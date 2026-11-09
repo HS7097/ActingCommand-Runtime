@@ -19,22 +19,22 @@ use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub(crate) const STATE_SCHEMA: &str = "actingcommand.runtime-watchdog-state.v2";
-pub(crate) const STATE_FILE: &str = "state.json";
+pub const STATE_SCHEMA: &str = "actingcommand.runtime-watchdog-state.v2";
+pub const STATE_FILE: &str = "state.json";
 const MAX_STATE_BYTES: u64 = 1024 * 1024;
 /// The state keeps the most recent start records only.
 const KEPT_STARTS: usize = 10;
 
 /// A result as the state keeps it: its code and its values (model §7.5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Recorded {
-    pub(crate) code: CodeStr,
+pub struct Recorded {
+    pub code: CodeStr,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
-    pub(crate) values: Map<String, Value>,
+    pub values: Map<String, Value>,
 }
 
 impl Recorded {
-    pub(crate) fn of(outcome: &Outcome) -> Self {
+    pub fn of(outcome: &Outcome) -> Self {
         Self {
             code: outcome.code().clone(),
             values: outcome.values().clone(),
@@ -42,14 +42,14 @@ impl Recorded {
     }
 
     /// Whether the kept result carries `code`.
-    pub(crate) fn is(&self, code: impl Into<Code>) -> bool {
+    pub fn is(&self, code: impl Into<Code>) -> bool {
         self.code == code.into()
     }
 
     /// The kept result as a received outcome, to travel as a link: its code, the category the
     /// catalog this build embeds gives it, and its values. A code the catalog does not list
     /// stays visible as `outcome_relay_unregistered`.
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         let relayed = Outcome::relayed(self.code.as_str());
         if relayed.code() != &self.code {
             return relayed;
@@ -70,46 +70,46 @@ impl Recorded {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct WatchdogState {
-    pub(crate) schema_version: String,
-    pub(crate) root: String,
+pub struct WatchdogState {
+    pub schema_version: String,
+    pub root: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) last_tick_unix_ms: Option<u64>,
+    pub last_tick_unix_ms: Option<u64>,
     /// The end of the previous task tick; the gap grace is measured from it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) last_task_tick_end_unix_ms: Option<u64>,
+    pub last_task_tick_end_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) grace_until_unix_ms: Option<u64>,
+    pub grace_until_unix_ms: Option<u64>,
     /// The last decision's code and values; log-on-change compares them.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) last_decision: Option<Recorded>,
+    pub last_decision: Option<Recorded>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) decision_since_unix_ms: Option<u64>,
+    pub decision_since_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) exhausted_since_unix_ms: Option<u64>,
+    pub exhausted_since_unix_ms: Option<u64>,
     /// The recorded start of the last live owner the watchdog did not start.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) formal_start_at_unix_ms: Option<u64>,
+    pub formal_start_at_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) process_present_since_unix_ms: Option<u64>,
-    pub(crate) starts: Vec<StartRecord>,
+    pub process_present_since_unix_ms: Option<u64>,
+    pub starts: Vec<StartRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct StartRecord {
-    pub(crate) at_unix_ms: u64,
-    pub(crate) method: String,
-    pub(crate) log: String,
+pub struct StartRecord {
+    pub at_unix_ms: u64,
+    pub method: String,
+    pub log: String,
     /// `watchdog_start_pending` until the start ends: `watchdog_started_runtime`,
     /// `start_timeout` or the failure's code, each with its values.
-    pub(crate) start_result: Recorded,
+    pub start_result: Recorded,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) generation: Option<u64>,
+    pub generation: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) actingd_pid: Option<u32>,
+    pub actingd_pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) owner_epoch: Option<String>,
+    pub owner_epoch: Option<String>,
 }
 
 impl Default for StartRecord {
@@ -129,7 +129,7 @@ impl Default for StartRecord {
 
 /// What `load` found besides the state itself.
 #[derive(Debug)]
-pub(crate) enum Loaded {
+pub enum Loaded {
     Fresh,
     Existing,
     /// Another schema version (the version 1 included): set aside (by `run-once` and
@@ -138,7 +138,7 @@ pub(crate) enum Loaded {
 }
 
 impl WatchdogState {
-    pub(crate) fn fresh(root: &str) -> Self {
+    pub fn fresh(root: &str) -> Self {
         Self {
             schema_version: STATE_SCHEMA.to_owned(),
             root: root.to_owned(),
@@ -146,14 +146,14 @@ impl WatchdogState {
         }
     }
 
-    pub(crate) fn push_start(&mut self, start: StartRecord) {
+    pub fn push_start(&mut self, start: StartRecord) {
         self.starts.push(start);
         let excess = self.starts.len().saturating_sub(KEPT_STARTS);
         self.starts = self.starts.split_off(excess);
     }
 
     /// The most recent start after the last observed formal start.
-    pub(crate) fn last_start(&self) -> Option<&StartRecord> {
+    pub fn last_start(&self) -> Option<&StartRecord> {
         let floor = self.formal_start_at_unix_ms.unwrap_or(0);
         self.starts.last().filter(|start| start.at_unix_ms > floor)
     }
@@ -161,7 +161,7 @@ impl WatchdogState {
 
 /// Reads the state; a missing file is a fresh state, another schema version a fresh state
 /// with [`Loaded::OtherSchema`], anything unreadable `watchdog_state_unreadable` (`path`).
-pub(crate) fn load(directory: &Path, root: &str) -> Result<(WatchdogState, Loaded), Outcome> {
+pub fn load(directory: &Path, root: &str) -> Result<(WatchdogState, Loaded), Outcome> {
     let path = directory.join(STATE_FILE);
     let unreadable = |error: &std::io::Error, op: IoOp| {
         io_failure(ActingctlCode::WatchdogStateUnreadable, &path, error, op)
@@ -202,7 +202,7 @@ pub(crate) fn load(directory: &Path, root: &str) -> Result<(WatchdogState, Loade
 }
 
 /// Moves a state of another schema version aside; nothing is deleted.
-pub(crate) fn set_aside(directory: &Path, now_unix_ms: u64) -> Result<PathBuf, Outcome> {
+pub fn set_aside(directory: &Path, now_unix_ms: u64) -> Result<PathBuf, Outcome> {
     let from = directory.join(STATE_FILE);
     let to = directory.join(format!("{STATE_FILE}.other-schema-{now_unix_ms}"));
     move_aside(&from, &to)?;
@@ -210,7 +210,7 @@ pub(crate) fn set_aside(directory: &Path, now_unix_ms: u64) -> Result<PathBuf, O
 }
 
 /// Renames a state file aside (`watchdog_state_unwritable` with `path` and `to_path`).
-pub(crate) fn move_aside(from: &Path, to: &Path) -> Result<(), Outcome> {
+pub fn move_aside(from: &Path, to: &Path) -> Result<(), Outcome> {
     fs::rename(from, to).map_err(|error| {
         io_failure(
             ActingctlCode::WatchdogStateUnwritable,
@@ -224,7 +224,7 @@ pub(crate) fn move_aside(from: &Path, to: &Path) -> Result<(), Outcome> {
 
 /// Written whole to a temporary file and flushed to disk, then renamed over the state, so an
 /// unclean shutdown cannot leave a renamed file without its content.
-pub(crate) fn save(directory: &Path, state: &WatchdogState) -> Result<(), Outcome> {
+pub fn save(directory: &Path, state: &WatchdogState) -> Result<(), Outcome> {
     let path = directory.join(STATE_FILE);
     let temporary = directory.join(format!("{STATE_FILE}.tmp-{}", std::process::id()));
     let unwritable = |at: &Path, error: &std::io::Error, op: IoOp| {

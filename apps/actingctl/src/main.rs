@@ -73,8 +73,13 @@ mod gate_381a;
 // `request-shutdown --wait` (G11), in-process.
 #[cfg(test)]
 mod gate_382_a1;
+// Test-only: Workflow #434 LAB-4, the WD-1 gate of `start` without `--config`, which stays with
+// actingctl's `start` when the watchdog's gates moved to `crates/watchdog`.
+#[cfg(all(test, windows))]
+mod gate_wd1_start;
 // Test-only: Workflow #381 A, the held Runtime start and the provider without instances, mounted
-// once for the whole binary (watchdog::gate_381a, mcp::tests::gate_387_d1b).
+// once for the whole binary (mcp::tests::gate_387_d1b; `crates/watchdog` mounts it for its own
+// gates since Workflow #434 LAB-4).
 #[cfg(test)]
 #[allow(dead_code)]
 #[path = "../../../tests/support/held_runtime.rs"]
@@ -90,8 +95,11 @@ mod runtime_start;
 // Workflow #434 LAB-1b: the shutdown wait lives in `crates/lab-ops`; this gives its failure as
 // `ActingctlError::ShutdownWait` to `install-transition`, `start`, `restart` and `install`.
 mod shutdown_wait;
+// Workflow #434 LAB-4 (register §1.287, "Slice LAB-4"): the watchdog is `crates/watchdog`, which
+// actingwatch.exe runs too; `watchdog …` runs it from there with the same output, codes and
+// exits, and every `crate::watchdog` path of `install` and `runtime_start` names it unchanged.
 #[cfg(windows)]
-mod watchdog;
+use actingcommand_watchdog as watchdog;
 
 // Workflow #390 DRILL-1: `ladder-drill` (MCP `ac_ladder_drill`), a drill of an instance's ladder.
 mod ladder_drill;
@@ -151,7 +159,7 @@ fn main() -> ExitCode {
         cli_line::developer_line(outcome, None);
     });
     // Workflow #434 LAB-1: `overview` (and mcp-serve's `ac_overview`) reads the watchdog block
-    // through actingctl's watchdog, which stays here until LAB-4.
+    // through the watchdog's reader; from LAB-4 that is `crates/watchdog`'s.
     #[cfg(windows)]
     overview::set_watchdog_block(watchdog::overview_block);
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();

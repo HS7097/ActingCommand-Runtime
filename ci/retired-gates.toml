@@ -415,3 +415,310 @@ test = "actingcommand-actingctl::bin:actingctl::child::tests::rl1c_fix1_child_st
 ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
 reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
 covered_by = "actingcommand-lab-ops::lib::child::tests::rl1c_fix1_child_still_running_at_the_deadline_is_ended_in_time, in the same apps.toml row."
+
+# Workflow #434 LAB-4 (register §1.287, "Slice LAB-4"): actingctl's watchdog moved to
+# crates/watchdog and actingwatch to apps/actingwatch with git mv; each test moved with its file,
+# paths only, so its name changed package and target and the new name takes the old one's place
+# in the same rows. The WD-1 gate of `actingctl start` stays with actingctl (gate_wd1_start), and
+# the launcher's gate of a fixed entry that cannot run left with the fixed entry: actingwatch runs
+# the tick in its own process.
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::observed_rows_follow_the_table_order"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::decide::tests::observed_rows_follow_the_table_order, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::start_rows_follow_the_table_order"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::decide::tests::start_rows_follow_the_table_order, in the same apps.toml rows."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::repeated_restarts_count_a_day_since_the_last_formal_start"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::decide::tests::repeated_restarts_count_a_day_since_the_last_formal_start, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::grace_opens_after_a_gap_or_a_boot_between_task_ticks"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::decide::tests::grace_opens_after_a_gap_or_a_boot_between_task_ticks, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::formal_starts_are_told_from_the_watchdogs_own"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::decide::tests::formal_starts_are_told_from_the_watchdogs_own, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::journals_of_every_shape_give_their_last_record"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::observe::tests::journals_of_every_shape_give_their_last_record, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::a6a_the_terminal_outcome_is_the_last_outcome_line_of_this_root"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::observe::tests::a6a_the_terminal_outcome_is_the_last_outcome_line_of_this_root, in the same apps.toml rows."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::processes_count_under_the_root_or_without_a_path"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::observe::tests::processes_count_under_the_root_or_without_a_path, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::verbatim_paths_become_plain"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::observe::tests::verbatim_paths_become_plain, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::tu44_the_watchdog_reads_a_close_with_the_upgrade_state_marker_as_usual"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::observe::tests::tu44_the_watchdog_reads_a_close_with_the_upgrade_state_marker_as_usual, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::state::tests::state_reads_tolerantly_and_sets_other_schemas_aside"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::state::tests::state_reads_tolerantly_and_sets_other_schemas_aside, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::log_keys_change_once_per_log_file_and_epoch"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::decide::tests::log_keys_change_once_per_log_file_and_epoch, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::log::tests::lines_carry_utc_time_level_code_and_quoted_fields"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::log::tests::lines_carry_utc_time_level_code_and_quoted_fields, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::log::tests::a_repeated_misconfiguration_looks_past_lines_from_stderr"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::log::tests::a_repeated_misconfiguration_looks_past_lines_from_stderr, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::task::tests::definition_is_utf16_xml_with_every_setting_escaped"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::task::tests::definition_is_utf16_xml_with_every_setting_escaped, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::task::tests::the_task_query_answers_in_json"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::task::tests::the_task_query_answers_in_json, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::task::tests::names_csv_and_console_output_are_read_as_windows_prints_them"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::task::tests::names_csv_and_console_output_are_read_as_windows_prints_them, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_381a::gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_381a::gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_381a::gate_fatal_line_formats_class_by_the_registered_top_code_only"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_381a::gate_fatal_line_formats_class_by_the_registered_top_code_only, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_381a::gate_an_unlogged_formal_close_looks_back_to_the_last_logged_owner"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_381a::gate_an_unlogged_formal_close_looks_back_to_the_last_logged_owner, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_381a::gate_the_state_root_of_a_stopped_held_start_leads_the_watchdog_to_a_start"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_381a::gate_the_state_root_of_a_stopped_held_start_leads_the_watchdog_to_a_start, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd_mt::wd_mt_a_log_that_ends_in_an_error_is_restarted_even_when_its_directory_entry_is_stale"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_wd_mt::wd_mt_a_log_that_ends_in_an_error_is_restarted_even_when_its_directory_entry_is_stale, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::every_decision_has_its_code_category_and_exit"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::decide::tests::every_decision_has_its_code_category_and_exit, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::tests::report_v2_of_a_live_owner_has_its_schema_outcome_and_attention"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::tests::report_v2_of_a_live_owner_has_its_schema_outcome_and_attention, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::state::tests::state_v2_round_trips_results_and_sets_a_v1_document_aside"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::state::tests::state_v2_round_trips_results_and_sets_a_v1_document_aside, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::a6a_the_terminal_outcome_decides_by_its_category"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::decide::tests::a6a_the_terminal_outcome_decides_by_its_category, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::a6a_a_run_out_budget_escalates_only_after_restarts_required"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::decide::tests::a6a_a_run_out_budget_escalates_only_after_restarts_required, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingwatch::gate_382_a1_launcher::gate_while_the_writer_lock_is_held_the_launcher_exits_0_and_runs_nothing"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to apps/actingwatch, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-actingwatch::bin:actingwatch::gate_382_a1_launcher::gate_while_the_writer_lock_is_held_the_launcher_exits_0_and_runs_nothing, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingwatch::gate_382_a1_launcher::gate_a_misplaced_program_a_root_without_watchdog_directory_and_an_unprobed_lock_exit_1"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to apps/actingwatch, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-actingwatch::bin:actingwatch::gate_382_a1_launcher::gate_a_misplaced_program_a_root_without_watchdog_directory_and_an_unprobed_lock_exit_1, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingwatch::gate_382_a1_launcher::gate_a_fixed_entry_that_cannot_run_is_logged_with_its_code_and_exits_1"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "actingwatch no longer runs the fixed entry <root>\\runtime\\actingctl.exe: it runs the tick in its own process (contracts/lab-two-entries.md §8.1, register §1.287 LAB-4), so no fixed entry can fail to run and watchdog_launcher_spawn_failed has no site; the injected launch of the two other gate_382_a1_launcher tests now keeps the ticks it is asked to run."
+covered_by = "actingcommand-actingwatch::gate_434_lab4::actingwatch_tick_in_process, in the new apps.toml row \"#434 LAB-4\": the program runs one tick in its own process on a root without actingctl.exe."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_an_answering_start_is_started_and_its_record_is_saved_before_the_spawn_and_at_the_end"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_382_a4::gate_382_a4_g12_an_answering_start_is_started_and_its_record_is_saved_before_the_spawn_and_at_the_end, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_whose_process_exits_first_is_start_failed_exited_during_startup"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_382_a4::gate_382_a4_g12_a_start_whose_process_exits_first_is_start_failed_exited_during_startup, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_its_window"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_its_window, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_single_location_root_resolves_with_its_root_config_and_state_root"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_wd1::wd1_a_single_location_root_resolves_with_its_root_config_and_state_root, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_crashed_single_location_runtime_is_started_with_its_root_config"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_wd1::wd1_a_crashed_single_location_runtime_is_started_with_its_root_config, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_formally_closed_single_location_runtime_is_not_started"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_wd1::wd1_a_formally_closed_single_location_runtime_is_not_started, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_live_single_location_runtime_is_left_alone"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_wd1::wd1_a_live_single_location_runtime_is_left_alone, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_active_json_appearing_before_the_start_is_a_selection_change"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_wd1::wd1_active_json_appearing_before_the_start_is_a_selection_change, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_install_on_a_single_location_root_checks_the_launcher_not_the_layout"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_wd1::wd1_install_on_a_single_location_root_checks_the_launcher_not_the_layout, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_root_with_neither_marker_stays_layout_unknown_and_ab_wins_over_single"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_wd1::wd1_a_root_with_neither_marker_stays_layout_unknown_and_ab_wins_over_single, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_start_without_config_still_needs_an_ab_selection"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved from the watchdog's gate_wd1 to actingctl's own gate_wd1_start, with its fixture: it tests actingctl's `start` (runtime_start::ab_installation), which stays in actingctl while the watchdog moved to crates/watchdog; what it asserts is unchanged."
+covered_by = "actingcommand-actingctl::bin:actingctl::gate_wd1_start::wd1_start_without_config_still_needs_an_ab_selection, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_deploy_holding_the_writer_lock_of_a_single_location_root_starts_nothing"
+ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
+reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-watchdog::lib::gate_wd1::wd1_a_deploy_holding_the_writer_lock_of_a_single_location_root_starts_nothing, in the same apps.toml row."

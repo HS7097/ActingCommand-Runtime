@@ -10,40 +10,40 @@ use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{Category, CauseRelation, Code, Outcome};
 
 /// A start record counts against the budget for this long.
-pub(crate) const BUDGET_WINDOW_MS: u64 = 30 * 60 * 1000;
+pub const BUDGET_WINDOW_MS: u64 = 30 * 60 * 1000;
 /// At most this many starts inside the budget window.
-pub(crate) const BUDGET_STARTS: usize = 3;
+pub const BUDGET_STARTS: usize = 3;
 /// `status` reports repeated restarts from this many watchdog starts within a day.
-pub(crate) const REPEATED_RESTARTS: usize = 2;
-pub(crate) const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+pub const REPEATED_RESTARTS: usize = 2;
+pub const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 /// A task tick more than this after the end of the previous one (one and a half tick
 /// periods: a logon, a reboot, a resume) opens the grace. A scheduled reboot leaves gaps of
 /// about 100-180 s, so a tick from before the current boot opens it as well.
-pub(crate) const GAP_MS: u64 = 90 * 1000;
+pub const GAP_MS: u64 = 90 * 1000;
 /// The grace leaves a logon starter (a logon script, acsetup's autostart) time to start the
 /// Runtime itself, before the watchdog considers a start.
-pub(crate) const GRACE_MS: u64 = 300 * 1000;
+pub const GRACE_MS: u64 = 300 * 1000;
 /// A Runtime process under the root without the owner lock for this long is an error, and so
 /// is (in `status`) an owner lock held this long without an answering owner.
-pub(crate) const PROCESS_WITHOUT_OWNER_MS: u64 = 10 * 60 * 1000;
+pub const PROCESS_WITHOUT_OWNER_MS: u64 = 10 * 60 * 1000;
 // #411 A66: a start that has not answered within the installation's start window
 // (`watchdog.start_window_ms`, `observe::Installation::start_window_ms`) is a start timeout;
 // there is no fixed window any more.
 /// A waiter for the watchdog's run lock waits the start window and this much more, for the
 /// tick's probes.
-pub(crate) const RUN_LOCK_MARGIN_MS: u64 = 20 * 1000;
+pub const RUN_LOCK_MARGIN_MS: u64 = 20 * 1000;
 /// Clock slack between a spawn and the started owner's recorded start.
-pub(crate) const CLOCK_SLACK_MS: u64 = 2 * 1000;
+pub const CLOCK_SLACK_MS: u64 = 2 * 1000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OwnerLock {
+pub enum OwnerLock {
     Locked,
     Unlocked,
     Missing,
 }
 
 impl OwnerLock {
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Locked => "locked",
             Self::Unlocked => "unlocked",
@@ -54,18 +54,18 @@ impl OwnerLock {
 
 /// The last owner record of the journal (a v1 or v2 record, or a checkpoint's `last_record`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OwnerRecord {
-    pub(crate) schema_version: String,
-    pub(crate) owner_epoch: String,
-    pub(crate) pid: u32,
-    pub(crate) started_at_unix_ms: u64,
-    pub(crate) active: bool,
-    pub(crate) closed_at_unix_ms: Option<u64>,
-    pub(crate) resource_disposition: Option<String>,
+pub struct OwnerRecord {
+    pub schema_version: String,
+    pub owner_epoch: String,
+    pub pid: u32,
+    pub started_at_unix_ms: u64,
+    pub active: bool,
+    pub closed_at_unix_ms: Option<u64>,
+    pub resource_disposition: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Journal {
+pub enum Journal {
     /// No journal, an empty one, or no complete line yet.
     Absent,
     Record {
@@ -78,53 +78,53 @@ pub(crate) enum Journal {
 
 /// The owner that answered a health request through runtime-info.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LiveOwner {
-    pub(crate) pid: u32,
-    pub(crate) owner_epoch: String,
-    pub(crate) started_at_unix_ms: u64,
+pub struct LiveOwner {
+    pub pid: u32,
+    pub owner_epoch: String,
+    pub started_at_unix_ms: u64,
 }
 
 /// Workflow #378 A6a (model section 7.5): a start's terminal outcome, the last `OUTCOME
 /// actingd:` or `OUTCOME acforward:` line of its log, and the log.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Terminal {
-    pub(crate) log: String,
-    pub(crate) outcome: Outcome,
+pub struct Terminal {
+    pub log: String,
+    pub outcome: Outcome,
 }
 
 /// Rows 2-6: what the tick observed before any start is considered.
-pub(crate) struct Observed {
-    pub(crate) lock: OwnerLock,
+pub struct Observed {
+    pub lock: OwnerLock,
     /// Only with `lock == Locked`: the owner answered, or why it did not.
-    pub(crate) live: Option<Result<LiveOwner, Outcome>>,
-    pub(crate) journal: Journal,
+    pub live: Option<Result<LiveOwner, Outcome>>,
+    pub journal: Journal,
     /// The terminal outcome of the newest log written since the journal's last record.
-    pub(crate) terminal: Option<Terminal>,
+    pub terminal: Option<Terminal>,
     /// Workflow #381 A R5b: with J closed but no log covering its epoch, the terminal outcome
     /// of the last earlier owner whose epoch a log covers, if that log holds one.
-    pub(crate) earlier_terminal: Option<Terminal>,
+    pub earlier_terminal: Option<Terminal>,
     /// #411 A66: the installation's start window, in milliseconds.
-    pub(crate) start_window_ms: u64,
+    pub start_window_ms: u64,
 }
 
 /// Rows 7a-7b: the probes taken only when a start is considered.
-pub(crate) struct StartProbes {
-    pub(crate) writer_busy: bool,
-    pub(crate) selection_changed: bool,
+pub struct StartProbes {
+    pub writer_busy: bool,
+    pub selection_changed: bool,
     /// Runtime processes whose executable is under the root, or whose path is unknown.
-    pub(crate) processes: Vec<RuntimeProcess>,
+    pub processes: Vec<RuntimeProcess>,
     /// When the machine last booted, read in the same probe as the processes.
-    pub(crate) boot_unix_ms: Option<u64>,
+    pub boot_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimeProcess {
-    pub(crate) pid: u32,
-    pub(crate) path: Option<String>,
+pub struct RuntimeProcess {
+    pub pid: u32,
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Decision {
+pub enum Decision {
     RunInProgress,
     /// Row 1: the failure that keeps the watchdog from deciding.
     Misconfigured(Outcome),
@@ -188,14 +188,14 @@ pub(crate) enum Decision {
 }
 
 /// The first stage: rows 2-6, or a start is to be considered.
-pub(crate) enum Stage {
+pub enum Stage {
     Decided(Decision),
     ConsiderStart,
 }
 
 impl Decision {
     /// The decision's registered code (its category sets the exit, model §7.6).
-    pub(crate) fn code(&self) -> Code {
+    pub fn code(&self) -> Code {
         let code = match self {
             Self::PanicUnrecovered { .. } => return ContractCode::PanicUnrecovered.code(),
             Self::RunInProgress => ActingctlCode::WatchdogRunInProgress,
@@ -227,7 +227,7 @@ impl Decision {
     /// The decision as its outcome: the code with its values (`owner_epoch`, `pid`, `log`,
     /// `count`, …), a failure as its `caused_by` link with its code as `failure_code`.
     /// Log-on-change compares the code and the values (model §7.5).
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         let outcome = Outcome::new(self.code());
         match self {
             Self::RunInProgress
@@ -293,7 +293,7 @@ impl Decision {
 /// An outcome's top code as a registered [`Code`], for a `failure_code` value: its spelling is
 /// read from the catalog this build embeds, which lives as long as the process. `None` when the
 /// catalog does not list it.
-pub(crate) fn registered_code(outcome: &Outcome) -> Option<Code> {
+pub fn registered_code(outcome: &Outcome) -> Option<Code> {
     let codes = actingcommand_contract::outcome::catalog_json()
         .ok()?
         .get("codes")?
@@ -305,7 +305,7 @@ pub(crate) fn registered_code(outcome: &Outcome) -> Option<Code> {
 }
 
 /// Rows 2-6 (row 1, misconfiguration, is decided while observing).
-pub(crate) fn decide_observed(observed: &Observed, state: &WatchdogState) -> Stage {
+pub fn decide_observed(observed: &Observed, state: &WatchdogState) -> Stage {
     if observed.lock == OwnerLock::Locked {
         return Stage::Decided(match &observed.live {
             Some(Ok(owner)) => Decision::Alive {
@@ -374,7 +374,7 @@ fn terminal_stage(terminal: &Terminal) -> Option<Stage> {
 /// person operating it recovered it: `panic_unrecovered`, fatal. Otherwise
 /// `watchdog_budget_exhausted` with the last terminal outcome as its link: the person can still
 /// fix the cause through the supported path.
-pub(crate) fn budget_decision(since_unix_ms: u64, terminals: &[Option<Outcome>]) -> Decision {
+pub fn budget_decision(since_unix_ms: u64, terminals: &[Option<Outcome>]) -> Decision {
     let restart_required = |terminal: &Option<Outcome>| {
         terminal
             .as_ref()
@@ -393,7 +393,7 @@ pub(crate) fn budget_decision(since_unix_ms: u64, terminals: &[Option<Outcome>])
 }
 
 /// Rows 7a-7f.
-pub(crate) fn decide_start(
+pub fn decide_start(
     probes: &StartProbes,
     state: &WatchdogState,
     now_unix_ms: u64,
@@ -443,7 +443,7 @@ pub(crate) fn decide_start(
 /// recorded start falls in `[at - 2 s, at + start window]` (#411 A66: the installation's
 /// `watchdog.start_window_ms`, `start_window_ms`). Every other live owner is a formal start
 /// (review M1: decided from a live, answering owner only, and again on every tick).
-pub(crate) fn started_by_watchdog(
+pub fn started_by_watchdog(
     owner: &LiveOwner,
     starts: &[StartRecord],
     start_window_ms: u64,
@@ -459,13 +459,13 @@ pub(crate) fn started_by_watchdog(
 }
 
 /// Starts since the last observed formal start, within the budget window.
-pub(crate) fn starts_in_budget(state: &WatchdogState, now_unix_ms: u64) -> usize {
+pub fn starts_in_budget(state: &WatchdogState, now_unix_ms: u64) -> usize {
     starts_since(state, now_unix_ms.saturating_sub(BUDGET_WINDOW_MS))
 }
 
 /// The start records that count against the budget, oldest first (Workflow #378 A6a: their
 /// logs' terminal outcomes decide a run-out budget).
-pub(crate) fn budget_starts(state: &WatchdogState, now_unix_ms: u64) -> Vec<&StartRecord> {
+pub fn budget_starts(state: &WatchdogState, now_unix_ms: u64) -> Vec<&StartRecord> {
     let floor = now_unix_ms
         .saturating_sub(BUDGET_WINDOW_MS)
         .max(state.formal_start_at_unix_ms.unwrap_or(0));
@@ -477,7 +477,7 @@ pub(crate) fn budget_starts(state: &WatchdogState, now_unix_ms: u64) -> Vec<&Sta
 }
 
 /// Watchdog starts since the last observed formal start, within the last day (review M8).
-pub(crate) fn starts_in_day(state: &WatchdogState, now_unix_ms: u64) -> usize {
+pub fn starts_in_day(state: &WatchdogState, now_unix_ms: u64) -> usize {
     starts_since(state, now_unix_ms.saturating_sub(DAY_MS))
 }
 
@@ -492,7 +492,7 @@ fn starts_since(state: &WatchdogState, floor_unix_ms: u64) -> usize {
 
 /// The gap grace (review L5): opened when the previous task tick ended more than `GAP_MS`
 /// ago or before the current boot; the first tick ever has none.
-pub(crate) fn grace_after_gap(
+pub fn grace_after_gap(
     last_task_tick_end: Option<u64>,
     now_unix_ms: u64,
     boot_unix_ms: Option<u64>,

@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+[package]
+name = "actingcommand-actingwatch"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Workflow #374: the GUI-subsystem program the watchdog's scheduled task runs from
+# `<root>\tools\`. Workflow #434 LAB-4: it runs the tick itself, from `crates/watchdog`, and
+# answers `status`, `install` and `uninstall` (moved from `apps/actingctl`).
+[[bin]]
+name = "actingwatch"
+path = "src/main.rs"
+
+[dependencies]
+actingcommand-contract = { workspace = true }
+# The registry of the launcher's own codes and the result line of a refused command line.
+actingcommand-lab-ops = { workspace = true }
+# The tick's channel fallback report, written where its other developer lines go.
+actingcommand-runtime-client = { workspace = true }
+actingcommand-watchdog = { workspace = true }
+
+[dev-dependencies]
+# `actingwatch_tick_in_process` compares the program's tick with the crate's (`tick_for_test`).
+actingcommand-watchdog = { workspace = true, features = ["test-hooks"] }
+serde_json = { workspace = true }
+tempfile = "3"

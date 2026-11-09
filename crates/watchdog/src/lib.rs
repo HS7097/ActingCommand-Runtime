@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! `actingctl watchdog` (Workflow #374): the Runtime watchdog of an A/B installation or, from
-//! v0.12.1 (Workflow #390 WD-1), of a single-location root.
+//! The Runtime watchdog (Workflow #374) of an A/B installation or, from v0.12.1 (Workflow #390
+//! WD-1), of a single-location root: `actingctl watchdog` and, from Workflow #434 LAB-4,
+//! `<root>\tools\actingwatch.exe`, which runs the task's tick in its own process.
 //! `run-once` is one supervision tick, run every minute by Task Scheduler through
 //! `<root>\tools\actingwatch.exe`; it starts the Runtime only when it is gone without a formal
 //! close. `status` computes the same decision read-only and adds attention outcomes, the task's
@@ -14,11 +15,22 @@
 //! `install` and `uninstall`; `attention` lists status's attention outcomes (empty for the other
 //! subcommands) and never changes the exit. The process exits by the top's category: 0
 //! success, info or warning; 1 error (usage included); 2 fatal.
+//!
+//! Workflow #434 LAB-4 (`contracts/lab-two-entries.md` §7, §8.1; register §1.287, "Slice
+//! LAB-4"): this crate is `apps/actingctl/src/watchdog/` moved unchanged, with the installer's
+//! `install\current.json` that row 7a″ reads ([`install_state`]). actingctl (until LAB-7) and
+//! actingwatch both run it through [`dispatch`]; its texts still say `actingctl`, as
+//! `crates/lab-ops`' do. It reads actingctl's codes and result line from `crates/lab-ops`, so
+//! `lab-ops` cannot link it: the overview's `watchdog` block stays the seam
+//! `overview::set_watchdog_block` (LAB-1), to which each program hands [`overview_block`].
 
-// Workflow #389 MCP-10: `decide`, `observe` and `start` are crate-visible, because `actingctl
-// start` and `restart` (`crate::runtime_start`) reuse the manual start, the owner observation
-// and `hold_run_lock`.
-pub(crate) mod decide;
+#![cfg(windows)]
+#![forbid(unsafe_code)]
+
+// Workflow #389 MCP-10: `decide`, `observe` and `start` are public, because `actingctl start`
+// and `restart` (`crate::runtime_start` of actingctl) and `actingctl install` reuse the manual
+// start, the owner observation and `hold_run_lock`.
+pub mod decide;
 // Test-only: Workflow #381 A, test plan A-2 G3a-G3d and H-1 G2.
 #[cfg(test)]
 mod gate_381a;
@@ -31,20 +43,31 @@ mod gate_wd1;
 // Test-only: WD-MT (Workflow #421, INV-1119), a candidate log's time read from the file.
 #[cfg(test)]
 mod gate_wd_mt;
-mod log;
-pub(crate) mod observe;
+// Test-only: Workflow #381 A, the held Runtime start and the provider without instances
+// (`gate_381a`, `gate_wd1`), mounted as actingctl mounts it.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../../tests/support/held_runtime.rs"]
+mod held_runtime;
+// Workflow #434 LAB-4: `install\current.json`, the installer's one unfinished operation (row 7a″),
+// moved from actingctl's `install::state`, which writes it through these types.
+pub mod install_state;
+pub mod log;
+pub mod observe;
 // Workflow #421 INST-1: `actingctl install` runs the same hidden CIM query for its process probe.
-pub(crate) mod powershell;
-pub(crate) mod start;
-mod state;
-mod task;
+pub mod powershell;
+pub mod start;
+pub mod state;
+pub mod task;
 
-use crate::cli_line;
-use crate::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{
     Category, CauseRelation, Code, Detail, IoOp, Outcome, RawSource,
 };
+// Workflow #434 LAB-4: actingctl's modules this code reads, from `crates/lab-ops` (LAB-1), bound
+// at the root so that every `crate::<module>` path of the moved files names them unchanged.
+use actingcommand_lab_ops::codes::{self, ActingctlCode, ArgumentProblem};
+use actingcommand_lab_ops::{cli_line, packs, process_probe};
 use decide::{Decision, Journal, Observed, OwnerLock, OwnerRecord, Stage, StartProbes};
 use log::Level;
 use observe::{Installation, WriterProbe};
@@ -57,12 +80,34 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, ExitStatus};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 pub(crate) const USAGE: &str = "usage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
 /// The report's schema (model §7.5).
 pub(crate) const REPORT_SCHEMA: &str = "actingcommand.watchdog.report.v2";
 const RUN_LOCK: &str = "run.lock";
+
+/// Where a developer line goes instead of stderr (Workflow #434 LAB-4).
+pub type DeveloperSink = Box<dyn Fn(&Outcome, Option<&str>) + Send + Sync>;
+
+static DEVELOPER_SINK: OnceLock<DeveloperSink> = OnceLock::new();
+
+/// Workflow #434 LAB-4: sends this process's developer lines to `sink` instead of stderr, once;
+/// `false` when a sink is set already. actingwatch's task tick has no stderr: it appends them to
+/// `watchdog.log`, where the launcher put the tick's stderr before LAB-4.
+pub fn set_developer_sink(sink: DeveloperSink) -> bool {
+    DEVELOPER_SINK.set(sink).is_ok()
+}
+
+/// The developer line `<LEVEL> actingctl: <outcome>[ <text>]`: on stderr
+/// (`cli_line::developer_line`), or to the sink [`set_developer_sink`] set.
+pub fn developer_line(outcome: &Outcome, text: Option<&str>) {
+    match DEVELOPER_SINK.get() {
+        Some(sink) => sink(outcome, text),
+        None => cli_line::developer_line(outcome, text),
+    }
+}
 
 /// #411 A66: how long a waiter for the watchdog's run lock waits: the start window of the
 /// installation at `root` and `RUN_LOCK_MARGIN_MS` for the tick's probes. A root that no longer
@@ -80,7 +125,7 @@ fn run_lock_wait(root: &Path) -> Duration {
 }
 
 /// `code` for `path`, caused by the error the OS raised for `op` (`foreign_os_error`).
-pub(crate) fn io_failure(
+pub fn io_failure(
     code: ActingctlCode,
     path: impl AsRef<Path>,
     error: &io::Error,
@@ -92,7 +137,7 @@ pub(crate) fn io_failure(
 }
 
 /// A JSON parser's refusal: `foreign_data_error` with `raw_source` json and its message.
-pub(crate) fn json_failure(error: &serde_json::Error) -> Outcome {
+pub fn json_failure(error: &serde_json::Error) -> Outcome {
     Outcome::new(ContractCode::ForeignDataError)
         .raw_source(RawSource::Json)
         .raw_text(error.to_string())
@@ -100,7 +145,7 @@ pub(crate) fn json_failure(error: &serde_json::Error) -> Outcome {
 
 /// A child process that failed: what it printed as the raw text of `foreign_other_error`
 /// (`raw_source` process), with its exit code when it exited.
-pub(crate) fn process_failure(status: ExitStatus, printed: &[u8]) -> Outcome {
+pub fn process_failure(status: ExitStatus, printed: &[u8]) -> Outcome {
     let failure = Outcome::new(ContractCode::ForeignOtherError).raw_source(RawSource::Process);
     let failure = match status.code() {
         Some(exit_code) => failure.exit_code(exit_code),
@@ -181,7 +226,13 @@ enum Subcommand {
 
 /// Runs `watchdog …` when the first argument names it; `None` leaves every other command to
 /// the CLI, unchanged.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+    dispatch_exit(arguments).map(ExitCode::from)
+}
+
+/// [`dispatch`], with the process's exit code as a number (Workflow #434 LAB-4: actingwatch
+/// exits with it).
+pub fn dispatch_exit(arguments: &[OsString]) -> Option<u8> {
     if arguments.first()?.to_str()? != "watchdog" {
         return None;
     }
@@ -207,7 +258,7 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
 /// Prints the report's one stdout line, then, unless `quiet`, the developer line of a warning,
 /// error or fatal top (`text` is developer English, such as the usage); returns the exit code.
 /// A stdout that refuses the line leaves the developer line `actingctl_output_failed`, exit 1.
-fn print(report: &Report, detail: Detail, quiet: bool, text: Option<&str>) -> ExitCode {
+fn print(report: &Report, detail: Detail, quiet: bool, text: Option<&str>) -> u8 {
     let written = report
         .line(detail)
         .map_err(io::Error::from)
@@ -216,9 +267,9 @@ fn print(report: &Report, detail: Detail, quiet: bool, text: Option<&str>) -> Ex
         return output_failed(&error);
     }
     if !quiet && report.outcome.category() > Category::Info {
-        cli_line::developer_line(&report.outcome, text);
+        developer_line(&report.outcome, text);
     }
-    ExitCode::from(report.exit_code())
+    report.exit_code()
 }
 
 fn write_line(line: &Value) -> io::Result<()> {
@@ -229,12 +280,13 @@ fn write_line(line: &Value) -> io::Result<()> {
     writer.flush()
 }
 
-fn output_failed(error: &dyn fmt::Display) -> ExitCode {
-    cli_line::developer_line(
+/// Exit 1, as `ExitCode::FAILURE`.
+fn output_failed(error: &dyn fmt::Display) -> u8 {
+    developer_line(
         &Outcome::new(ActingctlCode::ActingctlOutputFailed),
         Some(&error.to_string()),
     );
-    ExitCode::FAILURE
+    1
 }
 
 /// The subcommand and `--root`. A flag the subcommand does not take, a flag given twice and a
@@ -381,7 +433,9 @@ impl Tick {
         }
         // Row 7a″ (Workflow #421 INST-1): an unfinished installer operation; the OS released its
         // writer lock when the installer ended, so only `install\current.json` tells.
-        if let Some(operation_id) = crate::install::unfinished_operation(&self.installation.root) {
+        if let Some(operation_id) =
+            crate::install_state::unfinished_operation(&self.installation.root)
+        {
             return Err(Decision::InstallerUnfinished { operation_id });
         }
         let probe = seams
@@ -432,7 +486,7 @@ fn watchdog_log(directory: &Path) -> Value {
 /// overview` and `ac_overview`, read as [`status`] reads it (read-only; it writes nothing): the
 /// decision, the attention outcomes, each written as `envelope` writes an outcome, the watchdog's
 /// starts of the last 24 h and its last tick. A member the report does not hold is left out.
-pub(crate) fn overview_block(root: &Path, envelope: &dyn Fn(&Outcome) -> Value) -> Value {
+pub fn overview_block(root: &Path, envelope: &dyn Fn(&Outcome) -> Value) -> Value {
     let report = status(root);
     let mut block = Map::new();
     block.insert("decision".to_owned(), envelope(&report.outcome));
@@ -548,7 +602,7 @@ fn status(root: &Path) -> Report {
     }
     // Workflow #421 INST-1: an unfinished installer operation needs attention whatever decided.
     if !matches!(decision, Decision::InstallerUnfinished { .. })
-        && let Some(operation_id) = crate::install::unfinished_operation(&root)
+        && let Some(operation_id) = crate::install_state::unfinished_operation(&root)
     {
         attention.push(Decision::InstallerUnfinished { operation_id }.outcome());
     }
@@ -578,9 +632,11 @@ fn run_once(root: &Path, from_task: bool) -> Report {
     run_once_with(&start::system(), root, from_task)
 }
 
-/// Test-only (Workflow #421 INST-1, IT-10): the decision of one task tick on `seams`.
-#[cfg(test)]
-pub(crate) fn tick_for_test(seams: &dyn TickSeams, root: &Path) -> Outcome {
+/// Test-only (Workflow #421 INST-1, IT-10): the decision of one task tick on `seams`. Workflow
+/// #434 LAB-4: actingctl's install gates and actingwatch's `actingwatch_tick_in_process` read it
+/// through the feature `test-hooks`.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn tick_for_test(seams: &dyn TickSeams, root: &Path) -> Outcome {
     run_once_with(seams, root, true).outcome
 }
 
@@ -1096,7 +1152,7 @@ fn misconfigured_report(
                         &log::outcome_fields(&outcome),
                     ) {
                         Ok(()) => in_log = true,
-                        Err(error) => cli_line::developer_line(&error, None),
+                        Err(error) => developer_line(&error, None),
                     }
                 }
             }
@@ -1105,7 +1161,7 @@ fn misconfigured_report(
         None => Value::Null,
     };
     if quiet && !in_log {
-        cli_line::developer_line(&outcome, None);
+        developer_line(&outcome, None);
     }
     Report::new(outcome).with("log", log)
 }
@@ -1312,7 +1368,7 @@ fn install_failed(directory: Option<&Path>, failure: Outcome) -> Report {
             if let Err(error) =
                 log::append_outcome(directory, now_unix_ms(), Level::Error, &outcome)
             {
-                cli_line::developer_line(&error, None);
+                developer_line(&error, None);
             }
             watchdog_log(directory)
         }
@@ -1396,7 +1452,7 @@ fn uninstall(root: &Path) -> Report {
 /// `<root>\watchdog\run.lock`, held exclusively, retried until `wait` has passed. A tick that
 /// still holds it then is `watchdog_run_in_progress` (info: `path`, `timeout_ms`); a lock that
 /// cannot be opened or taken is `watchdog_run_lock_failed` (`path`).
-pub(crate) fn hold_run_lock(directory: &Path, wait: Duration) -> Result<File, Outcome> {
+pub fn hold_run_lock(directory: &Path, wait: Duration) -> Result<File, Outcome> {
     let path = directory.join(RUN_LOCK);
     let failed = |error: &io::Error, op: IoOp| {
         io_failure(ActingctlCode::WatchdogRunLockFailed, &path, error, op)

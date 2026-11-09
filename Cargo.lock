@@ -36,6 +36,7 @@ dependencies = [
  "actingcommand-runtime-database",
  "actingcommand-runtime-host",
  "actingcommand-scheduler",
+ "actingcommand-watchdog",
  "serde",
  "serde_json",
  "sha2",
@@ -103,6 +104,18 @@ dependencies = [
  "serde_json",
  "syn",
  "toml",
+]
+
+[[package]]
+name = "actingcommand-actingwatch"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "actingcommand-lab-ops",
+ "actingcommand-runtime-client",
+ "actingcommand-watchdog",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -506,6 +519,22 @@ dependencies = [
  "actingcommand-vision-ffi",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "actingcommand-watchdog"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "actingcommand-device",
+ "actingcommand-lab-ops",
+ "actingcommand-runtime-client",
+ "actingcommand-runtime-config",
+ "actingcommand-runtime-host",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

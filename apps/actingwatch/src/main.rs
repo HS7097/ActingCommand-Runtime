@@ -1,20 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! `actingwatch.exe` (Workflow #374): the program the Runtime watchdog's scheduled task runs
-//! every minute from `<root>\tools\`. A GUI-subsystem program opens no console window, so it
-//! runs the fixed entry `<root>\runtime\actingctl.exe watchdog run-once --root <root>
-//! --from-task` with `CREATE_NO_WINDOW`, appends the tick's stderr to
-//! `<root>\watchdog\watchdog.log` and returns the tick's exit code to Task Scheduler. It reads
-//! no slot material, takes no slot occupancy and decides nothing (`contracts/runtime-watchdog.md`).
+//! every minute from `<root>\tools\`. A GUI-subsystem program opens no console window. It reads
+//! no slot material and takes no slot occupancy of its own (`contracts/runtime-watchdog.md`).
 //! While acsetup holds the installation writer lock it does nothing at all (exit 0); otherwise
-//! it holds that lock shared for the tick, so acsetup cannot replace this program or the fixed
-//! entry while a tick runs.
+//! it holds that lock shared for the tick, so acsetup cannot replace this program while a tick
+//! runs.
 //!
-//! Workflow #378 A5 (model v2.2 §7.5, §7.6): the tick's exit (0, 1 or 2) passes through
-//! unchanged. The launcher's own failures are registered codes (`watchdog_launcher_misplaced`,
-//! `watchdog_launcher_log_unavailable`, `watchdog_launcher_writer_lock_failed`,
-//! `watchdog_launcher_spawn_failed`), written as the log line
-//! `ERROR actingwatch: <code> <path>: <os error text>` when the log is open, and exit 1.
+//! Workflow #434 LAB-4 (`contracts/lab-two-entries.md` §7, §8.1; register §1.287, "Slice LAB-4"):
+//! it runs the tick itself, in this process, from `crates/watchdog`: what its child
+//! `<root>\runtime\actingctl.exe watchdog run-once --root <root> --from-task` did before, step by
+//! step as actingctl's `main` ran it (the diagnostic sink, the channel fallback report, the
+//! process's installation, `ACTINGCOMMAND_DETAIL`, then the tick), with the same decisions,
+//! files, log lines, codes and exits. What that child wrote to its stderr, which this program
+//! appended to `<root>\watchdog\watchdog.log`, is appended there: the developer and `DIAG` lines
+//! and a panic's message. `actingwatch status|install|uninstall` answer as `actingctl watchdog
+//! <word> --root <root>` does for the root this program lies in.
+//!
+//! Workflow #378 A5 (model v2.2 §7.5, §7.6): the tick's exit (0, 1 or 2) is this program's. The
+//! launcher's own failures are registered codes (`watchdog_launcher_misplaced`,
+//! `watchdog_launcher_log_unavailable`, `watchdog_launcher_writer_lock_failed`), written as the
+//! log line `ERROR actingwatch: <code> <path>: <os error text>` when the log is open, and exit 1.
 
 #![windows_subsystem = "windows"]
 #![forbid(unsafe_code)]
@@ -23,33 +29,45 @@
 #[cfg(test)]
 mod gate_382_a1_launcher;
 
+use actingcommand_contract::outcome::Outcome;
+use actingcommand_lab_ops::cli_line;
 // The registry, for the launcher's own codes (never a literal spelling): actingctl's, in
 // `crates/lab-ops` since Workflow #434 LAB-1.
-use actingcommand_lab_ops::codes::ActingctlCode;
+use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
+use std::ffi::OsString;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::ExitCode;
 
 /// The exit of every launcher failure: an error (model §7.6).
 const FAILED: i32 = 1;
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// The developer text of a command line actingwatch does not take.
+const USAGE: &str = "usage: actingwatch [status|install|uninstall]";
+/// The developer text of an `ACTINGCOMMAND_DETAIL` the watchdog does not know (actingctl's).
+const DETAIL_USAGE: &str = "ACTINGCOMMAND_DETAIL takes codes or full";
 
-fn main() {
-    std::process::exit(run(&mut SystemLaunch));
+fn main() -> ExitCode {
+    let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if arguments.is_empty() {
+        // The task's tick: 0, 1 or 2.
+        ExitCode::from(u8::try_from(run(&mut SystemLaunch)).unwrap_or(1))
+    } else {
+        command(&SystemLaunch, &arguments)
+    }
 }
 
 /// Workflow #382 A-1 (test plan v2.2 §3.7, G13): what a launch reads and runs outside its own
-/// decisions, namely where this program is, the installation writer lock and the fixed entry.
-/// The process launches with `SystemLaunch`; a test injects its own.
+/// decisions, namely where this program is, the installation writer lock and, from Workflow #434
+/// LAB-4, the tick. The process launches with `SystemLaunch`; a test injects its own.
 trait Launch {
     /// This program's path, as `std::env::current_exe` gives it.
     fn current_exe(&self) -> Option<PathBuf>;
     /// The probe of the installation writer lock at `path`.
     fn writer_lock(&self, path: &Path) -> WriterLock;
-    /// Runs the fixed entry and waits for its exit.
-    fn status(&mut self, command: &mut Command) -> std::io::Result<ExitStatus>;
+    /// Runs the task's tick of the installation at `root` in this process, its developer lines
+    /// appended to `log`; the tick's exit code.
+    fn tick(&mut self, root: &Path, log: &Path) -> i32;
 }
 
 /// What the probe of the installation writer lock found.
@@ -64,7 +82,8 @@ enum WriterLock {
     Failed(std::io::Error),
 }
 
-/// The process's launch: its own executable, the writer lock file and a child process.
+/// The process's launch: its own executable, the writer lock file and the tick of
+/// `crates/watchdog`.
 struct SystemLaunch;
 
 impl Launch for SystemLaunch {
@@ -76,8 +95,8 @@ impl Launch for SystemLaunch {
         probe_writer_lock(path)
     }
 
-    fn status(&mut self, command: &mut Command) -> std::io::Result<ExitStatus> {
-        command.status()
+    fn tick(&mut self, root: &Path, log: &Path) -> i32 {
+        tick_in_process(root, &LogLines(log.to_path_buf()))
     }
 }
 
@@ -119,47 +138,121 @@ fn run(launch: &mut impl Launch) -> i32 {
             );
         }
     };
-    let entry = root.join("runtime").join("actingctl.exe");
-    let stderr = match log.try_clone() {
-        Ok(stderr) => stderr,
-        Err(error) => {
-            return failed(
-                Some(&mut log),
-                ActingctlCode::WatchdogLauncherSpawnFailed,
-                Some((entry.as_path(), error.to_string())),
-            );
+    // Workflow #434 LAB-4: the tick in this process, while the writer lock is held shared.
+    launch.tick(&root, &log_path)
+}
+
+/// `<root>\watchdog\watchdog.log`, appended to line by line: where the tick's stderr went.
+#[derive(Clone)]
+struct LogLines(PathBuf);
+
+impl LogLines {
+    /// Appends `line`. A log that refuses it changes nothing more: the tick's own log lines and
+    /// its exit stay its report, as when the launcher appended the child's stderr.
+    fn append(&self, line: &str) {
+        if let Ok(mut log) = OpenOptions::new().create(true).append(true).open(&self.0) {
+            let _ = writeln!(log, "{line}");
         }
-    };
-    let mut command = Command::new(&entry);
-    command
-        .args(["watchdog", "run-once", "--root"])
-        .arg(&root)
-        .arg("--from-task")
-        .current_dir(&root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(stderr);
-    #[cfg(windows)]
+    }
+}
+
+/// The developer line `<LEVEL> actingctl: <outcome>[ <text>]`, as actingctl's stderr held it.
+fn developer_text(outcome: &Outcome, text: Option<&str>) -> String {
+    let level = cli_line::level(outcome.category());
+    match text {
+        Some(text) => format!("{level} actingctl: {outcome} {text}"),
+        None => format!("{level} actingctl: {outcome}"),
+    }
+}
+
+/// The task's tick of `root`, as actingctl's `main` ran `watchdog run-once --root <root>
+/// --from-task`, with what it wrote to stderr appended to the log.
+fn tick_in_process(root: &Path, log: &LogLines) -> i32 {
+    let diagnostic = log.clone();
+    if let Err(error) =
+        actingcommand_contract::outcome::install_diagnostic_sink(Box::new(move |outcome, text| {
+            diagnostic.append(&format!("DIAG actingctl: {outcome} {text}"));
+        }))
     {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(CREATE_NO_WINDOW);
+        log.append(&format!("DIAG actingctl: {error}"));
     }
-    match launch.status(&mut command) {
-        // The tick's own exit: 0, 1 or 2 by its decision's category.
-        Ok(status) => match status.code() {
-            Some(exit) => exit,
-            None => failed(
-                Some(&mut log),
-                ActingctlCode::WatchdogLauncherSpawnFailed,
-                Some((entry.as_path(), status.to_string())),
-            ),
-        },
-        Err(error) => failed(
-            Some(&mut log),
-            ActingctlCode::WatchdogLauncherSpawnFailed,
-            Some((entry.as_path(), error.to_string())),
-        ),
+    let developer = log.clone();
+    // One tick per process: the sink is never set already.
+    let _ = actingcommand_watchdog::set_developer_sink(Box::new(move |outcome, text| {
+        developer.append(&developer_text(outcome, text));
+    }));
+    let panicked = log.clone();
+    std::panic::set_hook(Box::new(move |info: &std::panic::PanicHookInfo<'_>| {
+        panicked.append(&format!("thread 'main' {info}"));
+    }));
+    actingcommand_runtime_client::set_channel_unsupported_reporter(|outcome| {
+        actingcommand_watchdog::developer_line(outcome, None);
+    });
+    if let Err(error) = actingcommand_contract::process_installation() {
+        let outcome = Outcome::new(error.code());
+        actingcommand_watchdog::developer_line(&outcome, None);
+        return i32::from(cli_line::exit_code(outcome.category(), true));
     }
+    if let Err(outcome) = cli_line::detail() {
+        actingcommand_watchdog::developer_line(&outcome, Some(DETAIL_USAGE));
+        return i32::from(cli_line::exit_code(outcome.category(), true));
+    }
+    let arguments = [
+        OsString::from("watchdog"),
+        OsString::from("run-once"),
+        OsString::from("--root"),
+        root.as_os_str().to_owned(),
+        OsString::from("--from-task"),
+    ];
+    actingcommand_watchdog::dispatch_exit(&arguments).map_or(FAILED, i32::from)
+}
+
+/// `actingwatch status|install|uninstall`: `actingctl watchdog <word> --root <root>` for the root
+/// this program lies in, as actingctl's `main` runs it (its report on stdout, its developer line
+/// on stderr, its exit).
+fn command(launch: &impl Launch, arguments: &[OsString]) -> ExitCode {
+    if let Err(error) =
+        actingcommand_contract::outcome::install_diagnostic_sink(Box::new(|outcome, text| {
+            eprintln!("DIAG actingctl: {outcome} {text}");
+        }))
+    {
+        eprintln!("DIAG actingctl: {error}");
+    }
+    actingcommand_runtime_client::set_channel_unsupported_reporter(|outcome| {
+        cli_line::developer_line(outcome, None);
+    });
+    let word = arguments[0].to_str();
+    if !matches!(word, Some("status" | "install" | "uninstall")) {
+        return cli_line::refused(
+            &cli_line::usage_invalid(word, ArgumentProblem::Unknown),
+            Some(USAGE),
+        );
+    }
+    if let Some(extra) = arguments.get(1) {
+        return cli_line::refused(
+            &cli_line::usage_invalid(extra.to_str(), ArgumentProblem::Unknown),
+            Some(USAGE),
+        );
+    }
+    let Some(root) = install_root(launch.current_exe()) else {
+        return cli_line::refused(
+            &Outcome::new(ActingctlCode::WatchdogLauncherMisplaced),
+            None,
+        );
+    };
+    if let Err(error) = actingcommand_contract::process_installation() {
+        return cli_line::refused(&Outcome::new(error.code()), None);
+    }
+    if let Err(outcome) = cli_line::detail() {
+        return cli_line::refused(&outcome, Some(DETAIL_USAGE));
+    }
+    let arguments = [
+        OsString::from("watchdog"),
+        arguments[0].clone(),
+        OsString::from("--root"),
+        root.into_os_string(),
+    ];
+    ExitCode::from(actingcommand_watchdog::dispatch_exit(&arguments).unwrap_or(1))
 }
 
 /// `<root>` when this program (`executable`) is `<root>\tools\actingwatch.exe`, in its ordinary

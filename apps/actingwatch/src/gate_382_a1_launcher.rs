@@ -3,18 +3,19 @@
 // Workflow #382 A-1 (test plan v2.2 §3.7, G13; apps 27): actingwatch, the program the
 // watchdog's task runs (contracts/runtime-watchdog.md "Launcher"; rd-1007/v0113/model-374.md
 // §2.1). While acsetup holds the installation writer lock it exits 0 and runs nothing. A program
-// that is not `<root>\tools\actingwatch.exe`, a root without the watchdog directory, a writer
-// lock it cannot probe and a fixed entry it cannot run each end the launch with exit 1: model
-// v2.2 §7.5 and §7.6 replaced the launcher's 20-23 with registered codes and the exit of their
-// category, error. A fixed entry that cannot run is logged in `watchdog\watchdog.log` with its
-// code and path.
+// that is not `<root>\tools\actingwatch.exe`, a root without the watchdog directory and a writer
+// lock it cannot probe each end the launch with exit 1: model v2.2 §7.5 and §7.6 replaced the
+// launcher's 20-23 with registered codes and the exit of their category, error.
+//
+// Workflow #434 LAB-4: the launch runs the tick in its own process instead of a fixed entry, so
+// the injected launch keeps each tick it was asked to run where it kept each command; the gate
+// of a fixed entry that cannot run left with the fixed entry (`ci/retired-gates.toml`), and
+// `actingwatch_tick_in_process` runs a whole tick in the program.
 
 use super::{Launch, WriterLock, probe_writer_lock, run};
-use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
 use tempfile::TempDir;
 
 /// How the injected launch answers the writer lock probe.
@@ -26,12 +27,12 @@ enum LockProbe {
     Refused,
 }
 
-/// A launch of the program at `exe` whose fixed entry is not deployed, so it cannot run; it
-/// keeps each command it was asked to run.
+/// A launch of the program at `exe`; it keeps the root of each tick it was asked to run and
+/// runs none.
 struct InjectedLaunch {
     exe: PathBuf,
     lock: LockProbe,
-    runs: Vec<(PathBuf, Vec<OsString>)>,
+    runs: Vec<PathBuf>,
 }
 
 impl InjectedLaunch {
@@ -56,12 +57,9 @@ impl Launch for InjectedLaunch {
         }
     }
 
-    fn status(&mut self, command: &mut Command) -> io::Result<ExitStatus> {
-        self.runs.push((
-            PathBuf::from(command.get_program()),
-            command.get_args().map(OsStr::to_os_string).collect(),
-        ));
-        Err(io::Error::from(ErrorKind::NotFound))
+    fn tick(&mut self, root: &Path, _log: &Path) -> i32 {
+        self.runs.push(root.to_path_buf());
+        0
     }
 }
 
@@ -134,40 +132,4 @@ fn gate_a_misplaced_program_a_root_without_watchdog_directory_and_an_unprobed_lo
         assert_eq!(run(&mut launch), 1, "{case}");
         assert!(launch.runs.is_empty(), "{case}: it ran {:?}", launch.runs);
     }
-}
-
-#[test]
-fn gate_a_fixed_entry_that_cannot_run_is_logged_with_its_code_and_exits_1() {
-    let temp = TempDir::new().expect("tempdir");
-    let mut launch = InjectedLaunch::new(
-        program(&temp, "tools", "actingwatch.exe", true),
-        LockProbe::File,
-    );
-
-    assert_eq!(run(&mut launch), 1);
-    // It tried the fixed entry `<root>\runtime\actingctl.exe` once.
-    let [(entry, _)] = launch.runs.as_slice() else {
-        panic!("one run of the fixed entry, not {:?}", launch.runs);
-    };
-    assert!(
-        entry.ends_with("runtime/actingctl.exe"),
-        "{}",
-        entry.display()
-    );
-    assert_eq!(
-        entry
-            .parent()
-            .and_then(Path::parent)
-            .map(|root| fs::canonicalize(root).expect("the root")),
-        Some(fs::canonicalize(temp.path()).expect("the temporary root"))
-    );
-    let log = fs::read_to_string(temp.path().join("watchdog").join("watchdog.log"))
-        .expect("the watchdog log");
-    let lines = log.lines().collect::<Vec<_>>();
-    assert_eq!(lines.len(), 1, "{log}");
-    assert!(
-        lines[0].starts_with("ERROR actingwatch: watchdog_launcher_spawn_failed ")
-            && lines[0].contains(&entry.display().to_string()),
-        "{log}"
-    );
 }

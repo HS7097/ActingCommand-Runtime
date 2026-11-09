@@ -7,7 +7,10 @@ Task Manager, a reboot; and when its last start ended in an error, a held start 
 stopped among them (Workflow #381 A, #378 A6a). It never starts a Runtime that was
 closed formally, that is alive, that the installer is working on, or whose last start
 ended in a fatal outcome; those stay down, and the fatal case stays down loudly. Task
-Scheduler runs one tick a minute through `<root>\tools\actingwatch.exe`.
+Scheduler runs one tick a minute through `<root>\tools\actingwatch.exe`. From Workflow #434
+LAB-4 the watchdog is the crate `crates/watchdog`: `actingwatch.exe` runs the tick in its own
+process (see "Launcher") and `actingctl watchdog` runs the same code until LAB-7 deletes
+actingctl ([lab-two-entries.md](lab-two-entries.md) §7, §8.1).
 
 The watchdog reads the ledger never and writes it never. It adds no event type, no
 fact and no persisted Runtime structure. It is a read-only consumer of `owner.lock`
@@ -32,6 +35,12 @@ They run before `--state-root` parsing, like `mcp-serve`; no other command chang
 When the process runs with an inherited installation (through the fixed entry
 `<root>\runtime\actingctl.exe`), its root must be `--root`; otherwise
 `watchdog_root_mismatch`.
+
+From LAB-4, `<root>\tools\actingwatch.exe status|install|uninstall` answers as `actingctl
+watchdog <word> --root <root>` for the root it lies in, with the same report, codes and exits;
+it takes no `--root`. Another word is `actingctl_usage_invalid`, and a program that is not
+`<root>\tools\actingwatch.exe` is `watchdog_launcher_misplaced`, each as actingctl's result line,
+exit 1.
 
 ## Layout
 
@@ -316,7 +325,8 @@ the start log's terminal outcome, else its last line (developer text).
 
 `<root>\tools\actingwatch.exe`, shipped in the Tools artifact (layout
 `platform-tools-v3`), is the program Task Scheduler runs. It is a GUI-subsystem
-program, so it opens no console window, and uses std only. It:
+program, so it opens no console window, and forbids unsafe code; from LAB-4 it is
+`apps/actingwatch` and links `crates/watchdog`. It:
 
 1. requires to be `<root>\tools\actingwatch.exe` itself, else exits 1
    (`watchdog_launcher_misplaced`);
@@ -326,14 +336,23 @@ program, so it opens no console window, and uses std only. It:
    free, it keeps it for the tick, so acsetup cannot replace the launcher or the fixed
    entry meanwhile; a lock that cannot be probed is
    `watchdog_launcher_writer_lock_failed`, exit 1;
-4. runs `<root>\runtime\actingctl.exe watchdog run-once --root <root> --from-task`
-   with `CREATE_NO_WINDOW`, stdin and stdout NUL, stderr appended to the log and the
-   working directory `<root>`, and exits with its code (0, 1 or 2); a fixed entry that
-   cannot run, or ends without an exit code, is `watchdog_launcher_spawn_failed`, exit 1.
+4. runs the tick, `run-once --root <root> --from-task`, and exits with its code (0, 1 or
+   2). Before LAB-4 it ran `<root>\runtime\actingctl.exe watchdog run-once --root <root>
+   --from-task` with `CREATE_NO_WINDOW`, stdin and stdout NUL, stderr appended to the log
+   and the working directory `<root>`, and a fixed entry that could not run, or ended
+   without an exit code, was `watchdog_launcher_spawn_failed`, exit 1. From LAB-4
+   (Workflow #434) it runs the tick in its own process, from `crates/watchdog`, in the
+   order actingctl ran it (its diagnostic sink, `process_installation()`,
+   `ACTINGCOMMAND_DETAIL`, the tick), with the same decisions, files, log lines, codes and
+   exits; what the child wrote to stderr (its developer lines, `DIAG actingctl:` lines and
+   a panic's message) is appended to the log in the same words, and its report goes to
+   this program's stdout, which the task does not read. `watchdog_launcher_spawn_failed`
+   has no site any more.
 
 Its own failures are registered codes (Workflow #378 A5); from step 3 on, it appends
-`ERROR actingwatch: <code> <path>: <error>` to the log. It reads no slot material and
-takes no slot occupancy.
+`ERROR actingwatch: <code> <path>: <error>` to the log. It reads no slot material of its own
+and takes no slot occupancy of its own; the tick pins the selected slot of an A/B
+installation for its duration, as before, through the selection it reads.
 
 ## Task
 
@@ -522,6 +541,7 @@ close record is a follow-up.
   owner and changes no selection.
 - Switched back to a slot whose actingctl predates the watchdog, every tick fails
   with that actingctl's usage error (exit 1) until a newer slot is selected or the
-  task is disabled.
+  task is disabled. From LAB-4 the tick runs in `tools\actingwatch.exe` and no
+  longer runs the slot's actingctl.
 - The Task Scheduler history of a per-minute task turns over fast; `watchdog.log` is
   the record, the history shows the last runs.
