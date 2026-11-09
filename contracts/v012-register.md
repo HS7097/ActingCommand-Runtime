@@ -8091,6 +8091,83 @@ which ac_app no longer builds; what it asserts is unchanged.
 
 **LAB-1b rollback** (to the release before it). Nothing persisted: code and the table's text.
 
+#### Slice LAB-2 (0.12.47): the CLI module, `actinglab serve --stdio`, the retired command words deleted
+
+Coordinator work order `rd-1108/arch-013/brief-lab2.md`; on main `c76ce040` (LAB-1b, #1548,
+merged). The contract is [lab-two-entries.md](lab-two-entries.md) §4.2, §8.2 and §9.3, and its
+open points 6 and 7, which the coordinator settled for this slice; the table is
+[lab-operations.json](lab-operations.json). actingctl and its MCP server answer as before (same
+words, lines, codes, exit codes and MCP answers); only where `lab-ops` prints moved.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L2-1 | actinglab's CLI module (`apps/actinglab/src/cli_module.rs`, with `words`, `place`, `core_ops`, `engine`, `serve`) | behaviour | LAB-2 | actinglab's `main` | the operation table's short words: the longest name of an offered row (planned, of the core, debugging or authoring module, of slice LAB-1, LAB-1b or LAB-2) that begins the line, then its positionals in order (the instance an alias, an `instance_id` or an ADB port), options `--name value` and switches `--name`; a row with `params_more` takes its source command's further flags and words (`words`); anything else, a reserved row and a rescue row are refused with `actingctl_usage_invalid` (`argument`, `argument_problem`). No `--root`, no `--state-root`: `lab_ops::locate`, and `ACTINGCOMMAND_RUNTIME_STATE_ROOT` when set. Core rows: the commands LAB-1 moved with their parsing are given actingctl's words and answer actingctl's line, the others are called with their parameters and shaped as actingctl shapes them; `run start` (actingctl `task-run`), `run stop` (MCP `ac_stop_run`), `reset` and `drill` likewise. Debugging and authoring rows: actinglab's own command (its `params_more`, or `app launch|restart|stop` → `session app`, `user-config` → `user-config get`), its data beside `lab_operation_completed`, its error's code relayed with every member of its details beside it and its message as the developer text. For people by default: the code with its values (the catalog holds no phrase, none is made up) and the result's members as a small table; `--json` the one line `cli_line` builds; exit 0, 1 or 2 by category, a refusal at least 1, `lab_operation_check_failed` 1. `help` lists the offered operations; `--version` |
+| L2-2 | `actinglab serve --stdio` | behaviour | LAB-2 | — | one `{op, params}` per line on stdin, one answer line per request on stdout, in order: the CLI's `--json` line for the same operation and parameters; a line that is no request is answered with its refusal and the loop goes on; developer lines on stderr; ends with stdin (exit 0), a failed stdin or stdout ends it with `actingctl_output_failed` (exit 1); the initiator is checked once at the start |
+| L2-3 | the envelope form: `--envelope`, and `--via` (MCP's actinglab child) | transitional behaviour | LAB-2 | `lab_ops::lab_child` (unchanged) | runs actinglab's command words of before LAB-2 with their envelope and exit codes 2 to 6, unchanged, so that MCP's Lab tools (which read that envelope and class by its exit code) and the protocol goldens stay as they are; LAB-5 builds MCP on the table and retires it. The integration tests' runners pass `--envelope` (paths only); `expected.json` is unchanged |
+| L2-4 | `lab_ops::cli_line::{Exit, Developer, developer_text, finish}`; `success`, `failure`, `refused`, `receipt` and the moved commands' `dispatch` answer an `Exit` | in-process types | LAB-2 | actingctl, actinglab | `lab-ops` builds the line, the developer line and the exit code and prints nothing; actingctl's own `cli_line` (`apps/actingctl/src/cli_line.rs`, re-exporting the crate's module) prints them as before and names itself `actingctl`, actinglab `actinglab`. `runtime_domain_never_writes_stderr`'s `STDERR_ALLOW_LIST` entry for `crates/lab-ops/src/cli_line.rs` (LAB-1) is removed; the list is empty |
+| L2-5 | `lab_ops::front::{Front, set, current, client_config}` | in-process seam | LAB-2 | actinglab's CLI module | the commands LAB-1 moved connect on the CLI channel with (Cli, Cli), as actingctl's, unless the program says at its start that it is actinglab: then on the Lab channel with (Lab, Lab), as every actinglab connection binds until LAB-6 |
+| L2-6 | `lab_ops::ladder_drill` (`mode`, `Failure`, `drill`) | moved code (`git mv`) | LAB-2 | actingctl `ladder-drill`, MCP `ac_ladder_drill`, actinglab `drill` | from actingctl unchanged, items now `pub` |
+| L2-7 | `lab_ops::initiator::ENVIRONMENT_VARIABLE`, `Initiator::of_lab_process`, `Initiator::of_this_lab_process` | behaviour | LAB-2 | actinglab | §4.2: `Lab-CLI`, or `Lab-制包` / `Lab-救急` from `ACTINGCOMMAND_INITIATOR`; any other value (`Lab-CLI` and the other four words included) is `actingctl_usage_invalid` with `variable`, before anything is sent or written |
+| L2-8 | the recordings' `initiator` (open point 6): `RecordingLock::acquire(state_dir, instance, command, initiator)`, `RecordingLock::initiator`, `RecordingStep.initiator`, `RecordedMark.initiator` (`crates/lab`), `SessionRecordStep.initiator` (actinglab's session file) | file format | LAB-2 | actinglab's record commands | the lock carries the holder's word; the save writes it on every step and mark the command added (an empty one), those of earlier commands keep theirs; a session step is written with it. Required members: a recording written before LAB-2 does not decode ([lab-recording.md](lab-recording.md), "recording.json") |
+| L2-9 | outcome code `lab_operation_completed` (actinglab, success, `none`, no values; pending, since 0.12.47) | catalog | LAB-2 | actinglab's CLI module | one domain code for the success of an operation whose source has no success code of its own; `lab_operation_check_failed`'s and `actingctl_usage_invalid`'s descriptions say what LAB-2 changes (exit 1 in the CLI module; the variable `ACTINGCOMMAND_INITIATOR`) |
+| L2-10 | `user-config` and `user-config set` (open point 7) | words, table rows | LAB-2 | — | actinglab's `config get|set` (its user configuration file) renamed, unchanged otherwise, since tests and `external-tools/NOTICE.md` use them; two `debugging` rows of the table (170 operations) |
+| L2-11 | the table's rows LAB-2 corrected from the code that serves them (contract §9.4) | contract table | LAB-2 | — | `config` takes no parameter (the configuration read has no instance and no prefix); `run show` drops `from_step` (its read holds no steps); `emu selfcheck` and `app launch|restart|stop` drop `wait` (nothing bounds them besides their own request); `record draft` moves to LAB-5 (its source is MCP's `ac_binding_draft`, no command of actinglab); `requests` add `Status` where the module resolves `<inst>` with a status read (`frames`, `monitor set`, `monitor clear`, `emu selfcheck`, `run start`, `reset`, `drill`) and `QueryEvents` and `Status` for `run stop`; each with its note; the schema does not change and every row's `entries` still follows its rule |
+| L2-12 | deleted: the retired and reserved entries of actinglab's capability table (`commands/capabilities.rs`, 122: `session request …`, the retired `session` words, `ledger …`, `devices`, `monitor`, `scheduler …`, `operation dry-run`, `resource import-alas|drift-alas|check-release|convert`, `package build-task|build-pack`, `record|session record build-task|promote|publish` and the rest); the dispatch of the retired `session` words (20 arms) and `retired_authority`, the `ledger` group, `devices` and `monitor`, `lab start|lease|preempt|release`, the `scheduler` group, `operation dry-run` and `resource import-alas|drift-alas|check-release` | removed code | LAB-2 | — | those words are unknown commands now |
+
+**Tests.** New: apps row "#434 LAB-2" (`gate_434_lab2`, actinglab's binary tests; an empty
+configuration in a temporary folder, offline frames; no Runtime, no clock, no sleep):
+`cli_short_words_parse`, `cli_json_matches_op_output` and `serve_answers_same_as_cli` (the
+register's named tests), and `recording_steps_and_marks_carry_the_initiator` (the work order's
+fourth). Deleted with their words (none is a gate map name, so nothing is retired):
+`session_response_capabilities_are_retired`, `session_request_no_wait_capability_is_retired`,
+`session_request_cancel_capability_is_retired`, `session_request_state_capabilities_are_retired`,
+`local_ledger_query_commands_fail_loud` (`src/tests/mod.rs`) and `scheduler_stub_is_exit_six`
+(`src/tests/cli_basics.rs`). Adapted, where this slice changes what they pin:
+`capabilities_are_offline` (a deleted word is asserted absent, and no retired or reserved entry is
+left but `lab arbitrator`), `top_level_record_capability_is_available` and
+`direct_touch_commands_are_capability_registered` (the deleted words leave their lists; the
+retired instance words are asserted absent), `retired_session_commands_and_selectors_create_no_legacy_state`
+(`tests/session_closeout.rs`: only the retired selectors still refuse); the
+`config get|set` words of `src/tests/cli_basics.rs` and `src/tests/mod.rs` (now `user-config`);
+the fixtures `drift_test_anchor_step` and `ocr_mark` (`initiator`) and the seven `crates/lab`
+gates that take a recording lock (the word `Lab-CLI`); the runners of `tests/*.rs` (`--envelope`).
+
+**Interface.** None: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
+`runtime-outcomes` 1. actinglab's lines and its recording files are no declared interface
+([component-interfaces.md](component-interfaces.md) has no row for them); LAB-6 raises
+`runtime-client` 7 and `ledger` 8.
+
+**Where LAB-2 differs from its work order's letter.**
+
+- (a) The envelope form stays (L2-3): MCP's Lab tools read actinglab's envelope and take their
+  class from its exit code (2 to 6), and the protocol goldens pin it; changing them would change
+  every MCP answer (work order item 8) and re-record the goldens.
+- (b) Kept, though retired: the explicit refusals `resource_production_retired` (`package
+  build-task|build-pack`, `resource convert`, `record|session record build-task|promote|publish`),
+  which the protocol goldens (`package_build_task_retired`, `package_build_pack_retired`) and the
+  record tests pin, the refusals of the retired selectors of the session commands that stay
+  (`--via-daemon`, `--local`, `--state-dir`; `session_closeout`), and `lab arbitrator`
+  (`lab2_cli`'s contract). Their capability entries are gone with the rest.
+- (c) The `watchdog` block: LAB-4 was not merged on the base, and actinglab cannot reach
+  actingctl's watchdog, so actinglab's `status` answers it null, as on a platform without the
+  watchdog; the slice that merges second of LAB-2 and LAB-4 registers it.
+- (d) Until LAB-6 deletes the origin gates of `RuntimeRequest::validate()`, a request the Runtime
+  takes only from an operator or agent origin (`drill`, `offset`, `facts publish`, `targets set`,
+  `wake-test`) may be refused on actinglab's Lab envelope; the line shows the receipt's code, and
+  actingctl serves them until LAB-7.
+- (e) `ACTINGCOMMAND_RUNTIME_STATE_ROOT` still names the state root when set (MCP's child and the
+  tests set it); otherwise the located one.
+- (f) The table's corrections and its two new rows (L2-10, L2-11).
+
+**What LAB-2 changes live.** `actinglab` on a command line speaks the table's words and prints
+lines for people (or `--json`): a script that parsed actinglab's envelope passes `--envelope`.
+MCP answers as before. New Lab recordings carry `initiator`.
+
+**LAB-2 rollback** (to the release before it). A Lab recording written by 0.12.47 carries
+`initiator` on its steps and marks, which an earlier build refuses as unknown members: finish or
+redo such a recording before rolling back (a session step's `initiator` is ignored). Nothing else
+persisted.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

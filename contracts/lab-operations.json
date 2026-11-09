@@ -191,8 +191,7 @@
       "name": "run show",
       "module": "core",
       "params": [
-        {"name": "id", "form": "positional", "type": "request_id", "required": true},
-        {"name": "from_step", "form": "option", "type": "integer", "required": false}
+        {"name": "id", "form": "positional", "type": "request_id", "required": true}
       ],
       "params_more": "MCP ac_get_run",
       "output": "one run: its receipt, state and steps",
@@ -204,7 +203,7 @@
       "source": ["MCP ac_get_run", "actinglab lab receipt"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `run_show` (the run a handle or run_id names, the full read and the answer of MCP ac_get_run); waiting on the run and the jobs of the MCP process stay with MCP"
+      "notes": "LAB-1b moved its code into lab-ops: `run_show` (the run a handle or run_id names, the full read and the answer of MCP ac_get_run); waiting on the run and the jobs of the MCP process stay with MCP; LAB-2 dropped from_step: the read answers the run whole and holds no steps (run evidence --from-step pages them)"
     },
     {
       "name": "run evidence",
@@ -403,11 +402,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["CaptureSequence"],
+      "requests": ["CaptureSequence", "Status"],
       "source": ["actingctl stream", "actinglab stream", "actinglab session stream"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `frames` (the capture of actingctl stream and its defaults)"
+      "notes": "LAB-1b moved its code into lab-ops: `frames` (the capture of actingctl stream and its defaults); LAB-2: requests add Status, the read that resolves <inst>"
     },
     {
       "name": "discover",
@@ -464,10 +463,7 @@
     {
       "name": "config",
       "module": "core",
-      "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
-        {"name": "prefix", "form": "option", "type": "string", "required": false}
-      ],
+      "params": [],
       "output": "the settings in effect with their source, and config_version",
       "writes": false,
       "irreversible": false,
@@ -476,7 +472,8 @@
       "requests": ["RuntimeFactSnapshot"],
       "source": ["actingctl status --config", "MCP ac_facts (scope config)", "acui: settings page read (crates/acui-source/src/workbench.rs)"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-2 corrected its params from the code that serves it (`facts::read`, actingctl status --config): the configuration read has no instance and no prefix"
     },
     {
       "name": "config set",
@@ -559,11 +556,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["ConfigureMonitor"],
+      "requests": ["ConfigureMonitor", "Status"],
       "source": ["actingctl monitor-set", "actinglab session monitor-policy"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `configure` (the policy of actingctl monitor-set, its defaults and the request)"
+      "notes": "LAB-1b moved its code into lab-ops: `configure` (the policy of actingctl monitor-set, its defaults and the request); LAB-2: requests add Status, the read that resolves <inst>"
     },
     {
       "name": "monitor clear",
@@ -576,11 +573,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["ClearMonitor"],
+      "requests": ["ClearMonitor", "Status"],
       "source": ["actingctl monitor-clear"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `configure::clear_monitor` (actingctl monitor-clear)"
+      "notes": "LAB-1b moved its code into lab-ops: `configure::clear_monitor` (actingctl monitor-clear); LAB-2: requests add Status, the read that resolves <inst>"
     },
     {
       "name": "offset",
@@ -693,26 +690,24 @@
       "name": "emu selfcheck",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
-        {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["SelfCheckInstance"],
+      "requests": ["SelfCheckInstance", "Status"],
       "source": ["actingctl selfcheck", "acui: rescue bar reconnect and check (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "MCP gains it; LAB-1b moved its code into lab-ops: `emulators::self_check` and the failure of a check that did not pass (actingctl selfcheck)"
+      "notes": "MCP gains it; LAB-1b moved its code into lab-ops: `emulators::self_check` and the failure of a check that did not pass (actingctl selfcheck); LAB-2 dropped wait: the self-check answers when it ends, and no source bounds it; LAB-2: requests add Status, the read that resolves <inst>"
     },
     {
       "name": "app launch",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
-        {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
       "output": "the receipt",
       "writes": true,
@@ -723,14 +718,13 @@
       "source": ["MCP ac_app (launch)", "actinglab session app launch", "actinglab session instance app launch", "acui: rescue bar game start and restart (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2)"
+      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself"
     },
     {
       "name": "app restart",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
-        {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
       "output": "the receipt",
       "writes": true,
@@ -741,14 +735,13 @@
       "source": ["MCP ac_app (restart)", "actinglab session app restart", "actinglab session instance app restart", "acui: rescue bar game start and restart (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2)"
+      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself"
     },
     {
       "name": "app stop",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
-        {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
       "output": "the receipt",
       "writes": true,
@@ -759,7 +752,7 @@
       "source": ["MCP ac_app (stop)", "actinglab session app stop", "actinglab session instance app stop", "actinglab session app force-stop", "actinglab session instance app force-stop"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2)"
+      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself"
     },
     {
       "name": "shutdown",
@@ -1043,11 +1036,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["RunContainedTask", "QueryEvents"],
+      "requests": ["RunContainedTask", "QueryEvents", "Status"],
       "source": ["actingctl task-run", "MCP ac_run_pack", "actinglab lab run"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "frames pinned Lab and kept (lab-two-entries.md section 2.4)"
+      "notes": "frames pinned Lab and kept (lab-two-entries.md section 2.4); LAB-2: requests add Status, the read that resolves <inst>"
     },
     {
       "name": "run stop",
@@ -1061,10 +1054,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["CancelContainedTask", "SafeReset"],
+      "requests": ["CancelContainedTask", "SafeReset", "QueryEvents", "Status"],
       "source": ["MCP ac_stop_run", "actinglab run stop (runtime-interface.md)"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-2: requests add QueryEvents and Status, the run's read and the status read that names its instance for the reset"
     },
     {
       "name": "reset",
@@ -1077,10 +1071,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["SafeReset"],
+      "requests": ["SafeReset", "Status"],
       "source": ["actingctl reset", "actinglab runtime reset"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-2: requests add Status, the read that resolves <inst>"
     },
     {
       "name": "tap",
@@ -1289,10 +1284,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["DrillRecoveryLadder"],
+      "requests": ["DrillRecoveryLadder", "Status"],
       "source": ["actingctl ladder-drill", "MCP ac_ladder_drill"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-2: requests add Status, the read that resolves <inst>"
     },
     {
       "name": "watch",
@@ -1413,6 +1409,41 @@
       "source": ["actinglab recognize-artifact"],
       "slice": "LAB-2",
       "status": "planned"
+    },
+    {
+      "name": "user-config",
+      "module": "debugging",
+      "params": [
+        {"name": "key", "form": "positional", "type": "key", "required": false, "note": "absent: the whole file"}
+      ],
+      "output": "actinglab's own user configuration file (its adb path, its instances' devices), or one key of it",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab config get"],
+      "slice": "LAB-2",
+      "status": "planned",
+      "notes": "open point 7 (the coordinator's ruling): actinglab's config get, renamed so that it takes no word of the config operations; what it does is unchanged"
+    },
+    {
+      "name": "user-config set",
+      "module": "debugging",
+      "params": [
+        {"name": "key", "form": "positional", "type": "key", "required": true},
+        {"name": "value", "form": "positional", "type": "string", "required": true}
+      ],
+      "output": "the key and the value written, and the file",
+      "writes": true,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab config set"],
+      "slice": "LAB-2",
+      "status": "planned",
+      "notes": "open point 7 (the coordinator's ruling): actinglab's config set, renamed so that it takes no word of the config operations; what it does is unchanged"
     },
     {
       "name": "pack load",
@@ -1625,8 +1656,9 @@
       "entries": ["lab"],
       "requests": [],
       "source": ["MCP ac_binding_draft", "actinglab package preflight (its first step)"],
-      "slice": "LAB-2",
-      "status": "planned"
+      "slice": "LAB-5",
+      "status": "planned",
+      "notes": "LAB-2 moved it to LAB-5: its source is MCP's ac_binding_draft (package preflight and an actingd check-config child), no command of actinglab; LAB-5 builds it with MCP from the table"
     },
     {
       "name": "package check",

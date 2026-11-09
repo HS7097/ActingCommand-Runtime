@@ -38,7 +38,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const COMMAND: &str = "devices";
@@ -489,7 +489,7 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
 /// Runs `devices …` when the first argument names it; `None` leaves every other command to the
 /// CLI. One result line (Workflow #378 A5): the answer with `device_list_reported` or
 /// `device_binding_changed`, or `{outcome}` with the refusal and exit 1.
-pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }

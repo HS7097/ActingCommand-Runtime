@@ -14,16 +14,15 @@ use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::instance_selector::{self, SelectorMiss};
 use actingcommand_contract::outcome::Outcome;
-use actingcommand_contract::{EventActor, EventSource, InstanceId, RuntimeControlPlaneStatus};
+use actingcommand_contract::{InstanceId, RuntimeControlPlaneStatus};
 use actingcommand_runtime_client::{
     ContainedRunState, ListedContainedRun, RunDispatch, RunListFilter, RunListPosition,
-    RuntimeClient, RuntimeClientConfig, RuntimeClientError,
+    RuntimeClient, RuntimeClientError,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
-use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const USAGE: &str = "usage: actingctl runs --state-root <path> [--instance <alias|instance_id|ADB port>] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--task-prefix <text>] [--dispatch manual|scheduled] [--state open|succeeded|failed|cancelled|interrupted_unterminated] [--limit <1-100>] [--cursor <next_cursor>]";
@@ -497,7 +496,7 @@ fn row(run: &ListedContainedRun, status: Option<&RuntimeControlPlaneStatus>) -> 
 /// Runs `runs`; `None` leaves every other command to the CLI, unchanged. One result line on
 /// stdout (Workflow #378 A5): the run list with `run_list_reported`, or `{outcome}` with the
 /// failure (an argument failure's developer line adds the usage) and exit 1.
-pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != "runs" {
         return None;
     }
@@ -514,13 +513,8 @@ fn run(arguments: &[OsString]) -> Result<Map<String, Value>, Failure> {
     let (state_root, request) = parse(arguments)?;
     let now_unix_ms = now_unix_ms()?;
     let deadline = Instant::now() + CLI_READ_BUDGET;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    ))
-    .map_err(Failure::Runtime)?;
+    let client = RuntimeClient::connect(crate::front::client_config(state_root))
+        .map_err(Failure::Runtime)?;
     let answer = read(&client, &request, now_unix_ms, deadline)?;
     let mut result = cli_line::members(answer.render(answer.row_count()), "runs");
     let warnings = answer.warnings();

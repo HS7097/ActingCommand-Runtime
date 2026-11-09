@@ -23,19 +23,19 @@ use crate::instance_selector::{self, SelectorMiss};
 use crate::material_export;
 use actingcommand_contract::outcome::{Code, Detail as OutcomeDetail, Outcome};
 use actingcommand_contract::{
-    CorrelationId, EventActor, EventQuery, EventSeverity, EventSource, EventType, InstanceId,
-    LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, ProjectedEvent, ProjectionPayload,
+    CorrelationId, EventQuery, EventSeverity, EventType, InstanceId, LedgerView,
+    MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, ProjectedEvent, ProjectionPayload,
     ProjectionProfile, RequestId, RunId, RuntimeEventQueryCursor, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest, SanitizationError, TaskId,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use std::collections::hash_map::RandomState;
 use std::ffi::OsString;
 use std::hash::BuildHasher;
 use std::path::PathBuf;
-use std::process::{self, ExitCode};
+use std::process;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -684,7 +684,7 @@ pub fn brief_row(event: &ProjectedEvent) -> Value {
 /// `actingctl events …` when the first argument is `events`: one result line on stdout
 /// (Workflow #378 A5), the page with `runtime_events_reported`, or `{outcome}` with the failure
 /// (an argument failure's developer line adds the usage) and exit 1.
-pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -704,13 +704,8 @@ pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
 fn run_cli(arguments: &[OsString]) -> Result<Value, EventsError> {
     let (state_root, parameters) = cli_parameters(arguments)?;
     let request = parse(&parameters, CLI_MAX_LIMIT)?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        &state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    ))
-    .map_err(EventsError::Runtime)?;
+    let client = RuntimeClient::connect(crate::front::client_config(&state_root))
+        .map_err(EventsError::Runtime)?;
     // One Status for the whole call, never one per read of the wait (§2.5).
     let instance_id = match &request.instance {
         Some(selector) => {

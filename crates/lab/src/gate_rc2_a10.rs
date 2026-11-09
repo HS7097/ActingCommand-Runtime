@@ -60,8 +60,8 @@ impl Fixture {
             .expect("session JSON"),
         )
         .expect("session file");
-        let lock =
-            RecordingLock::acquire(&state, INSTANCE, "gate_rc2_a10").expect("recording lock");
+        let lock = RecordingLock::acquire(&state, INSTANCE, "gate_rc2_a10", "Lab-CLI")
+            .expect("recording lock");
         let ocr = LabOcr::from_vision_root(&temp.path().join("no-vision"));
         record_start(&lock, &RecordStartOptions::default()).expect("record start");
         let path = recording_path(&state, RECORD_ID);

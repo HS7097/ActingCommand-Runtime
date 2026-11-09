@@ -154,9 +154,16 @@ actingcommand_contract::outcome_codes! {
         /// details carry the receipt's `req_id`, `correlation_id` and `receipt_state`, the
         /// `effect` and `executed` its record reports, its `failure` when it reports one, and the
         /// client's `client_code` and `client_message`. Exit 5 (keys `req_id`, `receipt_state`,
-        /// `client_code`).
+        /// `client_code`). Workflow #434 LAB-2: the CLI module's line exits 1.
         LabOperationCheckFailed => "lab_operation_check_failed": error / none,
         // ---- end of LABDO-1
+        // ---- Workflow #434 LAB-2 (pending): the CLI module's success of an operation whose
+        // source has no success code of its own.
+        /// Success. An operation of the CLI module (or of `serve --stdio`) served by actinglab's
+        /// own command, or a core operation whose only source was an MCP tool, ran to its end;
+        /// its line carries the answer.
+        LabOperationCompleted => "lab_operation_completed": success / none,
+        // ---- end of LAB-2
     }
 }
 

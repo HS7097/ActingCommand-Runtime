@@ -634,9 +634,23 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.45",
-      "description": "Workflow #433 LABDO-1: online actinglab do --capture (an element, coordinates or --operation) sent its Lab operation and the Runtime answered it with a receipt, then a check the runtime client runs after the receipt failed: the event queries of the request, its lease and its actions, or the evidence check of the operation's record against those events and the artifacts they verify. The Runtime acted as its receipt reports, so this is not a device error: the details carry the receipt's req_id, correlation_id and receipt_state, the effect its record reports (performed, not_performed or indeterminate; null when the receipt carries no Lab operation record) with executed, the record's own failure when it reports one, and the client's code (client_code) and message (client_message). Exit 5, the class of a Runtime or state failure. MCP relays it as lab_tool_failed (class runtime) with req_id. Nothing more is written to the ledger by the client.",
+      "description": "Workflow #433 LABDO-1: online actinglab do --capture (an element, coordinates or --operation) sent its Lab operation and the Runtime answered it with a receipt, then a check the runtime client runs after the receipt failed: the event queries of the request, its lease and its actions, or the evidence check of the operation's record against those events and the artifacts they verify. The Runtime acted as its receipt reports, so this is not a device error: the details carry the receipt's req_id, correlation_id and receipt_state, the effect its record reports (performed, not_performed or indeterminate; null when the receipt carries no Lab operation record) with executed, the record's own failure when it reports one, and the client's code (client_code) and message (client_message). Exit 5 in the envelope form (--envelope, and --via for the MCP child), the class of a Runtime or state failure; Workflow #434 LAB-2: the CLI module's line exits 1 like every error and carries every member of the details beside the outcome. MCP relays it as lab_tool_failed (class runtime) with req_id. Nothing more is written to the ledger by the client.",
       "common_causes": "The client's evidence check disagrees with what the Runtime recorded for a successful operation (for example runtime_lab_diagnostic_budget_mismatch when an OCR session's placement report was archived under the request); the event query timed out or failed; an artifact could not be read back from the state root.",
       "handling": "Do not send the operation again as though it had not run: read effect first, and the instance's screen. Report client_code with req_id so the check can be corrected."
+    },
+    "lab_operation_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.47",
+      "description": "Workflow #434 LAB-2: an operation of actinglab's CLI module (or of actinglab serve --stdio) whose source has no success code of its own ran to its end: a debugging or authoring operation served by actinglab's own command (observe, do, record start and the like), or a core operation whose only source was an MCP tool (run show, material, targets, app launch, app restart, app stop). The line carries the operation's answer beside this outcome; exit 0.",
+      "common_causes": "The operation succeeded.",
+      "handling": "None."
     }
   }
 }

@@ -21,6 +21,7 @@ fn actinglab_runtime_adapter_is_disposable_and_emits_runtime_flow_data() {
     runtime.wait_ready(root.path());
 
     let observe = Command::new(env!("CARGO_BIN_EXE_actinglab"))
+        .arg("--envelope")
         .args([
             "--json",
             "runtime",
@@ -51,6 +52,7 @@ fn actinglab_runtime_adapter_is_disposable_and_emits_runtime_flow_data() {
     runtime.assert_alive();
 
     let reset = Command::new(env!("CARGO_BIN_EXE_actinglab"))
+        .arg("--envelope")
         .args([
             "--json",
             "runtime",

@@ -1137,6 +1137,7 @@ impl Fixture {
     fn run(&self, args: &[OsString]) -> Output {
         let binary = env!("CARGO_BIN_EXE_actinglab");
         Command::new(binary)
+            .arg("--envelope")
             .args(args)
             .current_dir(self.root())
             .env(

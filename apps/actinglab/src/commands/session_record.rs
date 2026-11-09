@@ -46,6 +46,9 @@ pub(crate) struct SessionRecordStep {
     pub(crate) step_id: String,
     pub(crate) created_at_unix_ms: u64,
     pub(crate) updated_at_unix_ms: u64,
+    /// Workflow #434 LAB-2 (`contracts/lab-two-entries.md` §4.2, §4.3 "Recordings"): the initiator
+    /// word of the process that recorded the step.
+    pub(crate) initiator: String,
     #[serde(flatten)]
     pub(crate) data: SessionRecordStepData,
 }
@@ -610,6 +613,7 @@ fn new_session_record_step(
         step_id,
         created_at_unix_ms: current_unix_ms(),
         updated_at_unix_ms: current_unix_ms(),
+        initiator: crate::cli_module::recording_initiator()?.to_owned(),
         data,
     })
 }
@@ -2399,7 +2403,15 @@ fn record_action_lock(
     if !matches!(action, "start" | "stop" | "mark" | "step" | "amend") {
         return Ok(None);
     }
-    RecordingLock::acquire(state_dir, instance_id, &format!("record {action}")).map(Some)
+    // Workflow #434 LAB-2: every step and mark the command adds carries the process's initiator.
+    let initiator = crate::cli_module::recording_initiator()?;
+    RecordingLock::acquire(
+        state_dir,
+        instance_id,
+        &format!("record {action}"),
+        initiator,
+    )
+    .map(Some)
 }
 
 fn held_record_lock(lock: &Option<RecordingLock>) -> CliOutcome<&RecordingLock> {
@@ -2972,7 +2984,9 @@ pub(crate) fn record_flag_begin(
         )
         .with_details(json!({"state_root": state_dir.display().to_string()})));
     }
-    RecordingLock::acquire(&state_dir, &record_instance, command)
+    // Workflow #434 LAB-2: every step and mark the command adds carries the process's initiator.
+    let initiator = crate::cli_module::recording_initiator()?;
+    RecordingLock::acquire(&state_dir, &record_instance, command, initiator)
 }
 
 #[cfg(test)]

@@ -1,5 +1,17 @@
 use super::{CliError, CliOutcome, FlagArgs, RUNTIME_STATE_ROOT_ENV, SESSION_STATE_ENV};
+use std::sync::OnceLock;
 use std::{env, path::PathBuf};
+
+/// Workflow #434 LAB-2: the state root the CLI module located from the selected configuration
+/// (`contracts/lab-two-entries.md` §9.3), which the commands it runs use when
+/// `ACTINGCOMMAND_RUNTIME_STATE_ROOT` is not set.
+static LOCATED_STATE_ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+/// Workflow #434 LAB-2: the commands of this process use the located state root `path`; the
+/// first call decides.
+pub(super) fn use_located_state_root(path: PathBuf) {
+    let _ = LOCATED_STATE_ROOT.set(path);
+}
 
 pub(super) fn app_state_root() -> CliOutcome<PathBuf> {
     let root = env::var("LOCALAPPDATA")
@@ -16,6 +28,9 @@ pub(super) fn runtime_state_root() -> CliOutcome<PathBuf> {
             )));
         }
         return Ok(PathBuf::from(path));
+    }
+    if let Some(path) = LOCATED_STATE_ROOT.get() {
+        return Ok(path.clone());
     }
     let root = env::var("LOCALAPPDATA")
         .or_else(|_| env::var("APPDATA"))

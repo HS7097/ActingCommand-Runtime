@@ -234,8 +234,11 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
   today (LAB-3). An operation that then sends requests to a running Runtime binds `lab` with the
   same word, so its G14 records carry it too.
 - **Recordings.** Each mark and step of a Lab recording carries `initiator` (#350 option B, design
-  §3.4); a step that reaches the device is also in G14. No slice of the order names this yet
-  (open point 6).
+  §3.4); a step that reaches the device is also in G14. LAB-2 writes it (open point 6, the
+  coordinator's ruling): the word of section 4.2 for `actinglab.exe` (`Lab-CLI`, or `Lab-制包` /
+  `Lab-救急` from `ACTINGCOMMAND_INITIATOR`), carried by the recording lock and written on each
+  step and mark the command adds ([lab-recording.md](lab-recording.md), "recording.json"). The
+  recording format changes directly: a recording without it does not decode.
 - **The watchdog.** Its starts stay recorded in its own files as today. A request it sends beyond
   `Health` carries `Lab-看门狗`; today it sends none.
 
@@ -402,6 +405,15 @@ every kind the file names exists; `entries` follows its rule; a `reserved` row h
 - Output for people by default: one line with the result code and its short phrase from the
   outcome catalog, and a small table where needed. `--json` prints the one line `cli_line` prints
   today. Exit codes stay 0, 1 and 2.
+- **As LAB-2 built it** (register §1.287, "Slice LAB-2"). The catalog holds no phrase for a code,
+  so the line for people is the code with its values, and none is made up; the small table is
+  the result's members. An operation served by actinglab's own command answers its data beside
+  `lab_operation_completed`, and a failure its code (relayed; one the catalog does not list is
+  `outcome_relay_unregistered` with `raw_code`) with every member of its details beside it.
+  `ACTINGCOMMAND_RUNTIME_STATE_ROOT`, which MCP's actinglab child and the tests set, still names
+  the state root when set. The words of actinglab before LAB-2, with their envelope and exit codes
+  2 to 6, stay behind `--envelope` (and `--via`, MCP's child) until LAB-5 builds MCP on the
+  table, so that every MCP answer stays as it is; their retired and reserved words are gone.
 - **A request the Runtime answered is never a device error** (Workflow #433 LABDO-1, in force
   from that slice; LAB-2 and LAB-5 keep it). Once the Lab has sent an operation's request and
   the Runtime has answered it, a failure of a check the client runs after the receipt (its event
@@ -486,9 +498,12 @@ After LAB-6 the host emits neither `lab_module_not_installed` nor `lab_module_op
 5. **`install-root`.** The journal's `initiator` and `one_way` are members of the installers'
    private documents; whether they raise `install-root` (the A/B journal v2) is LAB-3's to judge by
    the bump rule.
-6. **Recordings' initiator.** No slice of the order writes it yet; LAB-2 is the natural one.
+6. **Recordings' initiator.** Settled (the coordinator's ruling, 2026-11-09): LAB-2 writes it,
+   section 4.3 "Recordings"; the format changes without compatibility.
 7. **actinglab's own `config get` and `config set`** (its user configuration file) collide with
-   the `config` operations: LAB-2 renames or removes them.
+   the `config` operations. Settled (the coordinator's ruling, 2026-11-09): LAB-2 renames them
+   `user-config` and `user-config set`, two `debugging` rows of the table (`lab-operations.json`),
+   which do what they did; tests and `external-tools/NOTICE.md` use them, so they stay.
 8. **The two host codes** `lab_module_not_installed` and `lab_module_option_disabled` lose their
    emitter at LAB-6; whether the catalog retires them is LAB-6's.
 9. **The MCP tool count.** The table has one operation per CLI form (168 in v1), so MCP would list

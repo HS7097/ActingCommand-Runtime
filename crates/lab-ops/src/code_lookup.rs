@@ -22,7 +22,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-use std::process::ExitCode;
 
 const COMMAND: &str = "codes";
 const USAGE: &str = "usage: actingctl codes <code> | actingctl codes [--prefix <text>] [--owner <owner>] [--limit <1-100>] [--cursor <next_cursor>]";
@@ -313,7 +312,7 @@ fn decode_cursor(cursor: &str, fingerprint: &str) -> Result<Option<String>, Refu
 /// It takes no `--state-root`: it never connects to the Runtime (command table D5). One result
 /// line on stdout (Workflow #378 A5): the entry or the page with `outcome_codes_reported`, or
 /// `{outcome}` with the refusal (a usage refusal's developer line adds the usage) and exit 1.
-pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }

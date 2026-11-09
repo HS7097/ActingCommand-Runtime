@@ -1001,6 +1001,7 @@ where
     S: AsRef<OsStr>,
 {
     Command::new(env!("CARGO_BIN_EXE_actinglab"))
+        .arg("--envelope")
         .args(args)
         .env("ACTINGLAB_CONFIG_PATH", temp.path().join("config.json"))
         .output()

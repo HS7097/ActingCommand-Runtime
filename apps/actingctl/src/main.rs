@@ -34,10 +34,14 @@
 //   `read_bounded` and `foreign_data_error`, which actingctl's readers took, are read in the crate
 //   only now).
 use actingcommand_lab_ops::{
-    InputProblem, capability_gap, child, cli_line, code_lookup, codes, devices, diagnose, events,
-    evidence_read, facts, instance_selector, observe_export, overview, packs, perf_preset, remedy,
-    routine_summary, run_evidence, run_list,
+    InputProblem, capability_gap, child, code_lookup, codes, devices, diagnose, events,
+    evidence_read, facts, instance_selector, ladder_drill, observe_export, overview, packs,
+    perf_preset, remedy, routine_summary, run_evidence, run_list,
 };
+// Workflow #434 LAB-2: `lab-ops` builds the result line and returns it; actingctl prints it here,
+// unchanged (`cli_line`, which re-exports the crate's module). `ladder_drill` (`ladder-drill`,
+// MCP `ac_ladder_drill`) moved to `lab-ops` too, so that actinglab's CLI module serves `drill`.
+mod cli_line;
 // Workflow #434 LAB-1b (register §1.287, LAB-1b row): the other core operations live in
 // `crates/lab-ops` too, a function per operation that sends its requests and shapes its answer;
 // `run` below and the MCP tools call them and answer as before. What each module serves:
@@ -92,9 +96,6 @@ mod runtime_start;
 mod shutdown_wait;
 #[cfg(windows)]
 mod watchdog;
-
-// Workflow #390 DRILL-1: `ladder-drill` (MCP `ac_ladder_drill`), a drill of an instance's ladder.
-mod ladder_drill;
 
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 // Test-only: the tests below read them; the code that did moved to `crates/lab-ops` (LAB-1b).
@@ -210,13 +211,13 @@ fn main() -> ExitCode {
     }
     // --- Workflow #389 MCP-1: `events`, the CLI of ac_events, parses its own flags. ---
     if let Some(exit) = events::dispatch(&arguments) {
-        return exit;
+        return cli_line::print(exit);
     }
     // --- end MCP-1 ---
     // Workflow #389 MCP-5a: `observe --export` takes the instance selector of MCP and leaves
     // before `Invocation::parse`; `observe` without `--export` is unchanged.
     if let Some(exit) = observe_export::dispatch(&arguments) {
-        return exit;
+        return cli_line::print(exit);
     }
     // Workflow #389 MCP-10: `start` and `restart` take `--root`, not `--state-root`; CLI only.
     #[cfg(windows)]
@@ -228,68 +229,68 @@ fn main() -> ExitCode {
     // ---- Workflow #389 MCP-11 (begin): `packs` reads the selected configuration offline and
     // takes no `--state-root` (command table D5). ----
     if let Some(exit) = packs::dispatch(&arguments) {
-        return exit;
+        return cli_line::print(exit);
     }
     // ---- Workflow #389 MCP-11 (end) ----
     // ---- Workflow #389 MCP-14 (begin): `codes` reads the outcome catalog this build embeds
     // offline and takes no `--state-root` (command table D5); its flags are `flags_of`'s. ----
     if let Some(exit) = code_lookup::dispatch(&arguments) {
-        return exit;
+        return cli_line::print(exit);
     }
     // ---- Workflow #389 MCP-14 (end) ----
     // Workflow #389 MCP-3: `runs` takes the instance selector of MCP and leaves before
     // `Invocation::parse`.
     if let Some(exit) = run_list::dispatch(&arguments) {
-        return exit;
+        return cli_line::print(exit);
     }
     // ---- Workflow #389 MCP-7 (begin): `diagnose` takes the instance selector of MCP, optional,
     // and leaves before `Invocation::parse`. ----
     if let Some(exit) = diagnose::dispatch(&arguments) {
-        return exit;
+        return cli_line::print(exit);
     }
     // ---- Workflow #389 MCP-7 (end) ----
     // ---- Workflow #389 MCP-8 (begin): `overview` takes the instance selector of MCP, `--root`
     // and `--sections`, and leaves before `Invocation::parse`. ----
     if let Some(exit) = overview::dispatch(&arguments) {
-        return exit;
+        return cli_line::print(exit);
     }
     // ---- Workflow #389 MCP-8 (end) ----
     // ---- Workflow #389 MCP-6 (begin): `run evidence` takes `--request-id` or `--run-id` and
     // leaves before `Invocation::parse`; its flags are `flags_of`'s. ----
     if let Some(exit) = run_evidence::dispatch(&arguments) {
-        return exit;
+        return cli_line::print(exit);
     }
     // ---- Workflow #389 MCP-6 (end) ----
     // ---- Workflow #398 RD-1c (begin): `devices` runs the install's adb, never the Runtime, and
     // leaves before `Invocation::parse`; its flags are `flags_of`'s. ----
     if let Some(exit) = devices::dispatch(&arguments) {
-        return exit;
+        return cli_line::print(exit);
     }
     // ---- Workflow #398 RD-1c (end) ----
     // Workflow #410 item 6: `capability-gap` appends to the user's local log, never the Runtime,
     // and leaves before `Invocation::parse`; its flags are `flags_of`'s.
     if let Some(exit) = capability_gap::dispatch(&arguments) {
-        return exit;
+        return cli_line::print(exit);
     }
     // Workflow #411 B15 R6: `remedy` takes its action as the second word and leaves before
     // `Invocation::parse`; its flags are `flags_of`'s.
     if let Some(exit) = remedy::dispatch(&arguments, detail) {
-        return exit;
+        return cli_line::print(exit);
     }
     // #422 LN-7c C: `evidence` takes its action as the second word and leaves before
     // `Invocation::parse`; its flags are `flags_of`'s.
     if let Some(exit) = evidence_read::dispatch(&arguments, detail) {
-        return exit;
+        return cli_line::print(exit);
     }
     // Workflow #429 R-2: `perf-preset` takes its action as the second word (and `set` its preset
     // as the third) and leaves before `Invocation::parse`; its flags are `flags_of`'s.
     if let Some(exit) = perf_preset::dispatch(&arguments, detail) {
-        return exit;
+        return cli_line::print(exit);
     }
     // Workflow #429 R-12: `routine-summary` takes `--hour` or `--day` without a value and leaves
     // before `Invocation::parse`; its flags are `flags_of`'s.
     if let Some(exit) = routine_summary::dispatch(&arguments, detail) {
-        return exit;
+        return cli_line::print(exit);
     }
     match run(arguments, detail) {
         Ok(Done {

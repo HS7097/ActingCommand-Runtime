@@ -145,7 +145,7 @@ const RECORD_FORMS: &[(&str, Mode)] = &[
 /// `no_effect` when its status is retired, reserved or unavailable, and `undeclared` otherwise.
 const DECLARATIONS: &[(&str, Mode)] = &[
     // preview
-    ("config set", DRY_RUN),
+    ("user-config set", DRY_RUN),
     ("tap", DRY_RUN),
     ("swipe", DRY_RUN),
     ("long-tap", DRY_RUN),
@@ -280,7 +280,7 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("version", Mode::NoEffect),
     ("doctor", Mode::NoEffect),
     ("paths", Mode::NoEffect),
-    ("config get", Mode::NoEffect),
+    ("user-config get", Mode::NoEffect),
     ("schema", Mode::NoEffect),
     ("list", Mode::NoEffect),
     ("capabilities", Mode::NoEffect),

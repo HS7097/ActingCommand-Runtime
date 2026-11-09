@@ -353,7 +353,8 @@ impl Recording {
             .expect("session JSON"),
         )
         .expect("session file");
-        let lock = RecordingLock::acquire(&state, INSTANCE, "gate_lab_b9").expect("recording lock");
+        let lock = RecordingLock::acquire(&state, INSTANCE, "gate_lab_b9", "Lab-CLI")
+            .expect("recording lock");
         let ocr = if with_ocr {
             LabOcr::with_provider(Arc::new(ScriptedOcr))
         } else {

@@ -21,6 +21,8 @@ impl Lab2Fixture {
 
     fn command(&self, args: &[&str], local_app_data: &Path) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_actinglab"));
+        // Workflow #434 LAB-2: the envelope form of the command words.
+        command.arg("--envelope");
         command
             .args(args)
             .args(["--zip", self.package.to_str().expect("package path")]);
@@ -116,6 +118,8 @@ fn parse_json(output: &Output) -> Value {
 fn retired_arbitrator_fails_without_creating_local_state() {
     let local = TempDir::new().expect("local app data");
     let mut command = Command::new(env!("CARGO_BIN_EXE_actinglab"));
+    // Workflow #434 LAB-2: the envelope form of the command words.
+    command.arg("--envelope");
     command.args(["--json", "lab", "arbitrator", "status"]);
     configure_command(&mut command, local.path());
     let output = command.output().expect("actinglab child process");
@@ -182,6 +186,8 @@ fn offline_mode_requires_an_explicit_scene_and_never_falls_back_to_device_io() {
 fn child_process_stdout_remains_one_json_envelope() {
     let local = TempDir::new().expect("local app data");
     let mut command = Command::new(env!("CARGO_BIN_EXE_actinglab"));
+    // Workflow #434 LAB-2: the envelope form of the command words.
+    command.arg("--envelope");
     command.args(["--json", "lab", "arbitrator", "status"]);
     configure_command(&mut command, local.path());
     let output = command.output().expect("actinglab child process");

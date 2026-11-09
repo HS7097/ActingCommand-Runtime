@@ -7,13 +7,18 @@
 //! it. From LAB-6 the six words are a closed vocabulary of `runtime-client` 7 and `ledger` 8.
 
 use crate::cli_line;
-use crate::codes::ArgumentProblem;
+use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::table::Entry;
 use actingcommand_contract::outcome::Outcome;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize, Serializer};
+use std::ffi::OsStr;
 use std::fmt;
 use std::str::FromStr;
+
+/// The environment variable the UI sets for every Lab process it starts (§4.2): `Lab-制包` for
+/// its workbench's `serve`, `Lab-救急` for every other one.
+pub const ENVIRONMENT_VARIABLE: &str = "ACTINGCOMMAND_INITIATOR";
 
 /// Where a request or an operation came from: the group (`UI`) or the Lab module (§4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -78,6 +83,28 @@ impl Initiator {
             .into_iter()
             .find(|initiator| initiator.as_str() == word)
             .ok_or_else(|| cli_line::usage_invalid(Some(word), ArgumentProblem::NotRecognised))
+    }
+
+    /// Workflow #434 LAB-2 (§4.2): the word of an `actinglab.exe` process, its CLI and `serve`,
+    /// given the value of [`ENVIRONMENT_VARIABLE`] (`None` when it is not set): `Lab-CLI`, unless
+    /// the variable names `Lab-制包` or `Lab-救急`. Any other value, `UI`, `Lab-MCP` and
+    /// `Lab-看门狗` included, is `actingctl_usage_invalid` with `variable`
+    /// `ACTINGCOMMAND_INITIATOR`, and the process sends and writes nothing.
+    pub fn of_lab_process(variable: Option<&OsStr>) -> Result<Self, Outcome> {
+        let Some(value) = variable else {
+            return Ok(Self::LabCli);
+        };
+        [Self::LabAuthoring, Self::LabRescue]
+            .into_iter()
+            .find(|initiator| value.to_str() == Some(initiator.as_str()))
+            .ok_or_else(|| {
+                Outcome::new(ActingctlCode::ActingctlUsageInvalid).variable(ENVIRONMENT_VARIABLE)
+            })
+    }
+
+    /// [`Self::of_lab_process`] with this process's environment.
+    pub fn of_this_lab_process() -> Result<Self, Outcome> {
+        Self::of_lab_process(std::env::var_os(ENVIRONMENT_VARIABLE).as_deref())
     }
 }
 

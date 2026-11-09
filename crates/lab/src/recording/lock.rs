@@ -25,12 +25,21 @@ pub struct RecordingLock {
     state_dir: PathBuf,
     instance: String,
     lock_path: PathBuf,
+    /// Workflow #434 LAB-2 (`contracts/lab-two-entries.md` §4.2, §4.3 "Recordings"): the
+    /// initiator word of the process that holds the lock, written on every step and mark it adds.
+    initiator: String,
 }
 
 impl RecordingLock {
     /// Takes `<state>/record-<instance>.lock` without waiting and records the holder in
-    /// `<state>/record-<instance>.lock.json`.
-    pub fn acquire(state_dir: &Path, instance: &str, command: &str) -> LabResult<Self> {
+    /// `<state>/record-<instance>.lock.json`. `initiator` is the holding process's initiator word
+    /// (§4.2), which every step and mark the holder adds carries.
+    pub fn acquire(
+        state_dir: &Path,
+        instance: &str,
+        command: &str,
+        initiator: &str,
+    ) -> LabResult<Self> {
         let stem = safe_file_stem(instance);
         let lock_path = state_dir.join(format!("record-{stem}.lock"));
         let holder_path = state_dir.join(format!("record-{stem}.lock.json"));
@@ -64,11 +73,17 @@ impl RecordingLock {
             state_dir: state_dir.to_path_buf(),
             instance: instance.to_string(),
             lock_path,
+            initiator: initiator.to_string(),
         })
     }
 
     pub fn state_dir(&self) -> &Path {
         &self.state_dir
+    }
+
+    /// The initiator word of the holding process.
+    pub fn initiator(&self) -> &str {
+        &self.initiator
     }
 
     pub fn instance(&self) -> &str {

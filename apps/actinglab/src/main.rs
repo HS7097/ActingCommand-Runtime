@@ -29,8 +29,7 @@ use actingcommand_runtime_client::{
     ChannelVia, RuntimeChannel, RuntimeClient, RuntimeClientConfig,
 };
 use cli_information::{
-    help_data, run_config, run_devices, run_doctor, run_list, run_paths, run_schema, run_status,
-    version_data,
+    help_data, run_config, run_doctor, run_list, run_paths, run_schema, run_status, version_data,
 };
 use cli_parse::parse_invocation;
 #[cfg(test)]
@@ -98,10 +97,8 @@ use commands::{
 };
 use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_capture_backend_choice};
 use flag_args::FlagArgs;
-use lab_package_control::{
-    attach_package_event, run_control, run_lab, run_operation, run_package, run_scheduler,
-};
-use monitor_stream::{run_monitor, stream_contract_json, stream_events_json};
+use lab_package_control::{attach_package_event, run_control, run_lab, run_operation, run_package};
+use monitor_stream::{stream_contract_json, stream_events_json};
 #[rustfmt::skip] use flag_values::{
     parse_match_metric_flag, parse_optional_duration_ms, parse_optional_string_value,
     parse_optional_unit_f64, parse_optional_usize,
@@ -168,6 +165,9 @@ use user_config_store::write_user_config;
 use zip::{ZipWriter, write::FileOptions};
 
 mod cli_information;
+// Workflow #434 LAB-2: the CLI module (short words from the operation table, output for people,
+// `--json`, `serve --stdio`).
+mod cli_module;
 mod cli_parse;
 mod cli_result;
 mod codes;
@@ -230,18 +230,25 @@ const SESSION_STATE_ENV: &str = "ACTINGLAB_SESSION_STATE_DIR";
 const REQUIRE_SESSION_DAEMON_ENV: &str = "ACTINGLAB_REQUIRE_SESSION_DAEMON";
 const ALLOW_PATH_ADB_FOR_MUMU_ENV: &str = "ACTINGCOMMAND_ALLOW_PATH_ADB_FOR_MUMU";
 fn main() -> ExitCode {
-    let json_default = !io::stdout().is_terminal();
-    let invocation = parse_invocation(env::args().skip(1), json_default);
-    if let Ok(invocation) = &invocation
-        && let Some(via) = invocation.global.via
-    {
-        let _ = CHANNEL_VIA.set(via);
-    }
+    let arguments = env::args().skip(1).collect::<Vec<_>>();
     // Workflow #389 U-2 (model section 3.5): an actingd before U-2 leaves this process's
     // connections unbound; the runtime client reports it once, on stderr.
     actingcommand_runtime_client::set_channel_unsupported_reporter(|outcome| {
         eprintln!("WARN actinglab: {outcome}");
     });
+    // Workflow #434 LAB-2: the CLI module (the operation table's short words, `--json`, `serve
+    // --stdio`), unless the command line asks for the envelope form (`--envelope`, or `--via` from
+    // the MCP server's child), which runs the command words below as before.
+    if !cli_module::envelope_form(&arguments) {
+        return cli_module::main(arguments);
+    }
+    let json_default = !io::stdout().is_terminal();
+    let invocation = parse_invocation(cli_module::without_envelope(arguments), json_default);
+    if let Ok(invocation) = &invocation
+        && let Some(via) = invocation.global.via
+    {
+        let _ = CHANNEL_VIA.set(via);
+    }
     // Parsed admission refuses retired production before installation selection takes a slot.
     if invocation.is_ok()
         && let Err(error) = actingcommand_contract::process_installation()
@@ -358,7 +365,6 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "capabilities" => run_capabilities(&invocation.global),
         [cmd] if cmd == "doctor" => run_doctor(&invocation.global),
         [cmd] if cmd == "status" => run_status(&invocation.global, &invocation.args),
-        [cmd] if cmd == "devices" => run_devices(&invocation.global, &invocation.args),
         [cmd] if cmd == "schema" => run_schema(&invocation.args),
         [cmd] if cmd == "list" => run_list(&invocation.global, &invocation.args),
         [cmd] if cmd == "touch-probe" => run_touch_probe(&invocation.global, &invocation.args),
@@ -392,13 +398,17 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "locate" => run_locate(&invocation.global, &invocation.args),
         [cmd] if cmd == "tap-target" => run_tap_target(&invocation.global, &invocation.args),
         [cmd] if cmd == "navigate" => run_navigate(&invocation.global, &invocation.args),
-        [cmd] if cmd == "monitor" => run_monitor(&invocation.global, &invocation.args),
         [cmd] if cmd == "stream" => {
             runtime_stream_adapter::run_stream(&invocation.global, &invocation.args)
         }
         [cmd] if cmd == "record" => run_session_record(&invocation.global, &invocation.args),
         [cmd] if cmd == "explain" => run_explain_run(&invocation.args),
-        [group, sub] if group == "config" => run_config(sub, &invocation.global, &invocation.args),
+        // Workflow #434 LAB-2 (open point 7, the coordinator's ruling): actinglab's own user
+        // configuration file, `config get|set` before, renamed so as not to take the operation
+        // table's `config` words.
+        [group, sub] if group == "user-config" => {
+            run_config(sub, &invocation.global, &invocation.args)
+        }
         [group, sub] if group == "env" => {
             env_detection::run_env(sub, &invocation.global, &invocation.args)
         }
@@ -412,7 +422,6 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [group, sub] if group == "control" => {
             run_control(sub, &invocation.global, &invocation.args)
         }
-        [group, sub] if group == "scheduler" => run_scheduler(sub, &invocation.global),
         [group, sub] if group == "scheduling" => {
             scheduling_cli::run_scheduling(sub, &invocation.global, &invocation.args)
         }
@@ -427,7 +436,6 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [group, sub] if group == "runtime" => {
             runtime_slice_cli::run(sub, &invocation.global, &invocation.args)
         }
-        [group, sub] if group == "ledger" => run_ledger(sub, &invocation.global, &invocation.args),
         [group, sub] if group == "session" => {
             run_session(sub, &invocation.global, &invocation.args)
         }
@@ -552,16 +560,6 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
 }
 
 use cli_result::human_summary;
-fn run_ledger(sub: &str, _global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let _ = FlagArgs::parse(args)?;
-    match sub {
-        "show" | "events" | "receipts" | "diagnose" | "evidence" => Err(CliError::not_implemented(
-            "local_ledger_retired",
-            "local ledger queries are retired; use lab watch or lab receipt to query the Runtime global ledger",
-        )),
-        other => Err(CliError::usage(format!("unknown ledger command: {other}"))),
-    }
-}
 
 #[cfg(test)]
 #[allow(dead_code)]
@@ -571,32 +569,13 @@ mod legacy_local_ledger_reader;
 fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
         "status" => run_session_status(global, args),
-        "bootstrap" => runtime_session_adapter::retired_authority(sub, args),
         "throat-policy" => run_session_throat_policy(global, args),
         "capture-policy" => run_session_capture_policy(global, args),
         "record-policy" => run_session_record_policy(global, args),
         "self-heal-policy" => run_session_self_heal_policy(global, args),
-        "self-heal-plan" => runtime_session_adapter::retired_authority(sub, args),
-        "phase-c-plan" => runtime_session_adapter::retired_authority(sub, args),
-        "readiness" => runtime_session_adapter::retired_authority(sub, args),
-        "connect-plan" => runtime_session_adapter::retired_authority(sub, args),
-        "stream-plan" => runtime_session_adapter::retired_authority(sub, args),
-        "queue" => runtime_session_adapter::retired_authority(sub, args),
-        "command-check" => runtime_session_adapter::retired_authority(sub, args),
-        "submit-plan" => runtime_session_adapter::retired_authority(sub, args),
-        "validation-plan" => runtime_session_adapter::retired_authority(sub, args),
-        "start" => runtime_session_adapter::retired_authority(sub, args),
-        "stop" => runtime_session_adapter::retired_authority(sub, args),
-        "cleanup" => runtime_session_adapter::retired_authority(sub, args),
-        "daemon" => runtime_session_adapter::retired_authority(sub, args),
-        "request" => runtime_session_adapter::retired_authority(sub, args),
         "contract" => run_session_contract(global, args),
         "api" => run_session_api(global, args),
         "transport" => run_session_transport(global, args),
-        "journal" => runtime_session_adapter::retired_authority(sub, args),
-        "events" => runtime_session_adapter::retired_authority(sub, args),
-        "response" => runtime_session_adapter::retired_authority(sub, args),
-        "request-state" => runtime_session_adapter::retired_authority(sub, args),
         "monitor-policy" => run_session_monitor_policy(global, args),
         "instance" => run_session_instance(global, args),
         "app" => run_session_app_or_recorded(global, args),
@@ -605,8 +584,9 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "capture" => run_capture(global, args),
         "stream" => runtime_stream_adapter::run_stream(global, args),
         "recover" => run_session_recover(global, args),
-        "lease" => runtime_session_adapter::retired_authority(sub, args),
         "record" => run_session_record(global, args),
+        // Workflow #434 LAB-2: the retired session words (bootstrap, request, daemon, lease and
+        // the rest) are gone; they are unknown session commands now.
         _ => Err(CliError::usage(format!("unknown session command: {sub}"))),
     }
 }

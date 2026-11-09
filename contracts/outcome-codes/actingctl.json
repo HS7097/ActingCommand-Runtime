@@ -17,7 +17,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl was given arguments its usage does not allow: an unknown command or option, a missing or repeated value, or a value out of range. argument and argument_problem name the argument and the rule when one argument is at fault, range_min and range_max the allowed range, and variable an invalid ACTINGCOMMAND_DETAIL. Exit 1.",
+      "description": "actingctl was given arguments its usage does not allow: an unknown command or option, a missing or repeated value, or a value out of range. argument and argument_problem name the argument and the rule when one argument is at fault, range_min and range_max the allowed range, and variable an invalid ACTINGCOMMAND_DETAIL or (Workflow #434 LAB-2, actinglab) an ACTINGCOMMAND_INITIATOR other than Lab-制包 or Lab-救急. actinglab's CLI module and serve --stdio answer it for their own words and options too. Exit 1.",
       "common_causes": "A misspelt command or option, or a caller written for another release.",
       "handling": "Correct the command line; actingctl without arguments prints its usage."
     },

@@ -78,6 +78,9 @@ mod gate_392_da4;
 // reads `loading.json` and a pack's loading copy.
 #[path = "gate_load2.rs"]
 mod gate_load2;
+// Workflow #434 LAB-2: the CLI module, `serve --stdio` and the recordings' initiator.
+#[path = "gate_434_lab2.rs"]
+mod gate_434_lab2;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
@@ -432,6 +435,7 @@ fn drift_test_anchor_step(step_id: &str, id: &str) -> Value {
         "step_id": step_id,
         "created_at_unix_ms": 1,
         "updated_at_unix_ms": 2,
+        "initiator": "Lab-CLI",
         "kind": "anchor",
         "id": id,
         "region": {"mode": "rect", "rect": {"x": 1, "y": 2, "width": 3, "height": 4}},
@@ -570,7 +574,7 @@ fn session_instance_list_reads_config() {
     let _ = run_cli(
         [
             "--json",
-            "config",
+            "user-config",
             "set",
             "instance.azur.serial",
             "127.0.0.1:16385",
@@ -578,17 +582,23 @@ fn session_instance_list_reads_config() {
         true,
     );
     let _ = run_cli(
-        ["--json", "config", "set", "instance.azur.game", "azurlane"],
+        [
+            "--json",
+            "user-config",
+            "set",
+            "instance.azur.game",
+            "azurlane",
+        ],
         true,
     );
     let _ = run_cli(
-        ["--json", "config", "set", "instance.azur.server", "jp"],
+        ["--json", "user-config", "set", "instance.azur.server", "jp"],
         true,
     );
     let _ = run_cli(
         [
             "--json",
-            "config",
+            "user-config",
             "set",
             "instance.azur.adb_path",
             "C:\\Tools\\adb.exe",
@@ -598,7 +608,7 @@ fn session_instance_list_reads_config() {
     let _ = run_cli(
         [
             "--json",
-            "config",
+            "user-config",
             "set",
             "instance.azur.capture_backend",
             "droidcast_raw",
@@ -839,7 +849,8 @@ fn capabilities_are_offline() {
         Some("trusted_remote")
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -847,7 +858,8 @@ fn capabilities_are_offline() {
                 == Some("session request capabilities"))
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -855,7 +867,8 @@ fn capabilities_are_offline() {
                 == Some("session request contract"))
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -863,14 +876,16 @@ fn capabilities_are_offline() {
                 == Some("session request api"))
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
             .any(|command| command.get("command").and_then(Value::as_str) == Some("session queue"))
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -878,7 +893,8 @@ fn capabilities_are_offline() {
                 == Some("session request queue"))
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -886,7 +902,8 @@ fn capabilities_are_offline() {
                 == Some("session submit-plan"))
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -894,7 +911,8 @@ fn capabilities_are_offline() {
                 == Some("session bootstrap"))
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -902,7 +920,8 @@ fn capabilities_are_offline() {
                 == Some("session request bootstrap"))
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -910,7 +929,8 @@ fn capabilities_are_offline() {
                 == Some("session request submit-plan"))
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -918,7 +938,8 @@ fn capabilities_are_offline() {
                 == Some("session validation-plan"))
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -926,7 +947,8 @@ fn capabilities_are_offline() {
                 == Some("session request validation-plan"))
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -942,7 +964,8 @@ fn capabilities_are_offline() {
                 == Some("session transport"))
     );
     assert!(
-        data.get("commands")
+        !data
+            .get("commands")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -957,19 +980,11 @@ fn capabilities_are_offline() {
             .any(|command| command.get("command").and_then(Value::as_str)
                 == Some("session instance registry"))
     );
-    let retired = data
-        .get("commands")
-        .and_then(Value::as_array)
-        .unwrap()
-        .iter()
-        .find(|command| {
-            command.get("command").and_then(Value::as_str) == Some("session instance keep-alive")
-        })
-        .expect("retired command remains discoverable");
-    assert_eq!(
-        retired.get("status").and_then(Value::as_str),
-        Some("retired")
-    );
+    // Workflow #434 LAB-2: the retired and reserved command words are gone from the table.
+    assert!(data["commands"].as_array().unwrap().iter().all(|command| {
+        !matches!(command["status"].as_str(), Some("retired" | "reserved"))
+            || command["command"] == "lab arbitrator"
+    }));
     for command in data["commands"].as_array().unwrap() {
         let status = command["status"].as_str().unwrap();
         assert!(matches!(
@@ -980,16 +995,7 @@ fn capabilities_are_offline() {
         assert!(!command["reason_code"].as_str().unwrap().is_empty());
     }
     for (name, status, reason) in [
-        ("ledger show", "retired", "local_ledger_retired"),
-        (
-            "session request status",
-            "retired",
-            "legacy_session_authority_retired",
-        ),
-        ("devices", "retired", "actinglab_device_authority_retired"),
-        ("monitor", "retired", "legacy_session_authority_retired"),
         ("operation run", "unavailable", "lab_lease_required"),
-        ("scheduler start", "reserved", "handler_reserved"),
         ("lab status", "unverified", "runtime_dependency_unverified"),
         ("package dry-run", "available", "offline_handler_ready"),
     ] {
@@ -1903,14 +1909,11 @@ fn top_level_record_capability_is_available() {
         "record start",
         "record status",
         "record stop",
-        "record build-task",
         "session record start",
         "session record status",
         "session record stop",
-        "session record build-task",
         "session stream",
         "session stream check",
-        "session request stream check",
     ] {
         let command = commands
             .iter()
@@ -1920,9 +1923,6 @@ fn top_level_record_capability_is_available() {
             command.get("status").and_then(Value::as_str),
             Some(match command_name {
                 "session stream" => "unverified",
-                "session request stream check"
-                | "record build-task"
-                | "session record build-task" => "retired",
                 _ => "available",
             })
         );
@@ -1935,86 +1935,6 @@ fn top_level_record_capability_is_available() {
         stream.get("status").and_then(Value::as_str),
         Some("unverified")
     );
-}
-
-#[test]
-fn session_response_capabilities_are_retired() {
-    let commands = command_capabilities();
-    for command_name in [
-        "session response",
-        "session response get",
-        "session response wait",
-        "session request response",
-        "session request response get",
-        "session request response wait",
-    ] {
-        let command = commands
-            .iter()
-            .find(|command| command.get("command").and_then(Value::as_str) == Some(command_name))
-            .unwrap_or_else(|| panic!("{command_name} capability"));
-        assert_eq!(
-            command.get("status").and_then(Value::as_str),
-            Some("retired")
-        );
-    }
-}
-
-#[test]
-fn session_request_no_wait_capability_is_retired() {
-    let commands = command_capabilities();
-    let command = commands
-        .iter()
-        .find(|command| {
-            command.get("command").and_then(Value::as_str) == Some("session request --no-wait")
-        })
-        .expect("session request --no-wait capability");
-    assert_eq!(
-        command.get("status").and_then(Value::as_str),
-        Some("retired")
-    );
-}
-
-#[test]
-fn session_request_cancel_capability_is_retired() {
-    let commands = command_capabilities();
-    let command = commands
-        .iter()
-        .find(|command| {
-            command.get("command").and_then(Value::as_str) == Some("session request cancel")
-        })
-        .expect("session request cancel capability");
-    assert_eq!(
-        command.get("status").and_then(Value::as_str),
-        Some("retired")
-    );
-    assert_eq!(
-        command.get("needs").and_then(Value::as_array).unwrap(),
-        &vec![Value::String("offline".to_string())]
-    );
-}
-
-#[test]
-fn session_request_state_capabilities_are_retired() {
-    let commands = command_capabilities();
-    for command_name in [
-        "session request-state",
-        "session request-state get",
-        "session request-state wait",
-        "session request-state list",
-        "session request request-state",
-        "session request request-state get",
-        "session request request-state wait",
-        "session request request-state list",
-    ] {
-        let command = commands
-            .iter()
-            .find(|command| command.get("command").and_then(Value::as_str) == Some(command_name))
-            .unwrap_or_else(|| panic!("{command_name} capability"));
-        assert_eq!(
-            command.get("status").and_then(Value::as_str),
-            Some("retired")
-        );
-    }
 }
 
 #[test]
@@ -2322,15 +2242,9 @@ fn direct_touch_commands_are_capability_registered() {
     }
     for command in [
         "session status",
-        "session bootstrap",
         "session throat-policy",
         "session capture-policy",
         "session self-heal-policy",
-        "session submit-plan",
-        "session validation-plan",
-        "session journal",
-        "session events",
-        "session events wait",
         "session contract",
         "session api",
         "session instance",
@@ -2348,43 +2262,6 @@ fn direct_touch_commands_are_capability_registered() {
         "session capture",
         "session capture diagnose",
         "session recover --stale-capture",
-        "session request status",
-        "session request bootstrap",
-        "session request throat-policy",
-        "session request capture-policy",
-        "session request self-heal-policy",
-        "session request submit-plan",
-        "session request validation-plan",
-        "session request journal",
-        "session request events",
-        "session request events wait",
-        "session request cancel",
-        "session request contract",
-        "session request api",
-        "session request devices",
-        "session request record",
-        "session request capture",
-        "session request capture-diagnose",
-        "session request stream",
-        "session request recognize",
-        "session request detect-page",
-        "session request current-page",
-        "session request is-visible",
-        "session request locate",
-        "session request monitor-once",
-        "session request instance list",
-        "session request instance registry",
-        "session request instance app",
-        "session request app",
-        "session request recover --stale-capture",
-        "session request lab-run",
-        "session request package-run",
-        "session request operation-run",
-        "ledger show",
-        "ledger events",
-        "ledger receipts",
-        "ledger diagnose",
-        "ledger evidence",
         "stream",
         "capture diagnose",
     ] {
@@ -2422,28 +2299,13 @@ fn direct_touch_commands_are_capability_registered() {
             })
         );
     }
+    // Workflow #434 LAB-2: the retired instance words are gone from the table.
     for command in [
         "session instance health",
         "session instance keep-alive",
-        "session instance connect",
-        "session instance reconnect",
         "session request instance health",
-        "session request instance keep-alive",
-        "session request instance connect",
-        "session request instance reconnect",
     ] {
-        let capability = commands
-            .iter()
-            .find(|value| value.get("command").and_then(Value::as_str) == Some(command))
-            .unwrap_or_else(|| panic!("{command} retirement marker missing"));
-        assert_eq!(
-            capability.get("status").and_then(Value::as_str),
-            Some("retired")
-        );
-        assert_eq!(
-            capability.get("needs").and_then(Value::as_array).unwrap(),
-            &vec![Value::String("offline".to_string())]
-        );
+        assert!(commands.iter().all(|value| value["command"] != command));
     }
 }
 
@@ -2946,16 +2808,6 @@ fn navigate_dry_run_uses_navigation_graph() {
         route[0].get("id").and_then(Value::as_str),
         Some("home_to_target")
     );
-}
-
-#[test]
-fn local_ledger_query_commands_fail_loud() {
-    let result = run_cli(["--json", "ledger", "show"], true);
-
-    assert_eq!(result.exit_code(), 6, "{}", result.envelope_json());
-    let error = result.envelope.error.as_ref().unwrap();
-    assert_eq!(error.code, "local_ledger_retired");
-    assert!(error.message.contains("lab watch or lab receipt"));
 }
 
 #[test]

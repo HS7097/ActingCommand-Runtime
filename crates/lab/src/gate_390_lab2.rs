@@ -214,7 +214,8 @@ impl Recording {
             .expect("session JSON"),
         )
         .expect("session file");
-        let lock = RecordingLock::acquire(&state, INSTANCE, "gate_lab2").expect("recording lock");
+        let lock = RecordingLock::acquire(&state, INSTANCE, "gate_lab2", "Lab-CLI")
+            .expect("recording lock");
         let ocr = LabOcr::from_vision_root(&temp.path().join("no-vision"));
         record_start(
             &lock,

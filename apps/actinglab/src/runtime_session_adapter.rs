@@ -73,17 +73,6 @@ pub(super) fn run_monitor_policy(global: &GlobalOptions, args: &[String]) -> Cli
     }
 }
 
-pub(super) fn retired_authority(subcommand: &str, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    reject_legacy_flags(&flags)?;
-    Err(CliError::not_implemented(
-        "legacy_session_authority_retired",
-        format!(
-            "session {subcommand} belonged to the retired Session file-state authority; use Runtime-backed status, monitor-policy, stream, or actingctl"
-        ),
-    ))
-}
-
 fn reject_legacy_flags(flags: &FlagArgs) -> CliOutcome<()> {
     if flags.bool("--via-daemon")
         || flags.bool("--local")

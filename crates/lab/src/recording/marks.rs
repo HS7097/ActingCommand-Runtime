@@ -257,6 +257,8 @@ fn empty_mark(spec: &MarkSpec, step: u32, transition_of: Option<u32>, now: u64) 
             matched_scales_milli: None,
         },
         created_at_unix_ms: now,
+        // Workflow #434 LAB-2: written by `save` with the lock holder's word.
+        initiator: String::new(),
     }
 }
 

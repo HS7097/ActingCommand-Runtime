@@ -22,7 +22,6 @@ use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const COMMAND: &str = "capability-gap";
@@ -161,7 +160,7 @@ fn parse(arguments: &[OsString]) -> Result<(String, String), Outcome> {
 }
 
 /// The `capability-gap` command, when it is the first word.
-pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
