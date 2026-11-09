@@ -369,8 +369,8 @@ pub(super) fn select_instance<'s>(
         .map_err(|miss| ToolError::outcome("usage", miss.outcome(selector)))
 }
 
-/// One committed material, found again from its ref at the ledger's current snapshot (or, for
-/// ac_observe, the frame its observation just recorded). Workflow #434 LAB-1b: `material`'s.
+// One committed material, found again from its ref at the ledger's current snapshot (or, for
+// ac_observe, the frame its observation just recorded). Workflow #434 LAB-1b: `material`'s.
 pub(super) use crate::material::Material;
 
 /// Workflow #434 LAB-1b: the ref, the reads and the text answer are `material`'s; the call

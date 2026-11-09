@@ -499,8 +499,8 @@ static RECORD_STATUS: LabCommand = LabCommand {
 // ---- Workflow #389 MCP-13a (begin): ac_app, actinglab `session app` (MCP-0 command table v1.1
 // §4.14), operator before U-3 and option two after it (FCM:116). ----
 
-/// The actions of actinglab `session app` (`session_management.rs`); `force-stop` is the same
-/// action as `stop`. Workflow #434 LAB-1b: `apps::ACTIONS`.
+// The actions of actinglab `session app` (`session_management.rs`); `force-stop` is the same
+// action as `stop`. Workflow #434 LAB-1b: `apps::ACTIONS`.
 pub(super) use crate::apps::ACTIONS as APP_ACTIONS;
 
 /// `session app <action> --instance <alias>`, never with `--record` (no recording step).
