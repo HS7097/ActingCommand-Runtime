@@ -9,6 +9,137 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.46
+
+本版是 v0.12.45 之后合并的 2 个 PR：#428 SS-2f（#1543）和 #428 SS-2h（#1546）。先说部署：接口声明都不变（账本仍是 [3, 7]），部署不用带
+`--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；v0.12.45 的安装工具装本版照常（见下面的升级）；装上以后能退回 v0.12.45，不用带标志
+（规则文件写了水位线或 `limited` 的，退回前要先拿掉，见下面的退回）。没有新键，默认值文件没改。运行上要知道的是这几处：
+
+- **部署本身不改变调度的决定**：生产的规则文件现在都没写池的估值、水位线和 `limited`，裁定 116 的停摆照旧（被评判的业务候选仍是
+  `benefit_unknown`，一个也不派）。SS-2h 在这样的目录上逐字节不变（目录的序列化、哈希和每个决定都一样）。SS-2f 只管业务候选跨实例的先后；116 之下
+  还能派的业务候选只有不被评判的那几种（由指令触发的业务规则，和随它运行的链条后继），只有两台实例的这类候选在同一轮争同一个共享运行名额
+  （`max_concurrent_runs`、重场景名额）时，谁先谁后才可能和以前不同（见下一条）。
+- **SS-2f：业务档跨实例，谁等得最久谁先**（登记 §1.288）。
+  - 目录带业务标记（`benefit_judged`）时，两台不同实例的业务候选先按实例排：这台实例最近一次策略派发最早的先，从没派发过的排在所有派发过的前面，
+    同一时刻（两台都没派过也算）按实例 id 小的先（`crates/policy/src/evaluator.rs` 2657–2672，`evaluator/turns.rs` 44）。「最近一次」取这台实例
+    各任务快照里最新的 `last_dispatched_unix_ms`，读数刷新的派发也算；读的是每次评估本来就有的快照，不加新读取，不查账本。
+  - 这个键排在 `promoted`、档和零档的位置之后：维护档仍整体在前，零档仍在每台实例的正收益和未评判候选后面；同一实例内的次序不变（未评判的先，
+    评判的按 `B ÷ E`，零档最后）；维护档和不带标记的目录照旧；保留门按同一个次序取候选，仍按实例算。
+  - 116 解除以后的效果：几台实例的业务候选争共享运行名额时，给等得最久的实例，不再给数大的游戏（各游戏的价值单位不同，`B` 跨游戏不可比）。
+    没有新码、新键。
+- **SS-2h：池的两条水位线，和封顶时的花费次序**（登记 §1.289；只对写了估值的池和被评判的消耗者起作用）。
+  - **平时全价**：被评判候选的消耗一律按 `W·c` 算，不管池满不满；SS-2b 按满度的线性折价退役，SS-2d 的 `ε` 读整个 `C`。被消耗的再生池照旧要读数
+    （未知或过期是 `benefit_unknown`），下一步变化时再评。
+  - **两条线**：V2 池可以写 `stop_line`（停止线 S）和 `hard_line`（硬线 H），要么都写、要么都不写；每条是一个事实引用（事实加偏移，同 CF-5 的上限
+    引用）或常数。规则是 `0 ≤ H < S ≤ 上限`：编译时比得出来的不合是 `pool_lines_invalid`（目录拒收），评估时才读得到的不合是 `lines_invalid`；V1 写它
+    是 `unknown_field`。不写时 S 就是上限、H 是 0。线由模型、人或代理写，Runtime 从不自己算。
+  - **上限以下**：被评判、本来能派的候选，跑完会让池落到 H 以下的不派：`pool_line_held`（`pool_line_hold` 是 `would_cross_hard_line`，带
+    `amount_after`）。
+  - **封顶**：读数到上限（开机时也算）时，这台实例上的这个池开始一个封顶期。每轮列出这个池现在能派的被评判消耗者，按「不算这个池的成本时一次运行
+    的价值 V ÷ 消耗量 c」冻结次序（平手按任务 id，从不按成本排），从读数往下计划到 S；最后一个可以越过 S，但不能让池落到 H 以下。一次只派排头一个
+    （`capped_spend`，带两条线、`pool_capacity`、`pool_reading`、`capped_episode`、`capped_round`、`capped_rank`），每次派前再核实际读数；读数还在 S
+    以上就开下一轮，第二轮起只排没标 `limited` 的。排头在分配里占它自己的位置（档和 `B ÷ E`，`B` 只算把读数压到 S 以下的那部分消耗），所以更急的档
+    照样先走；派单在调度器里面，其余的门照走。其余的消耗者这一轮等着：`pool_line_held`，`pool_line_hold` 是 `capped_not_head`、
+    `capped_limited_spent`、`capped_would_cross_hard_line`、`capped_not_dispatchable`（带 `gate_code`）、`capped_round_empty` 或 `capped_cap_unknown`。
+  - 回合记忆（`CappedMemory`）只在内存里，和 SS-4 的一样：重启或启用新的一代目录就从头算（`crates/runtime-host/src/policy_host.rs` 1254、2888、
+    3061）。空闲计划把 `pool_line_held` 当作被收益门挡住的，不算到期，也不为它叫醒（`schedule_explanation.rs` 197）。线只约束调度器：手动请求、随链
+    运行的链条后继和 Runtime 自己的任务不受它挡。
+  - **规则文件的新成员**：池的 `stop_line`、`hard_line`；规则的 `"limited": true`（编排器写成任务的 `benefit_limited`，只用在被评判的规则上，维护规则
+    写它会被拒）。**写了水位线的规则文件要本版的 Runtime**：它必须在 `requires` 里写子系统 `pool_lines`（本版的 `config.subsystems` 多这一行，常开），
+    不写的话本版的编排器拒收（`schedule_invalid`，指在那条线上，`crates/policy/src/compose.rs` 862–880）；v0.12.45 不认这个子系统，按名字拒收
+    （`schedule_requires_missing`）。
+  - **有线没估值**：池写了两条线、却没有估值（没写或是 `"pending"`）时，目录照样编译，带一条警告 `pool_lines_unvalued`（指在 `stop_line`，列在编译
+    结果和试跑报告里）；只有写了估值的池的线才参与硬线和封顶次序，所以这两条线不改变任何决定。这是编译器的第一个警告：以前有诊断就拒收，现在有
+    错误才拒收（`crates/policy/src/compiler.rs` 418–425），其余诊断都是错误级，原有检查一条没放松。
+
+配置：接口修订都不变，按代码和 `contracts/component-interfaces.md` 核过：`actingd-config` 仍是 [5, 27]，`ledger` 仍是 [3, 7]，`runtime-client` 仍是 [3, 6]，
+`package` 仍是 [3, 7]，`install-selection` 仍是 [1, 1]，`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。`contracts/component-interfaces.md`、
+`distribution/windows/component-interfaces.json` 和架构测试 `tools/actinglab-architecture/tests/component_interfaces.rs` 自 v0.12.45 没改。
+
+- SS-2f 不升接口：评估器的排序不是锚点，没有对端读的字段、记录或文件变了（`component-interfaces.md` 的升级规则，290–304）。
+- SS-2h 不升接口：新成员由 `requires` 的 `pool_lines` 把关（旧 Runtime 拒收整个文件，不会读错），新码是结果码目录的追加（`runtime-outcomes` 1 的读者
+  本来就收），回合记忆不落盘；同一条规则里「旧对端容得下的改动不升修订」。池的两条线和任务的 `benefit_limited` 是目录格式的追加，不是账本形状；它们对
+  退回的影响见下面。
+- 配置键：没有新键，也没有去掉的键。`crates/runtime-config`、`actingd.defaults.json` 和 `actingd.config.example.json` 自 v0.12.45 都没改，键表、默认值
+  文件和配置示例都没改，部署计划的默认值对比是空的。`pool_lines` 是程序事实 `config.subsystems` 里的一行（`apps/actingd/src/config/manifest.rs`
+  190–198，`config_subsystem_always_on`），不是配置键；`apps/actingd` 只改了这一处。
+- 结果码：SS-2h 新码 4 个，都在 policy 分片，待定稿，`ladder_class` none，since 0.12.46：`capped_spend`（info）、`pool_line_held`（info）、
+  `pool_lines_invalid`（error，目录诊断）、`pool_lines_unvalued`（warning，目录诊断）。新值键 8 个：整数 `pool_capacity`、`stop_line`、`hard_line`、
+  `pool_reading`、`capped_episode`、`capped_round`、`capped_rank` 和词表键 `pool_line_hold`；新词表 `pool_line_hold`（8 个词：`would_cross_hard_line`、
+  `capped_not_dispatchable`、`capped_limited_spent`、`capped_would_cross_hard_line`、`capped_round_empty`、`capped_not_head`、`capped_cap_unknown`、
+  `lines_invalid`）；policy 多一个前缀 `capped_`，前缀 `pool_` 加上 policy。`policy_benefit_nonpositive`、`benefit_unknown`、`benefit_gap` 的词
+  `reading_unknown`、`benefit_milli` 和 `tolerance_milli` 的说明去掉了折价。SS-2f 没有码。没有新位置，没有新定稿或退役的条目。结果码目录从 3892 个码、
+  1741 个位置变成 3896 个、1741 个；新码都是待定稿，不进发布文件，所以本版的发布文件是空的。
+- 账本：不升，没有新记录形状。新码和新值只放在已有的原因链里（而且只有写了估值的池才会出现），回合记忆不落盘。
+- 程序文件：workspace 成员仍是 36 个（`turns.rs`、`capped.rs` 是 `crates/policy` 里的新模块），Runtime 包和 Tools 包的文件清单都和 v0.12.45 一样
+  （`.github/workflows` 自 v0.12.45 没改）；`Cargo.lock` 没改，没有新依赖。改了的只有 `crates/policy`、`crates/runtime-host`（`policy_host.rs`、
+  `schedule_explanation.rs`）、合同 crate 的值键表（`crates/actingcommand-contract/src/outcome/keys.rs` 743–753）和 `apps/actingd` 的一行子系统；
+  `crates/runtime-client`、`crates/ledger`、`crates/ledger-forensics`、`apps/actingctl`、`apps/actinglab` 自 v0.12.45 没改，MCP 工具仍是 41 个。
+
+升级时要知道的（按安装工具的代码核过；`apps/actingctl/src/install` 自 v0.12.43 没改，下面的行号在 v0.12.45 和本版相同）：
+
+- 不用 `--accept-ledger-one-way`：两边的 `ledger` 都是 [3, 7]，`previous_max_in_next`（7 在 [3, 7] 里）和 `one_way`（7 不大于 7）都过
+  （`apps/actingctl/src/install/plan.rs` 281–294），带上也不改判断；现行和目标的 `ledger` 相同，所以计划里没有 `ledger_verify`（908），apply 不读账本。
+- 其余的边都过：两边的声明逐字相同，安装工具自己的声明 I 编在程序里（`install/host.rs` 24–25），v0.12.45 的 I 和本版的声明一样；`next_max_in_installer`
+  （295–307）、`installer_meets_previous` 和 `installer_meets_next`（308–323）都过；`package` 两边都是 [3, 7]，`bundle_max_in_next` 在单一位置根上只有
+  `pack_declaration_unknown` 警告（325–348）；`installer_knows_keys`（353–369）不受影响，没有新键；`next_check_config`（895–907）：本版的 check-config
+  只在报告的子系统里多一行 `pool_lines`，配置代码（`crates/runtime-config`、`apps/actingd/src/config.rs`、`crates/vision-ffi`）没改，收现行配置，写了
+  DirectML 的也一样。
+- **v0.12.45 的安装工具没有新东西要发或要读**：它和 Runtime 之间的请求、答复形状都没变，它不编排规则文件、不读目录。从本版的构建目录跑本版的安装
+  工具，结果相同。
+- 部署的自动回退和 `install undo` 这次可以用：接口边都过，回退门的配置一项也过；刚部署完的规则文件没写水位线，退回也不受目录挡（见下面的退回）。
+
+退回 v0.12.45（按安装工具的代码核过）：
+
+- 安装工具允许退回，不用 `--accept-ledger-one-way`。两边的声明相同：`ledger` [3, 7] 的 `previous_max_in_next` 和 `one_way` 都过（`plan.rs` 281–294），
+  `runtime-client`、`install-control`、`runtime-outcomes`、`package` 和 `actingd-config` 两边都一样，没有失败的边；退回时 `next_check_config` 不算接口边
+  （`plan.rs` 1019–1025）。部署的自动回退（`install/deploy.rs` 715–733，`accept_ledger_one_way: false`）、`rollback plan|apply` 和起过本版 Runtime 以后的
+  `install undo`（`install/undo.rs` 177–189、324–356）走的是同一组边和同一个回退门（`install/update.rs` 378 起）。
+- 回退门其余几项：v0.12.45 自己的读者读部署之后写的账本页（`ledger_readability`，`update.rs` 395–432，只对本版替换掉的那个构建算，就是 v0.12.45）：
+  没有新记录形状，新码和新值都在已有的原因链里，读得了；v0.12.45 在这个根上最近一次打开在它的期限减余量之内（433–484）；现行配置过 v0.12.45 的
+  check-config（485–498）：两版的配置代码相同。
+- **规则文件写了水位线或 `limited` 时，安装工具不拦，但 v0.12.45 不收、甚至起不来**：回退门不看规则文件和目录。
+  - v0.12.45 不认子系统 `pool_lines`，它的编排器以 `schedule_requires_missing` 拒收写了线的 `schedule.json`（v0.12.45 的 `crates/policy/src/compose.rs`
+    890–903）；它的读取器也不认任务的 `benefit_limited`（`unknown_field`）。这个游戏退回启用的代里的那份规则文件，其他游戏照常。
+  - 更要紧的是启动：v0.12.45 启动时要重新编译启用的那一代、每个未了结的派单钉住的那一代，以及决策记忆点名的每次派单所在的那一代（§1.225 的退回
+    更正）。其中只要有一代带水位线或 `benefit_limited`，它的读取器就拒收（任务和池都是 `deny_unknown_fields`，v0.12.45 的 `crates/policy/src/schema.rs`
+    305–307、1051–1053），以 `catalog_generation_invalid` 致命地停下（v0.12.45 的 `crates/runtime-host/src/policy_host.rs` 6677，配置族的全局故障），整个
+    Runtime 起不来。
+  - 所以退回之前，先在本版上把各游戏根 `schedule.json` 里的 `stop_line`、`hard_line`、`limited` 和 `requires` 里的 `pool_lines` 拿掉，等下一次工作台
+    检查启用了不带它们的一代（程序事实 `config.catalog` 换成了新的代），再确认没有未了结的计划派单；在带线的代下派过计划运行的每个（任务、实例）对，
+    都要先在新的代下再完成一次派单。生产的规则文件现在都没写这些，所以现在退回什么都不用做。
+- 落盘的东西都不挡：没有新键、新文件、新记录形状；回合记忆不落盘。
+- 退回以后：业务档跨实例又按 `B ÷ E` 排；写了估值的再生池又按满度折价；没有水位线和封顶次序。
+- 客户端和 Runtime 的配对：
+  - v0.12.45 的安装工具装本版：照常，不带标志，见上面的升级。
+  - **actinglab ≤ v0.12.45 和 MCP（actingctl ≤ v0.12.45）连本版的 Runtime**：线上什么都不变。`crates/runtime-client`、`apps/actingctl`、`apps/actinglab`
+    自 v0.12.45 没改，合同 crate 只在值键表里加了 8 个键，Runtime 收的请求、发的回执和写的记录形状都和 v0.12.45 一样。只有规则文件写了估值和水位线
+    以后，`actingctl schedule`、`ac_schedule` 和 `ac_overview`、`ac_diagnose` 的未运行一行里才会出现新码：旧客户端照原样显示码和值，但它内嵌的码目录
+    没有这 4 个码，`actingctl codes`、`ac_outcome_code` 查它们答 `outcome_code_unknown`（`crates/lab-ops/src/code_lookup.rs` 188）。生产根里的
+    actingctl（含 MCP 服务和看门狗）、`tools\actinglab.exe` 和 Runtime 是同一个构建，随部署一起换。
+  - **控制台 UI**（UI 仓 main `e60e3366`，最新发版仍是 UI v0.12.10；自 `c03d18ea` 只改了 `model/` 下的 acmodel，控制台没动：`Cargo.toml` 39–44 仍把
+    合同、账本、取证、`runtime-client`、配置和内核 crate 钉在 `a322caa4`，即 v0.12.43；`crates/acui-setup/component-interfaces.json` 仍声明
+    `actingd-config` [5, 26]、`ledger` [3, 7]、`runtime-client` [3, 5]、`runtime-outcomes` [1, 1]）：本版的声明和 v0.12.45 逐字相同，线上也没变，所以
+    控制台对本版和对 v0.12.45 一样。`ledger` 7 在 [3, 7] 里，`runtime-client` [3, 5] 和 [3, 6] 有交集，`runtime-outcomes` 1 在 [1, 1] 里；配置写了修订
+    27 的成员（切了 DirectML）时不在它声明的 [5, 26] 里，这在 v0.12.44 就是这样，本版没变：控制台把配置当 JSON 读、只查 `vision_provider_manifest`
+    （`crates/acui-installation/src/lib.rs` 77），画面刷新走 `observe_readonly`（`crates/acui-source/src/workbench/preview.rs` 586–595）。本版的 4 个新码
+    不在它钉住的码目录里，遇到时它照原样显示码（`crates/acui-rows/src/outcome.rs` 152、156–161）；生产的规则文件没写估值和水位线，现在不会出现。本版
+    没有东西逼控制台换钉。
+
+运行上的变化：
+
+- 部署本身不改变运行：没写估值和水位线的目录 SS-2h 逐字节不变；SS-2f 只在两台实例不被评判的业务候选争同一个共享运行名额时，先给最近一次派发最早的实例。
+
+本版合并的 PR：
+
+- #1543 SS-2f（#428，登记 §1.288，问题 137 的答复 K2）：`allocation_order` 加一个键，业务档跨实例按最近一次策略派发排（新模块 `evaluator/turns.rs`），
+  保留门用同一个次序；契约改调度 README 和 `standard-pack-schedule.md`；新测试 4 个（`gate_ss2f`），没有改既有测试；没有新码、新键。
+- #1546 SS-2h（#428，登记 §1.289，裁定 138 和 172、173）：池的 `stop_line`、`hard_line` 和 `pool_lines_invalid`；平时全价（SS-2b 的折价退役）；硬线和
+  封顶花费次序（新模块 `evaluator/capped.rs`，新入口 `evaluate_with_capped_spending`，runtime-host 持有只在内存的回合记忆）；任务成员 `benefit_limited`
+  （规则成员 `limited`）；常开子系统 `pool_lines`；编译器开始带出警告（`pool_lines_unvalued`）；新码 4 个、值键 8 个、词表 1 个；新测试 19 个
+  （`gate_ss2h`，设计的 17 个加修复补的 2 个），改造 2 个（`gate_ss2b::ss2b_t6`、`gate_ss2d::ss2d_t15`：满的再生池原来不计成本，现在全价，到上限时作为
+  封顶排头派出）。它取代了没合入的 SS-2h-a（#1544）。
+
 ## v0.12.45
 
 本版是 v0.12.44 之后合并的 3 个 PR：#434 LAB-0（#1540）、#433 LABDO-1（#1542）和 #434 LAB-1（#1541）。先说部署：接口声明都不变（账本仍是 [3, 7]），
