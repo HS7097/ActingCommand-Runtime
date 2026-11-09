@@ -42,6 +42,23 @@ it takes no `--root`. Another word is `actingctl_usage_invalid`, and a program t
 `<root>\tools\actingwatch.exe` is `watchdog_launcher_misplaced`, each as actingctl's result line,
 exit 1.
 
+**Where a subcommand of actingwatch prints** (LAB-4 fix 1). actingwatch is a GUI-subsystem
+program, which Windows starts without standard handles in its parent's console. Started with a
+word, it first attaches to its parent's console when there is one
+(`AttachConsole(ATTACH_PARENT_PROCESS)`, through `actingcommand-host-metrics`'
+`standard_handles::attach_parent_console`, so actingwatch itself still forbids unsafe code):
+the report line, the developer line and any `DIAG actingctl:` line then appear in that console,
+on its stdout and stderr, in the words `actingctl watchdog` prints. Handles the parent gave it
+(a redirection or a pipe) stay as they are and receive the same lines; a parent without a
+console (Explorer, a GUI) leaves nothing to attach to, and nothing is shown. The exit code is
+set on every path (0, 1 or 2 by the top's category; 1 for a refused command line). An
+interactive cmd or PowerShell does not wait for a GUI-subsystem program: its lines may come
+after the next prompt, and `%ERRORLEVEL%` or `$LASTEXITCODE` does not hold its exit. Wait for
+it to read the exit: in cmd `start /wait "" <root>\tools\actingwatch.exe status`, then
+`%ERRORLEVEL%`; in PowerShell `(Start-Process -FilePath <root>\tools\actingwatch.exe
+-ArgumentList status -NoNewWindow -Wait -PassThru).ExitCode`. The task's tick (no word) attaches
+to nothing and stays windowless.
+
 ## Layout
 
 Two layouts qualify (Workflow #390 WD-1 adds the second in v0.12.1):
@@ -326,7 +343,8 @@ the start log's terminal outcome, else its last line (developer text).
 `<root>\tools\actingwatch.exe`, shipped in the Tools artifact (layout
 `platform-tools-v3`), is the program Task Scheduler runs. It is a GUI-subsystem
 program, so it opens no console window, and forbids unsafe code; from LAB-4 it is
-`apps/actingwatch` and links `crates/watchdog`. It:
+`apps/actingwatch` and links `crates/watchdog` (and, from LAB-4 fix 1, for its subcommands'
+console only, `actingcommand-host-metrics`; see "Commands"). Without arguments it:
 
 1. requires to be `<root>\tools\actingwatch.exe` itself, else exits 1
    (`watchdog_launcher_misplaced`);
@@ -347,7 +365,9 @@ program, so it opens no console window, and forbids unsafe code; from LAB-4 it i
    exits; what the child wrote to stderr (its developer lines, `DIAG actingctl:` lines and
    a panic's message) is appended to the log in the same words, and its report goes to
    this program's stdout, which the task does not read. `watchdog_launcher_spawn_failed`
-   has no site any more.
+   has no site any more and is retired in 0.12.47 (LAB-4 fix 1). The developer lines reach
+   the log because actingwatch names the log as the crate's developer sink in every call;
+   the crate has no default sink and prints nothing on stderr of its own.
 
 Its own failures are registered codes (Workflow #378 A5); from step 3 on, it appends
 `ERROR actingwatch: <code> <path>: <error>` to the log. It reads no slot material of its own

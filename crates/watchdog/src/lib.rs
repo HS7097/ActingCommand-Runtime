@@ -80,7 +80,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, ExitStatus};
-use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 pub(crate) const USAGE: &str = "usage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
@@ -88,26 +87,13 @@ pub(crate) const USAGE: &str = "usage: actingctl watchdog <status|run-once [--fr
 pub(crate) const REPORT_SCHEMA: &str = "actingcommand.watchdog.report.v2";
 const RUN_LOCK: &str = "run.lock";
 
-/// Where a developer line goes instead of stderr (Workflow #434 LAB-4).
-pub type DeveloperSink = Box<dyn Fn(&Outcome, Option<&str>) + Send + Sync>;
-
-static DEVELOPER_SINK: OnceLock<DeveloperSink> = OnceLock::new();
-
-/// Workflow #434 LAB-4: sends this process's developer lines to `sink` instead of stderr, once;
-/// `false` when a sink is set already. actingwatch's task tick has no stderr: it appends them to
-/// `watchdog.log`, where the launcher put the tick's stderr before LAB-4.
-pub fn set_developer_sink(sink: DeveloperSink) -> bool {
-    DEVELOPER_SINK.set(sink).is_ok()
-}
-
-/// The developer line `<LEVEL> actingctl: <outcome>[ <text>]`: on stderr
-/// (`cli_line::developer_line`), or to the sink [`set_developer_sink`] set.
-pub fn developer_line(outcome: &Outcome, text: Option<&str>) {
-    match DEVELOPER_SINK.get() {
-        Some(sink) => sink(outcome, text),
-        None => cli_line::developer_line(outcome, text),
-    }
-}
+/// Where the watchdog's developer lines `<LEVEL> actingctl: <outcome>[ <text>]` go: the outcome
+/// and the developer English beside it. Workflow #434 LAB-4 fix 1: the program that runs a
+/// subcommand names it in every call of [`dispatch`] and [`dispatch_exit`], and there is no
+/// default, so this crate prints nothing on stderr of its own. actingctl prints them on stderr,
+/// as before; actingwatch's task tick appends them to `watchdog.log`, where the launcher put the
+/// tick's stderr before LAB-4, and its `status`, `install` and `uninstall` print them on stderr.
+pub type DeveloperSink<'a> = &'a dyn Fn(&Outcome, Option<&str>);
 
 /// #411 A66: how long a waiter for the watchdog's run lock waits: the start window of the
 /// installation at `root` and `RUN_LOCK_MARGIN_MS` for the tick's probes. A root that no longer
@@ -166,6 +152,11 @@ struct Report {
     outcome: Outcome,
     attention: Vec<Outcome>,
     data: Map<String, Value>,
+    /// Workflow #434 LAB-4 fix 1: the developer lines (without developer text) the subcommand
+    /// writes before its report line: a log line it could not append, and under the task a
+    /// misconfiguration the log does not hold. [`print`] hands them to the caller's sink first,
+    /// in this order, where they went to stderr at once before.
+    developer_before: Vec<Outcome>,
 }
 
 impl Report {
@@ -174,6 +165,7 @@ impl Report {
             outcome,
             attention: Vec::new(),
             data: Map::new(),
+            developer_before: Vec::new(),
         }
     }
 
@@ -225,24 +217,40 @@ enum Subcommand {
 }
 
 /// Runs `watchdog …` when the first argument names it; `None` leaves every other command to
-/// the CLI, unchanged.
-pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
-    dispatch_exit(arguments).map(ExitCode::from)
+/// the CLI, unchanged. Its developer lines go to `developer` (Workflow #434 LAB-4 fix 1).
+pub fn dispatch(arguments: &[OsString], developer: DeveloperSink<'_>) -> Option<ExitCode> {
+    dispatch_exit(arguments, developer).map(ExitCode::from)
 }
 
 /// [`dispatch`], with the process's exit code as a number (Workflow #434 LAB-4: actingwatch
 /// exits with it).
-pub fn dispatch_exit(arguments: &[OsString]) -> Option<u8> {
+pub fn dispatch_exit(arguments: &[OsString], developer: DeveloperSink<'_>) -> Option<u8> {
     if arguments.first()?.to_str()? != "watchdog" {
         return None;
     }
     let detail = match cli_line::detail() {
         Ok(detail) => detail,
-        Err(invalid) => return Some(print(&Report::new(invalid), Detail::Full, false, None)),
+        Err(invalid) => {
+            return Some(print(
+                &Report::new(invalid),
+                Detail::Full,
+                false,
+                None,
+                developer,
+            ));
+        }
     };
     let (subcommand, root) = match parse(&arguments[1..]) {
         Ok(parsed) => parsed,
-        Err(usage) => return Some(print(&Report::new(usage), detail, false, Some(USAGE))),
+        Err(usage) => {
+            return Some(print(
+                &Report::new(usage),
+                detail,
+                false,
+                Some(USAGE),
+                developer,
+            ));
+        }
     };
     // Under the task, stderr goes into watchdog.log: the developer line is for a person only.
     let quiet = matches!(subcommand, Subcommand::RunOnce { from_task: true });
@@ -252,22 +260,32 @@ pub fn dispatch_exit(arguments: &[OsString]) -> Option<u8> {
         Subcommand::Install => install(&root),
         Subcommand::Uninstall => uninstall(&root),
     };
-    Some(print(&report, detail, quiet, None))
+    Some(print(&report, detail, quiet, None, developer))
 }
 
-/// Prints the report's one stdout line, then, unless `quiet`, the developer line of a warning,
-/// error or fatal top (`text` is developer English, such as the usage); returns the exit code.
-/// A stdout that refuses the line leaves the developer line `actingctl_output_failed`, exit 1.
-fn print(report: &Report, detail: Detail, quiet: bool, text: Option<&str>) -> u8 {
+/// Hands the developer lines the subcommand wrote before its report to `developer`, prints the
+/// report's one stdout line, then, unless `quiet`, the developer line of a warning, error or
+/// fatal top (`text` is developer English, such as the usage); returns the exit code. A stdout
+/// that refuses the line leaves the developer line `actingctl_output_failed`, exit 1.
+fn print(
+    report: &Report,
+    detail: Detail,
+    quiet: bool,
+    text: Option<&str>,
+    developer: DeveloperSink<'_>,
+) -> u8 {
+    for before in &report.developer_before {
+        developer(before, None);
+    }
     let written = report
         .line(detail)
         .map_err(io::Error::from)
         .and_then(|line| write_line(&line));
     if let Err(error) = written {
-        return output_failed(&error);
+        return output_failed(&error, developer);
     }
     if !quiet && report.outcome.category() > Category::Info {
-        developer_line(&report.outcome, text);
+        developer(&report.outcome, text);
     }
     report.exit_code()
 }
@@ -281,8 +299,8 @@ fn write_line(line: &Value) -> io::Result<()> {
 }
 
 /// Exit 1, as `ExitCode::FAILURE`.
-fn output_failed(error: &dyn fmt::Display) -> u8 {
-    developer_line(
+fn output_failed(error: &dyn fmt::Display, developer: DeveloperSink<'_>) -> u8 {
+    developer(
         &Outcome::new(ActingctlCode::ActingctlOutputFailed),
         Some(&error.to_string()),
     );
@@ -634,7 +652,7 @@ fn run_once(root: &Path, from_task: bool) -> Report {
 
 /// Test-only (Workflow #421 INST-1, IT-10): the decision of one task tick on `seams`. Workflow
 /// #434 LAB-4: actingctl's install gates and actingwatch's `actingwatch_tick_in_process` read it
-/// through the feature `test-hooks`.
+/// through the feature `test-hooks`; it prints nothing, so it takes no developer sink.
 #[cfg(any(test, feature = "test-hooks"))]
 pub fn tick_for_test(seams: &dyn TickSeams, root: &Path) -> Outcome {
     run_once_with(seams, root, true).outcome
@@ -1132,6 +1150,8 @@ fn misconfigured_report(
     // Under the task (`quiet`) stderr also lands in watchdog.log: it repeats nothing the log
     // already holds.
     let mut in_log = false;
+    // Workflow #434 LAB-4 fix 1: the developer lines go to the caller's sink, before the report.
+    let mut developer_before = Vec::new();
     let log = match directory {
         Some(directory) => {
             if write {
@@ -1152,7 +1172,7 @@ fn misconfigured_report(
                         &log::outcome_fields(&outcome),
                     ) {
                         Ok(()) => in_log = true,
-                        Err(error) => developer_line(&error, None),
+                        Err(error) => developer_before.push(error),
                     }
                 }
             }
@@ -1161,9 +1181,11 @@ fn misconfigured_report(
         None => Value::Null,
     };
     if quiet && !in_log {
-        developer_line(&outcome, None);
+        developer_before.push(outcome.clone());
     }
-    Report::new(outcome).with("log", log)
+    let mut report = Report::new(outcome).with("log", log);
+    report.developer_before = developer_before;
+    report
 }
 
 /// `status`'s task section (read-only, through the ScheduledTasks module). A missing task is
@@ -1363,18 +1385,22 @@ fn install_failed(directory: Option<&Path>, failure: Outcome) -> Report {
     } else {
         failure
     };
+    // Workflow #434 LAB-4 fix 1: the developer line goes to the caller's sink, before the report.
+    let mut developer_before = Vec::new();
     let log = match directory {
         Some(directory) => {
             if let Err(error) =
                 log::append_outcome(directory, now_unix_ms(), Level::Error, &outcome)
             {
-                developer_line(&error, None);
+                developer_before.push(error);
             }
             watchdog_log(directory)
         }
         None => Value::Null,
     };
-    Report::new(outcome).with("log", log)
+    let mut report = Report::new(outcome).with("log", log);
+    report.developer_before = developer_before;
+    report
 }
 
 /// `uninstall`: `schtasks /Delete /F`. Every file under `<root>\watchdog\` stays. The root

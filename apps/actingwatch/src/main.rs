@@ -17,6 +17,13 @@
 //! and a panic's message. `actingwatch status|install|uninstall` answer as `actingctl watchdog
 //! <word> --root <root>` does for the root this program lies in.
 //!
+//! Workflow #434 LAB-4 fix 1: a GUI-subsystem program started from a console has no standard
+//! handles there, so a subcommand first attaches to its parent's console when there is one
+//! (`actingcommand_host_metrics::standard_handles::attach_parent_console`; this crate stays free
+//! of unsafe code): its report, its developer lines and its errors appear in that console, and
+//! its exit code is set on every path. The task's tick (no argument) attaches nothing and stays
+//! windowless. The crate's developer lines go where this program names them, never to a default.
+//!
 //! Workflow #378 A5 (model v2.2 §7.5, §7.6): the tick's exit (0, 1 or 2) is this program's. The
 //! launcher's own failures are registered codes (`watchdog_launcher_misplaced`,
 //! `watchdog_launcher_log_unavailable`, `watchdog_launcher_writer_lock_failed`), written as the
@@ -39,6 +46,7 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::OnceLock;
 
 /// The exit of every launcher failure: an error (model §7.6).
 const FAILED: i32 = 1;
@@ -50,9 +58,13 @@ const DETAIL_USAGE: &str = "ACTINGCOMMAND_DETAIL takes codes or full";
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
     if arguments.is_empty() {
-        // The task's tick: 0, 1 or 2.
+        // The task's tick: 0, 1 or 2. It attaches to no console and stays windowless.
         ExitCode::from(u8::try_from(run(&mut SystemLaunch)).unwrap_or(1))
     } else {
+        // Workflow #434 LAB-4 fix 1: a subcommand started from a console prints there. A parent
+        // without a console leaves the standard handles as they were (a redirected one still
+        // receives the lines); the exit code is set either way.
+        let _attached = actingcommand_host_metrics::standard_handles::attach_parent_console();
         command(&SystemLaunch, &arguments)
     }
 }
@@ -96,9 +108,15 @@ impl Launch for SystemLaunch {
     }
 
     fn tick(&mut self, root: &Path, log: &Path) -> i32 {
-        tick_in_process(root, &LogLines(log.to_path_buf()))
+        // One tick per process: the log is never set already.
+        tick_in_process(root, TICK_LOG.get_or_init(|| LogLines(log.to_path_buf())))
     }
 }
+
+/// The task tick's `<root>\watchdog\watchdog.log`, set once at its start: the runtime client
+/// takes its channel fallback reporter as a plain function ([`tick_channel_report`]), which reads
+/// the log here.
+static TICK_LOG: OnceLock<LogLines> = OnceLock::new();
 
 /// Tries the writer lock at `path` shared, without waiting.
 fn probe_writer_lock(path: &Path) -> WriterLock {
@@ -143,7 +161,6 @@ fn run(launch: &mut impl Launch) -> i32 {
 }
 
 /// `<root>\watchdog\watchdog.log`, appended to line by line: where the tick's stderr went.
-#[derive(Clone)]
 struct LogLines(PathBuf);
 
 impl LogLines {
@@ -167,34 +184,29 @@ fn developer_text(outcome: &Outcome, text: Option<&str>) -> String {
 
 /// The task's tick of `root`, as actingctl's `main` ran `watchdog run-once --root <root>
 /// --from-task`, with what it wrote to stderr appended to the log.
-fn tick_in_process(root: &Path, log: &LogLines) -> i32 {
-    let diagnostic = log.clone();
+fn tick_in_process(root: &Path, log: &'static LogLines) -> i32 {
     if let Err(error) =
         actingcommand_contract::outcome::install_diagnostic_sink(Box::new(move |outcome, text| {
-            diagnostic.append(&format!("DIAG actingctl: {outcome} {text}"));
+            log.append(&format!("DIAG actingctl: {outcome} {text}"));
         }))
     {
         log.append(&format!("DIAG actingctl: {error}"));
     }
-    let developer = log.clone();
-    // One tick per process: the sink is never set already.
-    let _ = actingcommand_watchdog::set_developer_sink(Box::new(move |outcome, text| {
-        developer.append(&developer_text(outcome, text));
-    }));
-    let panicked = log.clone();
+    // Workflow #434 LAB-4 fix 1: the tick's developer lines go to the log, named for every call.
+    let developer: actingcommand_watchdog::DeveloperSink<'_> = &|outcome, text| {
+        log.append(&developer_text(outcome, text));
+    };
     std::panic::set_hook(Box::new(move |info: &std::panic::PanicHookInfo<'_>| {
-        panicked.append(&format!("thread 'main' {info}"));
+        log.append(&format!("thread 'main' {info}"));
     }));
-    actingcommand_runtime_client::set_channel_unsupported_reporter(|outcome| {
-        actingcommand_watchdog::developer_line(outcome, None);
-    });
+    actingcommand_runtime_client::set_channel_unsupported_reporter(tick_channel_report);
     if let Err(error) = actingcommand_contract::process_installation() {
         let outcome = Outcome::new(error.code());
-        actingcommand_watchdog::developer_line(&outcome, None);
+        developer(&outcome, None);
         return i32::from(cli_line::exit_code(outcome.category(), true));
     }
     if let Err(outcome) = cli_line::detail() {
-        actingcommand_watchdog::developer_line(&outcome, Some(DETAIL_USAGE));
+        developer(&outcome, Some(DETAIL_USAGE));
         return i32::from(cli_line::exit_code(outcome.category(), true));
     }
     let arguments = [
@@ -204,7 +216,22 @@ fn tick_in_process(root: &Path, log: &LogLines) -> i32 {
         root.as_os_str().to_owned(),
         OsString::from("--from-task"),
     ];
-    actingcommand_watchdog::dispatch_exit(&arguments).map_or(FAILED, i32::from)
+    actingcommand_watchdog::dispatch_exit(&arguments, developer).map_or(FAILED, i32::from)
+}
+
+/// The runtime client's channel fallback report during the task's tick: its developer line,
+/// appended to the tick's log, which [`SystemLaunch::tick`] set before the tick installed this
+/// reporter.
+fn tick_channel_report(outcome: &Outcome) {
+    if let Some(log) = TICK_LOG.get() {
+        log.append(&developer_text(outcome, None));
+    }
+}
+
+/// The developer line of a subcommand (Workflow #434 LAB-4 fix 1): on stderr, which the parent's
+/// console, when there is one, now shows; the words `cli_line::developer_line` printed for it.
+fn stderr_line(outcome: &Outcome, text: Option<&str>) {
+    eprintln!("{}", developer_text(outcome, text));
 }
 
 /// `actingwatch status|install|uninstall`: `actingctl watchdog <word> --root <root>` for the root
@@ -219,7 +246,7 @@ fn command(launch: &impl Launch, arguments: &[OsString]) -> ExitCode {
         eprintln!("DIAG actingctl: {error}");
     }
     actingcommand_runtime_client::set_channel_unsupported_reporter(|outcome| {
-        cli_line::developer_line(outcome, None);
+        stderr_line(outcome, None);
     });
     let word = arguments[0].to_str();
     if !matches!(word, Some("status" | "install" | "uninstall")) {
@@ -252,7 +279,7 @@ fn command(launch: &impl Launch, arguments: &[OsString]) -> ExitCode {
         OsString::from("--root"),
         root.into_os_string(),
     ];
-    ExitCode::from(actingcommand_watchdog::dispatch_exit(&arguments).unwrap_or(1))
+    ExitCode::from(actingcommand_watchdog::dispatch_exit(&arguments, &stderr_line).unwrap_or(1))
 }
 
 /// `<root>` when this program (`executable`) is `<root>\tools\actingwatch.exe`, in its ordinary

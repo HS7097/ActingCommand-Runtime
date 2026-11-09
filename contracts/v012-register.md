@@ -8106,11 +8106,12 @@ report, codes and exits).
 |---|---|---|---|---|---|
 | L4-1 | `crates/watchdog` (package `actingcommand-watchdog`, a library, Windows only; version 0.1.0) | workspace member | LAB-4 | — | `apps/actingctl/src/watchdog/` moved with `git mv` (`mod.rs` became `lib.rs`; `decide`, `observe`, `start`, `state`, `task`, `log`, `powershell` and the gates `gate_381a`, `gate_382_a4`, `gate_wd1`, `gate_wd_mt`); `pub(crate)` became `pub` and every module is public; actingctl's modules it reads (`cli_line`, `codes`, `packs`, `process_probe`) come from `crates/lab-ops` and are bound at the crate's root, so every `crate::<module>` path of the moved files names them unchanged; actingctl binds the crate as `watchdog` at its root, so its `crate::watchdog` paths name it unchanged; tested in the CI job `host-lab`; the outcome catalog's fragment owner `watchdog` registers nothing (the watchdog's codes stay the owner `actingctl`'s, in `crates/lab-ops`) |
 | L4-2 | `install_state`: `OperationKind`, `Current`, `OPERATION_PREFIX`, `operation_ms`, `unfinished_operation` | moved code | LAB-4 | `actingctl install` (`install\current.json`) | from actingctl's `install::state` and `install::journal`, unchanged: the reader of row 7a″, which actingwatch's own tick needs as actingctl's did; actingctl names them where it did, and `OperationKind::location` became actingctl's trait `KindLocation` (a crate cannot add an inherent method to another crate's type); the reader reads `current.json` whole with a byte order mark skipped, as `install::files::read_json` did, and any failure stays `Some(None)` |
-| L4-3 | `dispatch` (actingctl's `watchdog …`) and `dispatch_exit` (the same, its exit as a number); `set_developer_sink`, `developer_line`, `DeveloperSink` | behaviour, in-process seam | LAB-4 | actingctl's `main`, actingwatch | the report, its developer line and the exit are actingctl's; without a sink a developer line goes to stderr through `cli_line::developer_line`, as before; actingwatch's task tick sets a sink that appends it to `watchdog.log` |
+| L4-3 | `dispatch(arguments, developer)` (actingctl's `watchdog …`) and `dispatch_exit(arguments, developer)` (the same, its exit as a number); `DeveloperSink<'a>` (`&'a dyn Fn(&Outcome, Option<&str>)`) | behaviour, in-process seam | LAB-4 (the sink a parameter from fix 1) | actingctl's `main`, actingwatch | the report, its developer line and the exit are actingctl's; every call names where the developer lines go, and there is no default (fix 1: the crate printed through `lab-ops`' `cli_line::developer_line` when no sink was set, which LAB-2 removes from `lab-ops`): actingctl names its `cli_line::developer_line` (stderr, as before), actingwatch's task tick a sink that appends to `watchdog.log`, its subcommands a sink that prints on stderr in the same words; a developer line written before the report (a log line not appended, a misconfiguration under the task the log does not hold) goes to the sink first, in the same order as before |
 | L4-4 | the feature `test-hooks`: `tick_for_test` | test seam | LAB-4 | actingctl's and actingwatch's dev-dependencies | the decision of one task tick on given seams (Workflow #421 INST-1, IT-10), read by actingctl's install gates and by `actingwatch_tick_in_process` |
 | L4-5 | `apps/actingwatch` (package `actingcommand-actingwatch`, the program `actingwatch.exe`) | workspace member, program | LAB-4 | — | `apps/actingctl/src/watch_launcher.rs` moved with `git mv` to `src/main.rs`, with its gate `gate_382_a1_launcher.rs`; `apps/actingctl` no longer has a `[[bin]] actingwatch`, so LAB-7 deletes actingctl without it; the release build's `--bin actingwatch`, the file in the Tools artifact (`platform-tools-v3`) and the task's action are unchanged; tested in the CI job `apps`; fragment owner `actingwatch`, which registers nothing |
 | L4-6 | actingwatch without arguments: the task's tick | behaviour | LAB-4 | Task Scheduler | the launcher's steps 1 to 3 unchanged (its own place, the log, `install\writer.lock` held shared for the tick); step 4 runs in this process what `actingctl watchdog run-once --root <root> --from-task` ran as its child, in the order of actingctl's `main`: the diagnostic sink, the channel fallback reporter, `process_installation()`, `ACTINGCOMMAND_DETAIL`, then `dispatch_exit`; what the child wrote to its stderr (developer lines, `DIAG actingctl:` lines, a panic's message), which the launcher appended to `watchdog.log`, is appended there in the same words; the exit is the tick's (0, 1 or 2) |
-| L4-7 | `actingwatch status`, `install`, `uninstall` | behaviour | LAB-4 | — (the Lab's `watchdog install`, `watchdog uninstall` and `alive` come with its rescue module) | `actingctl watchdog <word> --root <root>` for the root actingwatch lies in (`<root>\tools\actingwatch.exe`), through `dispatch_exit`: actingctl's report, developer line, codes and exits; another word, or a second one, is `actingctl_usage_invalid` (`argument`, `argument_problem` `unknown`) with the usage, and a program that is not `<root>\tools\actingwatch.exe` is `watchdog_launcher_misplaced`, each as actingctl's result line, exit 1; no `--root` (contract §7: an operation acts on the root of the program that runs it) |
+| L4-7 | `actingwatch status`, `install`, `uninstall` | behaviour | LAB-4 | — (the Lab's `watchdog install`, `watchdog uninstall` and `alive` come with its rescue module) | `actingctl watchdog <word> --root <root>` for the root actingwatch lies in (`<root>\tools\actingwatch.exe`), through `dispatch_exit`: actingctl's report, developer line, codes and exits; another word, or a second one, is `actingctl_usage_invalid` (`argument`, `argument_problem` `unknown`) with the usage, and a program that is not `<root>\tools\actingwatch.exe` is `watchdog_launcher_misplaced`, each as actingctl's result line, exit 1; no `--root` (contract §7: an operation acts on the root of the program that runs it); from fix 1 a subcommand first attaches to its parent's console when there is one (L4-8), so its lines appear there, and its exit code is set on every path |
+| L4-8 | `actingcommand_host_metrics::standard_handles::attach_parent_console() -> bool` | Runtime-internal interface | LAB-4 fix 1 | actingwatch's `main`, for a subcommand only | `AttachConsole(ATTACH_PARENT_PROCESS)` in the module that already holds the process's own standard-handle calls (WD-MT), so actingwatch keeps `forbid(unsafe_code)`; `true` when attached; `false` (nothing changes, the handles the process was given stay) when the parent has no console or is gone, or the call is refused; never creates a window; the task's tick does not call it |
 
 **Tests.** New: apps row "#434 LAB-4" (`actingcommand-actingwatch::gate_434_lab4::actingwatch_tick_in_process`,
 an integration test of the program; no clock, no sleep): `actingwatch.exe`, copied to
@@ -8134,10 +8135,17 @@ exists); `c3b_client_device_authority_stays_behind_runtime` also reads `crates/w
 `apps/actingwatch/src` and checks both packages' production dependencies.
 
 **Interface.** None: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
-`runtime-outcomes` 1. No code, key or location is added. The Tools layout is unchanged
-(`platform-tools-v3`): `tools-layout` 5 ([component-interfaces.md](component-interfaces.md),
-"Planned: Workflow #434") counts LAB-4's `actingwatch.exe` that carries the watchdog, but the
-derived revision follows the layout's file list, which LAB-5 and LAB-7 change.
+`runtime-outcomes` 1. No code, key or location is added; one code is retired (fix 1):
+`watchdog_launcher_spawn_failed` (actingctl's, pending, never released settled), `status`
+`retired`, `retired_in` 0.12.47, no `replaced_by`, and its registry entry removed (G1). The
+Tools layout is unchanged (`platform-tools-v3`): `tools-layout` 5
+([component-interfaces.md](component-interfaces.md), "Planned: Workflow #434") counts LAB-4's
+`actingwatch.exe` that carries the watchdog, but the derived revision follows the layout's file
+list, which LAB-5 and LAB-7 change. Since LAB-4 the root-fixed `tools\actingwatch.exe` reads the
+selection and the configuration itself and sends `Health`, where it spoke only through a
+command line: R-15c/d must add a version-range check for it before an A/B root runs it; no A/B
+root is in use and a single-location root replaces `runtime\` and `tools\` together, so no
+interface revision now ([install-cli.md](install-cli.md), "The A/B layout", fix 1).
 
 **Where LAB-4 differs from its work order's letter.**
 
@@ -8149,9 +8157,12 @@ derived revision follows the layout's file list, which LAB-5 and LAB-7 change.
 - (c) The operation table's rows `watchdog install` and `watchdog uninstall` (slice LAB-4, "runs
   actingwatch.exe") are not built: actingwatch gains the `install` and `uninstall` they run, and
   the Lab's own words come with its rescue module and CLI (LAB-3, LAB-2). The rows stay
-  `planned`, unchanged.
-- (d) `watchdog_launcher_spawn_failed` keeps its catalog entry and has no site: no fixed entry is
-  run.
+  `planned`. Fix 1, by the coordinator's ruling (#434 6743701251): they are the Lab's own
+  commands and belong to LAB-3, so their `slice` is `LAB-3` and their note says that the Lab links
+  `crates/watchdog` and registers or removes the task as `actingctl watchdog install|uninstall`
+  does.
+- (d) `watchdog_launcher_spawn_failed` has no site: no fixed entry is run. Fix 1 retires it in
+  0.12.47 (see "Interface").
 - (e) `install` still requires `<root>\runtime\actingctl.exe` (`watchdog_launcher_missing`), as
   before; the task no longer runs it, and LAB-7 drops the check with actingctl.
 
@@ -8160,6 +8171,18 @@ the tick itself; the Runtime's `actingctl.exe` still answers `watchdog …` (act
 `ac_overview` and the UI's settings page read `watchdog status` through it). The scheduled task
 does not change: its name, its action `<root>\tools\actingwatch.exe` without arguments, its
 working directory `<root>`, its trigger and its settings are what `install` registered.
+
+**LAB-4 fix 1** (the review of PR #1549; coordinator work order
+`rd-1108/arch-013/brief-lab4-fix1.md`). The tick is unchanged. (1) The PR's "At deploy" checks
+that `<root>\tools\actingwatch.exe` is the new Tools' file by its SHA-256. (2)
+`distribution/windows/INSTALL.md` and [install-cli.md](install-cli.md) no longer say that
+actingwatch only runs `runtime\actingctl.exe`, takes no slot and speaks only through a command
+line ("Interface"). (3) `watchdog_launcher_spawn_failed` is retired. (4) actingwatch's
+subcommands attach to their parent's console (L4-7, L4-8;
+[runtime-watchdog.md](runtime-watchdog.md), "Commands"). (5) The crate's developer lines go to
+the sink each call names, with no default (L4-3); what actingctl and actingwatch print does not
+change. (6) The table's `watchdog install` and `watchdog uninstall` rows are LAB-3's ((c)). No
+test is added or changed: the sink is a parameter, so a call without one does not compile.
 
 **LAB-4 rollback** (to the release before it). The Tools' launcher runs actingctl's tick again;
 `state.json`, `watchdog.log` and the task are the same files.

@@ -17,6 +17,9 @@ path = "src/main.rs"
 
 [dependencies]
 actingcommand-contract = { workspace = true }
+# Workflow #434 LAB-4 fix 1: `standard_handles::attach_parent_console`, so `status`, `install` and
+# `uninstall` print in the console they were started from; this program forbids unsafe code.
+actingcommand-host-metrics = { workspace = true }
 # The registry of the launcher's own codes and the result line of a refused command line.
 actingcommand-lab-ops = { workspace = true }
 # The tick's channel fallback report, written where its other developer lines go.

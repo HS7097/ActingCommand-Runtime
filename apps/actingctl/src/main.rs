@@ -198,10 +198,11 @@ fn main() -> ExitCode {
         Ok(detail) => detail,
         Err(outcome) => return failed(&outcome, Some(DETAIL_USAGE)),
     };
-    // Workflow #374: `watchdog` takes `--root`, not `--state-root`.
+    // Workflow #374: `watchdog` takes `--root`, not `--state-root`. Workflow #434 LAB-4 fix 1:
+    // its developer lines go where actingctl prints its own, on stderr; the crate has no default.
     #[cfg(windows)]
     {
-        if let Some(exit) = watchdog::dispatch(&arguments) {
+        if let Some(exit) = watchdog::dispatch(&arguments, &cli_line::developer_line) {
             return exit;
         }
     }
