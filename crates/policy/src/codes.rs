@@ -298,6 +298,10 @@ actingcommand_contract::outcome_codes! {
         /// rules: one without the other, the stop line not above the hard line, or a line above
         /// the pool's capacity.
         PoolLinesInvalid => "pool_lines_invalid": error / none,
+        /// Warning (catalog compile diagnostic; SS-2h fix 1). A pool writes `stop_line` and
+        /// `hard_line` but no declared valuation: only a valued pool's lines take part, so these
+        /// are carried and change nothing. The catalog compiles.
+        PoolLinesUnvalued => "pool_lines_unvalued": warning / none,
         // ---- SS-2h: end ----
     }
 }
@@ -310,7 +314,8 @@ actingcommand_contract::outcome_vocabulary! {
         /// Below the cap: its run would leave the pool below its hard line.
         WouldCrossHardLine => "would_cross_hard_line",
         /// Capped: it could not be dispatched when its round's order was frozen, or cannot now
-        /// (`gate_code` its own reason).
+        /// (`gate_code` its own reason), or a later gate of its own refused it in the round, which
+        /// passed it (`gate_code` that gate's code).
         CappedNotDispatchable => "capped_not_dispatchable",
         /// Capped, from an episode's second round on: its runs are limited, so only the first
         /// round takes it.

@@ -1762,6 +1762,10 @@ A V2 pool may write `stop_line` and `hard_line` ([v2/README.md](v2/README.md);
   capacity's own fact with a larger offset), and when the stop line is not above the hard line
   where it can tell (two constants, or two references to one fact by their offsets; at
   `hard_line`). Lines it cannot compare are checked at each evaluation (above).
+- **Without a valuation** (SS-2h fix 1): only a valued pool's lines take part. A V2 pool that writes
+  both lines but no declared valuation (none, or the pending marker) compiles with the warning
+  `pool_lines_unvalued` at its `stop_line` (the first compile warning; "Diagnostics"): the lines are
+  carried as written and change no decision.
 - **Capability.** A Runtime that reads the members reports the always-on subsystem `pool_lines` in
   `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A
   `schedule.json` whose pool writes either must list `pool_lines` in `requires`
@@ -1810,35 +1814,67 @@ without a valuation is untouched.
   `R − ⌈C/1000⌉ < H` is skipped (`capped_would_cross_hard_line`, `amount_after`) and the next tried;
   one that fits is planned and `R` falls by its consumption. So the last one may take the reading
   past the stop line but never below the hard line; with `H = S − (the costliest run)` nothing is
-  skipped.
+  skipped. The plan is taken again at each evaluation of the round, from the same starting
+  reading: one dispatched in the round counts with its consumption, one passed (below) not at all.
 - **Dispatch, one at a time** (layout 乙). At each evaluation the head is the first planned
-  consumer the round has not dispatched (a task snapshot whose `last_dispatched_unix_ms` is at or
-  after the round's start counts as dispatched in it) that is a candidate now. Before it is
-  dispatched the reading is read again: when the head would leave `r − ⌈C/1000⌉ < H` the round
-  ends; when every planned one ran it ends too; while `r` is above `S` the next round starts at
-  once. The head and the planned candidates after it that fit above `H` form the pool's block:
-  in the allocation the block stays together at its head's place (its tier, `B ÷ E` and every key
-  after, the head's `B` being `V − W·(c − a)`, `a = min(c, max(0, r − S))`: only the part of the
-  consumption that takes the reading below the stop line costs), and the first of it that every
-  later gate admits (the reserve gate, the shared run limits, every pause, hold, blackout and
-  budget of the Runtime) is dispatched with `capped_spend` (info; `pool_id`, `pool_capacity`,
-  `stop_line`, `hard_line`, `capped_episode`, `capped_round`, `capped_rank` its place in the
-  round's order, `pool_reading`). A block candidate a later gate defers keeps that gate's reason
-  and the next one is tried; one behind the dispatched one, or behind its head when a more urgent
-  candidate took the instance, waits with `pool_line_held` `capped_not_head` (`task_id` the head).
-  A more urgent tier, and a business candidate of a higher `B ÷ E`, go first as always.
+  consumer the round has neither dispatched (a task snapshot whose `last_dispatched_unix_ms` is at
+  or after the round's start counts as dispatched in it) nor passed (below) that is a candidate
+  now. Before it is dispatched the reading is read again: when the head would leave
+  `r − ⌈C/1000⌉ < H` the round ends; when every planned one ran or was passed it ends too; while
+  `r` is above `S` the next round starts at once. The head and the planned candidates after it
+  that fit above `H` form the pool's block, followed by its fallbacks (below): in the allocation
+  the block stays together at its head's place (its tier, `B ÷ E` and every key after, the head's
+  `B` being `V − W·(c − a)`, `a = min(c, max(0, r − S))`: only the part of the consumption that
+  takes the reading below the stop line costs), and the first of it that every later gate admits
+  (the reserve gate, the shared run limits, every pause, hold, blackout and budget of the Runtime)
+  is dispatched with `capped_spend` (info; `pool_id`, `pool_capacity`, `stop_line`, `hard_line`,
+  `capped_episode`, `capped_round`, `capped_rank` its place in the round's order,
+  `pool_reading`). A block candidate a later gate defers keeps that gate's reason and the next one
+  is tried; one behind the dispatched one, or behind its head when a more urgent candidate took
+  the instance, waits with `pool_line_held` `capped_not_head` (`task_id` the head), a fallback
+  with the hold the round gives it otherwise (`capped_not_head`, or
+  `capped_would_cross_hard_line` when the plan skips it). A more urgent tier, and a business
+  candidate of a higher `B ÷ E`, go first as always.
+- **Only what can be dispatched now** (SS-2h fix 1; Alice, 17:37: 「只加入现在空闲且能被调度/执行的
+  任务进入排序」). A round lists only the candidates of the evaluation, so every condition the policy
+  judges before the order holds for each when it is listed. The gates judged after it, the reserve
+  gate and the Runtime's admission (the task's and its profile's daily, window and runtime budgets,
+  the package's suspension and schedule, the quiet before a blackout and the day-boundary fit, a
+  remedy round), are known only at the allocation, so:
+  - **Passed.** A block candidate whose work entry such a gate defers is passed for the round,
+    with the registered code of that gate's reason: the round's plan, taken again from the
+    round's starting reading, leaves it out (it consumes nothing), so the next one of the order is
+    planned in its place. While it is a candidate in a later evaluation of the round it is held
+    with `capped_not_dispatchable`, `gate_code` that code. The next round lists it again (from the
+    second round on only when it is not `benefit_limited`). Not passed, and so waited for: a
+    candidate on an instance a whole-instance hold holds as the cycle starts (a control gate, a
+    held instance or its takeover cooldown, an active blackout, the Runtime's positions 1, 2 and 4
+    that `FactRefreshInputs::instance_holds` carries, or UPD-1's hold): nothing could be dispatched
+    there, and the round waits; one whose dispatch only waits (the Runtime's random delay, the
+    chain handover's `successor_wait_codes`); one a chain step goes before; one the pools' lines
+    hold.
+  - **Fallbacks.** So that the next one is tried at once, the block goes on, after its planned
+    candidates, with what the round would plan once every candidate of the block before is passed,
+    taken the same way (candidates now, until one would end below `H`), again while one is added.
+    A fallback is reached only when every block candidate before it is refused.
+  - **The round ends** when no planned consumer it has neither dispatched nor passed is a
+    candidate now while a consumer of the pool is (one whose trigger turned false, for example):
+    those left say why (`capped_not_dispatchable`, `gate_code` their own reason), and the next
+    round starts at once while `r` is above `S`. So a consumer that cannot be dispatched never holds
+    the pool at its cap.
 - **The others are held** with `pool_line_held` and the episode's `capped_episode` and
   `capped_round`: a consumer of the order not in the block (`capped_not_head`, or
   `capped_would_cross_hard_line` when the plan skipped it), a limited one from the second round on
   (`capped_limited_spent`), one listed after the order was frozen or of no value without the
-  pool's cost (`capped_not_head` when it would pass, else its own reason), and a consumer that is
+  pool's cost (`capped_not_head` when it would pass, else its own reason), one the round passed
+  (`capped_not_dispatchable`, `gate_code` the code it was refused with), and a consumer that is
   no candidate of the evaluation (`capped_not_dispatchable`, `gate_code` its own last reason when
   registered: no run left, a precondition, a cooldown); it is listed again at the next round.
-- **Memory only.** The episodes, their round numbers and frozen orders are the Runtime's
-  (`CappedMemory`, passed to `evaluate_with_capped_spending`), as the no-progress guard's are
-  ("No-progress guard"): no ledger record, state file or decision identity holds them. A start
-  begins with none; a pool still at or above its cap then begins a new episode. Every other entry
-  point evaluates with an empty memory.
+- **Memory only.** The episodes, their round numbers, frozen orders and passed members are the
+  Runtime's (`CappedMemory`, passed to `evaluate_with_capped_spending`), as the no-progress
+  guard's are ("No-progress guard"): no ledger record, state file or decision identity holds
+  them. A start begins with none; a pool still at or above its cap then begins a new episode.
+  Every other entry point evaluates with an empty memory.
 - **Unchanged.** Every other gate and its order, the triggers, the reserves, the shared run
   limits, pauses, blackouts (a time window is only a blacklist), SS-4, the maintenance tier,
   SS-2f's turns across instances and the one dispatch per instance. A catalog without a valuation,

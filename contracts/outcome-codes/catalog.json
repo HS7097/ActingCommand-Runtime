@@ -3801,7 +3801,7 @@
           "description": "Below the cap: its run would leave the pool below its hard line (amount_after, hard_line)."
         },
         "capped_not_dispatchable": {
-          "description": "Capped: it was no candidate when its round's order was frozen, or is none now (gate_code its own reason, when registered); it is listed again at the next round."
+          "description": "Capped: it was no candidate when its round's order was frozen, or is none now (gate_code its own reason, when registered), or a later gate of its own (the reserve gate, a budget, a window, a package hold or a remedy round of the Runtime's admission) refused it in the round, which passed it (gate_code that gate's code); it is listed again at the next round."
         },
         "capped_limited_spent": {
           "description": "Capped, from an episode's second round on: its task is marked benefit_limited, so only the first round takes it; the next episode's first round takes it again."

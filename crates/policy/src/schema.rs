@@ -132,6 +132,9 @@ pub enum CatalogDiagnosticCode {
     /// written without the other, the stop line is not above the hard line, or one is above the
     /// pool's capacity.
     PoolLinesInvalid,
+    /// SS-2h fix 1 (register §1.289; a warning): a pool writes `stop_line` and `hard_line` but no
+    /// declared valuation, so its lines change nothing.
+    PoolLinesUnvalued,
 }
 
 impl CatalogDiagnosticCode {
@@ -165,6 +168,7 @@ impl CatalogDiagnosticCode {
             }
             Self::RealizationCycle => PolicyCode::RealizationCycle.code(),
             Self::PoolLinesInvalid => PolicyCode::PoolLinesInvalid.code(),
+            Self::PoolLinesUnvalued => PolicyCode::PoolLinesUnvalued.code(),
         }
     }
 }

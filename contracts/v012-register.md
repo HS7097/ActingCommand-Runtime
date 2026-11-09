@@ -8197,6 +8197,29 @@ nothing and half way half its weight; now full price, and at its capacity the ta
 its capped order with `B` −9000) and `ss2d_t15` (a full regenerating pool cost nothing; now it is
 dispatched as the capped head with `B` −9000).
 
+**Fix 1** (coordinator brief `rd-1109/brief-ss2h-fix1.md`, the independent review of PR #1546;
+same release, same number). (1) `capped::line_value` returns the named `LinesProblem` instead of a
+tuple with a string (the outcome guard's G2); the reason it gives is unchanged. (2) Alice's 17:37
+「只加入现在空闲且能被调度/执行的任务进入排序」 for the gates judged after the order: a capped
+block's candidate that the reserve gate or the Runtime's admission (a budget, a window, a package
+hold, a remedy round) defers is passed for its round (`capped::settle`, after the allocation; the
+gate's code kept in `CappedMemory`), the plan, taken again from the round's starting reading,
+leaving it out; the block carries fallbacks (what the round would plan once every candidate before
+is passed), so the next one is tried in the same evaluation; a passed one is held
+`capped_not_dispatchable` with that `gate_code`; a round with nothing left, or whose planned ones
+left are no candidates while a consumer is, ends. A whole-instance hold as the cycle starts
+(`FactRefreshInputs::instance_holds`, UPD-1's `InstanceHolds`), the random delay
+(`successor_wait_codes`) and a chain step pass none: the round waits, as before. (3) A V2 pool with
+both lines and no declared valuation compiles with the new warning `pool_lines_unvalued` (catalog
+diagnostic, warning, policy fragment) at its `stop_line`; the compiler now returns a catalog's
+warnings with it (`CompiledCatalog::warnings`, the accepted dry-run report) and refuses only on an
+error. Tests: `ss2h_t18` (fails before: the refused limited member held the pool above its stop
+line) and `ss2h_t19`; adapted, as fix 1 deliberately changes what they pinned: `ss2h_t5` (the
+blacked-out member is passed, so the next round dispatches K first, where it stayed in its round
+and ran next) and, with the busy instance held as the cycle starts as the Runtime gives it,
+`ss2h_t5` and `ss2h_t9`. Still no configuration key, ledger shape or interface revision; a catalog
+without valuations, lines and `benefit_limited` is unchanged byte for byte.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

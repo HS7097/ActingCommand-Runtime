@@ -14,7 +14,10 @@
 // - the head of the order competes with the instance's other candidates by its tier and
 //   `B = V − W·(c − a)`, `a = min(c, max(0, r − S))`; the pool's other consumers wait;
 // - the memory of the episodes is the Runtime's, in memory only;
-// - a catalog without valuations, lines and `benefit_limited` decides and hashes as before.
+// - a catalog without valuations, lines and `benefit_limited` decides and hashes as before;
+// - fix 1 (coordinator brief `rd-1109/brief-ss2h-fix1.md`, the review of PR #1546): a member a gate
+//   of its own refuses is passed for its round and the next one tried, a round with nothing left
+//   that can be dispatched ends (tests 5 and 18), and lines without a valuation warn (test 19).
 //
 // The catalog is neutral and V2: tasks on one instance, the capped pool `pool.neutral` read from
 // `resource.neutral` with its capacity read from `resource.neutral.capacity` (180 unless a test
@@ -32,17 +35,17 @@ use super::selection_catalog::{DAY_MS, HOUR_MS, NOW, fact, instance};
 use crate::{
     CandidateEligibility, CappedMemory, CatalogCompileFailure, CatalogDiagnosticCode,
     CatalogDocumentSource, CatalogSources, ChainHandoverInputs, CompiledCatalog, DecisionReason,
-    DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime, FactRefreshInputs,
-    FactRefreshSettings, FactValue, HostResourceSnapshot, InstanceHolds, NoProgressGuards,
-    ObservedFact, OwedReruns, PolicyCode, PolicyEvaluation, PolicyEvaluationError, RemedyPlan,
-    RunSlots, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, SchedulingDecisionState,
-    ScopeSelector, StandardPackBinding, StandardPackComposeInput, StandardPackComposition,
-    StandardPackGameFiles, TaskDecision, TaskRuntimeSnapshot, TaskTerminalState,
-    check_resource_targets, compile_catalog, compose_standard_pack_rules,
-    evaluate_with_capped_spending, evaluate_with_no_progress, parse_resource_targets,
-    project_fact_pools,
+    DiagnosticSeverity, DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime,
+    FactRefreshInputs, FactRefreshSettings, FactValue, HostResourceSnapshot, InstanceHold,
+    InstanceHolds, NoProgressGuards, ObservedFact, OwedReruns, PolicyCode, PolicyEvaluation,
+    PolicyEvaluationError, RemedyPlan, RunSlots, SCHEDULING_SCHEMA_VERSION,
+    SCHEDULING_SCHEMA_VERSION_V2, SchedulingDecisionState, ScopeSelector, StandardPackBinding,
+    StandardPackComposeInput, StandardPackComposition, StandardPackGameFiles, TaskDecision,
+    TaskRuntimeSnapshot, TaskTerminalState, check_resource_targets, compile_catalog,
+    compose_standard_pack_rules, evaluate_with_capped_spending, evaluate_with_no_progress,
+    parse_resource_targets, project_fact_pools,
 };
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{Category, Outcome};
 use actingcommand_contract::{
     BundleIndex, StandardPackProblem, StandardPackRootBytes, read_standard_pack_root,
 };
@@ -65,9 +68,10 @@ const GOAL: &str = "pool.goal";
 const LEFT_KEY: &str = "resource.neutral.left";
 const UNLOCKED_KEY: &str = "resource.neutral.unlocked";
 /// The Runtime's deferrals the fixture admission answers: an instance another holder holds (a
-/// busy instance), and a blackout.
+/// busy instance), a blackout, and a used-up daily count.
 const INSTANCE_HELD: &str = "dispatch_instance_held";
 const BLACKOUT: &str = "blackout_active";
+const BUDGET: &str = "policy_budget_exhausted";
 /// The neutral example catalog's golden identities, computed before SS-2h (as in `gate_386_cf4`
 /// and `compiler::tests`).
 const V1_EXAMPLE_HASH: &str =
@@ -268,18 +272,21 @@ fn ss2h_t4_the_cost_never_keeps_a_consumer_out_of_the_order() {
     );
 }
 
-// Test 5, only what can be dispatched now. At the cap, of five consumers each consuming 20:
+// Test 5, only what can be dispatched now. At the cap, of four consumers each consuming 20:
 // - K (no run left, `resource.neutral.left` 0) and P (its precondition `resource.neutral.unlocked`
 //   0 unmet) are no candidates: they do not enter the order and say so (`capped_not_dispatchable`,
 //   `gate_code` `trigger_false`);
-// - the instance is busy (the admission defers every candidate, `dispatch_instance_held`): nothing
-//   runs, the round stays and its candidates keep the admission's reason;
-// - then Bk is in a blackout (`blackout_active`): it yields its turn and G, next in the order, is
-//   dispatched;
-// - once the run is left, the precondition met and the blackout over, Bk runs, K and P wait for the
-//   head (`capped_not_head`); at 140 the episode ends (below the cap K, worth it at full price, is
-//   dispatched as any candidate is), and at the next episode's first round K, the highest `V ÷ c`,
-//   is the head.
+// - the instance is busy (the cycle starts with it held, as the Runtime says in
+//   `FactRefreshInputs::instance_holds`, and the admission defers every candidate,
+//   `dispatch_instance_held`): nothing runs, nothing is passed, the round stays and its candidates
+//   keep the admission's reason;
+// - then Bk is in a blackout of its own (`blackout_active`): it keeps that reason, yields its turn
+//   and G, next in the order, is dispatched; Bk is passed for the round (fix 1);
+// - once the run is left, the precondition met and the blackout over, the round has nothing left
+//   and ends: the next round takes all four, K (the highest `V ÷ c`) first, while P, Bk and G wait
+//   for the head (`capped_not_head`); at 140 the episode ends (below the cap K, worth it at full
+//   price, is dispatched as any candidate is), and at the next episode's first round K is the head.
+// Adapted by fix 1: before it, the blacked-out Bk stayed in its round and ran next, ahead of K.
 #[test]
 fn ss2h_t5_only_consumers_that_can_be_dispatched_now_enter_the_order() {
     let gated = |id: &str, key: &str, produced: u64| {
@@ -319,7 +326,7 @@ fn ss2h_t5_only_consumers_that_can_be_dispatched_now_enter_the_order() {
         }
     };
 
-    let (busy, asked) = world.evaluate_with(|_| deferred(INSTANCE_HELD));
+    let (busy, asked) = world.evaluate_busy();
     assert!(dispatched(&busy).is_empty(), "{busy:#?}");
     assert_eq!(
         asked,
@@ -363,12 +370,19 @@ fn ss2h_t5_only_consumers_that_can_be_dispatched_now_enter_the_order() {
     world.extra.insert(LEFT_KEY.to_owned(), 1);
     world.extra.insert(UNLOCKED_KEY.to_owned(), 1);
     let recovered = world.evaluate();
-    assert_eq!(dispatched(&recovered), ["task_bk"], "{recovered:#?}");
-    for task_id in ["task_k", "task_p"] {
+    assert_eq!(dispatched(&recovered), ["task_k"], "{recovered:#?}");
+    let head = spend(&recovered, "task_k");
+    assert_eq!(
+        head.value("capped_round"),
+        Some(&json!(2)),
+        "the next round"
+    );
+    assert_eq!(head.value("capped_rank"), Some(&json!(1)));
+    for task_id in ["task_p", "task_bk", "task_g"] {
         assert_eq!(
             hold(decision(&recovered, task_id)).as_deref(),
             Some("capped_not_head"),
-            "{task_id} waits for the round: {recovered:#?}"
+            "{task_id} waits for the head: {recovered:#?}"
         );
     }
     world.run(&recovered, 20, TaskTerminalState::Succeeded);
@@ -567,8 +581,9 @@ fn ss2h_t8_from_the_second_round_limited_tasks_wait_for_the_next_episode() {
 }
 
 // Test 9, the order is frozen for the round. Read at 200: A (30, `V ÷ c` 1000) before B (25, 640).
-// The instance is busy at the round's start. Then a goal on B's product raises B's value far above
-// A's (`V ÷ c` above 4000): the round keeps its order and dispatches A, then B; the next round is
+// The instance is busy at the round's start (held as the cycle starts, as in test 5; fix 1: so the
+// round waits and passes no one). Then a goal on B's product raises B's value far above A's
+// (`V ÷ c` above 4000): the round keeps its order and dispatches A, then B; the next round is
 // sorted again and dispatches B first.
 #[test]
 fn ss2h_t9_the_order_is_frozen_for_the_round() {
@@ -584,7 +599,7 @@ fn ss2h_t9_the_order_is_frozen_for_the_round() {
         json!([out_pool(), goal_pool(), capped_pool(true)]),
     );
     let mut world = World::new(catalog, 200);
-    let (busy, asked) = world.evaluate_with(|_| deferred(INSTANCE_HELD));
+    let (busy, asked) = world.evaluate_busy();
     assert!(dispatched(&busy).is_empty(), "{busy:#?}");
     assert_eq!(asked, ["task_a", "task_b"], "frozen: A first");
 
@@ -1087,6 +1102,174 @@ fn ss2h_t17_the_rounding_bound_reads_the_whole_consumption() {
     );
 }
 
+// Test 18 (fix 1, the review's finding 2; fails before: the round held the pool at its cap). A
+// consumer that cannot be dispatched never holds its round.
+// - Read at 200, the order is L (limited, 20, `V ÷ c` 1500), M1 (20, 1300) and M2 (20, 1200), all
+//   planned (200 → 180 → 160 → 140). L's daily count is used up: the admission refuses it
+//   (`policy_budget_exhausted`) whenever it is asked. L keeps that reason, is passed for the round
+//   and M1, next in the order, is dispatched; then M2, L held `capped_not_dispatchable` with that
+//   `gate_code` and not asked again. With nothing left, the round ends; still above the stop line,
+//   the next round, without the limited L (`capped_limited_spent`), dispatches M1 at 160, and at
+//   140 the episode ends.
+// - Read at 200, X (20, 1500), Y (20, 1300) and Z (20, 1200, due only while `resource.neutral.left`
+//   is at least 1) are all planned. X and Y run; Z's trigger then turns false: no planned one left
+//   can be dispatched while X and Y can, so the round ends and round 2 dispatches X at 160, Z
+//   saying why it is left out (`capped_not_dispatchable`, `trigger_false`).
+#[test]
+fn ss2h_t18_a_consumer_that_cannot_be_dispatched_never_holds_its_round() {
+    let mut world = World::new(
+        catalog(
+            vec![
+                limited(judged("task_l", 20, 30)),
+                judged("task_m1", 20, 26),
+                judged("task_m2", 20, 24),
+            ],
+            pools(true),
+        ),
+        200,
+    );
+    let admission = |intent: &DispatchIntent| {
+        if intent.task_id == "task_l" {
+            deferred(BUDGET)
+        } else {
+            CandidateEligibility::Eligible
+        }
+    };
+    let (first, asked) = world.evaluate_with(admission);
+    assert_eq!(
+        asked,
+        ["task_l", "task_m1"],
+        "L, then the next of the order"
+    );
+    assert_eq!(dispatched(&first), ["task_m1"], "{first:#?}");
+    assert_eq!(
+        last(decision(&first, "task_l")).outcome.code().as_str(),
+        BUDGET,
+        "L keeps the admission's reason"
+    );
+    assert_eq!(
+        spend(&first, "task_m1").value("capped_rank"),
+        Some(&json!(2))
+    );
+    world.run(&first, 20, TaskTerminalState::Succeeded);
+
+    let (second, asked) = world.evaluate_with(admission);
+    assert_eq!(asked, ["task_m2"], "L is passed for the round: {second:#?}");
+    assert_eq!(dispatched(&second), ["task_m2"]);
+    assert_eq!(
+        spend(&second, "task_m2").value("capped_round"),
+        Some(&json!(1))
+    );
+    let passed = decision(&second, "task_l");
+    assert_eq!(
+        hold(passed).as_deref(),
+        Some("capped_not_dispatchable"),
+        "{passed:#?}"
+    );
+    assert_eq!(
+        last(passed).outcome.value("gate_code"),
+        Some(&json!(BUDGET))
+    );
+    world.run(&second, 20, TaskTerminalState::Succeeded);
+    assert_eq!(world.reading, 160);
+
+    let (third, _) = world.evaluate_with(admission);
+    assert_eq!(
+        dispatched(&third),
+        ["task_m1"],
+        "the round ended and the pool is not held at its cap: {third:#?}"
+    );
+    let next = spend(&third, "task_m1");
+    assert_eq!(next.value("capped_round"), Some(&json!(2)));
+    assert_eq!(next.value("capped_rank"), Some(&json!(1)));
+    assert_eq!(
+        hold(decision(&third, "task_l")).as_deref(),
+        Some("capped_limited_spent")
+    );
+    world.run(&third, 20, TaskTerminalState::Succeeded);
+    assert_eq!(world.reading, 140);
+    let (spent, _) = world.evaluate_with(admission);
+    assert_eq!(
+        world.memory.episode(A, POOL),
+        None,
+        "spent to the stop line: {spent:#?}"
+    );
+
+    let gated = with(
+        judged("task_z", 20, 24),
+        "trigger",
+        json!({"kind": "all", "predicates": [enough(20), at_least(LEFT_KEY, 1)]}),
+    );
+    let mut world = World::new(
+        catalog(
+            vec![judged("task_x", 20, 30), judged("task_y", 20, 26), gated],
+            pools(true),
+        ),
+        200,
+    );
+    world.extra.insert(LEFT_KEY.to_owned(), 1);
+    for task_id in ["task_x", "task_y"] {
+        let evaluation = world.evaluate();
+        assert_eq!(dispatched(&evaluation), [task_id], "{evaluation:#?}");
+        world.run(&evaluation, 20, TaskTerminalState::Succeeded);
+    }
+    world.extra.insert(LEFT_KEY.to_owned(), 0);
+    let ended = world.evaluate();
+    assert_eq!(
+        dispatched(&ended),
+        ["task_x"],
+        "the round ended: {ended:#?}"
+    );
+    assert_eq!(
+        spend(&ended, "task_x").value("capped_round"),
+        Some(&json!(2))
+    );
+    let left_out = decision(&ended, "task_z");
+    assert_eq!(
+        hold(left_out).as_deref(),
+        Some("capped_not_dispatchable"),
+        "{left_out:#?}"
+    );
+    assert_eq!(
+        last(left_out).outcome.value("gate_code"),
+        Some(&json!("trigger_false"))
+    );
+}
+
+// Test 19 (fix 1, the review's finding 3). A pool that writes both lines but no valuation compiles
+// with one warning, `pool_lines_unvalued` (a registered warning) at its `stop_line`, listed with the
+// compiled catalog and counted by its dry-run report; with a valuation, or without lines, there is
+// none.
+#[test]
+fn ss2h_t19_lines_without_a_valuation_compile_with_a_warning() {
+    let unvalued = catalog(vec![judged("task_f", 30, 10)], bare(pools(true)));
+    let [warning] = unvalued.warnings() else {
+        panic!("one warning: {:?}", unvalued.warnings());
+    };
+    assert_eq!(warning.code, CatalogDiagnosticCode::PoolLinesUnvalued);
+    assert_eq!(warning.severity, DiagnosticSeverity::Warning);
+    assert_eq!(warning.json_path, "/pools/1/stop_line");
+    assert_eq!(warning.code.code(), PolicyCode::PoolLinesUnvalued.code());
+    assert_eq!(
+        PolicyCode::PoolLinesUnvalued.as_str(),
+        "pool_lines_unvalued"
+    );
+    assert_eq!(PolicyCode::PoolLinesUnvalued.category(), Category::Warning);
+    let report = serde_json::from_slice::<Value>(&unvalued.dry_run_json().expect("the dry run"))
+        .expect("the dry-run report");
+    assert_eq!(report["status"], json!("accepted"));
+    assert_eq!(report["diagnostic_statistics"]["warnings"], json!(1));
+    assert_eq!(report["warnings"][0]["code"], json!("pool_lines_unvalued"));
+    for (case, pools) in [("valued", pools(true)), ("no lines", bare(pools(false)))] {
+        let compiled = catalog(vec![judged("task_f", 30, 10)], pools);
+        assert!(
+            compiled.warnings().is_empty(),
+            "{case}: {:?}",
+            compiled.warnings()
+        );
+    }
+}
+
 // ---- The world a test drives ----
 
 /// The catalog, the Runtime's memory, the capped pool's reading and the tasks' snapshots.
@@ -1101,6 +1284,8 @@ struct World {
     extra: BTreeMap<String, i64>,
     /// Other facts as given.
     records: Vec<ObservedFact>,
+    /// The instance is held as the cycle starts (`FactRefreshInputs::instance_holds`).
+    busy: bool,
 }
 
 impl World {
@@ -1115,6 +1300,7 @@ impl World {
             states: Vec::new(),
             extra: BTreeMap::new(),
             records: Vec::new(),
+            busy: false,
         }
     }
 
@@ -1128,6 +1314,7 @@ impl World {
             states: self.states.clone(),
             extra: self.extra.clone(),
             records: self.records.clone(),
+            busy: self.busy,
         }
     }
 
@@ -1165,6 +1352,16 @@ impl World {
         self.evaluate_with(|_| CandidateEligibility::Eligible).0
     }
 
+    /// One round on a busy instance, as the Runtime gives it: the cycle starts with the instance
+    /// held (`dispatch_instance_held` in `FactRefreshInputs::instance_holds`) and the admission
+    /// defers every candidate with it; and the tasks it was asked about, in order.
+    fn evaluate_busy(&mut self) -> (PolicyEvaluation, Vec<String>) {
+        self.busy = true;
+        let answer = self.evaluate_with(|_| deferred(INSTANCE_HELD));
+        self.busy = false;
+        answer
+    }
+
     /// One round with `admission`'s answers, and the tasks it was asked about, in order.
     fn evaluate_with(
         &mut self,
@@ -1172,6 +1369,16 @@ impl World {
     ) -> (PolicyEvaluation, Vec<String>) {
         let facts = self.facts();
         let resources = resources(&self.catalog, &facts);
+        let mut refresh = refresh_inputs();
+        if self.busy {
+            refresh.instance_holds.insert(
+                A.to_owned(),
+                InstanceHold {
+                    reason: admission_reason(INSTANCE_HELD),
+                    next_wake_unix_ms: None,
+                },
+            );
+        }
         let mut asked = Vec::new();
         let evaluation = evaluate_with_capped_spending::<PolicyEvaluationError>(
             &self.catalog,
@@ -1180,7 +1387,7 @@ impl World {
             time(self.now),
             11,
             &BTreeSet::new(),
-            &refresh_inputs(),
+            &refresh,
             &RemedyPlan::default(),
             &ChainHandoverInputs::default(),
             &RunSlots::default(),
@@ -1303,11 +1510,16 @@ fn refresh_inputs() -> FactRefreshInputs {
 /// The admission's deferral by the registered code `code`.
 fn deferred(code: &str) -> CandidateEligibility {
     CandidateEligibility::Deferred {
-        reason: DecisionReason {
-            outcome: Outcome::relayed(code),
-            detail: format!("fixture admission: {code}"),
-        },
+        reason: admission_reason(code),
         next_wake_unix_ms: None,
+    }
+}
+
+/// The admission's reason of the registered code `code`.
+fn admission_reason(code: &str) -> DecisionReason {
+    DecisionReason {
+        outcome: Outcome::relayed(code),
+        detail: format!("fixture admission: {code}"),
     }
 }
 

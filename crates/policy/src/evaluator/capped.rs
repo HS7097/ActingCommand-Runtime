@@ -26,18 +26,28 @@
 //!   from `r`: each one in turn while the accumulated reading is above `S` (or at the cap), one
 //!   whose run would end below `H` skipped. Before each dispatch the actual `r` is read again: the
 //!   head (the first planned one not dispatched in the round that is a candidate now) must not end
-//!   below `H`, or the round ends. A round whose planned tasks were all dispatched ends; the next
-//!   one starts while `r` is above `S`. A round that lists or plans nothing though a consumer is a
-//!   candidate ends the episode (`capped_round_empty`); while no consumer is a candidate at all the
-//!   episode waits for its next round.
-//! - **Dispatch (layout 乙).** The head and the planned candidates after it that fit above `H`
-//!   are the pool's only consumers in the allocation, one block in the order at the head's place
-//!   (the head's tier and `B ÷ E`, `B = V − W·(c − a)`, `a = min(c, max(0, r − S))`); the first of
-//!   them that every later gate admits is dispatched (`capped_spend`), the others wait
-//!   (`capped_not_head`). Every other gate stays.
-//! - **Memory only** ([`CappedMemory`]): the episodes, their round numbers and frozen orders, as
-//!   SS-4's `NoProgressMemory` keeps its guards. A start, or a new catalog generation, begins
-//!   with none. Which tasks a round dispatched is read from the task snapshots
+//!   below `H`, or the round ends. A round whose planned tasks were all dispatched or passed ends;
+//!   the next one starts while `r` is above `S`. A round that lists or plans nothing though a
+//!   consumer is a candidate ends the episode (`capped_round_empty`); while no consumer is a
+//!   candidate at all the episode waits for its next round.
+//! - **Only what can be dispatched now** (SS-2h fix 1; Alice 17:37, 「只加入现在空闲且能被调度/执行的
+//!   任务进入排序」). (a) A round lists the candidates of the evaluation, past every gate the policy
+//!   judges before the order. (b) The gates judged after it (the reserve gate, and the Runtime's
+//!   admission with its budgets, windows and holds, which the evaluator learns only at admission):
+//!   a block candidate one of them refuses for its own sake is passed for the round with that
+//!   gate's code ([`settle`]); the plan goes on without it, so the next one is tried, and in later
+//!   evaluations of the round it is held `capped_not_dispatchable` with that `gate_code`. A
+//!   whole-instance hold, the Runtime's random delay and a chain step pass none: the round waits.
+//!   (c) When no planned one left is a candidate now while a consumer is, the round ends.
+//! - **Dispatch (layout 乙).** The head and the planned candidates after it that fit above `H`,
+//!   then their fallbacks (what the round would plan once every candidate of the block before them
+//!   is passed), are the pool's only consumers in the allocation, one block in the order at the
+//!   head's place (the head's tier and `B ÷ E`, `B = V − W·(c − a)`, `a = min(c, max(0, r − S))`);
+//!   the first of them that every later gate admits is dispatched (`capped_spend`), the others wait
+//!   (`capped_not_head`; a fallback with the hold the round gives it). Every other gate stays.
+//! - **Memory only** ([`CappedMemory`]): the episodes, their round numbers, frozen orders and
+//!   passed members, as SS-4's `NoProgressMemory` keeps its guards. A start, or a new catalog
+//!   generation, begins with none. Which tasks a round dispatched is read from the task snapshots
 //!   (`last_dispatched_unix_ms` at or after the round's start).
 //!
 //! The lines constrain the scheduler only: a manual request, a chain successor that rides with its
@@ -45,7 +55,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_selection_policy::UnknownReason;
 
 use super::benefit::{
@@ -55,9 +65,9 @@ use super::benefit::{
 use super::tie_break::TieKey;
 use super::{
     DecisionReason, EvaluationFacts, InstanceSnapshot, PlacementCandidate, PlacementContext,
-    PolicyEvaluationError, PolicyEvaluationResult, TaskWork, UnknownReasonToken,
-    live_pool_unknown_reason, pool_bound, project_pool_value, reason_with, scope_matches_instance,
-    unknown_token,
+    PolicyEvaluationError, PolicyEvaluationResult, SchedulingDecisionState, TaskWork,
+    UnknownReasonToken, live_pool_unknown_reason, pool_bound, project_pool_value, reason_with,
+    scope_matches_instance, unknown_token,
 };
 use crate::codes::{PolicyCode, PoolLineHold};
 use crate::{FactValue, ObservationRef, PoolCapacity, PoolLine, PoolSpec, TaskSpec};
@@ -99,15 +109,60 @@ struct Episode {
     round: Option<Round>,
 }
 
-/// One round: its frozen order and its plan.
+/// One round: its frozen order, the reading its plan starts from, and the members it passed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Round {
     started_at_unix_ms: u64,
+    /// The reading at the round's start, which its plan accumulates from ([`Round::plan`]).
+    reading: i128,
     order: Vec<Member>,
-    /// Indices into `order`, in plan order.
-    planned: Vec<usize>,
-    /// Indices into `order` the plan skipped, with what the pool would have held after them.
-    skipped: Vec<(usize, i128)>,
+    /// SS-2h fix 1 (b): the indices into `order` that a gate of their own refused after the round
+    /// listed them ([`settle`]), with the registered code of that gate's reason: passed for the
+    /// round, they take no part in its plan.
+    passed: BTreeMap<usize, Option<Code>>,
+    /// The indices into `order` of the block the latest evaluation offered to the allocation,
+    /// which [`settle`] reads once.
+    offered: Vec<usize>,
+}
+
+impl Round {
+    /// The round's plan (module doc), the members `assumed` passed as well: from the round's
+    /// starting reading, the order taken in turn. A passed member consumes nothing; one
+    /// `dispatched` in the round is planned with its consumption; while the accumulated reading is
+    /// not spent, one whose run would end below the hard line is skipped (with what the pool would
+    /// hold after it) and any other planned. Indices into `order`, in plan order. With nothing
+    /// passed or dispatched it is the plan the round began with.
+    fn plan(
+        &self,
+        lines: Lines,
+        dispatched: &BTreeSet<usize>,
+        assumed: &BTreeSet<usize>,
+    ) -> (Vec<usize>, Vec<(usize, i128)>) {
+        let mut planned = Vec::new();
+        let mut skipped = Vec::new();
+        let mut reading = self.reading;
+        for (index, member) in self.order.iter().enumerate() {
+            if self.passed.contains_key(&index) || assumed.contains(&index) {
+                continue;
+            }
+            if dispatched.contains(&index) {
+                planned.push(index);
+                reading -= i128::from(member.consumed);
+                continue;
+            }
+            if lines.spent(reading) {
+                break;
+            }
+            let after = reading - i128::from(member.consumed);
+            if after < i128::from(lines.hard) {
+                skipped.push((index, after));
+                continue;
+            }
+            planned.push(index);
+            reading = after;
+        }
+        (planned, skipped)
+    }
 }
 
 /// One task of a round's frozen order.
@@ -150,6 +205,13 @@ pub(super) struct CappedSlot {
     pub(super) position: usize,
     pub(super) spend: DecisionReason,
     pub(super) lead: Option<LeadKey>,
+    /// SS-2h fix 1 (b): for a fallback of the block (one the round would plan only once every
+    /// candidate of the block before it is passed), the reason it is held with, and its wake,
+    /// when an earlier one is dispatched or another candidate takes the instance: its round's
+    /// hold, as when it was in no block. `None` for a planned one, which waits with
+    /// `capped_not_head`.
+    pub(super) wait: Option<DecisionReason>,
+    pub(super) wake_unix_ms: Option<u64>,
 }
 
 /// SS-2h: the order fields of a capped block's lead, the candidate of the block with the lowest
@@ -349,7 +411,7 @@ pub(super) fn plan(
                 }
                 continue;
             };
-            view.decide(
+            let offered = view.decide(
                 (&pool.id, instance),
                 lines,
                 ranked,
@@ -358,10 +420,66 @@ pub(super) fn plan(
                 work,
                 &consumers,
             )?;
+            // SS-2h fix 1: the block offered to the allocation, which `settle` reads after it.
+            if let Some(round) = memory
+                .episodes
+                .get_mut(&key)
+                .and_then(|episode| episode.round.as_mut())
+            {
+                round.offered = offered;
+            }
         }
     }
     memory.episodes.retain(|key, _| considered.contains(key));
     Ok(decided.into_iter().map(Decided::disposition).collect())
+}
+
+/// SS-2h fix 1 (b) (module doc): after the allocation, each candidate of a capped block whose work
+/// entry a gate of its own deferred (the reserve gate, the Runtime's admission with its budgets,
+/// windows and package holds, a remedy round) is passed for its round, with the registered code of
+/// that gate's reason, so the round's plan goes on without it and the round ends once none is left.
+/// None is passed on an instance a whole-instance hold holds (`whole_instance_held`, of a task and
+/// an instance: nothing could be dispatched there), nor one whose dispatch only waits (`waits`, the
+/// Runtime's random delay), one a chain step goes before, or one the pools' lines hold.
+pub(super) fn settle(
+    memory: &mut CappedMemory,
+    work: &[TaskWork],
+    whole_instance_held: impl Fn(&str, &str) -> bool,
+    waits: &[Code],
+) {
+    for ((instance_id, _), episode) in &mut memory.episodes {
+        let Some(round) = episode.round.as_mut() else {
+            continue;
+        };
+        for index in std::mem::take(&mut round.offered) {
+            let Some(member) = round.order.get(index) else {
+                continue;
+            };
+            let Some(entry) = work.iter().find(|entry| {
+                entry.task_id == member.task_id
+                    && entry.instance_id.as_deref() == Some(instance_id.as_str())
+            }) else {
+                continue;
+            };
+            if entry.state != SchedulingDecisionState::Deferred
+                || whole_instance_held(member.task_id.as_str(), instance_id.as_str())
+            {
+                continue;
+            }
+            let Some(reason) = entry.reasons.last() else {
+                continue;
+            };
+            if reason.outcome.is(PolicyCode::PoolLineHeld)
+                || reason.outcome.is(PolicyCode::PolicyChainHandoverWaiting)
+                || waits.iter().any(|code| reason.outcome.is(*code))
+            {
+                continue;
+            }
+            round
+                .passed
+                .insert(index, reason.outcome.code().registered());
+        }
+    }
 }
 
 /// What the pools decided for one candidate so far: the first capped hold, the first hard-line
@@ -489,11 +607,11 @@ fn lines(
         (Some(stop), Some(hard)) => {
             let stop = match line_value(pool, stop, facts, context) {
                 Ok(stop) => stop,
-                Err((fact_key, reason)) => return Ok(Err(unknown(Some(fact_key), Some(reason)))),
+                Err(problem) => return Ok(Err(problem)),
             };
             let hard = match line_value(pool, hard, facts, context) {
                 Ok(hard) => hard,
-                Err((fact_key, reason)) => return Ok(Err(unknown(Some(fact_key), Some(reason)))),
+                Err(problem) => return Ok(Err(problem)),
             };
             (stop, hard)
         }
@@ -517,18 +635,23 @@ fn lines(
 
 /// One line's value: a constant itself; a reference the integer its fact of the pool's scope
 /// holds plus the offset, read as a capacity fact is (at least the pool's minimum confidence, not
-/// past its expiry), or the fact's key and why it gives none.
+/// past its expiry), or, when the fact gives none, [`LinesProblem::Unknown`] of the written lines
+/// with the fact's key and why.
 fn line_value(
     pool: &PoolSpec,
     line: &PoolLine,
     facts: &EvaluationFacts,
     context: &PlacementContext<'_>,
-) -> Result<i128, (String, UnknownReason)> {
+) -> Result<i128, LinesProblem> {
     let reference = match line {
         PoolLine::Constant(value) => return Ok(i128::from(*value)),
         PoolLine::Fact(reference) => reference,
     };
-    let missing = |reason| (reference.fact_key.clone(), reason);
+    let missing = |reason| LinesProblem::Unknown {
+        written: true,
+        fact_key: Some(reference.fact_key.clone()),
+        unknown_reason: Some(reason),
+    };
     let fact = facts
         .facts
         .iter()
@@ -555,13 +678,17 @@ fn line_value(
     Ok(i128::from(value) + i128::from(reference.offset))
 }
 
-/// The capped round of a pair at this evaluation: the round's order and plan, with what is left
+/// The capped round of a pair at this evaluation: the round, with its plan now and what is left
 /// of it.
 struct RoundView<'a> {
     episode: u64,
     round: u64,
-    order: &'a [Member],
-    skipped: &'a [(usize, i128)],
+    /// The round; `None` while the episode waits for its next one.
+    state: Option<&'a Round>,
+    /// The members the round dispatched.
+    dispatched: BTreeSet<usize>,
+    /// The members the plan now skips, with what the pool would hold after each.
+    skipped: Vec<(usize, i128)>,
     /// The planned members the round has not dispatched, in plan order.
     remaining: Vec<usize>,
 }
@@ -616,6 +743,16 @@ fn step<'m>(
             .and_then(|state| state.last_dispatched_unix_ms)
             .is_some_and(|dispatched| dispatched >= since)
     };
+    // The members a round dispatched.
+    let dispatched_of = |round: &Round| {
+        round
+            .order
+            .iter()
+            .enumerate()
+            .filter(|(_, member)| dispatched_in(&member.task_id, round.started_at_unix_ms))
+            .map(|(index, _)| index)
+            .collect::<BTreeSet<_>>()
+    };
     let mut started = false;
     loop {
         let Some(episode) = memory.episodes.get_mut(key) else {
@@ -636,8 +773,9 @@ fn step<'m>(
                     return Ok(Some(RoundView {
                         episode: episode.number,
                         round: episode.rounds,
-                        order: &[],
-                        skipped: &[],
+                        state: None,
+                        dispatched: BTreeSet::new(),
+                        skipped: Vec::new(),
                         remaining: Vec::new(),
                     }));
                 }
@@ -660,28 +798,36 @@ fn step<'m>(
         if started {
             break;
         }
+        let dispatched = dispatched_of(round);
         let remaining = round
-            .planned
-            .iter()
-            .copied()
-            .filter(|index| !dispatched_in(&round.order[*index].task_id, round.started_at_unix_ms))
+            .plan(lines, &dispatched, &BTreeSet::new())
+            .0
+            .into_iter()
+            .filter(|index| !dispatched.contains(index))
             .collect::<Vec<_>>();
-        // Every planned task ran: the round is over.
+        // Every planned task ran or was passed: the round is over.
         if remaining.is_empty() {
             episode.round = None;
             continue;
         }
-        // Before the dispatch, the head must not end below the hard line, or the round ends.
-        let head = remaining
+        // The head: the first planned one not dispatched that is a candidate now. Before the
+        // dispatch it must not end below the hard line, or the round ends. SS-2h fix 1 (c): when no
+        // planned one left is a candidate now while a consumer is, none of the round can be
+        // dispatched now: the round ends too (the ones left say why, `capped_not_dispatchable`).
+        // While no consumer is a candidate at all, the round waits.
+        let ends = match remaining
             .iter()
-            .find(|index| candidates.contains_key(round.order[**index].task_id.as_str()));
-        if let Some(head) = head
-            && lines.reading - i128::from(round.order[*head].consumed) < i128::from(lines.hard)
+            .find(|index| candidates.contains_key(round.order[**index].task_id.as_str()))
         {
-            episode.round = None;
-            continue;
+            Some(head) => {
+                lines.reading - i128::from(round.order[*head].consumed) < i128::from(lines.hard)
+            }
+            None => !candidates.is_empty(),
+        };
+        if !ends {
+            break;
         }
-        break;
+        episode.round = None;
     }
     let Some(episode) = memory.episodes.get(key) else {
         return Ok(None);
@@ -689,21 +835,23 @@ fn step<'m>(
     let Some(round) = episode.round.as_ref() else {
         return Ok(None);
     };
-    let remaining = if started {
-        round.planned.clone()
+    // A round begun at this evaluation has dispatched nothing yet.
+    let dispatched = if started {
+        BTreeSet::new()
     } else {
-        round
-            .planned
-            .iter()
-            .copied()
-            .filter(|index| !dispatched_in(&round.order[*index].task_id, round.started_at_unix_ms))
-            .collect()
+        dispatched_of(round)
     };
+    let (planned, skipped) = round.plan(lines, &dispatched, &BTreeSet::new());
+    let remaining = planned
+        .into_iter()
+        .filter(|index| !dispatched.contains(index))
+        .collect();
     Ok(Some(RoundView {
         episode: episode.number,
         round: episode.rounds,
-        order: &round.order,
-        skipped: &round.skipped,
+        state: Some(round),
+        dispatched,
+        skipped,
         remaining,
     }))
 }
@@ -759,30 +907,21 @@ fn start_round(
             consumed: *consumed,
         })
         .collect::<Vec<_>>();
-    let mut planned = Vec::new();
-    let mut skipped = Vec::new();
-    let mut reading = lines.reading;
-    for (index, member) in order.iter().enumerate() {
-        if lines.spent(reading) {
-            break;
-        }
-        let after = reading - i128::from(member.consumed);
-        if after < i128::from(lines.hard) {
-            skipped.push((index, after));
-            continue;
-        }
-        planned.push(index);
-        reading = after;
-    }
-    if planned.is_empty() {
+    let round = Round {
+        started_at_unix_ms: now,
+        reading: lines.reading,
+        order,
+        passed: BTreeMap::new(),
+        offered: Vec::new(),
+    };
+    if round
+        .plan(lines, &BTreeSet::new(), &BTreeSet::new())
+        .0
+        .is_empty()
+    {
         return Ok(None);
     }
-    Ok(Some(Round {
-        started_at_unix_ms: now,
-        order,
-        planned,
-        skipped,
-    }))
+    Ok(Some(round))
 }
 
 impl RoundView<'_> {
@@ -798,29 +937,63 @@ impl RoundView<'_> {
         decided: &mut [Decided],
         work: &mut [TaskWork],
         consumers: &[Consumer<'_>],
-    ) -> PolicyEvaluationResult<()> {
+    ) -> PolicyEvaluationResult<Vec<usize>> {
         let overflow = || PolicyEvaluationError::overflow("a capped head's benefit overflowed");
-        // The head and the planned candidates after it that fit above the hard line, in order.
-        let mut block = Vec::new();
-        for index in &self.remaining {
-            let member = &self.order[*index];
-            if !candidates.contains_key(member.task_id.as_str()) {
-                continue;
+        let order: &[Member] = match self.state {
+            Some(round) => &round.order,
+            None => &[],
+        };
+        // The block: the head and the planned candidates after it that fit above the hard line, in
+        // order. SS-2h fix 1 (b): then its fallbacks, each tried only once every candidate of the
+        // block before it is refused: what the round would plan with those passed, taken the same
+        // way, again while one is added. With each `true` when it is a fallback.
+        let mut block = Vec::<(usize, bool)>::new();
+        if let Some(round) = self.state {
+            let mut group = self.remaining.clone();
+            let mut assumed = BTreeSet::new();
+            let mut fallback = false;
+            'groups: loop {
+                let mut added = false;
+                for index in group {
+                    let member = &order[index];
+                    if !candidates.contains_key(member.task_id.as_str()) {
+                        continue;
+                    }
+                    // As the head, it would end the round.
+                    if lines.reading - i128::from(member.consumed) < i128::from(lines.hard) {
+                        break 'groups;
+                    }
+                    block.push((index, fallback));
+                    added = true;
+                }
+                if !added {
+                    break;
+                }
+                assumed.extend(block.iter().map(|(index, _)| *index));
+                fallback = true;
+                group = round
+                    .plan(lines, &self.dispatched, &assumed)
+                    .0
+                    .into_iter()
+                    .filter(|index| !self.dispatched.contains(index))
+                    .collect();
             }
-            if lines.reading - i128::from(member.consumed) < i128::from(lines.hard) {
-                break;
-            }
-            block.push(*index);
         }
         let head = block
             .first()
-            .map(|index| self.order[*index].task_id.as_str());
+            .map(|(index, _)| order[*index].task_id.as_str());
         for (task_id, (index, known, term)) in candidates {
-            let at = self
-                .order
-                .iter()
-                .position(|member| member.task_id == *task_id);
-            if let Some(position) = block.iter().position(|member| Some(*member) == at) {
+            let at = order.iter().position(|member| member.task_id == *task_id);
+            // Its hold when the round does not try it now.
+            let held = match at {
+                Some(at) => Some(self.member_hold(at, pool_id, lines, head)),
+                None if self.round > 1 && known.task.is_benefit_limited() => {
+                    Some(self.reason(PoolLineHold::CappedLimitedSpent, pool_id, lines, None, None))
+                }
+                None => None,
+            };
+            let place = at.and_then(|at| block.iter().position(|(member, _)| *member == at));
+            if let Some(position) = place {
                 // B = V − W·(c − a), a = min(c, max(0, r − S)): only the part below the stop line
                 // costs.
                 let above = (lines.reading - i128::from(lines.stop)).max(0);
@@ -848,42 +1021,24 @@ impl RoundView<'_> {
                             position,
                             spend: spend_reason(pool_id, lines, self.episode, self.round, rank),
                             lead: None,
+                            wait: held.filter(|_| block[position].1),
+                            wake_unix_ms: None,
                         },
                     ));
                 }
                 continue;
             }
-            let held = match at {
-                Some(at) => match self.skipped.iter().find(|(skipped, _)| *skipped == at) {
-                    Some((_, after)) => Some(self.reason(
-                        PoolLineHold::CappedWouldCrossHardLine,
-                        pool_id,
-                        lines,
-                        Some(*after),
-                        None,
-                    )),
-                    None => {
-                        Some(self.reason(PoolLineHold::CappedNotHead, pool_id, lines, None, head))
-                    }
-                },
-                None if self.round > 1 && known.task.is_benefit_limited() => {
-                    Some(self.reason(PoolLineHold::CappedLimitedSpent, pool_id, lines, None, None))
-                }
+            match held {
+                Some(held) => decided[*index].held(held),
                 // Listed after the order was frozen, or of no value without the pool's cost:
                 // held only if it would pass.
-                None => {
-                    decided[*index].normal_hold(&self.reason(
-                        PoolLineHold::CappedNotHead,
-                        pool_id,
-                        lines,
-                        None,
-                        head,
-                    ));
-                    None
-                }
-            };
-            if let Some(held) = held {
-                decided[*index].held(held);
+                None => decided[*index].normal_hold(&self.reason(
+                    PoolLineHold::CappedNotHead,
+                    pool_id,
+                    lines,
+                    None,
+                    head,
+                )),
             }
         }
         // The consumers that are no candidates of the gate (nor riders of a chain, nor of an
@@ -902,22 +1057,55 @@ impl RoundView<'_> {
                 .reasons
                 .last()
                 .and_then(|reason| reason.outcome.code().registered());
-            let mut reason = self.reason(
-                PoolLineHold::CappedNotDispatchable,
+            entry
+                .reasons
+                .push(self.not_dispatchable(pool_id, lines, gate));
+        }
+        Ok(block.into_iter().map(|(index, _)| index).collect())
+    }
+
+    /// The hold of the order's member `at` that the round does not try now: passed for the round
+    /// (SS-2h fix 1 (b): `capped_not_dispatchable`, `gate_code` its recorded refusal), skipped by
+    /// the plan (`capped_would_cross_hard_line`), or waiting for the head (`capped_not_head`).
+    fn member_hold(
+        &self,
+        at: usize,
+        pool_id: &str,
+        lines: Lines,
+        head: Option<&str>,
+    ) -> DecisionReason {
+        if let Some(gate) = self.state.and_then(|round| round.passed.get(&at)) {
+            return self.not_dispatchable(pool_id, lines, *gate);
+        }
+        match self.skipped.iter().find(|(skipped, _)| *skipped == at) {
+            Some((_, after)) => self.reason(
+                PoolLineHold::CappedWouldCrossHardLine,
                 pool_id,
                 lines,
+                Some(*after),
                 None,
-                None,
-            );
-            if let Some(gate) = gate {
-                reason.outcome = reason.outcome.gate_code(gate);
-                reason
-                    .detail
-                    .push_str(&format!(" gate_code={}", gate.as_str()));
-            }
-            entry.reasons.push(reason);
+            ),
+            None => self.reason(PoolLineHold::CappedNotHead, pool_id, lines, None, head),
         }
-        Ok(())
+    }
+
+    /// `pool_line_held` `capped_not_dispatchable` of this round, with `gate_code` the gate that
+    /// keeps it when registered.
+    fn not_dispatchable(&self, pool_id: &str, lines: Lines, gate: Option<Code>) -> DecisionReason {
+        let mut reason = self.reason(
+            PoolLineHold::CappedNotDispatchable,
+            pool_id,
+            lines,
+            None,
+            None,
+        );
+        if let Some(gate) = gate {
+            reason.outcome = reason.outcome.gate_code(gate);
+            reason
+                .detail
+                .push_str(&format!(" gate_code={}", gate.as_str()));
+        }
+        reason
     }
 
     /// `pool_line_held` of this round.

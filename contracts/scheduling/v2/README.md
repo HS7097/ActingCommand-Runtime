@@ -286,6 +286,8 @@ Alice's ruling 138 and her answers of 11-09), V2 only:
   capacity, a reference to the capacity's fact with a larger offset) and a stop line not above the
   hard line (two constants, two references to one fact) are `pool_lines_invalid` at the member
   (at `hard_line` for the last); the rest is checked at each evaluation (`0 ≤ H < S ≤ cap`). A
+  pool that writes both but declares no valuation compiles with the warning `pool_lines_unvalued`
+  at `stop_line`: its lines change nothing (SS-2h fix 1). A
   V1 document that names either is refused as an unknown field at the member. Without them the
   stop line is the capacity and the hard line 0. A `schedule.json` whose pool writes them names
   `pool_lines` in `requires`.

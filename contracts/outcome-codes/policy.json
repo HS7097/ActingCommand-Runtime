@@ -2422,6 +2422,26 @@
       "description": "Catalog compile diagnostic (SS-2h; contracts/scheduling/README.md \"Pool lines\"): a pool's stop_line and hard_line break their rules, at the member: one is written without the other, the stop line is not above the hard line (two constants, or two references to one fact compared by their offsets), or a line is above the pool's capacity (a constant above a constant capacity, or a reference to the capacity's own fact with a larger offset). Lines a compilation cannot compare are checked at each evaluation (lines_invalid). The catalog is refused.",
       "common_causes": "A schedule.json pool binds only one of its two thresholds, or the hard line was bound above the stop line.",
       "handling": "Write both lines, the stop line above the hard line and neither above the capacity, and bind them again."
+    },
+    "pool_lines_unvalued": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.46",
+      "description": "Catalog compile diagnostic, a warning (SS-2h fix 1; contracts/scheduling/README.md \"Pool lines\"): a pool writes stop_line and hard_line but no declared valuation (none, or the pending marker), at its stop_line. Only a valued pool's lines take part in the hard line and the capped spending order, so these are carried as written and change no decision. The catalog compiles; the warning is listed with the compiled catalog and in its dry-run report.",
+      "common_causes": "The pool's thresholds were bound before its valuation, or its valuation is still the pending marker.",
+      "handling": "Bind the pool's valuation, or remove the lines until it has one."
     }
   }
 }

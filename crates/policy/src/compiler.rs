@@ -415,9 +415,16 @@ fn compile_catalog_bounded(
         },
         selection.is_some(),
     );
-    if !diagnostics.is_empty() {
+    // Any error refuses the catalog, its warnings listed with it; warnings alone accompany the
+    // compiled catalog (SS-2h fix 1, the first compile warning: `pool_lines_unvalued`).
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+    {
         return Err(CatalogCompileFailure::new(diagnostics));
     }
+    let mut warnings = diagnostics;
+    sort_diagnostics(&mut warnings);
 
     let hash = catalog_hash(&catalog, selection.as_ref()).map_err(|reason| {
         CatalogCompileFailure::new(vec![tasks_map.diagnostic(
@@ -435,7 +442,7 @@ fn compile_catalog_bounded(
         catalog,
         selection,
         summary,
-        warnings: Vec::new(),
+        warnings,
     })
 }
 

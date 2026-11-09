@@ -1911,7 +1911,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         &mut work,
         &target_policies,
         refresh_inputs.is_some(),
-        (capped, catalog.catalog_hash()),
+        (&mut *capped, catalog.catalog_hash()),
     )?;
     affected.extend(scored_affected);
     // Workflow #411 B15 R2: a remedy request or retry ranks among the promoted candidates.
@@ -2059,8 +2059,20 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                     _ => None,
                 };
                 if let Some(head) = head {
-                    let reason = capped::not_head_reason(&slot.pool_id, head);
-                    work[candidate.work_index].reasons.push(reason);
+                    let task_work = &mut work[candidate.work_index];
+                    match &slot.wait {
+                        // SS-2h fix 1: a fallback of the block, tried only once every candidate of
+                        // the block before it is refused, is held as its round holds it.
+                        Some(wait) => {
+                            task_work.state = SchedulingDecisionState::Deferred;
+                            task_work.reasons.push(wait.clone());
+                            task_work.next_wake_unix_ms =
+                                min_wake(task_work.next_wake_unix_ms, slot.wake_unix_ms);
+                        }
+                        None => task_work
+                            .reasons
+                            .push(capped::not_head_reason(&slot.pool_id, head)),
+                    }
                     continue;
                 }
             }
@@ -2297,6 +2309,19 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         task_work.rank = Some(candidate.rank);
         task_work.reasons = reasons;
     }
+    // SS-2h fix 1 (b): a capped block's candidate that a gate of its own refused is passed for its
+    // round; a whole-instance hold as the cycle starts (the Runtime's positions 1-2 and 4, UPD-1's
+    // hold), the Runtime's random delay and a chain step pass none.
+    capped::settle(
+        capped,
+        &work,
+        |task_id, instance_id| {
+            instance_holds.held(task_id, instance_id).is_some()
+                || refresh_inputs
+                    .is_some_and(|inputs| inputs.instance_holds.contains_key(instance_id))
+        },
+        &successor_waits,
+    );
     // Workflow #384 D2-S4: the affected candidates' reasons, before any dispatch decision record
     // lists them.
     if let Some(inputs) = refresh_inputs {

@@ -7,20 +7,21 @@ use actingcommand_contract::MAX_STRATEGIC_WEIGHT_MILLI;
 use crate::source::SourceMap;
 use crate::{
     ActivityProfile, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode, ClockSchedule,
-    ClockSource, Comparison, EffectDirection, FactComparand, FactReference, FactValue, LoadProfile,
-    MAX_ACTIVITY_PROFILES, MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CANONICAL_INTEGER,
-    MAX_CLOCK_DRIFT_MS, MAX_CONTINUED_TASK_IDS, MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS,
-    MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS, MAX_FACT_TIME_OFFSET_MS,
-    MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_MISSED_GRACE_MS,
-    MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE,
-    MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS,
-    MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI,
-    MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE,
-    MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES, MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS,
-    MIN_UTC_OFFSET_MINUTES, MetricRef, MissedSlotRule, ObservationRef, PoolCapacity, PoolLine,
-    PoolProjection, PoolSpec, PoolValuation, PredicateSpec, ProjectionComparand,
-    ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector,
-    TaskSpec, TimelineDocument, TimelineEvent,
+    ClockSource, Comparison, DiagnosticSeverity, EffectDirection, FactComparand, FactReference,
+    FactValue, LoadProfile, MAX_ACTIVITY_PROFILES, MAX_APPROVAL_REFS, MAX_BUDGET_COUNT,
+    MAX_CANONICAL_INTEGER, MAX_CLOCK_DRIFT_MS, MAX_CONTINUED_TASK_IDS, MAX_DEFER_AGING_CAP_MS,
+    MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS,
+    MAX_FACT_TIME_OFFSET_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK,
+    MAX_MISSED_GRACE_MS, MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES,
+    MAX_PRIORITY_PERCENTILE, MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES,
+    MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI,
+    MAX_VALUATION_GAP_WEIGHT_MILLI, MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES,
+    MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES,
+    MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS, MIN_UTC_OFFSET_MINUTES, MetricRef,
+    MissedSlotRule, ObservationRef, PoolCapacity, PoolLine, PoolProjection, PoolSpec,
+    PoolValuation, PredicateSpec, ProjectionComparand, ResourceEffectSpec,
+    SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TaskSpec,
+    TimelineDocument, TimelineEvent,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -2177,6 +2178,18 @@ fn validate_pool_lines(
         ));
         return;
     };
+    // SS-2h fix 1: only a valued pool's lines take part; a pool without a declared valuation
+    // carries them unread, which the compiler says (a warning at `stop_line`; the catalog compiles).
+    if pool.declared_valuation().is_none() {
+        let mut warning = map.diagnostic(
+            CatalogDiagnosticCode::PoolLinesUnvalued,
+            format!("{path}/stop_line"),
+            "a pool's stop_line and hard_line take part only with a declared valuation",
+            descriptor,
+        );
+        warning.severity = DiagnosticSeverity::Warning;
+        diagnostics.push(warning);
+    }
     if !well_formed {
         return;
     }

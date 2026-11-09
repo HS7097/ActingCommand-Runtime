@@ -670,7 +670,11 @@ pub(super) fn gate(
                         defer(task_work, reason);
                         continue;
                     }
-                    Disposition::Member { benefit, slot } => {
+                    Disposition::Member { benefit, mut slot } => {
+                        // SS-2h fix 1: a fallback of its block that waits takes the wake a held
+                        // candidate takes.
+                        slot.wake_unix_ms =
+                            wake_unix_ms.filter(|wake| *wake > context.time.unix_ms);
                         candidate.benefit = Some(benefit);
                         candidate.capped = Some(*slot);
                         if let Some(record) = task_work.record.as_mut() {
