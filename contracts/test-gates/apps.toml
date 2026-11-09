@@ -1267,10 +1267,12 @@ tests = [
 ]
 incident = ["#434 LAB-4"]
 
-# #428 CW-1 (0.12.47; register §1.290; brief rd-1110/brief-cw1.md): the catalog block of actingctl overview and ac_overview carries the active composed generation's compile warnings as config.catalog_warnings holds them, compile_warnings {count, codes, items [{warning, game, pointer}]}; without the fact, or with it recorded empty, the block is MCP-9a's byte for byte
+# #428 CW-1 (0.12.47; register §1.290; brief rd-1110/brief-cw1.md): the catalog block of actingctl overview and ac_overview carries the active composed generation's compile warnings as config.catalog_warnings holds them, compile_warnings {count, codes, items [{warning, game, pointer}]}; without the fact, or with it recorded empty, the block is MCP-9a's byte for byte. Fix 1 (brief rd-1110/brief-cw1-fix1.md): past the fact's 256 rows the place rows, then the count rows, are cut, the fact ends with the cut row {counts_omitted, places_omitted} and the block carries items_omitted and counts_omitted; ac_overview cuts compile_warnings.items just before the catalog block, leaving items_truncated: true and the pointer /catalog/compile_warnings/items in truncated
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-lab-ops::lib::overview::tests::cw1_the_catalog_block_shows_the_compile_warnings_and_is_unchanged_without_them",
+    "actingcommand-lab-ops::lib::overview::tests::cw1_a_cut_fact_and_the_catalog_block_say_how_many_rows_are_missing",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::cw1_ac_overview_cuts_the_compile_warnings_items_just_before_the_catalog_block",
 ]
 incident = ["#428 CW-1"]

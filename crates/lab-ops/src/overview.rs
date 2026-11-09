@@ -623,7 +623,10 @@ fn running_selection<'f>(facts: &'f RuntimeFactSnapshot, member: &str) -> Option
 /// (`config.catalog_warnings`), the block also carries [`CATALOG_COMPILE_WARNINGS`]
 /// `{count, codes, items}`: how many warnings, their codes, and each warning's place
 /// `{warning, game?, pointer}` (its code, its game and its JSON pointer in that game's
-/// `schedule.json`), as many as the fact holds. Without warnings the block is as before.
+/// `schedule.json`), as many as the fact holds. Fix 1: when the fact's 256 rows left some out, it
+/// also carries `items_omitted` and `counts_omitted`, how many place rows and count rows are
+/// missing (a warning whose count row is missing is in neither `count` nor `codes`). Without
+/// warnings the block is as before.
 fn catalog_block(facts: &RuntimeFactSnapshot) -> Result<Value, Outcome> {
     let Some(record) = facts.records.iter().find(|record| {
         record.scope == RuntimeFactScope::Runtime && record.key == CONFIG_CATALOG_FACT_KEY
@@ -645,8 +648,8 @@ fn catalog_block(facts: &RuntimeFactSnapshot) -> Result<Value, Outcome> {
 /// compile warnings; MCP cuts its `items` before the block ([`catalog_block`]).
 pub const CATALOG_COMPILE_WARNINGS: &str = "compile_warnings";
 
-/// #428 CW-1: `{count, codes, items}` of `config.catalog_warnings`, `None` without the fact or
-/// with no warning in it. A record that does not read back is its refusal
+/// #428 CW-1: `{count, codes, items, items_omitted?, counts_omitted?}` of
+/// `config.catalog_warnings`, `None` without the fact or with no warning in it. A record that does not read back is its refusal
 /// (`invalid_fact_snapshot_record`).
 fn compile_warnings(facts: &RuntimeFactSnapshot) -> Result<Option<Value>, Outcome> {
     let Some(record) = facts.records.iter().find(|record| {
@@ -680,11 +683,17 @@ fn compile_warnings(facts: &RuntimeFactSnapshot) -> Result<Option<Value>, Outcom
             Value::Object(item)
         })
         .collect::<Vec<_>>();
-    Ok(Some(json!({
+    let mut block = json!({
         "count": warnings.total(),
         "codes": codes,
         "items": items,
-    })))
+    });
+    // Fix 1 (Fail Loud): the fact's row bound left rows out; the block says how many of each.
+    if warnings.is_cut() {
+        block["items_omitted"] = json!(warnings.places_omitted);
+        block["counts_omitted"] = json!(warnings.counts_omitted);
+    }
+    Ok(Some(block))
 }
 
 /// `actingctl watchdog status` of the install root, read locally (command table §4.10): its
@@ -1508,6 +1517,96 @@ mod tests {
                 before,
                 "{case}"
             );
+        }
+    }
+
+    // #428 CW-1 fix 1 (coordinator work order rd-1110/brief-cw1-fix1.md item 4, Fail Loud): past
+    // the fact's 256 rows nothing is left out silently. The place rows are cut first, then the
+    // count rows; the fact ends with the cut row {counts_omitted, places_omitted} and reads back
+    // as written, and the catalog block says how many items and count rows are missing.
+    #[test]
+    fn cw1_a_cut_fact_and_the_catalog_block_say_how_many_rows_are_missing() {
+        use actingcommand_contract::{
+            CatalogCompileWarning, ConfigCatalogWarnings, MAX_RUNTIME_FACT_RECORD_ROWS,
+        };
+        use std::collections::BTreeMap;
+
+        let catalog = ConfigCatalog {
+            catalog_id: "standard-packs".to_owned(),
+            catalog_version: 7,
+            catalog_hash: format!("sha256:{}", "c".repeat(64)),
+            activated_event_id: "evt_0123456789abcdef0123456789abcdef".to_owned(),
+            approval_id: None,
+            approval_disposition: None,
+            previous_catalog_id: None,
+            previous_catalog_version: None,
+        }
+        .to_fact_record(1, OriginModule::Policy);
+        let warning = |game: String, pointer: String| CatalogCompileWarning {
+            warning: "pool_lines_unvalued".to_owned(),
+            game: Some(game),
+            pointer,
+        };
+        // 300 places in one game's file: one count row, 254 place rows and the cut row.
+        let places = (0..300)
+            .map(|index| {
+                warning(
+                    "neutral-game-a".to_owned(),
+                    format!("/pools/{index}/stop_line"),
+                )
+            })
+            .collect::<Vec<_>>();
+        // One place in each of 300 games' files: 255 count rows and the cut row.
+        let games = (0..300)
+            .map(|index| {
+                warning(
+                    format!("neutral-game-{index:03}"),
+                    "/pools/0/stop_line".to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (case, warnings, count, items, items_omitted, counts_omitted) in [
+            ("place rows cut", places, 300, 254_usize, 46_i64, 0_i64),
+            ("count rows cut too", games, 255, 0, 300, 45),
+        ] {
+            let cut = ConfigCatalogWarnings::of(&warnings);
+            let record = cut.to_fact_record(2, OriginModule::Policy);
+            let FactValue::RecordList(rows) = &record.value else {
+                panic!("{case}: a record list");
+            };
+            assert_eq!(rows.len(), MAX_RUNTIME_FACT_RECORD_ROWS, "{case}");
+            assert_eq!(
+                rows.last(),
+                Some(&BTreeMap::from([
+                    (
+                        "counts_omitted".to_owned(),
+                        FactScalar::Integer(counts_omitted)
+                    ),
+                    (
+                        "places_omitted".to_owned(),
+                        FactScalar::Integer(items_omitted)
+                    ),
+                ])),
+                "{case}"
+            );
+            assert_eq!(
+                ConfigCatalogWarnings::from_fact_record(&record).expect("the fact reads back"),
+                cut,
+                "{case}"
+            );
+
+            let block =
+                catalog_block(&facts(vec![catalog.clone(), record])).expect("the catalog block");
+            let shown = &block["compile_warnings"];
+            assert_eq!(shown["count"], json!(count), "{case}: {shown}");
+            assert_eq!(shown["codes"], json!(["pool_lines_unvalued"]), "{case}");
+            assert_eq!(
+                shown["items"].as_array().map(Vec::len),
+                Some(items),
+                "{case}"
+            );
+            assert_eq!(shown["items_omitted"], json!(items_omitted), "{case}");
+            assert_eq!(shown["counts_omitted"], json!(counts_omitted), "{case}");
         }
     }
 

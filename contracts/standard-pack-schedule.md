@@ -424,19 +424,23 @@ nothing.
 - **Compile warnings** (#428 CW-1, since 0.12.47; register §1.290). The composer places each
   warning the compiled catalog carries (for example `pool_lines_unvalued`) in its game's
   `schedule.json` as it places a refusal, each place once (a pool composed for two instances
-  warns at both copies). An activation records them on the `standard_pack_registered` record of
-  that game as `compile_warnings` (`warning_code`, `json_pointer`; at most 64, with
-  `compile_warnings_total`), also for a game whose file did not change, so every warning of the
-  activated composition is in the ledger; a game without warnings is recorded as before. After
-  each composition the active generation holds (just activated, or with the active rules digest,
-  so also at the first check after a start), the workbench holds its warnings in the program fact
-  `config.catalog_warnings` (runtime scope, re-observed): one count row `{warning, game?, count}`
-  per code and game, then one place row `{warning, game?, pointer}` per warning while the fact's
-  256 rows leave room. The fact is recorded only when it changes and never while it is absent and
-  the composition has no warning, so a Runtime whose compositions never had one records nothing
-  new; once the active generation has none, it is recorded empty. `actingctl overview` and
-  `ac_overview` show it in their `catalog` block as `compile_warnings {count, codes, items}`
-  ([runtime-interface.md](runtime-interface.md)). A warning the composer cannot place in a game's
+  warns at both copies). An activation records them on the `standard_pack_registered` record it
+  writes for each changed `schedule.json` (above) as `compile_warnings` (`warning_code`,
+  `json_pointer`; at most 64, with `compile_warnings_total`): a game's warnings are in the ledger
+  at its own registration. Fix 1 (the coordinator's ruling): it writes no other record, so a game
+  whose file did not change gets none, with or without warnings, and a game without warnings is
+  recorded as before. After each composition the active generation holds (just activated, or
+  with the active rules digest, so also at the first check after a start), the workbench holds
+  its warnings, every game's, in the program fact `config.catalog_warnings` (runtime scope,
+  re-observed): one count row `{warning, game?, count}` per code and game, then one place row
+  `{warning, game?, pointer}` per warning. Past the fact's 256 rows nothing is left out silently
+  (fix 1): the place rows are cut first, then the count rows, and the last row
+  `{counts_omitted, places_omitted}` says how many of each are missing. The fact is recorded only
+  when it changes and never while it is absent and the composition has no warning, so a Runtime
+  whose compositions never had one records nothing new; once the active generation has none, it
+  is recorded empty. `actingctl overview` and `ac_overview` show it in their `catalog` block as
+  `compile_warnings {count, codes, items}`, with `items_omitted` and `counts_omitted` when the
+  fact was cut ([runtime-interface.md](runtime-interface.md)). A warning the composer cannot place in a game's
   file (none so far) has no game, keeps its pointer in the composed document and is held in the
   fact only. Composing, activating and deciding do not depend on them.
 - **Unload.** A game whose instances are gone, or whose root holds no `schedule.json`, is left
@@ -550,6 +554,6 @@ checks them), and the composer fills the scope:
 No ledger record type or member is added. A composed generation is activated with the existing
 catalog records and no approval (RL-1b); `standard_pack_registered` gains the optional values
 `schedule_sha256`, `rules`, `held` and `unclassified`, and (#428 CW-1) `compile_warnings`, values
-the ledger's reader only spells; `config.catalog_warnings` is a new key of the `config.` fact
-family. The configuration's catalog section, its approvals and
+the ledger's reader only spells, on the records the workbench writes already (no record is added);
+`config.catalog_warnings` is a new key of the `config.` fact family. The configuration's catalog section, its approvals and
 its procedure manifest stay as they are until RL-C removes them.

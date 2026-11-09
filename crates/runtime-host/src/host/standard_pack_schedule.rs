@@ -663,8 +663,13 @@ impl HostShared {
                 let Some(sha) = &game.schedule_sha256 else {
                     continue;
                 };
-                // #428 CW-1: the activation records every compile warning of its composition on
-                // the record of the game whose file gave it, also when that file did not change.
+                if previous_sha.as_ref() == Some(&Some(sha.clone())) {
+                    continue;
+                }
+                // #428 CW-1 (fix 1, the coordinator's ruling: no new registration record): the
+                // record the activation writes for a game whose file changed carries the compile
+                // warnings that file gave. A game whose file did not change gets no record; its
+                // warnings are in `config.catalog_warnings` with the rest of the generation's.
                 let warnings = composition
                     .compile_warnings()
                     .iter()
@@ -675,9 +680,6 @@ impl HostShared {
                             .json_pointer(warning.pointer.as_str())
                     })
                     .collect::<Vec<_>>();
-                if previous_sha.as_ref() == Some(&Some(sha.clone())) && warnings.is_empty() {
-                    continue;
-                }
                 let count = read
                     .get(&game.game_id)
                     .map_or(0, |files| files.root.registry.len());
@@ -749,7 +751,8 @@ impl HostShared {
 
     /// #428 CW-1 (register §1.290): records `config.catalog_warnings`, the compile warnings of
     /// `composition`, which the active generation holds (it was just activated, or its rules
-    /// digest is the active one's). Nothing is recorded when the stored value is the same, nor
+    /// digest is the active one's): every game's, a game whose file did not change and so has no
+    /// new `standard_pack_registered` record included (fix 1). Nothing is recorded when the stored value is the same, nor
     /// while the fact is absent and the composition has no warning, so a Runtime whose composed
     /// generations never had one records nothing new; one that had some records the fact empty.
     fn record_catalog_warnings(

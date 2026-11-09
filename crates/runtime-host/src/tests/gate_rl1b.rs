@@ -1265,3 +1265,189 @@ fn cw1_b_a_composition_without_warnings_records_as_before() {
     assert!(catalog_warnings_fact(&bench).is_none());
     bench.close();
 }
+
+// ---------------------------------------------------------------------------------------------
+// #428 CW-1 fix 1 (coordinator work order rd-1110/brief-cw1-fix1.md items 2 and 3; the
+// coordinator's ruling: no new registration record): the cases the review found untested
+// ---------------------------------------------------------------------------------------------
+
+/// A second instance of game A on server A: every item of game A's file is composed for both.
+const BOUND_A_TWICE: Bound = (INSTANCE_B, GAME_A, SERVER_A);
+
+/// The one record `pool_lines_unvalued` of [`schedule_a_lines_unvalued`] gives in the
+/// `compile_warnings` of game A's `standard_pack_registered`.
+fn lines_unvalued_record() -> Value {
+    json!([{"warning_code": LINES_UNVALUED, "json_pointer": "/pools/0/stop_line"}])
+}
+
+/// What `config.catalog_warnings` holds for one `pool_lines_unvalued` at pool A's `stop_line` in
+/// game A's `schedule.json`.
+fn lines_unvalued_in_a() -> ConfigCatalogWarnings {
+    ConfigCatalogWarnings::of(&[CatalogCompileWarning {
+        warning: LINES_UNVALUED.to_owned(),
+        game: Some(GAME_A.to_owned()),
+        pointer: "/pools/0/stop_line".to_owned(),
+    }])
+}
+
+/// The warnings `config.catalog_warnings` holds now, read back.
+fn held_warnings(bench: &Bench) -> ConfigCatalogWarnings {
+    let fact = catalog_warnings_fact(bench).expect("config.catalog_warnings is held");
+    ConfigCatalogWarnings::from_fact_record(&fact).expect("the fact reads back")
+}
+
+/// Game A's files as the bench placed them, composed for the instances `bound`.
+fn compose_a(bench: &Bench, bound: &[Bound]) -> actingcommand_policy::StandardPackComposition {
+    let instances = bound
+        .iter()
+        .map(|(alias, game, server)| {
+            (
+                (*alias).to_owned(),
+                StandardPackBinding {
+                    game_id: (*game).to_owned(),
+                    server_id: (*server).to_owned(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let bundle_bytes = fs::read(bench.path(GAME_A, "bundle.json")).expect("bundle bytes");
+    let root = actingcommand_contract::read_standard_pack_root(
+        actingcommand_contract::StandardPackRootBytes {
+            bundle: Some(&bundle_bytes),
+            pages: None,
+            interrupts: None,
+            navigation: None,
+            tables: false,
+            display_layout: None,
+        },
+        GAME_A,
+    )
+    .expect("a sound root")
+    .expect("a game root");
+    let schedule_bytes = fs::read(bench.path(GAME_A, "schedule.json")).expect("schedule bytes");
+    let games = BTreeMap::from([(
+        GAME_A.to_owned(),
+        StandardPackGameFiles {
+            schedule: &schedule_bytes,
+            root: &root,
+            maintenance: &[],
+        },
+    )]);
+    compose_standard_pack_rules(&StandardPackComposeInput {
+        instances: &instances,
+        games: &games,
+        subsystems: None,
+        catalog_version: 1,
+    })
+    .expect("compose game A")
+}
+
+/// CW-1 fix 1, case 1: two games, game A's pool with lines and no valuation. The file of game B
+/// changes and game A's does not: the next activation records game B again, with no warning, and
+/// writes no new `standard_pack_registered` record of game A; `config.catalog_warnings` still
+/// holds game A's warning, as the active generation has it.
+#[test]
+fn cw1_c_a_game_whose_file_did_not_change_is_not_registered_again_and_its_warnings_stay_held() {
+    let bench = Bench::new(&[BOUND_A, BOUND_B], &[POOL_A], true, None);
+    bench.place(
+        GAME_A,
+        SERVER_A,
+        &[PACKAGE_1],
+        Some(&schedule_a_lines_unvalued(&[(RULE_1, PACKAGE_1, 100)])),
+    );
+    bench.place(
+        GAME_B,
+        SERVER_B,
+        &[PACKAGE_B],
+        Some(&schedule_b(100, false)),
+    );
+    bench.cycle(POLICY_NOW_UNIX_MS, 0);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 1);
+    let registered_a = registrations(&bench, GAME_A);
+    assert_eq!(registered_a.len(), 1, "{registered_a:#?}");
+    assert_eq!(
+        registered_a[0].value("compile_warnings"),
+        Some(&lines_unvalued_record()),
+        "{registered_a:#?}"
+    );
+    assert_eq!(registrations(&bench, GAME_B).len(), 1);
+    assert_eq!(held_warnings(&bench), lines_unvalued_in_a());
+
+    // Game B's file changes (a priority of another length); game A's does not.
+    bench.place(GAME_B, SERVER_B, &[PACKAGE_B], Some(&schedule_b(99, false)));
+    bench.cycle(POLICY_NOW_UNIX_MS, INTERVAL_MS);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 2);
+    let registered_b = registrations(&bench, GAME_B);
+    assert_eq!(registered_b.len(), 2, "{registered_b:#?}");
+    assert_eq!(registered_b[1].value("compile_warnings"), None);
+    assert_eq!(
+        registrations(&bench, GAME_A),
+        registered_a,
+        "game A is not registered again"
+    );
+    assert_eq!(held_warnings(&bench), lines_unvalued_in_a());
+    bench.close();
+}
+
+/// CW-1 fix 1, case 2: game A bound to two instances. Its pool is composed once for each, and
+/// the compiled catalog warns at both copies; the activation's record of game A lists the warning
+/// once, at its one place in game A's `schedule.json`, and `config.catalog_warnings` counts it once.
+#[test]
+fn cw1_d_the_same_warning_from_two_instances_is_listed_once() {
+    let bound = [BOUND_A, BOUND_A_TWICE];
+    let bench = Bench::new(&bound, &[POOL_A], true, None);
+    bench.place(
+        GAME_A,
+        SERVER_A,
+        &[PACKAGE_1],
+        Some(&schedule_a_lines_unvalued(&[(RULE_1, PACKAGE_1, 100)])),
+    );
+    let composed = compose_a(&bench, &bound);
+    assert_eq!(
+        composed.compiled().warnings().len(),
+        2,
+        "one warning at each copy of the pool: {:#?}",
+        composed.compiled().warnings()
+    );
+    assert_eq!(composed.compile_warnings().len(), 1);
+
+    bench.cycle(POLICY_NOW_UNIX_MS, 0);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 1);
+    let registered = registrations(&bench, GAME_A);
+    assert_eq!(registered.len(), 1, "{registered:#?}");
+    assert_eq!(
+        registered[0].value("compile_warnings"),
+        Some(&lines_unvalued_record()),
+        "{registered:#?}"
+    );
+    let held = held_warnings(&bench);
+    assert_eq!(held.total(), 1);
+    assert_eq!(held, lines_unvalued_in_a());
+    bench.close();
+}
+
+/// CW-1 fix 1, case 3: after a restart, at the first check of the restarted host, the active
+/// generation (restored, not activated again, and its game not registered again) has its
+/// compile warnings in `config.catalog_warnings` again.
+#[test]
+fn cw1_e_after_a_restart_the_fact_holds_the_active_generation_s_warnings_again() {
+    let bench = Bench::new(&[BOUND_A], &[POOL_A], true, None);
+    bench.place(
+        GAME_A,
+        SERVER_A,
+        &[PACKAGE_1],
+        Some(&schedule_a_lines_unvalued(&[(RULE_1, PACKAGE_1, 100)])),
+    );
+    bench.cycle(POLICY_NOW_UNIX_MS, 0);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 1);
+    assert_eq!(held_warnings(&bench), lines_unvalued_in_a());
+
+    // The restarted host evaluates at the fixture's restart instant, after every record of the
+    // first start (board #71, TCLOCK).
+    let bench = bench.restart(true);
+    bench.cycle(POLICY_RESTART_UNIX_MS, 0);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 1);
+    assert_eq!(registrations(&bench, GAME_A).len(), 1);
+    assert_eq!(held_warnings(&bench), lines_unvalued_in_a());
+    bench.close();
+}

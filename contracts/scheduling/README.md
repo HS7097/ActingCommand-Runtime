@@ -1767,9 +1767,11 @@ A V2 pool may write `stop_line` and `hard_line` ([v2/README.md](v2/README.md);
   `pool_lines_unvalued` at its `stop_line` (the first compile warning; "Diagnostics"): the lines are
   carried as written and change no decision. Where it is seen (#428 CW-1, since 0.12.47): offline,
   in the report of `actinglab scheduling compile`; for a composed catalog, the Runtime's workbench
-  records it when it activates the generation, on the `standard_pack_registered` record of the game
-  whose `schedule.json` gave the pool (`compile_warnings`, its code and its pointer in that file),
-  and holds the active generation's warnings in the program fact `config.catalog_warnings`, which
+  records it when it activates the generation with that file changed, on the
+  `standard_pack_registered` record of the game whose `schedule.json` gave the pool
+  (`compile_warnings`, its code and its pointer in that file; no record for a file that did not
+  change), and holds the active generation's warnings, every game's, in the program fact
+  `config.catalog_warnings`, which
   `actingctl overview` and `ac_overview` show in their `catalog` block (`compile_warnings`)
   ([standard-pack-schedule.md](../standard-pack-schedule.md), "The scheduler workbench").
 - **Capability.** A Runtime that reads the members reports the always-on subsystem `pool_lines` in

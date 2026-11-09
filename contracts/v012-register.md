@@ -8376,7 +8376,7 @@ and ran next) and, with the busy instance held as the cycle starts as the Runtim
 `ss2h_t5` and `ss2h_t9`. Still no configuration key, ledger shape or interface revision; a catalog
 without valuations, lines and `benefit_limited` is unchanged byte for byte.
 
-### 1.290 Slice CW-1 (0.12.47): the composed catalog's compile warnings are recorded and shown (#428; AK v0.12.34 and BA v0.12.37 went live on 11-10 at 01:11 and 01:12 JST with pool lines and no valuation, and their `pool_lines_unvalued` (§1.289 fix 1) was nowhere: not in the ledger, `catalog.activated`, `standard_pack_registered`, `ac_overview` or actingd's log, against Fail Loud; the coordinator's ruling, not Alice's words: record and show them; coordinator work order `rd-1110/brief-cw1.md`)
+### 1.290 Slice CW-1 (0.12.47): the composed catalog's compile warnings are recorded and shown (#428; on 11-10 the standard packs of two games went live with pool lines and no valuation, and their `pool_lines_unvalued` (§1.289 fix 1) was nowhere: not in the ledger, `catalog.activated`, `standard_pack_registered`, `ac_overview` or actingd's log, against Fail Loud; the coordinator's ruling, not Alice's words: record and show them; coordinator work order `rd-1110/brief-cw1.md`)
 
 [standard-pack-schedule.md](standard-pack-schedule.md) ("The scheduler workbench", "Compile
 warnings"), [scheduling/README.md](scheduling/README.md) ("Pool lines"),
@@ -8392,18 +8392,18 @@ composer's own (unclassified packages, priority tiers).
 **What.** (1) The composer places each compile warning in its game's `schedule.json` as it places a
 refusal (`Composed::locate`), each place once, in the order game, code, pointer
 (`StandardPackComposition::compile_warnings`, `StandardPackCompileWarning`). (2) **Record:** an
-activation writes, on the `standard_pack_registered` record of each game with warnings, the new
-optional value `compile_warnings` (records of `warning_code`, a code, and `json_pointer`), also
-for a game whose file did not change; a game without warnings is recorded as before, and a game
-whose file did not change and has none still gets no record. Chosen over `catalog.activated`
+activation writes, on the `standard_pack_registered` record it writes today for each changed
+`schedule.json`, the new optional value `compile_warnings` (records of `warning_code`, a code, and
+`json_pointer`) when that file gave warnings; it writes no other record (fix 1), and a game
+without warnings is recorded as before. Chosen over `catalog.activated`
 because that record's payload (`CatalogTransitionEventData`, its audit `AuditInput`) is a typed
 shape whose members the ledger reader checks, so a member there raises `ledger` (revision 5's
 rule), while an outcome's values are what the reader only spells. (3) **Show:** after each
 composition the active generation holds, the workbench records the program fact
-`config.catalog_warnings` (runtime scope, `config.` re-observed; `ConfigCatalogWarnings`): count
-rows `{warning, game?, count}`, then place rows `{warning, game?, pointer}` within the fact's 256
-rows; only when it changes, never while absent with no warning, and empty once the active
-generation has none. The overview (`actingctl overview`, `ac_overview`, and actinglab's through
+`config.catalog_warnings` (runtime scope, `config.` re-observed; `ConfigCatalogWarnings`), every
+game's warnings: count rows `{warning, game?, count}`, then place rows `{warning, game?, pointer}`
+within the fact's 256 rows, a cut said by its last row (fix 1); only when it changes, never while
+absent with no warning, and empty once the active generation has none. The overview (`actingctl overview`, `ac_overview`, and actinglab's through
 `crates/lab-ops`) reads it from the RuntimeFactSnapshot it already reads and adds
 `compile_warnings {count, codes, items}` to the `catalog` block; MCP cuts the `items` just
 before the block.
@@ -8425,14 +8425,37 @@ any other and does not load at its start (`config.` is re-observed).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| CW1-1 | `standard_pack_registered`'s optional value `compile_warnings` (records `warning_code`, `json_pointer`); keys `compile_warnings`, `warning_code` | outcome values (no ledger shape) | CW-1 | runtime-host workbench | `since` 0.12.47; at most 64 with `compile_warnings_total` |
-| CW1-2 | the program fact `config.catalog_warnings` | new key of the `config.` family (runtime scope, untagged) | CW-1 | runtime-host workbench | §4 below |
-| CW1-3 | `catalog.compile_warnings {count, codes, items [{warning, game?, pointer}]}` | `actingctl overview` / `ac_overview` answer | CW-1 | lab-ops overview | absent without warnings; MCP cuts `items` before `catalog` |
+| CW1-1 | `standard_pack_registered`'s optional value `compile_warnings` (records `warning_code`, `json_pointer`); keys `compile_warnings`, `warning_code` | outcome values (no ledger shape) | CW-1 | runtime-host workbench | `since` 0.12.47; at most 64 with `compile_warnings_total`; only on the records an activation writes for changed files (fix 1) |
+| CW1-2 | the program fact `config.catalog_warnings` | new key of the `config.` family (runtime scope, untagged) | CW-1 | runtime-host workbench | §4 below; the cut row `{counts_omitted, places_omitted}` last when rows were left out (fix 1) |
+| CW1-3 | `catalog.compile_warnings {count, codes, items [{warning, game?, pointer}], items_omitted?, counts_omitted?}` | `actingctl overview` / `ac_overview` answer | CW-1 | lab-ops overview | absent without warnings; `items_omitted`, `counts_omitted` only when the fact was cut (fix 1); MCP cuts `items` before `catalog` |
 
 Tests: `gate_rl1b::cw1_a_lines_without_a_valuation_are_recorded_with_the_activation_and_held_for_the_overview`
 (fails before: the record carried no warning), `gate_rl1b::cw1_b_a_composition_without_warnings_records_as_before`
 and `overview::tests::cw1_the_catalog_block_shows_the_compile_warnings_and_is_unchanged_without_them`.
 No test adapted.
+
+**Fix 1** (coordinator brief `rd-1110/brief-cw1-fix1.md`, the independent review of PR #1551; same
+release, same number; no interface revision, as above). (1) This section's heading named the two
+packs that went live; a contract names no game and no pack release (the architecture guard C2), so
+it describes the case. (2) The coordinator's ruling, no new registration record: the first version
+wrote a `standard_pack_registered` record at every activation for each game with warnings, also
+when its file did not change, which would have changed the production record stream (its packs
+have warnings now). The value is now carried only on the records an activation writes today, for
+changed files; a game's warnings are in the ledger at its own registration, and the fact holds the
+active generation's whole set, unchanged games included. (3) Past the fact's 256 rows the place
+rows were dropped silently, the overview's `count` then above its `items` with no marker (Fail
+Loud): the fact now ends with the cut row `{counts_omitted, places_omitted}` (one row of the bound
+kept for it; the place rows cut first, then the count rows), and the overview's block carries
+`items_omitted` and `counts_omitted`. A composition without warnings records and answers byte for
+byte as before. Tests (the cases the review found untested), each new:
+`gate_rl1b::cw1_c_a_game_whose_file_did_not_change_is_not_registered_again_and_its_warnings_stay_held`
+(fails before: the first version registered the unchanged game again),
+`gate_rl1b::cw1_d_the_same_warning_from_two_instances_is_listed_once`,
+`gate_rl1b::cw1_e_after_a_restart_the_fact_holds_the_active_generation_s_warnings_again`,
+`gate_mcp8::cw1_ac_overview_cuts_the_compile_warnings_items_just_before_the_catalog_block` (MCP's
+cut: `items_truncated` and the pointer `/catalog/compile_warnings/items` in `truncated`) and
+`overview::tests::cw1_a_cut_fact_and_the_catalog_block_say_how_many_rows_are_missing` (fails
+before: the fact had no cut row). No test adapted.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

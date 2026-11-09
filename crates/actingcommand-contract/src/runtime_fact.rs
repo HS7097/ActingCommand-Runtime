@@ -535,21 +535,35 @@ pub struct CatalogWarningCount {
     pub count: u64,
 }
 
+/// The member of the cut row of `config.catalog_warnings` that says how many count rows the
+/// fact's row bound left out (#428 CW-1 fix 1).
+const CATALOG_WARNINGS_COUNTS_OMITTED: &str = "counts_omitted";
+/// The member of the cut row of `config.catalog_warnings` that says how many place rows the
+/// fact's row bound left out (#428 CW-1 fix 1).
+const CATALOG_WARNINGS_PLACES_OMITTED: &str = "places_omitted";
+
 /// The compile warnings of the active composed catalog generation (#428 CW-1, register §1.290),
 /// recorded as `config.catalog_warnings` (runtime scope, re-observed like every `config.` fact):
 /// first one count row `{warning, game?, count}` per code and game, then one place row
-/// `{warning, game?, pointer}` per warning while the fact's row bound leaves room, so the counts
-/// stay whole when places are left out. Empty while the generation has no warning.
+/// `{warning, game?, pointer}` per warning. Fix 1 (Fail Loud): rows past the fact's row bound are
+/// never left out silently: the place rows are cut first, then the count rows, and one last cut
+/// row `{counts_omitted, places_omitted}` says how many of each are missing. Empty while the
+/// generation has no warning.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConfigCatalogWarnings {
     pub counts: Vec<CatalogWarningCount>,
     pub places: Vec<CatalogCompileWarning>,
+    /// How many count rows the row bound left out (fix 1): their warnings are in no count.
+    pub counts_omitted: u64,
+    /// How many place rows the row bound left out (fix 1).
+    pub places_omitted: u64,
 }
 
 impl ConfigCatalogWarnings {
     /// The warnings of `warnings`, each once: counted by code and game, and placed in the order
-    /// code, game, pointer, as many places as [`MAX_RUNTIME_FACT_RECORD_ROWS`] leaves after the
-    /// count rows.
+    /// code, game, pointer. When the rows pass [`MAX_RUNTIME_FACT_RECORD_ROWS`], one row is kept
+    /// for the cut row and the rest hold the count rows first, then as many place rows as fit;
+    /// [`Self::counts_omitted`] and [`Self::places_omitted`] say how many of each were left out.
     pub fn of(warnings: &[CatalogCompileWarning]) -> Self {
         let mut places = warnings.to_vec();
         places.sort();
@@ -568,22 +582,44 @@ impl ConfigCatalogWarnings {
                 count,
             })
             .collect::<Vec<_>>();
-        counts.truncate(MAX_RUNTIME_FACT_RECORD_ROWS);
-        places.truncate(MAX_RUNTIME_FACT_RECORD_ROWS - counts.len());
-        Self { counts, places }
+        let (mut counts_omitted, mut places_omitted) = (0, 0);
+        if counts.len() + places.len() > MAX_RUNTIME_FACT_RECORD_ROWS {
+            let omitted = |rows: usize| u64::try_from(rows).unwrap_or(u64::MAX);
+            // The cut row takes one row of the bound.
+            let room = MAX_RUNTIME_FACT_RECORD_ROWS - 1;
+            let counts_kept = counts.len().min(room);
+            let places_kept = room - counts_kept;
+            counts_omitted = omitted(counts.len().saturating_sub(counts_kept));
+            places_omitted = omitted(places.len().saturating_sub(places_kept));
+            counts.truncate(counts_kept);
+            places.truncate(places_kept);
+        }
+        Self {
+            counts,
+            places,
+            counts_omitted,
+            places_omitted,
+        }
     }
 
     /// Whether the generation has no warning.
     pub fn is_empty(&self) -> bool {
-        self.counts.is_empty()
+        self.counts.is_empty() && self.counts_omitted == 0
     }
 
-    /// How many warnings the generation has, placed or not.
+    /// Whether the row bound left rows out (fix 1): the fact then ends with its cut row.
+    pub fn is_cut(&self) -> bool {
+        self.counts_omitted > 0 || self.places_omitted > 0
+    }
+
+    /// How many warnings the count rows count, placed or not; a warning whose count row was left
+    /// out ([`Self::counts_omitted`]) is not in it.
     pub fn total(&self) -> u64 {
         self.counts.iter().map(|count| count.count).sum()
     }
 
-    /// The `config.catalog_warnings` fact: the count rows, then the place rows.
+    /// The `config.catalog_warnings` fact: the count rows, then the place rows, then, when rows
+    /// were left out, the cut row `{counts_omitted, places_omitted}`.
     pub fn to_fact_record(
         &self,
         observed_at_unix_ms: u64,
@@ -613,18 +649,32 @@ impl ConfigCatalogWarnings {
             );
             placed
         });
+        let omitted = |rows: u64| FactScalar::Integer(i64::try_from(rows).unwrap_or(i64::MAX));
+        let cut = self.is_cut().then(|| {
+            BTreeMap::from([
+                (
+                    CATALOG_WARNINGS_COUNTS_OMITTED.to_owned(),
+                    omitted(self.counts_omitted),
+                ),
+                (
+                    CATALOG_WARNINGS_PLACES_OMITTED.to_owned(),
+                    omitted(self.places_omitted),
+                ),
+            ])
+        });
         RuntimeFactRecord {
             scope: RuntimeFactScope::Runtime,
             key: CONFIG_CATALOG_WARNINGS_FACT_KEY.to_owned(),
-            value: FactValue::RecordList(counts.chain(places).collect()),
+            value: FactValue::RecordList(counts.chain(places).chain(cut).collect()),
             observed_at_unix_ms,
             source,
             ttl_ms: None,
         }
     }
 
-    /// The warnings a `config.catalog_warnings` record holds; a row that is neither a count row
-    /// nor a place row as [`Self::to_fact_record`] writes them is `invalid_fact_snapshot_record`.
+    /// The warnings a `config.catalog_warnings` record holds; a row that is neither a count row,
+    /// a place row nor, last, a cut row as [`Self::to_fact_record`] writes them is
+    /// `invalid_fact_snapshot_record`.
     pub fn from_fact_record(record: &RuntimeFactRecord) -> Result<Self, SanitizationError> {
         let refused = || {
             SanitizationError::new(
@@ -636,7 +686,24 @@ impl ConfigCatalogWarnings {
             return Err(refused());
         };
         let mut read = Self::default();
-        for row in rows {
+        for (index, row) in rows.iter().enumerate() {
+            // Fix 1: the cut row, the last one, with its two members and nothing else.
+            if row.contains_key(CATALOG_WARNINGS_COUNTS_OMITTED)
+                || row.contains_key(CATALOG_WARNINGS_PLACES_OMITTED)
+            {
+                let omitted = |field: &str| match row.get(field) {
+                    Some(FactScalar::Integer(value)) => {
+                        u64::try_from(*value).map_err(|_| refused())
+                    }
+                    _ => Err(refused()),
+                };
+                read.counts_omitted = omitted(CATALOG_WARNINGS_COUNTS_OMITTED)?;
+                read.places_omitted = omitted(CATALOG_WARNINGS_PLACES_OMITTED)?;
+                if index + 1 != rows.len() || row.len() != 2 || !read.is_cut() {
+                    return Err(refused());
+                }
+                continue;
+            }
             let text = |field: &str| -> Result<Option<String>, SanitizationError> {
                 match row.get(field) {
                     None => Ok(None),
