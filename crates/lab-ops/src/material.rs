@@ -304,7 +304,7 @@ pub fn read_whole(
 /// `material_unavailable` (Workflow #378 A5): the read's state (`material_state`) and, when the
 /// read stopped short, its limit (`material_limit`), caused by the Runtime's typed failure code
 /// when it gave one (relayed as the Runtime spelled it).
-pub fn unavailable_outcome(
+fn unavailable_outcome(
     state: RuntimeMaterialReadState,
     limit: Option<RuntimeMaterialReadLimit>,
     failure: Option<&RuntimeMaterialReadFailure>,

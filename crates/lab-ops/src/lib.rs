@@ -15,9 +15,9 @@
 //!   `actingctl` (`contracts/outcome-codes/actingctl.json`), whose crate this now is.
 //! - Workflow #434 LAB-1b: the other 23 core operations, whose code was in actingctl's `main.rs`
 //!   and in MCP's tools (register §1.287, LAB-1b row): a function per operation that sends its
-//!   requests on a connection it is given and shapes its answer, which actingctl's CLI and MCP
-//!   server call and wrap as before; [`served`] names the function that serves each core
-//!   operation of LAB-1 and LAB-1b.
+//!   requests on a connection it is given (for `app`, through the actinglab child it runs) and
+//!   shapes its answer, which actingctl's CLI and MCP server call and wrap as before; [`served`]
+//!   names the function that serves each core operation of LAB-1 and LAB-1b.
 
 #![forbid(unsafe_code)]
 
@@ -89,12 +89,14 @@ pub mod table;
 // clear`, `monitor set`, `monitor clear`), facts (`facts publish`), emulators (`discover`, `emu
 // start|stop|restart|selfcheck`), games (`app launch|restart|stop`) and the rest (`shutdown`,
 // `wake-test`); with the bounded wait of `emu start|stop|restart`, and the shutdown wait and the
-// process probe it reads, moved from actingctl unchanged.
+// process probe it reads, moved from actingctl unchanged; and `lab_child`, actinglab run as a
+// child and its envelope read, which `app` runs and MCP's other Lab tools share.
 pub mod apps;
 pub mod configure;
 pub mod emulators;
 pub mod fact_publish;
 pub mod frames;
+pub mod lab_child;
 pub mod material;
 pub mod process_probe;
 pub mod run_show;

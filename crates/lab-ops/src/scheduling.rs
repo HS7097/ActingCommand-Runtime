@@ -30,7 +30,7 @@ pub const MCP_PAUSE_REASON: &str = "mcp.pause";
 pub const MCP_DRAIN_TIMEOUT_S: u64 = 60;
 pub const MCP_MAX_DRAIN_TIMEOUT_S: u64 = 600;
 /// `source_detector` of the priority offsets `offset` publishes.
-pub const TASK_OFFSET_DETECTOR: &str = "actingctl.task-offset";
+const TASK_OFFSET_DETECTOR: &str = "actingctl.task-offset";
 
 /// The scope of a pause or resume: the instance `instance_alias`, or every instance without one.
 pub fn pause_scope(instance_alias: Option<String>) -> SchedulingPauseScope {

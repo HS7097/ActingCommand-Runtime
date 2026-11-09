@@ -723,7 +723,7 @@
       "source": ["MCP ac_app (launch)", "actinglab session app launch", "actinglab session instance app launch", "acui: rescue bar game start and restart (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `apps` (the actions and the command line of actinglab session app that MCP ac_app runs); the session command itself is actinglab's (LAB-2)"
+      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2)"
     },
     {
       "name": "app restart",
@@ -741,7 +741,7 @@
       "source": ["MCP ac_app (restart)", "actinglab session app restart", "actinglab session instance app restart", "acui: rescue bar game start and restart (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `apps` (the actions and the command line of actinglab session app that MCP ac_app runs); the session command itself is actinglab's (LAB-2)"
+      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2)"
     },
     {
       "name": "app stop",
@@ -759,7 +759,7 @@
       "source": ["MCP ac_app (stop)", "actinglab session app stop", "actinglab session instance app stop", "actinglab session app force-stop", "actinglab session instance app force-stop"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `apps` (the actions and the command line of actinglab session app that MCP ac_app runs); the session command itself is actinglab's (LAB-2)"
+      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2)"
     },
     {
       "name": "shutdown",

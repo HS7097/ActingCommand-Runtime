@@ -4,10 +4,10 @@
 //! §1.287): for each `core` row of the operation table (`contracts/lab-operations.json`) that
 //! LAB-1 or LAB-1b moved here, the function of this crate that serves it, the one that sends the
 //! row's request on a connection it is given and shapes its answer (for `app launch|restart|stop`,
-//! actinglab's command line that sends it). actingctl's CLI and MCP server call these today; the
-//! CLI module (LAB-2) and the MCP server from the table (LAB-5) are to be built on them.
-//! `lab_ops_core_rows_served_by_lab_ops` reads the table and this registry and finds no such row
-//! without its server.
+//! the one that runs actinglab's `session app`, which sends it, and reads its answer). actingctl's
+//! CLI and MCP server call these today; the CLI module (LAB-2) and the MCP server from the table
+//! (LAB-5) are to be built on them. `lab_ops_core_rows_served_by_lab_ops` reads the table and this
+//! registry: no such row is without its server, and every entry names such a row, once.
 
 /// One operation and the function of this crate that serves it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,14 +18,42 @@ pub struct Served {
     pub function: &'static str,
 }
 
+/// A function of up to eight parameters, what a registry entry names; `Arguments` is the tuple of
+/// its parameter types. A constant or a static is no function and implements it not.
+trait Function<Arguments> {}
+
+/// `Function` for the functions of one arity.
+macro_rules! function_of_arity {
+    ($($parameter:ident),*) => {
+        impl<F, R, $($parameter),*> Function<($($parameter,)*)> for F
+        where
+            F: Fn($($parameter),*) -> R,
+        {
+        }
+    };
+}
+
+function_of_arity!();
+function_of_arity!(A);
+function_of_arity!(A, B);
+function_of_arity!(A, B, C);
+function_of_arity!(A, B, C, D);
+function_of_arity!(A, B, C, D, E);
+function_of_arity!(A, B, C, D, E, G);
+function_of_arity!(A, B, C, D, E, G, H);
+function_of_arity!(A, B, C, D, E, G, H, I);
+
+/// Compiles only for a function (see [`Function`]).
+const fn is_function<F: Function<Arguments>, Arguments>(_function: &F) {}
+
 /// `"<operation>" => module::function`: the entry compiles only when the path names a function
-/// of this crate.
+/// of this crate; a constant, a static or another item does not.
 macro_rules! served {
     ($operation:literal => $module:ident :: $function:ident) => {
         Served {
             operation: $operation,
             function: {
-                let _ = crate::$module::$function;
+                is_function(&crate::$module::$function);
                 concat!(stringify!($module), "::", stringify!($function))
             },
         }
@@ -83,9 +111,9 @@ pub const SERVED: &[Served] = &[
     served!("emu stop" => emulators::control),
     served!("emu restart" => emulators::control),
     served!("emu selfcheck" => emulators::self_check),
-    served!("app launch" => apps::session_app),
-    served!("app restart" => apps::session_app),
-    served!("app stop" => apps::session_app),
+    served!("app launch" => apps::run),
+    served!("app restart" => apps::run),
+    served!("app stop" => apps::run),
     served!("shutdown" => shutdown::request),
     served!("wake-test" => wake_test::queue),
     // LAB-1.

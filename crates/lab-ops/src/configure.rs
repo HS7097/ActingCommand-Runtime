@@ -19,8 +19,8 @@ use actingcommand_runtime_client::{ConfiguredSettings, RuntimeClient, RuntimeCli
 use serde_json::{Map, Value};
 
 /// `monitor set` defaults: the interval between two checks and the page expected.
-pub const DEFAULT_MONITOR_INTERVAL_MS: u64 = 30_000;
-pub const DEFAULT_EXPECTED_PAGE: &str = "home";
+const DEFAULT_MONITOR_INTERVAL_MS: u64 = 30_000;
+const DEFAULT_EXPECTED_PAGE: &str = "home";
 
 /// The changes of `config set <key>=<json>…` (`set`) and `config clear <key>…` (`clear`), the
 /// same `ConfigureSettings` changes MCP's `changes` give: a set carries its value (JSON, not
@@ -127,7 +127,7 @@ pub fn configured_answer(
 }
 
 /// The policy of `monitor set`: a check every `interval_ms` (default
-/// [`DEFAULT_MONITOR_INTERVAL_MS`]) expecting `expected_page` (default [`DEFAULT_EXPECTED_PAGE`]),
+/// `DEFAULT_MONITOR_INTERVAL_MS`) expecting `expected_page` (default `DEFAULT_EXPECTED_PAGE`),
 /// recovering when `recover`; `None` for a policy the contract refuses.
 pub fn monitor_policy(
     interval_ms: Option<u64>,

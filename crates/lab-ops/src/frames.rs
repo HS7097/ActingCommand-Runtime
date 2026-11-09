@@ -8,11 +8,11 @@ use actingcommand_contract::CaptureSequenceSpec;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeFlowOutput};
 
 /// `frames` defaults: how many frames, and the interval between two.
-pub const DEFAULT_FRAME_COUNT: u16 = 1;
-pub const DEFAULT_INTERVAL_MS: u64 = 250;
+const DEFAULT_FRAME_COUNT: u16 = 1;
+const DEFAULT_INTERVAL_MS: u64 = 250;
 
-/// The capture of `count` frames (default [`DEFAULT_FRAME_COUNT`]) `interval_ms` apart (default
-/// [`DEFAULT_INTERVAL_MS`]); `None` for a capture the contract refuses.
+/// The capture of `count` frames (default `DEFAULT_FRAME_COUNT`) `interval_ms` apart (default
+/// `DEFAULT_INTERVAL_MS`); `None` for a capture the contract refuses.
 pub fn spec(count: Option<u16>, interval_ms: Option<u64>) -> Option<CaptureSequenceSpec> {
     CaptureSequenceSpec::new(
         count.unwrap_or(DEFAULT_FRAME_COUNT),

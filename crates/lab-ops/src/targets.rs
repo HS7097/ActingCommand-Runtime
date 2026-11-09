@@ -23,7 +23,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The schema of the documents [`document`] builds.
-pub const DOCUMENT_SCHEMA: &str = "actingcommand.resource-targets.v2";
+const DOCUMENT_SCHEMA: &str = "actingcommand.resource-targets.v2";
 /// The longest validity [`valid_until`] gives a policy, in days.
 pub const MAX_VALID_DAYS: u64 = 365;
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;

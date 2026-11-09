@@ -51,7 +51,8 @@ use actingcommand_lab_ops::{
 // - `targets`: `agent-apply-resource-targets` (MCP `ac_resources_list`, `ac_targets_get`,
 //   `ac_targets_set`); `wake_test`: `agent-wake-test`;
 // - read by the MCP server only: `run_show` (`ac_get_run`), `material` (`ac_material`) and
-//   `apps` (`ac_app`).
+//   `apps` (`ac_app`), with `lab_child`, actinglab run as a child and its envelope read, which
+//   `ac_app` and the other Lab tools share.
 #[cfg(windows)]
 use actingcommand_lab_ops::process_probe;
 use actingcommand_lab_ops::scheduling::{self, OffsetFailure, pause_scope};
@@ -63,7 +64,7 @@ use actingcommand_lab_ops::{
 #[cfg(all(test, feature = "mcp"))]
 use actingcommand_lab_ops::schedule;
 #[cfg(feature = "mcp")]
-use actingcommand_lab_ops::{apps, material, material_export, run_show};
+use actingcommand_lab_ops::{apps, lab_child, material, material_export, run_show};
 
 // Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
 #[cfg(test)]
