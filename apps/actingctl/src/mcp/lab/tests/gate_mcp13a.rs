@@ -7,9 +7,12 @@
 // an operator types, after `--json`, against the Runtime of this server's state root, without
 // `--record`; its answer is that command's envelope data unchanged, as for every Lab tool
 // (gate 43, `interpret`). Workflow #389 U-2: MCP forwards the work, so `--via mcp` comes
-// after `--json`, before the operator's command.
+// after `--json`, before the operator's command. Workflow #434 LAB-1b: the child is the one
+// ac_app runs, `lab-ops`' `apps::run` of the operation `app_request` makes of the arguments
+// (`apps::command`, on this server's actinglab, `Program::child`).
 
-use super::super::{APP, APP_ACTIONS, Program, command_line};
+use super::super::{APP_ACTIONS, Program, app_request};
+use crate::apps;
 use serde_json::{Map, json};
 use std::ffi::OsStr;
 use std::path::PathBuf;
@@ -33,14 +36,14 @@ fn gate_ac_app_runs_actinglab_session_app_with_the_same_action_and_instance() {
         let mut arguments = Map::new();
         arguments.insert("action".to_owned(), json!(action));
         arguments.insert("instance".to_owned(), json!(ALIAS));
-        let line = match command_line(&APP, &arguments) {
-            Ok(line) => line,
+        let app = match app_request(&arguments) {
+            Ok(app) => app,
             Err(error) => panic!(
                 "ac_app with action {action} was refused: {}",
                 error.to_value()
             ),
         };
-        let command = program.command(&line);
+        let command = apps::command(&program.child(), &app);
         assert_eq!(command.get_program(), program.actinglab.as_os_str());
         let words = command
             .get_args()

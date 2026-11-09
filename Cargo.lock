@@ -226,6 +226,7 @@ name = "actingcommand-lab-ops"
 version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
+ "actingcommand-host-metrics",
  "actingcommand-ledger",
  "actingcommand-policy",
  "actingcommand-runtime-client",

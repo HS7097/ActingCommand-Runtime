@@ -25,9 +25,8 @@ pub(super) fn observe(context: &ToolContext<'_>, arguments: &Map<String, Value>)
     let alias = select_instance(status.instances(), selector)?
         .instance_alias()
         .to_owned();
-    let flow = connected
-        .client
-        .observe_readonly(&alias)
+    // Workflow #434 LAB-1b: the observation is `observe_export::observe`.
+    let flow = crate::observe_export::observe(&connected.client, &alias)
         .map_err(|error| context.runtime.failure(&connected, &error))?;
     // None of the observation's events carries the frame it reports.
     let frame = ObservedFrame::of(&flow)

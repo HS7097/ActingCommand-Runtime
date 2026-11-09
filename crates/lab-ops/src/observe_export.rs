@@ -55,6 +55,15 @@ pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     })
 }
 
+/// `frame` (Workflow #434 LAB-1b): one ObserveReadonly of the instance `alias`, which captures a
+/// frame; `observe`, `observe --export` and MCP `ac_observe` send it.
+pub fn observe(
+    client: &RuntimeClient,
+    alias: &str,
+) -> Result<RuntimeFlowOutput, RuntimeClientError> {
+    client.observe_readonly(alias)
+}
+
 /// The frame one observation captured, with the event of that observation that carries it.
 pub struct ObservedFrame<'a> {
     pub observation: &'a ReadonlyObservation,
@@ -181,7 +190,7 @@ fn run(arguments: &[OsString]) -> Result<Value, Failure> {
         })?
         .instance_alias()
         .to_owned();
-    let flow = client.observe_readonly(&alias).map_err(Failure::Runtime)?;
+    let flow = observe(&client, &alias).map_err(Failure::Runtime)?;
     let frame = ObservedFrame::of(&flow).ok_or(Failure::FrameUnrecorded)?;
     let bytes = read_frame(&client, &frame)?;
     let artifact = frame.observation.artifact();

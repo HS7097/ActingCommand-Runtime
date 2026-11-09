@@ -11,6 +11,9 @@
 //! by a last `foreign_other_error` holding actinglab's message verbatim as `raw_text`. Any other
 //! exit code, or no envelope, is runtime `lab_process_failed`, caused by a `foreign_other_error`
 //! holding the stderr tail (and by the details and the message of an error it printed).
+//! Workflow #434 LAB-1b: running actinglab and reading its envelope are `lab-ops`'
+//! (`lab_child`), as is ac_app's operation (`apps::run`); this module finds the install, checks
+//! the arguments, runs the jobs and gives a failure as a tool error.
 //!
 //! Each call runs as a background job of this process: answered within the call budget, or
 //! a handle for `ac_get_run`. The child is never killed; the handle lives only in this
@@ -32,7 +35,10 @@
 //! its `material_export_failed` is the warning instead. An error is always small and never
 //! exported: the warnings found before it become its `note` links.
 
-use super::child::{self, Captured, ChildFailure};
+use super::child;
+// Test-only: the gates read a child's envelope through `interpret`.
+#[cfg(test)]
+use super::child::Captured;
 use super::jobs::JobEnd;
 use super::observer;
 use super::operator::{self, CLI};
@@ -42,8 +48,9 @@ use super::tools::{
     out_of_range,
 };
 use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::{apps, lab_child};
 use actingcommand_contract::ClientActionValue;
-use actingcommand_contract::codes::{ContractCode, SharedCode};
+use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome, OutcomeEnvelope, RawSource};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -54,13 +61,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Every Lab job handle starts so; one this process does not hold answers `handle_unknown`.
 pub(super) const HANDLE_PREFIX: &str = "lab_job_";
-/// actinglab finds the Runtime it talks to here (`state_roots.rs:11-24`).
-const STATE_ROOT_ENV: &str = "ACTINGCOMMAND_RUNTIME_STATE_ROOT";
-/// Workflow #389 U-2: actinglab's global option naming MCP as the counter that forwarded the
-/// work (model section 3.2 rule 7).
-pub(super) const LAB_VIA_MCP: [&str; 2] = ["--via", "mcp"];
-/// The tail of a failed child's stderr kept as `raw_text`.
-const MAX_STDERR_TAIL: usize = 2048;
+/// Workflow #389 U-2: MCP, the counter that forwarded the work, as actinglab's `--via` names it
+/// (model section 3.2 rule 7).
+const LAB_VIA: &str = "mcp";
 /// A string argument may not look like a flag: actinglab's flag parser takes a value that
 /// starts with `--` for the next flag (`flag_args.rs:27-28`).
 const NOT_A_FLAG: &str = "^([^-]|-([^-]|$))";
@@ -498,13 +501,16 @@ static RECORD_STATUS: LabCommand = LabCommand {
 // ---- Workflow #389 MCP-13a (begin): ac_app, actinglab `session app` (MCP-0 command table v1.1
 // §4.14), operator before U-3 and option two after it (FCM:116). ----
 
-/// The actions of actinglab `session app` (`session_management.rs`); `force-stop` is the same
-/// action as `stop`.
-pub(super) const APP_ACTIONS: [&str; 4] = ["launch", "restart", "stop", "force-stop"];
+// The actions of actinglab `session app` (`session_management.rs`); `force-stop` is the same
+// action as `stop`. Workflow #434 LAB-1b: `apps::ACTIONS`.
+pub(super) use crate::apps::ACTIONS as APP_ACTIONS;
 
-/// `session app <action> --instance <alias>`, never with `--record` (no recording step).
+/// ac_app's arguments, for its input schema (`app_input`) and their checks (`app_request`).
+/// Workflow #434 LAB-1b: actinglab's command line, `session app <action> --instance <alias>`
+/// without `--record`, is `lab-ops`' (`apps::App`, run by `apps::run`), so this table names no
+/// command word and no flag, and no command line is built from it.
 static APP: LabCommand = LabCommand {
-    words: &["session", "app"],
+    words: &[],
     flags: &[
         flag(
             "action",
@@ -514,7 +520,7 @@ static APP: LabCommand = LabCommand {
         ),
         flag(
             "instance",
-            "--instance",
+            "",
             Kind::Text,
             "actinglab --instance: the Runtime instance alias whose application is controlled.",
         ),
@@ -621,9 +627,12 @@ fn not_a_flag(key: &str, text: &str) -> Result<(), ToolError> {
     Ok(())
 }
 
-/// actinglab's arguments after `--json`: the command words, the positional argument, the
-/// valued flags, then the switches, so no switch is ever followed by a value.
-fn command_line(command: &LabCommand, map: &Map<String, Value>) -> Result<Vec<String>, ToolError> {
+/// A Lab tool's arguments: none but its flags' (else `unknown`), and every required one given
+/// (else `required`, naming the first missing in `required` order).
+fn checked_arguments<'a>(
+    command: &LabCommand,
+    map: &'a Map<String, Value>,
+) -> Result<Arguments<'a>, ToolError> {
     let names = command
         .flags
         .iter()
@@ -633,6 +642,13 @@ fn command_line(command: &LabCommand, map: &Map<String, Value>) -> Result<Vec<St
     if let Some(missing) = command.required.iter().find(|key| !arguments.has(key)) {
         return Err(invalid_argument(missing, ArgumentProblem::Required));
     }
+    Ok(arguments)
+}
+
+/// actinglab's arguments after `--json`: the command words, the positional argument, the
+/// valued flags, then the switches, so no switch is ever followed by a value.
+fn command_line(command: &LabCommand, map: &Map<String, Value>) -> Result<Vec<String>, ToolError> {
+    let arguments = checked_arguments(command, map)?;
     let mut line = command
         .words
         .iter()
@@ -700,7 +716,8 @@ struct Program {
     state_root: Result<PathBuf, Outcome>,
 }
 
-/// What one child answered.
+/// What one child answered (Workflow #434 LAB-1b: `lab_child::Answer`, its failure as a tool
+/// error).
 pub(super) struct Answer {
     /// The envelope's `data`, or the error its exit code names.
     pub(super) result: Result<Value, ToolError>,
@@ -708,6 +725,18 @@ pub(super) struct Answer {
     req_id: Option<String>,
     /// Whether the child ran to its end (and may have recorded a Lab request).
     returned: bool,
+}
+
+impl From<lab_child::Answer> for Answer {
+    fn from(answer: lab_child::Answer) -> Self {
+        Self {
+            result: answer
+                .result
+                .map_err(|failure| ToolError::outcome(failure.class, failure.outcome)),
+            req_id: answer.req_id,
+            returned: answer.returned,
+        }
+    }
 }
 
 impl Program {
@@ -736,48 +765,27 @@ impl Program {
         })
     }
 
-    /// `actinglab --json --via mcp <arguments>`, talking to this server's Runtime when it is
-    /// known. Workflow #389 U-2 (model section 3.2 rule 7): MCP forwards the work, so the child's
-    /// connections bind the Lab channel with `via = mcp`.
-    fn command(&self, arguments: &[String]) -> Command {
-        let mut command = Command::new(&self.actinglab);
-        super::runtime::pin_child(&mut command, self.installation.as_ref());
-        command.arg("--json").args(LAB_VIA_MCP).args(arguments);
-        if let Ok(state_root) = &self.state_root {
-            command.env(STATE_ROOT_ENV, state_root);
+    /// This server's actinglab as `lab-ops` runs it (Workflow #434 LAB-1b): talking to this
+    /// server's Runtime when it is known. Workflow #389 U-2 (model section 3.2 rule 7): MCP
+    /// forwards the work, so the child's connections bind the Lab channel with `via = mcp`.
+    fn child(&self) -> lab_child::Actinglab<'_> {
+        lab_child::Actinglab {
+            program: &self.actinglab,
+            installation: self.installation.as_ref(),
+            state_root: self.state_root.as_ref().ok().map(PathBuf::as_path),
+            via: LAB_VIA,
         }
-        command
+    }
+
+    /// `actinglab --json --via mcp <arguments>`, the child [`Self::call`] runs; the gates read it.
+    #[cfg(test)]
+    fn command(&self, arguments: &[String]) -> Command {
+        self.child().command(arguments)
     }
 
     /// Runs actinglab to its end.
-    fn call(&self, arguments: &[String], what: &str) -> Answer {
-        match child::run_to_end(self.command(arguments)) {
-            Ok(captured) => interpret(&captured, what),
-            Err(failure) => Answer {
-                result: Err(child_failure(&failure, what)),
-                req_id: None,
-                returned: false,
-            },
-        }
-    }
-}
-
-/// An actinglab child that gave no answer: runtime `lab_process_failed`, caused by the OS
-/// failure that kept it from starting or from being waited for (none when a thread reading its
-/// output panicked), or `lab_process_timeout`. `_what` names the command for the caller's
-/// reading; the outcome carries no text.
-pub(super) fn child_failure(failure: &ChildFailure, _what: &str) -> ToolError {
-    match failure {
-        ChildFailure::StillRunning { .. } | ChildFailure::Ended => {
-            ToolError::new("runtime", ActingctlCode::LabProcessTimeout)
-        }
-        ChildFailure::Spawn(_) | ChildFailure::Io(_) => {
-            let error = ToolError::new("runtime", ActingctlCode::LabProcessFailed);
-            match failure.os_failure() {
-                Some(cause) => error.caused_by(cause),
-                None => error,
-            }
-        }
+    fn call(&self, arguments: &[String]) -> Answer {
+        Answer::from(self.child().call(arguments))
     }
 }
 
@@ -786,183 +794,11 @@ fn words(items: &[&str]) -> Vec<String> {
     items.iter().map(|item| (*item).to_owned()).collect()
 }
 
-/// A child's stderr as foreign text: `foreign_other_error` from the process, with the last
-/// `MAX_STDERR_TAIL` bytes as `raw_text` (`raw_text_truncated` when that is not all of it) and
-/// the exit code when the child exited.
-fn process_text(captured: &Captured) -> Outcome {
-    let text = String::from_utf8_lossy(&captured.stderr);
-    let mut start = text.len().saturating_sub(MAX_STDERR_TAIL);
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
-    let link = Outcome::new(ContractCode::ForeignOtherError)
-        .raw_source(RawSource::Process)
-        .raw_text(&text[start..]);
-    let link = if start > 0 {
-        link.raw_text_truncated(true)
-    } else {
-        link
-    };
-    match captured.status.code() {
-        Some(exit) => link.exit_code(exit),
-        None => link,
-    }
-}
-
-/// The envelope's data, or the error its exit code names (`cli_result.rs:93-100`).
-/// `_what` names the command for the caller's reading; the outcome carries no text.
+/// The envelope's data, or the error its exit code names: `lab_child::interpret`, its failure
+/// as a tool error; the gates read it. `_what` names the command for the caller's reading.
+#[cfg(test)]
 pub(super) fn interpret(captured: &Captured, _what: &str) -> Answer {
-    let envelope = serde_json::from_slice::<Value>(captured.stdout.trim_ascii()).ok();
-    let ok = envelope
-        .as_ref()
-        .and_then(|envelope| envelope.get("ok"))
-        .and_then(Value::as_bool);
-    let data = envelope.as_ref().and_then(|envelope| envelope.get("data"));
-    let lab_error = envelope
-        .as_ref()
-        .and_then(|envelope| envelope.get("error"))
-        .filter(|error| error.is_object());
-    let req_id = match ok {
-        Some(true) => data.and_then(|data| data.get("req_id")),
-        _ => lab_error
-            .and_then(|error| error.get("details"))
-            .and_then(|details| details.get("req_id")),
-    }
-    .and_then(Value::as_str)
-    .map(str::to_owned);
-    // actinglab's code, as it spells it.
-    let spelling = lab_error
-        .and_then(|error| error.get("code"))
-        .and_then(Value::as_str);
-    // Workflow #433 LABDO-1: actinglab's message, kept.
-    let message = lab_error
-        .and_then(|error| error.get("message"))
-        .and_then(Value::as_str);
-    let result = match (captured.status.code(), ok, spelling) {
-        (Some(0), Some(true), _) => Ok(data.cloned().unwrap_or(Value::Null)),
-        (Some(exit @ 2..=6), Some(false), Some(spelling)) => Err(command_failed(
-            exit,
-            spelling,
-            req_id.as_deref(),
-            lab_error.and_then(|error| error.get("details")),
-            message,
-        )),
-        _ => Err(process_failed(
-            captured,
-            req_id.as_deref(),
-            lab_error.and_then(|error| error.get("details")),
-            message,
-        )),
-    };
-    Answer {
-        result,
-        req_id,
-        returned: true,
-    }
-}
-
-/// An actinglab error envelope: `lab_tool_failed` with actinglab's exit code (and its req_id),
-/// caused by actinglab's code (its `spelling`), in the class that exit code names; exit 6 is
-/// `not_implemented`. The error's `details`, when it has any, are a second cause (see
-/// [`details_text`]), and its `message` the last (see [`message_text`]). Workflow #433
-/// LABDO-1: so a Lab operation the Runtime answered and the client's check then refused
-/// (`lab_operation_check_failed`, exit 5) is class runtime with its req_id, its details (the
-/// effect among them) and actinglab's message.
-fn command_failed(
-    exit: i32,
-    spelling: &str,
-    req_id: Option<&str>,
-    details: Option<&Value>,
-    message: Option<&str>,
-) -> ToolError {
-    let (class, cause) = match exit {
-        3 => ("safety", Outcome::relayed(spelling)),
-        4 => ("device", Outcome::relayed(spelling)),
-        5 => ("runtime", Outcome::relayed(spelling)),
-        6 => ("usage", Outcome::new(SharedCode::NotImplemented)),
-        _ => ("usage", Outcome::relayed(spelling)),
-    };
-    let outcome = Outcome::new(ActingctlCode::LabToolFailed).exit_code(exit);
-    let outcome = match req_id {
-        Some(req_id) => outcome.req_id(req_id),
-        None => outcome,
-    };
-    let outcome = outcome.caused_by(cause);
-    let outcome = match details_text(details, Some(exit)) {
-        Some(details) => outcome.caused_by(details),
-        None => outcome,
-    };
-    let outcome = match message_text(message, Some(exit)) {
-        Some(message) => outcome.caused_by(message),
-        None => outcome,
-    };
-    ToolError::outcome(class, outcome)
-}
-
-/// Workflow #433 LABDO-1: the message of an actinglab error envelope, actinglab's own text about
-/// the failure (for a Lab operation, the client's failure after the Runtime answered): a
-/// `foreign_other_error` from the process with that text verbatim as `raw_text` (cut at its
-/// bound, the whole text then going to the diagnostic sink) and actinglab's exit code when it
-/// exited. `None` when the error has no message or an empty one.
-fn message_text(message: Option<&str>, exit: Option<i32>) -> Option<Outcome> {
-    let message = message.filter(|message| !message.is_empty())?;
-    let link = Outcome::new(ContractCode::ForeignOtherError)
-        .raw_source(RawSource::Process)
-        .raw_text(message);
-    Some(match exit {
-        Some(exit) => link.exit_code(exit),
-        None => link,
-    })
-}
-
-/// The details of an actinglab error envelope, actinglab's data about the failure: a
-/// `foreign_other_error` from the process with their JSON text as `raw_text` (cut at its bound,
-/// the whole text then going to the diagnostic sink) and actinglab's exit code when it exited.
-/// `None` when the error has no details or empty ones.
-fn details_text(details: Option<&Value>, exit: Option<i32>) -> Option<Outcome> {
-    let details = details.filter(|details| match details {
-        Value::Null => false,
-        Value::Object(members) => !members.is_empty(),
-        _ => true,
-    })?;
-    let link = Outcome::new(ContractCode::ForeignOtherError)
-        .raw_source(RawSource::Process)
-        .raw_text(details.to_string());
-    Some(match exit {
-        Some(exit) => link.exit_code(exit),
-        None => link,
-    })
-}
-
-/// actinglab answered no usable envelope (none, an unexpected exit code, or `ok` that does not
-/// match it): runtime `lab_process_failed`, caused by its stderr and, when it printed an error
-/// with details, by those details (see [`details_text`]), and with a message by that message
-/// (see [`message_text`]).
-fn process_failed(
-    captured: &Captured,
-    req_id: Option<&str>,
-    details: Option<&Value>,
-    message: Option<&str>,
-) -> ToolError {
-    let outcome = Outcome::new(ActingctlCode::LabProcessFailed);
-    let outcome = match captured.status.code() {
-        Some(exit) => outcome.exit_code(exit),
-        None => outcome,
-    };
-    let outcome = match req_id {
-        Some(req_id) => outcome.req_id(req_id),
-        None => outcome,
-    };
-    let outcome = outcome.caused_by(process_text(captured));
-    let outcome = match details_text(details, captured.status.code()) {
-        Some(details) => outcome.caused_by(details),
-        None => outcome,
-    };
-    let outcome = match message_text(message, captured.status.code()) {
-        Some(message) => outcome.caused_by(message),
-        None => outcome,
-    };
-    ToolError::outcome("runtime", outcome)
+    Answer::from(lab_child::interpret(captured))
 }
 
 /// `bytes`, written whole by the export writer as `<sha256>.json`: `{path, sha256, size}`.
@@ -1144,9 +980,8 @@ fn author(
         .and_then(Value::as_str)
         .map(str::to_owned);
     let program = Program::locate(context)?;
-    let what = command.words.join(" ");
     run_job(context, move |handle| {
-        let answer = program.call(&line, &what);
+        let answer = program.call(&line);
         let warnings = if records && answer.returned {
             record_action(
                 &program.state_root,
@@ -1369,14 +1204,35 @@ pub(super) fn record_status(
 }
 
 /// ac_app (Workflow #389 MCP-13a): actinglab `session app <action> --instance <alias>`, its data
-/// verbatim. An action that is none of `APP_ACTIONS` is refused before actinglab runs.
+/// verbatim. An action that is none of `APP_ACTIONS` is refused before actinglab runs. Workflow
+/// #434 LAB-1b: the operation is `lab-ops`' `apps::run` (its command line and its child), which
+/// this tool runs as a Lab job, with nothing to record (no `capture`).
 pub(super) fn app(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
-    let line = command_line(&APP, arguments)?;
-    let action = line.get(APP.words.len()).map(String::as_str);
-    if !action.is_some_and(|action| APP_ACTIONS.contains(&action)) {
-        return Err(invalid_argument("action", ArgumentProblem::NotRecognised));
-    }
-    author(context, arguments, &APP, "ac_app")
+    let app = app_request(arguments)?;
+    let program = Program::locate(context)?;
+    run_job(context, move |handle| {
+        let answer = Answer::from(apps::run(&program.child(), &app));
+        command_end(
+            &APP,
+            handle,
+            answer.result,
+            answer.req_id.as_deref(),
+            Vec::new(),
+        )
+    })
+}
+
+/// ac_app's arguments, checked as every Lab tool's are (`checked_arguments`, then each string in
+/// the order of `APP`'s flags), and its action, refused with `not_recognised` when it is none of
+/// `APP_ACTIONS`: the `app` operation `apps::run` runs.
+fn app_request(map: &Map<String, Value>) -> Result<apps::App, ToolError> {
+    let arguments = checked_arguments(&APP, map)?;
+    let action = lab_string(&arguments, "action")?;
+    let instance = lab_string(&arguments, "instance")?;
+    action
+        .zip(instance)
+        .and_then(|(action, instance)| apps::App::new(&action, &instance))
+        .ok_or_else(|| invalid_argument("action", ArgumentProblem::NotRecognised))
 }
 
 // ---------------------------------------------------------------- checks
@@ -1410,7 +1266,7 @@ pub(super) fn catalog_check(
     }
     let program = Program::locate(context)?;
     run_job(context, move |handle| {
-        let answer = program.call(&line, "resource catalog");
+        let answer = program.call(&line);
         finish(&plain(handle), answer.result, None, Vec::new())
     })
 }
@@ -1531,7 +1387,7 @@ pub(super) fn binding_draft(
         // Workflow #336 PKG-S4: preflight takes the package by its path only.
         let mut line = words(&["package", "preflight", "--package"]);
         line.push(package.clone());
-        let preflight = program.call(&line, "package preflight").result;
+        let preflight = program.call(&line).result;
         let admission = match preflight {
             Ok(preflight) => json!({"package": package, "preflight": preflight}),
             Err(error) => {
@@ -1608,7 +1464,7 @@ fn check_config(program: &Program) -> Result<Value, ToolError> {
             let outcome = if captured.stderr.is_empty() {
                 outcome
             } else {
-                outcome.caused_by(process_text(&captured))
+                outcome.caused_by(lab_child::process_text(&captured))
             };
             ToolError::outcome("runtime", outcome)
         })?;
