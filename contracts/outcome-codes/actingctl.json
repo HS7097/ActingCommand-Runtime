@@ -2862,9 +2862,10 @@
       "uncertain": false,
       "values": {},
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "actingwatch cannot run the watchdog tick (<root>\\runtime\\actingctl.exe).",
+      "retired_in": "0.12.47",
+      "description": "Retired (Workflow #434 LAB-4): actingwatch runs the watchdog's tick in its own process and starts no fixed entry, so nothing can fail to run and nothing emits this code. Was: actingwatch cannot run the watchdog tick (<root>\\runtime\\actingctl.exe).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

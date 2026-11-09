@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+[package]
+name = "actingcommand-watchdog"
+# Workflow #434 LAB-4: the Runtime watchdog (Workflow #374), moved out of actingctl unchanged so
+# that actingwatch runs the task's tick itself; actingctl runs it from here until LAB-7.
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# actingctl's install gates and actingwatch's `actingwatch_tick_in_process` read the decision of one
+# task tick (`tick_for_test`); their dev-dependencies turn it on.
+test-hooks = []
+
+[dependencies]
+actingcommand-contract = { workspace = true }
+# actingctl's outcome codes (`codes`, the registry of the catalog owner `actingctl`), its result
+# line (`cli_line`), the root configuration's name (`packs`) and the process probe
+# (`process_probe`), in `crates/lab-ops` since Workflow #434 LAB-1 and LAB-1b.
+actingcommand-lab-ops = { workspace = true }
+# The live owner's health request (`observe::live_owner`).
+actingcommand-runtime-client = { workspace = true }
+# #411 A66: `watchdog.start_window_ms` through the key table and the defaults file.
+actingcommand-runtime-config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The task's name (`task::task_name`).
+sha2 = { workspace = true }
+
+[dev-dependencies]
+# Workflow #381 A: the held Runtime start of `gate_381a` and `gate_wd1`
+# (`tests/support/held_runtime.rs`), stopped at the runtime-host preparation checkpoints.
+actingcommand-device = { workspace = true }
+actingcommand-runtime-host = { workspace = true, features = ["test-hooks"] }
+tempfile = "3"

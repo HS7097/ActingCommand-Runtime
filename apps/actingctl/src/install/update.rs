@@ -28,7 +28,7 @@ use super::lock::WriterLock;
 use super::manifest::{self, Half};
 use super::plan::{self, Action, Loaded, PlanInputs, PlanKind, Planned, Refused};
 use super::programs::{self, Deadline, PageRefused};
-use super::state::{self, LiveBuild, OperationKind, Paths};
+use super::state::{self, KindLocation, LiveBuild, OperationKind, Paths};
 use super::{Answer, Flags};
 use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal, RollbackGatePart};
 use actingcommand_contract::outcome::{CauseRelation, Outcome, OutcomeEnvelope};

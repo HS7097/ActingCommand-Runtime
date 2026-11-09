@@ -54,13 +54,13 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 const CMD_UNSAFE: &[char] = &['&', '|', '<', '>', '^', '%', '!', '"'];
 
 /// One start: the method it used and the answering owner, or the start's failure.
-pub(crate) struct Attempt {
-    pub(crate) method: &'static str,
-    pub(crate) result: Result<LiveOwner, Outcome>,
+pub struct Attempt {
+    pub method: &'static str,
+    pub result: Result<LiveOwner, Outcome>,
 }
 
 /// Workflow #382 A-4 (test plan v2.2 APPS-I3): the watchdog's seams to the machine.
-pub(crate) trait TickSeams {
+pub trait TickSeams {
     /// The wall clock, in Unix milliseconds.
     fn now_unix_ms(&self) -> u64;
     /// The monotonic clock the readiness window is measured on.
@@ -85,12 +85,12 @@ pub(crate) trait TickSeams {
 }
 
 /// A started process, as the readiness wait sees it.
-pub(crate) trait StartedProcess {
+pub trait StartedProcess {
     fn state(&mut self) -> Result<StartedState, Outcome>;
 }
 
 /// Whether a started process still runs.
-pub(crate) enum StartedState {
+pub enum StartedState {
     Running,
     /// The breakaway child exited, with its exit code when it has one.
     Exited(Option<i32>),
@@ -101,12 +101,12 @@ pub(crate) enum StartedState {
 }
 
 /// The machine: the system clocks, the CIM probe, CreateProcess or WMI, and the Runtime client.
-pub(crate) struct System {
+pub struct System {
     origin: Instant,
 }
 
 /// The machine's seams, with the monotonic clock read from here on.
-pub(crate) fn system() -> System {
+pub fn system() -> System {
     System {
         origin: Instant::now(),
     }
@@ -212,17 +212,17 @@ fn failed(method: &'static str, failure: Outcome) -> Attempt {
 // --- Workflow #389 MCP-10 (begin): the start's inputs, shared with `actingctl start`. ---
 /// What one start needs: the root (working directory, fixed entry), the config handed to the
 /// fixed entry, the state root whose owner answers, and how long readiness may take.
-pub(crate) struct Target<'a> {
-    pub(crate) root_plain: &'a Path,
-    pub(crate) config_plain: &'a Path,
-    pub(crate) state_root: &'a Path,
-    pub(crate) ready_timeout: Duration,
+pub struct Target<'a> {
+    pub root_plain: &'a Path,
+    pub config_plain: &'a Path,
+    pub state_root: &'a Path,
+    pub ready_timeout: Duration,
 }
 
 impl<'a> Target<'a> {
     /// The tick's target: the installation's selection and its start window (#411 A66,
     /// `watchdog.start_window_ms`).
-    pub(crate) fn of(installation: &'a Installation) -> Self {
+    pub fn of(installation: &'a Installation) -> Self {
         Self {
             root_plain: &installation.root_plain,
             config_plain: &installation.config_plain,
@@ -231,7 +231,7 @@ impl<'a> Target<'a> {
         }
     }
 
-    pub(crate) fn entry(&self) -> PathBuf {
+    pub fn entry(&self) -> PathBuf {
         self.root_plain.join("runtime").join(RUNTIME_IMAGE)
     }
 }
@@ -239,7 +239,7 @@ impl<'a> Target<'a> {
 /// The checks of a manual start that need no spawn, so `restart` refuses before it stops
 /// anything: the fixed entry is a file (`entry_missing`), and no path the WMI start carries
 /// holds a cmd metacharacter (`watchdog_wmi_path_unsafe`; start the Runtime formally).
-pub(crate) fn preflight(target: &Target<'_>) -> Result<(), Outcome> {
+pub fn preflight(target: &Target<'_>) -> Result<(), Outcome> {
     let entry = target.entry();
     if !entry.is_file() {
         return Err(Outcome::new(ActingctlCode::EntryMissing).path(&entry));
@@ -255,7 +255,7 @@ pub(crate) fn preflight(target: &Target<'_>) -> Result<(), Outcome> {
     }
 }
 
-pub(crate) fn start(
+pub fn start(
     seams: &dyn TickSeams,
     installation: &Installation,
     log: &Path,
@@ -273,7 +273,7 @@ pub(crate) fn start(
 // --- Workflow #389 MCP-10 (end). ---
 
 /// A start on the machine (`actingctl start` and `restart`).
-pub(crate) fn start_target(
+pub fn start_target(
     installation: &Target<'_>,
     log: &Path,
     spawn_at_unix_ms: u64,
@@ -431,7 +431,7 @@ fn wait_ready(
 /// The log's terminal outcome (Workflow #378 A6a: it was the FATAL line), else its last
 /// non-empty line: developer text for the start's failure line in `watchdog.log` and on stderr,
 /// never an interface value.
-pub(crate) fn last_log_line(log: &Path) -> String {
+pub fn last_log_line(log: &Path) -> String {
     let mut tail = Vec::new();
     let read = File::open(log).and_then(|mut file| {
         let length = file.metadata()?.len();

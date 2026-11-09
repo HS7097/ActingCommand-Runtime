@@ -126,8 +126,8 @@ incident = ["#381 A"]
 key = "20"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::observed_rows_follow_the_table_order",
-    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::start_rows_follow_the_table_order",
+    "actingcommand-watchdog::lib::decide::tests::observed_rows_follow_the_table_order",
+    "actingcommand-watchdog::lib::decide::tests::start_rows_follow_the_table_order",
 ]
 incident = []
 
@@ -136,8 +136,8 @@ incident = []
 key = "21"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::start_rows_follow_the_table_order",
-    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::repeated_restarts_count_a_day_since_the_last_formal_start",
+    "actingcommand-watchdog::lib::decide::tests::start_rows_follow_the_table_order",
+    "actingcommand-watchdog::lib::decide::tests::repeated_restarts_count_a_day_since_the_last_formal_start",
 ]
 incident = []
 
@@ -146,8 +146,8 @@ incident = []
 key = "22"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::grace_opens_after_a_gap_or_a_boot_between_task_ticks",
-    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::formal_starts_are_told_from_the_watchdogs_own",
+    "actingcommand-watchdog::lib::decide::tests::grace_opens_after_a_gap_or_a_boot_between_task_ticks",
+    "actingcommand-watchdog::lib::decide::tests::formal_starts_are_told_from_the_watchdogs_own",
 ]
 incident = []
 
@@ -156,11 +156,11 @@ incident = []
 key = "23"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::journals_of_every_shape_give_their_last_record",
-    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::a6a_the_terminal_outcome_is_the_last_outcome_line_of_this_root",
-    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::processes_count_under_the_root_or_without_a_path",
-    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::verbatim_paths_become_plain",
-    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::tu44_the_watchdog_reads_a_close_with_the_upgrade_state_marker_as_usual",
+    "actingcommand-watchdog::lib::observe::tests::journals_of_every_shape_give_their_last_record",
+    "actingcommand-watchdog::lib::observe::tests::a6a_the_terminal_outcome_is_the_last_outcome_line_of_this_root",
+    "actingcommand-watchdog::lib::observe::tests::processes_count_under_the_root_or_without_a_path",
+    "actingcommand-watchdog::lib::observe::tests::verbatim_paths_become_plain",
+    "actingcommand-watchdog::lib::observe::tests::tu44_the_watchdog_reads_a_close_with_the_upgrade_state_marker_as_usual",
 ]
 incident = ["#389 U-1"]
 
@@ -169,13 +169,13 @@ incident = ["#389 U-1"]
 key = "24"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::watchdog::state::tests::state_reads_tolerantly_and_sets_other_schemas_aside",
-    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::log_keys_change_once_per_log_file_and_epoch",
-    "actingcommand-actingctl::bin:actingctl::watchdog::log::tests::lines_carry_utc_time_level_code_and_quoted_fields",
-    "actingcommand-actingctl::bin:actingctl::watchdog::log::tests::a_repeated_misconfiguration_looks_past_lines_from_stderr",
-    "actingcommand-actingctl::bin:actingctl::watchdog::task::tests::definition_is_utf16_xml_with_every_setting_escaped",
-    "actingcommand-actingctl::bin:actingctl::watchdog::task::tests::the_task_query_answers_in_json",
-    "actingcommand-actingctl::bin:actingctl::watchdog::task::tests::names_csv_and_console_output_are_read_as_windows_prints_them",
+    "actingcommand-watchdog::lib::state::tests::state_reads_tolerantly_and_sets_other_schemas_aside",
+    "actingcommand-watchdog::lib::decide::tests::log_keys_change_once_per_log_file_and_epoch",
+    "actingcommand-watchdog::lib::log::tests::lines_carry_utc_time_level_code_and_quoted_fields",
+    "actingcommand-watchdog::lib::log::tests::a_repeated_misconfiguration_looks_past_lines_from_stderr",
+    "actingcommand-watchdog::lib::task::tests::definition_is_utf16_xml_with_every_setting_escaped",
+    "actingcommand-watchdog::lib::task::tests::the_task_query_answers_in_json",
+    "actingcommand-watchdog::lib::task::tests::names_csv_and_console_output_are_read_as_windows_prints_them",
     "actingcommand-actingctl::watchdog_process::watchdog_install_registers_the_task_and_uninstall_removes_it",
 ]
 incident = []
@@ -185,10 +185,10 @@ incident = []
 key = "26"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_381a::gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_381a::gate_fatal_line_formats_class_by_the_registered_top_code_only",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_381a::gate_an_unlogged_formal_close_looks_back_to_the_last_logged_owner",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_381a::gate_the_state_root_of_a_stopped_held_start_leads_the_watchdog_to_a_start",
+    "actingcommand-watchdog::lib::gate_381a::gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold",
+    "actingcommand-watchdog::lib::gate_381a::gate_fatal_line_formats_class_by_the_registered_top_code_only",
+    "actingcommand-watchdog::lib::gate_381a::gate_an_unlogged_formal_close_looks_back_to_the_last_logged_owner",
+    "actingcommand-watchdog::lib::gate_381a::gate_the_state_root_of_a_stopped_held_start_leads_the_watchdog_to_a_start",
 ]
 incident = ["#381 A"]
 
@@ -196,7 +196,7 @@ incident = ["#381 A"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd_mt::wd_mt_a_log_that_ends_in_an_error_is_restarted_even_when_its_directory_entry_is_stale",
+    "actingcommand-watchdog::lib::gate_wd_mt::wd_mt_a_log_that_ends_in_an_error_is_restarted_even_when_its_directory_entry_is_stale",
 ]
 incident = ["#421 INV-1119"]
 
@@ -334,9 +334,9 @@ tests = [
     "actingcommand-lab-ops::lib::events::tests::each_argument_problem_of_events_is_the_usage_outcome_with_its_argument_values",
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_tool_error_is_exactly_class_and_outcome_and_tier_not_enabled_names_its_blocker",
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcpt1::gate_interpret_answers_each_actinglab_exit_by_its_class_with_actinglab_s_code_as_the_cause",
-    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::every_decision_has_its_code_category_and_exit",
-    "actingcommand-actingctl::bin:actingctl::watchdog::tests::report_v2_of_a_live_owner_has_its_schema_outcome_and_attention",
-    "actingcommand-actingctl::bin:actingctl::watchdog::state::tests::state_v2_round_trips_results_and_sets_a_v1_document_aside",
+    "actingcommand-watchdog::lib::decide::tests::every_decision_has_its_code_category_and_exit",
+    "actingcommand-watchdog::lib::tests::report_v2_of_a_live_owner_has_its_schema_outcome_and_attention",
+    "actingcommand-watchdog::lib::state::tests::state_v2_round_trips_results_and_sets_a_v1_document_aside",
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_387_d1b::rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top",
 ]
 incident = ["#378 A5", "#378 RK-1"]
@@ -380,9 +380,9 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::gate_a6a::a6a_each_outcome_is_one_developer_line_and_one_outcome_line_by_its_category",
     "actingcommand-actingd::bin:actingcommand-actingd::gate_a6a::a6a_a_start_refusal_goes_to_the_fallback_log_only_when_stderr_is_not_kept",
     "actingcommand-actingd::bin:actingcommand-actingd::gate_a6a::a6a_every_subcommand_exit_is_one_report_line_with_its_outcome",
-    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::a6a_the_terminal_outcome_decides_by_its_category",
-    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::a6a_a_run_out_budget_escalates_only_after_restarts_required",
-    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::a6a_the_terminal_outcome_is_the_last_outcome_line_of_this_root",
+    "actingcommand-watchdog::lib::decide::tests::a6a_the_terminal_outcome_decides_by_its_category",
+    "actingcommand-watchdog::lib::decide::tests::a6a_a_run_out_budget_escalates_only_after_restarts_required",
+    "actingcommand-watchdog::lib::observe::tests::a6a_the_terminal_outcome_is_the_last_outcome_line_of_this_root",
     "actingcommand-actingd::process::an_idle_runtime_accepts_the_first_shutdown_request_right_after_ready",
 ]
 incident = ["#378 A6a"]
@@ -453,9 +453,8 @@ incident = ["#382 A-1 G11"]
 key = "27"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingwatch::gate_382_a1_launcher::gate_while_the_writer_lock_is_held_the_launcher_exits_0_and_runs_nothing",
-    "actingcommand-actingctl::bin:actingwatch::gate_382_a1_launcher::gate_a_misplaced_program_a_root_without_watchdog_directory_and_an_unprobed_lock_exit_1",
-    "actingcommand-actingctl::bin:actingwatch::gate_382_a1_launcher::gate_a_fixed_entry_that_cannot_run_is_logged_with_its_code_and_exits_1",
+    "actingcommand-actingwatch::bin:actingwatch::gate_382_a1_launcher::gate_while_the_writer_lock_is_held_the_launcher_exits_0_and_runs_nothing",
+    "actingcommand-actingwatch::bin:actingwatch::gate_382_a1_launcher::gate_a_misplaced_program_a_root_without_watchdog_directory_and_an_unprobed_lock_exit_1",
 ]
 incident = ["#382 A-1 G13"]
 
@@ -626,10 +625,10 @@ incident = ["#381 B", "#382 A-4"]
 key = "25"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_an_answering_start_is_started_and_its_record_is_saved_before_the_spawn_and_at_the_end",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_whose_process_exits_first_is_start_failed_exited_during_startup",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_its_window",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts",
+    "actingcommand-watchdog::lib::gate_382_a4::gate_382_a4_g12_an_answering_start_is_started_and_its_record_is_saved_before_the_spawn_and_at_the_end",
+    "actingcommand-watchdog::lib::gate_382_a4::gate_382_a4_g12_a_start_whose_process_exits_first_is_start_failed_exited_during_startup",
+    "actingcommand-watchdog::lib::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_its_window",
+    "actingcommand-watchdog::lib::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts",
 ]
 incident = ["#374", "#382 A-4"]
 # Workflow #336 PKG-S4 (option 丙): the input surfaces name a package by its path only. A configuration with startup_package {package} checks, and one that still carries startup_package.expected_sha256 or policy.procedure_manifest[].package_digest is config_decode_failed at config_load (prerequisite_packages left with Workflow #373 NAV-3a, host key 90); actingctl task-run refuses --package-ref, --expected-sha256 and their --recovery-* forms as unknown flags and runs a package given by its path; MCP ac_run_pack takes no package_ref or recovery_package_ref and starts no actinglab package digest, and ac_pack_check takes the package alone and answers only its check, since Workflow #411 A5 actinglab package check's data instead of the interim preflight (key 71) (M-PKG v1.1 §4.5 S4-T1, S4-T2 configuration half, S4-T3, S4-T4; S5-T4)
@@ -726,15 +725,15 @@ incident = ["#390"]
 key = "70"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_single_location_root_resolves_with_its_root_config_and_state_root",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_crashed_single_location_runtime_is_started_with_its_root_config",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_formally_closed_single_location_runtime_is_not_started",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_live_single_location_runtime_is_left_alone",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_active_json_appearing_before_the_start_is_a_selection_change",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_install_on_a_single_location_root_checks_the_launcher_not_the_layout",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_root_with_neither_marker_stays_layout_unknown_and_ab_wins_over_single",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_start_without_config_still_needs_an_ab_selection",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_deploy_holding_the_writer_lock_of_a_single_location_root_starts_nothing",
+    "actingcommand-watchdog::lib::gate_wd1::wd1_a_single_location_root_resolves_with_its_root_config_and_state_root",
+    "actingcommand-watchdog::lib::gate_wd1::wd1_a_crashed_single_location_runtime_is_started_with_its_root_config",
+    "actingcommand-watchdog::lib::gate_wd1::wd1_a_formally_closed_single_location_runtime_is_not_started",
+    "actingcommand-watchdog::lib::gate_wd1::wd1_a_live_single_location_runtime_is_left_alone",
+    "actingcommand-watchdog::lib::gate_wd1::wd1_active_json_appearing_before_the_start_is_a_selection_change",
+    "actingcommand-watchdog::lib::gate_wd1::wd1_install_on_a_single_location_root_checks_the_launcher_not_the_layout",
+    "actingcommand-watchdog::lib::gate_wd1::wd1_a_root_with_neither_marker_stays_layout_unknown_and_ab_wins_over_single",
+    "actingcommand-actingctl::bin:actingctl::gate_wd1_start::wd1_start_without_config_still_needs_an_ab_selection",
+    "actingcommand-watchdog::lib::gate_wd1::wd1_a_deploy_holding_the_writer_lock_of_a_single_location_root_starts_nothing",
 ]
 incident = ["#390 WD-1"]
 
@@ -1260,7 +1259,15 @@ tests = [
 ]
 incident = ["#433 LABDO-1"]
 
-# Workflow #434 LAB-2 (0.12.47; register §1.287, "Slice LAB-2"; brief rd-1108/arch-013/brief-lab2.md; contracts/lab-two-entries.md §4.2, §8.2, §9.3, open points 6 and 7): actinglab's CLI module reads the operation table's short words into the operation and its parameters (the longest name, the instance and other positionals, options, switches, a source command's further flags and words) and refuses by name a word or flag the row does not take, a reserved row, a rescue row and the old config get; its --json line is the operation's output (a core row's line as lab-ops builds it, an actinglab command's data beside lab_operation_completed, a failure's details kept beside its code, lab_operation_check_failed exiting 1); serve --stdio answers one line per request, the CLI's --json line for the same operation, and refuses a line that is no request without ending; a Lab recording's steps and marks and a session step carry the process's initiator word (Lab-CLI, or Lab-制包 / Lab-救急 from ACTINGCOMMAND_INITIATOR), and any other value of the variable is refused with nothing written
+# Workflow #434 LAB-4 (0.12.47; register §1.287, "Slice LAB-4"; brief rd-1108/arch-013/brief-lab4.md; contracts/lab-two-entries.md §7 and §8.1; contracts/runtime-watchdog.md, "Launcher"): actingwatch.exe, run as the task runs it (no argument, in the root), runs one tick in its own process on a single-location root that holds no actingctl.exe, exits 0 and decides, records in state.json (last_decision, starts, the task tick's end) and logs in watchdog.log what crates/watchdog's task tick decides, records and logs on a twin root: watchdog_never_started
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingwatch::gate_434_lab4::actingwatch_tick_in_process",
+]
+incident = ["#434 LAB-4"]
+
+# Workflow #434 LAB-2 (0.12.47; register §1.287, "Slice LAB-2"; briefs rd-1108/arch-013/brief-lab2.md and brief-lab2-fix1.md; contracts/lab-two-entries.md §4.1, §4.2, §8.2, §9.3, open points 6, 7 and 10): actinglab's CLI module reads the operation table's short words into the operation and its parameters (the longest name, the instance and other positionals, options, switches, a source command's further flags and words) and refuses by name a word or flag the row does not take, a reserved row, a rescue row and the old config get; main's route (fix 1, the coordinator's ruling of 2026-11-10) sends serve and the operations the module serves itself (those from actingctl) to the module and the short words of a row actinglab's own command serves to that command in its words; a core word prints the code and a small table for people by default and with --json the line lab-ops builds; a row actinglab's own command serves answers that command's envelope; serve --stdio answers one line per request, the line the operation's --json prints, and refuses a line that is no request without ending; a Lab recording's steps and marks and a session step carry the process's initiator word (Lab-CLI, or Lab-制包 / Lab-救急 from ACTINGCOMMAND_INITIATOR, Lab-MCP through --via mcp), and any other value of the variable is refused with nothing written; every command of actinglab's dispatch stays actinglab's own on main's route, and the command lines of its consumers (acmodel's validator, the resource repositories' CI and scripts, the hotplace kit, MCP's --via mcp child) print through main's entry what main printed before LAB-2, with the same exit code
 [[gate]]
 coverage = "Y"
 tests = [
@@ -1268,5 +1275,6 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab2::cli_json_matches_op_output",
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab2::serve_answers_same_as_cli",
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab2::recording_steps_and_marks_carry_the_initiator",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab2::consumer_command_lines_answer_as_on_main",
 ]
 incident = ["#434 LAB-2"]

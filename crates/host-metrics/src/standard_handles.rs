@@ -14,8 +14,31 @@
 //! and is not affected.
 //!
 //! On an operating system other than Windows nothing is changed.
+//!
+//! Workflow #434 LAB-4 fix 1: [`attach_parent_console`], for a GUI-subsystem program run with a
+//! subcommand from a console (`actingwatch status|install|uninstall`), so that what it prints
+//! appears there. That program forbids unsafe code; the one call it needs lives here.
 
 use actingcommand_contract::outcome::Outcome;
+
+/// Attaches this process to its parent's console (`AttachConsole(ATTACH_PARENT_PROCESS)`), so a
+/// GUI-subsystem program started from a console writes its standard output and standard error
+/// there: Windows sets the standard handles the process was not given to that console's. `true`
+/// when it attached. `false` when there was nothing to attach to (the parent has no console, or
+/// has exited, or this process has a console already) or the call was refused, and on an
+/// operating system other than Windows: the standard handles stay as they were, so a handle the
+/// process was given (a redirection, a pipe) still receives what it writes. Nothing is opened,
+/// and a console window is never created.
+pub fn attach_parent_console() -> bool {
+    #[cfg(windows)]
+    {
+        os::attach_parent_console()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
 
 /// One of this process's standard handles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +72,15 @@ mod os {
     use windows_sys::Win32::Foundation::{
         GetLastError, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
     };
-    use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+    use windows_sys::Win32::System::Console::{
+        ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+    };
+
+    pub(super) fn attach_parent_console() -> bool {
+        // SAFETY: attaches this process to the console of its parent, if it has one; no memory
+        // is passed and no handle is returned.
+        unsafe { AttachConsole(ATTACH_PARENT_PROCESS) != 0 }
+    }
 
     pub(super) fn clear_inheritance(stream: StandardStream) -> Result<bool, Outcome> {
         // The handle is read straight from the process's standard handle table; this crate

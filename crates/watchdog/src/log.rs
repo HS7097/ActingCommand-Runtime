@@ -14,12 +14,12 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-pub(crate) const LOG_FILE: &str = "watchdog.log";
+pub const LOG_FILE: &str = "watchdog.log";
 /// The field that names the failure a `watchdog_misconfigured` line is about.
 const FAILURE_FIELD: &str = "failure_code";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Level {
+pub enum Level {
     Info,
     Warn,
     Error,
@@ -36,7 +36,7 @@ impl Level {
 }
 
 /// Appends one line; a log that refuses it is `watchdog_log_unwritable` (`path`).
-pub(crate) fn append(
+pub fn append(
     directory: &Path,
     now_unix_ms: u64,
     level: Level,
@@ -50,7 +50,7 @@ pub(crate) fn append(
 }
 
 /// Appends one line for an outcome: its code, its values and links ([`outcome_fields`]).
-pub(crate) fn append_outcome(
+pub fn append_outcome(
     directory: &Path,
     now_unix_ms: u64,
     level: Level,
@@ -88,7 +88,7 @@ fn write(directory: &Path, line: &str) -> Result<(), Outcome> {
 
 /// An outcome's values as log fields, then each link as one `cause` field in its developer
 /// form (`<relation>: <code> key=value… [links]`).
-pub(crate) fn outcome_fields(outcome: &Outcome) -> Vec<(&str, String)> {
+pub fn outcome_fields(outcome: &Outcome) -> Vec<(&str, String)> {
     let mut fields = outcome
         .values()
         .iter()
@@ -112,7 +112,7 @@ pub(crate) fn outcome_fields(outcome: &Outcome) -> Vec<(&str, String)> {
 /// Whether the log's last structured line is `<code>` with `failure_code=<failure>`; a
 /// misconfiguration found before the state is readable is written once, not every minute.
 /// Lines the launcher appended from a tick's stderr are skipped.
-pub(crate) fn last_line_matches(directory: &Path, code: Code, failure: Code) -> bool {
+pub fn last_line_matches(directory: &Path, code: Code, failure: Code) -> bool {
     let mut tail = Vec::new();
     let read = File::open(directory.join(LOG_FILE)).and_then(|mut file| {
         let length = file.metadata()?.len();
@@ -173,7 +173,7 @@ fn format_line(
 }
 
 /// `YYYY-MM-DDTHH:MM:SS.mmmZ`, from days since the epoch to the proleptic Gregorian date.
-pub(crate) fn rfc3339_utc(unix_ms: u64) -> String {
+pub fn rfc3339_utc(unix_ms: u64) -> String {
     let seconds = unix_ms / 1000;
     let days = i64::try_from(seconds / 86_400).unwrap_or(i64::MAX / 2);
     let second_of_day = seconds % 86_400;

@@ -212,24 +212,22 @@ pub(crate) fn write_state(paths: &Paths, state: &InstallState) -> Result<(), Out
     files::write_json_atomic(&paths.state(), state)
 }
 
-/// The kinds of operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum OperationKind {
-    ReleaseStage,
-    Adopt,
-    Update,
-    Rollback,
-    // Workflow #421 INST-2: the formal stop with its hold, the installer's start, the release
-    // of a hold.
-    Stop,
-    Start,
-    ReleaseHold,
+// Workflow #434 LAB-4: the kinds of operations and `install\current.json`, the one unfinished
+// operation, moved to `crates/watchdog` (`install_state`) with the reader of watchdog row 7a″
+// (`unfinished_operation`), so that actingwatch's own tick reads them as this installer writes
+// them; unchanged, and named here as before.
+pub(crate) use actingcommand_watchdog::install_state::{
+    Current, OperationKind, unfinished_operation,
+};
+
+/// The command that opens an operation of a kind: the `operation` of its outcomes (Workflow #434
+/// LAB-4: `OperationKind` lives in `crates/watchdog`, so its `location` is this trait's).
+pub(crate) trait KindLocation {
+    fn location(self) -> InstallLocation;
 }
 
-impl OperationKind {
-    /// The command that opens an operation of this kind: the `operation` of its outcomes.
-    pub(crate) fn location(self) -> InstallLocation {
+impl KindLocation for OperationKind {
+    fn location(self) -> InstallLocation {
         match self {
             Self::ReleaseStage => InstallLocation::ReleaseStage,
             Self::Adopt => InstallLocation::Adopt,
@@ -242,15 +240,6 @@ impl OperationKind {
     }
 }
 
-/// `install\current.json`: the one unfinished operation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Current {
-    pub(crate) operation_id: String,
-    pub(crate) kind: OperationKind,
-    pub(crate) started_at_unix_ms: u64,
-}
-
 /// What `current.json` says.
 pub(crate) enum CurrentState {
     /// No unfinished operation.
@@ -259,40 +248,6 @@ pub(crate) enum CurrentState {
     Unfinished(Current),
     /// A `current.json` that cannot be read or is not this shape.
     Unreadable(Outcome),
-}
-
-/// Workflow #421 INST-1, watchdog row 7a″: `current.json` of `root` as the watchdog and
-/// `actingctl start` read it. `None` when there is none, or when it names an unfinished
-/// `release stage` or `adopt`, which change only `install\` (review S1 F7: the row is for the
-/// operations that swap program files, an update or a rollback and their undo); otherwise the
-/// unfinished operation's id when the file can be read and names one, `Some(None)` when it
-/// cannot.
-pub(crate) fn unfinished_operation(root: &Path) -> Option<Option<String>> {
-    let path = root.join("install").join("current.json");
-    if !path.exists() {
-        return None;
-    }
-    match files::read_json::<Current>(&path) {
-        // Workflow #421 INST-2: a standalone stop, start or release of a hold swaps no program
-        // file either.
-        Ok(current)
-            if matches!(
-                current.kind,
-                OperationKind::ReleaseStage
-                    | OperationKind::Adopt
-                    | OperationKind::Stop
-                    | OperationKind::Start
-                    | OperationKind::ReleaseHold
-            ) =>
-        {
-            None
-        }
-        Ok(current) => Some(
-            Some(current.operation_id)
-                .filter(|operation_id| super::journal::operation_ms(operation_id).is_some()),
-        ),
-        Err(_) => Some(None),
-    }
 }
 
 /// Reads `current.json`.

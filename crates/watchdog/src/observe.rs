@@ -38,7 +38,7 @@ const LOG_TAIL_BYTES: u64 = 64 * 1024;
 /// back over (an installer's chained installs leave a few maintenance owners in between).
 const LOOKBACK_OWNERS: usize = 16;
 const MAX_RUNTIME_INFO_BYTES: u64 = 64 * 1024;
-pub(crate) const RUNTIME_IMAGE: &str = "actingcommand-actingd.exe";
+pub const RUNTIME_IMAGE: &str = "actingcommand-actingd.exe";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
 /// Workflow #390 WD-1: the file in `<root>\runtime` that marks an executable root
 /// (`packs::executable_install_root`, the contract's flat-root branch of `process_installation`).
@@ -48,7 +48,7 @@ const BUILD_MANIFEST: &str = "BUILD-MANIFEST.json";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 /// How the supervised root is laid out (Workflow #390 WD-1).
-pub(crate) enum Layout {
+pub enum Layout {
     /// An A/B installation. Holding its selection keeps the selected slot pinned with a shared
     /// slot lock for the tick, as every acforward launch does.
     Ab {
@@ -63,15 +63,15 @@ pub(crate) enum Layout {
 }
 
 /// The installation this tick supervises.
-pub(crate) struct Installation {
-    pub(crate) root: PathBuf,
+pub struct Installation {
+    pub root: PathBuf,
     /// The ordinary spelling handed to children, cmd, WMI and the task (review L7).
-    pub(crate) root_plain: PathBuf,
-    pub(crate) layout: Layout,
-    pub(crate) config_plain: PathBuf,
-    pub(crate) state_root: PathBuf,
+    pub root_plain: PathBuf,
+    pub layout: Layout,
+    pub config_plain: PathBuf,
+    pub state_root: PathBuf,
     /// #411 A66: the start window of the configuration (`watchdog.start_window_ms`).
-    pub(crate) start_window_ms: u64,
+    pub start_window_ms: u64,
 }
 
 impl Installation {
@@ -79,7 +79,7 @@ impl Installation {
     /// `process_installation()` holds, the snapshot acforward handed this process, or, for a
     /// direct run, `install\active.json`); otherwise a single-location root when
     /// `<root>\runtime\BUILD-MANIFEST.json` is a file; otherwise `watchdog_layout_unknown`.
-    pub(crate) fn resolve(root_argument: &Path) -> Result<Self, Outcome> {
+    pub fn resolve(root_argument: &Path) -> Result<Self, Outcome> {
         let root = canonical_root(root_argument)?;
         if let Some(selected) = selection(&root)? {
             return Self::ab(root, selected);
@@ -92,7 +92,7 @@ impl Installation {
 
     /// An A/B installation only (`actingctl start` and `restart` without `--config`): a root
     /// without a selection, a single-location root among them, is `watchdog_layout_unknown`.
-    pub(crate) fn resolve_ab(root_argument: &Path) -> Result<Self, Outcome> {
+    pub fn resolve_ab(root_argument: &Path) -> Result<Self, Outcome> {
         let root = canonical_root(root_argument)?;
         match selection(&root)? {
             Some(selected) => Self::ab(root, selected),
@@ -133,7 +133,7 @@ impl Installation {
     }
 
     /// The report's `layout`: `ab` or `single`.
-    pub(crate) fn layout_name(&self) -> &'static str {
+    pub fn layout_name(&self) -> &'static str {
         match self.layout {
             Layout::Ab { .. } => "ab",
             Layout::Single => "single",
@@ -141,7 +141,7 @@ impl Installation {
     }
 
     /// The selected generation; a single-location root has none.
-    pub(crate) fn generation(&self) -> Option<u64> {
+    pub fn generation(&self) -> Option<u64> {
         match &self.layout {
             Layout::Ab { generation, .. } => Some(*generation),
             Layout::Single => None,
@@ -149,7 +149,7 @@ impl Installation {
     }
 
     /// The selected slot; a single-location root has none.
-    pub(crate) fn slot(&self) -> Option<&'static str> {
+    pub fn slot(&self) -> Option<&'static str> {
         match &self.layout {
             Layout::Ab { slot, .. } => Some(*slot),
             Layout::Single => None,
@@ -161,7 +161,7 @@ impl Installation {
     /// Review M3: `install\active.json` read again under the shared writer lock, so it cannot
     /// change before the fixed entry reads it once more. Workflow #390 WD-1: on a
     /// single-location root, an `install\active.json` that appeared is a changed selection too.
-    pub(crate) fn selection_unchanged(&self) -> Result<bool, Outcome> {
+    pub fn selection_unchanged(&self) -> Result<bool, Outcome> {
         // install\active.json is unreadable before the start.
         let current = InstalledProcess::read_active(&self.root)
             .map_err(|error| Outcome::new(error.code()))?;
@@ -245,7 +245,7 @@ fn selected_configuration(selected: &InstalledProcess) -> Result<(PathBuf, u64),
 /// `watchdog_state_root_invalid`, each with its `path`. #411 A66: the start window is its
 /// `watchdog.start_window_ms`, else the defaults file's; a value outside its type or range is
 /// the configuration's own refusal, `config_value_invalid` with the key.
-pub(crate) fn configured(bytes: &[u8], config: &Path) -> Result<(PathBuf, u64), Outcome> {
+pub fn configured(bytes: &[u8], config: &Path) -> Result<(PathBuf, u64), Outcome> {
     let document: Value = serde_json::from_slice(bytes).map_err(|error| {
         Outcome::new(ActingctlCode::WatchdogConfigUnreadable)
             .path(config)
@@ -265,7 +265,7 @@ pub(crate) fn configured(bytes: &[u8], config: &Path) -> Result<(PathBuf, u64), 
 
 /// The canonical installation root carries the Windows verbatim prefix; cmd, WMI, the task
 /// definition and child working directories take the ordinary spelling of the same path.
-pub(crate) fn plain_path(path: &Path) -> PathBuf {
+pub fn plain_path(path: &Path) -> PathBuf {
     let Some(text) = path.to_str() else {
         return path.to_path_buf();
     };
@@ -281,7 +281,7 @@ pub(crate) fn plain_path(path: &Path) -> PathBuf {
     }
 }
 
-pub(crate) fn unix_ms(time: SystemTime) -> u64 {
+pub fn unix_ms(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
@@ -290,7 +290,7 @@ pub(crate) fn unix_ms(time: SystemTime) -> u64 {
 
 /// L and J. A read refused by the owner's lock (os error 33, WouldBlock elsewhere) is Locked;
 /// only complete lines count, so a torn tail of an append in progress is ignored.
-pub(crate) fn owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal), Outcome> {
+pub fn owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal), Outcome> {
     read_owner_journal(state_root).map(|(lock, journal, _)| (lock, journal))
 }
 
@@ -336,7 +336,7 @@ fn read_owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal, Vec<u8>)
     Ok((OwnerLock::Unlocked, journal, bytes))
 }
 
-pub(crate) fn parse_journal(bytes: &[u8], modified_unix_ms: u64) -> Journal {
+pub fn parse_journal(bytes: &[u8], modified_unix_ms: u64) -> Journal {
     let complete = bytes
         .iter()
         .rposition(|byte| *byte == b'\n')
@@ -479,7 +479,7 @@ fn epoch_text(value: &Value) -> Option<String> {
 /// `start_window_ms` is the installation's start window (#411 A66), which bounds the open start
 /// an answering owner may belong to. The candidate logs' times are read from the files
 /// themselves ([`FileTimes`], WD-MT).
-pub(crate) fn observe_owner(
+pub fn observe_owner(
     state_root: &Path,
     log_directories: &[PathBuf],
     root: Option<&Path>,
@@ -498,7 +498,7 @@ pub(crate) fn observe_owner(
 /// (WD-MT, Workflow #421). The logs are listed once, for an unlocked journal with a record: F,
 /// the close's log evidence and R5b all read that one list. (`status` lists them once more, the
 /// same way, after it decides a formal close: [`close_logged`].)
-pub(crate) fn observe_owner_with(
+pub fn observe_owner_with(
     state_root: &Path,
     log_directories: &[PathBuf],
     root: Option<&Path>,
@@ -553,7 +553,7 @@ pub(crate) fn observe_owner_with(
 }
 
 /// I, parsed tolerantly for reporting; `None` when absent or unreadable.
-pub(crate) fn runtime_info(state_root: &Path) -> Option<Value> {
+pub fn runtime_info(state_root: &Path) -> Option<Value> {
     let mut bytes = Vec::new();
     File::open(state_root.join(RUNTIME_INFO_FILE))
         .ok()?
@@ -570,10 +570,7 @@ pub(crate) fn runtime_info(state_root: &Path) -> Option<Value> {
 
 /// Review M1: alive means the owner named by runtime-info answers a health request; an owner
 /// that does not is the client's failure (`RuntimeClientError::outcome`).
-pub(crate) fn live_owner(
-    state_root: &Path,
-    timeout: Option<Duration>,
-) -> Result<LiveOwner, Outcome> {
+pub fn live_owner(state_root: &Path, timeout: Option<Duration>) -> Result<LiveOwner, Outcome> {
     let config = RuntimeClientConfig::new(
         state_root,
         actingcommand_runtime_client::RuntimeChannel::Cli,
@@ -599,7 +596,7 @@ pub(crate) fn live_owner(
 /// and stderr kept the err log open, its entry stayed at the log's creation time, and a stop
 /// that ended in an error was read as a formal close for 35 minutes. The time is therefore read
 /// from the file itself, not from the directory listing.
-pub(crate) trait LogTimes {
+pub trait LogTimes {
     /// The modification time of the file at `path`, read from the file; `Ok(None)` when no
     /// regular file is there (it went away after the listing, or it is a directory).
     fn modified_unix_ms(&self, path: &Path) -> std::io::Result<Option<u64>>;
@@ -610,7 +607,7 @@ pub(crate) trait LogTimes {
 /// open handle of the file shares. Only when that open is refused as access denied (an access
 /// control list that denies reading the file's attributes) does Rust's std fall back to the
 /// directory entry's data.
-pub(crate) struct FileTimes;
+pub struct FileTimes;
 
 impl LogTimes for FileTimes {
     fn modified_unix_ms(&self, path: &Path) -> std::io::Result<Option<u64>> {
@@ -674,7 +671,7 @@ fn candidate_logs(
 /// F: the terminal outcome of the newest candidate log modified at or after `since_unix_ms`
 /// that holds one of this root (Workflow #378 A6a, model section 7.5: it was the newest FATAL
 /// line; a lost start race, `owner_conflict`, is an error terminal like any other).
-pub(crate) fn terminal_after(
+pub fn terminal_after(
     directories: &[PathBuf],
     since_unix_ms: u64,
     root: Option<&Path>,
@@ -710,7 +707,7 @@ fn newest_terminal(
 /// Workflow #378 A6a (model sections 2.4, 7.5): the terminal outcome of each start that counts
 /// against the budget, oldest first, read from the log the watchdog gave it; `None` for a start
 /// whose log is gone, unreadable or holds no terminal outcome.
-pub(crate) fn start_terminals(state: &WatchdogState, now_unix_ms: u64) -> Vec<Option<Outcome>> {
+pub fn start_terminals(state: &WatchdogState, now_unix_ms: u64) -> Vec<Option<Outcome>> {
     super::decide::budget_starts(state, now_unix_ms)
         .into_iter()
         .map(|start| {
@@ -723,7 +720,7 @@ pub(crate) fn start_terminals(state: &WatchdogState, now_unix_ms: u64) -> Vec<Op
 
 /// Review M2 (ii): a formal close is `logged` when some candidate log was written during the
 /// closed epoch (actingd prints its ready line after it takes the owner lock).
-pub(crate) fn close_logged(
+pub fn close_logged(
     directories: &[PathBuf],
     started_at_unix_ms: u64,
     closed_at_unix_ms: u64,
@@ -767,7 +764,7 @@ fn read_tail(path: &Path) -> Result<String, Outcome> {
 /// outcome naming another installation's `install_root` (a fallback-log line of another root's
 /// start, N4) is not this root's terminal outcome; a line without `install_root` is every
 /// root's.
-pub(crate) fn terminal_outcome(tail: &str, root: Option<&Path>) -> Option<Outcome> {
+pub fn terminal_outcome(tail: &str, root: Option<&Path>) -> Option<Outcome> {
     let outcome = tail.lines().rev().find_map(|line| {
         let line = line.trim();
         let envelope = line
@@ -803,12 +800,12 @@ fn names_other_root(outcome: &Outcome, root: &Path) -> bool {
 
 /// W, probed only when a start is considered. A free lock is returned held shared, so acsetup
 /// cannot begin until this tick ends (review L4); a missing file means acsetup never ran.
-pub(crate) enum WriterProbe {
+pub enum WriterProbe {
     Free(Option<File>),
     Busy,
 }
 
-pub(crate) fn writer_lock(root: &Path) -> Result<WriterProbe, Outcome> {
+pub fn writer_lock(root: &Path) -> Result<WriterProbe, Outcome> {
     let path = root.join(WRITER_LOCK);
     let failed = |error: &std::io::Error, op: IoOp| {
         io_failure(ActingctlCode::WatchdogWriterLockFailed, &path, error, op)
@@ -827,7 +824,7 @@ pub(crate) fn writer_lock(root: &Path) -> Result<WriterProbe, Outcome> {
 
 /// The console starts actingd with its log in `%LOCALAPPDATA%\ActingCommand\logs`; the task runs
 /// as the same user.
-pub(crate) fn console_log_directory() -> Option<PathBuf> {
+pub fn console_log_directory() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA")
         .filter(|directory| !directory.is_empty())
         .map(|directory| PathBuf::from(directory).join("ActingCommand").join("logs"))
@@ -836,15 +833,15 @@ pub(crate) fn console_log_directory() -> Option<PathBuf> {
 /// What the start rows read from the machine in one hidden PowerShell: P (review H2), the
 /// processes named `actingcommand-actingd.exe` whose executable is under the root or whose
 /// path cannot be read, and the last boot time (for the gap grace).
-pub(crate) struct HostProbe {
-    pub(crate) processes: Vec<RuntimeProcess>,
-    pub(crate) boot_unix_ms: Option<u64>,
+pub struct HostProbe {
+    pub processes: Vec<RuntimeProcess>,
+    pub boot_unix_ms: Option<u64>,
 }
 
 /// Every failure is `process_probe_failed`: caused by PowerShell's failure, or by
 /// `foreign_data_error` when its output is not JSON; output without `boot_unix_ms`, or a
 /// process row without a pid, is the code alone.
-pub(crate) fn host_probe(root_plain: &Path) -> Result<HostProbe, Outcome> {
+pub fn host_probe(root_plain: &Path) -> Result<HostProbe, Outcome> {
     const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
         $ProgressPreference = 'SilentlyContinue'\n\
         $found = @(Get-CimInstance -ClassName Win32_Process -Filter \"Name='actingcommand-actingd.exe'\" | ForEach-Object { [pscustomobject]@{ pid = [uint32]$_.ProcessId; path = $_.ExecutablePath } })\n\
@@ -860,7 +857,7 @@ pub(crate) fn host_probe(root_plain: &Path) -> Result<HostProbe, Outcome> {
     parse_host_probe(&output, root_plain)
 }
 
-pub(crate) fn parse_host_probe(output: &str, root_plain: &Path) -> Result<HostProbe, Outcome> {
+pub fn parse_host_probe(output: &str, root_plain: &Path) -> Result<HostProbe, Outcome> {
     let value: Value = serde_json::from_str(output.trim()).map_err(|error| {
         Outcome::new(ActingctlCode::ProcessProbeFailed).caused_by(json_failure(&error))
     })?;
@@ -873,10 +870,7 @@ pub(crate) fn parse_host_probe(output: &str, root_plain: &Path) -> Result<HostPr
     })
 }
 
-pub(crate) fn parse_processes(
-    value: &Value,
-    root_plain: &Path,
-) -> Result<Vec<RuntimeProcess>, Outcome> {
+pub fn parse_processes(value: &Value, root_plain: &Path) -> Result<Vec<RuntimeProcess>, Outcome> {
     let rows = match value {
         Value::Array(rows) => rows.clone(),
         Value::Null => Vec::new(),

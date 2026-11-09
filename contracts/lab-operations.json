@@ -2764,9 +2764,9 @@
       "entries": ["lab"],
       "requests": [],
       "source": ["actingctl watchdog install"],
-      "slice": "LAB-4",
+      "slice": "LAB-3",
       "status": "planned",
-      "notes": "runs actingwatch.exe"
+      "notes": "the Lab's own command, with its rescue module (coordinator's ruling, #434 6743701251); it links crates/watchdog (LAB-4) and registers the task as actingctl watchdog install does; tools\\actingwatch.exe install answers the same since LAB-4"
     },
     {
       "name": "watchdog uninstall",
@@ -2779,9 +2779,9 @@
       "entries": ["lab"],
       "requests": [],
       "source": ["actingctl watchdog uninstall"],
-      "slice": "LAB-4",
+      "slice": "LAB-3",
       "status": "planned",
-      "notes": "runs actingwatch.exe"
+      "notes": "the Lab's own command, with its rescue module (coordinator's ruling, #434 6743701251); it links crates/watchdog (LAB-4) and removes the task as actingctl watchdog uninstall does; tools\\actingwatch.exe uninstall answers the same since LAB-4"
     },
     {
       "name": "agent add",
