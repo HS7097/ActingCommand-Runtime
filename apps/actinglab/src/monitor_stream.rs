@@ -1,13 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{CliOutcome, GlobalOptions, runtime_session_adapter};
+// Workflow #434 LAB-2: the retired `monitor` command is gone; its stream shapes stay.
 use serde_json::{Value, json};
 use std::time::Duration;
-
-pub(super) fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let _ = global;
-    runtime_session_adapter::retired_authority("monitor", args)
-}
 
 pub(super) fn stream_contract_json(
     max_frames: usize,

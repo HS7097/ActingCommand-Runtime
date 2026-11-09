@@ -8,13 +8,17 @@
 //! CLI prints it as its line beside the outcome `recovery_ladder_drill_queued`, MCP as its result.
 //! Without `--device` (`device` false) the drill is a plan and never acts on the device; its
 //! records, tagged `drill`, are read with `events --request-id <ladder_request_id>`.
+//!
+//! Workflow #434 LAB-2: moved from actingctl unchanged, so that actinglab's CLI module serves the
+//! debugging operation `drill` with the same request and answer; actingctl and its MCP server read
+//! it from here.
 
 use crate::instance_selector::{self, SelectorMiss};
 use actingcommand_contract::{RecoveryDrillMode, RecoveryLadderDrill};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 
 /// The mode `--device` (`device`) asks for: a plan unless the request says to act on the device.
-pub(crate) const fn mode(device: bool) -> RecoveryDrillMode {
+pub const fn mode(device: bool) -> RecoveryDrillMode {
     if device {
         RecoveryDrillMode::Device
     } else {
@@ -23,7 +27,7 @@ pub(crate) const fn mode(device: bool) -> RecoveryDrillMode {
 }
 
 /// Why a drill was not admitted.
-pub(crate) enum Failure {
+pub enum Failure {
     /// The selector names no instance of the Runtime's status, or more than one.
     Selector {
         miss: SelectorMiss,
@@ -35,7 +39,7 @@ pub(crate) enum Failure {
 
 /// Resolves `selector` with one status read and asks the Runtime for a drill of that instance's
 /// ladder in `mode`.
-pub(crate) fn drill(
+pub fn drill(
     client: &RuntimeClient,
     selector: &str,
     mode: RecoveryDrillMode,

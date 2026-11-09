@@ -23,15 +23,12 @@ use crate::codes::ArgumentProblem;
 use crate::instance_selector::{self, SelectorMiss};
 use actingcommand_contract::codes::ReceiptCode;
 use actingcommand_contract::outcome::{Detail, Outcome};
-use actingcommand_contract::{
-    EventActor, EventSource, RoutineSummaryGranularity, RoutineSummaryPage,
-};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
+use actingcommand_contract::{RoutineSummaryGranularity, RoutineSummaryPage};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::process::ExitCode;
 
 pub const COMMAND: &str = "routine-summary";
 /// The flag of the hour buckets.
@@ -111,7 +108,7 @@ pub enum Ended {
 }
 
 /// The `routine-summary` command, when it is the first word.
-pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -140,12 +137,7 @@ pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
 /// flags): the page's, read on a connection with the CLI's (Cli, Cli) origin; or why it ended.
 pub fn answer(arguments: &[OsString], detail: Detail) -> Result<Map<String, Value>, Ended> {
     let parsed = parse(arguments).map_err(Ended::Usage)?;
-    let config = RuntimeClientConfig::new(
-        &parsed.state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    );
+    let config = crate::front::client_config(&parsed.state_root);
     let config = match detail {
         Detail::Codes => config.with_detail(Detail::Codes),
         Detail::Full => config,

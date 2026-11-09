@@ -210,8 +210,10 @@ reuses carry the optional keys this slice declares on them: `resource_declaratio
 `package_fmt_check_failed` (`path`, `unformatted`, `step`), and `step` on `validation_failed`,
 `standard_pack_root_invalid` and the `package_bundle_*` errors.
 
-`resource check-release` is retired: it answered `checked` without checking. It is refused with
-`resource_check_release_retired` (exit 2), whose catalog text names `resource verify`.
+`resource check-release` is retired: it answered `checked` without checking. It was refused with
+`resource_check_release_retired` (exit 2), whose catalog text names `resource verify`; since
+0.12.47 (Workflow #434 LAB-2) the word is gone, an unknown resource command, and the code is
+retired.
 
 ## What stays in the wrapper
 

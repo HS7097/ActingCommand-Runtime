@@ -56,23 +56,23 @@ use actingcommand_contract::outcome::{
     Category, CauseRelation, Code, CodeStr, Detail, Outcome, OutcomeEnvelope, RawSource,
 };
 use actingcommand_contract::{
-    CommandPayload, DiagnosticOutcomePayload, EventActor, EventPayload, EventQuery, EventSource,
-    EventType, InstalledProcess, InstanceId, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS,
+    CommandPayload, DiagnosticOutcomePayload, EventPayload, EventQuery, EventType,
+    InstalledProcess, InstanceId, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS,
     PolicyExecutionOutcome, PolicyExecutionPayload, PolicyFailureDisposition, PolicyPayload,
     ProjectedEvent, ProjectionPayload, RequestId, RuntimeControlPlaneStatus,
     RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimePayload,
     TaskId, scheduled_failure_code_str,
 };
 use actingcommand_runtime_client::{
-    ContainedRunState, ContainedRunStatus, RunDispatch, RuntimeClient, RuntimeClientConfig,
-    RuntimeClientError, WindowRun,
+    ContainedRunState, ContainedRunStatus, RunDispatch, RuntimeClient, RuntimeClientError,
+    WindowRun,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::Command;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1706,7 +1706,7 @@ fn stderr_tail(stderr: &[u8]) -> String {
 /// Runs `diagnose`; `None` leaves every other command to the CLI, unchanged. One result line on
 /// stdout (Workflow #378 A5): the diagnosis with `runtime_diagnosis_reported`, or `{outcome}`
 /// with the failure (a flag failure's developer line adds the usage) and exit 1.
-pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != "diagnose" {
         return None;
     }
@@ -1727,13 +1727,8 @@ fn run(arguments: &[OsString]) -> Result<Value, Failure> {
     let since_unix_ms = request.window(now_unix_ms()?)?;
     let deadline = Instant::now() + CLI_READ_BUDGET;
     let report = SuspensionReport::start(root.as_deref(), deadline);
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        &state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    ))
-    .map_err(Failure::Runtime)?;
+    let client = RuntimeClient::connect(crate::front::client_config(&state_root))
+        .map_err(Failure::Runtime)?;
     let (diagnosis, query) = read(
         &client,
         &request,

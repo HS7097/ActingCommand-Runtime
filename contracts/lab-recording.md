@@ -57,9 +57,17 @@ command deletes nothing and names the files it already wrote.
      "freshness":null,"recorded_at_unix_ms":0,"superseded":false}],
    "marks":[…],"reused":[],
    "click":null,"click_guard":null,"transition":null,
-   "closed":false,"closed_by":null}],
+   "closed":false,"closed_by":null,"initiator":"Lab-CLI"}],
  "artifact":null}
 ```
+
+- Workflow #434 LAB-2 ([lab-two-entries.md](lab-two-entries.md) §4.2 and §4.3, "Recordings";
+  open point 6, the coordinator's ruling): every step and every mark carries `initiator`, the
+  word of the process that added it: `Lab-CLI`, or `Lab-制包` / `Lab-救急` from
+  `ACTINGCOMMAND_INITIATOR`. The recording lock carries the holder's word, and the save writes it
+  on each step and mark the command added; those of earlier commands keep theirs. The member is
+  required: a recording written before LAB-2 does not decode (no compatibility in the testing
+  stage). A `session record step` of the session file carries it too.
 
 - `index` is a serial number inside the recording, starting at 1 and never reused. Dropped
   steps and steps converted into a transition stay in the file. Every option that names a

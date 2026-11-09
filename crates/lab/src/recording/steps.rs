@@ -54,6 +54,9 @@ pub(crate) struct Session {
     /// nothing that needs an active recording (a new step, a step operation, an application
     /// operation, a device command) is accepted on it.
     pub(crate) stopped: bool,
+    /// Workflow #434 LAB-2: the lock holder's initiator word, written by [`save`] on every step
+    /// and mark this command added.
+    pub(crate) initiator: String,
 }
 
 pub(crate) fn default_recording_defaults() -> RecordingDefaults {
@@ -157,6 +160,7 @@ fn open_session_with(lock: &RecordingLock, allow_stopped: bool) -> LabResult<Ses
             pending: Vec::new(),
             cache: BTreeMap::new(),
             stopped: true,
+            initiator: lock.initiator().to_owned(),
         });
     }
     if old.status != "active" {
@@ -207,12 +211,21 @@ fn open_session_with(lock: &RecordingLock, allow_stopped: bool) -> LabResult<Ses
         pending: Vec::new(),
         cache: BTreeMap::new(),
         stopped: false,
+        initiator: lock.initiator().to_owned(),
     })
 }
 
 /// Writes the pending frames and crops, then the recording. A failure names what was
-/// already written; nothing is deleted.
+/// already written; nothing is deleted. Workflow #434 LAB-2: every step this command added (one
+/// whose `initiator` is still empty) is written with the lock holder's initiator word; those of
+/// earlier commands keep theirs. A mark carries the word from when it is made (`add_marks`, fix 2).
 pub(crate) fn save(session: &mut Session) -> LabResult<Vec<String>> {
+    let initiator = session.initiator.clone();
+    for step in &mut session.recording.steps {
+        if step.initiator.is_empty() {
+            step.initiator.clone_from(&initiator);
+        }
+    }
     let mut written = Vec::new();
     let pending = std::mem::take(&mut session.pending);
     for (path, bytes, sha256) in &pending {
@@ -554,6 +567,8 @@ fn new_step(index: u32, frames: Vec<RecordedFrame>) -> RecordingStep {
         transition: None,
         closed: false,
         closed_by: None,
+        // Written by `save` with the lock holder's word.
+        initiator: String::new(),
     }
 }
 
@@ -895,6 +910,9 @@ fn add_marks(
             }
         };
         let mut mark = prepared.mark;
+        // Workflow #434 LAB-2 fix 2: the lock holder's initiator word, filled when the mark is
+        // made, so that the answer of `record mark` carries the word the file does.
+        mark.initiator.clone_from(&session.initiator);
         if let (Some(crop), Some(png)) = (mark.crop.as_mut(), prepared.crop_png) {
             if let Some(owner) = assets.get(&crop.asset)
                 && owner != &spec.id

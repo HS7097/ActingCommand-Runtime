@@ -18,7 +18,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 const FEATURES: &str = "neutral.test.features";
-const HOME_TO_SHOP: &str = "neutral.test.home_to_shop";
+pub(crate) const HOME_TO_SHOP: &str = "neutral.test.home_to_shop";
 const RETURN_HOME: &str = "neutral.test.return_home";
 const STAGE: &str = "neutral.test.stage";
 
@@ -121,7 +121,7 @@ type Pack = (
 
 // The installed game root `<temporary>/packages/neutral/` whose edge `home` to `shop` names
 // `edge_package`.
-fn game_root(temp: &TempDir, edge_package: &str) -> std::path::PathBuf {
+pub(crate) fn game_root(temp: &TempDir, edge_package: &str) -> std::path::PathBuf {
     let root = temp.path().join("packages").join("neutral");
     let packs: [Pack; 4] = [
         (

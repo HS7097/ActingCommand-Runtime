@@ -30,15 +30,14 @@ use crate::instance_selector::{self, SelectorMiss};
 use actingcommand_contract::codes::ReceiptCode;
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
-    EventActor, EventSource, FactContent, FactObservation, FactRecord, FactScalar, FactScope,
-    FactValue, REMEDY_CHOICES_FACT_KEY, SanitizationError,
+    FactContent, FactObservation, FactRecord, FactScalar, FactScope, FactValue,
+    REMEDY_CHOICES_FACT_KEY, SanitizationError,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const COMMAND: &str = "remedy";
@@ -315,7 +314,7 @@ struct Parsed {
 }
 
 /// The `remedy` command, when it is the first word.
-pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -432,12 +431,7 @@ fn run(parsed: &Parsed, detail: Detail) -> Result<(Value, Outcome), Ended> {
         Some(path) => Some(read_rows(path).map_err(Ended::Usage)?),
         None => None,
     };
-    let config = RuntimeClientConfig::new(
-        &parsed.state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    );
+    let config = crate::front::client_config(&parsed.state_root);
     let config = match detail {
         Detail::Codes => config.with_detail(Detail::Codes),
         Detail::Full => config,

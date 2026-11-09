@@ -187,6 +187,9 @@ pub struct RecordingStep {
     pub transition: Option<StepTransition>,
     pub closed: bool,
     pub closed_by: Option<String>,
+    /// Workflow #434 LAB-2 (`contracts/lab-two-entries.md` §4.2, §4.3 "Recordings"): the initiator
+    /// word of the process that added the step (`Lab-CLI`, `Lab-制包` or `Lab-救急`).
+    pub initiator: String,
 }
 
 /// An optional step (Workflow #339): after the page that follows its run of optional steps
@@ -539,6 +542,9 @@ pub struct RecordedMark {
     pub value_test: Option<ValueTestSpec>,
     pub self_test: SelfTest,
     pub created_at_unix_ms: u64,
+    /// Workflow #434 LAB-2 (`contracts/lab-two-entries.md` §4.2, §4.3 "Recordings"): the initiator
+    /// word of the process that added the mark.
+    pub initiator: String,
 }
 
 impl RecordedMark {

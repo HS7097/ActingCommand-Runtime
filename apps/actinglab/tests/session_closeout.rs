@@ -65,27 +65,9 @@ fn retired_session_commands_and_selectors_create_no_legacy_state() {
     let legacy_state = root.path().join("legacy-session");
     fs::write(&config_path, "{}").expect("write config");
 
-    let retired_commands: &[&[&str]] = &[
-        &["--json", "session", "daemon"],
-        &["--json", "session", "queue"],
-        &["--json", "session", "request", "status"],
-        &["--json", "session", "journal"],
-        &["--json", "session", "events"],
-        &["--json", "session", "response"],
-        &["--json", "session", "request-state"],
-        &["--json", "session", "lease"],
-        &["--json", "monitor"],
-    ];
-    for command in retired_commands {
-        assert_retired(run_actinglab(
-            &config_path,
-            &runtime_root,
-            &local_app_data,
-            &legacy_state,
-            command,
-        ));
-    }
-
+    // Workflow #434 LAB-2: the retired session words (daemon, queue, request, journal, events,
+    // response, request-state, lease) and `monitor` are gone from actinglab; the retired
+    // selectors of the session commands that stay still refuse.
     let retired_selectors: &[&[&str]] = &[
         &["--json", "session", "status", "--via-daemon"],
         &["--json", "session", "monitor-policy", "status", "--local"],

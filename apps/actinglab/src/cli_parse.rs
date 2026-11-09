@@ -206,9 +206,10 @@ fn require_raw(
 fn command_path_and_args(rest: Vec<String>) -> (Vec<String>, Vec<String>) {
     let top = rest[0].clone();
     let path_len = match top.as_str() {
-        "config" | "env" | "lab" | "package" | "operation" | "control" | "scheduler"
-        | "runtime" | "resource" | "run" | "report" | "session" | "ledger" | "scheduling"
-        | "standard-pack" => rest.get(1).map(|_| 2).unwrap_or(1),
+        "user-config" | "env" | "lab" | "package" | "operation" | "control" | "runtime"
+        | "resource" | "run" | "report" | "session" | "scheduling" | "standard-pack" => {
+            rest.get(1).map(|_| 2).unwrap_or(1)
+        }
         _ => 1,
     };
     let command = rest.iter().take(path_len).cloned().collect::<Vec<_>>();

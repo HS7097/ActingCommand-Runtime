@@ -11,12 +11,15 @@
 //!
 //! The outcome is full by default (class (b), §7.1); `ACTINGCOMMAND_DETAIL=codes` keeps only
 //! its registered names. An unknown value is a usage error.
+//!
+//! Workflow #434 LAB-2 (register §1.287, LAB-2 row): this crate builds the line, the developer
+//! line and the exit code of an exit ([`Exit`]) and returns them; the program prints them
+//! (actingctl and actinglab each name themselves in the developer line). Nothing here writes to
+//! stdout or stderr.
 
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_contract::outcome::{Category, Detail, Outcome};
 use serde_json::{Map, Value};
-use std::io::{self, Write};
-use std::process::ExitCode;
 
 /// The environment variable that switches actingctl's outcomes to codes only (§7.1).
 pub const DETAIL_VARIABLE: &str = "ACTINGCOMMAND_DETAIL";
@@ -60,60 +63,93 @@ pub const fn level(category: Category) -> &'static str {
     }
 }
 
-/// The developer line `<LEVEL> actingctl: <outcome>[ <text>]` on stderr; `text` is developer
-/// English only (a usage line, a foreign detail the outcome does not hold).
-pub fn developer_line(outcome: &Outcome, text: Option<&str>) {
+/// The developer line `<LEVEL> <program>: <outcome>[ <text>]` for stderr, without its line end;
+/// `text` is developer English only (a usage line, a foreign detail the outcome does not hold).
+/// Workflow #434 LAB-2: the program prints it and names itself (`actingctl`, `actinglab`).
+pub fn developer_text(program: &str, outcome: &Outcome, text: Option<&str>) -> String {
     match text {
-        Some(text) => eprintln!("{} actingctl: {outcome} {text}", level(outcome.category())),
-        None => eprintln!("{} actingctl: {outcome}", level(outcome.category())),
+        Some(text) => format!("{} {program}: {outcome} {text}", level(outcome.category())),
+        None => format!("{} {program}: {outcome}", level(outcome.category())),
+    }
+}
+
+/// The developer line of an exit: its outcome and its developer text.
+#[derive(Debug, Clone)]
+pub struct Developer {
+    pub outcome: Outcome,
+    pub text: Option<String>,
+}
+
+impl Developer {
+    /// The line `program` prints on stderr ([`developer_text`]).
+    pub fn line(&self, program: &str) -> String {
+        developer_text(program, &self.outcome, self.text.as_deref())
+    }
+}
+
+/// What one exit prints and how it ends (Workflow #434 LAB-2): the result line for stdout, the
+/// developer line for stderr when the exit has one, and the exit code. The program prints the
+/// line first, then the developer line. A line that did not encode (`line` is `Err` with the
+/// encoder's text) leaves only the developer line `actingctl_output_failed` with that text, and
+/// the exit is 1 (§7.3); so does a stdout that refuses the line.
+#[derive(Debug, Clone)]
+pub struct Exit {
+    pub line: Result<Value, String>,
+    pub developer: Option<Developer>,
+    pub code: u8,
+}
+
+impl Exit {
+    /// The outcome of the developer line when the line could not be printed:
+    /// `actingctl_output_failed`.
+    pub fn output_failed() -> Outcome {
+        Outcome::new(ActingctlCode::ActingctlOutputFailed)
     }
 }
 
 /// A successful exit: `{…result, "outcome": …}`.
-pub fn success(result: Map<String, Value>, outcome: &Outcome) -> ExitCode {
+pub fn success(result: Map<String, Value>, outcome: &Outcome) -> Exit {
     finish(Some(result), outcome, false, None)
 }
 
 /// A failed exit: `{"outcome": …}`, then the developer line with `text`.
-pub fn failure(outcome: &Outcome, text: Option<&str>) -> ExitCode {
+pub fn failure(outcome: &Outcome, text: Option<&str>) -> Exit {
     finish(None, outcome, false, text)
 }
 
 /// A refused exit: `{outcome}` and the developer line with `text`, non-zero whatever the top's
 /// category (a refusal the Runtime topped with an info or warning code still failed; A4 part B
 /// L2).
-pub fn refused(outcome: &Outcome, text: Option<&str>) -> ExitCode {
+pub fn refused(outcome: &Outcome, text: Option<&str>) -> Exit {
     finish(None, outcome, true, text)
 }
 
 /// The line of a subcommand whose result holds a Runtime receipt: `refused` is true when that
 /// receipt's state is denied or failed, and the process then exits non-zero whatever the
 /// outcome's category (A4 part B L2).
-pub fn receipt(result: Map<String, Value>, outcome: &Outcome, refused: bool) -> ExitCode {
+pub fn receipt(result: Map<String, Value>, outcome: &Outcome, refused: bool) -> Exit {
     finish(Some(result), outcome, refused, None)
 }
 
-/// Prints the line and the developer line and returns the exit code (see [`exit_code`]). When
-/// stdout refuses the line, the developer line `actingctl_output_failed` is all that is left
-/// and the exit is 1 (§7.3).
-fn finish(
+/// A line with `result` beside `outcome`, its developer line with `text` (when `refused` or the
+/// outcome is worse than info) and its exit code (see [`exit_code`]).
+pub fn finish(
     result: Option<Map<String, Value>>,
     outcome: &Outcome,
     refused: bool,
     text: Option<&str>,
-) -> ExitCode {
+) -> Exit {
     let detail = detail().unwrap_or(Detail::Full);
-    let line = match line(result, outcome, detail) {
-        Ok(line) => line,
-        Err(error) => return output_failed(&error.to_string()),
-    };
-    if let Err(error) = write_line(&line) {
-        return output_failed(&error.to_string());
+    let line = line(result, outcome, detail).map_err(|error| error.to_string());
+    let developer = (refused || outcome.category() > Category::Info).then(|| Developer {
+        outcome: outcome.clone(),
+        text: text.map(str::to_owned),
+    });
+    Exit {
+        line,
+        developer,
+        code: exit_code(outcome.category(), refused),
     }
-    if refused || outcome.category() > Category::Info {
-        developer_line(outcome, text);
-    }
-    ExitCode::from(exit_code(outcome.category(), refused))
 }
 
 /// The result line: the result's members and `outcome`, the envelope in `detail`.
@@ -153,22 +189,6 @@ pub fn warning_value(outcome: &Outcome, detail: Detail) -> Value {
     let mut warning = Map::new();
     warning.insert("outcome".to_owned(), outcome_value(outcome, detail));
     Value::Object(warning)
-}
-
-fn write_line(line: &Value) -> io::Result<()> {
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    serde_json::to_writer(&mut writer, line)?;
-    writer.write_all(b"\n")?;
-    writer.flush()
-}
-
-fn output_failed(text: &str) -> ExitCode {
-    developer_line(
-        &Outcome::new(ActingctlCode::ActingctlOutputFailed),
-        Some(text),
-    );
-    ExitCode::FAILURE
 }
 
 /// A warning of this process's result line: [`warning_value`] in the process's detail.

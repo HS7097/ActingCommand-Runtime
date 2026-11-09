@@ -1266,3 +1266,16 @@ tests = [
     "actingcommand-actingwatch::gate_434_lab4::actingwatch_tick_in_process",
 ]
 incident = ["#434 LAB-4"]
+
+# Workflow #434 LAB-2 (0.12.47; register §1.287, "Slice LAB-2"; briefs rd-1108/arch-013/brief-lab2.md, brief-lab2-fix1.md and brief-lab2-fix2.md; contracts/lab-two-entries.md §4.1, §4.2, §8.2, §9.3, open points 6, 7 and 10): actinglab's CLI module reads the operation table's short words into the operation and its parameters (the longest name, the instance and other positionals, options, switches, a source command's further flags and words) and refuses by name a word or flag the row does not take, a reserved row, a rescue row and the old config get; main's route (fix 1, the coordinator's ruling of 2026-11-10) sends serve and the operations the module serves itself (those from actingctl) to the module and the short words of a row actinglab's own command serves to that command in its words; a core word prints the code and a small table for people by default and with --json the line lab-ops builds; a row actinglab's own command serves answers that command's envelope; serve --stdio answers one line per request, the line the operation's --json prints, and refuses a line that is no request without ending; a Lab recording's steps and marks and a session step carry the process's initiator word (Lab-CLI, or Lab-制包 / Lab-救急 from ACTINGCOMMAND_INITIATOR, Lab-MCP through --via mcp), the answer of record mark carries the word its file does (fix 2), and any other value of the variable is refused with nothing written; every command of actinglab's dispatch stays actinglab's own on main's route, and the command lines of its consumers (acmodel's validator, the resource repositories' CI and scripts, the hotplace kit, MCP's --via mcp child) print through main's entry what the same line prints without the route, with the same exit code; and (fix 2) the production binary prints for each consumer's command line the exit code and envelope the goldens of tests/golden/consumers.json, written from main c76ce040's code, hold
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab2::cli_short_words_parse",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab2::cli_json_matches_op_output",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab2::serve_answers_same_as_cli",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab2::recording_steps_and_marks_carry_the_initiator",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab2::consumer_command_lines_take_the_old_path_unchanged",
+    "actingcommand-actinglab::consumer_goldens::consumer_command_lines_print_what_main_printed",
+]
+incident = ["#434 LAB-2"]

@@ -150,6 +150,8 @@ pub(super) fn run_paths(global: &GlobalOptions) -> CliOutcome<Value> {
     }))
 }
 
+/// Workflow #434 LAB-2 (open point 7): `user-config get|set`, actinglab's own user configuration
+/// file (`config get|set` before LAB-2).
 pub(super) fn run_config(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
         "get" => {
@@ -167,7 +169,7 @@ pub(super) fn run_config(sub: &str, global: &GlobalOptions, args: &[String]) -> 
         }
         "set" => {
             if args.len() < 2 {
-                return Err(CliError::usage("config set requires <key> <value>"));
+                return Err(CliError::usage("user-config set requires <key> <value>"));
             }
             let mut config = read_user_config()?;
             config_set(&mut config, &args[0], &args[1])?;
@@ -189,7 +191,9 @@ pub(super) fn run_config(sub: &str, global: &GlobalOptions, args: &[String]) -> 
                 "value": args[1]
             }))
         }
-        _ => Err(CliError::usage(format!("unknown config command: {sub}"))),
+        _ => Err(CliError::usage(format!(
+            "unknown user-config command: {sub}"
+        ))),
     }
 }
 
@@ -243,16 +247,6 @@ pub(super) fn run_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             "runtime": data,
         })
     })
-}
-
-pub(super) fn run_devices(_global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    reject_legacy_session_routing(&flags)?;
-    flags.expect_positionals("devices", 0)?;
-    Err(CliError::not_implemented(
-        "actinglab_device_authority_retired",
-        "direct ADB device discovery was retired from ActingLab; query the resident Runtime",
-    ))
 }
 
 pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {

@@ -17,17 +17,16 @@ use crate::instance_selector::{self, SelectorMiss};
 use crate::material_export::{self, MAX_EXPORT_BYTES, WriteFailure};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    EventActor, EventSource, LedgerEventPosition, ProjectedEvent, ReadonlyObservation,
-    RuntimeMaterialReadFailure, RuntimeMaterialReadLimit, RuntimeMaterialReadState, RuntimeResult,
+    LedgerEventPosition, ProjectedEvent, ReadonlyObservation, RuntimeMaterialReadFailure,
+    RuntimeMaterialReadLimit, RuntimeMaterialReadState, RuntimeResult,
 };
 use actingcommand_runtime_client::{
-    RuntimeClient, RuntimeClientConfig, RuntimeClientError, RuntimeFlowOutput,
-    RuntimeMaterialCompleteResult, RuntimeMaterialSelection,
+    RuntimeClient, RuntimeClientError, RuntimeFlowOutput, RuntimeMaterialCompleteResult,
+    RuntimeMaterialSelection,
 };
 use serde_json::{Value, json};
 use std::ffi::{OsStr, OsString};
 use std::path::{self, PathBuf};
-use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 const USAGE: &str = "usage: actingctl observe --state-root <path> --instance <alias|instance_id|ADB port> --export <directory>";
@@ -37,7 +36,7 @@ const READ_BUDGET: Duration = Duration::from_secs(60);
 
 /// Runs `observe` when it carries `--export`; `None` leaves every other command, and `observe`
 /// without `--export`, to `Invocation::parse`, unchanged.
-pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != "observe"
         || !arguments[1..]
             .iter()
@@ -175,13 +174,8 @@ fn run(arguments: &[OsString]) -> Result<Value, Failure> {
         selector,
         directory,
     } = parse(arguments)?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    ))
-    .map_err(Failure::Runtime)?;
+    let client = RuntimeClient::connect(crate::front::client_config(state_root))
+        .map_err(Failure::Runtime)?;
     let status = client.status().map_err(Failure::Runtime)?;
     let alias = instance_selector::select(status.instances(), &selector)
         .map_err(|miss| Failure::Selector {

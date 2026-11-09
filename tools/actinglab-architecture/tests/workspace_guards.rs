@@ -681,11 +681,9 @@ fn lab_input_face_is_semantic_input_executor() {
 #[test]
 fn runtime_domain_never_writes_stderr() {
     /// Workspace-relative file (matched as the `path:` prefix of a reported violation) and reason.
-    const STDERR_ALLOW_LIST: &[(&str, &str)] = &[(
-        "crates/lab-ops/src/cli_line.rs",
-        "Workflow #434 LAB-1: actingctl's developer line (`developer_line`), moved unchanged with \
-         `cli_line`; the CLI's printing leaves `lab-ops` with LAB-2, which removes this entry.",
-    )];
+    /// Workflow #434 LAB-2: empty again; `lab-ops` returns the CLI's lines and the programs print
+    /// them.
+    const STDERR_ALLOW_LIST: &[(&str, &str)] = &[];
 
     let root = workspace_root();
     let mut files = Vec::new();
@@ -1359,16 +1357,9 @@ fn command_inventory_matches_checked_in_snapshot() {
     }
     assert_eq!(
         exemptions,
-        BTreeSet::from([
-            "help",
-            "version",
-            "doctor",
-            "scheduler status",
-            "scheduler pause",
-            "scheduler resume",
-            "scheduler start",
-            "scheduler stop",
-        ]),
+        // Workflow #434 LAB-2: the reserved `scheduler` commands are deleted, and their
+        // exemptions with them.
+        BTreeSet::from(["help", "version", "doctor"]),
         "pipeline exemptions must match their named command scope"
     );
 }

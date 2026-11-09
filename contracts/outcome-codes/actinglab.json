@@ -594,11 +594,12 @@
       "uncertain": false,
       "values": {},
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.4",
-      "description": "actinglab resource check-release is retired: it answered checked whenever --repo was a directory, without checking anything. It is refused (exit 2) and writes nothing (Workflow #411 RV-1).",
+      "retired_in": "0.12.47",
+      "description": "Retired (Workflow #434 LAB-2). actinglab resource check-release was retired by Workflow #411 RV-1: it answered checked whenever --repo was a directory, without checking anything, and was refused with this code (exit 2). Since 0.12.47 the word is gone from actinglab (an unknown resource command), and nothing emits the code.",
       "common_causes": "A script written for the retired stub.",
-      "handling": "Run actinglab resource verify, which checks a resource repository's commit as its CI does and writes a report."
+      "handling": "None in 0.12.47 and later: the code is no longer emitted. Run actinglab resource verify, which checks a resource repository's commit as its CI does and writes a report."
     },
     "package_check_click_box_single_point": {
       "category": "warning",
@@ -634,9 +635,23 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.45",
-      "description": "Workflow #433 LABDO-1: online actinglab do --capture (an element, coordinates or --operation) sent its Lab operation and the Runtime answered it with a receipt, then a check the runtime client runs after the receipt failed: the event queries of the request, its lease and its actions, or the evidence check of the operation's record against those events and the artifacts they verify. The Runtime acted as its receipt reports, so this is not a device error: the details carry the receipt's req_id, correlation_id and receipt_state, the effect its record reports (performed, not_performed or indeterminate; null when the receipt carries no Lab operation record) with executed, the record's own failure when it reports one, and the client's code (client_code) and message (client_message). Exit 5, the class of a Runtime or state failure. MCP relays it as lab_tool_failed (class runtime) with req_id. Nothing more is written to the ledger by the client.",
+      "description": "Workflow #433 LABDO-1: online actinglab do --capture (an element, coordinates or --operation) sent its Lab operation and the Runtime answered it with a receipt, then a check the runtime client runs after the receipt failed: the event queries of the request, its lease and its actions, or the evidence check of the operation's record against those events and the artifacts they verify. The Runtime acted as its receipt reports, so this is not a device error: the details carry the receipt's req_id, correlation_id and receipt_state, the effect its record reports (performed, not_performed or indeterminate; null when the receipt carries no Lab operation record) with executed, the record's own failure when it reports one, and the client's code (client_code) and message (client_message). Exit 5, the class of a Runtime or state failure; Workflow #434 LAB-2 (fix 1): actinglab's own commands, do among them, keep their output and exit codes until the later slice of lab-two-entries.md open point 10 moves them to the CLI module's line, where it exits 1 like every error and carries every member of the details beside the outcome. MCP relays it as lab_tool_failed (class runtime) with req_id. Nothing more is written to the ledger by the client.",
       "common_causes": "The client's evidence check disagrees with what the Runtime recorded for a successful operation (for example runtime_lab_diagnostic_budget_mismatch when an OCR session's placement report was archived under the request); the event query timed out or failed; an artifact could not be read back from the state root.",
       "handling": "Do not send the operation again as though it had not run: read effect first, and the instance's screen. Report client_code with req_id so the check can be corrected."
+    },
+    "lab_operation_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.47",
+      "description": "Workflow #434 LAB-2: an operation of actinglab's CLI module (or of actinglab serve --stdio) whose source has no success code of its own ran to its end: an operation whose only source was an MCP tool (run show, material, targets, run stop). The line carries the operation's answer beside this outcome; exit 0. actinglab's own commands answer their envelope as before (LAB-2 fix 1), not this code.",
+      "common_causes": "The operation succeeded.",
+      "handling": "None."
     }
   }
 }

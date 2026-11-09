@@ -1,8 +1,8 @@
 use crate::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, IdIssuer, IdKind, PackageValidationResponse,
     create_package_blocked_result_zip, file_sha256, lab_run, lab2_cli, package_build, package_cli,
-    reject_legacy_session_routing, require_runtime, run_session_status, runtime_debug,
-    runtime_session_adapter, validate_json_file, validate_operation_dir,
+    reject_legacy_session_routing, run_session_status, runtime_debug, validate_json_file,
+    validate_operation_dir,
 };
 use actingcommand_device::vendor_stdio_session_diagnostic;
 use serde_json::{Value, json};
@@ -53,22 +53,9 @@ pub(super) fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> Cli
             }
             runtime_debug::run_runtime_debug(sub, args)
         }
-        "start" => {
-            require_runtime(global)?;
-            let flags = FlagArgs::parse(args)?;
-            let mode = flags
-                .optional("--mode")
-                .unwrap_or("passive_mirror".to_string());
-            if !["passive_mirror", "scheduler_noop", "exclusive_drain"].contains(&mode.as_str()) {
-                return Err(CliError::usage(format!("unsupported lab mode: {mode}")));
-            }
-            Err(CliError::not_implemented(
-                "not_implemented",
-                "lab start is reserved until Runtime lab sessions are connected",
-            ))
-        }
+        // Workflow #434 LAB-2: the reserved `lab start` and the retired `lab lease`, `preempt` and
+        // `release` are gone; they are unknown lab commands now.
         "status" => run_session_status(global, args),
-        "lease" | "preempt" | "release" => runtime_session_adapter::retired_authority(sub, args),
         "receipt" => lab2_cli::run_receipt(global, args),
         "evidence" => lab2_cli::run_evidence(global, args),
         "arbitrator" => lab2_cli::run_arbitrator(global, args),
@@ -211,7 +198,7 @@ fn write_package_light_event(
 
 pub(super) fn run_operation(
     sub: &str,
-    global: &GlobalOptions,
+    _global: &GlobalOptions,
     args: &[String],
 ) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
@@ -238,13 +225,7 @@ pub(super) fn run_operation(
                 "mode": sub
             }))
         }
-        "dry-run" => {
-            require_runtime(global)?;
-            Err(CliError::not_implemented(
-                "not_implemented",
-                "operation dry-run is reserved until Runtime operation adapter is connected",
-            ))
-        }
+        // Workflow #434 LAB-2: the reserved `operation dry-run` is gone.
         "run" => {
             reject_legacy_session_routing(&flags)?;
             Err(CliError::safety_blocked(
@@ -321,15 +302,5 @@ pub(super) fn run_control(
             }))
         }
         _ => Err(CliError::usage(format!("unknown control command: {sub}"))),
-    }
-}
-
-pub(super) fn run_scheduler(sub: &str, _global: &GlobalOptions) -> CliOutcome<Value> {
-    match sub {
-        "status" | "pause" | "resume" | "start" | "stop" => Err(CliError::not_implemented(
-            "scheduler_not_available",
-            "Scheduler interface is reserved but not implemented yet.",
-        )),
-        _ => Err(CliError::usage(format!("unknown scheduler command: {sub}"))),
     }
 }
