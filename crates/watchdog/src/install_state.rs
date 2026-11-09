@@ -27,6 +27,11 @@ pub enum OperationKind {
     Stop,
     Start,
     ReleaseHold,
+    // Workflow #434 LAB-3: the Lab's rescue module's `config replace` (and `config restore`),
+    // which swaps the configuration file, and `place`, which places a bundle's game root. Neither
+    // is on row 7a″'s pass list: while one is unfinished the watchdog stands aside.
+    ConfigReplace,
+    PackPlace,
 }
 
 /// `install\current.json`: the one unfinished operation.

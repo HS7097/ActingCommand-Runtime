@@ -657,6 +657,56 @@ impl Host for FakeHost {
         self.detached.borrow_mut().push(arguments.to_vec());
         Ok(9_999)
     }
+
+    /// Workflow #434 LAB-3: the watchdog of the fake Runtime: `status` decides `watchdog_alive`
+    /// while it runs, `watchdog_never_started` otherwise; `install` and `uninstall` succeed.
+    /// Every question is listed in the host's log (`watchdog <word>`).
+    fn watchdog(&self, asked: crate::watchdog::Asked, _root: &Path) -> crate::watchdog::Answered {
+        let (word, outcome) = match asked {
+            crate::watchdog::Asked::Status if self.runtime.running.get() => {
+                let owner = self.runtime.owner.borrow().clone();
+                (
+                    "status",
+                    Outcome::new(ActingctlCode::WatchdogAlive)
+                        .owner_epoch(owner.epoch)
+                        .pid(owner.pid),
+                )
+            }
+            crate::watchdog::Asked::Status => {
+                ("status", Outcome::new(ActingctlCode::WatchdogNeverStarted))
+            }
+            crate::watchdog::Asked::Install => {
+                ("install", Outcome::new(ActingctlCode::WatchdogInstalled))
+            }
+            crate::watchdog::Asked::Uninstall => (
+                "uninstall",
+                Outcome::new(ActingctlCode::WatchdogUninstalled),
+            ),
+        };
+        self.log.borrow_mut().push(format!("watchdog {word}"));
+        crate::watchdog::Answered {
+            line: Some(json!({
+                "schema_version": "actingcommand.watchdog.report.v2",
+                "outcome": outcome.envelope(actingcommand_contract::outcome::Detail::Full),
+                "attention": [],
+            })),
+            outcome,
+            developer_before: Vec::new(),
+        }
+    }
+
+    fn detach_rescue(
+        &self,
+        arguments: &[String],
+        initiator: Option<&str>,
+        _directory: &Path,
+        _log: &Path,
+    ) -> Result<u32, Outcome> {
+        let mut line = initiator.map_or_else(Vec::new, |word| vec![format!("initiator={word}")]);
+        line.extend(arguments.iter().cloned());
+        self.detached.borrow_mut().push(line);
+        Ok(9_999)
+    }
 }
 
 /// Workflow #421 INST-2: how one fake start behaves.
@@ -717,6 +767,10 @@ pub(super) struct FakeRuntime {
     /// The spawn under way: when, how it behaves and its build.
     pending: RefCell<Option<(u64, FakeStart, String)>>,
     revisions: Cell<u64>,
+    /// Workflow #434 LAB-3: the catalog the latest evaluation ran under, and the ones the next
+    /// reads answer, one per read (a new composition the workbench activates).
+    pub(super) catalog: RefCell<Option<String>>,
+    pub(super) catalogs: RefCell<VecDeque<String>>,
 }
 
 impl FakeRuntime {
@@ -749,6 +803,8 @@ impl FakeRuntime {
             calls: RefCell::new(Vec::new()),
             pending: RefCell::new(None),
             revisions: Cell::new(0),
+            catalog: RefCell::new(None),
+            catalogs: RefCell::new(VecDeque::new()),
         }
     }
 
@@ -764,6 +820,7 @@ impl FakeRuntime {
                 pause: None,
                 lease_active: false,
                 queued_requests: 0,
+                game: None,
             })
             .collect();
     }
@@ -1048,6 +1105,17 @@ impl RuntimeLink for FakeRuntime {
             owner_epoch: owner.epoch,
             started_at_unix_ms: owner.started_at_unix_ms,
         })
+    }
+
+    fn catalog_hash(&self, _state_root: &Path) -> Result<Option<String>, Outcome> {
+        if !self.running.get() {
+            return Err(refused());
+        }
+        self.calls.borrow_mut().push("catalog".to_owned());
+        if let Some(next) = self.catalogs.borrow_mut().pop_front() {
+            *self.catalog.borrow_mut() = Some(next);
+        }
+        Ok(self.catalog.borrow().clone())
     }
 }
 

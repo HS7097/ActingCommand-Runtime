@@ -704,6 +704,55 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
   the CLI returns it, neither recomputed nor filtered. `install new` is not built yet (INST-6,
   slice R-15e), so this rule has no code before it; no flag of an existing command changes.
 
+## The Lab's rescue module (Workflow #434 LAB-3, since 0.12.48)
+
+[lab-two-entries.md](lab-two-entries.md) §5 to §7; the rows of module `rescue` in
+[lab-operations.json](lab-operations.json); register §1.287, "Slice LAB-3". The installer's code
+moved from `apps/actingctl` to `crates/lab-rescue` and runs with one of two faces. **`actingctl
+install` keeps the face this document describes (`install-cli` 1), every option, output, code and
+exit, until LAB-7 deletes it**; a journal it writes is byte for byte what it wrote before. The
+Lab's rescue module (`actinglab <row>`, `actinglab serve --stdio`) runs the same commands with
+the rescue face:
+
+- **No root word.** It acts on the root of the `actinglab.exe` that runs it (`<root>\tools\` until
+  LAB-7 moves it to `runtime\`); `--root` and `--state-root` are refused as unknown arguments.
+- **The initiator.** Every journal an operation of the module writes has `initiator` (§4.3 of the
+  contract's words) from before its first step; an `undo` records its own initiator in the undo
+  record; a resumed operation keeps the face its journal began with. `unlock` passes the initiator
+  as actingd's `--actor`.
+- **No confirmation parameters.** `--plan <id>` for an apply, `--accept-ledger-one-way`,
+  `--known-pause`, `--ack-guard`, `--ui-confirmed` and `--via` are refused
+  (`actingctl_usage_invalid`, `argument_problem` `unknown`). `deploy`, `rollback`, `config replace`
+  and `place` plan and apply in one call under the writer lock; `--plan` (a switch) answers the
+  plan only. A one-way ledger edge is journalled `one_way: true` instead of acknowledged.
+- **Every pause is known.** A hold takes every pause it finds on an affected instance as known,
+  keeps it and lists it; `release-hold` hands back only the operation's own hold, whose reason is
+  the module's `lab-<operation>-<unix ms>` unless the caller names one (`down --reason`).
+- **Guards report.** Every row of "Guards" below is evaluated as for `actingctl install` and none
+  refuses: a row that fails or is not evaluated is noted with the warning `install_caveat_noted`,
+  `install_caveat` `guard_failed` and the rows as `install_guards`, and the journal keeps the rows.
+  A start waits for memory up to `install.start.memory_wait_ms` as before, then goes on and
+  journals the row. The preconditions, the writer lock, an unfinished operation, the interface
+  checks, the rollback gate and the checks of the inputs still refuse.
+- **The composites** (operation kinds `config_replace` and `pack_place` are the module's own;
+  `deploy` and `rollback` are an `update` and a `rollback` journal): `deploy <tag|commit>` stages
+  (`--dir`, with its `release-facts.json` when present, or a kept build), plans, and with a Runtime
+  running applies the composite update (stop with hold, apply, start and its checks), waits for the
+  watchdog's `watchdog_alive` within `install.start.ready_timeout_ms` and releases the hold;
+  `config replace <file>` checks the file with the live build's check-config (`--install-root`)
+  before anything changes, then stops with hold, stages it as `actingd.config.json.new-<ms>.part`,
+  swaps it in with the replaced file kept as `actingd.config.json.prev-<ms>`, starts, waits for
+  `alive` and releases (the file's content is never printed, only its SHA-256); `config restore
+  <prev>` does the same with a kept `.prev-<ms>`; `place <bundle.zip>` plans with the contract
+  crate's readers and the `package` edge, holds the instances bound to the bundle's game (the game
+  comes from the bundle), waits until they are idle, places each item `.part` → `.old-<ms>` → in
+  place (step `pack_item`), checks the bundle again and runs `<root>\tools\actinglab.exe
+  standard-pack check` on the placed game root, releases and reads the schedule; `alive [--wait]`
+  is the watchdog's status of the root. `--detach` runs the module's own command again through the
+  WMI start with the same initiator. The download stays outside.
+- **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
+  CLI envelope, as `actingctl install`'s do.
+
 ## Interface checks
 
 From [component-interfaces.md](component-interfaces.md), "Checks per operation". The parties:
@@ -920,6 +969,12 @@ any other schema (`state_invalid`).
  "rollback": {"started_at_unix_ms": 0, "to": "<40 hex>", "failed": ["<check id>"], "reversed_at_unix_ms": 0 | null},
  "result": {…} | null, "finished_at_unix_ms": 0 | null}
 ```
+
+The Lab's rescue module (LAB-3) adds two members after `installer`, which `actingctl install`
+never writes: `"initiator": "<word>"` (lab-two-entries.md §4.1) and `"one_way": true` (a one-way
+ledger edge it applied; absent otherwise); its undo record carries `"initiator"` too. Kinds
+`config_replace` and `pack_place` are the module's. An older reader that refuses unknown members
+does not read such a journal; `install-root` does not change (lab-two-entries.md, open point 5).
 
 The journal is written `.part` → flushed → renamed before each step starts and after it ends.
 `current.json` is written before the first step and renamed `current.json.finished-<ms>` at the
@@ -2047,14 +2102,16 @@ fragments and this build's enums; the forwarder's codes are in
 - vocabulary `install_rollback_slot_material` (new): `intact`, `cleaned`, `not_intact`.
 - vocabulary `install_rollback_build_material` (new): `kept`, `cleaned`.
 - vocabulary `install_operation_kind` (new): `release_stage`, `adopt`, `update`, `rollback`,
-  `stop`, `start`, `release_hold`, `prepare`, `convert`, `clean`, `restart`.
+  `stop`, `start`, `release_hold`, `prepare`, `convert`, `clean`, `restart`; the rescue module's
+  composites add (Workflow #434 LAB-3, since 0.12.48) `config_replace`, `pack_place`.
 - vocabulary `install_step_kind` (new): `extract`, `copy_build`, `verify_tree`, `place_build`,
   `materialize_part`, `verify_part`, `pause`, `close`, `ledger_verify`, `place_slot`,
   `stage_file`, `swap_file`, `retire_live_files`, `place_entries`, `refresh_entries`,
   `refresh_root_fixed`, `init_slot_locks`, `write_selection`, `commit_selection`, `record_state`,
   `start`, `post_check`, `record_health`, `release_hold`, `reverse_files`, `revert_selection`,
   `clean_check`, `clean_slot`, `clean_builds`, `clean_converted`, `delete_cleaning`,
-  `record_cleanup`.
+  `record_cleanup`; the rescue module's `place` adds (Workflow #434 LAB-3, since 0.12.48)
+  `pack_item`.
 - vocabulary `install_member` (new): `runtime`, `tools`, `ui`.
 - vocabulary `install_row_reason` (new): `target_restores_player_holds`, `no_player_hold_support`,
   `ui_drives_no_installer`.

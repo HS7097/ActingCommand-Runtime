@@ -3,7 +3,8 @@
 // Workflow #390 WD-1 (deploy plan Q1 option (b); Alice 2026-10-16; register §1.96; apps gate 70),
 // req. 6: `actingctl start` / `restart` without `--config` still need an A/B selection. Workflow
 // #434 LAB-4 moved the watchdog's gates to `crates/watchdog` (`gate_wd1`); this one tests
-// actingctl's `start`, which stays here, so it stays with it, on the same single-location root:
+// actingctl's `start`, and it moved with it to `crates/lab-rescue` (LAB-3), on the same
+// single-location root:
 // `runtime\BUILD-MANIFEST.json`, a stand-in fixed entry and `actingd.config.json` naming an
 // absolute state root outside the root; no `install\`.
 

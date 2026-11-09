@@ -722,3 +722,238 @@ test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_deploy
 ruling = "Workflow #434 LAB-4 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7 and §8.1)"
 reason = "Moved with its file from apps/actingctl to crates/watchdog, paths only: the test and what it asserts are unchanged."
 covered_by = "actingcommand-watchdog::lib::gate_wd1::wd1_a_deploy_holding_the_writer_lock_of_a_single_location_root_starts_nothing, in the same apps.toml row."
+
+# Workflow #434 LAB-3 (register §1.287, "Slice LAB-3"): actingctl's installer (apps/actingctl/src/install),
+# its start and restart (runtime_start.rs, with the WD-1 gate of start) and agent-channel moved to
+# crates/lab-rescue with git mv; each test moved with its file, paths only, so its name changed package and
+# target and the new name takes the old one's place in the same rows.
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::gate_wd1_start::wd1_start_without_config_still_needs_an_ab_selection"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with actingctl's start (runtime_start.rs) from apps/actingctl/src to crates/lab-rescue/src, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::gate_wd1_start::wd1_start_without_config_still_needs_an_ab_selection, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_411_p49::p49_l4_the_list_tells_a_reused_pid_from_the_entry_by_its_creation_time"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_411_p49::p49_l4_the_list_tells_a_reused_pid_from_the_entry_by_its_creation_time, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_411_p49::p49_m1_a_pid_the_probe_cannot_judge_marks_its_row_and_the_list_still_answers"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_411_p49::p49_m1_a_pid_the_probe_cannot_judge_marks_its_row_and_the_list_still_answers, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_429_r0b_pairing::r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_three_to_four"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_three_to_four, in the same apps.toml row."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst1_update::hs2b_ledger_six_needs_the_one_way_flag_and_refuses_the_rollback_to_five"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst1_update::hs2b_ledger_six_needs_the_one_way_flag_and_refuses_the_rollback_to_five, in the same host.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst1_update::inst_undo_edge_6_an_owner_that_started_inside_the_operation_counts"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst1_update::inst_undo_edge_6_an_owner_that_started_inside_the_operation_counts, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst1_update::p49_l9_the_notice_asks_no_reconnect_for_an_mcp_entrys_child"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst1_update::p49_l9_the_notice_asks_no_reconnect_for_an_mcp_entrys_child, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_5_a_failed_check_rolls_back_to_the_previous_build_and_releases_the_hold"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst2_d_5_a_failed_check_rolls_back_to_the_previous_build_and_releases_the_hold, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_6_a_new_start_that_exits_rolls_back_the_same_way"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst2_d_6_a_new_start_that_exits_rolls_back_the_same_way, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7_a_failed_gate_keeps_the_new_build_and_the_hold"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst2_d_7_a_failed_gate_keeps_the_new_build_and_the_hold, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7b_a_running_image_met_before_the_close_fails_the_gate_and_closes_nothing"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst2_d_7b_a_running_image_met_before_the_close_fails_the_gate_and_closes_nothing, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7c_a_failed_gate_after_a_new_start_that_exited_names_install_start"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst2_d_7c_a_failed_gate_after_a_new_start_that_exited_names_install_start, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_f_4_resume_finishes_a_rollback_interrupted_after_each_of_its_steps"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst2_f_4_resume_finishes_a_rollback_interrupted_after_each_of_its_steps, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_1_a_finished_composite_across_a_one_way_ledger_refuses_and_changes_nothing"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_1_a_finished_composite_across_a_one_way_ledger_refuses_and_changes_nothing, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_2_without_a_ledger_change_a_finished_composite_is_undone"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_2_without_a_ledger_change_a_finished_composite_is_undone, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_3_an_unfinished_composite_is_judged_once_its_start_may_have_spawned"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_3_an_unfinished_composite_is_judged_once_its_start_may_have_spawned, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_4_after_a_failed_post_check_the_undo_meets_the_edge_the_rollback_met"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_4_after_a_failed_post_check_the_undo_meets_the_edge_the_rollback_met, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_5_a_failed_start_counts_only_when_a_process_spawned"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_5_a_failed_start_counts_only_when_a_process_spawned, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_7_after_a_rollback_the_reader_refused_the_undo_meets_the_same_part"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_7_after_a_rollback_the_reader_refused_the_undo_meets_the_same_part, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_8_a_composites_next_names_undo_only_when_the_edges_would_pass"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_8_a_composites_next_names_undo_only_when_the_edges_would_pass, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::s2if_t1_an_instruction_kept_over_a_changed_default_passes_the_check"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::s2if_t1_an_instruction_kept_over_a_changed_default_passes_the_check, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::s2if_t2_a_dropped_instruction_fails_the_check"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::s2if_t2_a_dropped_instruction_fails_the_check, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::s2if_t3_a_superseded_instruction_fails_the_check"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::s2if_t3_a_superseded_instruction_fails_the_check, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::s2if_t4_the_rollback_start_with_the_default_changed_back_passes_the_check"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::s2if_t4_the_rollback_start_with_the_default_changed_back_passes_the_check, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_r15a_ui_edges::r15a_t1_each_ui_edge_passes_and_fails_by_its_speaks_table"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_r15a_ui_edges::r15a_t1_each_ui_edge_passes_and_fails_by_its_speaks_table, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_r15a_ui_edges::r15a_t2_a_failed_ui_edge_names_every_side_with_its_source_and_range"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_r15a_ui_edges::r15a_t2_a_failed_ui_edge_names_every_side_with_its_source_and_range, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_r15a_ui_edges::r15a_t3_a_ui_declaration_without_runtime_outcomes_counts_as_zero_zero"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_r15a_ui_edges::r15a_t3_a_ui_declaration_without_runtime_outcomes_counts_as_zero_zero, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_r15b_registry::r15b_every_code_and_word_of_the_contracts_is_registered"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_r15b_registry::r15b_every_code_and_word_of_the_contracts_is_registered, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b_a_ui_release_verifies_and_stages_into_ui_builds"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_r15b_release::r15b_a_ui_release_verifies_and_stages_into_ui_builds, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b_an_unrecognised_zip_refuses_zip_set_by_its_name"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_r15b_release::r15b_an_unrecognised_zip_refuses_zip_set_by_its_name, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b_each_failure_of_a_ui_release_is_listed"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_r15b_release::r15b_each_failure_of_a_ui_release_is_listed, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b_the_runtime_and_tools_stage_answers_and_keeps_its_build_as_before"
+ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
+reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_r15b_release::r15b_the_runtime_and_tools_stage_answers_and_keeps_its_build_as_before, in the same apps.toml row."

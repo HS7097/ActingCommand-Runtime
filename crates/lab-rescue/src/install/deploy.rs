@@ -67,7 +67,7 @@ pub(crate) enum StepEnd {
 
 /// The members of an answer whose hold stays: `next` names `release-hold` with its reason, and
 /// `install start` when the Runtime is down (closed, or a start that failed: review S2 M4).
-fn hold_kept(
+pub(crate) fn hold_kept(
     paths: &Paths,
     reason: Option<&SchedulingPauseReason>,
     runtime_down: bool,
@@ -174,6 +174,8 @@ pub(crate) fn step(
         StepKind::PostCheck => post_check(operation, n, loaded, notes),
         StepKind::ReleaseHold => release_hold(operation, n, loaded),
         StepKind::ReverseFiles => reverse_files(operation, n, loaded, notes),
+        // Workflow #434 LAB-3: the rescue module's `place`.
+        StepKind::PackItem => super::place::item_step(operation, n, loaded),
         _ => Err(state_invalid(
             operation.journal().kind.location(),
             operation.paths().journal(operation.id()),
@@ -448,10 +450,29 @@ fn start(
         .into_iter()
         .filter(|ack| !held || ack != InstallGuard::Memory.as_str())
         .collect::<Vec<_>>();
+    // Workflow #434 LAB-3 (contracts/lab-two-entries.md §6, open point 4): in the rescue module
+    // the start still waits for memory, then goes on and reports the row.
+    let report = super::Face::of(operation.journal()).rescue();
     let launched = {
         let mut progress = |value: &Value| operation.progress(n, value.clone());
-        launch::start(host, &paths, loaded, command, &commit, &acks, &mut progress)
+        launch::start(
+            host,
+            &paths,
+            loaded,
+            command,
+            &commit,
+            &launch::Guarding {
+                acked: &acks,
+                report,
+            },
+            &mut progress,
+        )
     };
+    if let Ok(launched) = &launched
+        && let Some(memory) = &launched.memory_noted
+    {
+        operation.add_guard(memory.clone())?;
+    }
     let launched = match launched {
         Ok(launched) => launched,
         Err(refusal) => {
@@ -503,6 +524,10 @@ fn post_check(
     let command = operation.journal().kind.location();
     let paths = operation.paths().clone();
     let step = operation.journal().steps[n - 1].clone();
+    // Workflow #434 LAB-3: the checks after a placement, not after a start.
+    if super::place::is_place_check(&step.intent) {
+        return super::place::check_step(operation, n, loaded, notes);
+    }
     let rollback = of_rollback(&step.intent);
     let journal = operation.journal().clone();
     let started = start_before(operation, n).unwrap_or(Value::Null);
@@ -999,6 +1024,20 @@ fn hold_caveats(operation: &Operation<'_>, config: &Value, notes: &mut Vec<Outco
     }
 }
 
+/// Workflow #434 LAB-3 (contracts/lab-two-entries.md §6): the caveat `guard_failed` of an
+/// operation the rescue module began, for every journalled guard row that did not pass (an
+/// informational one aside), added once; nothing for `actingctl install`, whose guards refused.
+pub(crate) fn guard_caveats(operation: &Operation<'_>, notes: &mut Vec<Outcome>) {
+    let journal = operation.journal();
+    if !super::Face::of(journal).rescue() || has(notes.as_slice(), InstallCaveat::GuardFailed) {
+        return;
+    }
+    notes.extend(guards::noted(
+        journal.kind.location(),
+        guards::failed_in(&journal.guards),
+    ));
+}
+
 /// Ends `operation` refused: its result recorded and `current.json` retired; the answer carries
 /// `members` (what stays: the hold, the build) and the hold's caveats.
 pub(crate) fn end(
@@ -1009,6 +1048,7 @@ pub(crate) fn end(
     loaded: &Loaded,
 ) -> Result<Answer, Outcome> {
     hold_caveats(&operation, &loaded.config, &mut notes);
+    guard_caveats(&operation, &mut notes);
     // The operation's id on the family's own refusal; a fatal cause that tops it (the
     // fatal-link rule) keeps its own values.
     let refusal = if refusal.is(crate::codes::ActingctlCode::InstallCommandRefused) {
@@ -1053,6 +1093,7 @@ pub(crate) fn finish(
     loaded: &Loaded,
 ) -> Result<Answer, Outcome> {
     hold_caveats(&operation, &loaded.config, &mut notes);
+    guard_caveats(&operation, &mut notes);
     let journal = operation.journal().clone();
     let paths = operation.paths().clone();
     let command = journal.kind.location();
@@ -1168,6 +1209,49 @@ pub(crate) fn finish(
                 .install_operation_id(operation_id.clone())
                 .count(resumed)
         }
+        // Workflow #434 LAB-3: the rescue module's `config replace` (and `config restore`): the
+        // configuration kept aside, the start and its checks.
+        OperationKind::ConfigReplace => {
+            insert(
+                "backup",
+                journal.inputs.get("backup").cloned().unwrap_or(Value::Null),
+            );
+            insert(
+                "config_sha256",
+                journal
+                    .inputs
+                    .get("config_sha256")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
+            if !starts.is_empty() {
+                insert("start", starts[0].clone());
+            }
+            if !checks.is_empty() {
+                insert("post_check", checks[0].clone());
+            }
+            super::done(command)
+                .install_operation_id(operation_id.clone())
+                .installation_changed(true)
+        }
+        // Workflow #434 LAB-3: the rescue module's `place`: the game, each item placed and the
+        // checks after the placement.
+        OperationKind::PackPlace => {
+            insert(
+                "game",
+                journal.inputs.get("game").cloned().unwrap_or(Value::Null),
+            );
+            insert(
+                "placed",
+                json!(evidence_of(&journal, StepKind::PackItem, false)),
+            );
+            if !checks.is_empty() {
+                insert("checks", checks[0].clone());
+            }
+            super::done(command)
+                .install_operation_id(operation_id.clone())
+                .installation_changed(true)
+        }
         OperationKind::ReleaseStage | OperationKind::Adopt => {
             return Err(operation.interrupted(state_invalid(
                 command,
@@ -1180,7 +1264,11 @@ pub(crate) fn finish(
         && !released
         && matches!(
             journal.kind,
-            OperationKind::Update | OperationKind::Rollback | OperationKind::Stop
+            OperationKind::Update
+                | OperationKind::Rollback
+                | OperationKind::Stop
+                | OperationKind::ConfigReplace
+                | OperationKind::PackPlace
         )
     {
         members.extend(hold_kept(&paths, Some(reason), false));
@@ -1245,16 +1333,45 @@ fn composite_steps(
 }
 
 /// The hold's S0, the guards and the deferred record, read from the running Runtime before
-/// anything changes; the guards' refusal as an answer with their rows.
-struct HoldStart {
-    seen: super::runtime::RuntimeSeen,
-    config: super::runtime::ConfigSeen,
-    held: Vec<String>,
-    rows: Vec<guards::GuardRow>,
-    deferred: Value,
+/// anything changes; the guards' refusal as an answer with their rows. Workflow #434 LAB-3: the
+/// hold's inputs as the operation takes them (in the rescue module every pause found on an
+/// instance is a known pause), and the guards' caveat when the rescue module went on past a row.
+pub(crate) struct HoldStart {
+    pub(crate) seen: super::runtime::RuntimeSeen,
+    pub(crate) config: super::runtime::ConfigSeen,
+    pub(crate) held: Vec<String>,
+    pub(crate) rows: Vec<guards::GuardRow>,
+    pub(crate) deferred: Value,
+    pub(crate) hold: HoldInputs,
 }
 
-fn hold_start(
+/// Workflow #434 LAB-3 (contracts/lab-two-entries.md §5): the rescue module's hold: every pause
+/// `seen` shows on an instance, other than the hold's own, is a known pause, kept and listed.
+pub(crate) fn known_from(seen: &super::runtime::RuntimeSeen, hold: &HoldInputs) -> HoldInputs {
+    HoldInputs {
+        reason: hold.reason.clone(),
+        known: pauses_seen(seen, Some(&hold.reason)),
+        only: hold.only.clone(),
+    }
+}
+
+/// Every pause `seen` shows on an instance, by alias, but those with the reason `except`.
+fn pauses_seen(
+    seen: &super::runtime::RuntimeSeen,
+    except: Option<&SchedulingPauseReason>,
+) -> BTreeMap<String, String> {
+    seen.instances
+        .iter()
+        .filter_map(|instance| {
+            let pause = instance.pause.as_ref()?;
+            (Some(&pause.reason) != except)
+                .then(|| (instance.alias.clone(), pause.reason.as_str().to_owned()))
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn hold_start(
     host: &dyn Host,
     paths: &Paths,
     loaded: &Loaded,
@@ -1262,6 +1379,7 @@ fn hold_start(
     hold: &HoldInputs,
     with_memory: bool,
     acks: &[String],
+    face: super::Face,
 ) -> Result<Result<HoldStart, Answer>, Outcome> {
     let runtime = host.runtime();
     let seen = match runtime.status(&loaded.state_root) {
@@ -1281,7 +1399,15 @@ fn hold_start(
         .config(&loaded.state_root)
         .map_err(|cause| hold::stop_failed(operation, cause))?;
     let plan_seen = runtime.plan(&loaded.state_root);
-    let held = hold::held_instances(&seen, &hold.reason);
+    let hold = if face.rescue() {
+        known_from(&seen, hold)
+    } else {
+        hold.clone()
+    };
+    let mut held = hold::held_instances(&seen, &hold.reason);
+    if let Some(only) = &hold.only {
+        held.retain(|alias| only.contains(alias));
+    }
     let now = host.now_unix_ms();
     let mut rows = vec![
         guards::foreign_pauses(&seen, Some(&hold.reason), &hold.known),
@@ -1293,7 +1419,7 @@ fn hold_start(
         // S2 M2).
         rows.push(guards::memory_before_stop(host, paths, &loaded.settings));
     }
-    if let Err(refusal) = guards::refuse(operation, &rows, acks) {
+    if let Err(refusal) = guards::judge(face, operation, &rows, acks) {
         return Ok(Err(
             Answer::new(refusal).with("guards", guards::values(&rows))?
         ));
@@ -1305,6 +1431,7 @@ fn hold_start(
         held,
         rows,
         deferred,
+        hold,
     }))
 }
 
@@ -1313,6 +1440,7 @@ fn hold_start(
 /// acknowledgments, the configuration file's SHA-256 (what `config` is judged against) and the
 /// deferred record journalled. A running image that would change and may not be renamed refuses
 /// before anything else.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn open_composite<'h>(
     host: &'h dyn Host,
     paths: &Paths,
@@ -1321,6 +1449,7 @@ pub(crate) fn open_composite<'h>(
     hold: &HoldInputs,
     start: bool,
     acks: &[String],
+    face: super::Face,
 ) -> Result<Result<Operation<'h>, Answer>, Outcome> {
     let operation = planned.inputs.operation;
     if let Some(image) = planned.running.blocked.first() {
@@ -1329,11 +1458,14 @@ pub(crate) fn open_composite<'h>(
             .pid(image.pid);
         return Ok(Err(planned.answer(refusal)?));
     }
-    let begun = match hold_start(host, paths, loaded, operation, hold, start, acks)? {
+    let begun = match hold_start(host, paths, loaded, operation, hold, start, acks, face)? {
         Ok(begun) => begun,
         Err(answer) => return Ok(Err(answer)),
     };
-    let mut acknowledged = if planned.inputs.accept_ledger_one_way {
+    let hold = &begun.hold;
+    // Workflow #434 LAB-3: the rescue module takes no acknowledgment (§5); a one-way edge it
+    // passed is journalled `one_way`.
+    let mut acknowledged = if planned.inputs.accept_ledger_one_way && !face.rescue() {
         vec!["accept_ledger_one_way".to_owned()]
     } else {
         Vec::new()
@@ -1344,6 +1476,8 @@ pub(crate) fn open_composite<'h>(
             PlanKind::Update => OperationKind::Update,
             PlanKind::Rollback => OperationKind::Rollback,
         },
+        initiator: face.initiator(),
+        one_way: face.rescue() && planned.one_way(),
         inputs: json!({
             "commit": planned.target.commit,
             "accept_ledger_one_way": planned.inputs.accept_ledger_one_way,
@@ -1375,8 +1509,12 @@ pub(crate) fn open_composite<'h>(
 }
 
 /// `install stop --root <root> --hold <reason> [--known-pause ALIAS=REASON]... [--ack-guard
-/// <id>]...`.
-pub(crate) fn stop_command(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
+/// <id>]...`. Workflow #434 LAB-3: the rescue module's `down` runs it with its face.
+pub(crate) fn stop_command(
+    words: &[&str],
+    host: &dyn Host,
+    face: super::Face,
+) -> Result<Answer, Outcome> {
     const STOP: InstallLocation = InstallLocation::Stop;
     let flags = Flags::parse_lists(
         words,
@@ -1397,12 +1535,15 @@ pub(crate) fn stop_command(words: &[&str], host: &dyn Host) -> Result<Answer, Ou
     let acks = guards::parse_acks(&flags.list("--ack-guard"))?;
     journal::refuse_unfinished(STOP, &paths)?;
     let loaded = plan::load(&paths, STOP)?;
-    let begun = match hold_start(host, &paths, &loaded, STOP, &hold, false, &acks)? {
+    let begun = match hold_start(host, &paths, &loaded, STOP, &hold, false, &acks, face)? {
         Ok(begun) => begun,
         Err(answer) => return Ok(answer),
     };
+    let hold = begun.hold.clone();
     let opening = Opening {
         kind: OperationKind::Stop,
+        initiator: face.initiator(),
+        one_way: false,
         inputs: json!({
             "hold": hold.reason,
             "known_pauses": hold.known,
@@ -1493,8 +1634,13 @@ fn last_stop(host: &dyn Host, paths: &Paths) -> Option<(String, journal::S0, Opt
     None
 }
 
-/// `install start --root <root> [--ack-guard <id>]...`.
-pub(crate) fn start_command(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
+/// `install start --root <root> [--ack-guard <id>]...`. Workflow #434 LAB-3: the rescue module's
+/// `up` runs it with its face.
+pub(crate) fn start_command(
+    words: &[&str],
+    host: &dyn Host,
+    face: super::Face,
+) -> Result<Answer, Outcome> {
     const START: InstallLocation = InstallLocation::Start;
     let flags = Flags::parse_lists(words, &["--root"], &["--ack-guard"], &[])?;
     let paths = super::resolve_root(&flags)?;
@@ -1525,12 +1671,14 @@ pub(crate) fn start_command(words: &[&str], host: &dyn Host) -> Result<Answer, O
             .joined(CauseRelation::CausedBy, checked.received));
     }
     let rows = vec![guards::adb(host, &paths, &loaded.config, &loaded.settings)];
-    if let Err(refusal) = guards::refuse(START, &rows, &acks) {
+    if let Err(refusal) = guards::judge(face, START, &rows, &acks) {
         return Answer::new(refusal).with("guards", guards::values(&rows));
     }
     let stopped = last_stop(host, &paths);
     let opening = Opening {
         kind: OperationKind::Start,
+        initiator: face.initiator(),
+        one_way: false,
         inputs: json!({
             "commit": live.commit,
             "s0_from": stopped.as_ref().map(|(id, _, _)| id),
@@ -1567,8 +1715,13 @@ pub(crate) fn start_command(words: &[&str], host: &dyn Host) -> Result<Answer, O
     update::run(operation, &loaded)
 }
 
-/// `install release-hold --root <root> --reason <reason>`.
-pub(crate) fn release_hold_command(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
+/// `install release-hold --root <root> --reason <reason>`. Workflow #434 LAB-3: the rescue
+/// module's `release-hold` runs it with its face.
+pub(crate) fn release_hold_command(
+    words: &[&str],
+    host: &dyn Host,
+    face: super::Face,
+) -> Result<Answer, Outcome> {
     const RELEASE: InstallLocation = InstallLocation::ReleaseHold;
     let flags = Flags::parse(words, &["--root", "--reason"], &[])?;
     let paths = super::resolve_root(&flags)?;
@@ -1590,6 +1743,8 @@ pub(crate) fn release_hold_command(words: &[&str], host: &dyn Host) -> Result<An
     }
     let opening = Opening {
         kind: OperationKind::ReleaseHold,
+        initiator: face.initiator(),
+        one_way: false,
         inputs: json!({"hold": reason}),
         plan_id: None,
         plan: None,
@@ -1612,8 +1767,14 @@ pub(crate) fn release_hold_command(words: &[&str], host: &dyn Host) -> Result<An
 
 /// `install guards --root <root> --for stop|start [--hold <reason>] [--known-pause
 /// ALIAS=REASON]...`: the guards the command would evaluate now; nothing changes. A hot
-/// placement's guards come with INST-4. `count` is how many guards would refuse.
-pub(crate) fn guards_command(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
+/// placement's guards come with INST-4. `count` is how many guards would refuse. Workflow #434
+/// LAB-3: in the rescue module's `guards` every pause found on an instance is known, and `count`
+/// is how many rows the operation would note (none refuses).
+pub(crate) fn guards_command(
+    words: &[&str],
+    host: &dyn Host,
+    face: super::Face,
+) -> Result<Answer, Outcome> {
     const GUARDS: InstallLocation = InstallLocation::GuardsReport;
     let flags = Flags::parse_lists(
         words,
@@ -1644,6 +1805,11 @@ pub(crate) fn guards_command(words: &[&str], host: &dyn Host) -> Result<Answer, 
                             .collect(),
                     };
                     let plan = runtime.plan(&loaded.state_root);
+                    let known = if face.rescue() {
+                        pauses_seen(&seen, hold.as_ref().map(|hold| &hold.reason))
+                    } else {
+                        known
+                    };
                     rows.push(guards::foreign_pauses(
                         &seen,
                         hold.as_ref().map(|hold| &hold.reason),

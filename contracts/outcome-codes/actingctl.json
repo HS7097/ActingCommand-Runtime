@@ -3039,12 +3039,13 @@
         "game": "optional",
         "package_id": "optional",
         "config_key": "optional",
-        "path": "optional"
+        "path": "optional",
+        "install_guards": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "An actingctl install command did its work, but install_caveat names something left unchecked, pending or on the previous build; operation names the command. As a note link under install_command_done it qualifies a success: mcp_clients_on_previous_build (count) after an update or rollback, pack_declaration_unknown (game) in a plan, restart_required after a configuration commit while the Runtime runs, post_check_mismatch (count) after a start, config_overridden_by_instruction (config_key), pack_restart_needed (package_id), pack_full_check_skipped (path), open_time_from_other_build (commit_sha, path) when the rollback gate judged another build's ledger open, check_config_without_install_root (commit_sha, path) when the target build's check-config ran without --install-root. As the top it is the command's own result and carries install_command_done's values: release verify without a release-facts file (release_unconfirmed, commit_sha). Exit 0.",
+      "description": "An actingctl install command did its work, but install_caveat names something left unchecked, pending or on the previous build; operation names the command. As a note link under install_command_done it qualifies a success: mcp_clients_on_previous_build (count) after an update or rollback, pack_declaration_unknown (game) in a plan, restart_required after a configuration commit while the Runtime runs, post_check_mismatch (count) after a start, config_overridden_by_instruction (config_key), pack_restart_needed (package_id), pack_full_check_skipped (path), open_time_from_other_build (commit_sha, path) when the rollback gate judged another build's ledger open, check_config_without_install_root (commit_sha, path) when the target build's check-config ran without --install-root, and (Workflow #434 LAB-3, since 0.12.48) guard_failed (install_guards) when the Lab's rescue module went on past guards that failed or were not evaluated, which actingctl install refuses. As the top it is the command's own result and carries install_command_done's values: release verify without a release-facts file (release_unconfirmed, commit_sha). Exit 0.",
       "common_causes": "MCP servers running during an update; an adopted root whose packs declare no interfaces; a release folder checked without its facts; a configuration committed while the Runtime runs; a post-check after a start that did not match.",
       "handling": "Act on install_caveat when it matters: reconnect the MCP clients, check the release against its published facts, restart the Runtime when the person chooses, or read the post-check. The command itself needs nothing more."
     },
@@ -3436,6 +3437,54 @@
       "status": "active",
       "since": "0.12.35",
       "description": "The operation of the command actingctl install restart (Workflow #429 R-15b frozen, R-15d builds it; contracts/install-cli.md)."
+    },
+    "install_deploy": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.48",
+      "description": "The operation of the Lab's rescue module's deploy: stage, plan, stop with hold, apply, start, alive, release (Workflow #434 LAB-3; contracts/lab-two-entries.md section 7)."
+    },
+    "install_config_replace": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.48",
+      "description": "The operation of the Lab's rescue module's config replace, and the kind config_replace's steps (Workflow #434 LAB-3; contracts/lab-two-entries.md section 7)."
+    },
+    "install_alive": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.48",
+      "description": "The operation of the Lab's rescue module's alive with --wait: the watchdog's status read until the Runtime is alive (Workflow #434 LAB-3)."
+    },
+    "install_unlock": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.48",
+      "description": "The operation of the Lab's rescue module's unlock: actingd unlock-owner with the initiator as its actor (Workflow #434 LAB-3; contracts/lab-two-entries.md section 5)."
+    },
+    "install_check_config": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.48",
+      "description": "The operation of the Lab's rescue module's check-config, and of the check-config step of config replace and config restore (Workflow #434 LAB-3)."
+    },
+    "install_ledger_verify": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.48",
+      "description": "The operation of the Lab's rescue module's ledger verify: actingd ledger-maintenance verify of the root's configuration (Workflow #434 LAB-3)."
     }
   }
 }

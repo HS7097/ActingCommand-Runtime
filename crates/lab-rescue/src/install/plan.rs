@@ -212,7 +212,8 @@ impl Planned {
     }
 
     /// Whether the target's ledger maximum exceeds the live build's (a one-way ledger edge).
-    fn one_way(&self) -> bool {
+    /// Workflow #434 LAB-3: what the rescue module journals as `one_way`.
+    pub(crate) fn one_way(&self) -> bool {
         match (range(&self.live, LEDGER), range(&self.target, LEDGER)) {
             (Some(live), Some(target)) => target[1] > live[1],
             _ => false,

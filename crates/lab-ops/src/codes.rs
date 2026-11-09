@@ -476,6 +476,16 @@ actingcommand_contract::outcome_locations! {
         ConvertApply => "install_convert_apply",
         Clean => "install_clean",
         Restart => "install_restart",
+        // Workflow #434 LAB-3 (since 0.12.48; contracts/lab-two-entries.md §7): the operations of
+        // the Lab's rescue module that no `actingctl install` command has: the composites `deploy`
+        // and `config replace`, `alive`, and `unlock`, `check-config` and `ledger verify`, which run
+        // actingd's commands.
+        Deploy => "install_deploy",
+        ConfigReplace => "install_config_replace",
+        Alive => "install_alive",
+        Unlock => "install_unlock",
+        CheckConfig => "install_check_config",
+        LedgerVerify => "install_ledger_verify",
     }
 }
 
@@ -615,6 +625,10 @@ actingcommand_contract::outcome_vocabulary! {
         CleanupDeferred => "cleanup_deferred",
         PlayerHoldOfflineReadFailed => "player_hold_offline_read_failed",
         McpEntryGenerationStale => "mcp_entry_generation_stale",
+        // Workflow #434 LAB-3 (since 0.12.48; contracts/lab-two-entries.md §6): in the Lab's
+        // rescue module a guard that fails or is not evaluated is noted, never refused; the guards
+        // as `install_guards`.
+        GuardFailed => "guard_failed",
     }
 }
 

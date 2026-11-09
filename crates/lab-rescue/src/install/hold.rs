@@ -46,6 +46,10 @@ const BUSY_POLL_MS: u64 = 500;
 pub(crate) struct HoldInputs {
     pub(crate) reason: SchedulingPauseReason,
     pub(crate) known: BTreeMap<String, String>,
+    /// Workflow #434 LAB-3: the instances the hold may take, when it takes only some (the rescue
+    /// module's `place` holds the instances bound to the bundle's game); `None` for every
+    /// instance, as `install stop` and the composite update hold.
+    pub(crate) only: Option<Vec<String>>,
 }
 
 /// `--hold <reason>` and every `--known-pause ALIAS=REASON`: the reason and each named pause of
@@ -76,7 +80,11 @@ pub(crate) fn parse_hold(flags: &Flags<'_>) -> Result<Option<HoldInputs>, Outcom
             return Err(super::unusable("--known-pause"));
         }
     }
-    Ok(Some(HoldInputs { reason, known }))
+    Ok(Some(HoldInputs {
+        reason,
+        known,
+        only: None,
+    }))
 }
 
 /// The instances the hold takes: those S0 shows unpaused, and those already paused with the

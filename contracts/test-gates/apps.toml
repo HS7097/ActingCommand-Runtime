@@ -732,7 +732,7 @@ tests = [
     "actingcommand-watchdog::lib::gate_wd1::wd1_active_json_appearing_before_the_start_is_a_selection_change",
     "actingcommand-watchdog::lib::gate_wd1::wd1_install_on_a_single_location_root_checks_the_launcher_not_the_layout",
     "actingcommand-watchdog::lib::gate_wd1::wd1_a_root_with_neither_marker_stays_layout_unknown_and_ab_wins_over_single",
-    "actingcommand-actingctl::bin:actingctl::gate_wd1_start::wd1_start_without_config_still_needs_an_ab_selection",
+    "actingcommand-lab-rescue::lib::gate_wd1_start::wd1_start_without_config_still_needs_an_ab_selection",
     "actingcommand-watchdog::lib::gate_wd1::wd1_a_deploy_holding_the_writer_lock_of_a_single_location_root_starts_nothing",
 ]
 incident = ["#390 WD-1"]
@@ -1023,10 +1023,10 @@ incident = ["#422 OV-24K"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::s2if_t1_an_instruction_kept_over_a_changed_default_passes_the_check",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::s2if_t2_a_dropped_instruction_fails_the_check",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::s2if_t3_a_superseded_instruction_fails_the_check",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::s2if_t4_the_rollback_start_with_the_default_changed_back_passes_the_check",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::s2if_t1_an_instruction_kept_over_a_changed_default_passes_the_check",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::s2if_t2_a_dropped_instruction_fails_the_check",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::s2if_t3_a_superseded_instruction_fails_the_check",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::s2if_t4_the_rollback_start_with_the_default_changed_back_passes_the_check",
 ]
 incident = ["#421 S2-IF"]
 
@@ -1129,10 +1129,10 @@ incident = ["STORE-FG-2"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7_a_failed_gate_keeps_the_new_build_and_the_hold",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_5_a_failed_check_rolls_back_to_the_previous_build_and_releases_the_hold",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_6_a_new_start_that_exits_rolls_back_the_same_way",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_f_4_resume_finishes_a_rollback_interrupted_after_each_of_its_steps",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst2_d_7_a_failed_gate_keeps_the_new_build_and_the_hold",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst2_d_5_a_failed_check_rolls_back_to_the_previous_build_and_releases_the_hold",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst2_d_6_a_new_start_that_exits_rolls_back_the_same_way",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst2_f_4_resume_finishes_a_rollback_interrupted_after_each_of_its_steps",
 ]
 incident = ["#421 P12"]
 
@@ -1140,8 +1140,8 @@ incident = ["#421 P12"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7b_a_running_image_met_before_the_close_fails_the_gate_and_closes_nothing",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7c_a_failed_gate_after_a_new_start_that_exited_names_install_start",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst2_d_7b_a_running_image_met_before_the_close_fails_the_gate_and_closes_nothing",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst2_d_7c_a_failed_gate_after_a_new_start_that_exited_names_install_start",
 ]
 incident = ["#421 P12"]
 
@@ -1149,14 +1149,14 @@ incident = ["#421 P12"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_1_a_finished_composite_across_a_one_way_ledger_refuses_and_changes_nothing",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_2_without_a_ledger_change_a_finished_composite_is_undone",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_3_an_unfinished_composite_is_judged_once_its_start_may_have_spawned",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_4_after_a_failed_post_check_the_undo_meets_the_edge_the_rollback_met",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_5_a_failed_start_counts_only_when_a_process_spawned",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst1_update::inst_undo_edge_6_an_owner_that_started_inside_the_operation_counts",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_7_after_a_rollback_the_reader_refused_the_undo_meets_the_same_part",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_8_a_composites_next_names_undo_only_when_the_edges_would_pass",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_1_a_finished_composite_across_a_one_way_ledger_refuses_and_changes_nothing",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_2_without_a_ledger_change_a_finished_composite_is_undone",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_3_an_unfinished_composite_is_judged_once_its_start_may_have_spawned",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_4_after_a_failed_post_check_the_undo_meets_the_edge_the_rollback_met",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_5_a_failed_start_counts_only_when_a_process_spawned",
+    "actingcommand-lab-rescue::lib::install::gate_inst1_update::inst_undo_edge_6_an_owner_that_started_inside_the_operation_counts",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_7_after_a_rollback_the_reader_refused_the_undo_meets_the_same_part",
+    "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::inst_undo_edge_8_a_composites_next_names_undo_only_when_the_edges_would_pass",
 ]
 incident = ["INST-UNDO-EDGE"]
 
@@ -1164,9 +1164,9 @@ incident = ["INST-UNDO-EDGE"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::install::gate_r15a_ui_edges::r15a_t1_each_ui_edge_passes_and_fails_by_its_speaks_table",
-    "actingcommand-actingctl::bin:actingctl::install::gate_r15a_ui_edges::r15a_t2_a_failed_ui_edge_names_every_side_with_its_source_and_range",
-    "actingcommand-actingctl::bin:actingctl::install::gate_r15a_ui_edges::r15a_t3_a_ui_declaration_without_runtime_outcomes_counts_as_zero_zero",
+    "actingcommand-lab-rescue::lib::install::gate_r15a_ui_edges::r15a_t1_each_ui_edge_passes_and_fails_by_its_speaks_table",
+    "actingcommand-lab-rescue::lib::install::gate_r15a_ui_edges::r15a_t2_a_failed_ui_edge_names_every_side_with_its_source_and_range",
+    "actingcommand-lab-rescue::lib::install::gate_r15a_ui_edges::r15a_t3_a_ui_declaration_without_runtime_outcomes_counts_as_zero_zero",
 ]
 incident = ["#429 R-15a"]
 
@@ -1174,8 +1174,8 @@ incident = ["#429 R-15a"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_three_to_four",
-    "actingcommand-actingctl::bin:actingctl::install::gate_429_r0b_pairing::r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused",
+    "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_three_to_four",
+    "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused",
 ]
 incident = ["#429 R-0b"]
 
@@ -1183,11 +1183,11 @@ incident = ["#429 R-0b"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b_a_ui_release_verifies_and_stages_into_ui_builds",
-    "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b_each_failure_of_a_ui_release_is_listed",
-    "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b_an_unrecognised_zip_refuses_zip_set_by_its_name",
-    "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b_the_runtime_and_tools_stage_answers_and_keeps_its_build_as_before",
-    "actingcommand-actingctl::bin:actingctl::install::gate_r15b_registry::r15b_every_code_and_word_of_the_contracts_is_registered",
+    "actingcommand-lab-rescue::lib::install::gate_r15b_release::r15b_a_ui_release_verifies_and_stages_into_ui_builds",
+    "actingcommand-lab-rescue::lib::install::gate_r15b_release::r15b_each_failure_of_a_ui_release_is_listed",
+    "actingcommand-lab-rescue::lib::install::gate_r15b_release::r15b_an_unrecognised_zip_refuses_zip_set_by_its_name",
+    "actingcommand-lab-rescue::lib::install::gate_r15b_release::r15b_the_runtime_and_tools_stage_answers_and_keeps_its_build_as_before",
+    "actingcommand-lab-rescue::lib::install::gate_r15b_registry::r15b_every_code_and_word_of_the_contracts_is_registered",
 ]
 incident = ["#429 R-15b"]
 
@@ -1196,9 +1196,9 @@ incident = ["#429 R-15b"]
 coverage = "Y"
 tests = [
     "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e24_the_status_records_the_entry_process_creation_time",
-    "actingcommand-actingctl::bin:actingctl::install::gate_411_p49::p49_l4_the_list_tells_a_reused_pid_from_the_entry_by_its_creation_time",
-    "actingcommand-actingctl::bin:actingctl::install::gate_411_p49::p49_m1_a_pid_the_probe_cannot_judge_marks_its_row_and_the_list_still_answers",
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst1_update::p49_l9_the_notice_asks_no_reconnect_for_an_mcp_entrys_child",
+    "actingcommand-lab-rescue::lib::install::gate_411_p49::p49_l4_the_list_tells_a_reused_pid_from_the_entry_by_its_creation_time",
+    "actingcommand-lab-rescue::lib::install::gate_411_p49::p49_m1_a_pid_the_probe_cannot_judge_marks_its_row_and_the_list_still_answers",
+    "actingcommand-lab-rescue::lib::install::gate_inst1_update::p49_l9_the_notice_asks_no_reconnect_for_an_mcp_entrys_child",
     "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e25_a_newer_install_during_a_deferred_switch_is_planned_again",
 ]
 incident = ["#411 P49"]
@@ -1289,3 +1289,14 @@ tests = [
     "actingcommand-actinglab::consumer_goldens::consumer_command_lines_print_what_main_printed",
 ]
 incident = ["#434 LAB-2"]
+
+# Workflow #434 LAB-3 (0.12.48; register §1.287, "Slice LAB-3"; brief rd-1108/arch-013/brief-lab3.md; contracts/lab-two-entries.md §4.3, §5, §6 and §7): on fake roots and seams, the Lab's rescue module's op status, up and rollback go through without runtime-info.json (no Runtime ran on the state root), a deploy without a Runtime runs stage, plan and the update's files only, and the rollback goes back to the build the live one replaced; every journal deploy, rollback and config replace write carries the initiator with no acknowledgment, the replaced configuration kept, and --accept-ledger-one-way, --ui-confirmed, --ack-guard, --known-pause and --root are actingctl_usage_invalid (unknown); with a Runtime running, deploy <tag> --dir <release> answers its steps stage, plan, stop, apply, start, alive and release in this order and asks the Runtime the hold, the close, the new build's start and the release of only its own hold in this order, another party's pause kept; and actingctl install answers the coordinator's deploy kit's command lines (release stage with --facts, --expect-tag and --expect-commit, update plan --preview, update apply --plan --stop --hold --known-pause --start with and without --detach, release-hold, status) as before LAB-3, its journals without initiator and one_way, an unnamed foreign pause still refusing its stop and a missing --plan still its own usage error
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_434_lab3::rescue_without_actingd",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab3::irreversible_journal_initiator",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab3::deploy_steps_in_order",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab3::actingctl_install_answers_the_deploy_kit_as_before",
+]
+incident = ["#434 LAB-3"]

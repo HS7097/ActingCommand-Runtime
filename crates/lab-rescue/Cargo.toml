@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+[package]
+name = "actingcommand-lab-rescue"
+# Workflow #434 LAB-3: the Lab's rescue and installation module (contracts/lab-two-entries.md §5
+# to §7): `actingctl install`, `start`, `restart` and `agent-channel` moved out of actingctl
+# unchanged, which actingctl keeps answering with until LAB-7, and the rescue module's operations
+# on them, which actinglab serves. `crates/watchdog` reads `crates/lab-ops`, so neither can link
+# this module: it is a crate of its own above both.
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# Workflow #432 AGT-T1: `agent-channel` and the rescue module's `agent …`, whose grammar and client
+# words are that crate's.
+actingcommand-agent-forward = { workspace = true }
+actingcommand-contract = { workspace = true }
+# actingctl's outcome codes, result line, child runner, process probe, shutdown wait, operation
+# table, initiator and default location (Workflow #434 LAB-1, LAB-1b, LAB-2).
+actingcommand-lab-ops = { workspace = true }
+actingcommand-runtime-client = { workspace = true }
+# Workflow #421 INST-1: the `install` section and the key table of the root's configuration.
+actingcommand-runtime-config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+# Workflow #434 LAB-4: the watchdog's manual start, its observation, its run lock, `current.json`
+# and, for the rescue module, its status, `install` and `uninstall`.
+actingcommand-watchdog = { workspace = true }
+# Workflow #421 INST-1: `release verify` and `stage` extract the release zips; LAB-3's `place`
+# reads a bundle zip.
+zip = { workspace = true }
+
+[dev-dependencies]
+# #411 P49: `mcp-entry list`'s gate fakes the process probe.
+actingcommand-host-metrics = { workspace = true }
+# Workflow #434 LAB-4: the install gates read the decision of one task tick (`tick_for_test`).
+actingcommand-watchdog = { workspace = true, features = ["test-hooks"] }
+tempfile = "3"

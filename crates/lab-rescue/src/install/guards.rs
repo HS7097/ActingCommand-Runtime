@@ -21,7 +21,7 @@ use super::files;
 use super::host::{Host, NotRan};
 use super::runtime::{PlanSeen, RuntimeSeen};
 use super::state::Paths;
-use crate::codes::{InstallGuard, InstallLocation, InstallRefusal};
+use crate::codes::{InstallCaveat, InstallGuard, InstallLocation, InstallRefusal};
 use actingcommand_contract::SchedulingPauseReason;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_runtime_config::install::InstallSettings;
@@ -350,6 +350,65 @@ pub(crate) fn refuse(
         return Ok(());
     }
     Err(super::refusal(operation, InstallRefusal::GuardFailed).install_guards(failed))
+}
+
+/// Workflow #434 LAB-3 (contracts/lab-two-entries.md §6): the guards as `face` judges them.
+/// `actingctl install` refuses as [`refuse`] does. The rescue module never refuses: every row
+/// that does not pass (an informational one aside) is noted, `Ok(Some)` with the caveat
+/// `guard_failed` ([`noted`]), and the operation goes on; `Ok(None)` when every row passes.
+pub(crate) fn judge(
+    face: super::Face,
+    operation: InstallLocation,
+    rows: &[GuardRow],
+    acked: &[String],
+) -> Result<Option<Outcome>, Outcome> {
+    if !face.rescue() {
+        return refuse(operation, rows, acked).map(|()| None);
+    }
+    Ok(noted(
+        operation,
+        rows.iter().filter(|row| row.refuses()).map(|row| row.guard),
+    ))
+}
+
+/// Workflow #434 LAB-3: `install_caveat_noted` of `operation` with `install_caveat`
+/// `guard_failed` and the guards that failed or were not evaluated as `install_guards`; `None`
+/// when there is none.
+pub(crate) fn noted(
+    operation: InstallLocation,
+    failed: impl IntoIterator<Item = InstallGuard>,
+) -> Option<Outcome> {
+    let failed = failed.into_iter().collect::<Vec<_>>();
+    (!failed.is_empty())
+        .then(|| super::caveat(operation, InstallCaveat::GuardFailed).install_guards(failed))
+}
+
+/// Workflow #434 LAB-3: the guards of journalled rows (`values`) that refuse in `actingctl
+/// install` (did not pass and are not informational), in their order, each once: what the rescue
+/// module's answer notes from its journal.
+pub(crate) fn failed_in(rows: &[Value]) -> Vec<InstallGuard> {
+    let mut failed = Vec::new();
+    for row in rows {
+        let informational = row
+            .get("informational")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let passed = row.get("result").and_then(Value::as_str) == Some("pass");
+        let guard = row.get("id").and_then(Value::as_str).and_then(|id| {
+            InstallGuard::ALL
+                .iter()
+                .copied()
+                .find(|guard| guard.as_str() == id)
+        });
+        if let Some(guard) = guard
+            && !informational
+            && !passed
+            && !failed.contains(&guard)
+        {
+            failed.push(guard);
+        }
+    }
+    failed
 }
 
 /// The rows as the journal and the result list them.

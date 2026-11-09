@@ -29,9 +29,23 @@ use serde_json::{Map, Value};
 use std::time::Duration;
 
 /// The slices whose operations this program serves: the core rows LAB-1 and LAB-1b moved into
-/// `lab-ops` and the rows of LAB-2. The rescue module's rows come with LAB-3 to LAB-5, a reserved
-/// row with the slice that opens it.
+/// `lab-ops` and the rows of LAB-2. The rescue module's rows are those `crates/lab-rescue` serves
+/// (Workflow #434 LAB-3: [`rescue_served`]); a reserved row comes with the slice that opens it.
 pub(crate) const BUILT_SLICES: [&str; 3] = ["LAB-1", "LAB-1b", "LAB-2"];
+
+/// Workflow #434 LAB-3: whether the rescue module serves the rescue row `name` (on Windows, where
+/// it runs); its rows of a source command not built yet, and LAB-5's, are not offered.
+pub(crate) fn rescue_served(name: &str) -> bool {
+    #[cfg(windows)]
+    {
+        actingcommand_lab_rescue::rescue::serves(name)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = name;
+        false
+    }
+}
 
 /// The member that holds the further words of a row with `params_more`.
 pub(crate) const MORE_WORDS: &str = "words";
@@ -44,11 +58,16 @@ pub(crate) struct Call {
 }
 
 /// Whether this program offers `operation`: a planned row of the core, debugging or authoring
-/// module whose slice is built.
+/// module whose slice is built, or (Workflow #434 LAB-3) a planned rescue row the rescue module
+/// serves.
 pub(crate) fn offered(operation: &Operation) -> bool {
-    operation.status == OperationStatus::Planned
-        && operation.module != OperationModule::Rescue
-        && BUILT_SLICES.contains(&operation.slice.as_str())
+    if operation.status != OperationStatus::Planned {
+        return false;
+    }
+    if operation.module == OperationModule::Rescue {
+        return rescue_served(&operation.name);
+    }
+    BUILT_SLICES.contains(&operation.slice.as_str())
 }
 
 /// The offered operation whose name begins the command line `words`, the longest; `None` when no

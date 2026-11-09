@@ -21,15 +21,13 @@ default = ["mcp"]
 mcp = []
 
 [dependencies]
-# Workflow #432 AGT-T1: `agent-channel`, whose grammar and client words are that crate's.
-actingcommand-agent-forward = { workspace = true }
 actingcommand-contract = { workspace = true }
-# #411 P49 (MCP-ENTRY review L4): `mcp-entry list` compares a status file's pid and recorded
-# process creation time with the operating system's (the probe the owner release uses).
-actingcommand-host-metrics = { workspace = true }
 # Workflow #434 LAB-1: actingctl's read and write modules and the helpers they share (the result
 # line, the codes, the instance selector, the material export, the child runner) live there.
 actingcommand-lab-ops = { workspace = true }
+# Workflow #434 LAB-3: `install` (with `mcp-entry`), `start`, `restart` and `agent-channel` live
+# in the Lab's rescue module, which actingctl answers them from until LAB-7.
+actingcommand-lab-rescue = { workspace = true }
 # #422 LN-7c Q: `evidence confirm-read` counts the evidence frames a confirmation covers with the
 # frame cleaner's statements, read-only (`evidence_covers`).
 actingcommand-ledger = { workspace = true }
@@ -37,23 +35,18 @@ actingcommand-ledger = { workspace = true }
 # standard packs' `schedule.json` through the composer actingd's scheduler workbench uses.
 actingcommand-policy = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
-# #411 A66: the watchdog and `actingctl start` read `watchdog.start_window_ms` from actingd's
-# configuration through the key table and the defaults file. Workflow #421 INST-1: `actingctl
-# install` reads the `install` section and the key table from the same file.
+# The key table of actingd's configuration, which the MCP gates read.
 actingcommand-runtime-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-# Workflow #434 LAB-4: `watchdog …`, `start`, `restart` and `install` run the watchdog from its
-# crate, and `install` writes `current.json` through its types.
+# Workflow #434 LAB-4: `watchdog …` runs the watchdog from its crate.
 actingcommand-watchdog = { workspace = true }
-# Workflow #421 INST-1: `install release verify` and `stage` extract the release zips.
+# The evidence and package archives the integration gates write.
 zip = { workspace = true }
 
 [dev-dependencies]
 actingcommand-artifact-store = { workspace = true }
-# Workflow #434 LAB-4: the install gates read the decision of one task tick (`tick_for_test`).
-actingcommand-watchdog = { workspace = true, features = ["test-hooks"] }
 # Workflow #434 LAB-1: the #422 QR-2b gate builds a diagnosis whose report never started.
 actingcommand-lab-ops = { workspace = true, features = ["test-hooks"] }
 actingcommand-device = { workspace = true }

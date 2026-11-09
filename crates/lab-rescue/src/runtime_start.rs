@@ -29,16 +29,19 @@
 //! `owner_epoch`, `log`), on failure `{outcome}` with the failure. A refusal the watchdog
 //! decides as info (the installer holds its writer lock, a tick holds the run lock) is
 //! `start_runtime_refused` caused by that decision, so it exits 1.
+//!
+//! Workflow #434 LAB-3: moved from `apps/actingctl` unchanged; [`dispatch`] builds the line that
+//! actingctl prints, and the Lab's rescue module's `up` (on an A/B root) and `restart` run the
+//! same start and restart for the root they run from ([`run_located`]).
 
-use crate::ActingctlError;
-use crate::cli_line;
+use crate::cli_line::{self, Exit};
 use crate::codes::{ActingctlCode, ArgumentProblem};
-use crate::shutdown_wait;
 use crate::watchdog::{self, decide, io_failure, observe, start};
 use actingcommand_contract::outcome::{Category, CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
     EventActor, EventSource, InstancePauseState, OwnerEpoch, RuntimeReceipt, SchedulingPauseState,
 };
+use actingcommand_lab_ops::shutdown_wait;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde::Serialize;
 use serde_json::Value;
@@ -46,7 +49,6 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -63,8 +65,8 @@ const IDLE_POLL: Duration = Duration::from_secs(10);
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 /// Runs `start` or `restart` when the first argument names one; `None` leaves every other
-/// command to the CLI, unchanged.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+/// command to the CLI, unchanged. The caller (actingctl) prints the exit.
+pub fn dispatch(arguments: &[OsString]) -> Option<Exit> {
     let mode = match arguments.first()?.to_str()? {
         "start" => Mode::Start,
         "restart" => Mode::Restart,
@@ -77,25 +79,46 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
         Ok(parsed) => parsed,
         Err(usage) => return Some(cli_line::failure(&usage, Some(USAGE))),
     };
-    Some(match run(mode, &parsed) {
+    Some(exit_of(run(mode, &parsed)))
+}
+
+/// Workflow #434 LAB-3: `start` or `restart` of the installation at `root`, with `config` (a
+/// single-location root's configuration file) or without it (an A/B root's selection), as
+/// `actingctl start|restart --root <root> [--config <config>]` runs it: the rescue module's `up`
+/// on an A/B root and its `restart`.
+pub(crate) fn run_located(mode: Mode, root: &Path, config: Option<&Path>) -> Exit {
+    exit_of(run(
+        mode,
+        &Arguments {
+            root: root.to_path_buf(),
+            config: config.map(Path::to_path_buf),
+            state_root: None,
+            ready_timeout: None,
+            wait_idle: Duration::ZERO,
+        },
+    ))
+}
+
+/// The line of a start's or a restart's result.
+fn exit_of(result: Result<(Report, Outcome), Failed>) -> Exit {
+    match result {
         Ok((report, outcome)) => match serde_json::to_value(&report) {
             Ok(value) => cli_line::success(cli_line::members(value, "result"), &outcome),
-            Err(error) => {
-                cli_line::developer_line(
-                    &Outcome::new(ActingctlCode::ActingctlOutputFailed),
-                    Some(&error.to_string()),
-                );
-                ExitCode::FAILURE
-            }
+            // Only the developer line `actingctl_output_failed` with the encoder's text, exit 1.
+            Err(error) => Exit {
+                line: Err(error.to_string()),
+                developer: None,
+                code: 1,
+            },
         },
         // A Runtime refusal topped with an info or warning code still failed (A4 part B L2):
-        // `crate::failed` exits non-zero whatever the top's category.
-        Err(failed) => crate::failed(&failed.outcome, failed.text.as_deref()),
-    })
+        // the line exits non-zero whatever the top's category.
+        Err(failed) => cli_line::refused(&failed.outcome, failed.text.as_deref()),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mode {
+pub(crate) enum Mode {
     Start,
     Restart,
 }
@@ -211,12 +234,6 @@ impl Failed {
 impl From<Outcome> for Failed {
     fn from(outcome: Outcome) -> Self {
         Self::new(outcome)
-    }
-}
-
-impl From<ActingctlError> for Failed {
-    fn from(error: ActingctlError) -> Self {
-        Self::new(error.outcome())
     }
 }
 

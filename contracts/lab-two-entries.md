@@ -309,6 +309,15 @@ Alice's answer 4. From LAB-3, in the rescue module:
   another root runs that root's own program.
 - The configuration file's candidate (`install config …`) becomes `config file …`, distinct from
   the run-time settings `config set` and `config clear`.
+- **As built by LAB-3** (0.12.48; register §1.287, "Slice LAB-3"; [install-cli.md](install-cli.md),
+  "The Lab's rescue module"): the module is `crates/lab-rescue`, which actingctl answers
+  `install`, `start`, `restart`, `mcp-entry` and `agent-channel` from, unchanged, until LAB-7;
+  actinglab runs from `<root>\tools\` until LAB-7 moves it, and the default location takes both;
+  a row whose source command is not built yet (`convert`, `clean`, `new`, `prepare`,
+  `config file …`, `instance add` and `remove`, `pack remove` and `restore`) is not offered
+  until the slice that builds the source; until LAB-6 the module's requests to a running Runtime
+  go on the CLI channel, as `actingctl install`'s do, since the Runtime refuses a pause, a resume
+  and a shutdown from a Lab envelope until LAB-6 deletes those origin gates (§2.4).
 
 ## 8 The Lab's modules
 
@@ -539,10 +548,19 @@ After LAB-6 the host emits neither `lab_module_not_installed` nor `lab_module_op
    (section 2.4), where today's CLI and MCP pin `Explicit`. LAB-6 either keeps that or pins these
    two by a request member; the design does not say.
 4. **The memory wait.** Section 6 keeps the start's wait for memory as a wait. If the wait should
-   go too, LAB-3 drops it.
+   go too, LAB-3 drops it. LAB-3 keeps it (its work order): a start of the rescue module waits up
+   to `install.start.memory_wait_ms`, reading memory every 500 ms, then goes on and journals and
+   reports the row (`guard_failed`); dropping it later changes only that wait.
 5. **`install-root`.** The journal's `initiator` and `one_way` are members of the installers'
    private documents; whether they raise `install-root` (the A/B journal v2) is LAB-3's to judge by
-   the bump rule.
+   the bump rule. Settled by LAB-3: no raise. `install-root` 1 covers the A/B root's private files
+   (`install-operation.v2`, the slot documents), which no build writes yet and no build declares
+   (component-interfaces.md: every build reads as `install-root` [0, 0]); the members go into the
+   single-location journal `install-operation.v1`, which that interface does not cover; both are
+   optional members written only by the rescue module, so `actingctl install` writes the journal
+   byte for byte as before; an older installer refusing a journal the new one wrote is the old-
+   version compatibility testing does not keep (Alice, 2026-10-11). The A/B journal v2 takes them
+   when R-15c builds it, inside `install-root` 1.
 6. **Recordings' initiator.** Settled (the coordinator's ruling, 2026-11-09): LAB-2 writes it,
    section 4.3 "Recordings"; the format changes without compatibility.
 7. **actinglab's own `config get` and `config set`** (its user configuration file) collide with

@@ -7719,6 +7719,9 @@
         },
         "mcp_entry_generation_stale": {
           "description": "Design 5.3: the MCP entry g1 follows a conversion once and no later switch; clients move to g2. (R-15b, since 0.12.35)"
+        },
+        "guard_failed": {
+          "description": "In the Lab's rescue module a guard failed or was not evaluated and the operation went on (contracts/lab-two-entries.md section 6: guards report, never refuse); install_guards names the guards, and the answer and the journal keep their rows. actingctl install refuses the same rows with install_refusal guard_failed instead. (Workflow #434 LAB-3, since 0.12.48)"
         }
       }
     },
@@ -8295,6 +8298,12 @@
         },
         "restart": {
           "description": "restart."
+        },
+        "config_replace": {
+          "description": "The Lab's rescue module's config replace and config restore: the configuration file swapped, the replaced one kept. (Workflow #434 LAB-3, since 0.12.48)"
+        },
+        "pack_place": {
+          "description": "The Lab's rescue module's place: one game's bundle placed into the standard-pack root. (Workflow #434 LAB-3, since 0.12.48)"
         }
       }
     },
@@ -8397,6 +8406,9 @@
         },
         "record_cleanup": {
           "description": "Phase 7."
+        },
+        "pack_item": {
+          "description": "One item of a single-location root's placement (the rescue module's place): a pack, a table or a root file placed, or a root file set aside. (Workflow #434 LAB-3, since 0.12.48)"
         }
       }
     },
@@ -11925,6 +11937,7 @@
     "mcp-entry": "apps/mcp-entry",
     "actingcommand-entry": "apps/actingcommand-entry",
     "watchdog": "crates/watchdog",
-    "actingwatch": "apps/actingwatch"
+    "actingwatch": "apps/actingwatch",
+    "lab-rescue": "crates/lab-rescue"
   }
 }
