@@ -97,6 +97,13 @@
             { "$ref": "#/$defs/valuation" },
             { "const": "pending" }
           ]
+        },
+        "redline": {
+          "description": "SS-2h-a: the pool's planned red line below its cap, a fact reference of the pool's scope plus an offset (meant as its capacity fact less a margin) or a constant line (meant for a pool whose capacity is a constant, at most that capacity). Carried as written; SS-2h-b's capped spending order spends a pool that reached its cap down to it. A schedule.json that writes one names pool_redline in requires.",
+          "oneOf": [
+            { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            { "$ref": "./common.schema.json#/$defs/factReference" }
+          ]
         }
       },
       "additionalProperties": false

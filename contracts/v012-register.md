@@ -7961,6 +7961,79 @@ opens its `reserved` row of the table. #410 item 3 (MCP's descriptions written o
 
 **Rollback.** Nothing to roll back: text only.
 
+### 1.288 Slice SS-2h-a (0.12.x): a consumption costs its full weight below the cap, and a pool may carry its planned red line (Alice's ruling 138 of 11-07 20:4x, the capped spending order, Workflow #428 comment 6706493161, and the planned red line of 20:5x, 6706630435; her answer of 11-09 16:4x, relayed by the coordinator: the capped order starts when the reading reaches or exceeds the cap and spends down into the band between the red line and the cap, and below the cap nothing is spent for free; design `rd-1031/design-c424-redline-1109.md` §1 and §4.1 with the coordinator's decisions Q1 A, Q3 and Q7 A; coordinator work order `rd-1109/brief-ss2ha.md` with its correction of 11-09)
+
+[scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Within tolerance",
+the new "Pool redline"), [scheduling/v2/README.md](scheduling/v2/README.md),
+[scheduling/v2/pools.schema.json](scheduling/v2/pools.schema.json),
+[standard-pack-schedule.md](standard-pack-schedule.md) (`requires`; the pool member passes
+through), [actingd-check-config.md](actingd-check-config.md) and
+[runtime-config.md](runtime-config.md) (`config.subsystems`) are the contract. The number 1.288 is
+provisional; #434 LAB-1 is in flight beside it.
+
+**What.** (1) A judged candidate's consumption of a pool costs its full weight, `W·c`, whatever
+the pool's fill and whether it regenerates or not: SS-2b's linear discount `P =
+W·clamp((cap − cur)/(cap − reserve), 0, 1)` is retired (`evaluator/benefit.rs`, `discount`
+removed). A regenerating pool it consumes is still read as before: an unknown or expired reading
+makes `B` unknown (`benefit_unknown`, `reading_unknown`), and a known one wakes the evaluation at
+its next step. (2) SS-2d's rounding bound reads the whole consumption: its consumption term is
+`C/(2000·Q) + m·(2W+1)/(4000·Q)`, the `σ` of the retired discount gone. (3) A V2 pool may carry
+`redline` (`PoolSpec::redline`, `PoolRedline`): CF-5's fact reference `{"type": "fact",
+"fact_key", "offset"}` of the pool's scope, meant as its capacity fact less a margin, or a
+constant line in `0..=2^53−1`, meant for a pool whose capacity is a constant. The compiler refuses
+it in a V1 document (`unknown_field` at the member), a reference by a capacity reference's rules
+at `redline/…`, and a constant above 2^53−1 or above a constant capacity (`limit_exceeded` at the
+member). It is parsed, checked, hashed and carried; nothing reads it at evaluation in this slice.
+(4) The always-on subsystem `pool_redline`; the composer refuses a `schedule.json` whose pool
+writes `redline` while `requires` does not name it (`schedule_invalid` at the first such pool's
+`redline`), and copies the member as written.
+
+**Why.** Ruling 138: at its cap a resource is spent by benefit, and the planned red line below the
+cap keeps some for timed tasks of high benefit; the line is the model's, a person's or an agent's,
+never the program's. The discount made every consumption look cheap as a pool filled, and below
+the cap nothing is spent for free (Alice, 11-09 16:4x). Q1 A: the model's line reaches
+`schedule.json` as this member, bound from `out/thresholds.json`; Q3: an offset relative to the
+read cap, or a constant only for a pool with no readable cap, the Runtime only adding the given
+offset to the cap it reads.
+
+**Deferred.** To SS-2h-b (Alice, 11-09 16:4x): the capped spending order, which begins when a
+pool's reading reaches its cap and spends it down to its red line, and with it the free part
+above the line (the design's `a = min(c, max(0, cur − L))`, which this slice does not build). To
+SS-2h-c: a line given for one instance, before the catalog's.
+
+**Unchanged.** A pool without `redline` serializes and hashes as before; a catalog without a
+valuation decides byte for byte as before (no judged candidate gets past `valuation_missing`), with
+or without a red line written; a pool that does not regenerate costs `W`, unread, as before; the
+reserve gate, the zero tier, the gates and their order, the one-way rule, game neutrality and
+ruling 116's stop. **No configuration key, no new outcome code, no persisted ledger shape, no
+interface revision**: the member is gated by its subsystem through `requires`, as CF-4's, CF-5's
+and SS-5's are, and `component-interfaces.md` has no anchor it touches. The descriptions of
+`policy_benefit_nonpositive`, `benefit_unknown`, the `benefit_gap` token `reading_unknown` and the
+value `benefit_milli` drop the discount.
+
+**What changes live.** Nothing now: no production pool declares a valuation, so no judged
+candidate reaches the cost; no `schedule.json` writes `redline`; ruling 116's stop holds. For a
+valued catalog a regenerating pool near its cap now costs its full weight (before, nothing at the
+cap): design §5.2 point 2's condition for valuing a regenerating pool (PRICE-4b) is met.
+
+**Rollback** (to the release before). The ledger and the configuration need nothing. A build
+without SS-2h-a refuses a pool that writes `redline` at its reader (`unknown_field`) and does not
+name `pool_redline`, so its composer refuses such a `schedule.json` (`schedule_requires_missing`);
+it compiles at its start every generation its dispatches and decision memories name (§1.225's
+rollback correction), so first let this build activate a generation without the member. Rolling
+back also brings the linear discount back for a valued regenerating pool.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS2h-1 | a V2 pool's `redline` (`PoolSpec::redline`, `PoolRedline::Fact` with CF-5's `FactReference`, or `PoolRedline::Constant`; schema `v2/pools.schema.json`) | catalog format addition (no ledger shape) | SS-2h-a | `acmodel bindings apply` (RL-R) | V2 only (V1: `unknown_field` at the member); a reference as a capacity reference at `redline/…`; a constant in `0..=2^53−1`, at most a constant capacity (`limit_exceeded`); absent serializes as nothing; read by nothing at evaluation until SS-2h-b |
+| SS2h-2 | the cost of a judged candidate's consumption, `W·c` for every pool; SS-2b's linear discount retired | behaviour (evaluation, score stage) | SS-2h-a | the policy evaluator | a regenerating pool is still read (unknown: `reading_unknown`) and wakes at its next step |
+| SS2h-3 | SS-2d's ε consumption term `C/(2000·Q) + m·(2W+1)/(4000·Q)`, without `σ` | behaviour (evaluation) | SS-2h-a | the policy evaluator | the production term and appendix A5 case 1 unchanged |
+| SS2h-4 | `config.subsystems` row `pool_redline` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | SS-2h-a | actingd | the composer requires it of a `schedule.json` whose pool writes `redline` (`POOL_REDLINE_SUBSYSTEM`, `POOL_REDLINE_MEMBER`); no outcome bears its name |
+
+Tests: `gate_ss2h` (design §4.1 tests 1, 3 to 7 with the coordinator's correction). Adapted, as the
+requirement deliberately changes what they pinned: `ss2b_t6` (a full regenerating pool cost
+nothing, half way half its weight) and `ss2d_t15` (a full regenerating pool cost nothing).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

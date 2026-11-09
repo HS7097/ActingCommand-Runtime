@@ -299,8 +299,7 @@ actingcommand_contract::outcome_vocabulary! {
         ValuationPending => "valuation_pending",
         /// A pool the task touches has no valuation for the instance.
         ValuationMissing => "valuation_missing",
-        /// The cost of a regenerating pool the task consumes needs its reading, which is
-        /// unknown or expired.
+        /// A regenerating pool the task consumes has a reading that is unknown or expired.
         ReadingUnknown => "reading_unknown",
     }
 }

@@ -23,7 +23,8 @@ package path and no approval:
   "requires": [ "<subsystem>", ... ],
   "rules":    [ a V2 task without scope, entrypoint and procedure_ref, with "package_id",
                 an optional "maintenance": true and an optional "realization": true ],
-  "pools":    [ a V2 pool without scope, with an optional "server" ],
+  "pools":    [ a V2 pool without scope, with an optional "server" (its V2 members, such as
+                "redline", pass through) ],
   "activity": [ a V2 activity profile without scope, with an optional "server" ],
   "timeline": [ a V2 timeline event without scope, with an optional "server" ],
   "held":     [ { "package_id", "reason", "reference"? } ]
@@ -85,6 +86,14 @@ not name it, `schedule_invalid` at the first in the order rules (their `trigger`
 `feedback_stop`, as above) then pools (for example `/rules/0/trigger/value`, then
 `/pools/0/capacity`). A file that writes both a `fact` reference and one of these names both
 subsystems. Each reference reads its fact in the pool's scope, which the composer fills.
+
+A pool that writes `redline`, its planned red line (SS-2h-a, register §1.288;
+[scheduling/README.md](scheduling/README.md), "Pool redline"), as a fact reference or a constant,
+requires `pool_redline`, alike: the composer refuses a file that writes one while `requires` does
+not name it, `schedule_invalid` at the first such pool's member in file order (for example
+`/pools/0/redline`). The member passes through: the composer copies it into each composed pool as
+written (it names no id and no scope; a reference names a fact of the pool's own scope, which the
+composer fills), and the catalog compiler checks it. A reference form needs `pool_redline` only.
 
 A timeline event that writes `excludes_fact_prefixes`, with any value (Workflow #411 P19, since
 0.12.25; [scheduling/README.md](scheduling/README.md), "Reset exclusions and the task's own last
@@ -235,7 +244,8 @@ each game root that holds `schedule.json`, that file's bytes, the root as
    `schedule.json` has no rules.
 2. **Read** each game's file (above): the reader, `requires` (it names `fact_reference` when a
    rule writes a fact reference, `pool_fact_reference` when a pool's `capacity` or a
-   `resource_projection`'s `value` is one, `reset_exclusions` when a timeline event writes
+   `resource_projection`'s `value` is one, `pool_redline` when a pool writes `redline`,
+   `reset_exclusions` when a timeline event writes
    `excludes_fact_prefixes`, `fact_unknown_probe` when a rule's `fact` predicate writes
    `on_unknown`, and the given subsystems name each entry), no timeline event
    invalidating `health.application.update_required` ("The store update rule"), the references

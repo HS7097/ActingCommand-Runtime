@@ -2271,9 +2271,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.32",
-      "description": "Scheduling decision reason (SS-2b, Alice's ruling 104 point 3; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate (a business task the catalog marks benefit_judged, not continuing a business chain, SS-2e: no link walked up to its chain head is marked, and not a manual request) has a known net benefit benefit_milli that is not positive: what one run produces is worth no more than what it consumes costs, each at the resource layer's weight per valuation step and a regenerating pool's cost discounted by its fullness. It is not dispatched this round; expected_duration_ms is the E it would be ranked with.",
+      "description": "Scheduling decision reason (SS-2b, Alice's ruling 104 point 3; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate (a business task the catalog marks benefit_judged, not continuing a business chain, SS-2e: no link walked up to its chain head is marked, and not a manual request) has a known net benefit benefit_milli that is not positive: what one run produces is worth no more than what it consumes costs, each at the resource layer's weight per valuation step (SS-2h-a: a consumption at its full weight, whatever the pool's fill). It is not dispatched this round; expected_duration_ms is the E it would be ranked with.",
       "common_causes": "The task consumes more value than it produces at the current readings, or the pool valuations make its yield worth nothing.",
-      "handling": "None: the candidate is judged again at every evaluation; a regenerating pool it consumes wakes the evaluation at its next step, as its cost falls while it fills. Revise the task's produces and consumes or the pools' valuation in the resource side's schedule.json if the value is wrong."
+      "handling": "None: the candidate is judged again at every evaluation; a regenerating pool it consumes wakes the evaluation at its next step. Revise the task's produces and consumes or the pools' valuation in the resource side's schedule.json if the value is wrong."
     },
     "benefit_unknown": {
       "category": "info",
@@ -2295,7 +2295,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.32",
-      "description": "Scheduling decision reason (SS-2b, Alice's rulings 104 point 3 and 116; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate's net benefit is unknown, so it is not dispatched; unknown is never 0 and the known part is never added up. benefit_gap says why: the task declares no produces or consumes entry, an entry's amount or a pool valuation it touches is the pending marker or missing (pool_id), or the cost of a regenerating pool it consumes needs a reading that is unknown or expired (pool_id, and fact_key with unknown_reason when the pool reads a fact; the fact refresh is asked for that reading).",
+      "description": "Scheduling decision reason (SS-2b, Alice's rulings 104 point 3 and 116; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate's net benefit is unknown, so it is not dispatched; unknown is never 0 and the known part is never added up. benefit_gap says why: the task declares no produces or consumes entry, an entry's amount or a pool valuation it touches is the pending marker or missing (pool_id), or a regenerating pool it consumes has a reading that is unknown or expired (pool_id, and fact_key with unknown_reason when the pool reads a fact; the fact refresh is asked for that reading).",
       "common_causes": "The resource side has not written the task's produces and consumes, or the pools' valuation, yet (Alice's ruling 116: business dispatch waits until values exist); or a pool reading has expired.",
       "handling": "Write the task's produces and consumes and each touched pool's valuation in the game's schedule.json; actinglab standard-pack check reports how many judged rules are complete, pending and undeclared. A reading is refreshed by the fact refresh."
     },

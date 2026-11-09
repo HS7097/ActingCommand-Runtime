@@ -18,7 +18,7 @@ use crate::{
     MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE,
     MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES, MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS,
     MIN_UTC_OFFSET_MINUTES, MetricRef, MissedSlotRule, ObservationRef, PoolCapacity,
-    PoolProjection, PoolSpec, PoolValuation, PredicateSpec, ProjectionComparand,
+    PoolProjection, PoolRedline, PoolSpec, PoolValuation, PredicateSpec, ProjectionComparand,
     ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector,
     TaskSpec, TimelineDocument, TimelineEvent,
 };
@@ -1973,6 +1973,10 @@ fn validate_pools(
                 diagnostics,
             );
         }
+        // SS-2h-a (register §1.288): the planned red line is V2's.
+        if let Some(redline) = &pool.redline {
+            validate_redline(pool, redline, &path, map, descriptor, diagnostics);
+        }
         if pool.capacity.constant() == Some(0)
             || matches!(
                 &pool.projection,
@@ -2058,6 +2062,56 @@ fn validate_pools(
                 descriptor,
                 diagnostics,
             );
+        }
+    }
+}
+
+/// SS-2h-a (register §1.288): a pool's `redline` at `<path>/redline`. It is V2 only: a V1
+/// document is refused as `unknown_field` at the member, and nothing else is checked. A
+/// reference follows a capacity reference's rules ([`validate_reference_members`]); a constant
+/// is a canonical safe integer and, against a constant capacity, at most that capacity
+/// (`limit_exceeded` at the member). Against a capacity read from a fact a constant is known to
+/// fit only at evaluation.
+fn validate_redline(
+    pool: &PoolSpec,
+    redline: &PoolRedline,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let member = format!("{path}/redline");
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            member,
+            "a pool's redline requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    match redline {
+        PoolRedline::Fact(reference) => {
+            validate_reference_members(reference, &member, "pool", map, descriptor, diagnostics);
+        }
+        PoolRedline::Constant(line) => {
+            if *line > MAX_CANONICAL_INTEGER as u64 {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::LimitExceeded,
+                    member,
+                    format!("a constant redline must be within 0..={MAX_CANONICAL_INTEGER}"),
+                    descriptor,
+                ));
+            } else if let Some(capacity) = pool.capacity.constant()
+                && *line > capacity
+            {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::LimitExceeded,
+                    member,
+                    format!("a redline of {line} exceeds pool capacity {capacity}"),
+                    descriptor,
+                ));
+            }
         }
     }
 }

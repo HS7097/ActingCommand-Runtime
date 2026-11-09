@@ -208,6 +208,20 @@ reserve's `at_least` and an effect's quantity are not checked at compilation.
 A catalog whose capacities and projection values are numbers serializes, and
 hashes, exactly as before.
 
+SS-2h-a (register §1.288; `../README.md`, "Pool redline"; Alice's ruling 138):
+a pool may carry `redline`, V2 only, its planned red line below the cap: CF-5's
+fact reference `{"type": "fact", "fact_key": B, "offset": N}`, B read in the
+pool's own scope (meant as its capacity fact, N negative: the read cap less a
+margin), or an integer in `0..=9007199254740991`, the line itself (meant for a
+pool whose capacity is a constant). A reference follows the capacity
+reference's rules at `redline/…`; a constant above the pool's constant capacity
+is `limit_exceeded` at the member; a V1 document that names it, in either form,
+is refused as an unknown field at the member. SS-2h-a carries it and nothing
+reads it at evaluation; SS-2h-b's capped spending order spends a pool that
+reached its cap down to it. A `schedule.json` that writes it names
+`pool_redline` in `requires`. A pool without it serializes, and hashes, exactly
+as before.
+
 SS-3 (since 0.12.30; register §1.212; `../README.md`, "Optional run-count
 bounds"): a V2 task may leave out `loop_budget`, and each of its items
 `daily_limit`, `window_iteration_limit` and `max_runtime_ms` on its own; a V2

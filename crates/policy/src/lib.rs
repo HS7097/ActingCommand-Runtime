@@ -124,4 +124,7 @@ mod tests {
     // SS-2d (0.12.35; register §1.235): a judged candidate within its rounding error is neither
     // positive nor negative; a model-verified realization task may run last in its tier.
     mod gate_ss2d;
+    // SS-2h-a (register §1.288): consumption costs its full weight, the rounding bound reads the
+    // whole consumption, and a pool's planned red line is checked and carried.
+    mod gate_ss2h;
 }

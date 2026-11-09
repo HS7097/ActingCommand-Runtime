@@ -7,7 +7,8 @@
 // - a judged candidate whose exact net benefit `S` is within its rounding bound
 //   `ε = Σ_produces [R/(2000·Q) + n·(2W+1)/(4000·Q)] + Σ_consumes σ·[C/(2000·Q) +
 //   m·(2W+1)/(4000·Q)]` is `benefit_within_tolerance`, neither positive nor
-//   `policy_benefit_nonpositive`;
+//   `policy_benefit_nonpositive` (SS-2h-a, register §1.288: `σ` is 1 for every pool now that
+//   consumption costs its full weight);
 // - a task marked `benefit_realization` (the model's verdict) whose produced pools include one
 //   weighed above 0 and whose latest run did not fail is released into the last place of the
 //   business tier, behind every positive candidate of every instance, every later gate applying;
@@ -690,8 +691,10 @@ fn ss2d_t14_the_compiler_holds_the_mark_to_its_conditions() {
 
 // Test 15: ruling 127 (i), the cost formula unchanged. A pool that does not regenerate, full (100
 // of 100) above its reserve line, costs its full weight: S = 1000 − 400 = 600, so does a scarce
-// material whatever its fill. A regenerating pool costs nothing at capacity (S = 1000) and its
-// weight at the reserve line (S = 1000 − 10·1000 = −9000).
+// material whatever its fill. A regenerating pool costs its weight at the reserve line (S = 1000 −
+// 10·1000 = −9000) and, SS-2h-a (register §1.288; Alice's ruling 138 and her answer of 11-09
+// 16:4x, below the cap nothing is spent for free), at capacity as well: −9000. Adapted in SS-2h-a:
+// until then SS-2b's discount made it cost nothing at capacity (S = 1000).
 #[test]
 fn ss2d_t15_the_cost_of_a_pool_is_as_before() {
     let of_100 = |mut pool: Value| {
@@ -740,20 +743,24 @@ fn ss2d_t15_the_cost_of_a_pool_is_as_before() {
         )],
         pools,
     );
-    let full = round(
-        &regenerating,
-        Vec::new(),
-        vec![reading("pool.stamina", 100)],
-    );
-    let breakdown = reason(decision(&full, A, POSITIVE), "rank_breakdown");
-    assert_eq!(breakdown.outcome.value("benefit_milli"), Some(&json!(1000)));
-    let at_reserve = round(&regenerating, Vec::new(), vec![reading("pool.stamina", 20)]);
-    let held = decision(&at_reserve, A, POSITIVE);
-    assert_eq!(last_code(held), NONPOSITIVE, "{held:#?}");
-    assert_eq!(
-        last(held).outcome.value("benefit_milli"),
-        Some(&json!(-9000))
-    );
+    for amount in [100, 20] {
+        let evaluation = round(
+            &regenerating,
+            Vec::new(),
+            vec![reading("pool.stamina", amount)],
+        );
+        assert!(
+            dispatched(&evaluation).is_empty(),
+            "{amount}: {evaluation:#?}"
+        );
+        let held = decision(&evaluation, A, POSITIVE);
+        assert_eq!(last_code(held), NONPOSITIVE, "{amount}: {held:#?}");
+        assert_eq!(
+            last(held).outcome.value("benefit_milli"),
+            Some(&json!(-9000)),
+            "{amount}"
+        );
+    }
 }
 
 // Test 16: the no-progress guard bounds the zero tier. Released and dispatched once on a reading

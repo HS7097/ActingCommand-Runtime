@@ -356,6 +356,12 @@ The members of `report`:
       plus an offset ([scheduling/README.md](scheduling/README.md), "Pool fact
       references"); a `schedule.json` that writes either requires it, so it is
       composed only by a Runtime that names this row.
+    - `pool_redline` (SS-2h-a, register §1.288): always on
+      (`config_subsystem_always_on`). The Runtime reads a pool's planned
+      `redline`, a fact of the pool's scope plus an offset or a constant
+      ([scheduling/README.md](scheduling/README.md), "Pool redline"); a
+      `schedule.json` whose pool writes it requires it, so it is composed only
+      by a Runtime that names this row.
     - `reset_exclusions` (Workflow #411 P19, since 0.12.25): always on
       (`config_subsystem_always_on`). The Runtime reads a timeline event's
       `excludes_fact_prefixes`, and its resets never clear a task's own last

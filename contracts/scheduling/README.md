@@ -868,16 +868,19 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   weight), `consume(k,p)` the task's declared consumption of the pool (its `consumes` amounts;
   SS-2g, since 0.12.34: in thousandths, `C/1000` exactly, an expected consumption included,
   "Expected quantities (v2)"; the reserve gate reads `⌈C/1000⌉`) and `Q_p` the pool's
-  `valuation.scale`. `P(k,p)`, the cost of consuming pool `p`, is `W(k,p)`, discounted for a
-  regenerating pool between the task's reserve
-  line on it (its `reserves` `at_least`, 0 without one) and its capacity: `P =
-  W·clamp((cap − cur)/(cap − reserve), 0, 1)`, `cur` the pool's projected amount as
-  `resource_projection` reads it: 0 at capacity, `W` at the reserve. A pool that does not
-  regenerate costs `W`. Nothing here writes a pool weight (the one-way rule, SS-1).
+  `valuation.scale`. `P(k,p)`, the cost of consuming pool `p`, is `W(k,p)`, whatever the pool's
+  fill and whether it regenerates or not: the cost of a consumption is `W·c` (SS-2h-a, register
+  §1.288; Alice's ruling 138 of 11-07, and her answer of 11-09 16:4x: the capped spending order
+  starts when the reading reaches the cap, and below the cap nothing is spent for free). Until
+  SS-2h-a a regenerating pool's cost was discounted between the task's reserve line on it and its
+  capacity, `P = W·clamp((cap − cur)/(cap − reserve), 0, 1)`; that discount is retired. Spending a
+  pool that reached its cap down to its planned red line ("Pool redline") is SS-2h-b's capped
+  spending order, not this cost. Nothing here writes a pool weight (the one-way rule, SS-1).
 - **Unknown is never 0.** A judged candidate whose task declares no `produces` and no `consumes`
   entry, an entry whose `amount` is the pending marker, a pool it touches whose `valuation` is the
   pending marker or absent (for the instance), or a regenerating pool it consumes whose reading is
-  unknown or expired has an unknown `B`: the known part is never added up. It is not dispatched:
+  unknown or expired (still read, as before, though its cost no longer depends on it) has an
+  unknown `B`: the known part is never added up. It is not dispatched:
   deferred with `benefit_unknown` (info; `benefit_gap` `no_effects`, `entry_pending`,
   `valuation_pending`, `valuation_missing` or `reading_unknown`; `pool_id`, and `fact_key` with
   `unknown_reason` for an unknown reading of a fact), no wake of its own. An unknown reading also
@@ -885,7 +888,8 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   decision then ends with the refresh's reason.
 - **Not positive.** A judged candidate whose known `B ≤ 0` is not dispatched: deferred with
   `policy_benefit_nonpositive` (info; `benefit_milli`, `expected_duration_ms`); a regenerating
-  pool it consumes wakes the evaluation at its next step, its cost falling as it fills.
+  pool it consumes wakes the evaluation at its next step, as before (SS-2h-a: its cost no longer
+  falls as it fills).
 - **Ranking, per instance** (catalogs that mark a task; "Dispatch Decision Record" item 1):
   `promoted` first, as before; then the tier, the maintenance tier (every unmarked task, and the
   Runtime's own reading) before the business tier (the marked tasks), as ruling 104 point 1 puts
@@ -917,10 +921,12 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   "Not positive" above; no configuration key.
   - *The bound.* The exact sum `S` (before the floor) differs from the model's value at the
     exported prices by at most `ε = Σ_produces [R/(2000·Q) + n·(2W+1)/(4000·Q)] +
-    Σ_consumes σ·[C/(2000·Q) + m·(2W+1)/(4000·Q)]`: `R` and `C` the pool's per-run production and
+    Σ_consumes [C/(2000·Q) + m·(2W+1)/(4000·Q)]`: `R` and `C` the pool's per-run production and
     consumption in thousandths (`r(k,p)` and SS-2g's `C`), `n` and `m` its `expected_amount_milli`
-    entries in each direction, `W` the weight `B` reads, `Q` the scale and `σ` the regenerating
-    share of `P`. The two roundings are the exported weight's (half to even, half a milli per
+    entries in each direction, `W` the weight `B` reads and `Q` the scale. SS-2h-a (register
+    §1.288): the consumption term reads the whole `C`, since no share of the cost is discounted;
+    until then it was multiplied by `σ`, the regenerating share of the retired discount. The two
+    roundings are the exported weight's (half to even, half a milli per
     step) and each expected quantity's (half a thousandth). `ε` is an exact rational summed as `S`
     is; an overflow fails the evaluation as the sum's does.
   - *Three ways.* With `|S| ≤ ε` the candidate is *within tolerance*: its sign is the rounding's,
@@ -1676,6 +1682,60 @@ An account's cap is read, never written as a constant (Alice 10-26). Two more V2
 - **Refusals**, each at its pointer, as for a reference of a `fact` predicate: in a V1 document, `unknown_field` at `capacity/type` or `value/type`; a key that is no identifier, `type_mismatch` at `…/fact_key`; N outside -9007199254740991..=9007199254740991, `limit_exceeded` at `…/offset`; a reference that names a `scope`, `unknown_field` at `…/scope`. A `type` other than `fact`, or an N that is no integer, is refused by the reader (`type_mismatch`).
 - **Capability.** A Runtime that reads both forms reports the always-on subsystem `pool_fact_reference` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A `schedule.json` that writes either must list `pool_fact_reference` in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file without it, so a Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older Runtime given a catalog with either refuses it at its reader.
 - For example, a task due while the projected amount is at least the read capacity less 20: the pool `"capacity": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": 0}` and the trigger `{"kind": "resource_projection", "pool_id": "pool.neutral", "comparison": "greater_than_or_equal", "value": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -20}}`.
+
+## Pool redline (SS-2h-a)
+
+Alice's ruling 138 (11-07 20:4x, Workflow #428 comment 6706493161): when a resource is at its cap,
+the tasks that consume it run by benefit, highest first, and a planned red line sits below the cap.
+The line keeps the pool off its cap while it holds some of the resource for timed tasks of high
+benefit, and it comes from the model, from a person or from an agent (her words of 20:5x, #428
+comment 6706630435: 「程序内应该算不出来，也不能算」). Her answer of 11-09 16:4x: the capped spending order starts
+when the reading reaches or exceeds the cap and spends down into the band between the red line and
+the cap; below the cap nothing is spent for free. Register §1.288.
+
+A V2 pool may write the member `redline` ([v2/README.md](v2/README.md); `actingcommand.scheduling.v2`
+only), in one of two forms:
+
+- **A fact reference**, the shape of a capacity read from its fact ("Pool fact references"):
+  `"redline": {"type": "fact", "fact_key": B, "offset": N}`, the integer the fact B of the pool's
+  own scope holds plus N. All three members are required and the reference names no scope. B is
+  meant to be the pool's capacity fact and N a negative offset, so the line is the read cap less a
+  margin: the Runtime adds the given offset to the cap it reads and never computes a line.
+- **A constant**, `"redline": L`, an integer in `0..=9007199254740991`, the line itself: meant for
+  a pool with no readable cap (a constant capacity).
+
+The offset or the constant comes from outside the Runtime: the model's threshold export
+(`out/thresholds.json`, written into `schedule.json` by `acmodel bindings apply`), a person or an
+agent. A pool without `redline` has its capacity as its line. A line given for one instance
+(SS-2h-c, later) will take precedence over the catalog's, and the catalog's over the cap.
+
+- **Who reads it.** In SS-2h-a nobody at evaluation: the member is parsed, checked, hashed with the
+  catalog and carried as written. The cost of consumption is the full weight whatever the fill
+  ("Net benefit within a tier"). SS-2h-b's capped spending order reads it: it begins when a pool's
+  reading reaches its cap and spends the pool down to the line. The triggers, the reserves, the
+  projections, forward planning, resource targets, the tie-break and the selection fields do not
+  read it.
+- **Refusals**, each at its pointer: in a V1 document, `unknown_field` at `/pools/<i>/redline`
+  (either form); for a reference, the rules of a capacity reference, at `redline/…`: a key that is
+  no identifier, `type_mismatch` at `redline/fact_key`; N outside
+  -9007199254740991..=9007199254740991, `limit_exceeded` at `redline/offset`; a reference that names
+  a `scope`, `unknown_field` at `redline/scope`; a `type` other than `fact`, or an N that is no
+  integer, is refused by the reader (`type_mismatch`). For a constant: above 9007199254740991, or
+  above the pool's constant capacity, `limit_exceeded` at `/pools/<i>/redline`; a negative number
+  or another value is refused by the reader (`type_mismatch`). Against a capacity read from a fact
+  a constant is not checked at compilation, as a reserve is not.
+- **Capability.** A Runtime that reads the member reports the always-on subsystem `pool_redline` in
+  `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A `schedule.json`
+  whose pool writes it, in either form, must list `pool_redline` in `requires`
+  ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file
+  without it (`schedule_invalid` at the first pool's `redline`), so a Runtime that does not name the
+  subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older
+  Runtime given a catalog with the member refuses it at its reader (`unknown_field`). A reference
+  form needs `pool_redline` only; `pool_fact_reference` stays the capacity's and the comparand's.
+- **Identity.** A pool without the member serializes, and hashes, exactly as before.
+- For example, a pool whose cap is read and whose line is 40 below it: `"capacity": {"type":
+  "fact", "fact_key": "resource.neutral.capacity", "offset": 0}` and `"redline": {"type": "fact",
+  "fact_key": "resource.neutral.capacity", "offset": -40}`.
 
 ## Reset exclusions and the task's own last result (Workflow #411 P19)
 

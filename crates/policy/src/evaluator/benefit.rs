@@ -19,23 +19,25 @@
 //!   `consume` is the task's declared consumption in thousandths, exact (SS-2g, register
 //!   §1.232: `C = Σ amount × 1000 + Σ expected_amount_milli`; the reserve gate reads
 //!   `⌈C/1000⌉`); `Q_p` is the pool's `valuation.scale`. `P(k,p)`, the cost of consuming pool
-//!   `p`, is `W(k,p)`, discounted for a regenerating pool linearly between the task's reserve
-//!   line on it and its capacity: `P = W·clamp((cap − cur)/(cap − reserve), 0, 1)`, 0 at
-//!   capacity, `W` at the reserve.
+//!   `p`, is `W(k,p)` whatever the pool's fill (SS-2h-a, register §1.288; Alice's ruling 138 and
+//!   her answer of 11-09 16:4x: below the cap nothing is spent for free). SS-2b's linear discount
+//!   `W·clamp((cap − cur)/(cap − reserve), 0, 1)` is retired; spending a pool that reached its cap
+//!   down to its planned red line is SS-2h-b's capped spending order.
 //! - **Unknown is never 0.** No declared effect, a pending entry, a pending or missing valuation
-//!   of a pool it touches, or a reading `P` needs that is unknown or expired makes `B` unknown:
-//!   the candidate is not dispatched (`benefit_unknown`), and the known part is never added up.
-//!   An unknown reading also asks the fact refresh for it. A known `B ≤ 0` is not dispatched
-//!   either (`policy_benefit_nonpositive`).
+//!   of a pool it touches, or an unknown or expired reading of a regenerating pool it consumes
+//!   makes `B` unknown: the candidate is not dispatched (`benefit_unknown`), and the known part
+//!   is never added up. An unknown reading also asks the fact refresh for it. A known `B ≤ 0` is
+//!   not dispatched either (`policy_benefit_nonpositive`).
 //! - **The one-way rule.** Nothing here writes a pool weight: the weights are read from the
 //!   resource layer's own term, which reads no task state.
 //! - **The zero band** (SS-2d, register §1.235; Alice's ruling 127, the review's version; design
 //!   `rd-1031/design-acm-price-addendum2.1.md` §7.2 and §7.3). The exact sum `S` (before the
 //!   floor) differs from the model's value at the exported prices by at most
-//!   `ε = Σ_produces [R/(2000·Q) + n·(2W+1)/(4000·Q)] + Σ_consumes σ·[C/(2000·Q) +
+//!   `ε = Σ_produces [R/(2000·Q) + n·(2W+1)/(4000·Q)] + Σ_consumes [C/(2000·Q) +
 //!   m·(2W+1)/(4000·Q)]`: `R` and `C` the per-run production and consumption in thousandths, `n`
 //!   and `m` the pool's `expected_amount_milli` entries in each direction, `W` the weight read
-//!   above, `Q` the scale and `σ` the regenerating share, summed exactly as `S` is. With `|S| ≤ ε`
+//!   above and `Q` the scale, summed exactly as `S` is (SS-2h-a: the whole `C`, as no share of
+//!   the cost is discounted; SS-2d's `σ` is retired with the discount). With `|S| ≤ ε`
 //!   the sign is the rounding's and is not trusted: the candidate is `benefit_within_tolerance`,
 //!   neither positive nor `policy_benefit_nonpositive`. A task marked `benefit_realization` whose
 //!   produced pools include one weighed above 0 and whose latest run did not fail is released
@@ -134,7 +136,8 @@ enum Judgement {
         /// SS-2d: `ε`, the exact rounding bound of `S` (module doc).
         tolerance: ExactSum,
         items: Vec<String>,
-        /// The next step of a regenerating pool it consumes: its cost falls as the pool fills.
+        /// The next step of a regenerating pool it consumes (SS-2h-a: its cost stays `W` a unit;
+        /// the evaluation still wakes as the pool fills, as before).
         wake_unix_ms: Option<u64>,
         /// SS-2d: a pool it produces is weighed above 0 on the instance (a model price or a
         /// goal's shortfall gives it a use).
@@ -391,58 +394,46 @@ fn judge(
             crate::resource_targets::declared_consumption_milli(task, &effect.pool_id)?;
         let weight_milli =
             weight(&effect.pool_id).unwrap_or_else(|| u64::from(valuation.base_weight_milli));
-        // The share of `W` a unit consumed costs: 1 for a pool that does not regenerate.
-        let (share_numerator, share_denominator) = match &pool.projection {
-            PoolProjection::NonRegenerating { .. } => (1_u128, 1_u128),
-            PoolProjection::Regenerating(_) => {
-                let Some(reading) = context.pool_values.get(effect.pool_id.as_str()) else {
-                    readings.push(pool);
-                    continue;
-                };
-                let Ok(current) =
-                    project_pool_value(pool, reading.bound, reading.snapshot, context.time.unix_ms)
-                else {
-                    readings.push(pool);
-                    continue;
-                };
-                if let Ok(Some(next)) = next_pool_projection_change(
-                    pool,
-                    reading.bound,
-                    reading.snapshot,
-                    context.time.unix_ms,
-                ) {
-                    wake_unix_ms = min_wake(wake_unix_ms, Some(next));
-                }
-                let capacity = i128::from(reading.bound.capacity());
-                let reserve = task
-                    .reserves
-                    .iter()
-                    .flatten()
-                    .filter(|reserve| reserve.pool_id == effect.pool_id)
-                    .map(|reserve| i128::from(reserve.at_least))
-                    .max()
-                    .unwrap_or(0);
-                discount(capacity, i128::from(current), reserve)
+        // SS-2h-a (register §1.288): a unit consumed costs its full weight `W` whatever the
+        // pool's fill; SS-2b's linear discount is retired. A regenerating pool still needs its
+        // reading, as before (unknown or expired, `B` is unknown), and wakes the evaluation at
+        // its next step.
+        if let PoolProjection::Regenerating(_) = &pool.projection {
+            let Some(reading) = context.pool_values.get(effect.pool_id.as_str()) else {
+                readings.push(pool);
+                continue;
+            };
+            if project_pool_value(pool, reading.bound, reading.snapshot, context.time.unix_ms)
+                .is_err()
+            {
+                readings.push(pool);
+                continue;
             }
-        };
+            if let Ok(Some(next)) = next_pool_projection_change(
+                pool,
+                reading.bound,
+                reading.snapshot,
+                context.time.unix_ms,
+            ) {
+                wake_unix_ms = min_wake(wake_unix_ms, Some(next));
+            }
+        }
         let (numerator, denominator) = ratio(
-            &[consumed_milli, u128::from(weight_milli), share_numerator],
-            &[u128::from(valuation.scale), 1_000, share_denominator],
+            &[consumed_milli, u128::from(weight_milli)],
+            &[u128::from(valuation.scale), 1_000],
         )
         .ok_or_else(overflow)?;
         sum.add(numerator, denominator, true).ok_or_else(overflow)?;
-        // SS-2d: `σ·[C/(2000·Q) + m·(2W+1)/(4000·Q)]`, SS-2g's thousandths as `C`.
+        // SS-2d: `C/(2000·Q) + m·(2W+1)/(4000·Q)`, SS-2g's thousandths as `C`, the whole of `C`
+        // (SS-2h-a: no share of it is discounted).
         let rounding = rounding_numerator(
             consumed_milli,
             expected_entries(&task.consumes, &effect.pool_id),
             weight_milli,
         )
         .ok_or_else(overflow)?;
-        let (bound_numerator, bound_denominator) = ratio(
-            &[rounding, share_numerator],
-            &[u128::from(valuation.scale), 4_000, share_denominator],
-        )
-        .ok_or_else(overflow)?;
+        let (bound_numerator, bound_denominator) =
+            ratio(&[rounding], &[u128::from(valuation.scale), 4_000]).ok_or_else(overflow)?;
         tolerance
             .add(bound_numerator, bound_denominator, false)
             .ok_or_else(overflow)?;
@@ -479,21 +470,6 @@ fn judge(
         wake_unix_ms,
         downstream,
     })
-}
-
-/// The share of the weight a consumed unit of a regenerating pool costs, as a reduced
-/// fraction: `clamp((cap − cur)/(cap − reserve), 0, 1)`. A reserve at or above the capacity
-/// leaves no room between the two lines: the share is 0 at capacity and 1 below it.
-fn discount(capacity: i128, current: i128, reserve: i128) -> (u128, u128) {
-    let room = capacity - reserve;
-    let missing = (capacity - current).max(0);
-    if room <= 0 {
-        return if missing == 0 { (0, 1) } else { (1, 1) };
-    }
-    let missing = missing.min(room);
-    let (numerator, denominator) = (missing.unsigned_abs(), room.unsigned_abs());
-    let common = gcd(numerator, denominator).max(1);
-    (numerator / common, denominator / common)
 }
 
 /// The expected duration `E` the utility term divides by (SCH-M ED-1): the pair's `E` when its

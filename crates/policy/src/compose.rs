@@ -14,7 +14,8 @@
 //! 2. **Read**: each game's file is read by the contract crate's reader, its `requires` checked
 //!    to name `fact_reference` when a rule writes a fact reference (#386 CF-4) and
 //!    `pool_fact_reference` when a pool's `capacity` or a `resource_projection`'s `value` is one
-//!    (#386 CF-5) and `reset_exclusions` when a timeline event writes `excludes_fact_prefixes`
+//!    (#386 CF-5) and `pool_redline` when a pool writes `redline` (SS-2h-a) and
+//!    `reset_exclusions` when a timeline event writes `excludes_fact_prefixes`
 //!    (Workflow #411 P19) and `fact_unknown_probe` when a rule's `fact` predicate writes
 //!    `on_unknown` (SS-5), no timeline event invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
@@ -61,7 +62,7 @@ use crate::canonical::canonical_serialized;
 use crate::{
     ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog,
     FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM,
-    POOL_FACT_REFERENCE_SUBSYSTEM, PoolSpec, RESET_EXCLUSIONS_SUBSYSTEM,
+    POOL_FACT_REFERENCE_SUBSYSTEM, POOL_REDLINE_SUBSYSTEM, PoolSpec, RESET_EXCLUSIONS_SUBSYSTEM,
     SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec, TimelineEvent,
     compile_composed_catalog,
 };
@@ -199,6 +200,10 @@ pub const BENEFIT_JUDGED_MEMBER: &str = "benefit_judged";
 /// carries the model's realization mark (the `schedule.json` rule member `"realization": true`,
 /// [`SCHEDULE_RULE_REALIZATION_MEMBER`]). A rule never writes it itself.
 pub const BENEFIT_REALIZATION_MEMBER: &str = "benefit_realization";
+
+/// SS-2h-a (register §1.288): the pool member of a planned red line, which the composer copies as
+/// written and which requires [`POOL_REDLINE_SUBSYSTEM`].
+pub const POOL_REDLINE_MEMBER: &str = "redline";
 
 /// SS-2b (register §1.225; Alice's ruling 116, 「业务覆盖完整」): how far one game's judged rules
 /// (those whose package is not maintenance-role and that do not declare themselves maintenance,
@@ -805,6 +810,26 @@ fn read_game(
             format!(
                 "a pool capacity or a resource projection read from a fact needs requires to name \
                  {POOL_FACT_REFERENCE_SUBSYSTEM}"
+            ),
+        ));
+    }
+    // SS-2h-a (register §1.288): likewise a pool that writes `redline`, in either form.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == POOL_REDLINE_SUBSYSTEM)
+        && let Some(index) = schedule
+            .pools
+            .iter()
+            .position(|pool| pool.body.contains_key(POOL_REDLINE_MEMBER))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/pools/{index}/{POOL_REDLINE_MEMBER}"),
+            ),
+            format!(
+                "a pool's {POOL_REDLINE_MEMBER} needs requires to name {POOL_REDLINE_SUBSYSTEM}"
             ),
         ));
     }

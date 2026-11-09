@@ -1007,6 +1007,47 @@ impl<'de> Deserialize<'de> for PoolCapacity {
     }
 }
 
+/// SS-2h-a (register §1.288): the configuration-manifest subsystem of a Runtime that reads a
+/// pool's `redline`; a `schedule.json` that writes one names it in `requires`.
+pub const POOL_REDLINE_SUBSYSTEM: &str = "pool_redline";
+
+/// A pool's planned red line (SS-2h-a, register §1.288; Alice's ruling 138: the line sits below
+/// the cap, and the program never computes it). SS-2h-a parses, checks and carries it; nothing
+/// reads it at evaluation yet: the capped spending order of SS-2h-b spends a pool that reached its
+/// cap down to it.
+///
+/// - [`PoolRedline::Fact`]: `{"type": "fact", "fact_key": <key>, "offset": <integer>}`, the
+///   integer the fact `fact_key` of the pool's own scope holds plus `offset`, the shape of a
+///   capacity read from a fact (`actingcommand.scheduling.v2` only). Naming the pool's capacity
+///   fact with a negative offset, the line is the read cap less a margin.
+/// - [`PoolRedline::Constant`]: an integer in `0..=2^53−1`, the line itself, for a pool whose cap
+///   is not read; against a constant capacity at most that capacity.
+///
+/// A pool without one has its capacity as its line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolRedline {
+    Constant(u64),
+    Fact(FactReference),
+}
+
+impl Serialize for PoolRedline {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Constant(line) => line.serialize(serializer),
+            Self::Fact(reference) => reference_wire(reference).serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PoolRedline {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match reference_or::<D, u64>(deserializer)? {
+            ReferenceOr::Reference(reference) => Self::Fact(reference),
+            ReferenceOr::Other(line) => Self::Constant(line),
+        })
+    }
+}
+
 impl Serialize for ProjectionComparand {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
@@ -1070,6 +1111,10 @@ pub struct PoolSpec {
         deserialize_with = "valuation_declaration"
     )]
     pub valuation: Option<ValuationDeclaration>,
+    /// SS-2h-a (register §1.288; V2 only): the pool's planned red line ([`PoolRedline`]); absent,
+    /// the line is the pool's capacity and the catalog keeps its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redline: Option<PoolRedline>,
 }
 
 impl PoolSpec {

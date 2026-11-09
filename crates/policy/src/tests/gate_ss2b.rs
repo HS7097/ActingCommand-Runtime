@@ -13,8 +13,9 @@
 // - a known `B ≤ 0` is `policy_benefit_nonpositive`, any unknown input `benefit_unknown`; neither
 //   is dispatched, and the known part of a partly known candidate is never added up;
 // - unjudged candidates rank as before; a catalog without a mark decides as before;
-// - consumption costs its weight, a regenerating pool's discounted by its fullness; an expected
-//   amount of 350 milli counts as 0.35;
+// - consumption costs its full weight, a regenerating pool's too whatever its fill (SS-2h-a,
+//   register §1.288, retired SS-2b's discount by fullness); an expected amount of 350 milli counts
+//   as 0.35;
 // - the pending markers validate in V2 and are refused elsewhere; the composer marks the rules
 //   whose package is not maintenance-role and counts the judged rules' coverage.
 //
@@ -420,10 +421,13 @@ fn ss2b_t5_a_catalog_without_marks_decides_as_before() {
 }
 
 // Test 6: consumption lowers B. A pool that does not regenerate costs its full weight: 2 x 1000
-// - 3 x 100 = 1700. A regenerating pool costs W * clamp((cap - cur) / (cap - reserve), 0, 1):
-// nothing at capacity, W at the reserve line, half way between them half. Ten units of stamina
-// at 1000 milli each against one valued unit: 1000, -9000 and -4000; below the line the share
-// stays 1. A candidate whose B is not positive wakes at the pool's next step.
+// - 3 x 100 = 1700. SS-2h-a (register §1.288; Alice's ruling 138 and her answer of 11-09 16:4x,
+// below the cap nothing is spent for free): a regenerating pool costs its full weight too,
+// whatever its fill. Ten units of stamina at 1000 milli each against one valued unit: -9000 at
+// capacity (100), half way (60), at the reserve line (20) and below it (10). Adapted in SS-2h-a:
+// until then the linear discount W * clamp((cap - cur) / (cap - reserve), 0, 1) gave 1000 at
+// capacity (dispatched) and -4000 half way. A candidate whose B is not positive wakes at the
+// pool's next step while the pool is below its capacity.
 #[test]
 fn ss2b_t6_consumption_lowers_the_benefit_by_its_cost() {
     let catalog_plain = catalog(vec![task(
@@ -451,11 +455,7 @@ fn ss2b_t6_consumption_lowers_the_benefit_by_its_cost() {
     )]);
     let observed = NOW - MINUTE_MS;
     let at = |amount: i64| vec![fact(A, STAMINA_KEY, amount, observed, None)];
-    let (full, _) = round(&catalog_regen, Vec::new(), at(100), true);
-    assert_eq!(dispatched(&full), ["task_regen"], "{full:#?}");
-    let breakdown = reason(decision(&full, "task_regen"), "rank_breakdown");
-    assert_eq!(breakdown.outcome.value("benefit_milli"), Some(&json!(1000)));
-    for (amount, expected) in [(20, -9_000), (60, -4_000), (10, -9_000)] {
+    for (amount, expected) in [(100, -9_000), (60, -9_000), (20, -9_000), (10, -9_000)] {
         let (evaluation, _) = round(&catalog_regen, Vec::new(), at(amount), true);
         assert!(
             dispatched(&evaluation).is_empty(),
@@ -472,11 +472,13 @@ fn ss2b_t6_consumption_lowers_the_benefit_by_its_cost() {
             Some(&json!(expected)),
             "{amount}"
         );
-        assert_eq!(
-            held.next_wake_unix_ms,
-            Some(observed + 6 * MINUTE_MS),
-            "{amount}: the pool's next step"
-        );
+        if amount < 100 {
+            assert_eq!(
+                held.next_wake_unix_ms,
+                Some(observed + 6 * MINUTE_MS),
+                "{amount}: the pool's next step"
+            );
+        }
     }
 }
 
