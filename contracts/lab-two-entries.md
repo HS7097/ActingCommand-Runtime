@@ -236,9 +236,10 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 - **Recordings.** Each mark and step of a Lab recording carries `initiator` (#350 option B, design
   §3.4); a step that reaches the device is also in G14. LAB-2 writes it (open point 6, the
   coordinator's ruling): the word of section 4.2 for `actinglab.exe` (`Lab-CLI`, or `Lab-制包` /
-  `Lab-救急` from `ACTINGCOMMAND_INITIATOR`), carried by the recording lock and written on each
-  step and mark the command adds ([lab-recording.md](lab-recording.md), "recording.json"). The
-  recording format changes directly: a recording without it does not decode.
+  `Lab-救急` from `ACTINGCOMMAND_INITIATOR`), and `Lab-MCP` (section 4.1) when MCP's actinglab
+  child runs the command (`--via mcp`, LAB-2 fix 1), carried by the recording lock and written on
+  each step and mark the command adds ([lab-recording.md](lab-recording.md), "recording.json").
+  The recording format changes directly: a recording without it does not decode.
 - **The watchdog.** Its starts stay recorded in its own files as today. A request it sends beyond
   `Health` carries `Lab-看门狗`; today it sends none.
 
@@ -327,7 +328,9 @@ The table's `modules` lists them with the module id each operation names (`core`
 
 A resident mode of the Lab core (LAB-2): it reads one `{op, params}` per line on stdin and answers
 one `{result}` or `{outcome}` per line, the operations being the table's. Its users are the MCP
-module and the UI's authoring workbench, so the three front ends share one loop.
+module and the UI's authoring workbench, so the three front ends share one loop. Each operation
+answers the line its `--json` answers (section 9.3): until open point 10, an operation
+actinglab's own command serves answers that command's envelope.
 
 ### 8.3 The authoring option
 
@@ -405,15 +408,38 @@ every kind the file names exists; `entries` follows its rule; a `reserved` row h
 - Output for people by default: one line with the result code and its short phrase from the
   outcome catalog, and a small table where needed. `--json` prints the one line `cli_line` prints
   today. Exit codes stay 0, 1 and 2.
-- **As LAB-2 built it** (register §1.287, "Slice LAB-2"). The catalog holds no phrase for a code,
-  so the line for people is the code with its values, and none is made up; the small table is
-  the result's members. An operation served by actinglab's own command answers its data beside
-  `lab_operation_completed`, and a failure its code (relayed; one the catalog does not list is
-  `outcome_relay_unregistered` with `raw_code`) with every member of its details beside it.
-  `ACTINGCOMMAND_RUNTIME_STATE_ROOT`, which MCP's actinglab child and the tests set, still names
-  the state root when set. The words of actinglab before LAB-2, with their envelope and exit codes
-  2 to 6, stay behind `--envelope` (and `--via`, MCP's child) until LAB-5 builds MCP on the
-  table, so that every MCP answer stays as it is; their retired and reserved words are gone.
+- **LAB-2 changes nothing any current consumer of actinglab gets** (the coordinator's ruling of
+  2026-11-10; register §1.287, "Slice LAB-2", fix 1). Its consumers are MCP's actinglab child,
+  acmodel's validator (UI repository), the four resource repositories' CI and scripts and the
+  coordinator's hotplace kit.
+  - **actinglab's own commands**, every command form actinglab had before LAB-2, keep their
+    output exactly: the output for people, the `--json` output (the envelope with `ok`, `data`
+    and `error`, also printed without `--json` when stdout is no terminal), byte for byte, and
+    their exit codes (0 and 2 to 6). That includes the global options their consumers pass, before
+    or after the words (`--run-root`, `--verbose`, `--json`, `--via`). They are on the table as
+    debugging and authoring rows; only their output stays. LAB-2's retired and reserved words are
+    gone from them, and `config get|set` is `user-config` (open point 7).
+  - **The new output** (the bullets above: the line for people by default, `--json` printing the
+    `cli_line` line, exit codes 0, 1 and 2, `lab_operation_check_failed` exiting 1) applies to the
+    operations LAB-2 newly offers in actinglab: the core rows that came from actingctl (served by
+    `crates/lab-ops`) and `run start`, `run stop`, `reset` and `drill`. No consumer runs them
+    through actinglab yet.
+  - **How actinglab tells them apart.** A command line whose words, `--json` taken out, begin with
+    `serve` or with the name of such an operation is the CLI module's; every other one is
+    actinglab's own and is parsed, run and printed as before. Two core rows take words that were
+    actinglab's own commands, `status` and `run show`: on the command line they stay actinglab's
+    own until open point 10, and their rows answer through `serve --stdio`. A row actinglab's own
+    command serves under other words (`watch` for `lab watch`, `recover` for `session recover`,
+    `user-config [<key>]` for `user-config get`, `app launch|restart|stop` for `session app`, and
+    the like) is given to that command in its words and answers as it does; refused short words
+    are actinglab's own usage error (`validation_failed`).
+  - **`serve --stdio`** answers each operation the line its `--json` answers: the CLI module's line
+    for the operations above, the envelope for actinglab's own commands.
+  - `--envelope` is gone: nothing needs it once actinglab's own command lines answer as before.
+  - The catalog holds no phrase for a code, so the line for people is the code with its values,
+    and none is made up; the small table is the result's members. The CLI module locates the
+    state root (`lab_ops::locate`); `ACTINGCOMMAND_RUNTIME_STATE_ROOT`, which MCP's actinglab child
+    and the tests set, still names it when set.
 - **A request the Runtime answered is never a device error** (Workflow #433 LABDO-1, in force
   from that slice; LAB-2 and LAB-5 keep it). Once the Lab has sent an operation's request and
   the Runtime has answered it, a failure of a check the client runs after the receipt (its event
@@ -421,8 +447,9 @@ every kind the file names exists; `entries` follows its rule; a `reserved` row h
   with the receipt's `req_id`, `correlation_id` and `receipt_state`, the `effect` and `executed`
   its record reports, the record's own `failure`, and the client's `client_code` and
   `client_message`. It is never `device_error`, and the caller reads the effect before sending
-  the operation again. actinglab exits 5 with it until LAB-2; with LAB-2's three exit codes it
-  exits 1 like every error, so from then on the effect is the lasting signal. MCP answers it in
+  the operation again. actinglab's `do` exits 5 with it, and keeps that until the slice of open
+  point 10 moves actinglab's own commands to the three exit codes; then it exits 1 like every
+  error, so from then on the effect is the lasting signal. MCP answers it in
   class `runtime` with its `req_id`, actinglab's details and its message (LAB-5 keeps that). A
   failure the Runtime itself reports in the receipt keeps its own code
   ([contained-lab-operation.md](contained-lab-operation.md)).
@@ -509,3 +536,13 @@ After LAB-6 the host emits neither `lab_module_not_installed` nor `lab_module_op
 9. **The MCP tool count.** The table has one operation per CLI form (168 in v1), so MCP would list
    that many tools. LAB-5 may present a family (`record`, `package`, `emu`) as one tool with an
    `action` argument; the table stays one row per form either way.
+10. **actinglab's own commands take the new output** (the coordinator's ruling of 2026-11-10, LAB-2
+    fix 1; section 9.3). In one later slice before LAB-5, which the coordinator schedules,
+    actinglab's own commands move to the CLI module's output (the line for people, `--json`
+    printing the `cli_line` line, exit codes 0, 1 and 2) together with their consumers:
+    acmodel's validator (UI repository, `model/src/acmodel/export/validator.py`), the four
+    resource repositories' CI and scripts (`resource-declarations.yml`, `bundle-check.yml`,
+    `scripts/bundle.ps1`, `scripts/validate-local.ps1`, `scripts/regression.ps1`), and the
+    coordinator's hotplace kit (`hotplace.ps1`, `tools/composer_check_r10.py`); MCP's actinglab
+    child moves with LAB-5. That slice also gives `status` and `run show` on the command line to
+    their core rows.

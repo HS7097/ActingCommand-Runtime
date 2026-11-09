@@ -237,14 +237,15 @@ fn cli_short_words_parse() {
 
     // LAB-2 fix 1, `main`'s route. `serve` and the operations the module serves itself, those
     // from actingctl, go to the module, `--json` anywhere.
-    for line in [
-        &["serve", "--stdio"][..],
+    let module_lines: [&[&str]; 6] = [
+        &["serve", "--stdio"],
         &["codes", "actingctl_usage_invalid"],
         &["--json", "config", "set", "a.b=1"],
         &["devices"],
         &["run", "evidence", "req-neutral-0001", "--json"],
         &["drill", "neutral.a"],
-    ] {
+    ];
+    for line in module_lines {
         match cli_module::route(words_of(line)) {
             Route::Module(module) => assert_eq!(module, words_of(line)),
             other => panic!("{line:?} is the module's: {other:?}"),

@@ -1357,16 +1357,9 @@ fn command_inventory_matches_checked_in_snapshot() {
     }
     assert_eq!(
         exemptions,
-        BTreeSet::from([
-            "help",
-            "version",
-            "doctor",
-            "scheduler status",
-            "scheduler pause",
-            "scheduler resume",
-            "scheduler start",
-            "scheduler stop",
-        ]),
+        // Workflow #434 LAB-2: the reserved `scheduler` commands are deleted, and their
+        // exemptions with them.
+        BTreeSet::from(["help", "version", "doctor"]),
         "pipeline exemptions must match their named command scope"
     );
 }

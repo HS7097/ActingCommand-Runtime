@@ -90,8 +90,8 @@ pub(crate) fn route(arguments: Vec<String>) -> Route {
     if words.first().map(String::as_str) == Some(SERVE) {
         return Route::Module(arguments);
     }
-    let table = table().ok();
-    let named = table.and_then(|table| words::named(table, &words));
+    let loaded = table().ok();
+    let named = loaded.and_then(|table| words::named(table, &words));
     if let Some(operation) = named
         && core_ops::serves(operation)
         && !crate::own_command(&name_words(&operation.name))
@@ -102,7 +102,7 @@ pub(crate) fn route(arguments: Vec<String>) -> Route {
         return Route::Own(arguments);
     }
     // The table's failure is the module's to report.
-    let Some(table) = table else {
+    let Some(table) = loaded else {
         return Route::Module(arguments);
     };
     let Some(operation) = named.filter(|operation| !core_ops::serves(operation)) else {
@@ -206,6 +206,10 @@ pub(crate) fn recording_initiator(via: Option<ChannelVia>) -> Result<&'static st
 /// The CLI module: one command line (`serve --stdio` included), printed, and its exit code.
 pub(crate) fn main(arguments: Vec<String>) -> ExitCode {
     actingcommand_lab_ops::front::set(actingcommand_lab_ops::front::Front::Actinglab);
+    // The register's LAB-2 row: `status` reads the overview's `watchdog` block through
+    // `crates/watchdog` (LAB-4), as actingctl does; on Windows only, where the watchdog runs.
+    #[cfg(windows)]
+    actingcommand_lab_ops::overview::set_watchdog_block(actingcommand_watchdog::overview_block);
     let (json, words) = front_end(arguments);
     if words.first().map(String::as_str) == Some(SERVE) {
         return serve::main(&words[1..]);

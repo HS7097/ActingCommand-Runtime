@@ -135,9 +135,8 @@ actingcommand_contract::outcome_codes! {
         ResourceVerifyReadbackMismatch => "resource_verify_readback_mismatch": error / none,
         /// Error. The report could not be written; stdout still carries it (keys `path`).
         ResourceVerifyReportWriteFailed => "resource_verify_report_write_failed": error / none,
-        /// Error. `resource check-release` is retired: it answered `checked` without checking.
-        /// `resource verify` checks a resource repository's commit.
-        ResourceCheckReleaseRetired => "resource_check_release_retired": error / none,
+        // Workflow #434 LAB-2 fix 1: `resource_check_release_retired` is retired in 0.12.47 with
+        // the word `resource check-release` (catalog `status` `retired`).
         // ---- end of #411 RV-1
         // ---- Workflow #411 B34 (slice E4, pending): `package check` warns on a click box of one
         // point.
@@ -154,14 +153,14 @@ actingcommand_contract::outcome_codes! {
         /// details carry the receipt's `req_id`, `correlation_id` and `receipt_state`, the
         /// `effect` and `executed` its record reports, its `failure` when it reports one, and the
         /// client's `client_code` and `client_message`. Exit 5 (keys `req_id`, `receipt_state`,
-        /// `client_code`). Workflow #434 LAB-2: the CLI module's line exits 1.
+        /// `client_code`). Workflow #434 LAB-2 fix 1: `do` keeps this exit until actinglab's own
+        /// commands move to the CLI module's line, which exits 1.
         LabOperationCheckFailed => "lab_operation_check_failed": error / none,
         // ---- end of LABDO-1
         // ---- Workflow #434 LAB-2 (pending): the CLI module's success of an operation whose
         // source has no success code of its own.
-        /// Success. An operation of the CLI module (or of `serve --stdio`) served by actinglab's
-        /// own command, or a core operation whose only source was an MCP tool, ran to its end;
-        /// its line carries the answer.
+        /// Success. An operation of the CLI module (or of `serve --stdio`) whose only source was
+        /// an MCP tool ran to its end; its line carries the answer.
         LabOperationCompleted => "lab_operation_completed": success / none,
         // ---- end of LAB-2
     }
