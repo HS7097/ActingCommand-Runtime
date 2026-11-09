@@ -7,20 +7,21 @@ use actingcommand_contract::MAX_STRATEGIC_WEIGHT_MILLI;
 use crate::source::SourceMap;
 use crate::{
     ActivityProfile, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode, ClockSchedule,
-    ClockSource, Comparison, EffectDirection, FactComparand, FactReference, FactValue, LoadProfile,
-    MAX_ACTIVITY_PROFILES, MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CANONICAL_INTEGER,
-    MAX_CLOCK_DRIFT_MS, MAX_CONTINUED_TASK_IDS, MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS,
-    MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS, MAX_FACT_TIME_OFFSET_MS,
-    MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_MISSED_GRACE_MS,
-    MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE,
-    MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS,
-    MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI,
-    MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE,
-    MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES, MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS,
-    MIN_UTC_OFFSET_MINUTES, MetricRef, MissedSlotRule, ObservationRef, PoolCapacity,
-    PoolProjection, PoolSpec, PoolValuation, PredicateSpec, ProjectionComparand,
-    ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector,
-    TaskSpec, TimelineDocument, TimelineEvent,
+    ClockSource, Comparison, DiagnosticSeverity, EffectDirection, FactComparand, FactReference,
+    FactValue, LoadProfile, MAX_ACTIVITY_PROFILES, MAX_APPROVAL_REFS, MAX_BUDGET_COUNT,
+    MAX_CANONICAL_INTEGER, MAX_CLOCK_DRIFT_MS, MAX_CONTINUED_TASK_IDS, MAX_DEFER_AGING_CAP_MS,
+    MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS,
+    MAX_FACT_TIME_OFFSET_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK,
+    MAX_MISSED_GRACE_MS, MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES,
+    MAX_PRIORITY_PERCENTILE, MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES,
+    MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI,
+    MAX_VALUATION_GAP_WEIGHT_MILLI, MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES,
+    MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES,
+    MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS, MIN_UTC_OFFSET_MINUTES, MetricRef,
+    MissedSlotRule, ObservationRef, PoolCapacity, PoolLine, PoolProjection, PoolSpec,
+    PoolValuation, PredicateSpec, ProjectionComparand, ResourceEffectSpec,
+    SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TaskSpec,
+    TimelineDocument, TimelineEvent,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -398,6 +399,7 @@ fn validate_tasks(
             descriptor,
             diagnostics,
         );
+        validate_limited(task, &path, map, descriptor, diagnostics);
     }
     validate_continuations(bundle, map, task_ids, descriptor, diagnostics);
     validate_realization_cycles(bundle, map, descriptor, diagnostics);
@@ -490,6 +492,39 @@ fn validate_realization(
                 descriptor,
             ));
         }
+    }
+}
+
+/// SS-2h (register §1.289): a task's `benefit_limited`. It is a V2 member (a V1 document that
+/// names it is refused as an unknown member); `true` requires `benefit_judged: true`
+/// (`missing_required_field` at `benefit_judged`), since only a judged candidate takes part in a
+/// capped spending order. `false` is as without the member.
+fn validate_limited(
+    task: &TaskSpec,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    if task.benefit_limited.is_none() {
+        return;
+    }
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            format!("{path}/benefit_limited"),
+            "benefit_limited requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if task.is_benefit_limited() && !task.is_benefit_judged() {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::MissingRequiredField,
+            format!("{path}/benefit_judged"),
+            "benefit_limited requires benefit_judged: true",
+            descriptor,
+        ));
     }
 }
 
@@ -2059,6 +2094,138 @@ fn validate_pools(
                 diagnostics,
             );
         }
+        // SS-2h (register §1.289): the stop line and the hard line are V2's.
+        validate_pool_lines(pool, &path, map, descriptor, diagnostics);
+    }
+}
+
+/// SS-2h (register §1.289; `contracts/scheduling/README.md`, "Pool lines"): a pool's `stop_line`
+/// and `hard_line` at `<path>/stop_line` and `<path>/hard_line`. They are V2 members: a V1
+/// document is refused as `unknown_field` at each member written, and nothing else is checked.
+/// Each line follows its form's rules: a reference a capacity reference's
+/// ([`validate_reference_members`]), a constant a canonical safe integer (`limit_exceeded` at the
+/// member). Then, `pool_lines_invalid` at the member:
+/// 1. one written without the other (at the one written);
+/// 2. a line above the pool's capacity, when both are known to the compiler: a constant above a
+///    constant capacity, or a reference to the capacity's own fact with a larger offset;
+/// 3. the stop line not above the hard line, when both are known to the compiler: two constants,
+///    or two references to one fact compared by their offsets (at `hard_line`).
+///
+/// Lines the compiler cannot compare are checked at each evaluation (`lines_invalid`).
+fn validate_pool_lines(
+    pool: &PoolSpec,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let written = [
+        ("stop_line", &pool.stop_line),
+        ("hard_line", &pool.hard_line),
+    ];
+    if written.iter().all(|(_, line)| line.is_none()) {
+        return;
+    }
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        for (member, line) in written {
+            if line.is_some() {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::UnknownField,
+                    format!("{path}/{member}"),
+                    format!("a pool's {member} requires actingcommand.scheduling.v2"),
+                    descriptor,
+                ));
+            }
+        }
+        return;
+    }
+    let mut well_formed = true;
+    for (member, line) in written {
+        let Some(line) = line else {
+            continue;
+        };
+        let at = format!("{path}/{member}");
+        match line {
+            PoolLine::Fact(reference) => {
+                let count = diagnostics.len();
+                validate_reference_members(reference, &at, "pool", map, descriptor, diagnostics);
+                well_formed &= diagnostics.len() == count;
+            }
+            PoolLine::Constant(value) => {
+                if *value > MAX_CANONICAL_INTEGER as u64 {
+                    diagnostics.push(map.diagnostic(
+                        CatalogDiagnosticCode::LimitExceeded,
+                        at,
+                        format!("a constant {member} must be within 0..={MAX_CANONICAL_INTEGER}"),
+                        descriptor,
+                    ));
+                    well_formed = false;
+                }
+            }
+        }
+    }
+    let (Some(stop), Some(hard)) = (&pool.stop_line, &pool.hard_line) else {
+        let member = if pool.stop_line.is_some() {
+            "stop_line"
+        } else {
+            "hard_line"
+        };
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::PoolLinesInvalid,
+            format!("{path}/{member}"),
+            "a pool writes stop_line and hard_line together, or neither",
+            descriptor,
+        ));
+        return;
+    };
+    // SS-2h fix 1: only a valued pool's lines take part; a pool without a declared valuation
+    // carries them unread, which the compiler says (a warning at `stop_line`; the catalog compiles).
+    if pool.declared_valuation().is_none() {
+        let mut warning = map.diagnostic(
+            CatalogDiagnosticCode::PoolLinesUnvalued,
+            format!("{path}/stop_line"),
+            "a pool's stop_line and hard_line take part only with a declared valuation",
+            descriptor,
+        );
+        warning.severity = DiagnosticSeverity::Warning;
+        diagnostics.push(warning);
+    }
+    if !well_formed {
+        return;
+    }
+    // Rule 2: a line above the capacity, where both are known here.
+    for (member, line) in [("stop_line", stop), ("hard_line", hard)] {
+        let above = match (line, &pool.capacity) {
+            (PoolLine::Constant(value), PoolCapacity::Constant(capacity)) => value > capacity,
+            (PoolLine::Fact(reference), PoolCapacity::Fact(capacity)) => {
+                reference.fact_key == capacity.fact_key && reference.offset > capacity.offset
+            }
+            _ => false,
+        };
+        if above {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::PoolLinesInvalid,
+                format!("{path}/{member}"),
+                format!("a pool's {member} may not be above its capacity"),
+                descriptor,
+            ));
+        }
+    }
+    // Rule 3: the stop line above the hard line, where both are known here.
+    let not_above = match (stop, hard) {
+        (PoolLine::Constant(stop), PoolLine::Constant(hard)) => stop <= hard,
+        (PoolLine::Fact(stop), PoolLine::Fact(hard)) => {
+            stop.fact_key == hard.fact_key && stop.offset <= hard.offset
+        }
+        _ => false,
+    };
+    if not_above {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::PoolLinesInvalid,
+            format!("{path}/hard_line"),
+            "a pool's stop_line must be above its hard_line",
+            descriptor,
+        ));
     }
 }
 

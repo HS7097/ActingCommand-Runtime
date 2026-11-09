@@ -275,6 +275,33 @@ requires, each refused at its member:
 With `false` it is as without the member. A V1 document that names it is refused as an unknown
 field at the member. A catalog without it serializes, and hashes, exactly as before.
 
+SS-2h (since 0.12.46; register §1.289; `../README.md`, "Pool lines", "Capped spending order";
+Alice's ruling 138 and her answers of 11-09), V2 only:
+- A pool may carry `stop_line` and `hard_line`, both or neither, its two water lines: each CF-5's
+  fact reference `{"type": "fact", "fact_key": B, "offset": N}`, B read in the pool's own scope
+  (meant as its capacity fact, N negative: the read cap less a margin), or an integer in
+  `0..=9007199254740991`, the line itself. A reference follows the capacity reference's rules at
+  `stop_line/…` or `hard_line/…`; a constant above 9007199254740991 is `limit_exceeded` at the
+  member; one written without the other, a line above the capacity (a constant above a constant
+  capacity, a reference to the capacity's fact with a larger offset) and a stop line not above the
+  hard line (two constants, two references to one fact) are `pool_lines_invalid` at the member
+  (at `hard_line` for the last); the rest is checked at each evaluation (`0 ≤ H < S ≤ cap`). A
+  pool that writes both but declares no valuation compiles with the warning `pool_lines_unvalued`
+  at `stop_line`: its lines change nothing (SS-2h fix 1). A
+  V1 document that names either is refused as an unknown field at the member. Without them the
+  stop line is the capacity and the hard line 0. A `schedule.json` whose pool writes them names
+  `pool_lines` in `requires`.
+- A task may carry `benefit_limited`, a boolean. With `true` its runs are counted by a limit (its
+  own, or an income cap that counts it): from an episode's second round the capped spending order
+  does not list it. The compiler requires `benefit_judged: true` beside it
+  (`missing_required_field` at `benefit_judged`). The standard-pack composer writes it from the
+  `schedule.json` rule member `"limited": true` (which only `acmodel bindings apply` writes, and
+  which is no V2 task member), and refuses a rule that writes `benefit_limited` itself. With
+  `false` it is as without the member. A V1 document that names it is refused as an unknown field
+  at the member.
+
+A catalog without these serializes, and hashes, exactly as before.
+
 SS-2g (since 0.12.34; register §1.232; `../README.md`, "Expected quantities (v2)"): a `consumes`
 entry may declare `expected_amount_milli` instead of `amount`, as a `produces` entry may: an
 integer in `0..=9007199254740991` thousandths of a unit per run, at most a constant capacity ×

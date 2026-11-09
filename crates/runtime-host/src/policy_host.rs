@@ -50,15 +50,15 @@ use actingcommand_contract::{
 };
 use actingcommand_ledger::{GlobalLedger, LedgerIndexRole, PersistedEvent};
 use actingcommand_policy::{
-    ActivityProfile, CandidateEligibility, CatalogDocumentSource, CatalogSources, CompiledCatalog,
-    CompletedActivityWindow, DecisionReason, DecisionReasonChain, DetectionSuggestion,
-    DispatchIntent, DispatchPrerequisites, EligibilityState, EvaluationFacts, EvaluationResources,
-    EvaluationTime, FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, InstanceSnapshot,
-    MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, NoProgressMemory,
-    PolicyEvaluation, REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun,
-    RemedySettlement, RunSlots, SchedulingDecisionState, ScopeSelector, TaskDecision,
-    TaskRuntimeSnapshot, TaskTerminalState, activity_window_at, compile_catalog,
-    evaluate_with_no_progress, plan_remedies,
+    ActivityProfile, CandidateEligibility, CappedMemory, CatalogDocumentSource, CatalogSources,
+    CompiledCatalog, CompletedActivityWindow, DecisionReason, DecisionReasonChain,
+    DetectionSuggestion, DispatchIntent, DispatchPrerequisites, EligibilityState, EvaluationFacts,
+    EvaluationResources, EvaluationTime, FACT_REFRESH_TASK_ID, FactRefreshInputs,
+    FactRefreshReader, InstanceSnapshot, MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK,
+    MAX_TASK_LAST_DURATION_MS, NoProgressMemory, PolicyEvaluation, REMEDY_JOURNAL_MAX_RUNS,
+    RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement, RunSlots,
+    SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot, TaskTerminalState,
+    activity_window_at, compile_catalog, evaluate_with_capped_spending, plan_remedies,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
 use serde::{Deserialize, Serialize};
@@ -1249,6 +1249,9 @@ pub(crate) struct PolicyHost {
     /// SS-4 (register §1.231): the no-progress guard's captured bases and armed guards, per
     /// (task, instance). Memory only; a host starts with none.
     no_progress: NoProgressMemory,
+    /// SS-2h (register §1.289): the capped episodes of the valued pools, per (instance, pool),
+    /// with their rounds' frozen orders. Memory only; a host starts with none.
+    capped: CappedMemory,
 }
 
 /// Workflow #422 LN-4: the dispatch journal while it is rebuilt.
@@ -1672,6 +1675,7 @@ impl PolicyHost {
             rerun_signals: Vec::new(),
             reruns: rerun::RerunState::default(),
             no_progress: NoProgressMemory::default(),
+            capped: CappedMemory::default(),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -2878,9 +2882,13 @@ impl PolicyHost {
         self.no_progress
             .observe(&active.compiled, facts, time, no_progress_on)?;
         let no_progress_guards = self.no_progress.guards();
+        // SS-2h (register §1.289; `scheduling/README.md`, "Capped spending order"): the capped
+        // episodes the evaluation reads and updates, taken out for the call and put back after it,
+        // whatever its result.
+        let mut capped = std::mem::take(&mut self.capped);
         let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
-        let mut evaluation = evaluate_with_no_progress::<RuntimeHostError>(
+        let evaluation = evaluate_with_capped_spending::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
@@ -2896,6 +2904,7 @@ impl PolicyHost {
             &rerun_plan.owed,
             &instance_holds,
             &no_progress_guards,
+            &mut capped,
             |task, _instance_id, page_id| {
                 Ok(crate::host::chain_entry_holds_page(
                     procedure_manifest,
@@ -3048,7 +3057,9 @@ impl PolicyHost {
                     Err(error) => Err(error),
                 }
             }),
-        )?;
+        );
+        self.capped = capped;
+        let mut evaluation = evaluation?;
         procedure_manifest.bind_evaluation(&mut evaluation)?;
         // Workflow #411 B15 R4 (model-b15 §7.5 to §7.7): the stops, lifts and expiries the plan
         // and the evaluation decided, each checked against the planning-signal projection before

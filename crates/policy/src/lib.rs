@@ -127,4 +127,7 @@ mod tests {
     // SS-2f (0.12.46; register §1.288): the business tier across instances goes to the instance
     // least recently dispatched first; within an instance the order of before stays.
     mod gate_ss2f;
+    // SS-2h (0.12.46; register §1.289): a pool's stop line and hard line, and the capped spending
+    // order inside the scheduler.
+    mod gate_ss2h;
 }

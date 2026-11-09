@@ -690,8 +690,12 @@ fn ss2d_t14_the_compiler_holds_the_mark_to_its_conditions() {
 
 // Test 15: ruling 127 (i), the cost formula unchanged. A pool that does not regenerate, full (100
 // of 100) above its reserve line, costs its full weight: S = 1000 − 400 = 600, so does a scarce
-// material whatever its fill. A regenerating pool costs nothing at capacity (S = 1000) and its
-// weight at the reserve line (S = 1000 − 10·1000 = −9000).
+// material whatever its fill (SS-2h, register §1.289: at its capacity it is the head of its capped
+// spending order, dispatched with that B, none of its consumption above the stop line). A
+// regenerating pool costs its weight at the reserve line (S = 1000 − 10·1000 = −9000) and, SS-2h
+// (Alice's ruling 138 and her answer of 11-09 16:39, below the cap nothing is spent for free), at
+// capacity as well: there it is dispatched as the head of its capped order with B = −9000. Adapted
+// in SS-2h: until then SS-2b's discount made it cost nothing at capacity (S = 1000).
 #[test]
 fn ss2d_t15_the_cost_of_a_pool_is_as_before() {
     let of_100 = |mut pool: Value| {
@@ -745,8 +749,13 @@ fn ss2d_t15_the_cost_of_a_pool_is_as_before() {
         Vec::new(),
         vec![reading("pool.stamina", 100)],
     );
+    assert_eq!(dispatched(&full), [POSITIVE], "{full:#?}");
     let breakdown = reason(decision(&full, A, POSITIVE), "rank_breakdown");
-    assert_eq!(breakdown.outcome.value("benefit_milli"), Some(&json!(1000)));
+    assert_eq!(
+        breakdown.outcome.value("benefit_milli"),
+        Some(&json!(-9000))
+    );
+    reason(decision(&full, A, POSITIVE), "capped_spend");
     let at_reserve = round(&regenerating, Vec::new(), vec![reading("pool.stamina", 20)]);
     let held = decision(&at_reserve, A, POSITIVE);
     assert_eq!(last_code(held), NONPOSITIVE, "{held:#?}");

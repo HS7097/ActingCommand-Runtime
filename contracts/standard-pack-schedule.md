@@ -22,8 +22,10 @@ package path and no approval:
   "schema_version": "actingcommand.schedule.v1",
   "requires": [ "<subsystem>", ... ],
   "rules":    [ a V2 task without scope, entrypoint and procedure_ref, with "package_id",
-                an optional "maintenance": true and an optional "realization": true ],
-  "pools":    [ a V2 pool without scope, with an optional "server" ],
+                an optional "maintenance": true, an optional "realization": true and an
+                optional "limited": true ],
+  "pools":    [ a V2 pool without scope, with an optional "server" (its V2 members, such as
+                "stop_line" and "hard_line", pass through) ],
   "activity": [ a V2 activity profile without scope, with an optional "server" ],
   "timeline": [ a V2 timeline event without scope, with an optional "server" ],
   "held":     [ { "package_id", "reason", "reference"? } ]
@@ -85,6 +87,15 @@ not name it, `schedule_invalid` at the first in the order rules (their `trigger`
 `feedback_stop`, as above) then pools (for example `/rules/0/trigger/value`, then
 `/pools/0/capacity`). A file that writes both a `fact` reference and one of these names both
 subsystems. Each reference reads its fact in the pool's scope, which the composer fills.
+
+A pool that writes `stop_line` or `hard_line`, its two water lines (SS-2h, since 0.12.46, register
+§1.289; [scheduling/README.md](scheduling/README.md), "Pool lines"), as a fact reference or a
+constant, requires `pool_lines`, alike: the composer refuses a file that writes one while
+`requires` does not name it, `schedule_invalid` at the first such pool's member in file order
+(for example `/pools/0/stop_line`). The members pass through: the composer copies them into each
+composed pool as written (they name no id and no scope; a reference names a fact of the pool's
+own scope, which the composer fills), and the catalog compiler checks them (`pool_lines_invalid`
+names the member). A reference form needs `pool_lines` only.
 
 A timeline event that writes `excludes_fact_prefixes`, with any value (Workflow #411 P19, since
 0.12.25; [scheduling/README.md](scheduling/README.md), "Reset exclusions and the task's own last
@@ -217,6 +228,22 @@ wastes nothing; `acmodel bindings apply` writes its verdict as
   on and a fact reading of each consumed pool, no cycle) are mapped back to the rule as every
   compiler diagnostic is; `realization_cycle` names the rule's `realization`.
 
+**The limited mark** (SS-2h, since 0.12.46; register §1.289; [scheduling/README.md](scheduling/README.md),
+"Capped spending order"; design `rd-1031/design-c424-redline-1109.md` §1.6 item 6). Whether a
+rule's runs are counted by a limit (the activity's own limit, or an income cap that counts it) is
+the model's to say; `acmodel bindings apply` writes it as `"limited": true` on the rule. It is
+written as the realization mark is:
+
+- The composer writes `benefit_limited: true` on the judged rule's task
+  ([scheduling/v2/README.md](scheduling/v2/README.md)): from a capped episode's second round its
+  candidate is not listed. The member is `schedule.json`'s: the composer leaves it out of the
+  composed task, so a file that does not write it composes byte for byte as before.
+- Only `true` marks; any other value, `false` included, and the mark on a rule that declares
+  `"maintenance": true` are refused, `schedule_invalid` at `/rules/<i>/limited`; a rule whose
+  package is maintenance-role is refused at the same pointer. A rule that writes
+  `benefit_limited` itself is refused at `/rules/<i>/benefit_limited`: the task member is the
+  composer's. A compiler diagnostic at the task's `benefit_limited` names the rule's `limited`.
+
 ## Composition
 
 `actingcommand_policy::compose_standard_pack_rules` is the one composer. The Runtime's
@@ -235,7 +262,8 @@ each game root that holds `schedule.json`, that file's bytes, the root as
    `schedule.json` has no rules.
 2. **Read** each game's file (above): the reader, `requires` (it names `fact_reference` when a
    rule writes a fact reference, `pool_fact_reference` when a pool's `capacity` or a
-   `resource_projection`'s `value` is one, `reset_exclusions` when a timeline event writes
+   `resource_projection`'s `value` is one, `pool_lines` when a pool writes `stop_line` or
+   `hard_line`, `reset_exclusions` when a timeline event writes
    `excludes_fact_prefixes`, `fact_unknown_probe` when a rule's `fact` predicate writes
    `on_unknown`, and the given subsystems name each entry), no timeline event
    invalidating `health.application.update_required` ("The store update rule"), the references
@@ -249,7 +277,9 @@ each game root that holds `schedule.json`, that file's bytes, the root as
    is not maintenance-role gains `benefit_judged: true` ("Judged rules" above), SS-2c: unless it
    declares itself maintenance (`maintenance`, which the composed task does not carry); SS-2d:
    such a rule that carries `"realization": true` also gains `benefit_realization: true` ("The
-   realization mark" above; the composed task does not carry `realization`).
+   realization mark" above; the composed task does not carry `realization`); SS-2h: and one that
+   carries `"limited": true` gains `benefit_limited: true` ("The limited mark" above; the composed
+   task does not carry `limited`).
 4. **Ids.** An item copied to exactly one instance keeps the file's id, so one instance per
    (game, server) composes ids byte-identical to the file. An item copied to two or more
    instances gets the id `<id>@<alias>` in each copy; every reference inside that copy (an

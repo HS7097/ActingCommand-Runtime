@@ -2271,9 +2271,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.32",
-      "description": "Scheduling decision reason (SS-2b, Alice's ruling 104 point 3; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate (a business task the catalog marks benefit_judged, not continuing a business chain, SS-2e: no link walked up to its chain head is marked, and not a manual request) has a known net benefit benefit_milli that is not positive: what one run produces is worth no more than what it consumes costs, each at the resource layer's weight per valuation step and a regenerating pool's cost discounted by its fullness. It is not dispatched this round; expected_duration_ms is the E it would be ranked with.",
+      "description": "Scheduling decision reason (SS-2b, Alice's ruling 104 point 3; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate (a business task the catalog marks benefit_judged, not continuing a business chain, SS-2e: no link walked up to its chain head is marked, and not a manual request) has a known net benefit benefit_milli that is not positive: what one run produces is worth no more than what it consumes costs, each at the resource layer's weight per valuation step (SS-2h: a consumption at its full weight whatever the pool's fill; SS-2b's discount by fullness is retired, and a pool at its cap is spent by the capped spending order instead). It is not dispatched this round; expected_duration_ms is the E it would be ranked with.",
       "common_causes": "The task consumes more value than it produces at the current readings, or the pool valuations make its yield worth nothing.",
-      "handling": "None: the candidate is judged again at every evaluation; a regenerating pool it consumes wakes the evaluation at its next step, as its cost falls while it fills. Revise the task's produces and consumes or the pools' valuation in the resource side's schedule.json if the value is wrong."
+      "handling": "None: the candidate is judged again at every evaluation; a regenerating pool it consumes wakes the evaluation at its next step. Revise the task's produces and consumes or the pools' valuation in the resource side's schedule.json if the value is wrong."
     },
     "benefit_unknown": {
       "category": "info",
@@ -2295,7 +2295,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.32",
-      "description": "Scheduling decision reason (SS-2b, Alice's rulings 104 point 3 and 116; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate's net benefit is unknown, so it is not dispatched; unknown is never 0 and the known part is never added up. benefit_gap says why: the task declares no produces or consumes entry, an entry's amount or a pool valuation it touches is the pending marker or missing (pool_id), or the cost of a regenerating pool it consumes needs a reading that is unknown or expired (pool_id, and fact_key with unknown_reason when the pool reads a fact; the fact refresh is asked for that reading).",
+      "description": "Scheduling decision reason (SS-2b, Alice's rulings 104 point 3 and 116; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate's net benefit is unknown, so it is not dispatched; unknown is never 0 and the known part is never added up. benefit_gap says why: the task declares no produces or consumes entry, an entry's amount or a pool valuation it touches is the pending marker or missing (pool_id), or a regenerating pool it consumes has a reading that is unknown or expired (pool_id, and fact_key with unknown_reason when the pool reads a fact; the fact refresh is asked for that reading).",
       "common_causes": "The resource side has not written the task's produces and consumes, or the pools' valuation, yet (Alice's ruling 116: business dispatch waits until values exist); or a pool reading has expired.",
       "handling": "Write the task's produces and consumes and each touched pool's valuation in the game's schedule.json; actinglab standard-pack check reports how many judged rules are complete, pending and undeclared. A reading is refreshed by the fact refresh."
     },
@@ -2341,6 +2341,107 @@
       "description": "Catalog compile diagnostic (SS-2d; contracts/scheduling/v2/README.md, benefit_realization): the tasks marked benefit_realization form a cycle through the pools they consume and produce (each marked task links every pool it consumes to every pool it produces, over the whole catalog, a task that consumes and produces one pool included); one diagnostic at the benefit_realization member of each marked task on such a cycle. The catalog is refused, so no zero-benefit loop can run.",
       "common_causes": "Two realization or conversion rules convert into each other's inputs, or one rule produces a pool it consumes.",
       "handling": "Remove the realization mark from the rule the model does not verify, or break the conversion cycle in the model and bind the rules again."
+    },
+    "capped_spend": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "pool_id": "required",
+        "pool_capacity": "required",
+        "stop_line": "required",
+        "hard_line": "required",
+        "capped_episode": "required",
+        "capped_round": "required",
+        "capped_rank": "required",
+        "pool_reading": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.46",
+      "description": "Scheduling decision reason (SS-2h, Alice's ruling 138 and her answers of 11-09 17:37, 17:42 and 17:48; contracts/scheduling/README.md \"Capped spending order\"): the dispatch is the head of a capped pool's spending order on its instance. The pool's reading (pool_reading, its projected amount less the consumption its reading does not show yet) reached its capacity (pool_capacity), so the pool is in a capped episode (capped_episode, counted since the Runtime started) and its consumers that could be dispatched were frozen in a round's order (capped_round; the first takes limited tasks too) by the value of a run without the pool's cost per unit of the pool consumed; capped_rank is the dispatch's place in it. The round spends the pool down to its stop line (stop_line); no run leaves it below its hard line (hard_line). The head competes with the instance's other candidates by its tier and B ÷ E, its B charging only the part of its consumption that takes the reading below the stop line.",
+      "common_causes": "A pool reached its cap (a regenerating pool filled, or an expired item was converted into it) and its consumers have a positive value without its cost.",
+      "handling": "None. Lower or raise the pool's stop_line and hard_line in schedule.json (the model's thresholds, or a person's or an agent's per instance) to spend more or less of it."
+    },
+    "pool_line_held": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "pool_line_hold": "required",
+        "pool_id": "required",
+        "pool_reading": "optional",
+        "pool_capacity": "optional",
+        "stop_line": "optional",
+        "hard_line": "optional",
+        "capped_episode": "optional",
+        "capped_round": "optional",
+        "amount_after": "optional",
+        "task_id": "optional",
+        "gate_code": "optional",
+        "fact_key": "optional",
+        "unknown_reason": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.46",
+      "description": "Scheduling decision reason (SS-2h, Alice's ruling 138 and her answers of 11-09 17:37, 17:42 and 17:48; contracts/scheduling/README.md \"Pool lines\", \"Capped spending order\"): a pool's lines hold a judged candidate (or, capped_not_dispatchable, a consumer of a capped pool that is no candidate) back this round. pool_line_hold says why: below the cap its run would leave the pool below its hard line (would_cross_hard_line, amount_after); in a capped episode (capped_episode, capped_round) it is no candidate now or was none when the round's order was frozen (capped_not_dispatchable, gate_code its own reason when registered), it is limited and the round is not the first (capped_limited_spent), its run would leave the pool below the hard line in the round's order (capped_would_cross_hard_line, amount_after), the round lists no task and the episode ends (capped_round_empty), or another consumer is the head (capped_not_head, task_id); or the pool's capacity, reading or a line's fact gives no value (capped_cap_unknown, fact_key and unknown_reason) or the lines read break their rules (lines_invalid). The lines constrain the scheduler only: a manual request, a chain successor that rides with its chain and the Runtime's own tasks are not held.",
+      "common_causes": "A pool's reading is near its hard line or at its cap, or a line's fact has not been read.",
+      "handling": "None: the candidate is judged again at every evaluation. Revise the pool's stop_line and hard_line in schedule.json if they are wrong; a line read from a fact needs a reading of that fact."
+    },
+    "pool_lines_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.46",
+      "description": "Catalog compile diagnostic (SS-2h; contracts/scheduling/README.md \"Pool lines\"): a pool's stop_line and hard_line break their rules, at the member: one is written without the other, the stop line is not above the hard line (two constants, or two references to one fact compared by their offsets), or a line is above the pool's capacity (a constant above a constant capacity, or a reference to the capacity's own fact with a larger offset). Lines a compilation cannot compare are checked at each evaluation (lines_invalid). The catalog is refused.",
+      "common_causes": "A schedule.json pool binds only one of its two thresholds, or the hard line was bound above the stop line.",
+      "handling": "Write both lines, the stop line above the hard line and neither above the capacity, and bind them again."
+    },
+    "pool_lines_unvalued": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.46",
+      "description": "Catalog compile diagnostic, a warning (SS-2h fix 1; contracts/scheduling/README.md \"Pool lines\"): a pool writes stop_line and hard_line but no declared valuation (none, or the pending marker), at its stop_line. Only a valued pool's lines take part in the hard line and the capped spending order, so these are carried as written and change no decision. The catalog compiles; the warning is listed with the compiled catalog and in its dry-run report.",
+      "common_causes": "The pool's thresholds were bound before its valuation, or its valuation is still the pending marker.",
+      "handling": "Bind the pool's valuation, or remove the lines until it has one."
     }
   }
 }

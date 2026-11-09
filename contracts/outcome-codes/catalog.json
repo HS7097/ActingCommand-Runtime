@@ -2361,11 +2361,11 @@
     },
     "benefit_gap": {
       "type": "vocab:benefit_gap",
-      "description": "Why a judged candidate's net benefit is unknown: no declared effect, a pending entry, a pending or missing valuation of a pool it touches, or an unknown reading the cost of a pool it consumes needs (SS-2b, contracts/scheduling/README.md \"Net benefit within a tier\")."
+      "description": "Why a judged candidate's net benefit is unknown: no declared effect, a pending entry, a pending or missing valuation of a pool it touches, or an unknown reading of a regenerating pool it consumes (SS-2b, contracts/scheduling/README.md \"Net benefit within a tier\")."
     },
     "benefit_milli": {
       "type": "integer",
-      "description": "A judged candidate's net benefit B in milli: the value of what one run produces less the cost of what it consumes, each at the resource layer's weight per valuation step, a regenerating pool's cost discounted by its fullness (SS-2b)."
+      "description": "A judged candidate's net benefit B in milli: the value of what one run produces less the cost of what it consumes, each at the resource layer's weight per valuation step (SS-2b; SS-2h: a consumption at its full weight whatever the pool's fill, and for the head of a capped spending order the part of its consumption above the stop line free)."
     },
     "expected_duration_ms": {
       "type": "duration_ms",
@@ -2551,7 +2551,7 @@
     },
     "tolerance_milli": {
       "type": "integer",
-      "description": "The rounding bound ε of a judged candidate's exact net benefit S, rounded up to a whole milli: the sum over the pools it produces of R/(2000·Q) + n·(2W+1)/(4000·Q) and over the pools it consumes of σ·(C/(2000·Q) + m·(2W+1)/(4000·Q)), with R and C its per-run production and consumption in thousandths, n and m the pool's expected_amount_milli entries, W the pool's weight, Q its valuation scale and σ its regenerating share (SS-2d, contracts/scheduling/README.md \"Within tolerance\")."
+      "description": "The rounding bound ε of a judged candidate's exact net benefit S, rounded up to a whole milli: the sum over the pools it produces of R/(2000·Q) + n·(2W+1)/(4000·Q) and over the pools it consumes of C/(2000·Q) + m·(2W+1)/(4000·Q), with R and C its per-run production and consumption in thousandths, n and m the pool's expected_amount_milli entries, W the pool's weight and Q its valuation scale (SS-2d, contracts/scheduling/README.md \"Within tolerance\"; SS-2h: the whole consumption, the regenerating share σ retired with SS-2b's discount)."
     },
     "zero_tier": {
       "type": "vocab:zero_tier",
@@ -2564,6 +2564,38 @@
     "resume_after_sequence": {
       "type": "integer",
       "description": "The ledger sequence after which an event subscription that ended resumes: the after_sequence of the cursor to subscribe again with, every event at or before it having reached its client or been filtered out (subscription_lagged; #419 SUB-LAG-1, since 0.12.37); a failed receipt keeps it in codes mode."
+    },
+    "pool_capacity": {
+      "type": "integer",
+      "description": "The capacity a pool's reading was held to at the evaluation, in the pool's real units: a constant capacity, or the one read from its fact (SS-2h, contracts/scheduling/README.md \"Pool lines\")."
+    },
+    "stop_line": {
+      "type": "integer",
+      "description": "A pool's stop line at the evaluation, in the pool's real units: the capped spending order spends the pool down to it; without lines the capacity (SS-2h, contracts/scheduling/README.md \"Pool lines\")."
+    },
+    "hard_line": {
+      "type": "integer",
+      "description": "A pool's hard line at the evaluation, in the pool's real units: no dispatch the scheduler chooses leaves the pool below it; without lines 0 (SS-2h, contracts/scheduling/README.md \"Pool lines\")."
+    },
+    "pool_reading": {
+      "type": "integer",
+      "description": "A pool's reading the lines were checked against, in the pool's real units: its projected amount less the consumption its reading does not show yet; negative when that consumption exceeds the amount (SS-2h)."
+    },
+    "capped_episode": {
+      "type": "integer",
+      "description": "Which capped episode of the pool on the instance, counted from 1 since the Runtime started: an episode begins when the reading reaches the cap (SS-2h, contracts/scheduling/README.md \"Capped spending order\")."
+    },
+    "capped_round": {
+      "type": "integer",
+      "description": "Which round of the capped episode, from 1: the first round takes limited tasks too, every later one only repeatable tasks (SS-2h)."
+    },
+    "capped_rank": {
+      "type": "integer",
+      "description": "A dispatch's place, from 1, in its round's frozen order of the pool's consumers by value per unit consumed (SS-2h)."
+    },
+    "pool_line_hold": {
+      "type": "vocab:pool_line_hold",
+      "description": "Why a pool's lines hold a judged candidate back this round (SS-2h, contracts/scheduling/README.md \"Pool lines\", \"Capped spending order\")."
     }
   },
   "vocabularies": {
@@ -3724,7 +3756,7 @@
           "description": "A pool the task touches has no valuation for the instance; pool_id names it."
         },
         "reading_unknown": {
-          "description": "The cost of a regenerating pool the task consumes needs the pool's reading, which is unknown or expired; pool_id names the pool, fact_key and unknown_reason its reading when it reads a fact, and the fact refresh is asked for it."
+          "description": "A regenerating pool the task consumes has a reading that is unknown or expired; pool_id names the pool, fact_key and unknown_reason its reading when it reads a fact, and the fact refresh is asked for it."
         }
       }
     },
@@ -3758,6 +3790,36 @@
         },
         "latest_failed": {
           "description": "Its latest run on the instance failed: deferred; the failure keeps its own retry and escalation path, the zero tier does not retry it."
+        }
+      }
+    },
+    "pool_line_hold": {
+      "description": "Why a pool's lines hold a judged candidate back, the value of pool_line_held (SS-2h, contracts/scheduling/README.md \"Pool lines\", \"Capped spending order\"). The lines constrain the scheduler only: manual requests and the Runtime's own tasks are not held.",
+      "review": "pending",
+      "tokens": {
+        "would_cross_hard_line": {
+          "description": "Below the cap: its run would leave the pool below its hard line (amount_after, hard_line)."
+        },
+        "capped_not_dispatchable": {
+          "description": "Capped: it was no candidate when its round's order was frozen, or is none now (gate_code its own reason, when registered), or a later gate of its own (the reserve gate, a budget, a window, a package hold or a remedy round of the Runtime's admission) refused it in the round, which passed it (gate_code that gate's code); it is listed again at the next round."
+        },
+        "capped_limited_spent": {
+          "description": "Capped, from an episode's second round on: its task is marked benefit_limited, so only the first round takes it; the next episode's first round takes it again."
+        },
+        "capped_would_cross_hard_line": {
+          "description": "Capped: its run, from the reading the round accumulates to it, would leave the pool below its hard line (amount_after), so the round skips it and tries the next."
+        },
+        "capped_round_empty": {
+          "description": "Capped: the round lists no task (none can be dispatched now, none fits above the hard line, or from the second round none is repeatable), so the episode ends."
+        },
+        "capped_not_head": {
+          "description": "Capped: another consumer of the pool is the head of the round's order (task_id), or this one already ran in the round; one consumer of the pool is dispatched at a time."
+        },
+        "capped_cap_unknown": {
+          "description": "The pool's capacity, its reading or a fact a line reads gives no value (fact_key and unknown_reason when a fact gives none), so its written lines cannot be kept and it enters no capped state."
+        },
+        "lines_invalid": {
+          "description": "The lines read at the evaluation break their rules: the stop line not above the hard line, or a line above the capacity or below 0 (stop_line, hard_line, pool_capacity)."
         }
       }
     },
@@ -9299,6 +9361,9 @@
       "contract",
       "runtime-host"
     ],
+    "capped_": [
+      "policy"
+    ],
     "capture_": [
       "actingd",
       "actinglab",
@@ -10662,6 +10727,7 @@
       "runtime-host"
     ],
     "pool_": [
+      "policy",
       "runtime-host"
     ],
     "port_": [

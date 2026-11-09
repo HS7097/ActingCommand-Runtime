@@ -128,6 +128,13 @@ pub enum CatalogDiagnosticCode {
     /// SS-2d (register §1.235): the tasks marked `benefit_realization` form a cycle through the
     /// pools they consume and produce.
     RealizationCycle,
+    /// SS-2h (register §1.289): a pool's `stop_line` and `hard_line` break their rules: one is
+    /// written without the other, the stop line is not above the hard line, or one is above the
+    /// pool's capacity.
+    PoolLinesInvalid,
+    /// SS-2h fix 1 (register §1.289; a warning): a pool writes `stop_line` and `hard_line` but no
+    /// declared valuation, so its lines change nothing.
+    PoolLinesUnvalued,
 }
 
 impl CatalogDiagnosticCode {
@@ -160,6 +167,8 @@ impl CatalogDiagnosticCode {
                 PolicyCode::PrioritySelectionPercentileInvalid.code()
             }
             Self::RealizationCycle => PolicyCode::RealizationCycle.code(),
+            Self::PoolLinesInvalid => PolicyCode::PoolLinesInvalid.code(),
+            Self::PoolLinesUnvalued => PolicyCode::PoolLinesUnvalued.code(),
         }
     }
 }
@@ -375,6 +384,15 @@ pub struct TaskSpec {
     /// it keeps its hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub benefit_realization: Option<bool>,
+    /// SS-2h (register §1.289, `actingcommand.scheduling.v2` only): `true` marks a judged task
+    /// whose runs a limit counts (its own daily limit, or an income cap that counts it): the
+    /// capped spending order takes it in an episode's first round only (`contracts/scheduling/
+    /// README.md`, "Capped spending order"). The standard-pack composer writes it from the
+    /// `schedule.json` rule member `"limited": true`; a V2 catalog may write it directly. The
+    /// compiler requires `benefit_judged: true` beside it. `false` is as without the member.
+    /// Absent, the member serializes as nothing at all, so a catalog without it keeps its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benefit_limited: Option<bool>,
 }
 
 impl TaskSpec {
@@ -386,6 +404,11 @@ impl TaskSpec {
     /// SS-2d: whether the catalog marks the task as a model-verified realization.
     pub fn is_benefit_realization(&self) -> bool {
         self.benefit_realization == Some(true)
+    }
+
+    /// SS-2h: whether the catalog marks the task's runs as counted by a limit.
+    pub fn is_benefit_limited(&self) -> bool {
+        self.benefit_limited == Some(true)
     }
 }
 
@@ -1007,6 +1030,45 @@ impl<'de> Deserialize<'de> for PoolCapacity {
     }
 }
 
+/// SS-2h (register §1.289): the configuration-manifest subsystem of a Runtime that reads a pool's
+/// `stop_line` and `hard_line`; a `schedule.json` whose pool writes them names it in `requires`.
+pub const POOL_LINES_SUBSYSTEM: &str = "pool_lines";
+
+/// One of a pool's two lines (SS-2h, register §1.289; Alice's ruling 138 and her answers of
+/// 11-09 17:37 and 17:42: a stop line above a hard line, given by the model, a person or an
+/// agent; the program never computes one): the pool's `stop_line` or `hard_line`.
+///
+/// - [`PoolLine::Fact`]: `{"type": "fact", "fact_key": <key>, "offset": <integer>}`, the integer
+///   the fact `fact_key` of the pool's own scope holds plus `offset`, the shape of a capacity read
+///   from a fact (`actingcommand.scheduling.v2` only). Naming the pool's capacity fact with a
+///   negative offset, the line is the read cap less a margin.
+/// - [`PoolLine::Constant`]: an integer in `0..=2^53−1`, the line itself.
+///
+/// A pool writes both or neither; without them its stop line is its capacity and its hard line 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolLine {
+    Constant(u64),
+    Fact(FactReference),
+}
+
+impl Serialize for PoolLine {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Constant(line) => line.serialize(serializer),
+            Self::Fact(reference) => reference_wire(reference).serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PoolLine {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match reference_or::<D, u64>(deserializer)? {
+            ReferenceOr::Reference(reference) => Self::Fact(reference),
+            ReferenceOr::Other(line) => Self::Constant(line),
+        })
+    }
+}
+
 impl Serialize for ProjectionComparand {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
@@ -1070,6 +1132,14 @@ pub struct PoolSpec {
         deserialize_with = "valuation_declaration"
     )]
     pub valuation: Option<ValuationDeclaration>,
+    /// SS-2h (register §1.289; V2 only): the pool's stop line ([`PoolLine`]), written with
+    /// `hard_line`; absent, the stop line is the pool's capacity and the catalog keeps its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_line: Option<PoolLine>,
+    /// SS-2h (register §1.289; V2 only): the pool's hard line ([`PoolLine`]), below the stop line;
+    /// absent, it is 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hard_line: Option<PoolLine>,
 }
 
 impl PoolSpec {

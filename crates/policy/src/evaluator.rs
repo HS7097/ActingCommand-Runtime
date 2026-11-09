@@ -49,12 +49,16 @@ mod no_progress;
 // SS-2f (register §1.288; Alice's answer K2 to question 137): the business tier's turns across
 // instances.
 mod turns;
+// SS-2h (register §1.289; Alice's ruling 138 and her answers 172 A and 173 of 11-09): a pool's two
+// lines and the capped spending order inside the scheduler.
+mod capped;
 
 use benefit::KnownBenefit;
 pub use blackout::{
     Blackout, BlackoutEntry, BlackoutSources, BlackoutWindow, DayBoundaryDeferral, blackout_at,
     day_boundary_fit, next_blackout_start,
 };
+pub use capped::CappedMemory;
 pub use chain_handover::{ChainEntryHolds, ChainHandoverInputs, RestingPage};
 pub(crate) use expected_runtime::snapshot_expected_runtime;
 pub use expected_runtime::{
@@ -1099,6 +1103,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         &OwedReruns::default(),
         &InstanceHolds::default(),
         &NoProgressGuards::default(),
+        &mut CappedMemory::default(),
         eligibility,
     )
 }
@@ -1134,6 +1139,7 @@ pub fn evaluate_with_fact_refresh<E: From<PolicyEvaluationError>>(
         &OwedReruns::default(),
         &InstanceHolds::default(),
         &NoProgressGuards::default(),
+        &mut CappedMemory::default(),
         eligibility,
     )
 }
@@ -1175,6 +1181,7 @@ pub fn evaluate_with_remedies<E: From<PolicyEvaluationError>>(
         &OwedReruns::default(),
         &InstanceHolds::default(),
         &NoProgressGuards::default(),
+        &mut CappedMemory::default(),
         eligibility,
     )
 }
@@ -1368,6 +1375,54 @@ pub fn evaluate_with_no_progress<E: From<PolicyEvaluationError>>(
     owed_reruns: &OwedReruns,
     instance_holds: &InstanceHolds,
     no_progress: &NoProgressGuards,
+    entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    evaluate_with_capped_spending(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        fact_refresh,
+        remedies,
+        chain_handover,
+        run_slots,
+        owed_reruns,
+        instance_holds,
+        no_progress,
+        &mut CappedMemory::default(),
+        entry_holds,
+        eligibility,
+    )
+}
+
+/// SS-2h (register §1.289; `contracts/scheduling/README.md`, "Pool lines", "Capped spending
+/// order"): `evaluate_with_no_progress` with the Runtime's memory of the capped episodes
+/// ([`CappedMemory`]), which the evaluation reads and updates. A pool whose reading reaches its
+/// cap enters a capped episode on its instance; each round freezes the pool's consumers that can
+/// be dispatched by their value per unit consumed and spends the pool down to its stop line, one
+/// dispatch at a time, never below its hard line; below the cap a judged candidate never leaves a
+/// pool below its hard line. Every other entry point evaluates with an empty memory, as after a
+/// start. A catalog without a valued pool evaluates as `evaluate_with_no_progress` does, byte for
+/// byte.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_with_capped_spending<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    fact_refresh: &FactRefreshInputs,
+    remedies: &RemedyPlan,
+    chain_handover: &ChainHandoverInputs,
+    run_slots: &RunSlots,
+    owed_reruns: &OwedReruns,
+    instance_holds: &InstanceHolds,
+    no_progress: &NoProgressGuards,
+    capped: &mut CappedMemory,
     mut entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
     eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
@@ -1386,6 +1441,7 @@ pub fn evaluate_with_no_progress<E: From<PolicyEvaluationError>>(
         owed_reruns,
         instance_holds,
         no_progress,
+        capped,
         eligibility,
     )
 }
@@ -1405,6 +1461,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     owed_reruns: &OwedReruns,
     instance_holds: &InstanceHolds,
     no_progress: &NoProgressGuards,
+    capped: &mut CappedMemory,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
@@ -1854,6 +1911,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         &mut work,
         &target_policies,
         refresh_inputs.is_some(),
+        (&mut *capped, catalog.catalog_hash()),
     )?;
     affected.extend(scored_affected);
     // Workflow #411 B15 R2: a remedy request or retry ranks among the promoted candidates.
@@ -1907,6 +1965,8 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
 
     // SS-2b: the tiers and the net benefit order the round only when the catalog marks a task.
     let tiers = benefit_tiers(catalog);
+    // SS-2h: a capped block takes its lead's place, after the promotions.
+    capped::assign_leads(&mut candidates);
     candidates.sort_by(|left, right| allocation_order(left, right, tiers, &turns));
     // Workflow #411 B41: on an instance where a chain step hands over on its page, the successor
     // is allocated before the candidates that ranked ahead of it. A deferral under one of
@@ -1928,6 +1988,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     // Workflow #427-B: the dispatches chosen so far in the round against the shared run limits.
     let mut round_slots = RoundSlots::default();
     let mut selected_instances = BTreeSet::new();
+    // SS-2h: the capped block (pool) and task of each instance's selected candidate, when it is
+    // one; a later candidate of the same block waits for it as for its head.
+    let mut selected_blocks = BTreeMap::<String, (String, String)>::new();
     let mut dispatch_intents = Vec::new();
     let mut reason_chains = Vec::new();
     // (reason chain index, work index) of every selected candidate, for its decision record.
@@ -1986,6 +2049,32 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                     &mut refresh_gates,
                 );
                 continue;
+            }
+            // SS-2h: a candidate of a capped block other than its head waits for the head: the
+            // block's dispatch, or, when another candidate took the instance, the block's lead.
+            if let Some(slot) = &candidate.capped {
+                let head = match selected_blocks.get(&candidate.instance_id) {
+                    Some((pool_id, head)) if *pool_id == slot.pool_id => Some(head.as_str()),
+                    _ if slot.position > 0 => slot.lead.as_ref().map(|lead| lead.task_id.as_str()),
+                    _ => None,
+                };
+                if let Some(head) = head {
+                    let task_work = &mut work[candidate.work_index];
+                    match &slot.wait {
+                        // SS-2h fix 1: a fallback of the block, tried only once every candidate of
+                        // the block before it is refused, is held as its round holds it.
+                        Some(wait) => {
+                            task_work.state = SchedulingDecisionState::Deferred;
+                            task_work.reasons.push(wait.clone());
+                            task_work.next_wake_unix_ms =
+                                min_wake(task_work.next_wake_unix_ms, slot.wake_unix_ms);
+                        }
+                        None => task_work
+                            .reasons
+                            .push(capped::not_head_reason(&slot.pool_id, head)),
+                    }
+                    continue;
+                }
             }
             work[candidate.work_index].reasons.push(reason(
                 PolicyCode::InstanceAlreadySelected,
@@ -2179,6 +2268,14 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         ) {
             reasons.push(parameters);
         }
+        // SS-2h: the head of a capped pool's order says so.
+        if let Some(slot) = &candidate.capped {
+            reasons.push(slot.spend.clone());
+            selected_blocks.insert(
+                candidate.instance_id.clone(),
+                (slot.pool_id.clone(), candidate.task_id.clone()),
+            );
+        }
         reasons.extend([
             reason(
                 PolicyCode::PlacementSelected,
@@ -2212,6 +2309,19 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         task_work.rank = Some(candidate.rank);
         task_work.reasons = reasons;
     }
+    // SS-2h fix 1 (b): a capped block's candidate that a gate of its own refused is passed for its
+    // round; a whole-instance hold as the cycle starts (the Runtime's positions 1-2 and 4, UPD-1's
+    // hold), the Runtime's random delay and a chain step pass none.
+    capped::settle(
+        capped,
+        &work,
+        |task_id, instance_id| {
+            instance_holds.held(task_id, instance_id).is_some()
+                || refresh_inputs
+                    .is_some_and(|inputs| inputs.instance_holds.contains_key(instance_id))
+        },
+        &successor_waits,
+    );
     // Workflow #384 D2-S4: the affected candidates' reasons, before any dispatch decision record
     // lists them.
     if let Some(inputs) = refresh_inputs {
@@ -2539,12 +2649,19 @@ fn benefit_tiers(catalog: &CompiledCatalog) -> bool {
 /// dispatched one, then the smaller instance id. It comes after the zero tier's place, so among
 /// the promoted, the positive and the released candidates alike; within an instance the order
 /// above stays, and the maintenance tier and a catalog without `tiers` order as before.
+///
+/// SS-2h (register §1.289; layout 乙): the candidates of one capped pool's block on an instance
+/// (`capped`) each take their block's lead's fields ([`capped::assign_leads`]), so the block stays
+/// together at the lead's place, in the block's order; every other candidate orders by its own
+/// fields, as before.
 fn allocation_order(
     left: &PlacementCandidate,
     right: &PlacementCandidate,
     tiers: bool,
     turns: &InstanceTurns<'_>,
 ) -> std::cmp::Ordering {
+    let (left_view, right_view) = (OrderView::of(left), OrderView::of(right));
+    let (left, right) = (&left_view, &right_view);
     let promoted = (right.promoted && !right.zero_tier).cmp(&(left.promoted && !left.zero_tier));
     let value = if tiers {
         promoted
@@ -2552,7 +2669,7 @@ fn allocation_order(
             .then_with(|| left.zero_tier.cmp(&right.zero_tier))
             .then_with(|| {
                 if left.business && right.business {
-                    turns.order(&left.instance_id, &right.instance_id)
+                    turns.order(left.instance_id, right.instance_id)
                 } else {
                     std::cmp::Ordering::Equal
                 }
@@ -2561,17 +2678,71 @@ fn allocation_order(
             .then_with(|| match (&left.benefit, &right.benefit) {
                 (Some(left), Some(right)) => left.order(right),
                 _ if left.zero_tier && right.zero_tier => std::cmp::Ordering::Equal,
-                _ => right.rank.total_score.cmp(&left.rank.total_score),
+                _ => right.total_score.cmp(&left.total_score),
             })
     } else {
-        promoted.then_with(|| right.rank.total_score.cmp(&left.rank.total_score))
+        promoted.then_with(|| right.total_score.cmp(&left.total_score))
     };
     value
         .then_with(|| right.affinity.cmp(&left.affinity))
-        .then_with(|| left.tie.order(&right.tie))
+        .then_with(|| left.tie.order(right.tie))
         .then_with(|| left.tie_breaker.cmp(&right.tie_breaker))
-        .then_with(|| left.task_id.cmp(&right.task_id))
-        .then_with(|| left.instance_id.cmp(&right.instance_id))
+        .then_with(|| left.task_id.cmp(right.task_id))
+        .then_with(|| left.instance_id.cmp(right.instance_id))
+        .then_with(|| left.position.cmp(&right.position))
+}
+
+/// The fields [`allocation_order`] reads of one candidate: its own, or (SS-2h) its capped block's
+/// lead's with its place in the block.
+struct OrderView<'a> {
+    promoted: bool,
+    business: bool,
+    zero_tier: bool,
+    benefit: Option<KnownBenefit>,
+    total_score: i64,
+    affinity: bool,
+    tie: &'a TieKey,
+    tie_breaker: u64,
+    task_id: &'a str,
+    instance_id: &'a str,
+    position: usize,
+}
+
+impl<'a> OrderView<'a> {
+    fn of(candidate: &'a PlacementCandidate) -> Self {
+        match candidate
+            .capped
+            .as_ref()
+            .and_then(|slot| slot.lead.as_ref().map(|lead| (slot.position, lead)))
+        {
+            Some((position, lead)) => Self {
+                promoted: lead.promoted,
+                business: lead.business,
+                zero_tier: lead.zero_tier,
+                benefit: lead.benefit,
+                total_score: lead.total_score,
+                affinity: lead.affinity,
+                tie: &lead.tie,
+                tie_breaker: lead.tie_breaker,
+                task_id: &lead.task_id,
+                instance_id: &candidate.instance_id,
+                position,
+            },
+            None => Self {
+                promoted: candidate.promoted,
+                business: candidate.business,
+                zero_tier: candidate.zero_tier,
+                benefit: candidate.benefit,
+                total_score: candidate.rank.total_score,
+                affinity: candidate.affinity,
+                tie: &candidate.tie,
+                tie_breaker: candidate.tie_breaker,
+                task_id: &candidate.task_id,
+                instance_id: &candidate.instance_id,
+                position: 0,
+            },
+        }
+    }
 }
 
 /// The score stage's terms of one staged candidate.
@@ -3100,6 +3271,10 @@ struct PlacementCandidate {
     /// released (`zero_tier: released`): the allocation takes it after every unjudged and every
     /// positive judged candidate of the business tier ([`allocation_order`]).
     zero_tier: bool,
+    /// SS-2h (register §1.289): the candidate is one of a capped pool's block on its instance:
+    /// the allocation keeps the block together at its lead's place, and its dispatch carries
+    /// `capped_spend`.
+    capped: Option<capped::CappedSlot>,
     facts_fresh_until_unix_ms: Option<u64>,
     activity_profile_id: String,
     daily_limit: Option<u32>,
@@ -3275,6 +3450,7 @@ fn build_candidate(
             && !benefit::manual_request(task),
         benefit: None,
         zero_tier: false,
+        capped: None,
         chain_head: chain_head.map(|head| head.id.clone()),
         facts_fresh_until_unix_ms,
         activity_profile_id: terms.activity_profile_id.to_owned(),
@@ -3643,7 +3819,10 @@ struct StagedCandidate {
 /// candidate the stage keeps that has any: its reserves' allowances, read from the reserve
 /// gate's own views and pending consumption, and its goals' gaps; a selected dispatch hands them
 /// its run.
-#[allow(clippy::type_complexity)]
+///
+/// SS-2h (register §1.289): the benefit gate reads and updates the capped episodes `capped`
+/// (the memory and the catalog generation it is kept under).
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn apply_priority_selection(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
@@ -3652,6 +3831,7 @@ fn apply_priority_selection(
     work: &mut [TaskWork],
     target_policies: &BTreeMap<String, InstanceTargetPolicy>,
     refreshing: bool,
+    (memory, catalog_hash): (&mut CappedMemory, &str),
 ) -> PolicyEvaluationResult<(
     Vec<PlacementCandidate>,
     Vec<AffectedCandidate>,
@@ -3700,6 +3880,7 @@ fn apply_priority_selection(
             &BTreeMap::new(),
             refreshing,
             &mut affected,
+            (memory, catalog_hash),
         )?;
         return Ok((ranked, affected, BTreeMap::new()));
     }
@@ -4176,6 +4357,7 @@ fn apply_priority_selection(
         &weights,
         refreshing,
         &mut affected,
+        (memory, catalog_hash),
     )?;
     // The consumption the reserved pools' readings do not show yet: the gate's step 3 and, SS-6,
     // the allowances read the same entries.
@@ -4303,12 +4485,14 @@ fn reserve_unshown<'a>(
 fn apply_reserves(
     catalog: &CompiledCatalog,
     context: &PlacementContext<'_>,
-    ranked: Vec<PlacementCandidate>,
+    mut ranked: Vec<PlacementCandidate>,
     work: &mut [TaskWork],
     reserves: &BTreeMap<usize, Vec<crate::resource_targets::ReserveView>>,
     unshown: &crate::resource_targets::UnshownConsumption<'_>,
 ) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
-    // The allocation order (the round's own sort), without moving the candidates.
+    // The allocation order (the round's own sort), without moving the candidates; SS-2h: a capped
+    // block at its lead's place.
+    capped::assign_leads(&mut ranked);
     let tiers = benefit_tiers(catalog);
     let mut order = (0..ranked.len()).collect::<Vec<_>>();
     order.sort_by(|left, right| {

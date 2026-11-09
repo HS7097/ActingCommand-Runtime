@@ -356,6 +356,13 @@ The members of `report`:
       plus an offset ([scheduling/README.md](scheduling/README.md), "Pool fact
       references"); a `schedule.json` that writes either requires it, so it is
       composed only by a Runtime that names this row.
+    - `pool_lines` (SS-2h, since 0.12.46, register §1.289): always on
+      (`config_subsystem_always_on`). The Runtime reads a pool's `stop_line`
+      and `hard_line`, each a fact of the pool's scope plus an offset or a
+      constant, and keeps the capped spending order
+      ([scheduling/README.md](scheduling/README.md), "Pool lines", "Capped
+      spending order"); a `schedule.json` whose pool writes them requires it,
+      so it is composed only by a Runtime that names this row.
     - `reset_exclusions` (Workflow #411 P19, since 0.12.25): always on
       (`config_subsystem_always_on`). The Runtime reads a timeline event's
       `excludes_fact_prefixes`, and its resets never clear a task's own last
