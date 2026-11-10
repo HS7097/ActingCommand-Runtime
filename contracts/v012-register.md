@@ -8842,6 +8842,335 @@ cut: `items_truncated` and the pointer `/catalog/compile_warnings/items` in `tru
 `overview::tests::cw1_a_cut_fact_and_the_catalog_block_say_how_many_rows_are_missing` (fails
 before: the fact had no cut row). No test adapted.
 
+### 1.291 Workflow #428 S168-0 (contracts only): a list reading written as a fact, a table maximum over a list, and a judge-only step; slices S168-4, S168-5a and S168-5b (Alice's answer to item 168 of 2026-11-08, board #428 6721302838; the 168 design of 2026-11-10, signed by the coordinator with its answers Q-1 to Q-11 on board #430 6755408718, among them Q-4, extend the Runtime with generic pieces, and Q-5, holdings split into several lists with the 256-row bound kept; read on main `d06910c6`; coordinator work order `rd-1110/brief-s168-contracts.md`, corrected after an independent review by the coordinator's rulings R1 to R6, work orders `rd-1110/brief-s168-contracts-fix1.md` and `rd-1110/brief-s168-contracts-fix2.md`, and after a second review by the rulings F1 to F9, work order `rd-1110/brief-s168-contracts-fix3.md`)
+
+The contracts are [resource-readings.md](resource-readings.md) ("List readings"),
+[instance-fact-store.md](instance-fact-store.md) ("List reading facts" and the capacity ledger),
+[ocr-fields.md](ocr-fields.md), [selection-policy.md](selection-policy.md) ("Record lists",
+"Table maximum over a list", "In-task consumer", "Limits") and
+[selection-graph.md](selection-graph.md) ("Select over a scan", "Ending empty", "Judge step",
+"Records"); the planned revisions are in [component-interfaces.md](component-interfaces.md),
+"Planned: Workflow #428 168". 1.291 was the next free number on `d06910c6` and still is on
+`7910349a`, where LAB-3 added its rows under §1.287; S168-4, S168-5a and S168-5b add their rows
+under this section.
+
+**S168-0 itself.** Contracts only: no code, no test, no gate row, no CI file, no configuration
+key, no code of the outcome catalog, and no live revision raised. The three pieces carry no game
+word: a list of keyed rows read from a page, the largest integer of one table column over listed
+keys, and a step that evaluates and records without input. Account data (what an instance holds,
+what was judged worth) stays in the instance fact store and the ledger.
+
+**The three slices** (the coordinator's ruling R3 after the review).
+
+| Slice | Repository | Size | What | Depends on | Interfaces |
+|---|---|---|---|---|---|
+| S168-4 | Runtime | L | the design's G-2: the `read_list` effect (declaration gate, parser, admission, the static walk's self-edge and once-per-run rule), the kernel's list read over the scan session with no policy, the three misses and their warning, the host's publication at the successful terminal (stage 2), the reserved prefix `inventory.list.` for clients and for marks; its report says that no package on the three resource repositories' `main` declares a mark under the prefix | S168-0 | `package` 8, with S168-5a |
+| S168-5a | Runtime | M | the design's G-4: the value source `table_max_over_list` in the selection-policy crate (validation, binding, one read per reference over the union of its lists, the reason, the input identity, upper bound, the scheduling refusal); its tests use fake snapshots | S168-0 | `package` 8, with S168-4; no `ledger` |
+| S168-5b | Runtime | L | the design's G-5: the `judge` effect with its two keys and the mapping member `judge_result` (declaration, admission, the kernel's judge path without an input port, the host's refusal of an input for it, the record with `judge_only`, the run's end on one of the two keys, `outcome_key` only when the evaluation is known, the unknown check does not block and no candidate is `unknown_dropped`); the ledger reader's rules for `judge_only` | S168-4 and S168-5a merged: main declares `package` [3, 8] | `package` 9 and `ledger` 8, in the Runtime release of LAB-6 and LAB-7 |
+
+**Named tests**, 26 in all: 10 for S168-4, 9 for S168-5a and 7 for S168-5b (the coordinator's
+ruling R6 after the review, and one more each for S168-5a and S168-5b by the ruling F3 of fix 3,
+work order `rd-1110/brief-s168-contracts-fix3.md`). Logic tests with fakes and a fake clock, no sleep; the ids are made
+up (`member.a` to `member.z`, `domain.x`, `domain.y`, `state.a`, `state.b`, the keys
+`inventory.list.example_kind_a` and `inventory.list.example_kind_b`, the table `example_values`,
+the serials `TESTSERIAL0001` and `TESTSERIAL0002`).
+
+S168-4, 10 tests, on a fake provider's saved viewports and a fake device:
+
+- `list_reading_publishes_whole_list`: a scan over three viewports reading `member.c`,
+  `member.a`, `member.b` with a `rank` column publishes, after the successful terminal, one
+  `fact.published` with one `record_list` record: rows `member.a`, `member.b`, `member.c` in that
+  order; observed at the capture time of the viewport the end check passed on; expiring
+  `valid_for_ms` later; the lowest confidence of the rows' features; `source_detector`
+  `list_reading:<task>/<operation>` and `source_snapshot_id` naming the run and that viewport.
+- `list_reading_empty_list_is_known`: no anchor match, both checks passing on the first
+  viewport: a record with zero rows and confidence 1000, and no input.
+- `list_reading_miss_publishes_nothing`: a position out of the dictionary, two positions with
+  one ID, and a 257th position each publish nothing and write the warning
+  `contained_task_resource_reading_unresolved` with `list_position_unread`,
+  `list_duplicate_key` and `list_rows_exceeded`; the run succeeds; the key's record from before
+  the run stays byte for byte; the third stops its scan at the 257th position.
+- `list_reading_failed_scan_fails_run`: a viewport that does not align ends the run with
+  `selection_scan_alignment_rejected`, stage `read_list`, and the run publishes no list and no
+  reading.
+- `list_reading_declaration_refusals`: each rule of the declaration table refused at its pointer
+  by the gate, and by admission with `contained_task_resource_reading_invalid`
+  `<operation id>:<reason>`; task schema `0.8` with `UnconsumedField`; the step runs once per
+  run and the walk follows the page's next operation.
+- `list_reading_key_reserved`: `PublishFacts` of `inventory.list.example_kind_a` from the agent,
+  CLI and UI origins is refused `list_reading_key_reserved`, nothing appended.
+- `list_reading_read_by_keyed_fact`: a later run's select step reads the published list through
+  `keyed_fact` (a listed key's column, an unlisted key's `absent`); the same list older than the
+  document's `max_age_ms` ends the evaluation `unknown` with `fact_stale`.
+- `list_reading_unchanged_rows_republished`: a second complete read whose rows did not change
+  publishes a second observation, with a new `source_snapshot_id` and a strictly newer
+  observation time, and raises no `fact_source_snapshot_identity_conflict`; the record's age is
+  the second read's.
+- `list_reading_full_store_refused`: on a fake store with no free identity, the publication is
+  refused `fact_store_capacity_exceeded`, the run fails `contained_task_resource_reading_rejected`,
+  no active fact is evicted, and a run of another instance (`TESTSERIAL0002`) goes on.
+- `list_reading_mark_key_reserved`: a mark whose `fact_key`, and a `current_capacity` mark whose
+  `capacity_fact_key`, is under `inventory.list.` is refused by the gate (`InvalidValue`,
+  `resource_reading_fact_key_invalid` @ `…/fact_key`, `resource_reading_capacity_fact_key_invalid`
+  @ `…/capacity_fact_key`) and by admission (`contained_task_resource_reading_invalid`,
+  `<id>:<reason>`); a mark under `inventory.` outside the prefix is still admitted.
+
+S168-5a, 9 tests, on tables loaded with `LoadedTable::load` and fake snapshots:
+
+- `table_list_max_reads_largest_of_class`: rows (`member.a`, `domain.x`, 5), (`member.b`,
+  `domain.x`, 9), (`member.c`, `domain.y`, 7); `lists` [`inventory.list.example_kind_a`] holding
+  {a, b, c}, under the pin `domain.x`, reads 9, and the reason `selection_table_list_max` holds
+  `fact_keys` [`inventory.list.example_kind_a`], `maximum` 9, `maximum_identity` `member.b`,
+  `count` 3.
+- `table_list_max_empty_and_out_of_class`: one empty list, two empty lists, and a list holding
+  {`member.c`} under `domain.x`, each read the document's `empty`.
+- `table_list_max_missing_key_is_unknown`: {`member.a`, `member.z`} with `member.z` unknown to
+  the table, every key unknown, and a null cell of the class each read Unknown, `lookup_miss`;
+  under `drop_candidate` the candidate is `unknown_dropped`, under `abort_evaluation` the
+  evaluation is `unknown`; never 0.
+- `table_list_max_validation`: a `boolean` or `enum_string` `value_column`, an undeclared list or
+  table, empty `lists`, a 17th list, a repeated `fact_key`, a substitution, a tie-break key, a
+  `fallback_column` and a 33rd distinct reference are validation errors, while 32 distinct
+  references that occur more than 32 times are not; `evaluate_collect` and the catalog compile
+  refuse a document that uses the source.
+- `table_list_max_input_identity`: a changed cell of a contributing row, or a changed row of any
+  listed list, moves `input_sha256`; a changed row of an unlisted key does not; a document
+  without the source keeps its `policy_sha256` and `input_sha256` byte for byte.
+- `table_list_max_union_of_lists`: `inventory.list.example_kind_a` holding {`member.a`,
+  `member.b`} and `inventory.list.example_kind_b` holding {`member.b`, `member.d`} read the
+  largest of the union {a, b, d}; `member.b`, in both lists, is looked up once and counts once;
+  `count` is 3 and `fact_keys` names both lists in the order of `lists`.
+- `table_list_max_unusable_list_is_unknown`, in two parts. (1) A direct read of one reference,
+  its lists handed in a fake snapshot without the up-front check: with
+  `inventory.list.example_kind_b` stale, the reference reads Unknown `fact_stale` whatever
+  `inventory.list.example_kind_a` holds; with both lists unusable for different reasons, the
+  reason is the first list's in the order of `lists`. (2) A whole evaluation of a document that
+  declares the two lists in `facts[]` in the opposite order of `lists`, both unusable for
+  different reasons: the up-front check ends the evaluation `unknown` before any candidate and
+  before any list maximum is read, with no verdict, no `selection_table_list_max` reason, and the
+  reason of the first unusable list in the declared order of `facts[]`.
+- `table_list_max_where_skips_rows`: a `where` keeping `state.a` leaves out a row of `state.b`
+  whose key the table lacks; that key is not looked up, is no miss and is not counted, and the
+  read is the largest of the kept keys.
+- `table_list_max_unknown_follows_the_declared_action`: a reference that reads Unknown
+  `lookup_miss` (a key of the union without a row in the table; a null cell of the class), read
+  by an `integer_compare` gate and by a term: under `drop_candidate` each candidate they assess
+  is `unknown_dropped` with `lookup_miss`, and its verdict is no static table drop; under
+  `abort_evaluation` the evaluation is `unknown` with `lookup_miss` and the rule, with no
+  verdict; no candidate is ranked on the value and nothing reads 0.
+
+S168-5b, 7 tests, on fake snapshots whose lists a document reads through `keyed_fact`, tables
+loaded with `LoadedTable::load`, and a fake device whose input port fails the test on any call.
+Reading the lists through `keyed_fact` concerns the tests' fixtures only, not the order: S168-5b
+still goes on main only after S168-4 and S168-5a merged ("Order" below).
+
+- `judge_known_ends_with_outcome_key`: a judge over three slots whose candidates are all known,
+  two judged worth and one not, writes one `task.selection_evaluated` with `judge_only`, the
+  three verdicts' kinds, `selected` the two worth ones in rank order and `unknown_check`
+  `blocking` `none`; the run is Completed on the step's page with the step's `outcome_key`, on
+  the mapping with `judge_result` `judged`.
+- `judge_unknown_slot_ends_with_unknown_key`: the same judge with one slot out of the dictionary
+  writes the record with every verdict it has, `selected` the worth ones and `unknown_check`
+  `blocking` `unknown_instances` with count 1; the run is Completed with the step's
+  `unknown_outcome_key`, on the mapping with `judge_result` `unknown`.
+- `judge_stale_list_ends_with_unknown_key`: with the declared list older than the document's
+  `max_age_ms`, the record holds `unknown` with no verdict and reason `fact_stale`; the run is
+  Completed with the step's `unknown_outcome_key`, never `selection_not_selected`.
+- `judge_unknown_dropped_candidate_ends_with_unknown_key`: a judge whose document reads a table
+  under `drop_candidate`, with every slot read: one run with one candidate whose key has no row
+  in the table, and one with a candidate whose cell of the class is null and has no fallback,
+  each drop that candidate `unknown_dropped`, a static table drop (`unknown_check.blocking`
+  `none`, `unknown_instances` 0), and each end the run with the step's `unknown_outcome_key`, on
+  the mapping with `judge_result` `unknown`; a run in which a gate decides against a candidate on
+  a known value (the class gate's `absent`, an `integer_compare` whose operands are known) and
+  nothing is `unknown_dropped` ends with the step's `outcome_key`.
+- `judge_performs_no_input`: in the runs above the fake input port receives no call and
+  the ledger holds no `task.effect_intent`, input or `task.effect_completed` of the step's
+  action; a host handed an effect intent for a judge step's action ends that run
+  `contained_task_judge_input_refused` before the device, and a run of another instance
+  (`TESTSERIAL0002`) goes on; an architecture guard finds no input type in the kernel's judge
+  module.
+- `judge_declaration_refusals`: a missing `unknown_outcome_key`, the two keys equal, a `guard`,
+  an `expect_after`, a `repeated_anchor` layout, a `scan`, a mode other than `none_allowed`, a
+  `required_count` below the slots, a missing mapping for either result, a mapping with the
+  wrong key, use as a prerequisite, and each `judge_result` rule (another string, an older
+  schema, a task without a judge step, a page that is no judge step's `from` page, together with
+  `busy`, a state reachable under both effect conditions) are each refused with the code and
+  detail of the declaration tables; two mappings with the same effect condition, page and
+  `judge_result` are refused `invalid_scheduling_outcome_declaration`, field `mapping_overlap`,
+  while the pair `judged` and `unknown` on one condition and page is admitted.
+- `judge_record_reader_rules`: the ledger reader takes `judge_only` with 0 or 2 selected, and an
+  `unknown` record whose check counts 2 kept slots with `blocking` `none`; it refuses it with
+  `multi_select`, a v2 projection, no `unknown_check`, `outranked_possible`, or a `selected` or
+  `empty` record with `blocking` `none` and `unknown_instances` above 0; a reader of `ledger` 7
+  refuses the record (`corrupt_ledger_record`).
+
+**Order.** S168-4 and S168-5a go side by side: S168-5a depends on S168-0 only (its tests use
+fake snapshots). They ship in one Runtime release, which may ship at any time; the second of the
+two to merge declares `package` [3, 8], and until then the first one's merge admits its own
+member by code ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #428
+168"). S168-5b goes on main only after S168-4 and S168-5a merged, that is, after main declares
+`package` [3, 8]: its revision 9 is revision 8 plus the judge, and revision 8 holds S168-5a's
+value source, so S168-5b never declares [3, 9] on a main without `table_max_over_list`. That its
+tests read their lists through `keyed_fact` concerns their fixtures, not this order. It ships
+in the Runtime release of LAB-6 and LAB-7. All three come before S168-6, the standard package's
+slice; the offline slices S168-1 to S168-3 go on beside them. S168-7, the console's view, needs
+a console whose `ledger` range holds 8, which is UI-L1's console.
+
+**What each changes at deploy.**
+
+- S168-4 and S168-5a, one release: the Runtime declares `package` [3, 8]. No pack declares a list
+  or reads a list maximum yet, so no run changes. A client's publication under `inventory.list.`
+  is refused from it, and so is a mark under that prefix (S168-4's report says that no package on
+  the three resource repositories' `main` declares one). A document without the new source
+  behaves byte for byte as before. The ledger, the configuration and the capacity are unchanged;
+  a rollback below `package` 8 stays open.
+- S168-5b, in the release of LAB-6 and LAB-7, on main after S168-4 and S168-5a merged: `package`
+  [3, 9] and `ledger` [3, 8], #434's revision 8, shared. One way by the Rp.max rule: once the
+  Runtime that declares `ledger` 8 has
+  run, going back below it is refused, whether or not a judge step ran; and the Runtime combines
+  only with a console whose `ledger` range holds 8, so it is deployed with or after UI-L1's
+  console. No configuration key. A package without a judge step and a mapping without
+  `judge_result` behave byte for byte as before.
+
+**Where S168-0 differs from the design or the work order.**
+
+- (a) The design reads 256 active fact identities per instance; the store holds 256 for the whole
+  host, shared by every instance, and the contracts book lists there.
+- (b) A list maximum reads 1 to 16 lists at once, over the union of their keys, each key counted
+  once (the coordinator's ruling R1 after the review, work order
+  `rd-1110/brief-s168-contracts-fix1.md`; the first work order had one list per reference). The
+  holdings split into 8 lists (Q-5) over 9 domains (Q-2) would otherwise take at least 48
+  references; a document holds at most 32 distinct list maxima. Any listed list that is not usable makes
+  the reference Unknown with its reason; `empty` is read only when every list is usable and no
+  key of the union is of the class ([selection-policy.md](selection-policy.md), "Table maximum
+  over a list").
+- (c) A list reading reads only a `repeated_anchor` layout over a scan: a list that fits one
+  viewport declares the scan too, as an `on_empty` select does, so every written list has
+  positive evidence of both ends.
+- (d) The judge's run ends with one of two keys (the coordinator's ruling R4 after the review,
+  made exact by the ruling F3 of fix 3): `outcome_key` only when the evaluation is known, the
+  unknown check does not block and no candidate of the layout was dropped because a read was
+  Unknown (no candidate `unknown_dropped`, a static table drop included), `unknown_outcome_key`
+  otherwise, both Completed and neither with an input, as the design (§9) tells a judgment from
+  "could not judge". A candidate a gate decides against on a known value is a judgment and does
+  not count. A mapping tells the two
+  apart on one page by its member `judge_result`, a closed vocabulary of `judged` and `unknown`
+  ([selection-graph.md](selection-graph.md), "Judge step", "Mapping the two keys"): `on_empty`'s
+  means, one mapping per page and effect condition, cannot, because both keys end on the same
+  page under the same condition. The record tells the rest apart (the decision's own outcome key
+  and `unknown_check`).
+- (e) The table digests behind a judge's decision are the run's existing
+  `standard_pack_table_read` records, not a new member of the record.
+- (f) A judge reads one frame of a `fixed_slots` layout: a scan moves the list, which is input.
+
+**Open points** for the coordinator.
+
+1. The `ledger` number, **answered by R3** (the coordinator's ruling after the review): S168-5b
+   ships in the same Runtime release as LAB-6 and LAB-7 and shares #434's planned `ledger` 8; it
+   does not take 8 ahead of LAB-6 and does not move #434's row to 9. If the releases come in
+   another order, the coordinator renumbers at that release
+   ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168").
+2. Fail-closed costs for S168-6, **answered by R2** (the coordinator's ruling after the review):
+   a position whose identity the package's dictionary lacks keeps the whole list unwritten, so
+   the dictionary covers every identity the list can show (the design's G-3); and what S168-2's
+   table owes a list maximum is the rule of [selection-policy.md](selection-policy.md), "Table
+   maximum over a list", "What the table owes a list maximum": a missing row of a class says
+   the identity is not of the class, so an identity of the class whose value is not known has a
+   row of the class with a null cell, and is never placed in another class only to have a row.
+3. A run's lists are written at its end: a judge reads lists of earlier runs only, so the
+   standard package reads its lists in a task that runs before its judge task.
+4. One key per judge run, **answered by R4** (the coordinator's ruling after the review): the
+   judge ends with `outcome_key` or `unknown_outcome_key`, mapped by `judge_result`, in S168-5b
+   (difference (d)), so a catalog can react to "could not judge" without a later slice.
+5. `actinglab replay` reports marks' readings but not a list's rows; an authoring aid for S168-6
+   that a later Lab slice may add.
+
+**Rollback.** Nothing to roll back: text only.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S168C-1 | the operation effect `read_list` `{layout_id, key_feature, key_column, columns, fact_key, valid_for_ms, scan}` | package format, `package` 8 | S168-4 | resource repositories | task schema `0.9` page-graph only; once per run |
+| S168C-2 | `fact.published` of `inventory.list.<name>`: one `record_list` record, `source_detector` `list_reading:` | existing record, new key prefix | S168-4 | runtime-host | §4 below; tagged as every instance key |
+| S168C-3 | `reading_problem` tokens `list_position_unread`, `list_duplicate_key`, `list_rows_exceeded`; the stage `read_list`; the optional value `count` (the catalog's integer key) on `contained_task_resource_reading_unresolved` | outcome vocabularies; an optional value of an existing code | S168-4 | execution-kernel | values the ledger reader only spells; S168-4 adds `count` to the code's `values` as `optional`: the entry is `review: pending`, and the outcome-code writing spec v2.2 (Workflow `rd-1008/errors/outcome-code-writing-spec.md`) lets a pending entry change its keys (§11) and forbids only a required key on a settled one (§2, rule 5) |
+| S168C-4 | `list_reading_key_reserved` (non-fatal request error, `fact_key`) | outcome code | S168-4 | runtime-host | from every origin |
+| S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 list maxima per document, counted as distinct references, and 16 lists per list maximum |
+| S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_keys`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `fact_keys` (`list<token>`, the lists read in the order of `lists`, at most 16 items), `maximum`, `maximum_identity` | outcome code and keys | S168-5a | selection-policy | a decision reason, no record member; `count` is the number of distinct keys of the union |
+| S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key, unknown_outcome_key}`, all four required, the two keys distinct | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only; ends with `outcome_key` (a known evaluation, an unknown check that does not block, no candidate `unknown_dropped`) or `unknown_outcome_key` |
+| S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, `ledger` 8 (#434's, shared) | S168-5b | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
+| S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5b | runtime-host | ends that run only |
+| S168C-10 | the optional `task.json` mapping member `judge_result`, a closed vocabulary of `judged` and `unknown` | package format, `package` 9 | S168-5b | resource repositories | maps a judge step's end with that result; two mappings overlap only with the same effect condition, page and `judge_result` (or none on both), so S168-5b changes `SchedulingOutcomeDeclaration::validate` (`mapping_overlap`); no persisted record carries it; [selection-graph.md](selection-graph.md), "Mapping the two keys" |
+
+### 1.292 Slice QP-1 (0.12.49): a ledger page stays inside its sequence bounds whatever the planner chooses (#422; the read-only investigation of 2026-11-10, `rd-1110/ledger-window-plan-findings.md`; the console's ledger window will send pages with `from_sequence`, `to_sequence`, a limit and a snapshot and no instance, which the coordinator ruled acceptable once this slice makes the bound independent of the planner; coordinator work order `rd-1110/brief-qp1-page-plan-bounds.md`)
+
+[ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer) (the QP-1
+note) and [global-ledger-query.md](global-ledger-query.md) (the QP-1 paragraphs) are the
+contract. 1.292 is the next free number on main `fa8adc67`, where #1554 added §1.291 (S168-0);
+this slice had taken 1.291, then the next free one on `7910349a`. No persisted ledger shape, wire
+shape, configuration key, outcome code, index or table is new or changed.
+
+**Why.** A view page reads its selection in segments of the sequence (LN-WS R2:
+`e.sequence>c AND e.sequence<=end`), its first of one sequence and run whatever the budget. A
+segment bounds a statement only when the index that drives it takes the segment's bounds. For a
+statement with a per-run link the link's index drives (DIAG-RUN). For one without, nothing in
+the text forced it: SQLite chose. Every view and link index is (column, sequence), so with an
+equality on its column the segment enters it as its second term; but the time bounds are a range
+on the time index's first column, where the segment cannot enter, and a statement the time
+index drove read every record of its time range, however far before the segment (the
+investigation measured about 6 500 SQLite steps for a page against about 18 million with the
+time index forced, on 400 000 records). With a window, the statement also carried the window's
+own sequence terms (`e.sequence>=from`, `e.sequence<=to`), a second range an index could take in
+place of the segment's.
+
+**What changed** (`history_statement`). Every time term is written `+e.timestamp_unix_ms`, in
+every statement, with a per-run link or without (a per-run statement had them so already), so
+no index serves a time bound; the window start's lookup (`TIME_START`, LN-WS R3) is its own
+statement and unchanged. A statement without a per-run link writes its window's sequence terms
+`+e.sequence>=?` and `+e.sequence<=?`: every caller's segment lies inside the window, so they
+select nothing more, and the segment's pair is the only sequence range an index can take. The
+link-set page of LN-8d still counts such a term as a sequence condition. A statement with a
+per-run link is unchanged: its time terms were already `+`. For a page its read budget does not
+cut, the rows, their order, cursors, read scope and continuation are the same; only plans may
+differ. Where the budget cuts a page, the place it stops depends on the work its statements'
+plans needed, so it may stop at another place than before.
+
+**The first statement** keeps its exemption from the budget: it spans one sequence and every
+search it makes stays inside it, so it reads that sequence's rows, and its work no longer grows
+with the history before the window.
+
+**Not bounded by the window, unchanged** (ledger-observer.md §15, the QP-1 note): the Lab
+relations a page reads (past the pool index's end through the snapshot, with the earlier link
+rows of a request or correlation first anchored there; the whole history's without a built
+index) and run recovery (each run of the page from sequence 0 through the snapshot through
+`ledger_links_run`, at most 1 025 records). The Runtime does not limit the distance between
+`from_sequence` and `to_sequence`.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): `ledger`
+stays [3, 7], since nothing persisted or written changes (SQLite format 2, the tables, the
+indexes and the views are the same); `runtime-client` stays [3, 6], since no request member and
+no answer changes; `actingd-config` gains no key.
+
+**What changes live.** Nothing in answers of a page its read budget does not cut; a page the
+budget cuts may stop at another place. A page with a time bound, and a page without a
+per-run link with a window, may take a different plan. The console may send time conditions
+online only against a Runtime with this slice.
+
+**Rollback** (to 0.12.48). Nothing persisted changes; 0.12.48 builds the statements as before,
+and a time bound may again drive a page's statement.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| QP1-1 | every time term of a history statement written `+e.timestamp_unix_ms` | Runtime-internal behaviour (statement text) | QP-1 | ledger | `since` 0.12.49; `time_bound_never_drives_a_page` |
+| QP1-2 | the window's sequence terms of a history statement without a per-run link written `+e.sequence` | Runtime-internal behaviour (statement text) | QP-1 | ledger | `page_statements_stay_inside_sequence_bounds`; the segment's pair is the only indexable sequence range; LN-8d's link-set page keeps its form with such a term: the same test asserts that a link-set statement with `to_sequence` (the resident retention's object load, its artifacts and its frames), built by `history_statement`, has the `e.sequence IN (SELECT sequence FROM (` form |
+| QP1-3 | the guarantee, the first statement's exemption, the window's width and the two reads a window does not bound | contract text agrees with the code | QP-1 | — | ledger-observer.md §15, global-ledger-query.md |
+
+Tests (ledger gate row "QP-1"): `gate_qp1::page_statements_stay_inside_sequence_bounds`,
+`gate_qp1::time_bound_never_drives_a_page` and `gate_qp1::page_results_unchanged_by_plan_bounds`.
+Adapted, as the requirement deliberately changes what it pinned:
+`gate_diag_run::diag_run_t1_a_per_run_read_is_driven_by_its_run_link_index` pinned that forms A
+and C of stop 1 (no per-run link) carry no `+` at all; their time terms now carry one, and no
+other term does.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -8921,6 +9250,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`, `device.screen_off_timeout_ms` (per instance, a bound handset only, with a lifetime; §1.59 RD5-2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-5b |
 | `session.remedy.choices` (one per scope: instance, server or game; §1.110 B15-6) | instance | yes | #411 B15 R6 |
 | `session.dispatch.parameter.<name>` (an overlay of a run's snapshots only, never stored; the prefix `session.dispatch.` is refused to publishers; §1.110 B15-7) | — (never stored) | — | #411 B15 R5 |
+| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 256 rows; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).

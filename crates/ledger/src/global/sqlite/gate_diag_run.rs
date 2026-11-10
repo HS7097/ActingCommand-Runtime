@@ -17,7 +17,8 @@
 //   frame's artifact; the lease grant of `linked_policy_run_events`; event types with a request;
 //   an artifact of one instance's run) is driven by a per-run link index, never by the event
 //   type, time, severity, origin or instance index, and passes the F6 plan check; forms A and C
-//   of stop 1 (no per-run link) keep today's statement;
+//   of stop 1 (no per-run link) write no term but their time terms with a `+` (#422 QP-1 writes
+//   every statement's time terms so);
 // - T2 growth: each form's first page for a short run at the head takes at most 1.5 times the
 //   SQLite work on 12 000 records that it takes on 3 000 (it was linear in the history's
 //   `artifact.verified` records, about 4 times);
@@ -632,7 +633,9 @@ fn diag_run_t1_a_per_run_read_is_driven_by_its_run_link_index() {
         assert!(check.violations.is_empty(), "{form}: {check:?}\n{sql}");
     }
 
-    // Forms A and C of stop 1 have no per-run link: their statements are today's.
+    // Forms A and C of stop 1 have no per-run link: no other term of theirs is written with a
+    // `+`. #422 QP-1 (adapted): their time terms are, as every statement's are, so that no time
+    // bound drives a page.
     let since = APPENDED_FIRST_MS;
     for (form, query) in [
         (
@@ -656,8 +659,12 @@ fn diag_run_t1_a_per_run_read_is_driven_by_its_run_link_index() {
         let (sql, _) = history_statement(&HistorySelection::of(&query), None, (0, 1), PAGE_ROWS)
             .expect("the page's statement");
         assert!(
-            !sql.contains('+'),
-            "{form}: a statement without a per-run link is unchanged: {sql}"
+            sql.contains("+e.timestamp_unix_ms>=?")
+                && !sql
+                    .replace("+e.timestamp_unix_ms", "e.timestamp_unix_ms")
+                    .contains('+'),
+            "{form}: a statement without a per-run link writes only its time terms with a `+`: \
+             {sql}"
         );
     }
 }
