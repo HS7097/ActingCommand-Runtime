@@ -1042,8 +1042,9 @@ select over a scan.
 (`snapshot:offline:empty` at position 1 of no ledger, instance `offline.simulation`, the
 package's game and server) at the instant the Lab process read when the dry run started, and
 confirms on the same saved frame. The result carries that instant as `selection_now_unix_ms`,
-and the decision fingerprint binds it, only when a select step was evaluated; every other
-result and fingerprint is unchanged. The kernel's `dry_run_select` evaluates one select step on
+and the decision fingerprint binds it, only when a select step, or a judge step (section "Judge
+step", "Account data and offline"), was evaluated; every other result and fingerprint is
+unchanged. The kernel's `dry_run_select` evaluates one select step on
 one saved frame with given facts and instant, for the `actinglab select` tool of a later slice.
 #411 Lab RP: it takes the instance fact snapshot and the package's run parameters, overlaid on
 the snapshot as a run's select step holds them (`session.dispatch.parameter.<name>`; the
@@ -1123,7 +1124,10 @@ component acts on it. **Status:** built by S168-5b (`package` revision 9, `ledge
 ships in the release of LAB-6 and LAB-7, [v012-register.md](v012-register.md) §1.291, "Slice
 S168-5b"). A Runtime before it refuses a package that declares one (`UnknownField` at
 `/operations/<i>/judge`). The code is `crates/execution-kernel/src/contained_task/judge.rs` (the
-effect, its admission and the judge path), the declaration gate's `Declaration::judge_step` and
+effect, its admission and the judge path's decision) with `judge_attempt` in
+`crates/execution-kernel/src/contained_task/selection.rs` (the judge path's projection of F1, its
+snapshot and tables, and its one record), the offline simulation's report of a judge's end
+(`crates/execution-kernel/src/offline.rs`), the declaration gate's `Declaration::judge_step` and
 `Declaration::judge_results`, the static walks of `crates/actingcommand-contract/src/taskflow.rs`
 (`judge_terminal_holds`) and the host's mapping and refusal in
 `crates/runtime-host/src/host/contained_task.rs`.
@@ -1359,7 +1363,10 @@ Three layers, each sufficient on its own:
    after it, so no later operation runs.
 3. **Host.** The host accepts no `task.effect_intent` and no input for a judge step's action: one
    would end the run with `contained_task_judge_input_refused` (runtime-host, error) before the
-   input reaches the device. It ends that run only, never the Runtime or another instance.
+   input reaches the device. It ends that run only, never the Runtime or another instance. The
+   host holds this on its own: it refuses an effect intent whose operation is one of the package's
+   judge steps, and once it has appended a run's `judge_only` record that run accepts no effect
+   intent and no input at all, whichever operation or layer would send it.
 
 So a judge step that ran is followed in the ledger by no `task.effect_intent`, input or
 `task.effect_completed` of its action. The tests of [v012-register.md](v012-register.md) §1.291
@@ -1389,6 +1396,19 @@ account data, written to the ledger only, and no Runtime path writes them anywhe
 `actinglab replay` runs a judge step with the production interpreter and reports its record;
 `package dry-run` evaluates it with the empty offline snapshot, as it evaluates a select step
 (section Offline), and confirms nothing.
+
+- **The dry run** captures F1 only, evaluates the judge on the empty offline snapshot at the
+  instant the Lab process read when the dry run started, and sends no input: the run ends at the
+  judge. Its `decision` is `{"status": "judge_completed", operation_label, final_page,
+  scheduling_outcome_key, selection}`: the judge step, its page, the key the run ends with (the
+  step's `outcome_key` or its `unknown_outcome_key`, by "Which key") and its record with
+  `judge_only`. The result carries `selection_now_unix_ms`, and the decision fingerprint binds the
+  decision and that instant, as for a select step. The empty snapshot holds no record list, so a
+  document that reads one evaluates `unknown` (`fact_missing`) and the dry run reports the step's
+  `unknown_outcome_key`; a document that reads only the frame's features is judged as the frame
+  shows.
+- **The replay** reports the record as the judge step's `selection`, with no effect and its page
+  as `reached_page`, and the end `completed` with the key as `scheduling_outcome_key`.
 
 ## Records
 

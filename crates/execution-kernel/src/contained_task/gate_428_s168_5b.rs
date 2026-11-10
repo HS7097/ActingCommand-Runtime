@@ -15,7 +15,7 @@
 
 use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
-use actingcommand_contract::codes::SanitizationCode;
+use actingcommand_contract::codes::{SanitizationCode, TaskflowCode};
 use actingcommand_contract::{
     FactContent, FactRecord, FactScalar, FactScope, FactValue, InstanceFactContext,
     InstanceFactSnapshot, SchedulingJudgeResult, SchedulingOutcomeDeclaration,
@@ -67,8 +67,8 @@ fn put(pixels: &mut [[u8; 3]], x: u32, y: u32, colour: [u8; 3]) {
     pixels[usize::try_from(y * WIDTH + x).expect("pixel index")] = colour;
 }
 
-// The list page: each slot shows the code of its name and, when open, its open mark.
-fn list(slots: [(usize, bool); 3]) -> ScriptedFrame {
+// The list page's pixels: each slot shows the code of its name and, when open, its open mark.
+fn list_pixels(slots: [(usize, bool); 3]) -> Vec<[u8; 3]> {
     let mut pixels = vec![BACKGROUND; usize::try_from(WIDTH * HEIGHT).expect("frame size")];
     put(&mut pixels, 0, 0, LIST_COLOUR);
     for (left, (name, open)) in (0..).map(|slot: u32| 120 * slot).zip(slots) {
@@ -78,7 +78,24 @@ fn list(slots: [(usize, bool); 3]) -> ScriptedFrame {
         let code = u8::try_from(name + 1).expect("name code");
         put(&mut pixels, 24 + left, 102, [code, 0, 0]);
     }
-    ScriptedFrame::rgb(WIDTH, HEIGHT, &pixels)
+    pixels
+}
+
+// The list page as the fake device shows it.
+fn list(slots: [(usize, bool); 3]) -> ScriptedFrame {
+    ScriptedFrame::rgb(WIDTH, HEIGHT, &list_pixels(slots))
+}
+
+// The list page as a saved frame, as `package dry-run` reads one.
+fn list_frame(slots: [(usize, bool); 3]) -> Frame {
+    Frame::from_pixels(
+        WIDTH,
+        HEIGHT,
+        list_pixels(slots).concat(),
+        PixelFormat::Rgb8,
+        CaptureBackendName::FixtureSimulation,
+    )
+    .expect("list frame")
 }
 
 // Reads the name of the code in the pixel its region starts on at confidence 0.99; any other
@@ -933,24 +950,79 @@ fn judge_performs_no_input() {
     // The judge path holds no type of the device side and calls no input: it is handed neither
     // the runtime nor the step's seed.
     let module = include_str!("judge.rs");
-    for name in [
-        "InputAction",
-        "InputFrameContext",
-        "InputSamplingEvidence",
-        "PointDraw",
-        "TouchChoice",
-        "ClickRect",
-        "ContainedTaskRuntime",
-        "step_point_draw",
-        "drawn_tap",
-        "action_seed",
-        ".input(",
-    ] {
+    for name in DEVICE_SIDE {
         assert!(
             !module.contains(name),
             "the kernel's judge module names {name}"
         );
     }
+    // Fix 1: `judge_attempt` (in `selection.rs`), the part of the judge path that holds the run's
+    // runtime, names no type or call of the device side in its body either, and hands the runtime
+    // only to the five callees below, which a select step's attempt shares. What those callees do
+    // with it is outside this guard: the fake device's failing input port pins it.
+    let body = judge_attempt_body(include_str!("selection.rs"));
+    for name in DEVICE_SIDE {
+        assert!(!body.contains(name), "judge_attempt names {name}");
+    }
+    let compact = body.split_whitespace().collect::<String>();
+    let handed = [
+        "budget_observation_now(runtime,",
+        "project_transaction(runtime,",
+        "pinned_state(runtime,",
+        "step_tables(runtime,",
+        "runtime.record(",
+    ];
+    for callee in handed {
+        assert_eq!(
+            compact.matches(callee).count(),
+            1,
+            "judge_attempt: {callee}"
+        );
+    }
+    assert_eq!(
+        compact.matches("runtime").count(),
+        handed.len(),
+        "judge_attempt hands the runtime only to {handed:?}"
+    );
+}
+
+// The names of the device side the judge path must not hold: its input types, the point draw,
+// the runtime trait, the step's seed and the input call.
+const DEVICE_SIDE: [&str; 11] = [
+    "InputAction",
+    "InputFrameContext",
+    "InputSamplingEvidence",
+    "PointDraw",
+    "TouchChoice",
+    "ClickRect",
+    "ContainedTaskRuntime",
+    "step_point_draw",
+    "drawn_tap",
+    "action_seed",
+    ".input(",
+];
+
+// The body of `judge_attempt` in `source`: from the brace that opens it to the brace that closes
+// it (the signature names the runtime's trait, the body must not).
+fn judge_attempt_body(source: &str) -> &str {
+    let start = source
+        .find("fn judge_attempt<")
+        .expect("selection.rs defines judge_attempt");
+    let open = start + source[start..].find('{').expect("judge_attempt has a body");
+    let mut depth = 0_usize;
+    for (offset, character) in source[open..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &source[open..=open + offset];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("judge_attempt's body is not closed")
 }
 
 // Admission's own member checks of a judge step, as `prepare_bundle` runs them after the
@@ -1143,6 +1215,46 @@ fn judge_declaration_refusals() {
         ),
         incomplete,
     );
+    // Fix 1, the phased route: the same task as one stage from the list page to the detail page
+    // is admitted, its judge state a terminal of the route's walk; without the mapping of either
+    // result, or with the wrong key, the walk refuses it `task_phases_outcome_incomplete`.
+    let phased = |mut task: Value| {
+        task["entry_page"] = json!("list");
+        task["phases"] = json!([{"id": "judge", "operations": ["judge_choices"],
+                                 "target_pages": ["detail"]}]);
+        task
+    };
+    let phased_base = admit(&phased(task()), &open_policy())
+        .unwrap_or_else(|error| panic!("the phased judge is admitted: {error}"));
+    assert!(phased_base.program.phases.is_some(), "one stage");
+    let phased_incomplete = TaskflowCode::TaskPhasesOutcomeIncomplete.as_str();
+    for (case, kept) in [
+        ("phased, no mapping for judged", vec![1, 2]),
+        ("phased, no mapping for unknown", vec![0, 2]),
+    ] {
+        let mut task = phased(task());
+        task["scheduling_outcome"]["mappings"] = json!(
+            kept.iter()
+                .map(|index| mappings()[*index].clone())
+                .collect::<Vec<_>>()
+        );
+        assert_code(
+            case,
+            &refused(case, &task, &open_policy()),
+            phased_incomplete,
+        );
+    }
+    let mut phased_wrong_key = phased(task());
+    phased_wrong_key["scheduling_outcome"]["mappings"][1]["outcome_key"] = json!("choices_other");
+    assert_code(
+        "phased, a mapping with the wrong key",
+        &refused(
+            "phased, a mapping with the wrong key",
+            &phased_wrong_key,
+            &open_policy(),
+        ),
+        phased_incomplete,
+    );
 
     // `judge_result`: refused by the declaration gate, which admission runs first, as another
     // word, an older schema, a task without a judge step or a page that is no judge step's page.
@@ -1196,4 +1308,71 @@ fn judge_declaration_refusals() {
     declaration(mappings())
         .validate()
         .expect("the pair judged and unknown on one condition and page is admitted");
+}
+
+// S168-5b fix 1 (`contracts/selection-graph.md`, "Account data and offline"): `package dry-run` of
+// a judge package completes and reports the judge's end, its key and its record, as it reports a
+// select step's evaluation: the empty offline snapshot (position 1) at the dry run's instant,
+// which the result carries, F1 the one frame captured, nothing confirmed and no input. A document
+// over the frame's features judges every slot and ends with the step's `outcome_key`; a document
+// that reads a record list finds none in the empty snapshot, so the evaluation is `unknown`
+// (`fact_missing`, no verdict) and the end is the step's `unknown_outcome_key`.
+#[test]
+fn judge_dry_run_reports_the_judge_end() {
+    for (case, policy, key, result) in [
+        (
+            "a document over the frame's features",
+            open_policy(),
+            JUDGED,
+            TaskSelectionOutcome::Selected { count: 2 },
+        ),
+        (
+            "a document that reads a record list",
+            listed_policy(),
+            UNKNOWN,
+            TaskSelectionOutcome::Unknown {
+                reason: TaskSelectionUnknownReason::FactMissing,
+            },
+        ),
+    ] {
+        let task = admitted(&policy);
+        let simulation = crate::simulate_contained_task_at(
+            &task,
+            vec![list_frame([(A, true), (B, true), (C, false)])],
+            NOW,
+        )
+        .unwrap_or_else(|error| panic!("{case}: the dry run completes: {error}"));
+
+        let crate::OfflineDecision::JudgeCompleted {
+            operation_label,
+            final_page,
+            scheduling_outcome_key,
+            selection,
+        } = &simulation.decision
+        else {
+            panic!("{case}: the judge's end: {:?}", simulation.decision);
+        };
+        assert_eq!(operation_label, "judge_choices", "{case}");
+        assert_eq!(final_page.as_deref(), Some(LIST_PAGE), "{case}");
+        assert_eq!(scheduling_outcome_key, key, "{case}");
+        assert_eq!(
+            selection.confirmation,
+            TaskSelectionConfirmation::JudgeOnly,
+            "{case}"
+        );
+        assert_eq!(selection.selection_result, result, "{case}");
+        assert_eq!(selection.input_ledger_position, 1, "{case}");
+        assert_eq!(selection.now_unix_ms, NOW, "{case}");
+        assert_eq!(selection.unknown_check, Some(NOTHING_UNKNOWN), "{case}");
+        selection
+            .validate()
+            .unwrap_or_else(|error| panic!("{case}: the reader takes the record: {error}"));
+        assert_eq!(simulation.selection_now_unix_ms, Some(NOW), "{case}");
+        assert_eq!(
+            simulation.capture_count, 1,
+            "{case}: F1 only, nothing confirmed"
+        );
+        assert_eq!(simulation.seed, None, "{case}: no point drawn");
+        assert!(!simulation.executed, "{case}");
+    }
 }

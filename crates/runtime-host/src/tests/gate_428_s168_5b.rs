@@ -359,21 +359,14 @@ fn judge_unknown_slot_ends_with_unknown_key() {
     host.close().expect("close the host");
 }
 
-// S168-5b test 5, the host's half: a host handed an effect intent for the judge step's action
-// (right after the step's record, as a faulty interpreter would hand it) ends that run
-// `contained_task_judge_input_refused` before the device: the device is handed no input and the
-// ledger holds no effect intent of the step. A run of another instance goes on and ends with the
-// judge's key, and the Runtime stays healthy.
-#[test]
-fn judge_performs_no_input() {
-    let root = TempDir::new().expect("tempdir");
-    let package = write(&root, "judge.zip", known_package());
-    let (first, second) = (device(), device());
-    let host = start(&root, &[(ALIAS, &first), (OTHER_ALIAS, &second)]);
-
-    host.inject_judge_effect_intent_for_test()
-        .expect("inject an effect intent");
-    let (receipt, correlation_id) = run(&host, ALIAS, &package);
+// The run `correlation_id` ended `contained_task_judge_input_refused` before the device: its
+// device was handed no input and the ledger holds no effect intent or completed effect of it.
+fn assert_judge_input_refused(
+    host: &RuntimeHost,
+    state: &FakeState,
+    receipt: &RuntimeReceipt,
+    correlation_id: CorrelationId,
+) {
     assert_eq!(
         receipt.state(),
         RuntimeReceiptState::Failed,
@@ -386,8 +379,8 @@ fn judge_performs_no_input() {
         "{:?}",
         receipt.outcome()
     );
-    assert_eq!(first.input_count.load(Ordering::Acquire), 0);
-    let facts = task_facts(&host, correlation_id);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    let facts = task_facts(host, correlation_id);
     assert!(
         !step_kinds(&facts)
             .iter()
@@ -395,10 +388,53 @@ fn judge_performs_no_input() {
         "{:?}",
         step_kinds(&facts)
     );
+}
+
+// Nothing is held on `alias`: no scheduling pause, global or of the instance, and the Runtime
+// is not poisoned.
+fn assert_nothing_held(host: &RuntimeHost, alias: &str) {
+    let (global, instances) = host
+        .scheduling_pauses_for_test()
+        .expect("the scheduling pauses");
+    assert!(global.is_none(), "{global:?}");
+    assert!(!instances.contains_key(alias), "{instances:?}");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+}
+
+// S168-5b test 5, the host's half: a host handed an effect intent for the judge step's action
+// (right after the step's record, as a faulty interpreter would hand it) ends that run
+// `contained_task_judge_input_refused` before the device: the device is handed no input and the
+// ledger holds no effect intent of the step. A run of another instance goes on and ends with the
+// judge's key; the refused instance runs again and completes, with nothing paused or poisoned on
+// it. Fix 1 (layer 3 is the host's on its own): a host handed an input with no effect intent
+// after the run's judge record ends that run the same way, before the device.
+#[test]
+fn judge_performs_no_input() {
+    let root = TempDir::new().expect("tempdir");
+    let package = write(&root, "judge.zip", known_package());
+    let (first, second) = (device(), device());
+    let host = start(&root, &[(ALIAS, &first), (OTHER_ALIAS, &second)]);
+
+    host.inject_judge_effect_intent_for_test()
+        .expect("inject an effect intent");
+    let (receipt, correlation_id) = run(&host, ALIAS, &package);
+    assert_judge_input_refused(&host, &first, &receipt, correlation_id);
 
     let (receipt, correlation_id) = run(&host, OTHER_ALIAS, &package);
     assert_judge_end(&host, &receipt, correlation_id, JUDGED);
     assert_eq!(second.input_count.load(Ordering::Acquire), 0);
-    assert!(host.fatal_error().expect("runtime health").is_none());
+
+    // The refused instance is not held: it runs the judge again and completes.
+    assert_nothing_held(&host, ALIAS);
+    let (receipt, correlation_id) = run(&host, ALIAS, &package);
+    assert_judge_end(&host, &receipt, correlation_id, JUDGED);
+    assert_eq!(first.input_count.load(Ordering::Acquire), 0);
+    assert_nothing_held(&host, ALIAS);
+
+    // An input with no effect intent before it, after the judge's record.
+    host.inject_judge_input_for_test().expect("inject an input");
+    let (receipt, correlation_id) = run(&host, ALIAS, &package);
+    assert_judge_input_refused(&host, &first, &receipt, correlation_id);
+    assert_nothing_held(&host, ALIAS);
     host.close().expect("close the host");
 }

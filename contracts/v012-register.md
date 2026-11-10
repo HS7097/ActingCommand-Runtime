@@ -8868,9 +8868,10 @@ what was judged worth) stays in the instance fact store and the ledger.
 | S168-5a | Runtime | M | the design's G-4: the value source `table_max_over_list` in the selection-policy crate (validation, binding, one read per reference over the union of its lists, the reason, the input identity, upper bound, the scheduling refusal); its tests use fake snapshots | S168-0 | `package` 8, with S168-4; no `ledger` |
 | S168-5b | Runtime | L | the design's G-5: the `judge` effect with its two keys and the mapping member `judge_result` (declaration, admission, the kernel's judge path without an input port, the host's refusal of an input for it, the record with `judge_only`, the run's end on one of the two keys, `outcome_key` only when the evaluation is known, the unknown check does not block and no candidate is `unknown_dropped`); the ledger reader's rules for `judge_only` | S168-4 and S168-5a merged: main declares `package` [3, 8] | `package` 9 and `ledger` 8, in the Runtime release of LAB-6 and LAB-7 |
 
-**Named tests**, 26 in all: 10 for S168-4, 9 for S168-5a and 7 for S168-5b (the coordinator's
+**Named tests**, 27 in all: 10 for S168-4, 9 for S168-5a and 8 for S168-5b (the coordinator's
 ruling R6 after the review, and one more each for S168-5a and S168-5b by the ruling F3 of fix 3,
-work order `rd-1110/brief-s168-contracts-fix3.md`). Logic tests with fakes and a fake clock, no sleep; the ids are made
+work order `rd-1110/brief-s168-contracts-fix3.md`; and one more for S168-5b, the dry run's, by
+the slice's fix 1, work order `rd-1110/brief-s168-5b-fix1.md`). Logic tests with fakes and a fake clock, no sleep; the ids are made
 up (`member.a` to `member.z`, `domain.x`, `domain.y`, `state.a`, `state.b`, the keys
 `inventory.list.example_kind_a` and `inventory.list.example_kind_b`, the table `example_values`,
 the serials `TESTSERIAL0001` and `TESTSERIAL0002`).
@@ -8965,8 +8966,9 @@ S168-5a, 9 tests, on tables loaded with `LoadedTable::load` and fake snapshots:
   selected, and no candidate is ranked or scored; under either, no candidate is ranked on the
   value and nothing reads 0.
 
-S168-5b, 7 tests, on fake snapshots whose lists a document reads through `keyed_fact`, tables
-loaded with `LoadedTable::load`, and a fake device whose input port fails the test on any call.
+S168-5b, 8 tests, on fake snapshots whose lists a document reads through `keyed_fact`, tables
+loaded with `LoadedTable::load`, and a fake device whose input port fails the test on any call
+(the eighth, the dry run's, on the offline simulation's empty snapshot).
 Reading the lists through `keyed_fact` concerns the tests' fixtures only, not the order: S168-5b
 still goes on main only after S168-4 and S168-5a merged ("Order" below).
 
@@ -8995,11 +8997,14 @@ still goes on main only after S168-4 and S168-5a merged ("Order" below).
   action; a host handed an effect intent for a judge step's action ends that run
   `contained_task_judge_input_refused` before the device, and a run of another instance
   (`TESTSERIAL0002`) goes on; an architecture guard finds no input type in the kernel's judge
-  module.
+  module. By the slice's fix 1: the refused instance runs the judge again and completes, nothing
+  paused or poisoned on it; a host handed an input with no effect intent after the run's judge
+  record ends that run the same way; and the guard reads the body of `judge_attempt` too.
 - `judge_declaration_refusals`: a missing `unknown_outcome_key`, the two keys equal, a `guard`,
   an `expect_after`, a `repeated_anchor` layout, a `scan`, a mode other than `none_allowed`, a
   `required_count` below the slots, a missing mapping for either result, a mapping with the
-  wrong key, use as a prerequisite, and each `judge_result` rule (another string, an older
+  wrong key (in a page graph and, by the slice's fix 1, in a phased route,
+  `task_phases_outcome_incomplete`), use as a prerequisite, and each `judge_result` rule (another string, an older
   schema, a task without a judge step, a page that is no judge step's `from` page, together with
   `busy`, a state reachable under both effect conditions) are each refused with the code and
   detail of the declaration tables; two mappings with the same effect condition, page and
@@ -9010,6 +9015,12 @@ still goes on main only after S168-4 and S168-5a merged ("Order" below).
   `multi_select`, a v2 projection, no `unknown_check`, `outranked_possible`, or a `selected` or
   `empty` record with `blocking` `none` and `unknown_instances` above 0; a reader of `ledger` 7
   refuses the record (`corrupt_ledger_record`).
+- `judge_dry_run_reports_the_judge_end` (the slice's fix 1): `package dry-run` of a judge package
+  completes and reports the judge's end, its operation, its page, its key and its record with
+  `judge_only`, evaluated on the empty offline snapshot at the dry run's instant, which the result
+  carries, with one frame captured, nothing confirmed and no point drawn; a document over the
+  frame's features ends with the step's `outcome_key`, and a document that reads a record list
+  evaluates `unknown` (`fact_missing`, no verdict) and ends with the step's `unknown_outcome_key`.
 
 **Order.** S168-4 and S168-5a go side by side: S168-5a depends on S168-0 only (its tests use
 fake snapshots). They ship in one Runtime release, which may ship at any time; the second of the
@@ -9125,19 +9136,23 @@ No game word: the tests' ids are this section's made-up ones.
 | S5B-4 | the kernel's judge path: `judge` (a function of the projection, the snapshot, the instant, the tables and the document; no device type, no seed), its unknown check (step 4), the key; `judge_attempt` projects F1, reads the snapshot and the tables, records once and the run ends by `finish_keyed_end` | behaviour | S168-5b | — | `crates/execution-kernel/src/contained_task/judge.rs`, `selection.rs` |
 | S5B-5 | the confirmation `judge_only` (S168C-8) and its reader rules | ledger shape, `ledger` 8 | S168-5b | runtime-host | `TaskSelectionConfirmation::JudgeOnly`, `TaskSelectionRecord::validate_judge_only` |
 | S5B-6 | `SchedulingOutcomeMapping::judge_result` (`SchedulingJudgeResult`, S168C-10), never with `busy`; `mapping_overlap` compares it; admission refuses it before task schema `0.9`, in a task without a judge step, and on a page that is no judge step's `from` page (`contained_task_outcome_declaration_invalid`) | package format, `package` 9 | S168-5b | resource repositories | the gate's `Declaration::judge_results` refuses the last two at `/scheduling_outcome` |
-| S5B-7 | the host: the disposition of a judge step's end matched among the mappings with the `judge_result` its kernel key names; the refusal `contained_task_judge_input_refused` (S168C-9) of an effect intent for a judge step's action while the package's own layer runs | behaviour; outcome code | S168-5b | runtime-host | `crates/runtime-host/src/host/contained_task.rs` |
+| S5B-7 | the host: the disposition of a judge step's end matched among the mappings with the `judge_result` its kernel key names; the refusal `contained_task_judge_input_refused` (S168C-9) of an effect intent for a judge step's action while the package's own layer runs, on every branch of a run, the direct fact refresh's included (fix 1); and (fix 1) once the host has appended a run's `judge_only` record, of any effect intent and any input of that run | behaviour; outcome code | S168-5b | runtime-host | `crates/runtime-host/src/host/contained_task.rs` (`judge_operations`, `judge_recorded`) |
 | S5B-8 | `package` [3, 9] and `ledger` [3, 8] in `distribution/windows/component-interfaces.json` | interface declaration | S168-5b | — | `ledger` 8 is #434's, shared: LAB-6 adds its shapes to it without a second raise |
+| S5B-9 | (fix 1) the offline simulation's decision `judge_completed` `{operation_label, final_page, scheduling_outcome_key, selection}`, the end of a run that a judge step ended, with `selection_now_unix_ms` and a fingerprint that binds both | behaviour; the dry run's output | S168-5b fix 1 | execution-kernel (`package dry-run`) | `OfflineDecision::JudgeCompleted` in `crates/execution-kernel/src/offline.rs`; no interface revision: the dry run's result is no declared interface |
 
-**Tests.** The register's seven named tests, all new, in halves:
+**Tests.** The register's eight named tests (the eighth by fix 1), all new, in halves:
 
 - execution-kernel, exec row "#428 S168-5b", `contained_task::gate_428_s168_5b`, on a fake device
   whose input port fails the test on any call, fake snapshots and tables loaded with
-  `LoadedTable::load`: tests 1 to 6 (test 5 with the architecture guard over `judge.rs`; test 6
-  admission's own member checks and the whole admission).
+  `LoadedTable::load`: tests 1 to 6 (test 5 with the architecture guard over `judge.rs` and, by
+  fix 1, the body of `judge_attempt`; test 6 admission's own member checks and the whole
+  admission, by fix 1 a phased route's too); and, in a row of its own, test 8,
+  `judge_dry_run_reports_the_judge_end`, on the offline simulation.
 - pack-containment, the same row, `source::declarations::tests::judge_declaration_refusals`: the
   gate's half of test 6.
 - runtime-host, host row "#428 S168-5b", `tests::gate_428_s168_5b`: the host halves of tests 1, 2
-  and 5 (the mapping by `judge_result`; the refused effect intent; another instance's run).
+  and 5 (the mapping by `judge_result`; the refused effect intent; another instance's run; by fix
+  1, the refused instance's next run and the refused input with no intent).
 - actingcommand-contract, contract row "#428 S168-5b", `task_selection::tests`, and ledger, ledger
   row "#428 S168-5b", `global::tests::gate_428_s168_5b`: the two halves of test 7.
 
@@ -9164,15 +9179,34 @@ no vocabulary added; the detail tokens are developer text.
   that carries the kernel's key (keys are unique; admission's state rule makes that key the
   step's `outcome_key` for `judged` and its `unknown_outcome_key` for `unknown`); a key no such
   mapping carries is `contained_task_outcome_comparison_conflict`. The mapping is then matched on
-  the run's condition, the page and that result, and its key checked against the kernel's.
+  the run's condition, the page and that result, and its key checked against the kernel's. This
+  is a reading: the host finds the result by the kernel's key, through the mappings, where the
+  contract's words ("the result the kernel's key names") would also let it read the step's own
+  two keys from the prepared package; with admission's state rule and unique keys both give the
+  same result for every admitted package (the pull request's review, `rd-1110/review-1566-findings.md`,
+  found it acceptable).
 - (b) The host's refusal is held by the package's own layer: the host knows the package's judge
-  steps by operation id while that layer runs, interrupt layers excepted. Test 5's host half hands
-  the host the effect intent through a test hook (`inject_judge_effect_intent_for_test`), right
-  after the judge's record, as a faulty interpreter would; the kernel itself never makes one.
+  steps by operation id while that layer runs, interrupt layers excepted, on every branch of a run
+  (fix 1 arms the direct fact refresh's, `run_for_reading_keys`, too). Fix 1: the host also holds
+  layer 3 on its own, whatever the kernel does: once it has appended a run's `judge_only` record
+  (`judge_recorded`), that run accepts no effect intent and no input, whichever operation or
+  layer would send it. A judge package is no prerequisite, return-home, navigation or interrupt
+  layer (`judge_end`), and nothing of the run captures or inputs after the judge's record, so the
+  flag can refuse nothing a run needs. Test 5's host half hands the host the effect intent
+  (`inject_judge_effect_intent_for_test`), and by fix 1 an input with no intent before it
+  (`inject_judge_input_for_test`), through a test hook right after the judge's record, as a
+  faulty interpreter would; the kernel itself never makes either.
 - (c) Test 7's "a reader of `ledger` 7 refuses the record": this build cannot run that reader, so
   the ledger's half renames the stored kind to a word this reader lacks and shows the refusal
   (`corrupt_ledger_record` at `decode_sqlite_record`), the mechanism by which a reader whose
-  vocabulary has no `judge_only` refuses it.
+  vocabulary has no `judge_only` refuses it. This is a reading shown by a renamed kind, not by the
+  revision-7 reader itself. The pull request's review checked the released reader: at tag `v0.12.50`
+  `TaskSelectionConfirmation` is tagged by `kind`, denies unknown fields, has no `JudgeOnly` and
+  no catch-all, and `crates/ledger/src` and `crates/actingcommand-contract/src/event` are byte
+  for byte the base's, so a released v0.12.50 refuses the record as the test shows (its start
+  fails while the record is among the newest records it verifies, a page that holds it fails, its
+  rollback gate fails `ledger_readability`), and it declares `ledger` [3, 7], so going back to it
+  is refused anyway.
 - (d) Admission runs the declaration gate on the sealed task first (S168-4's reading (b)), so a
   `judge_result` another word, before schema `0.9`, in a task without a judge step or on a page
   that is no judge step's is refused there (`resource_declaration_invalid`); admission's own
@@ -9182,6 +9216,61 @@ no vocabulary added; the detail tokens are developer text.
 - (f) The record is linked to the step's action and to the last frame the run captured, F1 for a
   layout without target consensus; a layout with consensus samples more frames first, and the link
   is to the last of them, as a select step's record is.
+
+**Fix 1** (coordinator work order `rd-1110/brief-s168-5b-fix1.md`, after the pull request's
+independent review `rd-1110/review-1566-findings.md`; main merged in at `76006500`, which holds
+§1.295):
+
+- The outcome guard (G2 on the first head): `check_policy_document` returns a typed refusal,
+  `contained_task_select_policy_mismatch` with the mismatch's text as its detail. The judge path
+  takes its `policy=<path> <text>` detail from it; the bridged `check_policy` turns it back into
+  its string, so a select step's detail is byte for byte as before. No allow-list entry and no new
+  bridge.
+- The dry run (S5B-9): every `package dry-run` of a judge package ended in
+  `offline_simulation_executed_step_invariant`, against "Account data and offline". The offline
+  simulation now reports a run that a judge step ended as `judge_completed`, with the judge's key
+  and record ([selection-graph.md](selection-graph.md), "Account data and offline"); any other
+  completed run that executed a step keeps the invariant failure, and every other dry run's result
+  and fingerprint is unchanged. Test 8 pins it. `actinglab replay` was walked once in the code with
+  a judge end: the production interpreter runs the judge, the replay's runtime attaches the
+  `judge_only` record to the step's `selection` and its page to `reached_page`, records no effect,
+  and the run's end is `completed` with the key as `scheduling_outcome_key`, which the command
+  answers with exit 0; it reports the record as the contract says, and needed no change.
+- Layer 3, the host's on its own (reading (b)): `judge_recorded` and its two checks, the effect
+  intent's and the input's. It needed nothing more than the flag and the two checks.
+- The direct fact refresh branch (`run_for_reading_keys` without the run's layer) knows the
+  package's judge steps as every other branch does.
+- The guard of `judge_performs_no_input` covers two texts. In `judge.rs` and in the body of
+  `judge_attempt` (`selection.rs`) it finds no input type (`InputAction`, `InputFrameContext`,
+  `InputSamplingEvidence`), no point draw (`PointDraw`, `TouchChoice`, `ClickRect`,
+  `step_point_draw`, `drawn_tap`), no runtime trait (`ContainedTaskRuntime`, in the body), no
+  seed (`action_seed`) and no `.input(` call; and in `judge_attempt`'s body the runtime is handed
+  to exactly five callees, each once: `budget_observation_now`, `project_transaction`,
+  `pinned_state`, `step_tables` and the one `record` of the decision. What those callees, which a
+  select step's attempt shares, do with the runtime, and what the run loop does around the step
+  (`finish_keyed_end`), are outside the guard: only the tests' fake device, whose input port fails
+  the test on any call, pins that they make no input.
+- Test 5's host half also runs the refused instance again, which completes with no pause held
+  and the Runtime not poisoned, and refuses an input with no intent after the judge's record.
+  Test 6 adds the phased route: the same task as one stage is admitted, and without either
+  result's mapping or with the wrong key the route's walk refuses it
+  `task_phases_outcome_incomplete`.
+- The source parser's phases builder (`validate_phases_bundle`) refuses a `judge` whose two keys
+  are not strings (`package_invalid`, `phase operation judge <member> must be a string`) instead
+  of reading it as no judge; the declaration gate refuses such a step first.
+- A scheduled run that fails `contained_task_judge_input_refused`, traced in the code (no test
+  runs a scheduled one): the refusal is a request failure (`RuntimeHostError::request`, receipt
+  `failed`, not poisoned), so the run's terminal records the failure with `failure_severe` false
+  and the Runtime and every other instance go on. The settlement (`failure_settlement.rs`) records
+  it for its pair (catalog task, instance) with the class `recoverable` (no poison, no fatal error,
+  and the code is not among `severe_policy_failure_codes`) and a failure identity whose frame
+  segment is unique: the code is not among the accumulating ones (`failure_accumulates`, main
+  scope), so the failure is rerun only ([policy-suspension.md](policy-suspension.md), "Every
+  other failure is rerun only") and never pauses the pair by repeating. The pair is then settled
+  as for any rerun-only failure under its own `on_failure` (rerun at once by R22, within its retry
+  limit and budgets). Its ladder class is `none`, so no recovery-ladder rung matches it by class;
+  the package is not suspended (a suspension follows a preparation refusal only), and no instance
+  pause or other pair is touched. It is an ordinary failure of that run and nothing wider.
 
 **At deploy.** One way: once the Runtime that declares `ledger` 8 has run, going back below it is
 refused, whether or not a judge step ran. It ships only in the release of LAB-6 and LAB-7 and

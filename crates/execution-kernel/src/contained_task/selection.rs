@@ -747,7 +747,9 @@ pub(super) fn read_policy(bytes: &[u8]) -> Result<SelectionPolicy, String> {
 /// #357 DB-2 (K3): so does a document that declares a shared table, and each `table` read keys
 /// its rows by the layout's identity field. Admission reads the document only, never a table.
 fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<(), String> {
-    check_policy_document(policy, layout)?;
+    // The bridge keeps its text: the typed refusal's detail, byte for byte.
+    check_policy_document(policy, layout)
+        .map_err(|error| error.detail().unwrap_or_default().to_owned())?;
     if policy.selection.required_count != 1 {
         return Err(format!(
             "required_count={} where a select step chooses one candidate",
@@ -759,16 +761,18 @@ fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<()
 
 /// [`check_policy`] without its count: every check of a select step's document against `layout`
 /// but the one candidate a select step chooses. Workflow #428 S168-5b: a judge step's document
-/// passes it, and admission checks its mode and count against the layout's slots instead.
+/// passes it, and admission checks its mode and count against the layout's slots instead. A
+/// refusal is `contained_task_select_policy_mismatch` with the mismatch's text as its detail.
 pub(super) fn check_policy_document(
     policy: &SelectionPolicy,
     layout: &CandidateLayout,
-) -> Result<(), String> {
+) -> Result<(), ContainedTaskError> {
+    let mismatch = |text: String| ContainedTaskError::with_detail(SELECT_POLICY_MISMATCH, text);
     if policy.applies_to.candidate_layout_id != layout.id {
-        return Err(format!(
+        return Err(mismatch(format!(
             "applies_to={} differs from layout={}",
             policy.applies_to.candidate_layout_id, layout.id
-        ));
+        )));
     }
     for field in &policy.fields {
         let feature = layout
@@ -793,16 +797,16 @@ pub(super) fn check_policy_document(
                         identity.domain() == allowed
                     }) => {}
             (None, _) => {
-                return Err(format!(
+                return Err(mismatch(format!(
                     "field={} is not a feature of layout={}",
                     field.name, layout.id
-                ));
+                )));
             }
             (Some(_), _) => {
-                return Err(format!(
+                return Err(mismatch(format!(
                     "field={} is typed unlike its feature of layout={}",
                     field.name, layout.id
-                ));
+                )));
             }
         }
     }
@@ -814,10 +818,10 @@ pub(super) fn check_policy_document(
             GateUnknownHandling::SubstituteVerdict { passes: true }
         )
     }) {
-        return Err(
+        return Err(mismatch(
             "declared identity, integer or consensus selection requires fail-closed hard gates"
-                .into(),
-        );
+                .to_owned(),
+        ));
     }
     if layout.unknown_identity == UnknownIdentityHandling::ReadableAttributes {
         for term in &policy.scoring {
@@ -825,23 +829,23 @@ pub(super) fn check_policy_document(
                 let identity_term = matches!(&term.value, ValueRef::Field { field }
                     if layout.features.iter().any(|feature| feature.name == *field && feature.identity.is_some()));
                 if !identity_term || i128::from(value_milli) * i128::from(term.weight_milli) > 0 {
-                    return Err("readable_attributes permits only a nonpositive identity substitution; other scoring inputs must be known".into());
+                    return Err(mismatch("readable_attributes permits only a nonpositive identity substitution; other scoring inputs must be known".to_owned()));
                 }
             }
         }
     }
     if policy.uses_record_lists() && layout.unknown_identity != UnknownIdentityHandling::Reject {
-        return Err(format!(
+        return Err(mismatch(format!(
             "layout={} unknown_identity=readable_attributes record_list=declared",
             layout.id
-        ));
+        )));
     }
     if policy.uses_tables() {
         if layout.unknown_identity != UnknownIdentityHandling::Reject {
-            return Err(format!(
+            return Err(mismatch(format!(
                 "layout={} unknown_identity=readable_attributes tables=declared",
                 layout.id
-            ));
+            )));
         }
         for key_field in policy.table_key_fields() {
             if !layout
@@ -849,10 +853,10 @@ pub(super) fn check_policy_document(
                 .iter()
                 .any(|feature| feature.name == key_field && feature.identity.is_some())
             {
-                return Err(format!(
+                return Err(mismatch(format!(
                     "layout={} key_field={key_field} identity=undeclared",
                     layout.id
-                ));
+                )));
             }
         }
     }

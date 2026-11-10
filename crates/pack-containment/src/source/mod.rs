@@ -3437,16 +3437,19 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
                 .pointer("/wait/on_timeout")
                 .and_then(Value::as_str),
             // Workflow #428 S168-5b: a judge step ends the run with one of its two keys; its
-            // state is a terminal and the walk follows no destination of it.
+            // state is a terminal and the walk follows no destination of it. A judge without its
+            // two string keys is refused, never read as no judge (the declaration gate refuses it
+            // first).
             judge: operation
                 .get("judge")
                 .filter(|judge| !judge.is_null())
-                .and_then(|judge| {
-                    Some(actingcommand_contract::TaskPhaseJudge {
-                        outcome_key: judge.get("outcome_key")?.as_str()?,
-                        unknown_outcome_key: judge.get("unknown_outcome_key")?.as_str()?,
+                .map(|judge| {
+                    Ok::<_, CliError>(actingcommand_contract::TaskPhaseJudge {
+                        outcome_key: phase_judge_key(judge, "outcome_key")?,
+                        unknown_outcome_key: phase_judge_key(judge, "unknown_outcome_key")?,
                     })
-                }),
+                })
+                .transpose()?,
         });
     }
     let game = bundle.data["game"].as_str().unwrap_or_default();
@@ -3524,6 +3527,14 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
         &scheduling,
     )
     .map_err(refused)
+}
+
+/// Workflow #428 S168-5b: the key `member` of a judge step's `judge` as the phases walk reads it;
+/// a judge whose key is not a string is the parser's refusal.
+fn phase_judge_key<'a>(judge: &'a Value, member: &str) -> CliOutcome<&'a str> {
+    judge.get(member).and_then(Value::as_str).ok_or_else(|| {
+        CliError::package_invalid(format!("phase operation judge {member} must be a string"))
+    })
 }
 
 /// The pages a task's `entry_page` names: one page, or each page of an entry page set

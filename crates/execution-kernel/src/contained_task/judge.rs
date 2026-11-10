@@ -304,8 +304,12 @@ pub(super) fn prepare_judge_steps(
             .map_err(|_| failure(SELECT_POLICY_MISSING, format!("policy={path}")))?;
         let policy = read_policy(bytes)
             .map_err(|reason| failure(SELECT_POLICY_INVALID, format!("policy={path} {reason}")))?;
-        check_policy_document(&policy, layout)
-            .map_err(|reason| failure(SELECT_POLICY_MISMATCH, format!("policy={path} {reason}")))?;
+        check_policy_document(&policy, layout).map_err(|error| {
+            failure(
+                SELECT_POLICY_MISMATCH,
+                format!("policy={path} {}", error.detail().unwrap_or_default()),
+            )
+        })?;
         if policy.selection.mode != SelectionMode::NoneAllowed {
             return Err(refusal(&id, "mode=not_none_allowed"));
         }
