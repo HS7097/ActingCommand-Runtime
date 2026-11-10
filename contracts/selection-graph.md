@@ -988,7 +988,9 @@ middle of a stage; an `empty` decision without `on_empty` still fails. The admis
 A judge step (Workflow #428 S168-5b, section Judge step) ends the run on its page the same way,
 after its record and with no input, for every result it reaches: a decision with or without
 candidates judged worth, a decision with unknown instances, and an `unknown` evaluation. Its end
-key is the step's own `outcome_key`.
+key is the step's `outcome_key` for a known decision with no unknown instance and its
+`unknown_outcome_key` otherwise; a mapping tells the two apart by its `judge_result` (section
+Judge step, "Mapping the two keys").
 
 ### Expected identity
 
@@ -1123,17 +1125,18 @@ The names are neutral examples:
 ```json
 {"id": "judge_choices", "from": "choice_page", "to": "choice_page",
  "judge": {"layout_id": "layout/choices", "policy": {"path": "policies/choices.json"},
-           "outcome_key": "choices_judged"}}
+           "outcome_key": "choices_judged", "unknown_outcome_key": "choices_unknown"}}
 ```
 
 | Rule | Refusal |
 | --- | --- |
 | `judge` is an effect: exactly one of `click`, `application`, `select`, `wait`, `read_list` and `judge`; task schema `0.9` only; a page-graph task | an older schema: `UnconsumedField` at `/operations/<i>/judge`; `linear_steps`: `contained_task_linear_invalid`, `reason=judge` |
-| `judge` holds `layout_id`, `policy` (`{path}`, a safe task-local `policies/<name>.json`) and `outcome_key`, all strings, all required | `MissingField`, `InvalidType` or `UnknownField` at the member |
+| `judge` holds `layout_id`, `policy` (`{path}`, a safe task-local `policies/<name>.json`), `outcome_key` and `unknown_outcome_key`, all strings, all four required | `MissingField`, `InvalidType` or `UnknownField` at the member |
+| `outcome_key` and `unknown_outcome_key` are distinct | `judge keys=equal` |
 | `to` is the `from` page | `judge to=not_from` |
 | `layout_id` names a `fixed_slots` layout the task declares on the `from` page, whose `unknown_identity` is `reject`: one frame shows every candidate it can hold. A list that scrolls is read by a list reading, never judged on one frame, and a judge declares no `scan` | `judge layout=not_fixed_slots`, `judge scan=declared` |
 | The document passes every check of a select step's (the 512 KiB limit, decode, canonical form, `validate`, `applies_to.candidate_layout_id`, `fields`), with `selection.mode` `none_allowed` and `required_count` at least the layout's slot count (so at most 64 are chosen). Its `required_count` above 1 does not make the step a multi select | `contained_task_select_policy_missing`, `_invalid`, `_mismatch`; `judge mode=not_none_allowed`, `judge required_count=below_slots` |
-| The task declares `scheduling_outcome`, and the keyed-terminal rule holds for the step's state: exactly one mapping with that state's effect condition lists the `from` page, and its key is `outcome_key` ([README.md](README.md), phases; the outcome coverage check of a task without phases) | `contained_task_outcome_declaration_incomplete`, `task_phases_outcome_incomplete` |
+| The task declares `scheduling_outcome`, and the step's state is mapped for both keys: exactly one mapping with that state's effect condition and `judge_result` `judged` lists the `from` page, with key `outcome_key`, and exactly one with `judge_result` `unknown` lists it, with key `unknown_outcome_key` (section "Mapping the two keys"; [README.md](README.md), phases; the outcome coverage check of a task without phases) | `contained_task_outcome_declaration_incomplete`, `task_phases_outcome_incomplete` |
 | No member an input uses: `guard`, `expect_after`, `unguarded_trusted_coordinate`, `max_runs`, `on_max_runs` and `on_guard_refused` are refused; `retryable` is `false` | `judge <member>=declared` |
 | The step is a terminal: the static walk ends there. It is neither the designated operation nor a member of a designated effect set, since it has no effect | `judge designated=declared` |
 | A package with a judge step is no prerequisite or return-home layer, as a package with an `on_empty` step is not: an early end on the step's page would leave the dependent package short of its entry page | `contained_task_prerequisite_incompatible`, `reason=judge_end` |
@@ -1162,26 +1165,29 @@ One judge step runs, with no input:
 6. The kernel records the step's `StepFinished` with `page_label` its page as recognized on F1
    (for a phased task, `phase` with `completed: false`), moves the run to Completed on that page
    and finishes it with `executed_steps` including the step, `final_page` that page and
-   `selected_scheduling_outcome` the step's `outcome_key`. The host derives the disposition from
-   that last `StepFinished` as for any end.
+   `selected_scheduling_outcome` the step's `outcome_key` or its `unknown_outcome_key`, as the
+   table below says. The host derives the disposition from that last `StepFinished` as for any
+   end, with the mapping of section "Mapping the two keys".
 
 No confirmation frame is captured, no guard is judged, no point is sampled, and no
 `task.effect_intent`, input or `task.effect_completed` belongs to the step.
 
-**Every result ends the run the same way:**
+**Every result ends the run Completed, with one of the two keys:**
 
 | Result | The record | The run |
 | --- | --- | --- |
-| A decision, `selected` (candidates judged worth) or `empty` (none), with no unknown instance | verbatim; `unknown_check.blocking` `none` | Completed with `outcome_key` |
-| The same with unknown instances: candidates that could not be judged, the named gap | verbatim, with every verdict it has; `blocking` `unknown_instances`, `unknown_instances` their count | Completed with `outcome_key` |
-| `unknown`: the evaluator ended the evaluation (an unusable record list, an `abort_evaluation` rule) | `unknown`, no verdict, its reason and rule | Completed with `outcome_key` |
+| A decision, `selected` (candidates judged worth) or `empty` (none), with no unknown instance: the evaluation is known and the record's unknown check does not block | verbatim; `unknown_check.blocking` `none` | Completed with `outcome_key` |
+| The same with unknown instances: candidates that could not be judged, the named gap; the unknown check blocks | verbatim, with every verdict it has; `blocking` `unknown_instances`, `unknown_instances` their count | Completed with `unknown_outcome_key` |
+| `unknown`: the evaluator ended the evaluation (an unusable record list, an `abort_evaluation` rule) | `unknown`, no verdict, its reason and rule | Completed with `unknown_outcome_key` |
 
-The record tells the results apart: the decision's own `outcome_key`, the string the document's
-`applies_to.outcome_keys` declares for its outcome, and `unknown_check`. Each verdict tells one
-candidate apart: `ranked` and chosen (judged worth), `gate_rejected` (not worth; the gate that
-decided names why), `unknown_dropped` (could not be judged; its reason). The run's scheduling
-outcome is the step's one `outcome_key` for every result, because one page under one effect
-condition maps to one key.
+Neither end makes any input, and the record is the same whichever key ends the run. The run's
+scheduling outcome tells a judgment from "could not judge": `outcome_key` for a judgment every
+candidate took part in, `unknown_outcome_key` otherwise, so that a catalog can react to the second
+(run the judge again once its inputs are known). The record tells the rest apart: the decision's
+own `outcome_key`, the string the document's `applies_to.outcome_keys` declares for its outcome,
+and `unknown_check`. Each verdict tells one candidate apart: `ranked` and chosen (judged worth),
+`gate_rejected` (not worth; the gate that decided names why), `unknown_dropped` (could not be
+judged; its reason).
 
 **Failures before the decision** end the run with their code and write no record, as for a
 single-frame select (section Execution): F1 not projected (`candidate_projection_budget_exceeded`,
@@ -1189,6 +1195,55 @@ single-frame select (section Execution): F1 not projected (`candidate_projection
 `invalid_candidate_projection`), `selection_state_unavailable`,
 `selection_fact_context_mismatch`, `selection_evaluation_failed`, and a record too large or
 invalid (`selection_record_too_large`). None of them follows an input: there is none.
+
+### Mapping the two keys
+
+The keyed-terminal rule ([README.md](README.md), phases;
+[resource-declarations.md](resource-declarations.md), "Per-run operation caps and keyed guard
+refusals") maps one page under one effect condition to exactly one mapping, and the host derives
+a run's key from the mapping of the run's effect condition that lists its final page (section
+Ending empty). That is how an `on_empty` key is mapped. A judge's two keys end on the same page
+under the same effect condition, so that means cannot tell them apart. A mapping of
+`scheduling_outcome` therefore may declare `judge_result`, a closed vocabulary of exactly two
+words. The names are neutral examples:
+
+```json
+"mappings": [
+  {"outcome_key": "choices_judged", "effect": "no_designated_effect",
+   "terminal_pages": ["choice_page"], "judge_result": "judged"},
+  {"outcome_key": "choices_unknown", "effect": "no_designated_effect",
+   "terminal_pages": ["choice_page"], "judge_result": "unknown"}
+]
+```
+
+| Word | The end it maps |
+| --- | --- |
+| `judged` | a judge step's end with its `outcome_key`: a known evaluation with no unknown instance |
+| `unknown` | a judge step's end with its `unknown_outcome_key`: an `unknown` evaluation, or unknown instances |
+
+- **Which ends.** A mapping with `judge_result` maps only a judge step's end with that result, on
+  the pages it lists. A mapping without it never maps a judge step's end; every other end of the
+  task is mapped among the mappings without it, by the rules as before, and such a mapping may
+  list a judge step's page too.
+- **The state rule.** For a judge step's state (its `from` page and the effect condition the walk
+  reaches it under), exactly one mapping with that condition and `judged` lists the page, and its
+  key is the step's `outcome_key`; exactly one mapping with that condition and `unknown` lists it,
+  and its key is the step's `unknown_outcome_key`. A judge state reachable under both effect
+  conditions would need two mappings with one key, which unique keys forbid, so it is refused.
+- **The host** derives the disposition from the run's last `StepFinished` as for any end, and
+  matches the mapping on the run's effect condition, the page and, when that step is a judge
+  step, the result the kernel's key names (`judged` for the step's `outcome_key`, `unknown` for
+  its `unknown_outcome_key`); it checks the mapping's key against the kernel's.
+- **Persistence.** No persisted record carries the member. A mapping without it serializes byte
+  for byte as before. It joins `package` revision 9 with the judge step
+  ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168").
+
+| Rule | Refusal |
+| --- | --- |
+| `judge_result` is the string `judged` or `unknown` | `invalid_scheduling_outcome_declaration`, field `judge_result` (the source parser: `resource_declaration_invalid`, `InvalidType` at `…/judge_result` for no string, `InvalidValue` there for another string) |
+| task schema `0.9` only | an older schema: `UnconsumedField` at `…/judge_result` |
+| only in a task with a judge step; every page the mapping lists is a judge step's `from` page; never together with `busy` | `invalid_scheduling_outcome_declaration`, field `judge_result` (the source parser: `resource_declaration_invalid`, `InvalidValue` at the declaration); Runtime admission: `contained_task_outcome_declaration_invalid` |
+| the state rule above | `contained_task_outcome_declaration_incomplete` in a page graph, `task_phases_outcome_incomplete` in a phased route |
 
 ### No input, and how that is enforced
 

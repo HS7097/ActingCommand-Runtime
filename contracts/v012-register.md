@@ -8876,9 +8876,15 @@ whose `ledger` range holds 8, which is UI-L1's console.
 - (c) A list reading reads only a `repeated_anchor` layout over a scan: a list that fits one
   viewport declares the scan too, as an `on_empty` select does, so every written list has
   positive evidence of both ends.
-- (d) The judge's run ends with one key for every result; the record tells the results apart
-  (the decision's own outcome key and `unknown_check`). A key per result would need mappings that
-  tell results apart on one page (open point 4).
+- (d) The judge's run ends with one of two keys (the coordinator's ruling R4 after the review):
+  `outcome_key` when the evaluation is known and no slot is unknown, `unknown_outcome_key` when
+  the evaluation is `unknown` or the unknown check blocks, both Completed and neither with an
+  input, as the design (§9) tells a judgment from "could not judge". A mapping tells the two
+  apart on one page by its member `judge_result`, a closed vocabulary of `judged` and `unknown`
+  ([selection-graph.md](selection-graph.md), "Judge step", "Mapping the two keys"): `on_empty`'s
+  means, one mapping per page and effect condition, cannot, because both keys end on the same
+  page under the same condition. The record tells the rest apart (the decision's own outcome key
+  and `unknown_check`).
 - (e) The table digests behind a judge's decision are the run's existing
   `standard_pack_table_read` records, not a new member of the record.
 - (f) A judge reads one frame of a `fixed_slots` layout: a scan moves the list, which is input.
@@ -8899,9 +8905,9 @@ whose `ledger` range holds 8, which is UI-L1's console.
    row of the class with a null cell, and is never placed in another class only to have a row.
 3. A run's lists are written at its end: a judge reads lists of earlier runs only, so the
    standard package reads its lists in a task that runs before its judge task.
-4. One key per judge run: enough for the console, which reads the record. A catalog that must
-   react to an `unknown` judgment differently needs a per-result mapping condition, a later
-   slice.
+4. One key per judge run, **answered by R4** (the coordinator's ruling after the review): the
+   judge ends with `outcome_key` or `unknown_outcome_key`, mapped by `judge_result`, in S168-5b
+   (difference (d)), so a catalog can react to "could not judge" without a later slice.
 5. `actinglab replay` reports marks' readings but not a list's rows; an authoring aid for S168-6
    that a later Lab slice may add.
 
@@ -8915,9 +8921,10 @@ whose `ledger` range holds 8, which is UI-L1's console.
 | S168C-4 | `list_reading_key_reserved` (non-fatal request error, `fact_key`) | outcome code | S168-4 | runtime-host | from every origin |
 | S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 per document, at most 16 lists per reference |
 | S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_keys`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `fact_keys` (`list<token>`, the lists read in the order of `lists`, at most 16 items), `maximum`, `maximum_identity` | outcome code and keys | S168-5a | selection-policy | a decision reason, no record member; `count` is the number of distinct keys of the union |
-| S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key}` | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only |
+| S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key, unknown_outcome_key}`, all four required, the two keys distinct | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only; ends with `outcome_key` or `unknown_outcome_key` |
 | S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, `ledger` 8 (#434's, shared) | S168-5b | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
 | S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5b | runtime-host | ends that run only |
+| S168C-10 | the optional `task.json` mapping member `judge_result`, a closed vocabulary of `judged` and `unknown` | package format, `package` 9 | S168-5b | resource repositories | maps a judge step's end with that result; no persisted record carries it; [selection-graph.md](selection-graph.md), "Mapping the two keys" |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
