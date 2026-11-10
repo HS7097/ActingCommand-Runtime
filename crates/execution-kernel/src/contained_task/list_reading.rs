@@ -490,7 +490,7 @@ pub(super) fn list_rows_of<'p>(
 
 /// A failure of a list reading's scan, at the stage `read_list` (`contracts/resource-readings.md`,
 /// "List readings", "Reading"); the runtime's own failures are unchanged.
-fn at_read_list<E>(error: ContainedTaskRunError<E>) -> ContainedTaskRunError<E> {
+pub(super) fn at_read_list<E>(error: ContainedTaskRunError<E>) -> ContainedTaskRunError<E> {
     match error {
         ContainedTaskRunError::Task(error) => {
             let outcome = error.outcome().stage(ExecutionKernelLocation::ReadList);

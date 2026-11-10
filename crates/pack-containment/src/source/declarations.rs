@@ -6332,4 +6332,473 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{region}: {}", error.message));
         }
     }
+
+    /// Workflow #428 S168-4: the declaration of a task schema `0.9` task's file.
+    fn list_task_file(schema: &'static str) -> Declaration<'static> {
+        Declaration {
+            file: Path::new("tasks/task/task.json"),
+            schema: Some(schema),
+        }
+    }
+
+    /// Workflow #428 S168-4: a `read_list` step on the list page, reading the layout's `member`
+    /// as its key and `open` as a column into `inventory.list.example_kind_a`.
+    fn list_step() -> Value {
+        serde_json::json!({
+            "id": "read_members", "from": "list", "to": "list",
+            "guard": {"page_id": "list", "target_id": "guard/list",
+                      "expected_rect": {"x": 3, "y": 0, "width": 1, "height": 1},
+                      "color_probe": "guard/list"},
+            "read_list": {
+                "layout_id": "layout/cards", "key_feature": "member", "key_column": "id",
+                "columns": [{"column": "open", "feature": "open"}],
+                "fact_key": "inventory.list.example_kind_a", "valid_for_ms": 86_400_000,
+                "scan": {"identity_feature": "member", "axis": "vertical", "advance": {},
+                         "reposition": {}, "settle": {}, "track": {}, "start": {}, "end": {},
+                         "bounds": {}}}
+        })
+    }
+
+    /// Workflow #428 S168-4: a task whose list page shows the cards of `layout/cards` (a
+    /// `member` identity, an `open` mark and a `level` measure), read by `list_step`, then left by
+    /// a tap to the detail page.
+    fn list_task() -> Value {
+        serde_json::json!({
+            "schema_version": "0.9", "task_id": "task", "game": "neutral",
+            "scheduling_outcome": {"mappings": [{"outcome_key": "listed",
+                                                 "effect": "no_designated_effect",
+                                                 "terminal_pages": ["detail"]}]},
+            "candidate_layouts": [{
+                "id": "layout/cards", "page_id": "neutral/list", "kind": "repeated_anchor",
+                "unknown_identity": "reject",
+                "features": [
+                    {"name": "member", "value": "identity", "target": "card/name",
+                     "offset": {"x": 0, "y": 50}},
+                    {"name": "open", "value": "passed", "target": "card/open",
+                     "offset": {"x": 80, "y": 0}},
+                    {"name": "level", "value": "measure_milli", "target": "card/level",
+                     "offset": {"x": 60, "y": 0}}
+                ]
+            }],
+            "operations": [list_step(), {"id": "leave", "from": "list", "to": "detail",
+                                         "click": {"kind": "point", "x": 1, "y": 0},
+                                         "unguarded_trusted_coordinate": true}]
+        })
+    }
+
+    /// The pointer and the reason of a declaration refusal.
+    fn refusal_at(result: CliOutcome<()>) -> (String, String) {
+        let error = result.expect_err("the declaration is refused");
+        assert_eq!(error.code, "resource_declaration_invalid");
+        let issue = error.details.expect("declaration issue");
+        (
+            issue["field_path"].as_str().unwrap_or_default().to_owned(),
+            issue["reason"].as_str().unwrap_or_default().to_owned(),
+        )
+    }
+
+    /// Workflow #428 S168-4 test 5, the declaration gate's half (admission's half is the
+    /// execution-kernel test of the same name; `contracts/resource-readings.md`, "List readings",
+    /// "Declaration" and "Members of a `read_list` step"): a `read_list` step with `when`,
+    /// `retryable: false` and `purpose` is declared; each rule of the declaration tables is
+    /// refused at its pointer: the step's structure by the operation's own check (an older task
+    /// schema, another effect, every refused member, a retry, no guard, a member of `read_list`
+    /// or its scan), and the rules of the whole task with its references by the task's check (a
+    /// 17th step, no scheduling outcome, a step that leaves its page, the layout, the key feature,
+    /// a column's feature, a key another list or a mark writes).
+    #[test]
+    fn list_reading_declaration_refusals() {
+        let mut declared = list_step();
+        declared["when"] = serde_json::json!({"present": "guard/list"});
+        declared["retryable"] = serde_json::json!(false);
+        declared["purpose"] = serde_json::json!("read the members");
+        list_task_file("0.9")
+            .operation(&declared, "/operations/0", true)
+            .expect("task schema 0.9 declares a read_list step");
+        let step = |patch: &dyn Fn(&mut Value)| {
+            let mut step = list_step();
+            patch(&mut step);
+            step
+        };
+        let operation_cases = [
+            (
+                "0.8",
+                list_step(),
+                "/operations/0/read_list",
+                "unconsumed_field",
+            ),
+            (
+                "0.9",
+                step(&|step| {
+                    step["click"] = serde_json::json!({"kind": "point", "x": 1, "y": 0});
+                }),
+                "/operations/0/read_list",
+                "invalid_value",
+            ),
+            (
+                "0.9",
+                step(&|step| step["threshold"] = serde_json::json!(0.9)),
+                "/operations/0/threshold",
+                "unconsumed_field",
+            ),
+            (
+                "0.9",
+                step(&|step| step["destructive"] = serde_json::json!(true)),
+                "/operations/0/destructive",
+                "unconsumed_field",
+            ),
+            (
+                "0.9",
+                step(&|step| step["retryable"] = serde_json::json!(true)),
+                "/operations/0/retryable",
+                "invalid_value",
+            ),
+            (
+                "0.9",
+                step(&|step| {
+                    step.as_object_mut().expect("step").remove("guard");
+                }),
+                "/operations/0/guard",
+                "missing_field",
+            ),
+            (
+                "0.9",
+                step(&|step| {
+                    step["read_list"]
+                        .as_object_mut()
+                        .expect("read_list")
+                        .remove("scan");
+                }),
+                "/operations/0/read_list/scan",
+                "missing_field",
+            ),
+            (
+                "0.9",
+                step(&|step| step["read_list"]["policy"] = serde_json::json!({})),
+                "/operations/0/read_list/policy",
+                "unknown_field",
+            ),
+            (
+                "0.9",
+                step(&|step| step["read_list"]["key_column"] = serde_json::json!("Id")),
+                "/operations/0/read_list/key_column",
+                "invalid_value",
+            ),
+            (
+                "0.9",
+                step(&|step| {
+                    step["read_list"]["columns"][0]["column"] = serde_json::json!("id");
+                }),
+                "/operations/0/read_list/columns/0/column",
+                "invalid_value",
+            ),
+            (
+                "0.9",
+                step(&|step| {
+                    step["read_list"]["columns"] = serde_json::json!(
+                        (0..64)
+                            .map(|index| serde_json::json!({"column": format!("c{index}"),
+                                                            "feature": "open"}))
+                            .collect::<Vec<_>>()
+                    );
+                }),
+                "/operations/0/read_list/columns",
+                "invalid_value",
+            ),
+            (
+                "0.9",
+                step(&|step| {
+                    step["read_list"]["fact_key"] = serde_json::json!("inventory.example_members");
+                }),
+                "/operations/0/read_list/fact_key",
+                "invalid_value",
+            ),
+            (
+                "0.9",
+                step(&|step| step["read_list"]["valid_for_ms"] = serde_json::json!(0)),
+                "/operations/0/read_list/valid_for_ms",
+                "invalid_value",
+            ),
+            (
+                "0.9",
+                step(&|step| {
+                    step["read_list"]["scan"]["early_stop"] = serde_json::json!("upper_bound");
+                }),
+                "/operations/0/read_list/scan/early_stop",
+                "unknown_field",
+            ),
+            (
+                "0.9",
+                step(&|step| {
+                    step["read_list"]["scan"]
+                        .as_object_mut()
+                        .expect("scan")
+                        .remove("bounds");
+                }),
+                "/operations/0/read_list/scan/bounds",
+                "missing_field",
+            ),
+        ];
+        for (schema, operation, pointer, reason) in operation_cases {
+            assert_eq!(
+                refusal_at(list_task_file(schema).operation(&operation, "/operations/0", true)),
+                (pointer.to_owned(), reason.to_owned()),
+                "{operation}"
+            );
+        }
+        // Every member the step refuses, at its own pointer.
+        for (member, value) in [
+            ("max_attempts", serde_json::json!(2)),
+            ("retry_interval_ms", serde_json::json!(100)),
+            ("on_error", serde_json::json!("return_home")),
+            ("unguarded_trusted_coordinate", serde_json::json!(false)),
+            ("verify_template", serde_json::json!("templates/mark.png")),
+            ("expect_after", serde_json::json!({"page_id": "list"})),
+            ("post_delay_ms", serde_json::json!(100)),
+            ("input_recheck", serde_json::json!({"kind": "fresh_frame"})),
+            (
+                "observation_window",
+                serde_json::json!({"until": "window_end", "window_ms": 1000}),
+            ),
+            ("on_guard_refused", serde_json::json!("next_candidate")),
+            ("max_runs", serde_json::json!(1)),
+            ("on_max_runs", serde_json::json!("next_candidate")),
+            (
+                "transition",
+                serde_json::json!({"kind": "window", "min_ms": 1, "max_ms": 2}),
+            ),
+            ("optional", serde_json::json!({"settle_ms": 10})),
+        ] {
+            let mut operation = list_step();
+            operation[member] = value;
+            assert_eq!(
+                refusal_at(list_task_file("0.9").operation(&operation, "/operations/0", true)),
+                (
+                    format!("/operations/0/{member}"),
+                    "unknown_field".to_owned()
+                ),
+                "{member}"
+            );
+        }
+
+        let task_file = list_task_file("0.9");
+        let check = |task: &Value| task_file.list_readings(task.as_object().expect("task"));
+        check(&list_task()).expect("the task's list reading is declared");
+        let task = |patch: &dyn Fn(&mut Value)| {
+            let mut task = list_task();
+            patch(&mut task);
+            task
+        };
+        let mut seventeen = list_task();
+        seventeen["operations"] = serde_json::json!(
+            (1..=17)
+                .map(|index| {
+                    let mut step = list_step();
+                    step["id"] = serde_json::json!(format!("read_{index:02}"));
+                    step["read_list"]["fact_key"] =
+                        serde_json::json!(format!("inventory.list.example_{index:02}"));
+                    step
+                })
+                .collect::<Vec<_>>()
+        );
+        let mark = |member: &str| {
+            let mut mark = serde_json::json!({"id": "k1", "fact_key": "inventory.example_count"});
+            mark[member] = serde_json::json!("inventory.list.example_kind_a");
+            mark
+        };
+        let task_cases = [
+            (seventeen, "/operations", "invalid_value"),
+            (
+                task(&|task| {
+                    task.as_object_mut()
+                        .expect("task")
+                        .remove("scheduling_outcome");
+                }),
+                "/scheduling_outcome",
+                "missing_field",
+            ),
+            (
+                task(&|task| task["operations"][0]["to"] = serde_json::json!("detail")),
+                "/operations/0/to",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["operations"][0]
+                        .as_object_mut()
+                        .expect("step")
+                        .remove("to");
+                }),
+                "/operations/0/to",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["operations"][0]["read_list"]["layout_id"] =
+                        serde_json::json!("layout/other");
+                }),
+                "/operations/0/read_list/layout_id",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["candidate_layouts"][0]["kind"] = serde_json::json!("fixed_slots");
+                }),
+                "/operations/0/read_list/layout_id",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["candidate_layouts"][0]["unknown_identity"] =
+                        serde_json::json!("readable_attributes");
+                }),
+                "/operations/0/read_list/layout_id",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["operations"][0]["from"] = serde_json::json!("detail");
+                    task["operations"][0]["to"] = serde_json::json!("detail");
+                }),
+                "/operations/0/read_list/layout_id",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["operations"][0]["read_list"]["key_feature"] = serde_json::json!("open");
+                }),
+                "/operations/0/read_list/key_feature",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["operations"][0]["read_list"]["scan"]["identity_feature"] =
+                        serde_json::json!("open");
+                }),
+                "/operations/0/read_list/key_feature",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["operations"][0]["read_list"]["columns"][0]["feature"] =
+                        serde_json::json!("level");
+                }),
+                "/operations/0/read_list/columns/0/feature",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["operations"][0]["read_list"]["columns"][0]["feature"] =
+                        serde_json::json!("member");
+                }),
+                "/operations/0/read_list/columns/0/feature",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["operations"][0]["read_list"]["columns"] = serde_json::json!([
+                        {"column": "open", "feature": "open"},
+                        {"column": "open_again", "feature": "open"}
+                    ]);
+                }),
+                "/operations/0/read_list/columns/1/feature",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    let mut again = list_step();
+                    again["id"] = serde_json::json!("read_again");
+                    task["operations"]
+                        .as_array_mut()
+                        .expect("operations")
+                        .insert(1, again);
+                }),
+                "/operations/1/read_list/fact_key",
+                "invalid_value",
+            ),
+            (
+                task(&|task| task["resource_readings"] = serde_json::json!([mark("fact_key")])),
+                "/operations/0/read_list/fact_key",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["resource_readings"] = serde_json::json!([mark("capacity_fact_key")]);
+                }),
+                "/operations/0/read_list/fact_key",
+                "invalid_value",
+            ),
+        ];
+        for (task, pointer, reason) in task_cases {
+            assert_eq!(
+                refusal_at(check(&task)),
+                (pointer.to_owned(), reason.to_owned()),
+                "{task}"
+            );
+        }
+    }
+
+    /// Workflow #428 S168-4 test 10, the declaration gate's half (admission's half is the
+    /// execution-kernel test of the same name; `contracts/resource-readings.md`, "Capacity and
+    /// reserved keys"): a mark whose `fact_key`, or a `current_capacity` mark whose
+    /// `capacity_fact_key`, lies under `inventory.list.` is refused `InvalidValue` at that member
+    /// (`resource_reading_fact_key_invalid`, `resource_reading_capacity_fact_key_invalid`); a mark
+    /// under `inventory.` outside the prefix is declared.
+    #[test]
+    fn list_reading_mark_key_reserved() {
+        let task = serde_json::json!({
+            "scheduling_outcome": {"mappings": [{"outcome_key": "read",
+                                                 "effect": "no_designated_effect",
+                                                 "terminal_pages": ["list"]}]}
+        });
+        let task = task.as_object().expect("task");
+        let mark = |fact_key: &str, capacity: Option<&str>| {
+            let mut mark = serde_json::json!({
+                "id": "k1", "fact_key": fact_key, "page_id": "list", "target_id": "card/count",
+                "trim": "whitespace_v1",
+                "value": {"type": "unsigned_integer", "min": 0, "max": 999,
+                          "format": "current_capacity"},
+                "minimum_confidence_milli": 900, "valid_for_ms": 60_000
+            });
+            if let Some(capacity) = capacity {
+                mark["capacity_fact_key"] = serde_json::json!(capacity);
+            }
+            serde_json::json!([mark])
+        };
+        let gate = list_task_file("0.9");
+        assert_eq!(
+            refusal_at(gate.resource_readings(
+                &mark("inventory.list.example_kind_a", None),
+                "/resource_readings",
+                task
+            )),
+            (
+                "/resource_readings/0/fact_key".to_owned(),
+                "invalid_value".to_owned()
+            )
+        );
+        assert_eq!(
+            refusal_at(gate.resource_readings(
+                &mark(
+                    "inventory.example_count",
+                    Some("inventory.list.example_kind_b")
+                ),
+                "/resource_readings",
+                task
+            )),
+            (
+                "/resource_readings/0/capacity_fact_key".to_owned(),
+                "invalid_value".to_owned()
+            )
+        );
+        gate.resource_readings(
+            &mark(
+                "inventory.example_count",
+                Some("inventory.example_capacity"),
+            ),
+            "/resource_readings",
+            task,
+        )
+        .expect("a mark under inventory. outside the prefix is declared");
+    }
 }

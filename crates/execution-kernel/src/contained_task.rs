@@ -90,6 +90,9 @@ mod declared_operation;
 mod linear;
 // Workflow #428 S168-4: a list read from a page, written whole as a record-list fact.
 mod list_reading;
+// Workflow #428 S168-4: the list reading's named tests, the kernel's halves.
+#[cfg(test)]
+mod gate_428_s168_4;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.

@@ -2837,3 +2837,18 @@ tests = [
     "actingcommand-ppocr-onnx-json-provider::lib::gate_407_gpu1e::a_failed_gpu_run_rebuilds_the_model_once_then_falls_back",
 ]
 incident = ["#407 GPU-1 E"]
+
+# Workflow #428 S168-4 (0.12.50; register §1.291, the slice's named tests; brief rd-1110/brief-s168-4.md; contracts/resource-readings.md, "List readings"), the kernel's and the declaration gate's halves: a list reading's session over a fake source's saved viewports reads a list whole over three viewports (rows in ascending byte order of the key, the lowest confidence, the end check's viewport reported once), reads an empty list as known with no move, gives no reading for an unread position, a repeated key or a 257th position (the scan stopping there; the warning with its count), and fails with a scan's own code at the stage read_list; the gate refuses each rule of the declaration tables at its pointer and admission's own checks with contained_task_resource_reading_invalid and <operation id>:<member> (a step plan with contained_task_linear_invalid, reason=read_list), the step capped at one dispatch and passed over to the page's next operation; a mark's fact_key or capacity_fact_key under inventory.list. is refused by the gate and by admission, and a mark under inventory. outside the prefix is admitted
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_4::list_reading_publishes_whole_list",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_4::list_reading_empty_list_is_known",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_4::list_reading_miss_publishes_nothing",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_4::list_reading_failed_scan_fails_run",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_4::list_reading_declaration_refusals",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_4::list_reading_mark_key_reserved",
+    "actingcommand-pack-containment::lib::source::declarations::tests::list_reading_declaration_refusals",
+    "actingcommand-pack-containment::lib::source::declarations::tests::list_reading_mark_key_reserved",
+]
+incident = ["#428 S168-4"]
