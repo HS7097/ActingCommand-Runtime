@@ -9518,6 +9518,65 @@ Removed with the runner it tested: `env_detection::lock::tests::windows_probe_ti
 (in no gate row). The other tests of the lock are unchanged; none pinned the PowerShell reader's
 text (the Windows fixture `sleeping_child` still starts `powershell.exe`, as a process to kill).
 
+### 1.295 Slice RD-BUDGET-1 (0.12.51): the declaration validator counts a file once per run (#428; on 11-10 a full scan of one resource repository's `main`, 441 pack JSON files, counted 114.25 MiB and was refused with "declaration read budget exceeded", although the distinct files it reads come to 25.76 MiB; the coordinator's ruling of 11-10, not Alice's words: the bound is on what a run reads from disk, so a file counts once; read-only triage `rd-1110/validator-failures-triage.md`, part A; coordinator work order `rd-1110/brief-rd-budget1.md`)
+
+[resource-declarations.md](resource-declarations.md) (the adapter's bounds) and
+[package-reference.md](package-reference.md) (the read bounds of `maintenance.json`) are the
+contract. 1.295 is the next free number on main `8d9b4f73`, and the name RD-BUDGET-1 was free. No
+persisted ledger shape, wire shape, configuration key, outcome code or vocabulary is new or
+changed.
+
+**Why.** `actinglab resource validate`, the declarations step of `resource verify` and
+`operation` share one reader, `DeclarationReader`, which bounds what one run reads to 64 MiB in
+total (`MAX_TOTAL_BYTES`). It counted every read, a repeated read of the same file too, and a
+selection-policy document is checked by checking its whole task again: the task, every policy
+the task names and the operations' `resources.json`, then the policy once more. The count grew
+with the square of the policies in a task, so a full scan was refused long before it had read
+64 MiB of distinct files. A run of the Runtime is not affected: it loads a pack through another
+reader, with per-pack bounds.
+
+**What.** The reader keeps each file's bytes for the rest of the run, by its repository-relative
+path as `read_files` spells it, and counts a path against the total only at its first read. A
+later read of the path answers the kept bytes and reads nothing from disk, under that read's own
+limit (a document read again under a policy's 512 KiB limit is still held to it, refused as "not
+a bounded regular file" as before). The first read of a file that takes the count past the total
+is refused as before: `resource_declaration_invalid`, `<file>: declaration read budget exceeded`,
+naming that file. The 16 MiB document limit, the policy limit, the 1 MiB path-list bound, the
+4096-path bound and the 64 MiB total are unchanged, and so are the files a check reads, the order
+of the checks and the count of a relative path list. The total stays a constant of the program;
+the reader takes it through a constructor (`DeclarationReader::with_total`) only so that a test
+can set a lower one, never from configuration or the command line.
+
+**Answer members.** `read_bytes` keeps its name and its meaning, the bytes the run read from disk,
+which is now also what is counted: in the answer of `resource validate`
+(`actinglab.resource-declarations.v1`) and of `operation`, and in the `declarations` counts of
+`resource verify`'s report. Its value falls for a run that reads a file more than once (such a
+file now counts once); a run that reads each file once answers as before. `read_files` and every
+other member are unchanged. Checking each task once per run would save the repeated parsing too;
+it is not done here.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): no pack format
+changes (`package`), the answers of actinglab's commands are no listed interface, and
+`runtime-outcomes` sees the same code and message.
+
+**At deploy.** `actinglab resource validate`, `resource verify` and `operation` count a file once
+per run. A full scan that was refused only because the same files were counted again now passes.
+No pack, no run and no answer shape changes. **Rollback** (below 0.12.51): the reader counts every
+read again, and such a scan is refused again; nothing else changes.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RDB1-1 | the total read bound of `DeclarationReader` (`apps/actinglab/src/resource_declarations.rs`) | tool behaviour | RD-BUDGET-1 | — | `since` 0.12.51; 64 MiB over the distinct files a run reads, each counted at its first read and kept; a later read reads nothing from disk; the refusal is unchanged |
+| RDB1-2 | `read_bytes` of `resource validate`'s and `operation`'s answers and of `resource verify`'s `declarations` counts | answer member, same name and meaning | RD-BUDGET-1 | — | the bytes read from disk, each file once; smaller than before only for a run that reads a file more than once |
+
+Tests (exec gate row "#428 RD-BUDGET-1"):
+`gate_428_rd_budget1::rd_budget1_a_task_with_several_policies_counts_each_distinct_file_once`,
+`gate_428_rd_budget1::rd_budget1_a_selection_whose_distinct_files_fit_the_total_passes`,
+`gate_428_rd_budget1::rd_budget1_distinct_files_over_the_total_are_refused_at_the_file_that_crosses`,
+`gate_428_rd_budget1::rd_budget1_a_second_read_of_a_path_answers_the_bytes_of_the_first`. No
+existing test changed: none pinned a repeated count (`gate_rc2_a11` and the consumer goldens read
+each file once, and `gate_rv1` asks only for a `read_bytes` above zero).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

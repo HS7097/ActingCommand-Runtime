@@ -508,7 +508,8 @@ only in `bundle.json`; the source declaration file is not copied.
 Resource repositories name the source input `maintenance.json` at their root. The existing
 `resource validate` declaration reader decodes this shared array and calls
 `validate_bundle_maintenance_declarations` for its source-only structural rules, under
-the declaration reader's own 16 MiB document / 64 MiB total read bounds. It does not load
+the declaration reader's own bounds: 16 MiB per document and 64 MiB in total over the distinct
+files a run reads, each file counted once (Workflow #428 RD-BUDGET-1). It does not load
 pack material. The bundle index validator reuses those same rules and adds index closure;
 generation then checks actual material and full chains through the kernel.
 

@@ -2860,3 +2860,14 @@ tests = [
     "actingcommand-lab::lib::env_detection::lock::tests::flk10_windows_holder_start_is_read_from_the_system_as_dotnet_ticks",
 ]
 incident = ["#71 FLK-10"]
+
+# Workflow #428 RD-BUDGET-1 (0.12.51; register §1.295; brief rd-1110/brief-rd-budget1.md; contracts/resource-declarations.md): the declaration validator's reader keeps each file's bytes for the run and counts a path against the 64 MiB total only at its first read: a task with three selection policies, each policy selected, counts the distinct files it reads once (read_bytes is their sizes and the path list's, not a multiple), a total that the distinct files fit passes the selection that a count of every read would exceed, a total one byte short refuses it with resource_declaration_invalid, "declaration read budget exceeded", naming the file whose first read crosses the line, and a second read of a path answers the first read's bytes, reads nothing from disk and keeps its own limit
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::resource_runtime_support::resource_declarations::gate_428_rd_budget1::rd_budget1_a_task_with_several_policies_counts_each_distinct_file_once",
+    "actingcommand-actinglab::bin:actinglab::resource_runtime_support::resource_declarations::gate_428_rd_budget1::rd_budget1_a_selection_whose_distinct_files_fit_the_total_passes",
+    "actingcommand-actinglab::bin:actinglab::resource_runtime_support::resource_declarations::gate_428_rd_budget1::rd_budget1_distinct_files_over_the_total_are_refused_at_the_file_that_crosses",
+    "actingcommand-actinglab::bin:actinglab::resource_runtime_support::resource_declarations::gate_428_rd_budget1::rd_budget1_a_second_read_of_a_path_answers_the_bytes_of_the_first",
+]
+incident = ["#428 RD-BUDGET-1"]
