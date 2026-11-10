@@ -688,7 +688,9 @@ The list holds only when every position was read. Otherwise it gives no reading:
 | `list_rows_exceeded` | a 257th position was read: the list holds more rows than one fact can (256). The scan stops there; nothing is cut to fit |
 
 Each is the warning `contained_task_resource_reading_unresolved` (`reading_id` the operation's
-id, `fact_key`, `reading_problem`, `count`: the unread positions, the repeated keys, or 257),
+id, `fact_key`, `reading_problem`, and `count`: the unread positions, the repeated keys, or 257;
+`count` is an optional value S168-4 adds to that code, [v012-register.md](v012-register.md)
+§1.291 S168C-3),
 written at once as one task diagnostic row of kind `error` (`TaskDiagnosticErrorData::Recognition`,
 phase `post_admission`, without `target_id`) on the step's last viewport. The step completes, the
 run goes on and settles as it would without the list, and the key's earlier record stays until
