@@ -10001,7 +10001,8 @@ alone), the closed record's first window (see "Two windows"), a rollback and its
 [vision-model-folders.md](vision-model-folders.md), "Startup and first use", is the contract: it
 already said that a model's own load does not count against a target's `timeout_ms`, and gains
 one sentence that the `timeout_ms` bounds inference and not a model's one-time load. 1.298 is the
-next free number: main `025c758c` holds 1.296 and open PR #1567 (CI-OCR-1) takes 1.297. No
+next free number: main `af7e2557` holds 1.296, and open PR #1567 (CI-OCR-1), whose branch still
+writes the 1.296 that main's UNSET-2 holds, takes 1.297. No
 persisted ledger shape, wire shape, configuration key, diagnostics member, outcome code, location
 or vocabulary is new or changed, and no package's `timeout_ms` or its bounds (1 to 60 000) change.
 
