@@ -8728,6 +8728,55 @@ names `devices bind`'s kept `--root`. No row, type, member, code, key or interfa
 
 **LAB-5A rollback** (to the release before it). Nothing persisted: code and the table's text.
 
+#### Slice LAB-5D (0.12.52): the answer budget is the caller's, and the operation layer cuts or exports
+
+Coordinator work order `rd-1108/arch-013/brief-lab5d.md`; the read-only surveys
+`rd-1108/arch-013/lab5a-step0-survey.md` §5 and §6 and `rd-1108/arch-013/lab5-design-survey.md` §4
+(both on `76006500`); on main `76006500` (#1565). The contract is
+[lab-two-entries.md](lab-two-entries.md) §9.3, "The answer budget is the caller's". A move of code
+and one new parameter: `actingctl mcp-serve` answers every call byte for byte as before (the same
+cuts, `<block>_truncated` members, exports and warnings), and the CLI, the CLI module and
+`serve --stdio` print the whole answer as before. A generated MCP server (LAB-5) has no place for
+per-tool code, so the code that keeps an answer inside the budget now lives with the operations.
+The operation table, `words.rs`, the parameters, the jobs and the handles are untouched.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5D-1 | `lab_ops::budget`: `Budget {fits, export}` (`new`, `with_export`), `Writer`, `Fitted {result, exported}`, `fits`, `export_for`, `write_json`, `write_bytes`, `exported_header`, `exported` | new module | LAB-5D | MCP's eleven reads below | `fits` says whether an answer fits, in the caller's measure; `export`, when the caller has a place for whole answers, is its writer `(sha256, extension, bytes)` answering the reference `{path, sha256, size}` or the outcome of a failed write. No budget (`None`): the whole answer. `Fitted.exported` is `answer_exported` with its `path` when the answer was written whole. An answer that does not encode is `material_export_failed` (`actingctl_output_failed` for `packs`' document), caused by the encoder's failure, as MCP's were |
+| L5D-2 | the seven reads that cut: `overview::within_budget` and `overview::cut_to_fit` (with `CUT_BLOCKS`, `CUT_ROW_BLOCKS`, `CUT_LAST`), `diagnose::Diagnosis::within_budget` (its order `Kept::cut_one`), `events::Page::within_budget` with `events::list_within_budget`, `events::payload_within_budget` and `events::Binder`, `schedule::within_budget` and `schedule::cut_to_fit`, `run_list::RunsAnswer::within_budget`, `run_evidence::Evidence::within_budget`, `code_lookup::Page::within_budget` | moved code | LAB-5D | `ac_overview`, `ac_diagnose`, `ac_events`, `ac_schedule`, `ac_runs`, `ac_run_evidence`, `ac_outcome_code` | moved unchanged from `apps/actingctl/src/mcp`: `observer.rs` (`cut_to_fit`, `cut_next` and the order's constants), the loop of `runs.rs` `render_within_budget`, `events.rs` (`list_page`, `payload_page`), `schedule.rs` (`cut_to_fit`, `cut`) and the page loops of `run_list.rs`, `run_evidence.rs` and `code_lookup.rs`: the same order, markers and cursors. `EventsError` gains `Export`, a payload page the export could not take, which MCP answers in class `runtime` as before |
+| L5D-3 | the four reads that export: `facts::within_budget`, `remedy::within_budget` (the answer of `remedy`, MCP's `ac_remedy_get`) and `routine_summary::within_budget`, each `budget::exported` with its header (moved from MCP: five members, three, three); `packs::Answer::within_budget` (the whole document with its warnings, answered `{source, export}`, the note counting the warnings the file holds) | moved code | LAB-5D | `ac_facts`, `ac_remedy_get`, `ac_routine_summary`, `ac_packs` | one shared way (`budget::exported`, with `exported_header`, `write_json` and `write_bytes`, which `packs` and `events`' payload page use too); MCP passes its writer, `observer::export_writer`: `material_export::write` on its export directory `%TEMP%\actingcommand-mcp\materials`, as before |
+| L5D-4 | what stays in the MCP front | — | LAB-5D | — | what speaks of the MCP protocol: its measure, passed as `fits` (`tools::fits_success`, in `tools::answer_budget`; ac_overview's `tools::fits_sent`, the size as sent in the session's protocol version; ac_diagnose and ac_packs count the warnings beside the answer) and, for ac_overview, the warning `output_budget_exceeded` that gives the whole answer's size as sent (`fit_answer`); the cursors bound to its connection (`CursorBinding`, the session and the connection's generation), passed as `events`' binder and inside `diagnose`'s errors page; its export directory and writer. Left where it is: the generic `output_budget_exceeded` of an answer that does not fit even so (`tools.rs`), and the Lab tools' overflow rule (`lab.rs`, `finish` and `fits_as_job`), which sizes the job answer of the `--via` child as `ac_get_run` would return it, no operation's answer |
+| L5D-5 | the CLI | — | — | — | actingctl's CLI, the CLI module (`core_ops`) and `serve --stdio` pass no budget: their paths are unchanged and print the whole answer, which each `within_budget` gives without one |
+
+**Tests.** New: apps row "#434 LAB-5D" (`gate_434_lab5d` in `crates/lab-ops`, on small made-up
+answers; no Runtime, no device, no clock, no sleep): `lab_ops_no_budget_whole_answer` (each of
+the eleven reads answers, with no budget, the whole answer the CLI prints),
+`lab_ops_budget_cuts_keep_their_markers` (each of the seven, given a `fits` that refuses the whole
+answer, cuts it with MCP's markers) and `lab_ops_budget_exports_the_header` (each of the four, and
+`events`' payload page, writes the whole answer through the caller's writer and answers its header
+with the export reference and `answer_exported`; a caller with no export gets the whole answer).
+Test-only: `RunsAnswer::of_rows`. No existing test changed: MCP's tests read the same names
+(`observer::cut_to_fit` and `schedule::cut_to_fit`, now test-only re-exports of `lab-ops`',
+`fit_answer`, `render_within_budget`, `schedule::within_budget` and the tools' `within_budget`),
+and no gate name changed, so nothing is retired.
+
+**Interface.** None raised. No code, key, location or vocabulary token is added.
+
+**Where LAB-5D differs from its work order's letter.**
+
+- (a) Each read takes the budget in the step that shapes its answer, beside the read
+  (`within_budget`), not in the Runtime read the registry names (`served::SERVED` is unchanged):
+  ac_overview, ac_diagnose and ac_packs measure their answer with the warnings the front renders
+  from the read, so their measure exists only once the read has returned. The tests drive these
+  steps with made-up answers.
+- (b) ac_overview's warning `output_budget_exceeded` stays in the front: its `actual_bytes` is the
+  whole answer's size as sent in the session's protocol version, the front's own measure; the cut
+  it reports is `overview`'s.
+
+**What LAB-5D changes live.** Nothing a person, a client or the Runtime sees.
+
+**LAB-5D rollback** (to the release before it). Nothing persisted: code only.
+
 #### Slice LAB-5C (0.12.52): the command line gains the parameters only MCP took
 
 Coordinator work order `rd-1108/arch-013/brief-lab5c.md`, after the read-only survey
@@ -10081,6 +10130,115 @@ the settlement, where L2 asks for the one before it (the cut run's own); test 2 
 simulation, whose resume the request path refuses. Not tested: a late settlement of a
 remedy-journal task after more than 64 later runs at host level (the journal's pruning is tested
 alone), the closed record's first window (see "Two windows"), a rollback and its edge.
+
+### 1.297 Slice CI-OCR-1 (0.12.52): a script fills or verifies a CPU vision root from the tool registry (#428; the coordinator's ruling of 2026-11-10 on board #428, not Alice's words: CI runs real OCR on the CPU, under six conditions, and its logic lives once, in the Runtime; coordinator work order `rd-1110/brief-ci-ocr-1.md`; fix round 1, the license files get pins so that a complete root is verified without a fetch: `rd-1110/brief-ci-ocr-1-fix1.md`)
+
+[vision-model-folders.md](vision-model-folders.md) (section "Vision root") is the contract, and
+`scripts/windows-tools/README.md` (section "CPU vision root") describes the script. 1.297 is the
+next free number: Runtime PR #1564 took 1.296 (on main `af7e2557`), and the name CI-OCR-1 was
+free. No persisted ledger shape,
+wire shape, configuration key, outcome code or vocabulary is new or changed, and no Rust code
+changes.
+
+**Why.** A resource repository's frame regression runs `actinglab` on GitHub's hosted Windows
+runners. A runner has no vision root, so every check that needs OCR answered
+`lab_ocr_unavailable` and checked nothing. The coordinator ruled (board #428, 2026-11-10) that CI
+runs real OCR on the CPU under six conditions:
+
+1. addresses and hashes come only from the Runtime's registry
+   `scripts/windows-tools/windows-tool-sources.v1.json`;
+2. files go only into the runner's temporary directory and `actions/cache`;
+3. the CPU execution provider;
+4. the folder layout of [vision-model-folders.md](vision-model-folders.md);
+5. a failed download fails the job after at most three attempts;
+6. one repository's branch first.
+
+That trial passed (1989 checks in 78 cases, twice, with and without a restored cache). It could
+not use `Materialize-TaskToolCache.ps1`, which refuses to finish while a selected component is
+`PendingVerification` (the registry said so of `ppocrv6-medium-onnx`), does not retry and refuses
+a target directory that exists, which a restored cache always is; so it carried about 470 lines of
+its own in a workflow file, which four repositories would have had to copy. **The coordinator's
+ruling:** the logic lives in the Runtime, once, as a small script of its own that the resource
+repositories fetch at their Tools pin's commit and call. The existing materializer keeps its
+behaviour.
+
+**What.** `scripts/windows-tools/Materialize-VisionRoot.ps1` (PowerShell 7) takes `-Destination`
+(the vision root, created when missing), `-Registry` (default: the registry beside it),
+`-ExecutionProvider` (only `cpu`; any other value is refused by name, before anything is read or
+written) and `-Attempts` (per fetched file, default 3, at least 1). It places
+`ort/onnxruntime.dll` and `ort/onnxruntime_providers_shared.dll` (the `pinned_files` of
+`onnxruntime-directml-1.24.4` at their `vision_root_path`, extracted from the pinned package), that
+package's `LICENSE` and `ThirdPartyNotices.txt` in `ort/licenses/onnxruntime/` (its
+`placement_note`; the entry's `pinned_license_files` at their `vision_root_path`), and
+`models/PP-OCRv6_medium/det.onnx`, `rec.onnx` and `keys.txt` (the three artifacts of
+`ppocrv6-medium-onnx`, flat layout; the trial built the same folder). Every file has a pin. A file
+with its pinned size and SHA-256 is kept and reported `verified`; any other is removed if present,
+fetched to a temporary name beside it, checked and moved into place (`downloaded`); a file that
+fails its check is never left in place. The package is fetched only when a file it pins (runtime or
+license) did not verify, and only those files are extracted from it, so a run on a complete root
+fetches nothing; a registry without `pinned_license_files` is refused by name. A failed fetch is
+tried again up to `-Attempts` times, then the run fails. The script holds no address, size or hash, writes nothing
+outside the destination, writes no configuration file and starts no program. Its stdout is one JSON
+line, `{execution_provider, destination, registry {path, sha256}, files [{path, size, sha256, state,
+component}]}`; diagnostics go to stderr; it exits 0 only when every file is in place and verified,
+otherwise 1 with `Materialize-VisionRoot: FAILED: <file>: <reason>`. A hidden test-only parameter
+reads the addresses from a local directory and is refused unless every address the entries name
+is on the reserved host `example.invalid`.
+
+**The registry.** `ppocrv6-medium-onnx`'s `compatibility.state` goes from `PendingVerification`
+to `Ready`, with the evidence as its `reason`: the Runtime's vision pipeline runs exactly these
+files in production (the coordinator compared the three SHA-256 of a production vision root with
+the pins on 2026-11-10: equal), and a hosted runner's frame regression passed on them.
+`ppocrv6-medium-source` keeps `PendingVerification`. `Ready` is the value of the materializer's
+own vocabulary. Of the registry's readers only the new script reads this state (it requires
+`Ready`): `Materialize-TaskToolCache.ps1` decides by the component's id, so a selection with
+`ppocrv6-medium-onnx` is still published as `pending-verification` and fails as before, its
+`pending_verification` now quoting the new reason; `Test-WindowsRemoteBuildTools.ps1` checks only
+`ppocrv6-medium-source`'s state; the Rust readers (`crates/vision-ffi`, `crates/device/build.rs`,
+actingd's adb pin) read other components.
+
+**License pins (fix round 1).** Without a pin of their own the license files were compared with the
+package, so every run fetched the package (12.5 MB), also on a restored cache where every pinned
+file verified, and failed when that one fetch failed. `onnxruntime-directml-1.24.4` now pins them
+in a new member `pinned_license_files`, in the shape of `pinned_files` (`path` in the package,
+`vision_root_path`, `size`, `sha256`, and a `hash_provenance`): `LICENSE` 1094 bytes, SHA-256
+`c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674`, and `ThirdPartyNotices.txt`
+331175 bytes, SHA-256 `fb0af774b4d7cffc5b9d046f2aaeade2f37df2f80abf8033c95dfffcc77a8866`, read
+from the pinned package by this script on a GitHub-hosted Windows runner on 2026-11-11 (two runs,
+identical). A member of its own keeps `pinned_files` the runtime pin of
+`crates/vision-ffi/src/runtime_pin.rs`: its logic test (`gate_407_gpu1a`) holds the three pinned
+runtime files equal to the `pinned_files` of the two components, both ways, and stays true
+unchanged; `Test-WindowsRemoteBuildTools.ps1`, which freezes two `pinned_files` of the entry, too.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): the registry is
+a tool source, the script's output line is no listed interface, and no Runtime program changes.
+
+**At deploy.** Nothing changes in a deployed Runtime: the script and the registry are repository
+files that a resource repository's CI reads at its Tools pin's commit. 0.12.52 is the first release
+that carries them. **Rollback** (a Tools pin below 0.12.52): the pin has no such script, and a
+resource repository's CI that calls it fails.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CIO-1 | `scripts/windows-tools/Materialize-VisionRoot.ps1` (`-Destination`, `-Registry`, `-ExecutionProvider cpu`, `-Attempts`) and its stdout line | tool script | CI-OCR-1 | — | `since` 0.12.52; the one implementation a resource repository's CI calls; seven files, each `verified` or `downloaded`, each with a pin; the package fetched only for a file of it that did not verify, so a complete root is verified without a fetch (fix round 1) |
+| CIO-2 | `windows-tool-sources.v1.json` `ppocrv6-medium-onnx` `compatibility` `{state: Ready, reason}` | tool source | CI-OCR-1 | — | was `PendingVerification`; `ppocrv6-medium-source` unchanged; `Materialize-TaskToolCache.ps1` unchanged and still pending for this component |
+| CIO-3 | `scripts/windows-tools/Test-MaterializeVisionRoot.ps1`, run by the step `Test Windows artifact tooling` of the Windows exact-SHA build | test | CI-OCR-1 | — | no network: a made-up registry on `example.invalid`, made-up files in a local directory, the script as a child process |
+| CIO-4 | `windows-tool-sources.v1.json` `onnxruntime-directml-1.24.4` `pinned_license_files[]` `{path, vision_root_path, size, sha256, hash_provenance}` | new member of a tool source | CI-OCR-1 (fix round 1) | — | `LICENSE` and `ThirdPartyNotices.txt` at `ort/licenses/onnxruntime/`; `Materialize-VisionRoot.ps1` requires it and refuses a registry without it by name; `pinned_files` and the runtime pin unchanged; no other reader |
+
+Tests (`Test-MaterializeVisionRoot.ps1`, not a Rust gate): `fresh-fill`,
+`second-run-fetches-nothing` (fix round 1: its test source is an empty directory, so any fetch,
+of the package or of a model file, would fail the run; it exits 0 with every file `verified` and
+none written again, and says the package was not fetched), `one-license-file-fetched` (fix round
+1: `LICENSE` missing, then `ThirdPartyNotices.txt` changed; the package is fetched from a source
+that holds only the package and only that file is placed, `downloaded`, the others `verified` and
+unwritten), `license-differs-from-pin-fails` (fix round 1: a package whose `LICENSE` has the
+pinned length and other bytes fails the run, naming the file and its pin, and the file is not left
+in place), `wrong-hash-fails-after-attempts`, `missing-registry-entry`,
+`provider-other-than-cpu`. `second-run-fetches-nothing` replaces the first round's
+`second-run-only-verifies`, which still served the package to the license files' comparison. No
+test outside this slice changed: `Test-WindowsRemoteBuildTools.ps1` pins only
+`ppocrv6-medium-source`'s state and the entry's two `pinned_files`, and `gate_407_gpu1a` reads
+only `pinned_files`.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

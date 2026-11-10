@@ -8,7 +8,8 @@
 //! answer, passed on unchanged (`session_remedy_choices_invalid` on top of a refusal). The scope
 //! is an instance or a game; `server` is no argument (`arguments_invalid`, `unknown`), since a
 //! server id is not game-qualified. The answers are the CLI's, without its outcome; a `get`
-//! answer larger than the output budget is exported, as `ac_facts` does.
+//! answer larger than the output budget is exported, as `ac_facts` does (Workflow #434 LAB-5D:
+//! by `remedy::within_budget`, with this server's budget).
 
 use super::operator::record_provenance;
 use super::runtime::client_error;
@@ -17,14 +18,11 @@ use super::tools::{
 };
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::remedy::{self, Failure, Target};
-use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{EventActor, EventSource};
 use serde_json::{Map, Value, json};
 
 /// The agent's origin: the writer of the instance's target record.
 const AGENT: (EventActor, EventSource) = (EventActor::Agent, EventSource::Adapter);
-/// The members an exported `get` answer keeps beside `export`.
-const EXPORTED_HEADER: [&str; 3] = ["instance_alias", "read_at_unix_ms", "in_effect"];
 
 pub(super) const SET_DESCRIPTION: &str = "Writes the remedy choices of one scope, the instance's target record session.remedy.choices, as actingctl remedy set does. Exactly one of instance (alias, instance_id or ADB port, resolved with one status read) or game names the scope; there is no server scope (a server id is not game-qualified, so a server record would reach every game sharing it), and a server argument is refused as arguments_invalid; rows is the scope's whole list, [] withdraws it. A row is {row: allow, need, capability} (this capability may serve this need), {row: none, need} (this need gets no remedy) or {row: parameter, capability, parameter, value} (a provider's parameter takes this value); every member is a string, every name a token the bound packages declare (a remedy's need and capabilities, a provided capability's parameters and options). The most specific record that applies to an instance applies as a whole (instance over game); without one the configuration and then the package defaults decide. The Runtime checks every write against the packages bound on every instance the scope covers and refuses a bad one whole: session_remedy_choices_invalid with field (the JSON pointer of the row and member) and instance_id (the instance a name is unknown on); nothing is written then. Every write is a new version (source_snapshot_id remedy-choices:<sha256>) and lifts a remedy stop it changes the inputs of. lift true, with instance and without rows, republishes the instance's own record unchanged, or an empty one when it has none (an empty instance record replaces the game record for that instance), with a new observation, as actingctl remedy lift does: it lifts a remedy stop on the instance after the cause was fixed by hand. Answers {event_id, scope, key, source_snapshot_id, observed_at_unix_ms, rows_total}, with previous_source_snapshot_id (null without an instance record) for lift. The write is recorded with the agent's origin.";
 
@@ -84,27 +82,10 @@ pub(super) fn get(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
         Failure::Runtime(error) => context.runtime.failure(&connected, &error),
         other => tool_error(&other),
     })?;
-    if tools::fits_success(&answer) {
-        return Ok(ToolSuccess::new(answer));
-    }
-    let export = super::events::export_json(&answer)?;
-    let mut exported = EXPORTED_HEADER
-        .iter()
-        .filter_map(|member| {
-            answer
-                .get(*member)
-                .map(|value| ((*member).to_owned(), value.clone()))
-        })
-        .collect::<Map<_, _>>();
-    let mut warning = Outcome::new(ActingctlCode::AnswerExported);
-    if let Some(path) = export["path"].as_str() {
-        warning = warning.path(path);
-    }
-    exported.insert("export".to_owned(), export);
-    Ok(ToolSuccess {
-        result: Value::Object(exported),
-        warnings: vec![tools::warning(&warning)],
-    })
+    // Workflow #434 LAB-5D: the export and its header are `remedy`'s.
+    remedy::within_budget(answer, Some(&tools::answer_budget()))
+        .map(|answer| tools::fitted(answer, Vec::new()))
+        .map_err(tools::export_failed)
 }
 
 /// A remedy failure as a tool error: a selector miss and a refused record are `usage`, a clock

@@ -5,11 +5,14 @@
 //! `scope` program, instance and config. Both sides build one `FactsRequest`, read it with
 //! `read` and answer the same object, `{scope, read_at_unix_ms, snapshot | records,
 //! records_total, records_kept}`: the CLI prints it as its line beside the outcome, MCP as its
-//! result, exported whole past the output budget (§2.2). No read records anything in the
+//! result, exported whole past the output budget (§2.2; Workflow #434 LAB-5D: [`within_budget`],
+//! with the budget MCP passes). No read records anything in the
 //! ledger: `RuntimeFactSnapshot` for program and config, `InstanceFactSnapshot` for one instance,
 //! whose selector one status read resolves (§2.5).
 
+use crate::budget::{self, Budget, Fitted};
 use crate::instance_selector::{self, SelectorMiss};
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     CONFIG_PARAMETERS_FACT_PREFIX, CONFIG_SELECTION_FACT_KEY, CONFIG_SUBSYSTEMS_FACT_KEY,
     RuntimeFactSnapshot,
@@ -17,6 +20,26 @@ use actingcommand_contract::{
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+
+/// The members an answer written whole to its caller's export keeps beside `export` (Workflow
+/// #429 R-4: the config read's `config_version` too). Workflow #434 LAB-5D: moved from MCP's
+/// `ac_facts`.
+const EXPORTED_HEADER: [&str; 5] = [
+    "scope",
+    "read_at_unix_ms",
+    "records_total",
+    "records_kept",
+    "config_version",
+];
+
+/// Workflow #434 LAB-5D: the answer of `facts` and `config`, `answer`, within `budget`, the one
+/// way of the reads that export ([`budget::exported`]): whole without a budget, when it fits or
+/// for a caller with no export; otherwise written whole through the caller's export and answered
+/// as `{scope, read_at_unix_ms, records_total, records_kept, config_version?, export}` with the
+/// warning `answer_exported`.
+pub fn within_budget(answer: Value, budget: Option<&Budget<'_>>) -> Result<Fitted, Outcome> {
+    budget::exported(answer, &EXPORTED_HEADER, budget)
+}
 
 /// What one read answers: the CLI form, the MCP `scope`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

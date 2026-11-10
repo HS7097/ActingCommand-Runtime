@@ -1330,6 +1330,16 @@ tests = [
 ]
 incident = ["#434 LAB-5A"]
 
+# Workflow #434 LAB-5D (0.12.52; register §1.287, "Slice LAB-5D"; brief rd-1108/arch-013/brief-lab5d.md; contracts/lab-two-entries.md §9.3): the answer budget is the caller's; on small made-up answers, each of the eleven reads whose MCP answer MCP's own code cut or exported (status, diagnose, events, schedule, runs, run evidence, codes; facts, packs, remedy, summary) answers its whole answer, the answer the CLI prints, when no budget is passed; given a fits that refuses the whole answer, each of the seven that cut cuts it as MCP's code did with the same markers (status's <block>_truncated and truncated in cut order, diagnose's fewest-count groups first and <list>_truncated, events' rows from the end with truncated and the cursor after the last row kept, then the one row's materials_truncated, schedule's candidate rows from the last entry with candidates_truncated, runs' and codes' truncated with next_cursor after the last row kept, run evidence's truncated and next_step, then the first step's frames referenced); and each of the four that export, and the payload page of events, writes the whole answer through the caller's writer as <sha256>.json and answers its header members beside the export reference with answer_exported naming the file (packs' {source, export}, its note counting the warnings the file holds), while a caller with no export gets the whole answer
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::gate_434_lab5d::lab_ops_no_budget_whole_answer",
+    "actingcommand-lab-ops::lib::gate_434_lab5d::lab_ops_budget_cuts_keep_their_markers",
+    "actingcommand-lab-ops::lib::gate_434_lab5d::lab_ops_budget_exports_the_header",
+]
+incident = ["#434 LAB-5D"]
+
 # Workflow #434 LAB-5C (0.12.52; register §1.287, "Slice LAB-5C"; brief rd-1108/arch-013/brief-lab5c.md; contracts/lab-two-entries.md §9.1): the arguments only today's MCP tools took are parameters of their rows, and a command line without them gives what it gave before; events' view, since_unix_ms, until_unix_ms, through_sequence, event_type, exclude_event_types, fact_key, min_severity, max_severity, origin_module, task_id and correlation_id go to lab-ops' events under their flags and are its query, and detail and wait_s its read's; diagnose's since_unix_ms goes on under its flag and a start more than seven days back is lab-ops' since_out_of_range; codes' prefix, owner and limit go on after the code and give the page they ask for, offline, and beside a code are lab-ops' conflicting; packs' role goes on after the instance and the install root, and a role lab-ops does not know is refused by name; material's out asks for the whole material into that directory, offset and max_bytes beside it are conflicting, and without it the slice is read as before; app launch|restart|stop's record goes to session app as --record, which its record gate takes, from the command line and serve alike; remedy set takes its rows file as before or its rows inline, which lab-ops reads (another shape --rows wrong_type) and goes on with to the Runtime, both refused as --rows conflicting and neither as <file> required, on the command line and in serve; material --out writes a made-up material into a temporary directory and its line names the file with its sha256 and size
 [[gate]]
 coverage = "Y"

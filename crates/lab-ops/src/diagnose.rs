@@ -10,8 +10,9 @@
 //! QueryEvents read, which records nothing in the ledger; at most one Status per call names the
 //! instance and the instances of the groups (§2.5).
 //!
-//! stdout is one line, the same JSON as the `ac_diagnose` result, with every list whole. Only
-//! MCP cuts lists to its output budget (`<list>_truncated`, §2.2; the order is in `mcp::runs`).
+//! stdout is one line, the same JSON as the `ac_diagnose` result, with every list whole. Only a
+//! caller that passes a budget has lists cut (`<list>_truncated`, §2.2; Workflow #434 LAB-5D:
+//! `Diagnosis::within_budget`, whose order is here; MCP passes its output budget).
 //!
 //! `actingd suspended` reads the configuration of the generation `install\active.json` selects
 //! at this call (`suspension_source`): an MCP server started before a deploy reads the deployed
@@ -43,6 +44,9 @@
 //! the warning `call_budget_exhausted` naming it (`member`) or the read's failure, while the
 //! others answer; `not_run` cut so is absent with `call_budget_exhausted` (`member` `not_run`).
 
+// Workflow #434 LAB-5D: the caller's answer budget, by its module's path: `Budget` here is the
+// call's deadline (#422 QR-2b).
+use crate::budget;
 use crate::child::{self, Captured, ChildFailure};
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -1164,6 +1168,56 @@ pub struct Kept {
     pub not_run: usize,
 }
 
+impl Kept {
+    /// Workflow #434 LAB-5D (moved unchanged from MCP's `ac_diagnose`): keeps one row fewer, of
+    /// the first list in the cut order that still has one; `false` when nothing is left to cut.
+    fn cut_one(&mut self) -> bool {
+        // Workflow #389 MCP-7 (command table §4.8): the groups go first, the fewest-count groups
+        // of each list first (each list is ordered by count, the most frequent first):
+        // failures_grouped, then runs_grouped. Then the clock-slot rows, from the end of their
+        // list (the owed rows, then the deferred and expired ones, then the refused and
+        // superseded ones, each oldest first): the full list stays in actingd suspended and
+        // clock_slots_total points there (#372 K3, K4). Then the deferred rows of the latest
+        // evaluation, from the end of their list (Workflow #386 SR-6b, MCP-19b: ac_schedule
+        // answers them all). Then what another tool can read again: the errors page (ac_events),
+        // then the runs, oldest first (ac_get_run / ac_events). The other rows of the actingd
+        // suspended report have no other MCP route, so they go last: repeating, lift, suspended,
+        // the suspended task packages (Workflow #386 SR-3), the stopped remedy rounds (Workflow
+        // #411 B15 R7), then the report's warnings.
+        if self.failures_grouped > 0 {
+            self.failures_grouped -= 1;
+        } else if self.runs_grouped > 0 {
+            self.runs_grouped -= 1;
+        } else if self.clock_slots > 0 {
+            self.clock_slots -= 1;
+        } else if self.not_run > 0 {
+            self.not_run -= 1;
+        } else if self.errors > 0 {
+            self.errors -= 1;
+        } else if self.runs > 0 {
+            self.runs -= 1;
+        } else if self.repeating > 0 {
+            self.repeating -= 1;
+        } else if self.lift > 0 {
+            self.lift -= 1;
+        } else if self.suspended > 0 {
+            self.suspended -= 1;
+        } else if self.packs > 0 {
+            self.packs -= 1;
+        } else if self.remedies > 0 {
+            self.remedies -= 1;
+        } else if self.reruns > 0 {
+            self.reruns -= 1;
+        } else if self.report_warnings > 0 {
+            self.report_warnings -= 1;
+        } else {
+            // Nothing left to cut.
+            return false;
+        }
+        true
+    }
+}
+
 impl Diagnosis {
     /// Every list whole.
     pub fn kept_all(&self) -> Kept {
@@ -1261,6 +1315,29 @@ impl Diagnosis {
             result.insert("incomplete".to_owned(), json!(true));
         }
         Value::Object(result)
+    }
+
+    /// Workflow #434 LAB-5D (moved unchanged from MCP's `ac_diagnose`): the diagnosis rendered
+    /// within `budget`. Without one, every list whole, as the CLI prints it. With one, rendered
+    /// with every list whole, then cut one row at a time in the order of [`Kept::cut_one`] until
+    /// the budget takes it; each list cut short is marked `<list>_truncated` ([`Self::render`]).
+    /// An answer that still does not fit when nothing is left to cut is given as it is, for the
+    /// caller to refuse. `errors_page` renders the errors page with its first `kept` rows, its
+    /// cursor bound as the caller binds it to its connection ([`Self::errors_page`] with the
+    /// caller's [`CursorBinding`]); `envelope` is [`Self::render`]'s.
+    pub fn within_budget<E>(
+        &self,
+        budget: Option<&budget::Budget<'_>>,
+        errors_page: &dyn Fn(usize) -> Result<Value, E>,
+        envelope: &dyn Fn(&Outcome) -> Value,
+    ) -> Result<Value, E> {
+        let mut kept = self.kept_all();
+        loop {
+            let result = self.render(&kept, errors_page(kept.errors)?, envelope);
+            if budget::fits(budget, &result) || !kept.cut_one() {
+                return Ok(result);
+            }
+        }
     }
 
     /// The errors page with its first `kept` rows, oldest first. Without a task_id filter its

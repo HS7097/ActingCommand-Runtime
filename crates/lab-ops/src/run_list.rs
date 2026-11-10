@@ -6,10 +6,12 @@
 //! arguments into one `RunsRequest`, read it with `read` and answer with `RunsAnswer::render`.
 //! stdout is one line, the same JSON as the ac_runs result, with the warnings as a top-level
 //! `warnings` member when there are any (D3) and the outcome `run_list_reported` (Workflow #378
-//! A5). Only MCP cuts rows to its output budget (`truncated`, §2.2). At most one status read per
+//! A5). Only a caller that passes a budget has rows cut (`truncated`, §2.2; Workflow #434
+//! LAB-5D: `RunsAnswer::within_budget`; MCP passes its output budget). At most one status read per
 //! call names the instance and the rows' aliases (§2.5); the run reads are event queries, which
 //! record nothing.
 
+use crate::budget::{self, Budget};
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::instance_selector::{self, SelectorMiss};
@@ -323,6 +325,46 @@ impl RunsAnswer {
         }
         result.insert("snapshot_ledger_position".to_owned(), json!(self.snapshot));
         Value::Object(result)
+    }
+
+    /// Workflow #434 LAB-5D (moved unchanged from MCP's `ac_runs`): the result within `budget`:
+    /// every row without one, the result the CLI prints; with one, rows cut from the last until
+    /// the budget takes it ([`Self::render`]: `truncated`, next_cursor after the last row kept).
+    /// A result that does not fit even without rows is given as it is, for the caller to refuse.
+    pub fn within_budget(&self, budget: Option<&Budget<'_>>) -> Value {
+        let mut kept = self.row_count();
+        loop {
+            let result = self.render(kept);
+            if kept == 0 || budget::fits(budget, &result) {
+                return result;
+            }
+            kept -= 1;
+        }
+    }
+
+    /// A page of `rows`, each with its order sequence, the newest first, of a window from
+    /// `since_unix_ms` at the snapshot `snapshot`, the Runtime's next page starting at `next`:
+    /// the made-up answers of Workflow #434 LAB-5D's named tests.
+    #[cfg(test)]
+    pub(crate) fn of_rows(
+        rows: Vec<(Value, u64)>,
+        since_unix_ms: u64,
+        snapshot: u64,
+        next: Option<RunListPosition>,
+    ) -> Self {
+        Self {
+            rows,
+            since_unix_ms,
+            until_unix_ms: None,
+            from: RunListPosition {
+                snapshot_ledger_position: snapshot,
+                before_sequence: u64::MAX,
+            },
+            next,
+            incomplete: false,
+            snapshot,
+            fingerprint: "0123456789abcdef".to_owned(),
+        }
     }
 
     /// `call_budget_exhausted` when the read budget ended the page before every listed run of

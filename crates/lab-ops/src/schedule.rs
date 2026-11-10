@@ -8,7 +8,8 @@
 //!
 //! - `actingctl schedule [--instance <alias|instance_id|ADB port>]` prints the answer verbatim,
 //!   candidates included (`main.rs`), as MCP `ac_schedule` answers it (`mcp::schedule`); both
-//!   read it with [`explanation`] (Workflow #434 LAB-1b).
+//!   read it with [`explanation`] (Workflow #434 LAB-1b). MCP passes its output budget to
+//!   [`within_budget`], which cuts candidate rows (Workflow #434 LAB-5D); the CLI passes none.
 //! - `overview` / `ac_overview` read it without candidates and give each instance row the
 //!   `not_running` row of its entry ([`not_running_by_alias`]).
 //! - `diagnose` / `ac_diagnose` read it with candidates and list the deferred rows (due, or
@@ -16,6 +17,7 @@
 //!   `scheduling.not_run.diagnose_rows` per instance, the value the program fact
 //!   `config.parameters.scheduling` holds ([`not_run`]).
 
+use crate::budget::Budget;
 use crate::codes::ActingctlCode;
 use crate::instance_selector::{self, SelectorMiss};
 use crate::overview::Warning;
@@ -70,6 +72,83 @@ pub fn explanation(
     client
         .schedule_explanation(alias.as_deref(), true)
         .map_err(Failure::Runtime)
+}
+
+/// Workflow #434 LAB-5D (moved unchanged from MCP's `ac_schedule`): the answer of `schedule`, the
+/// explanation's JSON, within `budget`: whole without one; with one, its candidate rows cut
+/// ([`cut_to_fit`]).
+pub fn within_budget(mut answer: Value, budget: Option<&Budget<'_>>) -> Value {
+    if let Some(budget) = budget {
+        cut_to_fit(&mut answer, budget.fits);
+    }
+    answer
+}
+
+/// Cuts the fewest candidate rows, from the last row of the last entry backwards, after which
+/// `fits` takes `answer`; each entry that lost rows is marked `candidates_truncated: true`.
+/// Nothing else is cut: when `fits` takes no answer, every candidate row is cut and the answer is
+/// left so, for the caller to refuse. Cutting a row more never makes the answer larger (a row is
+/// larger than the mark its entry gains), so the search halves the range.
+pub fn cut_to_fit(answer: &mut Value, fits: impl Fn(&Value) -> bool) {
+    if fits(answer) {
+        return;
+    }
+    let rows = answer
+        .get("instances")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("candidates").and_then(Value::as_array))
+        .map(Vec::len)
+        .sum::<usize>();
+    let all_cut = cut(answer, rows);
+    if !fits(&all_cut) {
+        *answer = all_cut;
+        return;
+    }
+    // Cutting `low - 1` rows does not fit, cutting `high` does.
+    let (mut low, mut high) = (1, rows);
+    while low < high {
+        let middle = usize::midpoint(low, high);
+        if fits(&cut(answer, middle)) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    *answer = cut(answer, high);
+}
+
+/// `answer` without its last `rows` candidate rows, counted from the last row of the last entry
+/// backwards, each entry that lost one marked `candidates_truncated: true`.
+fn cut(answer: &Value, rows: usize) -> Value {
+    let mut shortened = answer.clone();
+    let mut left = rows;
+    let entries = shortened
+        .get_mut("instances")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+        .rev();
+    for entry in entries {
+        if left == 0 {
+            break;
+        }
+        let Some(members) = entry.as_object_mut() else {
+            continue;
+        };
+        let Some(candidates) = members.get_mut("candidates").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let taken = left.min(candidates.len());
+        if taken == 0 {
+            continue;
+        }
+        candidates.truncate(candidates.len() - taken);
+        left -= taken;
+        members.insert("candidates_truncated".to_owned(), json!(true));
+    }
+    shortened
 }
 
 /// The `not_running` row of each entry of `explanation`, by the entry's instance alias, verbatim:

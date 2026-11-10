@@ -6,14 +6,16 @@
 //! Runtime request, no ledger record and no `--state-root` (command table D5). Both sides parse
 //! their arguments into one [`Query`], read it with [`read`] and answer what it returns; stdout is
 //! one line, the same JSON as the `ac_outcome_code` result, with the outcome
-//! `outcome_codes_reported` (Workflow #378 A5). Only MCP cuts a list to its output budget
-//! (`truncated`, command table §2.2).
+//! `outcome_codes_reported` (Workflow #378 A5). Only a caller that passes a budget has a list cut
+//! (`truncated`, command table §2.2; Workflow #434 LAB-5D: [`Page::within_budget`]; MCP passes
+//! its output budget).
 //!
 //! One entry is the catalog entry as the catalog holds it, with its `code` first. The list is the
 //! codes in name order, each `{code, category, ladder_class, status}`, and `next_cursor` while
 //! codes past the page remain. A cursor names the last code of its page and the filters it was
 //! issued for, so it holds across processes, restarts and both sides.
 
+use crate::budget::{self, Budget};
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_contract::codes::{ContractCode, SharedCode};
@@ -173,6 +175,22 @@ impl Page {
             result.insert("truncated".to_owned(), Value::Bool(true));
         }
         Ok(Value::Object(result))
+    }
+
+    /// Workflow #434 LAB-5D (moved unchanged from MCP's `ac_outcome_code`): the page within
+    /// `budget`: every row without one, the page the CLI prints; with one, rows cut from the last
+    /// until the budget takes it ([`Self::render`]: `truncated`, next_cursor after the last row
+    /// kept). A page that does not fit even without rows is given as it is, for the caller to
+    /// refuse.
+    pub fn within_budget(&self, budget: Option<&Budget<'_>>) -> Result<Value, Refusal> {
+        let mut kept = self.row_count();
+        loop {
+            let result = self.render(kept)?;
+            if kept == 0 || budget::fits(budget, &result) {
+                return Ok(result);
+            }
+            kept -= 1;
+        }
     }
 }
 
