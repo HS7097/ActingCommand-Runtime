@@ -9271,8 +9271,8 @@ other term does.
 [package-reference.md](package-reference.md) ("Tables", "When the Runtime reads it") and
 [actingd-check-config.md](actingd-check-config.md) (a sound game root's `tables`) are the
 contract; this section amends §1.65 TB1 to TB3. 1.293 is the next free number on main
-`dfc1d96f`, and the name TB-R1 was free. No persisted ledger shape, wire shape, configuration
-key, outcome code or vocabulary is new or changed.
+`dfc1d96f` and still is on `2e949752` (#1558 merged), and the name TB-R1 was free. No persisted
+ledger shape, wire shape, configuration key, outcome code or vocabulary is new or changed.
 
 **Why.** `read_standard_pack_tables` listed every entry of `tables/`, read each as a table and
 took the first 64 by name. A kept copy was reported as an invalid table at every start (one
@@ -9304,12 +9304,13 @@ to). A table's file name, `<table_id>.json`, never matches.
 in `tables/` (`notes.txt`, say) is read and reported as before; a root without such names lists,
 reads and records as before. The Runtime deletes and moves nothing.
 
-**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): `package`
-stays [3, 7], since what a bundle may contain does not change (the bundle index and
-`reserved_package_id` are untouched; only what the reader of an installed root ignores);
-`ledger` stays [3, 7], since no record shape changes (an existing `standard_pack_read` record is
-no longer written for such a name); `runtime-client` stays [3, 6] and `runtime-outcomes` gains no
-code: check-config's `tables` and the `packs` answer lose rows of an unchanged shape.
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)); every range
+stays as main declares it ([3, 7] for `package` and `ledger`, [3, 6] for `runtime-client` on
+`2e949752`). `package`: what a bundle may contain does not change (the bundle index and
+`reserved_package_id` are untouched; only what the reader of an installed root ignores).
+`ledger`: no record shape changes (an existing `standard_pack_read` record is no longer written
+for such a name). `runtime-client` and `runtime-outcomes`: no shape and no code changes;
+check-config's `tables` and the `packs` answer lose rows of an unchanged shape.
 
 **At deploy.** A game root with leftover copies in `tables/` stops reporting them; no table that
 was read before reads differently. **Rollback** (below 0.12.50): a Runtime before this release
