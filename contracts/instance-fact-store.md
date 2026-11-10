@@ -485,10 +485,13 @@ The store accepts or refuses it like any other observation.
   without a row is not present, and a record that is missing, expired, stale or below a reader's
   floor is unknown, never an empty list ([selection-policy.md](selection-policy.md), "Facts and
   unknown", "Record lists"). An empty record is a list read whole that showed no position.
-- **Reserved prefix.** Only the host writes under `inventory.list.` as a list:
-  `PublishFact` and `PublishFacts` of such a key are refused from every origin as
+- **Reserved prefix.** Only the host writes under `inventory.list.`, and only a list reading's
+  `record_list`. `PublishFact` and `PublishFacts` of such a key are refused from every origin as
   `list_reading_key_reserved` (non-fatal, `fact_key`), before the fact write gate, with nothing
-  appended.
+  appended. A mark's `fact_key` or `capacity_fact_key` under the prefix is refused at the
+  declaration gate and at admission (`resource_reading_fact_key_invalid`,
+  `resource_reading_capacity_fact_key_invalid`; [resource-readings.md](resource-readings.md),
+  "Capacity and reserved keys"), so no reading writes an integer there.
 - **Projection.** An ordinary instance fact: visible to `InstanceFactSnapshot` and `ac_facts`,
   carried with its rows in the snapshot of a select or judge step whose document declares it,
   and loaded at the start as every tagged instance record. No catalog predicate and no

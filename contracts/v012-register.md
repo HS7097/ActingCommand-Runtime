@@ -8761,7 +8761,7 @@ what was judged worth) stays in the instance fact store and the ledger.
 
 | Slice | Repository | Size | What | Depends on | Interfaces |
 |---|---|---|---|---|---|
-| S168-4 | Runtime | L | the design's G-2: the `read_list` effect (declaration gate, parser, admission, the static walk's self-edge and once-per-run rule), the kernel's list read over the scan session with no policy, the three misses and their warning, the host's publication at the successful terminal (stage 2), the reserved prefix `inventory.list.` for clients and for marks | S168-0 | `package` 8, with S168-5a |
+| S168-4 | Runtime | L | the design's G-2: the `read_list` effect (declaration gate, parser, admission, the static walk's self-edge and once-per-run rule), the kernel's list read over the scan session with no policy, the three misses and their warning, the host's publication at the successful terminal (stage 2), the reserved prefix `inventory.list.` for clients and for marks; its report says that no package on the three resource repositories' `main` declares a mark under the prefix | S168-0 | `package` 8, with S168-5a |
 | S168-5a | Runtime | M | the design's G-4: the value source `table_max_over_list` in the selection-policy crate (validation, binding, one read per reference over the union of its lists, the reason, the input identity, upper bound, the scheduling refusal); its tests use fake snapshots | S168-0 | `package` 8, with S168-4; no `ledger` |
 | S168-5b | Runtime | L | the design's G-5: the `judge` effect with its two keys and the mapping member `judge_result` (declaration, admission, the kernel's judge path without an input port, the host's refusal of an input for it, the record with `judge_only`, the run's end on one of the two keys); the ledger reader's rules for `judge_only` | S168-4 merged | `package` 9 and `ledger` 8, in the Runtime release of LAB-6 and LAB-7 |
 
@@ -9005,7 +9005,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`, `device.screen_off_timeout_ms` (per instance, a bound handset only, with a lifetime; §1.59 RD5-2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-5b |
 | `session.remedy.choices` (one per scope: instance, server or game; §1.110 B15-6) | instance | yes | #411 B15 R6 |
 | `session.dispatch.parameter.<name>` (an overlay of a run's snapshots only, never stored; the prefix `session.dispatch.` is refused to publishers; §1.110 B15-7) | — (never stored) | — | #411 B15 R5 |
-| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 256 rows; the prefix is refused to client publishers; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
+| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 256 rows; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).

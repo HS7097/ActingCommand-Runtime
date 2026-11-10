@@ -42,8 +42,8 @@ file. The following is the member only, not a complete task:
 | --- | --- | --- |
 | the array | `1..=16` entries; the task declares `scheduling_outcome` | empty or longer: `InvalidValue` @ `/resource_readings`; no outcome: `MissingField` @ `/scheduling_outcome` |
 | `id` | `[A-Za-z0-9_\-/.:]`, `1..=128` bytes, unique in the task | `InvalidValue` @ `/resource_readings/<i>/id` |
-| `fact_key` | starts with `resource.` or `inventory.`, satisfies the instance fact key rule, unique in the task | `InvalidValue` @ `…/fact_key` |
-| `capacity_fact_key` | optional (Workflow #390 READ-1); only with `value.format` `current_capacity`; the key rule of `fact_key`; unique in the task among every key the task's marks write | `InvalidValue` @ `…/capacity_fact_key` (reason `resource_reading_capacity_fact_key_invalid`, or `resource_reading_fact_key_duplicate`) |
+| `fact_key` | starts with `resource.` or `inventory.`, never with `inventory.list.` (from Workflow #428 S168-4: that prefix holds list readings only, "Capacity and reserved keys" below), satisfies the instance fact key rule, unique in the task | `InvalidValue` @ `…/fact_key` (reason `resource_reading_fact_key_invalid`) |
+| `capacity_fact_key` | optional (Workflow #390 READ-1); only with `value.format` `current_capacity`; the key rule of `fact_key`, so never under `inventory.list.` either; unique in the task among every key the task's marks write | `InvalidValue` @ `…/capacity_fact_key` (reason `resource_reading_capacity_fact_key_invalid`, or `resource_reading_fact_key_duplicate`) |
 | `page_id` | an identifier like `id` (not `any`) naming a page the task declares: its entry, target, error or `scheduling_outcome` pages, or a page one of its operations leaves, reaches or passes through (Workflow #384 D2-S2; it was a terminal page only); the page gate may use any recognition backend | `InvalidValue` @ `…/page_id`; cross-reference: `package_invalid` naming `…/page_id`; before any input the Runtime refuses a page its detector does not hold (`page_undeclared`) |
 | `target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`; a page gate may also name it (Workflow #396 REC-6), and the gate's observation of the frame handed to recognition is then the reading's | `InvalidValue` @ `…/target_id`; cross-reference: `package_invalid` naming `…/target_id`; a target the projection metadata marks personal is refused by the Runtime before any input |
 | `trim` | `whitespace_v1` only | `InvalidValue` @ `…/trim` |
@@ -732,9 +732,14 @@ the run the same way.
   nothing is evicted.
 - A client never writes a list: a `PublishFact` or `PublishFacts` of a key under
   `inventory.list.` is refused, from every origin, before the fact write gate, as the non-fatal
-  request error `list_reading_key_reserved` (`fact_key`), with nothing appended. A mark may still
-  name such a key (its record is an integer); a document that reads the key as a list then reads
-  `type_mismatch`, never a value.
+  request error `list_reading_key_reserved` (`fact_key`), with nothing appended.
+- A mark never writes under `inventory.list.` either: from S168-4, a mark's `fact_key` or
+  `capacity_fact_key` under that prefix is refused with the refusals of a mark's other key rules
+  (`ResourceReadingDeclaration::validate`, "Declaration" above). The declaration gate refuses it
+  as `InvalidValue` @ `…/fact_key` with reason `resource_reading_fact_key_invalid`, or @
+  `…/capacity_fact_key` with `resource_reading_capacity_fact_key_invalid`; Runtime admission
+  refuses the program before any input with `contained_task_resource_reading_invalid` and the
+  detail `<id>:<reason>`. So every record under the prefix is a list reading's `record_list`.
 
 ### Evidence
 
