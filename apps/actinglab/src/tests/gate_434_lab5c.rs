@@ -8,22 +8,26 @@
 //   row gives its command in `lab-ops` (`core_ops::offline_words`, `core_ops::handed_words`) and,
 //   where `lab-ops` builds it before any connection, the query (`events`, through
 //   `events::cli_request`), the window (`diagnose`, whose start too far back is refused) and the
-//   page (`codes`, offline); `material`'s read (`core_ops::material_read`); the command line
-//   actinglab's own `session app` gets (`engine::arguments`), whose `--record` gate takes it. For
-//   each row, a command line without the new options gives what it gave at the base.
+//   page (`codes`, offline); `material`'s read (`core_ops::material_read`). For each row, a
+//   command line without the new options gives what it gave at the base. (Fix 1: `app
+//   launch|restart|stop` gain no `record`; their rows are main's.)
 // - `remedy_set_takes_a_rows_file_or_rows_inline`: `file` alone goes on as before; `rows` alone
-//   goes beside the words, and `lab-ops` reads it (another shape refused before any connection);
-//   both are refused (`--rows` `conflicting`); neither is refused as before (`<file>` `required`),
-//   on the command line and in `serve --stdio` alike.
+//   goes beside the words, and `lab-ops` reads it (another shape, and fix 1: rows larger than a
+//   rows file may be, refused as a file is, before any connection); both are refused (`--rows`
+//   `conflicting`); neither is refused as before (`<file>` `required`), on the command line and
+//   in `serve --stdio` alike.
 // - `material_out_writes_the_whole_material`: a made-up material is written into a temporary
 //   directory and the line names the file.
-// Fakes only: a state root in a temporary folder on which no Runtime runs; no device, no clock,
-// no sleep.
+// Fakes only: a state root in a temporary folder on which no Runtime runs; no device, no sleep.
+// One case reads the system clock: `diagnose --since-unix-ms 1`, whose start `lab-ops` measures
+// back from now; 1 ms after the epoch is more than seven days back from any clock later than
+// seven days after the epoch, so the case is `since_out_of_range` whatever the clock reads.
 
 use super::*;
 use crate::cli_module::core_ops::{self, MaterialRead};
-use crate::cli_module::{self, Route, engine, words};
+use crate::cli_module::{self, words};
 use actingcommand_contract::EventQuery;
+use actingcommand_contract::MAX_FACT_OBSERVATION_BYTES;
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_lab_ops::cli_line;
 use actingcommand_lab_ops::events;
@@ -123,14 +127,6 @@ fn events_request(line: &[&str]) -> events::Request {
 fn module_line(line: &[&str]) -> (u8, Value) {
     let exit = cli_module::run_line(&words_of(line));
     (exit.code, exit.line.expect("the module's line"))
-}
-
-/// The command line `main`'s route gives actinglab's own command for `line`.
-fn own_route(line: &[&str]) -> Vec<String> {
-    match cli_module::route(words_of(line)) {
-        Route::Own(own) => own,
-        other => panic!("{line:?} is given to actinglab's own command: {other:?}"),
-    }
 }
 
 #[test]
@@ -396,7 +392,9 @@ fn lab5c_new_parameters_reach_their_function() {
         ),
         Err(exit) => panic!("--out is refused: {:?}", exit.line),
     }
-    // The slice's offset and size are refused beside `out`, before anything is sent.
+    // The slice's offset and size are refused beside `out` (`conflicting`). The row reads them
+    // in `material_read`, after the connection is made, as the base checked `--max-bytes`'
+    // range: with no Runtime running, the line is the connection's failure.
     for (flag, value) in [("--offset", "5"), ("--max-bytes", "10")] {
         let (_, params) = call(&["material", MATERIAL, "--out", out_word, flag, value]);
         match core_ops::material_read(&params) {
@@ -414,57 +412,6 @@ fn lab5c_new_parameters_reach_their_function() {
                 );
             }
         }
-    }
-
-    // `app launch|restart|stop`: `record` goes to `session app` as `--record`, whose gate takes
-    // it; without it, as before; `serve --stdio` gives the same command line.
-    for action in ["launch", "restart", "stop"] {
-        let own = own_route(&["app", action, "neutral.a", "--record"]);
-        assert_eq!(
-            own,
-            words_of(&[
-                "session",
-                "app",
-                action,
-                "--instance",
-                "neutral.a",
-                "--record"
-            ])
-        );
-        let invocation = match parse_invocation(own, true) {
-            Ok(invocation) => invocation,
-            Err((_, _, error)) => panic!("app {action} --record: {}", error.code),
-        };
-        assert!(
-            invocation.args.iter().any(|arg| arg == "--record"),
-            "{:?}",
-            invocation.args
-        );
-        if let Err(error) = record_flag_gate(&invocation) {
-            panic!("app {action} --record: {}", error.code);
-        }
-        assert_eq!(
-            own_route(&["app", action, "neutral.a"]),
-            words_of(&["session", "app", action, "--instance", "neutral.a"])
-        );
-        let name = format!("app {action}");
-        let params =
-            served(&json!({"op": name, "params": {"instance": "neutral.a", "record": true}}))
-                .expect("the serve call");
-        let Value::Object(members) = params else {
-            panic!("an object");
-        };
-        assert_eq!(
-            engine::arguments(table().operation(&name).expect("the row"), &members),
-            Some(words_of(&[
-                "session",
-                "app",
-                action,
-                "--instance",
-                "neutral.a",
-                "--record"
-            ]))
-        );
     }
 
     // Through the module, on a state root no Runtime runs on: `lab-ops` reads the values and
@@ -603,6 +550,35 @@ fn remedy_set_takes_a_rows_file_or_rows_inline() {
     assert_eq!(
         usage(&["remedy", "set", "--game", "neutral", "--rows", "[1]"]),
         (json!("--rows"), json!("wrong_type"))
+    );
+    // Fix 1: rows inline larger than a rows file may be are refused as a larger file is, with
+    // its bound in bytes, before anything is sent.
+    let large = json!([{ "row": "x".repeat(MAX_FACT_OBSERVATION_BYTES) }]).to_string();
+    let (code, line) = module_line(&[
+        "remedy",
+        "set",
+        "--game",
+        "neutral",
+        "--rows",
+        large.as_str(),
+    ]);
+    let outcome = &line["outcome"];
+    assert_eq!(
+        (
+            code,
+            outcome["code"].clone(),
+            outcome["values"]["argument"].clone(),
+            outcome["values"]["argument_problem"].clone(),
+            outcome["values"]["range_max"].clone()
+        ),
+        (
+            1,
+            json!("actingctl_usage_invalid"),
+            json!("--rows"),
+            json!("out_of_range"),
+            json!(MAX_FACT_OBSERVATION_BYTES)
+        ),
+        "{outcome}"
     );
     // Rows inline of the rows' shape are taken: the line goes on to the Runtime, whose
     // `runtime-info.json` the state root does not hold.

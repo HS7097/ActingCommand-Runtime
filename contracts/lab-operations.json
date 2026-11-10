@@ -365,7 +365,7 @@
         {"name": "instance", "form": "option", "type": "instance", "required": false, "note": "one of instance, game"},
         {"name": "game", "form": "option", "type": "string", "required": false},
         {"name": "file", "form": "positional", "type": "file", "required": false, "note": "a rows file; exactly one of file and rows (none is refused as <file> required, both as --rows conflicting)"},
-        {"name": "rows", "form": "option", "type": "json", "required": false, "note": "the rows inline instead of a file, a JSON list of row objects whose members are strings (another shape is --rows wrong_type); exactly one of file and rows"}
+        {"name": "rows", "form": "option", "type": "json", "required": false, "required_in": ["mcp"], "note": "the rows themselves instead of a file (--rows takes the rows, a rows file is the positional file): a JSON list of row objects whose members are strings, bounded as a rows file is (larger: --rows out_of_range); text that is not JSON is refused by the words as --rows wrong_type, where a file whose content is not JSON is --rows unusable; JSON of another shape is --rows wrong_type; exactly one of file and rows"}
       ],
       "output": "the published record",
       "writes": true,
@@ -731,8 +731,7 @@
       "name": "app launch",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
-        {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "the action becomes an application step of the instance's active Lab recording (session app --record)"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
       "output": "the receipt",
       "writes": true,
@@ -749,8 +748,7 @@
       "name": "app restart",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
-        {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "the action becomes an application step of the instance's active Lab recording (session app --record)"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
       "output": "the receipt",
       "writes": true,
@@ -768,8 +766,7 @@
       "name": "app stop",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
-        {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "the action becomes an application step of the instance's active Lab recording (session app --record)"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
       "output": "the receipt",
       "writes": true,

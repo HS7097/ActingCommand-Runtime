@@ -341,8 +341,9 @@ pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit
 /// Workflow #434 LAB-5C: `remedy set` with the scope's whole list given inline, the JSON `rows`
 /// MCP `ac_remedy_set` takes, in place of `--rows <file>`: `arguments` is the command line without
 /// `--rows` (with it, `--rows` is `conflicting`; another action than `set` refuses `--rows` as
-/// `unknown`, as its command line does). The rows are read as a rows file's content is
-/// ([`rows_from_json`]; another shape is `actingctl_usage_invalid`, `--rows`, `wrong_type`), then
+/// `unknown`, as its command line does). The rows are read as a rows file's content is, before
+/// anything is sent: bounded as a rows file is (fix 1: `inline_within_bound`), then
+/// [`rows_from_json`] (another shape is `actingctl_usage_invalid`, `--rows`, `wrong_type`); then
 /// `set` runs as [`dispatch`] runs it. `None` when the first word is no `remedy`.
 pub fn dispatch_rows(
     arguments: &[OsString],
@@ -356,6 +357,9 @@ pub fn dispatch_rows(
         Ok(parsed) => parsed,
         Err(outcome) => return Some(cli_line::failure(&outcome, Some(USAGE))),
     };
+    if let Err(outcome) = inline_within_bound(rows) {
+        return Some(cli_line::failure(&outcome, Some(USAGE)));
+    }
     let Some(rows) = rows_from_json(rows) else {
         return Some(cli_line::failure(
             &cli_line::usage_invalid(Some("--rows"), ArgumentProblem::WrongType),
@@ -544,4 +548,20 @@ fn read_rows(path: &Path) -> Result<Vec<BTreeMap<String, FactScalar>>, Outcome> 
         refused(ArgumentProblem::Unusable).caused_by(crate::foreign_data_error(&error))
     })?;
     rows_from_json(&value).ok_or_else(|| refused(ArgumentProblem::WrongType))
+}
+
+/// Workflow #434 LAB-5C fix 1: rows given inline are bounded as a rows file is ([`read_rows`]):
+/// their JSON text, as written compactly, larger than [`MAX_ROWS_FILE_BYTES`] is
+/// `actingctl_usage_invalid` (`--rows`, `out_of_range`, `range_max` the bound in bytes), the
+/// refusal of a larger file.
+fn inline_within_bound(rows: &Value) -> Result<(), Outcome> {
+    let refused = |problem| cli_line::usage_invalid(Some("--rows"), problem);
+    let bytes = serde_json::to_vec(rows).map_err(|error| {
+        refused(ArgumentProblem::Unusable).caused_by(crate::foreign_data_error(&error))
+    })?;
+    if bytes.len() > MAX_ROWS_FILE_BYTES {
+        return Err(refused(ArgumentProblem::OutOfRange)
+            .range_max(i64::try_from(MAX_ROWS_FILE_BYTES).unwrap_or(i64::MAX)));
+    }
+    Ok(())
 }

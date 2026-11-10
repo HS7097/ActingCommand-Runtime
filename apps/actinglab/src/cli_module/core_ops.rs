@@ -993,7 +993,9 @@ fn material_failed(failure: material::Failure) -> Exit {
     }
 }
 
-/// Workflow #434 LAB-5C: what one `material` line reads, decided before anything is sent.
+/// Workflow #434 LAB-5C: what one `material` line reads, decided in `served`, after the connection
+/// is made, as the base checked `--max-bytes`' range there (fix 1: so `offset` or `max_bytes`
+/// beside `out` is refused only once actingd answers the connection).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum MaterialRead<'a> {
     /// At most `max_bytes` of the material's text from `offset`: the row without `out`, as before.
