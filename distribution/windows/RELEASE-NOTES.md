@@ -99,7 +99,10 @@ S168-4 后合，声明 [3, 8]；一次发版只升一次，登记 §1.291）。`
   `list_duplicate_key`、`list_rows_exceeded`。`contained_task_resource_reading_unresolved` 多可选值 `count`（已有的键）；只改说明的：`lab_operation_completed`、
   `lab_operation_check_failed`。结果码守卫的允许表多一条（G5：声明门的 `read_list_member` 和位置 `read_list` 同名）。本版的发布文件是空的：没有新定稿或退役的
   条目。
-- 程序文件：workspace 仍是 39 个成员，`Cargo.toml`、`Cargo.lock`、`.github/` 自 v0.12.49 都没改，两个包的文件清单和 v0.12.49 一样。`apps/actingctl`、
+- 程序文件：workspace 仍是 39 个成员，`Cargo.toml`、`Cargo.lock` 自 v0.12.49 都没改；`.github/` 只改了 `.github/workflows/ci.yml`，它和
+  `ci/flaky-tests.toml` 一起把 FLK-10（actinglab 的 `golden_protocol::protocol_goldens_match_current_cli`）从 `host-lab` 门禁挪进不作门禁的 `flaky` 作业（发版
+  PR #1562 里改的），构建和两个包不受影响，两个包的文件清单和 v0.12.49 一样。在读进程启动时间的 PowerShell 检查改好以前，`actinglab detect` 的环境探测在负载很重
+  的机器上可能失败，报 `owner identity unavailable: PowerShell process inspector … timed out`，这时还没写结果和锁，再跑一次是安全的。`apps/actingctl`、
   `apps/mcp-entry`、`crates/lab-ops`、`crates/runtime-client` 自 v0.12.49 没改，MCP 工具仍是 41 个。actinglab 的命令从 102 条变成 100 条、顶层分派臂从 46 个
   变成 45 个（`ratchet/actinglab_commands.json`）。
 
@@ -127,7 +130,7 @@ S168-4 后合，声明 [3, 8]；一次发版只升一次，登记 §1.291）。`
   - **MCP 和它的 actinglab 子进程**：MCP 跑的每个 actinglab 子进程都由 `crates/lab-ops/src/lab_child.rs` 70–78 组命令行，参数一律以 `--json --via <计数方>` 开头；
     MCP 构造它的唯一一处给的是 `mcp`（`apps/actingctl/src/mcp/lab.rs` 66、771–778；`ac_app` 也走它，1214）。所以 MCP 发的每一行都带 `--via`，信封和退出码
     不变；`apps/actingctl`、`crates/lab-ops` 自 v0.12.49 没改，MCP 工具的答法照旧。
-  - **控制台 UI**（main `2f4a0cd7` 和最新发版 UI v0.12.12 `a56640c2` 都把 Runtime crate 钉在 `d06910c6`，即 v0.12.47，`Cargo.toml` 39–44；
+  - **控制台 UI**（最新发版 UI v0.12.13 的提交就是 main `2f4a0cd7`，它把 Runtime crate 钉在 `d06910c6`，即 v0.12.47，`Cargo.toml` 39–44；
     `crates/acui-setup/component-interfaces.json` 声明 `actingd-config` [5, 27]、`ledger` [3, 7]、`runtime-client` [3, 5]、`runtime-outcomes` [1, 1]，`package`
     [1, 2] 不是控制台的边）：本版这几项和 v0.12.49 一样，线上请求和账本形状也一样，控制台对本版照常；控制台不准入包。控制台本身不跑 actinglab：它跑的
     actingctl 命令 `packs`、`watchdog status --root`（`crates/acui-app/src/workbench/tools.rs` 383、415）和安装器的 `install-transition`、`status`、

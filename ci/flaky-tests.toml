@@ -26,9 +26,20 @@
 # on PR #1537 (run 42410223015, 2026-11-08 JST): the lease request's receipt did not arrive within
 # the test client's 2 s read timeout (`support/runtime.rs`, `frame_read=Idle`, no latched error).
 # PR #1537's change does not cause it; in 649 CI runs over 14 days it failed only this once (about
-# 297 passes), and its cause is not located. It is the one entry. With an empty table every module
-# job's `CI_SKIP` is `''` and the `flaky` job's `FLAKY_TESTS` is `''`: that job runs nothing and
-# passes.
+# 297 passes), and its cause is not located.
+#
+# FLK-10 (`protocol_goldens_match_current_cli`, actinglab's integration test `golden_protocol`,
+# host-lab) entered after one red on the v0.12.50 release PR #1562 (run 42793213181, 2026-11-10
+# JST), in its case `detect_success`: "owner identity unavailable: PowerShell process inspector for
+# PID ... timed out after 30000ms". `inspect_system_process`
+# (`crates/lab/src/env_detection/lock.rs`) starts `powershell.exe` to read a process's start time
+# with a 30 s limit, and the runner was slow. PR #1562 changes no code, and the same code passed
+# this test in run 42786729275 (the head of PR #1560). Its cause is located; it stays here until
+# the inspector asks the system directly. FLK-09 is not used here: the register keeps that number
+# for a test of 11-02 that has not failed again, so it has no mirror entry.
+#
+# FLK-08 and FLK-10 are the two entries. With an empty table every module job's `CI_SKIP` is `''`
+# and the `flaky` job's `FLAKY_TESTS` is `''`: that job runs nothing and passes.
 #
 # Every module job of `.github/workflows/ci.yml` passes `--skip <libtest path>` for its entries
 # (its `CI_SKIP` line), and the non-gating `flaky` job runs exactly these tests, once per
@@ -58,3 +69,12 @@ job = "host-lab"
 features = ["actingcommand-runtime-host/fixture-backends"]
 register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6713157793"
 status = "cause not located (receipt read timeout under load): first failed in run 42410223015 (PR #1537, host-lab, 2026-11-08 JST), once in 649 CI runs over 14 days; skipped until it is"
+
+[[test]]
+id = "FLK-10"
+name = "actingcommand-actinglab::golden_protocol::protocol_goldens_match_current_cli"
+crate = "actingcommand-actinglab"
+job = "host-lab"
+features = ["actingcommand-runtime-host/fixture-backends"]
+register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6764779352"
+status = "cause located (the PowerShell process inspector's 30 s limit on a slow runner): first failed in run 42793213181 (PR #1562, host-lab, 2026-11-10 JST), the same code passed in run 42786729275; skipped until the inspector asks the system directly"
