@@ -376,7 +376,7 @@ value goes through the resource line (Alice's 121 A); only a task's select step 
 ## Table maximum over a list
 
 Workflow #428 S168-5a, written ahead of its code by S168-0 and corrected by its fix 1, built by
-S168-5a (since 0.12.49; [v012-register.md](v012-register.md) §1.291, "Slice S168-5a"; the code
+S168-5a (since 0.12.50; [v012-register.md](v012-register.md) §1.291, "Slice S168-5a"; the code
 in `crates/selection-policy/src/list_max.rs`). A document may read the largest value one integer
 column of a declared table holds over the keys one or more declared record lists list: how much
 the best listed member is worth in one class of the table. The Runtime knows neither what the

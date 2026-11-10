@@ -533,7 +533,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.12.49",
+      "since": "0.12.50",
       "description": "A selection evaluation read one list maximum, once before any candidate: the largest integer of the standard-pack table table_id's column table_column over the union of the keys of the record lists fact_keys (count distinct keys), with the smallest key that holds it (maximum, maximum_identity), neither when no listed key is of the pinned class (the document's empty), or the reason the read is unknown (unknown_reason) (Workflow #428 S168-5a).",
       "common_causes": "TBD",
       "handling": "TBD"
