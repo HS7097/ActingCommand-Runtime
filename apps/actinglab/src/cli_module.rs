@@ -35,7 +35,8 @@
 //!   Lab recording's steps and marks carry it (open point 6, the coordinator's ruling), and
 //!   `Lab-MCP` when MCP's actinglab child (`--via mcp`) adds them.
 
-mod core_ops;
+// Workflow #434 LAB-5C: what a row hands `lab-ops` is read by the slice's test.
+pub(crate) mod core_ops;
 // Workflow #434 LAB-5A: its command table is read by the slice's test.
 pub(crate) mod engine;
 // Workflow #434 LAB-2b: the line actinglab's own commands print.

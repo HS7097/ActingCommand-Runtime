@@ -157,7 +157,21 @@
         {"name": "run", "form": "option", "type": "string", "required": false, "note": "a run_id (run_<32 hex>)"},
         {"name": "request", "form": "option", "type": "request_id", "required": false},
         {"name": "after", "form": "option", "type": "integer", "required": false, "note": "ledger sequence cursor"},
-        {"name": "limit", "form": "option", "type": "integer", "required": false}
+        {"name": "limit", "form": "option", "type": "integer", "required": false},
+        {"name": "view", "form": "option", "type": "enum:events|observation|changes|errors|health|lab", "required": false, "note": "one ledger view"},
+        {"name": "since_unix_ms", "form": "option", "type": "unsigned", "required": false, "note": "absolute window start, unix ms; not with since: both name the window's start (--since-unix-ms to the operation layer), which refuses the second as repeated"},
+        {"name": "until_unix_ms", "form": "option", "type": "unsigned", "required": false, "note": "absolute window end, unix ms"},
+        {"name": "through_sequence", "form": "option", "type": "unsigned", "required": false, "note": "the last ledger sequence of the page"},
+        {"name": "event_type", "form": "option", "type": "string", "required": false, "note": "one event type; not with type (the query rule refuses both)"},
+        {"name": "exclude_event_types", "form": "option", "type": "list<string>", "required": false, "note": "event types left out"},
+        {"name": "fact_key", "form": "option", "type": "string", "required": false, "note": "only the records that name this fact key, an instance fact's or a runtime fact's"},
+        {"name": "min_severity", "form": "option", "type": "enum:debug|success|info|warning|error|fatal", "required": false},
+        {"name": "max_severity", "form": "option", "type": "enum:debug|success|info|warning|error|fatal", "required": false},
+        {"name": "origin_module", "form": "option", "type": "string", "required": false, "note": "the module that recorded the event"},
+        {"name": "task_id", "form": "option", "type": "string", "required": false, "note": "a task_id (task_<32 hex>)"},
+        {"name": "correlation_id", "form": "option", "type": "string", "required": false, "note": "a correlation_id (correlation_<32 hex>)"},
+        {"name": "detail", "form": "option", "type": "enum:brief|summary|payload", "required": false, "default": "brief", "note": "brief rows; summary adds the outcome a record carries; payload adds the projected payload"},
+        {"name": "wait_s", "form": "option", "type": "integer", "required": false, "default": "0", "note": "seconds to wait for rows while the first page is empty, 0 to 20"}
       ],
       "output": "an event page with its next cursor",
       "writes": false,
@@ -235,9 +249,10 @@
       "params": [
         {"name": "ref", "form": "positional", "type": "material_ref", "required": true},
         {"name": "offset", "form": "option", "type": "integer", "required": false},
-        {"name": "max_bytes", "form": "option", "type": "integer", "required": false}
+        {"name": "max_bytes", "form": "option", "type": "integer", "required": false},
+        {"name": "out", "form": "option", "type": "dir", "required": false, "note": "write the whole material into this directory as <sha256 hex>.<extension> and answer {path, sha256, size}; not with offset or max_bytes; absent: the text slice"}
       ],
-      "output": "one bounded slice of a material",
+      "output": "one bounded slice of a material; with out, the file the whole material was written to",
       "writes": false,
       "irreversible": false,
       "runtime": "required",
@@ -254,7 +269,8 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
         {"name": "task", "form": "option", "type": "string", "required": false},
-        {"name": "since", "form": "option", "type": "duration", "required": false}
+        {"name": "since", "form": "option", "type": "duration", "required": false},
+        {"name": "since_unix_ms", "form": "option", "type": "unsigned", "required": false, "note": "absolute window start, unix ms, at most 7 days back (absent: 24 hours back); not with since: both name the window's start (--since-unix-ms to the operation layer), which refuses the second as repeated"}
       ],
       "output": "the diagnosis (its pages and the actingd suspended report, a local child)",
       "writes": false,
@@ -348,7 +364,8 @@
       "params": [
         {"name": "instance", "form": "option", "type": "instance", "required": false, "note": "one of instance, game"},
         {"name": "game", "form": "option", "type": "string", "required": false},
-        {"name": "file", "form": "positional", "type": "file", "required": true}
+        {"name": "file", "form": "positional", "type": "file", "required": false, "note": "a rows file; exactly one of file and rows (none is refused as <file> required, both as --rows conflicting)"},
+        {"name": "rows", "form": "option", "type": "json", "required": false, "required_in": ["mcp"], "note": "the rows themselves instead of a file (--rows takes the rows, a rows file is the positional file): a JSON list of row objects whose members are strings, bounded as a rows file is (larger: --rows out_of_range); text that is not JSON is refused by the words as --rows wrong_type, where a file whose content is not JSON is --rows unusable; JSON of another shape is --rows wrong_type; exactly one of file and rows"}
       ],
       "output": "the published record",
       "writes": true,
@@ -868,7 +885,8 @@
       "name": "packs",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
+        {"name": "role", "form": "option", "type": "enum:procedure|startup|resource_package", "required": false, "note": "only the rows of this role; absent: every role"}
       ],
       "output": "the packages of the selected configuration",
       "writes": false,
@@ -884,7 +902,10 @@
       "name": "codes",
       "module": "core",
       "params": [
-        {"name": "code", "form": "positional", "type": "code", "required": false, "note": "absent: the list"}
+        {"name": "code", "form": "positional", "type": "code", "required": false, "note": "absent: the list"},
+        {"name": "prefix", "form": "option", "type": "string", "required": false, "note": "the list: only codes whose name starts with it; not with code (conflicting)"},
+        {"name": "owner", "form": "option", "type": "string", "required": false, "note": "the list: only codes of this owner; not with code (conflicting)"},
+        {"name": "limit", "form": "option", "type": "integer", "required": false, "default": "20", "note": "the list's page, 1 to 100; not with code (conflicting)"}
       ],
       "output": "the code's catalog entry",
       "writes": false,
