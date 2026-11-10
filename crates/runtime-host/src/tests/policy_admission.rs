@@ -1892,6 +1892,944 @@ fn unset1_a_failed_read_of_the_run_records_holds_as_before_and_says_why() {
     host.close().expect("close host");
 }
 
+// UNSET-2 (0.12.51, register §1.296; production 10-26): a scheduled run cut by a stop after its
+// own failure path released its lease, with an effect record and without a terminal, which an
+// earlier start refused to settle, is settled once by the next start, which records who closed
+// it and why; the late settlement leaves its pair's failure state as it was. Fix round 1 (the
+// coordinator's rulings L1 to L4): a pair's latest completed run is the latest in admission
+// order, so a late settlement never stands for a pair that ran after it, and it is not a failure
+// of its pair anywhere; every start after the settling one starts.
+
+/// UNSET-2: evaluates at `now` with `seed` and admits A's dispatch: its run context and its
+/// intent.
+fn unset2_admit_a_at(
+    host: &RuntimeHost,
+    now: u64,
+    seed: u64,
+) -> (Box<PolicyRunContext>, DispatchIntent) {
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &pending_policy_facts(),
+            &pending_policy_resources(),
+            EvaluationTime {
+                unix_ms: now,
+                monotonic_ms: now,
+            },
+            seed,
+            PolicyTrigger::Recovery,
+        )
+        .expect("the evaluation");
+    let evaluation = cycle.evaluation.as_ref().expect("evaluation");
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.instance_id == POLICY_INSTANCE_ALIAS)
+        .unwrap_or_else(|| panic!("A's dispatch intent: {evaluation:#?}"))
+        .clone();
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("A's reason chain")
+        .clone();
+    record_policy_approval(host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(host, &intent))
+        .expect("A's admission")
+    else {
+        panic!("expected A's dispatch to be granted");
+    };
+    (context, intent)
+}
+
+/// UNSET-2: an effect record of the run of `context` is written; then the run's own failure path
+/// releases its lease (effect `performed`) and the stop cuts it before its execution record (the
+/// injected append failure latches the Runtime, as a crash ends it), and `host` is closed. The
+/// run has its own release, an effect record and no terminal.
+fn unset2_cut_after_its_own_release(host: RuntimeHost, context: &PolicyRunContext) {
+    host.append_contained_task_semantic_for_test(
+        context.request(),
+        context.lease_token(),
+        context.issued_task_id(),
+        context.issued_run_id(),
+        TaskSemanticFact::EffectIntent {
+            frame_extent: None,
+            step_index: 0,
+            operation_label: "fixture".to_owned(),
+            action: InputAction::Reset,
+        },
+    )
+    .expect("the run's effect record");
+    host.fail_next_policy_execution_append_for_test()
+        .expect("arm the execution append failure");
+    let error = host
+        .complete_scheduled_policy_failure_without_terminal_for_test(context)
+        .expect_err("the stop cuts the run before its execution record");
+    assert_eq!(error.code(), "ledger_failure");
+    let releases = host
+        .query_persisted_events_for_test(EventQuery {
+            run_id: Some(context.run_id()),
+            event_type: Some(EventType::LeaseReleased),
+            ..EventQuery::default()
+        })
+        .expect("the run's releases");
+    assert_eq!(releases.len(), 1, "the run's own release: {releases:#?}");
+    if let Err(error) = host.close() {
+        assert_eq!(error.code(), "ledger_failure", "{error:?}");
+    }
+}
+
+/// UNSET-2: the first start under the two-instance catalog `sources` (the pending one, or a
+/// variant of it): A's dispatch admitted, its run cut after its own release
+/// ([`unset2_cut_after_its_own_release`]). Returns the open dispatch on A and its intent.
+fn a_dispatch_on_a_cut_after_its_own_release(
+    root: &TempDir,
+    sources: &CatalogSources,
+) -> (OpenDispatchOnA, DispatchIntent) {
+    let (instance_a, instance_b) = (instance_id(), instance_id());
+    let host = RuntimeHost::start(
+        unset1_config(root, POLICY_NOW_UNIX_MS),
+        two_instance_provider(instance_a, instance_b),
+    )
+    .expect("first start");
+    host.activate_policy_catalog(sources)
+        .expect("two-instance catalog activation");
+    let (context, intent) = unset2_admit_a_at(&host, POLICY_NOW_UNIX_MS, 7);
+    let run_id = context.run_id();
+    unset2_cut_after_its_own_release(host, &context);
+    (
+        OpenDispatchOnA {
+            instance_a,
+            instance_b,
+            run_id,
+        },
+        intent,
+    )
+}
+
+/// UNSET-2: a restart at `clock_unix_ms` with no refusal injected. The Runtime starts.
+fn unset2_restart(root: &TempDir, open: &OpenDispatchOnA, clock_unix_ms: u64) -> RuntimeHost {
+    let host = RuntimeHost::start(unset1_config(root, clock_unix_ms), open.provider())
+        .expect("the restart");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host
+}
+
+/// UNSET-2: the number of `event_type` records (executions or completions) of `decision_id`.
+fn unset2_decision_records(host: &RuntimeHost, event_type: EventType, decision_id: &str) -> usize {
+    host.query_persisted_events_for_test(EventQuery {
+        event_type: Some(event_type),
+        ..EventQuery::default()
+    })
+    .expect("the policy records")
+    .iter()
+    .filter(|event| match event.payload() {
+        EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
+            payload.decision_id() == decision_id
+        }
+        EventPayload::Policy(PolicyPayload::DispatchCompleted(payload)) => {
+            payload.decision_id() == decision_id
+        }
+        _ => false,
+    })
+    .count()
+}
+
+/// UNSET-2: the run's `policy_settlement_dispatch_closed` records (Info).
+fn closed_records(
+    host: &RuntimeHost,
+    run_id: RunId,
+) -> Vec<actingcommand_contract::outcome::Outcome> {
+    unset1_records(
+        host,
+        run_id,
+        EventSeverity::Info,
+        "policy_settlement_dispatch_closed",
+    )
+}
+
+/// UNSET-2: the value record of the pair of `task_id` on the instance `instance_alias` (its
+/// failure state and the dispatches its journal names among it), held and replayed the same.
+fn unset2_pair_record(
+    host: &RuntimeHost,
+    instance_alias: &str,
+    task_id: &str,
+) -> actingcommand_contract::PolicyControlStateRecord {
+    let (held, replayed, _) = host
+        .decision_memory_for_test()
+        .expect("the decision memory");
+    let key = format!("decision_memory/{instance_alias}/{task_id}");
+    let record =
+        |records: &BTreeMap<String, crate::policy_control::PolicyValueRecord>| match records
+            .get(&key)
+        {
+            Some(crate::policy_control::PolicyValueRecord::Control(record)) => (**record).clone(),
+            other => panic!("A's pair's value record: {other:?}"),
+        };
+    assert_eq!(record(&held), record(&replayed), "held and replayed");
+    record(&held)
+}
+
+/// UNSET-2: the settling start's records of the run `run_id` of `decision_id`: the run settled
+/// once (one execution record, one completion), one `policy_settlement_dispatch_closed` naming
+/// the start's operation and the earlier refusal, the one Error of the earlier start and no
+/// Warning.
+fn assert_settled_once_and_closed(host: &RuntimeHost, run_id: RunId, decision_id: &str) {
+    assert_eq!(
+        unset2_decision_records(host, EventType::PolicyExecutionRecorded, decision_id),
+        1,
+        "one execution record"
+    );
+    assert_eq!(
+        unset2_decision_records(host, EventType::PolicyDispatchCompleted, decision_id),
+        1,
+        "one completion"
+    );
+    let closed = closed_records(host, run_id);
+    assert_eq!(closed.len(), 1, "one record of who closed it: {closed:#?}");
+    assert_eq!(
+        outcome_str(&closed[0], "failure_code"),
+        Some(UNSET1_REFUSAL)
+    );
+    assert_eq!(
+        outcome_str(&closed[0], "operation"),
+        Some("reconcile_policy_outcomes")
+    );
+    assert_eq!(unsettled_errors(host, run_id).len(), 1);
+    assert!(left_open_warnings(host, run_id).is_empty());
+}
+
+/// UNSET-2 fix 1 (ruling L2): `after`'s failure state is `before`'s: its failure streak (with its
+/// pause or backoff), its retry round, the place of its latest failure-setting settlement and its
+/// owed reruns.
+fn assert_failure_state_kept(
+    before: &actingcommand_contract::PolicyControlStateRecord,
+    after: &actingcommand_contract::PolicyControlStateRecord,
+    at: &str,
+) {
+    assert_eq!(
+        after.failure_streak, before.failure_streak,
+        "{at}: the failure streak, its pause or backoff"
+    );
+    assert_eq!(
+        after.retry_round, before.retry_round,
+        "{at}: the retry round"
+    );
+    assert_eq!(
+        after.failure_settled, before.failure_settled,
+        "{at}: the latest failure-setting settlement"
+    );
+    assert_eq!(
+        after.condition_reruns, before.condition_reruns,
+        "{at}: the owed reruns"
+    );
+}
+
+/// UNSET-2 fix 1: the task snapshot of the pair of `task_id` on `instance_alias`, as the
+/// evaluation at `now` projects it from the dispatch journal.
+fn unset2_snapshot(
+    host: &RuntimeHost,
+    instance_alias: &str,
+    task_id: &str,
+    now: u64,
+) -> actingcommand_policy::TaskRuntimeSnapshot {
+    host.policy_task_snapshots_for_test(now)
+        .expect("the task snapshots")
+        .into_iter()
+        .find(|snapshot| snapshot.task_id == task_id && snapshot.instance_id == instance_alias)
+        .expect("the pair's snapshot")
+}
+
+/// UNSET-2 fix 1: the number of `runtime.fact_recorded` rows of the settlement facts of
+/// `task_id` (`task.<task>.*`). A start that derives the same facts appends none.
+fn unset2_settlement_fact_rows(host: &RuntimeHost, task_id: &str) -> usize {
+    let prefix = format!("task.{task_id}.");
+    host.query_persisted_events_for_test(EventQuery {
+        event_type: Some(EventType::RuntimeFactRecorded),
+        ..EventQuery::default()
+    })
+    .expect("the fact records")
+    .iter()
+    .filter(|event| {
+        matches!(
+            event.payload(),
+            EventPayload::Runtime(actingcommand_contract::RuntimePayload::FactRecorded(payload))
+                if payload.record().key.starts_with(&prefix)
+        )
+    })
+    .count()
+}
+
+/// UNSET-2 fix 1: the journal entries a pair's value record named before the settlement that are
+/// completed (the later run, in R), which the record names alone after it.
+fn unset2_completed_entries(
+    record: &actingcommand_contract::PolicyControlStateRecord,
+) -> Vec<actingcommand_contract::PolicyJournalDispatchRecord> {
+    record
+        .dispatches
+        .iter()
+        .filter(|dispatch| dispatch.completed_sequence.is_some())
+        .copied()
+        .collect()
+}
+
+/// UNSET-2 test 1 (the pair has not run since): the first restart refuses the run's settlement
+/// and holds A (UNSET-1). The next start settles it once and records who closed it and why; the
+/// late settlement leaves the pair's failure state as it was before it (ruling L2): no failure
+/// streak, pause or backoff, as before, and the retry round the cut run's own admission opened,
+/// as before; at the settling start and at the next one. A later start writes neither a
+/// settlement nor a Warning for it, and the pair's eligibility age runs again.
+#[test]
+fn unset2_the_next_start_settles_a_run_cut_after_its_own_release_once() {
+    let root = TempDir::new().expect("tempdir");
+    let (open, intent) =
+        a_dispatch_on_a_cut_after_its_own_release(&root, &pending_policy_sources(1));
+    let host = first_hold_of_a(&root, &open);
+    let before = unset2_pair_record(&host, &intent.instance_id, &intent.task_id);
+    assert!(before.failure_streak.is_none(), "{before:#?}");
+    // Fix round 2: a normal admission opens its pair's retry round (`commit_admission`), so the
+    // cut run's round is part of the pair's failure state before the settlement.
+    assert_eq!(
+        before
+            .retry_round
+            .as_ref()
+            .map(|round| round.admission.activity.admitted_at_unix_ms),
+        Some(POLICY_NOW_UNIX_MS),
+        "the cut run's retry round: {before:#?}"
+    );
+    host.close().expect("close with A held");
+
+    let host = unset2_restart(&root, &open, POLICY_RESTART_UNIX_MS + 60_000);
+    assert_settled_once_and_closed(&host, open.run_id, &intent.decision_id);
+    let after = unset2_pair_record(&host, &intent.instance_id, &intent.task_id);
+    assert_failure_state_kept(&before, &after, "the settling start");
+    host.close().expect("close after the settlement");
+
+    let later = POLICY_RESTART_UNIX_MS + 120_000;
+    let host = unset2_restart(&root, &open, later);
+    assert_settled_once_and_closed(&host, open.run_id, &intent.decision_id);
+    let next = unset2_pair_record(&host, &intent.instance_id, &intent.task_id);
+    assert_failure_state_kept(&before, &next, "the next start");
+    resume_a(&host);
+    let evaluate = |unix_ms: u64, seed: u64, trigger: PolicyTrigger| {
+        host.evaluate_policy_cycle_with_test_inputs(
+            &pending_policy_facts(),
+            &pending_policy_resources(),
+            EvaluationTime {
+                unix_ms,
+                monotonic_ms: unix_ms,
+            },
+            seed,
+            trigger,
+        )
+        .expect("an evaluation after the settlement")
+    };
+    let first = evaluate(later, 9, PolicyTrigger::Recovery);
+    assert!(first.evaluation.is_some(), "the first evaluation ran");
+    let second = evaluate(later + 67_000, 10, PolicyTrigger::Reconciliation);
+    assert!(second.evaluation.is_some(), "the second evaluation ran");
+    let snapshot = host
+        .policy_task_snapshots_for_test(later + 67_000)
+        .expect("the task snapshots")
+        .into_iter()
+        .find(|snapshot| {
+            snapshot.task_id == intent.task_id && snapshot.instance_id == intent.instance_id
+        })
+        .expect("A's pair");
+    assert_eq!(
+        snapshot.eligible_since_unix_ms,
+        Some(later),
+        "the pair's eligibility age runs again"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// UNSET-2 fix 1 (R): the cut run's dispatch, open on A; the cut run's intent and the later
+/// run's; the pair's value record and its settlement fact rows after the later run, before the
+/// settlement.
+struct LaterRunOfA {
+    open: OpenDispatchOnA,
+    cut: DispatchIntent,
+    later: DispatchIntent,
+    before: actingcommand_contract::PolicyControlStateRecord,
+    fact_rows: usize,
+}
+
+/// UNSET-2 fix 1 (R): under the catalog `sources`, A's run is cut after its own release; the
+/// first restart holds A (UNSET-1) and a person lifts the hold; the pair runs again under a new
+/// decision, which succeeds, or fails when `fails`, while the cut run stays open; the host is
+/// closed.
+fn a_later_run_while_the_cut_run_is_open(
+    root: &TempDir,
+    sources: &CatalogSources,
+    fails: bool,
+) -> LaterRunOfA {
+    let (open, cut) = a_dispatch_on_a_cut_after_its_own_release(root, sources);
+    let host = first_hold_of_a(root, &open);
+    resume_a(&host);
+    let (context, later) = unset2_admit_a_at(&host, POLICY_RESTART_UNIX_MS, 9);
+    assert_ne!(later.decision_id, cut.decision_id);
+    if fails {
+        host.complete_scheduled_policy_failure_without_terminal_for_test(&context)
+            .expect("the later run fails");
+    } else {
+        host.complete_scheduled_policy_success_without_terminal_for_test(&context)
+            .expect("the later run succeeds");
+    }
+    drop(context);
+    let before = unset2_pair_record(&host, &cut.instance_id, &cut.task_id);
+    let fact_rows = unset2_settlement_fact_rows(&host, &cut.task_id);
+    host.close().expect("close after the later run");
+    LaterRunOfA {
+        open,
+        cut,
+        later,
+        before,
+        fact_rows,
+    }
+}
+
+/// UNSET-2 fix 1, at one start after the late settlement in R: the pair's failure state is as it
+/// was before the settlement; its value record names the later run alone, with the later run's
+/// own failure count `failures`; its task snapshot reads the later run (`terminal`); and no
+/// settlement fact was recorded since. A loading start (`loaded`) holds the later run, not the
+/// late one, in its dispatch journal.
+fn assert_the_later_run_stands(
+    host: &RuntimeHost,
+    r: &LaterRunOfA,
+    (now, start): (u64, &str),
+    terminal: actingcommand_policy::TaskTerminalState,
+    failures: u64,
+    loaded: bool,
+) {
+    assert_settled_once_and_closed(host, r.open.run_id, &r.cut.decision_id);
+    let after = unset2_pair_record(host, &r.cut.instance_id, &r.cut.task_id);
+    assert_failure_state_kept(&r.before, &after, start);
+    let named = unset2_completed_entries(&r.before);
+    assert_eq!(named.len(), 1, "{start}: the later run: {:#?}", r.before);
+    assert_eq!(
+        named[0].failures,
+        Some(failures),
+        "{start}: the later run's own count"
+    );
+    assert_eq!(
+        after.dispatches, named,
+        "{start}: the value record names the later run alone"
+    );
+    let snapshot = unset2_snapshot(host, &r.cut.instance_id, &r.cut.task_id, now);
+    assert_eq!(
+        snapshot.last_dispatched_unix_ms,
+        Some(POLICY_RESTART_UNIX_MS),
+        "{start}: the pair's latest run is the later one"
+    );
+    assert_eq!(snapshot.terminal_state, Some(terminal), "{start}");
+    assert_eq!(
+        snapshot.failure_streak,
+        Some(u16::try_from(failures).expect("a small count")),
+        "{start}: the later run's own count"
+    );
+    assert_eq!(
+        unset2_settlement_fact_rows(host, &r.cut.task_id),
+        r.fact_rows,
+        "{start}: the pair's settlement facts are unchanged"
+    );
+    if loaded {
+        let (resident, _) = host
+            .dispatch_journal_for_test()
+            .expect("the dispatch journal");
+        assert_eq!(
+            resident.0.get(&r.later.decision_id),
+            Some(&("Completed".to_owned(), Some(failures))),
+            "{start}: the loaded journal holds the later run"
+        );
+        assert!(
+            !resident.0.contains_key(&r.cut.decision_id),
+            "{start}: and not the late one: {resident:#?}"
+        );
+    }
+    assert!(host.fatal_error().expect("runtime health").is_none());
+}
+
+/// UNSET-2 fix 1 test 1 (R, ruling L4): after the first restart held A and a person lifted the
+/// hold, the pair ran again and succeeded while the cut run stayed open. The next start settles
+/// the cut run late; it and two more starts start. At each the pair's settlement facts are
+/// unchanged, its task snapshot and value record read the later run, its failure state is what
+/// it was before the settlement, and a loading start's journal holds the later run.
+#[test]
+fn unset2_r_the_starts_after_a_late_settlement_start_and_read_the_later_run() {
+    let root = TempDir::new().expect("tempdir");
+    let r = a_later_run_while_the_cut_run_is_open(&root, &pending_policy_sources(1), false);
+    assert!(r.before.failure_streak.is_none(), "{:#?}", r.before);
+    for (offset, start) in [
+        (60_000, "the settling start"),
+        (120_000, "the next start"),
+        (180_000, "the start after it"),
+    ] {
+        let now = POLICY_RESTART_UNIX_MS + offset;
+        let host = unset2_restart(&root, &r.open, now);
+        assert_the_later_run_stands(
+            &host,
+            &r,
+            (now, start),
+            actingcommand_policy::TaskTerminalState::Succeeded,
+            0,
+            offset > 60_000,
+        );
+        assert!(pause_of_a(&host).is_none(), "{start}: A is not paused");
+        host.close().expect("close host");
+    }
+}
+
+/// UNSET-2 fix 1 test 3 (R, ruling L2): as test 1, but the later run failed. Its failure streak
+/// with its backoff and its retry round are kept, and the pair's failure count is the later
+/// run's own (1), at the settling start and at the next one.
+#[test]
+fn unset2_r_a_later_failure_keeps_its_backoff_and_its_own_count() {
+    let root = TempDir::new().expect("tempdir");
+    let r = a_later_run_while_the_cut_run_is_open(&root, &pending_policy_sources(1), true);
+    assert!(
+        r.before.failure_streak.is_some(),
+        "the later run's failure: {:#?}",
+        r.before
+    );
+    for (offset, start) in [(60_000, "the settling start"), (120_000, "the next start")] {
+        let now = POLICY_RESTART_UNIX_MS + offset;
+        let host = unset2_restart(&root, &r.open, now);
+        assert_the_later_run_stands(
+            &host,
+            &r,
+            (now, start),
+            actingcommand_policy::TaskTerminalState::Failed,
+            1,
+            offset > 60_000,
+        );
+        host.close().expect("close host");
+    }
+}
+
+/// UNSET-2 fix 2: the pending catalog whose task on A has no retry and pauses at its first
+/// failure (`on_failure` `retry_limit` 0, `action` `pause`), so that a failed run of the pair is
+/// one `actingd suspended` lists, with its count.
+fn unset2_pausing_sources() -> CatalogSources {
+    let mut sources = pending_policy_sources(1);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("the pending tasks");
+    tasks["tasks"][0]["on_failure"]["retry_limit"] = serde_json::json!(0);
+    tasks["tasks"][0]["on_failure"]["action"] = serde_json::json!("pause");
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("the pending task bytes");
+    sources
+}
+
+/// UNSET-2 fix 1 test 5 (R, rulings L1 and L2; fix round 2, the second review's §7): the pair's
+/// later run failed and paused its task (a catalog whose task pauses at its first failure).
+/// After the settling start, `actingd suspended` lists the pair once, as suspended by its later
+/// run with that run's own count of the same error in a row (1). The late interruption is not
+/// the pair's latest failure: the pair is not listed as lifted by the restart, as the late
+/// interruption was before fix round 1, nor as repeating.
+#[test]
+fn unset2_r_actingd_suspended_reports_the_later_run_not_the_late_interruption() {
+    let root = TempDir::new().expect("tempdir");
+    let sources = unset2_pausing_sources();
+    let r = a_later_run_while_the_cut_run_is_open(&root, &sources, true);
+    let held = r
+        .before
+        .failure_streak
+        .as_ref()
+        .unwrap_or_else(|| panic!("the later run's failure: {:#?}", r.before));
+    assert_eq!(
+        (held.disposition, held.count, held.decision_id.as_str()),
+        (
+            PolicyFailureDisposition::PausedTask,
+            1,
+            r.later.decision_id.as_str()
+        ),
+        "the later run paused its task: {:#?}",
+        r.before
+    );
+    let host = unset2_restart(&root, &r.open, POLICY_RESTART_UNIX_MS + 60_000);
+    assert_settled_once_and_closed(&host, r.open.run_id, &r.cut.decision_id);
+    host.close().expect("close after the settlement");
+    let report = crate::suspension_report(&crate::SuspensionReportRequest {
+        config_path: Path::new("actingd.config.json"),
+        config_modified_unix_ms: None,
+        host: &unset1_config(&root, POLICY_RESTART_UNIX_MS + 60_000),
+        catalog: &sources,
+    })
+    .unwrap_or_else(|error| panic!("actingd suspended: {error}"));
+    let listed = |list: &str| -> Vec<serde_json::Value> {
+        report[list]
+            .as_array()
+            .unwrap_or_else(|| panic!("{list}: {report:#}"))
+            .iter()
+            .filter(|entry| {
+                entry["task_id"] == r.cut.task_id.as_str()
+                    && entry["instance_id"] == r.cut.instance_id.as_str()
+            })
+            .cloned()
+            .collect()
+    };
+    let suspended = listed("suspended");
+    assert_eq!(
+        suspended.len(),
+        1,
+        "the pair is suspended by its later run: {report:#}"
+    );
+    assert_eq!(
+        suspended[0]["paused"]["decision_id"],
+        r.later.decision_id.as_str(),
+        "the later run, not the late one: {report:#}"
+    );
+    assert_eq!(
+        suspended[0]["consecutive_same_error"], 1,
+        "the later run's own count: {report:#}"
+    );
+    for list in ["lifted", "repeating"] {
+        assert!(
+            listed(list).is_empty(),
+            "{list} lists the pair, whose latest failure is its later run's: {report:#}"
+        );
+    }
+}
+
+/// UNSET-2 fix 1: the outcome key the mapped fixture's task gives and its consumer reads.
+const UNSET2_OUTCOME_KEY: &str = "unset2-fixture-result";
+
+/// UNSET-2 fix 1: `config` with the fixture's procedures as scheduled runs, as UNSET-1's are, so
+/// a start settles a run cut before its first record.
+fn unset2_scheduled(config: RuntimeHostConfig) -> RuntimeHostConfig {
+    config.with_scheduled_procedures([
+        "procedure.observe".to_owned(),
+        "procedure.observe-b".to_owned(),
+    ])
+}
+
+/// UNSET-2 fix 2: how the mapped fixture's instance A is backed. A person's resume of an
+/// instance (`actingctl resume`, `ResumeScheduling` of an instance scope) applies to a
+/// device-backed instance only (Workflow #191 ps1: `require_physical_instance_alias` refuses any
+/// other with `fixture_execution_scope_forbidden`), so a test that lifts UNSET-1's hold runs A on
+/// a device, as UNSET-1's tests do; a test that never lifts it keeps the mapped fixture's
+/// simulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unset2Backend {
+    /// The mapped fixture's simulation (`admitted_mapped_run_fixture_configured`).
+    Fixture,
+    /// A device with the fake's task geometry, which runs the device twin of the mapped package
+    /// (`neutral_two_key_mapped_contained_task_package` with task geometry).
+    Device,
+}
+
+/// UNSET-2 fix 1: a start of the mapped fixture's Runtime over `root` at the clock's time:
+/// instance A on `backend`, whose task `fixture.observe` gives the outcome its consumer
+/// `fixture.followup` reads. `refuse` is the run whose settlement the start refuses, as UNSET-1's
+/// hold. The Runtime starts.
+fn unset2_mapped_start(
+    root: &TempDir,
+    clock: &Arc<ManualRuntimeClock>,
+    state: &Arc<FakeState>,
+    instance: InstanceId,
+    refuse: Option<RunId>,
+    backend: Unset2Backend,
+) -> RuntimeHost {
+    let config = unset2_scheduled(
+        config(root)
+            .with_runtime_clock(clock.clone())
+            .with_policy_inputs(PolicyInputSnapshot::new(
+                mapped_policy_facts(UNSET2_OUTCOME_KEY, false),
+                policy_resources(),
+            ))
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                b"",
+                vec!["after_observation".to_owned()],
+            )),
+    );
+    let config = match refuse {
+        Some(run_id) => config.with_policy_settlement_refusal_for_test(run_id),
+        None => config,
+    };
+    let provider = FakeProvider::one(POLICY_INSTANCE_ALIAS, instance, Arc::clone(state));
+    let provider = match backend {
+        Unset2Backend::Fixture => provider.fixture_simulation(),
+        Unset2Backend::Device => provider,
+    };
+    let host = RuntimeHost::start(config, Arc::new(provider)).expect("the mapped fixture's start");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host
+}
+
+/// UNSET-2 fix 1: moves the Runtime clock one second on; the new time.
+fn unset2_tick(clock: &ManualRuntimeClock) -> u64 {
+    let now = clock.sample().expect("the Runtime clock").unix_ms + 1_000;
+    advance_manual_clock_to(clock, now);
+    now
+}
+
+/// UNSET-2 fix 1: the first restart of the mapped fixture on `backend` after the run `cut` was
+/// cut: it refuses the run's settlement and holds A once (UNSET-1).
+fn unset2_mapped_hold(
+    root: &TempDir,
+    clock: &Arc<ManualRuntimeClock>,
+    state: &Arc<FakeState>,
+    instance: InstanceId,
+    cut: RunId,
+    backend: Unset2Backend,
+) -> RuntimeHost {
+    unset2_tick(clock);
+    let host = unset2_mapped_start(root, clock, state, instance, Some(cut), backend);
+    assert_eq!(unsettled_errors(&host, cut).len(), 1, "the first hold");
+    assert!(pause_of_a(&host).is_some(), "A is held");
+    host
+}
+
+/// UNSET-2 fix 1 test 2: whether the evaluation at `unix_ms` dispatches the consumer of A's
+/// task's outcome (`fixture.followup`, which runs while that outcome is true).
+fn unset2_consumer_dispatches(
+    host: &RuntimeHost,
+    unix_ms: u64,
+    seed: u64,
+    trigger: PolicyTrigger,
+) -> bool {
+    host.evaluate_policy_cycle_with_test_inputs(
+        &mapped_policy_facts_at(UNSET2_OUTCOME_KEY, unix_ms, false),
+        &policy_resources(),
+        EvaluationTime {
+            unix_ms,
+            monotonic_ms: unix_ms,
+        },
+        seed,
+        trigger,
+    )
+    .expect("the consumer's evaluation")
+    .evaluation
+    .expect("an evaluation that ran")
+    .dispatch_intents
+    .iter()
+    .any(|intent| intent.task_id == "fixture.followup")
+}
+
+/// UNSET-2 fix 1 test 2 (R with a referenced outcome key, ruling L1): A's task's outcome is read
+/// by a consumer. A's run is cut after its own release and held; after a person lifts the hold
+/// the pair runs again and succeeds, its terminal giving the outcome, so the consumer
+/// dispatches. The settling start and the next one start, the later run stands for the pair in
+/// the outcome-key snapshot, and the consumer decides as before the settlement. Fix round 2: A is
+/// a device (`Unset2Backend::Device`), as in UNSET-1's tests, since a person's resume applies to
+/// a device-backed instance only; the later run runs the device twin of the mapped package.
+#[test]
+fn unset2_r_a_rule_on_the_task_outcome_decides_after_the_settlement_as_before() {
+    let root = TempDir::new().expect("tempdir");
+    let device = Unset2Backend::Device;
+    let clock = Arc::new(ManualRuntimeClock::new(
+        POLICY_NOW_UNIX_MS,
+        POLICY_NOW_UNIX_MS,
+    ));
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let package_path = root.path().join("unset2-device-mapped-task.zip");
+    fs::write(
+        &package_path,
+        neutral_two_key_mapped_contained_task_package(
+            true,
+            UNSET2_OUTCOME_KEY,
+            &complementary_outcome_key(UNSET2_OUTCOME_KEY),
+        ),
+    )
+    .expect("write the mapped package");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("the mapped package request");
+    let instance = instance_id();
+    let host = unset2_mapped_start(&root, &clock, &state, instance, None, device);
+    host.activate_policy_catalog(&mapped_policy_sources(1, UNSET2_OUTCOME_KEY))
+        .expect("activate the mapped catalog");
+    let (cut, _) = admit_mapped_run_at(&host, UNSET2_OUTCOME_KEY, POLICY_NOW_UNIX_MS, 42_100);
+    let cut_run = cut.run_id();
+    unset2_cut_after_its_own_release(host, &cut);
+    let host = unset2_mapped_hold(&root, &clock, &state, instance, cut_run, device);
+    resume_a(&host);
+    let at = cut
+        .admission()
+        .activity
+        .next_eligible_unix_ms
+        .max(POLICY_NOW_UNIX_MS + MAPPED_RUN_MIN_ADVANCE_MS);
+    advance_manual_clock_to(&clock, at);
+    let (later, _) = admit_mapped_run_at(&host, UNSET2_OUTCOME_KEY, at, 42_101);
+    let receipt = host
+        .run_scheduled_contained_task(&later, &request)
+        .expect("the later run");
+    host.complete_scheduled_policy_run(&later, &receipt)
+        .expect("the later run's completion");
+    let pair = (
+        later.catalog_task_id().to_owned(),
+        later.instance_alias().to_owned(),
+    );
+    let after_run = later
+        .admission()
+        .activity
+        .next_eligible_unix_ms
+        .max(clock.sample().expect("the Runtime clock").unix_ms);
+    advance_manual_clock_to(&clock, after_run);
+    assert!(
+        unset2_consumer_dispatches(&host, after_run, 42_102, PolicyTrigger::FactsChanged),
+        "before the settlement the consumer reads the later run's outcome"
+    );
+    host.close().expect("close after the later run");
+
+    for (start, seed) in [("the settling start", 42_110), ("the next start", 42_111)] {
+        let now = unset2_tick(&clock);
+        let host = unset2_mapped_start(&root, &clock, &state, instance, None, device);
+        assert_settled_once_and_closed(&host, cut_run, cut.decision_id());
+        let snapshot = host
+            .policy_outcome_key_snapshot_for_test()
+            .expect("the outcome-key snapshot");
+        assert_eq!(
+            snapshot.completed_runs.get(&pair).map(|run| run.run_id),
+            Some(later.run_id()),
+            "{start}: the later run stands for the pair"
+        );
+        assert!(
+            unset2_consumer_dispatches(&host, now, seed, PolicyTrigger::Recovery),
+            "{start}: the consumer decides as before the settlement"
+        );
+        assert!(host.fatal_error().expect("runtime health").is_none());
+        host.close().expect("close host");
+    }
+}
+
+/// UNSET-2 fix 1 test 4 (N, rulings L2 and L3): A's task's outcome is read by a consumer. A's
+/// run is cut after its own release and held, and the pair does not run again; in the second
+/// case the pair's failure before the cut run was itself an interruption (its first in a row,
+/// which its restart lifted). The settling start and two more start; at each the pair's failure
+/// state is what it was before the settlement, and the late run reads as interrupted: the
+/// snapshot shows it as the pair's latest run, with the pair's failures in a row as before, and
+/// the pair's outcome is missing (its latest completed run failed).
+#[test]
+fn unset2_n_the_starts_after_a_late_settlement_keep_the_failure_state() {
+    // Nothing here lifts UNSET-1's hold, so A stays the mapped fixture's simulation.
+    let fixture = Unset2Backend::Fixture;
+    for held_interruption in [false, true] {
+        let case = if held_interruption {
+            "after an interruption"
+        } else {
+            "the pair's first run"
+        };
+        let root = TempDir::new().expect("tempdir");
+        let (host, state, first, _, _, clock) =
+            admitted_mapped_run_fixture_configured(&root, UNSET2_OUTCOME_KEY, unset2_scheduled);
+        let instance = first.lease_token().instance_id();
+        let (host, cut) = if held_interruption {
+            // The first run is cut by a stop before any record of its own; the next start
+            // settles it as interrupted and lifts that first interruption.
+            host.close().expect("close with the first run open");
+            unset2_tick(&clock);
+            let host = unset2_mapped_start(&root, &clock, &state, instance, None, fixture);
+            assert_eq!(
+                unset2_decision_records(
+                    &host,
+                    EventType::PolicyDispatchCompleted,
+                    first.decision_id()
+                ),
+                1,
+                "{case}: the first run is settled"
+            );
+            let at = first
+                .admission()
+                .activity
+                .next_eligible_unix_ms
+                .max(POLICY_NOW_UNIX_MS + MAPPED_RUN_MIN_ADVANCE_MS);
+            advance_manual_clock_to(&clock, at);
+            let (cut, _) = admit_mapped_run_at(&host, UNSET2_OUTCOME_KEY, at, 42_201);
+            (host, cut)
+        } else {
+            (host, first)
+        };
+        let cut_run = cut.run_id();
+        let cut_admitted = cut.admission().activity.admitted_at_unix_ms;
+        let (alias, task) = (
+            cut.instance_alias().to_owned(),
+            cut.catalog_task_id().to_owned(),
+        );
+        unset2_cut_after_its_own_release(host, &cut);
+        let host = unset2_mapped_hold(&root, &clock, &state, instance, cut_run, fixture);
+        let before = unset2_pair_record(&host, &alias, &task);
+        assert_eq!(
+            before.failure_streak.is_some(),
+            held_interruption,
+            "{case}: the held failure: {before:#?}"
+        );
+        host.close().expect("close with A held");
+
+        for start in ["the settling start", "the next start", "the start after it"] {
+            let at = format!("{case}, {start}");
+            let now = unset2_tick(&clock);
+            let host = unset2_mapped_start(&root, &clock, &state, instance, None, fixture);
+            assert_settled_once_and_closed(&host, cut_run, cut.decision_id());
+            let after = unset2_pair_record(&host, &alias, &task);
+            assert_failure_state_kept(&before, &after, &at);
+            let snapshot = unset2_snapshot(&host, &alias, &task, now);
+            assert_eq!(
+                snapshot.last_dispatched_unix_ms,
+                Some(cut_admitted),
+                "{at}: the late run is the pair's latest"
+            );
+            assert_eq!(
+                snapshot.terminal_state,
+                Some(actingcommand_policy::TaskTerminalState::Failed),
+                "{at}: it reads as interrupted"
+            );
+            assert_eq!(
+                snapshot.failure_streak,
+                Some(u16::from(held_interruption)),
+                "{at}: the pair's failures in a row are as before"
+            );
+            let outcomes = host
+                .policy_outcome_key_snapshot_for_test()
+                .expect("the outcome-key snapshot");
+            let latest = outcomes
+                .completed_runs
+                .get(&(task.clone(), alias.clone()))
+                .unwrap_or_else(|| panic!("{at}: the pair's latest completed run"));
+            assert_eq!(latest.run_id, cut_run, "{at}");
+            assert!(
+                matches!(
+                    latest.execution_outcome,
+                    PolicyExecutionOutcome::Failed { .. }
+                ),
+                "{at}: the pair's outcome is missing"
+            );
+            assert!(host.fatal_error().expect("runtime health").is_none());
+            host.close().expect("close host");
+        }
+    }
+}
+
+/// UNSET-2 fix 2 (UNSET2-5; the second review's §4): the dispatch journal's pruning keeps a late
+/// completion, admitted before the journal's bound of later runs of its pair and completed after
+/// all of them, while the value records' position lies before its completion, and drops it once
+/// that position is at or after it, or without a position (a full replay); the later runs stay.
+#[test]
+fn unset2_the_journal_keeps_a_late_completion_until_a_value_record_follows_it() {
+    let late_completed: u64 = 1_000;
+    for (recorded_through, kept) in [
+        (Some(late_completed - 1), true),
+        (Some(late_completed), false),
+        (Some(late_completed + 1), false),
+        (None, false),
+    ] {
+        let (late, size) = crate::policy_host::journal_keeps_a_late_completion_for_test(
+            late_completed,
+            recorded_through,
+        );
+        assert_eq!(late, kept, "recorded through {recorded_through:?}");
+        assert_eq!(
+            size,
+            actingcommand_policy::REMEDY_JOURNAL_MAX_RUNS + usize::from(kept),
+            "recorded through {recorded_through:?}: the later runs stay"
+        );
+    }
+}
+
 fn two_instance_pending_policy_host(root: &TempDir) -> RuntimeHost {
     let host = RuntimeHost::start(
         config(root),

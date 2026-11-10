@@ -985,10 +985,10 @@ fn status_and_run_show_take_their_core_rows() {
     // endpoint or a loopback one, before or after the words of `status` or `run show`. Either
     // order is the core row's line, given to the module as it is, and the row takes no endpoint:
     // the option is refused by name (`actingctl_usage_invalid`, exit 1), the same line in both
-    // orders, before the row connects. Before the words and after `status`'s it is refused while
-    // the words are read; after `run show`'s (a row with further flags) in `core_ops::answer`,
-    // before its one connection. The row reaches a Runtime only through the state root's
-    // runtime-info.json, whose host must be loopback, and the state root has none.
+    // orders, before the row connects: it is refused while the words are read (Workflow #434
+    // LAB-5A: `run show` no longer takes further flags, which `core_ops::answer` refused). The row
+    // reaches a Runtime only through the state root's runtime-info.json, whose host must be
+    // loopback, and the state root has none.
     let without_json: &[&str] = &[];
     for endpoint in ["http://example.invalid:4317", "http://127.0.0.1:4317"] {
         let option = ["--runtime-endpoint", endpoint];

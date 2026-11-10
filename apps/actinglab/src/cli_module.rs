@@ -12,7 +12,8 @@
 //!   anywhere on the line. Since LAB-2b (open point 10) it prints this module's line
 //!   ([`own_line`]): the output for people by default, `--json` the `cli_line` line, exit codes 0,
 //!   1 and 2; a line with `--via` (MCP's actinglab child) still prints the envelope (`ok`, `data`,
-//!   `error`) with its exit codes 2 to 6, until LAB-5. A row
+//!   `error`) with its exit codes 2 to 6, until LAB-7 (Workflow #434 LAB-5A: LAB-5 adds the new
+//!   server and replaces nothing, contract §11). A row
 //!   actinglab's own command serves under other words (`watch` for `lab watch`, `recover` for
 //!   `session recover`, `user-config [<key>]` for `user-config get`, `app launch` for `session app
 //!   launch` and the like) is given to that command in its words ([`engine`]) and answers as it
@@ -35,7 +36,8 @@
 //!   `Lab-MCP` when MCP's actinglab child (`--via mcp`) adds them.
 
 mod core_ops;
-mod engine;
+// Workflow #434 LAB-5A: its command table is read by the slice's test.
+pub(crate) mod engine;
 // Workflow #434 LAB-2b: the line actinglab's own commands print.
 pub(crate) mod own_line;
 mod place;

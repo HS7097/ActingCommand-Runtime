@@ -3394,3 +3394,17 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_428_s168_4::list_reading_full_store_refused",
 ]
 incident = ["#428 S168-4"]
+
+# #428 UNSET-2 (0.12.51; register §1.296; briefs rd-1110/brief-unset2.md and brief-unset2-fix1.md; changes #670's rule R4): a scheduled run cut by a stop after its own failure path released its lease (effect performed), with an effect record and no terminal, which an earlier start refused to settle (UNSET-1's hold), is settled once by the next start (one policy.execution_recorded, one policy.dispatch_completed) and recorded once as policy_settlement_dispatch_closed (Info) under the run's links, with the earlier refusal as failure_code and the operation reconcile_policy_outcomes; a later start writes neither a settlement nor a Warning for it and the pair's eligibility age runs again. Fix round 1 (rulings L1 to L4): a pair's latest completed run is its latest in admission order, so when the pair ran since (R) the settling start and the starts after it start, record no settlement fact, and their value record, loaded journal, task snapshot and outcome-key snapshot read the later run (a consumer of the task's outcome decides as before; a later failure keeps its backoff and its own count), and actingd suspended does not list the late interruption; when it did not (N) the late run reads as the pair's latest, interrupted, with its outcome missing, and the pair's failure state and failures in a row stay as before, also after an earlier interruption. Fix round 2 (brief rd-1110/brief-unset2-fix2.md): the failure state kept includes the retry round the cut run's own admission opened; the outcome-key test runs on a device-backed instance, as a person's resume requires; actingd suspended lists a later failure that paused the task as suspended by the later run with its own count; and the journal's pruning keeps a late completion until a value record follows it
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset2_the_next_start_settles_a_run_cut_after_its_own_release_once",
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset2_r_the_starts_after_a_late_settlement_start_and_read_the_later_run",
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset2_r_a_rule_on_the_task_outcome_decides_after_the_settlement_as_before",
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset2_r_a_later_failure_keeps_its_backoff_and_its_own_count",
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset2_n_the_starts_after_a_late_settlement_keep_the_failure_state",
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset2_r_actingd_suspended_reports_the_later_run_not_the_late_interruption",
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset2_the_journal_keeps_a_late_completion_until_a_value_record_follows_it",
+]
+incident = ["#428 UNSET-2"]

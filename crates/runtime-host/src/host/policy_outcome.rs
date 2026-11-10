@@ -6,7 +6,7 @@ use crate::codes::HostLocation;
 use crate::failure_identity::identifier_text;
 use crate::policy_control::{ConditionDecision, ConditionRule, PolicyValueRecord};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{CauseRelation, Code, Location, Outcome};
+use actingcommand_contract::outcome::{CauseRelation, Code, CodeStr, Location, Outcome};
 
 #[derive(Clone, Copy)]
 pub(super) enum PolicyOutcomeCacheUpdate<'a> {
@@ -495,6 +495,56 @@ impl HostShared {
             if let Some(alias) = alias {
                 self.hold_instance_pause_at_start(&alias, reason)?;
             }
+        }
+        Ok(())
+    }
+
+    /// UNSET-2 (register §1.296; the coordinator's ruling of 11-10): each dispatch this start
+    /// settled although an earlier start refused its settlement (`settled_late`) is recorded once
+    /// at Info, `policy_settlement_dispatch_closed`, under its run's links: this start's
+    /// settlement (operation `reconcile_policy_outcomes`) closed it, and the earlier refusal's
+    /// code is its `failure_code`; when that earlier record named its refusal by an unregistered
+    /// spelling, the earlier record's outcome is a `note` link instead. The dispatch itself is
+    /// closed by the settlement's own records (`policy.execution_recorded`,
+    /// `policy.dispatch_completed`), written before this one; a later start finds it settled and
+    /// writes nothing more for it. Fix round 1: a start that completes a late settlement whose
+    /// execution record a cut start wrote records it too (`reconcile_policy_dispatches`); a stop
+    /// between the completion and this record leaves it unwritten, and no later start writes it:
+    /// the settlement and the completion are the lasting records.
+    pub(super) fn record_late_settlements(
+        &self,
+        settled_late: &[LateSettlement],
+    ) -> RuntimeHostResult<()> {
+        const OPERATION: HostLocation = HostLocation::ReconcilePolicyOutcomes;
+        if settled_late.is_empty() {
+            return Ok(());
+        }
+        let through = self
+            .ledger
+            .latest_sequence()
+            .map_err(|_| ledger_error(OPERATION))?;
+        for late in settled_late {
+            let earlier = late
+                .refusal
+                .value("failure_code")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<CodeStr>(value).ok())
+                .and_then(|code| code.registered());
+            self.record_scheduled_dispatch_diagnostic(
+                &late.decision_id,
+                through,
+                OPERATION,
+                |_| {
+                    let closed = Outcome::new(HostCode::PolicySettlementDispatchClosed);
+                    Ok((
+                        EventSeverity::Info,
+                        match earlier {
+                            Some(code) => closed.failure_code(code),
+                            None => closed.link(CauseRelation::Note, late.refusal.clone()),
+                        },
+                    ))
+                },
+            )?;
         }
         Ok(())
     }
@@ -2050,7 +2100,7 @@ impl HostShared {
                     #[cfg(test)]
                     policy_crash_test_barrier("after_policy_execution");
                     policy
-                        .commit_execution(&data, budget_elapsed_ms)
+                        .commit_execution(&data, budget_elapsed_ms, false)
                         .map_err(RuntimeHostError::into_fatal)?;
                     policy.queue_rerun_signal(&data, decision);
                     (data, true)
@@ -2281,6 +2331,9 @@ impl HostShared {
 pub(super) struct StartSettlement {
     /// The dispatches the start could not settle, each with its refusal's code.
     pub(super) unsettled: Vec<UnsettledDispatch>,
+    /// UNSET-2 (register §1.296): the dispatches the start settled although an earlier start
+    /// refused them, each with that earlier refusal's record (`record_late_settlements`).
+    pub(super) settled_late: Vec<LateSettlement>,
     /// Test only: the run whose settlement the start refuses as the ledger would.
     #[cfg(test)]
     pub(super) refuse_run_for_test: Option<RunId>,
@@ -2296,6 +2349,14 @@ enum AbandonedRunEnd {
     /// Fix 2 (re-review M-1): its lease ended in one way without a run-linked release, at this
     /// time: it is ready to settle from that end, and no release is written (as at start).
     EndedWithoutRelease(u64),
+}
+
+/// UNSET-2 (register §1.296): a dispatch the start settled as interrupted although an earlier
+/// start refused its settlement, with the outcome of that start's
+/// `policy_settlement_dispatch_unsettled` record.
+pub(super) struct LateSettlement {
+    pub(super) decision_id: String,
+    pub(super) refusal: Outcome,
 }
 
 /// Workflow #369 E3 (#670 safety net): a dispatch the start could not settle.
@@ -2398,7 +2459,7 @@ pub(super) fn reconcile_policy_dispatches(
     reconcile_scheduled_policy_outcomes(policy, ledger, ended_without_release, start, rule)?;
     for decision_id in policy.pending_dispatch_completions() {
         let execution = policy.execution_data(&decision_id)?;
-        let completion = match ledger.reconcile_scheduled_policy_settlement(execution) {
+        let completion = match ledger.reconcile_scheduled_policy_settlement(execution.clone()) {
             Ok(completion) => completion,
             // #670 safety net: as for an outcome, a refused completion is recorded.
             Err(error) if error.is_scheduled_settlement_refusal() => {
@@ -2414,6 +2475,29 @@ pub(super) fn reconcile_policy_dispatches(
             }
         };
         policy.complete_dispatch(&decision_id, &completion)?;
+        // UNSET-2 (register §1.296): a late settlement whose completion a cut start left to
+        // this one is closed here, so this start records who closed it, as the settling start
+        // would have (`record_late_settlements`). Its run is read by the completion's links.
+        let refusal = crate::policy_host::late_settlement_refusal(
+            ledger,
+            &execution,
+            completion.links().task_id(),
+            completion.links().run_id(),
+            completion.sequence(),
+        )
+        .map_err(|error| {
+            SettlementRead::Fatal.error(&error, HostLocation::ReconcilePolicyDispatches)
+        })?
+        .and_then(|event| match event.payload() {
+            EventPayload::Runtime(RuntimePayload::Failed(record)) => Some(record.outcome().clone()),
+            _ => None,
+        });
+        if let Some(refusal) = refusal {
+            start.settled_late.push(LateSettlement {
+                decision_id,
+                refusal,
+            });
+        }
     }
     policy.refresh_dispatches(ledger)?;
     let pending = policy.pending_dispatches();
@@ -2556,7 +2640,9 @@ fn reconcile_scheduled_policy_outcomes_for(
         }
     };
     for decision_id in pending {
-        let settled = (|| -> RuntimeHostResult<()> {
+        // UNSET-2 (register §1.296): a settled run's earlier refusal, when an earlier start refused
+        // to settle it (`late_settlement_refusal`).
+        let settled = (|| -> RuntimeHostResult<Option<Outcome>> {
             // #419 LN-WS-F (R2): the intent from the sequence the dispatch journal holds.
             let intent = &policy_dispatch_intent(
                 ledger,
@@ -2709,7 +2795,7 @@ fn reconcile_scheduled_policy_outcomes_for(
             let Some(lease_ended_at) =
                 released_at.or_else(|| ended_without_release.get(&decision_id).copied())
             else {
-                return Ok(());
+                return Ok(None);
             };
             let (observed_at_unix_ms, input, runtime_ms) = match terminals.as_slice() {
                 [terminal] if terminal.event_type() == EventType::TaskCompleted => {
@@ -2828,6 +2914,24 @@ fn reconcile_scheduled_policy_outcomes_for(
                     crate::codes::HostLocation::ReconcilePolicyOutcomes,
                 ));
             }
+            // UNSET-2 (register §1.296): a run settled as interrupted that an earlier start refused
+            // to settle is settled late; read before the settlement's one write, as every read
+            // here. Its settlement leaves the decision memory as it was, and every replay of its
+            // record reads the same.
+            let refusal = crate::policy_host::late_settlement_refusal(
+                ledger,
+                &data,
+                Some(task_id),
+                Some(run_id),
+                through,
+            )
+            .map_err(|error| read.error(&error, HostLocation::ReconcilePolicyOutcomes))?
+            .and_then(|event| match event.payload() {
+                EventPayload::Runtime(RuntimePayload::Failed(record)) => {
+                    Some(record.outcome().clone())
+                }
+                _ => None,
+            });
             let completion = ledger
                 .reconcile_scheduled_policy_settlement(data.clone())
                 .map_err(|error| {
@@ -2837,7 +2941,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                     )
                 })?;
             policy
-                .commit_execution(&data, None)
+                .commit_execution(&data, None, refusal.is_some())
                 .map_err(RuntimeHostError::into_fatal)?;
             // Workflow #386 SR-2b-1: recorded by the start right after its reconciliation, online
             // by the next live settlement or evaluation.
@@ -2845,7 +2949,7 @@ fn reconcile_scheduled_policy_outcomes_for(
             policy
                 .complete_dispatch(&decision_id, &completion)
                 .map_err(RuntimeHostError::into_fatal)?;
-            Ok(())
+            Ok(refusal)
         })();
         // Workflow #369 E3 (coordinator ruling on #670, safety net): at start, a run whose
         // settlement the host's recovery or the ledger refuses does not fail the start; its
@@ -2855,8 +2959,21 @@ fn reconcile_scheduled_policy_outcomes_for(
         // skips its settlement for this tick, and (fix round 1, review L1) ends this tick's
         // reads: the settlements after it are read at the next tick. Any other failure, at start
         // and online, is returned.
-        if let Err(error) = settled {
-            match start.as_deref_mut() {
+        match settled {
+            Ok(None) => {}
+            // UNSET-2 (register §1.296): the start records who closed it and why
+            // (`record_late_settlements`). Online (`start` is `None`) none is met: a dispatch a
+            // start refused to settle stays quarantined, out of the pending settlements, for the
+            // life of that host, and the next start settles it.
+            Ok(Some(refusal)) => {
+                if let Some(start) = start.as_deref_mut() {
+                    start.settled_late.push(LateSettlement {
+                        decision_id,
+                        refusal,
+                    });
+                }
+            }
+            Err(error) => match start.as_deref_mut() {
                 Some(start) if per_run_settlement_refusal(&error) => {
                     policy.quarantine_dispatch(&decision_id);
                     start.unsettled.push(UnsettledDispatch {
@@ -2866,7 +2983,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                 }
                 None if unanswered_ledger_read(&error) => return Ok(Some(error)),
                 _ => return Err(error),
-            }
+            },
         }
     }
     Ok(None)
