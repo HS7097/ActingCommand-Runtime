@@ -180,7 +180,7 @@ impl Device {
             .collect()
     }
 
-    fn record(&self) -> &TaskSelectionRecord {
+    fn decision(&self) -> &TaskSelectionRecord {
         let records = self.records();
         let [record] = records.as_slice() else {
             panic!("one decision record: {:?}", self.script.traces());
@@ -714,7 +714,7 @@ fn judge_known_ends_with_outcome_key() {
         JUDGED,
         SchedulingJudgeResult::Judged,
     );
-    let record = device.record();
+    let record = device.decision();
     assert_eq!(record.confirmation, TaskSelectionConfirmation::JudgeOnly);
     assert_eq!(
         (status(record, 0), status(record, 1), status(record, 2)),
@@ -760,7 +760,7 @@ fn judge_unknown_slot_ends_with_unknown_key() {
         UNKNOWN,
         SchedulingJudgeResult::Unknown,
     );
-    let record = device.record();
+    let record = device.decision();
     assert_eq!(record.confirmation, TaskSelectionConfirmation::JudgeOnly);
     assert_eq!(
         (status(record, 0), status(record, 1), status(record, 2)),
@@ -798,7 +798,7 @@ fn judge_stale_list_ends_with_unknown_key() {
         UNKNOWN,
         SchedulingJudgeResult::Unknown,
     );
-    let record = device.record();
+    let record = device.decision();
     assert_eq!(record.confirmation, TaskSelectionConfirmation::JudgeOnly);
     assert_eq!(
         record.selection_result,
@@ -823,8 +823,8 @@ fn judge_stale_list_ends_with_unknown_key() {
         SchedulingJudgeResult::Judged,
     );
     assert_eq!(
-        fresh.record().selected,
-        [slot_id(fresh.record(), 0), slot_id(fresh.record(), 1)]
+        fresh.decision().selected,
+        [slot_id(fresh.decision(), 0), slot_id(fresh.decision(), 1)]
     );
 }
 
@@ -850,7 +850,7 @@ fn judge_unknown_dropped_candidate_ends_with_unknown_key() {
             UNKNOWN,
             SchedulingJudgeResult::Unknown,
         );
-        let record = device.record();
+        let record = device.decision();
         assert_eq!(
             (status(record, 0), status(record, 1), status(record, 2)),
             (
@@ -877,7 +877,7 @@ fn judge_unknown_dropped_candidate_ends_with_unknown_key() {
         JUDGED,
         SchedulingJudgeResult::Judged,
     );
-    let record = device.record();
+    let record = device.decision();
     assert_eq!(
         (status(record, 0), status(record, 1), status(record, 2)),
         (
