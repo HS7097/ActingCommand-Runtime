@@ -166,14 +166,19 @@ pub struct Operation {
     pub name: String,
     pub module: OperationModule,
     pub params: Vec<Param>,
-    /// The source command whose further flags carry over unchanged.
+    /// The source command whose further flags carry over unchanged; since Workflow #434 LAB-5A
+    /// only on a row no program offers yet (§9.2).
     pub params_more: Option<String>,
     /// What the operation answers.
     pub output: String,
     /// Whether it changes anything (MCP's `readOnlyHint` is its negation).
     pub writes: bool,
-    /// §5; MCP's `destructiveHint`.
+    /// §5; MCP's `destructiveHint` is `irreversible` or [`Self::disruptive`].
     pub irreversible: bool,
+    /// Workflow #434 LAB-5A: it stops or restarts something a person may be using, without being
+    /// irreversible in the sense of §5; absent is false.
+    #[serde(default)]
+    pub disruptive: bool,
     pub runtime: RuntimeNeed,
     pub entries: Vec<Entry>,
     /// The request kinds it sends.
@@ -254,6 +259,9 @@ pub struct Param {
     #[serde(default)]
     pub repeat: bool,
     pub default: Option<String>,
+    /// Workflow #434 LAB-5A: the front ends (the ids of the `modules` rows of role `front_end`) in
+    /// which it is required although the row does not require it; nothing reads it yet.
+    pub required_in: Option<Vec<String>>,
     pub note: Option<String>,
 }
 
@@ -276,6 +284,10 @@ pub enum ParamType {
     Instance,
     String,
     Integer,
+    /// Workflow #434 LAB-5A: a whole number from 0 to 2^64 − 1.
+    Unsigned,
+    /// Workflow #434 LAB-5A: a decimal number; the CLI hands the command its text.
+    Decimal,
     Boolean,
     /// A number with `ms`, `s`, `m` or `h`.
     Duration,
@@ -290,6 +302,8 @@ pub enum ParamType {
     /// One of the listed words (`enum:<a|b>`).
     Enum(Vec<String>),
     RequestId,
+    /// Workflow #434 LAB-5A: a request id or a run id.
+    RunRef,
     /// `op-<ms>`.
     OperationId,
     MaterialRef,
@@ -311,6 +325,8 @@ impl ParamType {
             "instance" => Self::Instance,
             "string" => Self::String,
             "integer" => Self::Integer,
+            "unsigned" => Self::Unsigned,
+            "decimal" => Self::Decimal,
             "boolean" => Self::Boolean,
             "duration" => Self::Duration,
             "path" => Self::Path,
@@ -321,6 +337,7 @@ impl ParamType {
             "key_value" => Self::KeyValue,
             "list<string>" => Self::ListOfStrings,
             "request_id" => Self::RequestId,
+            "run_ref" => Self::RunRef,
             "operation_id" => Self::OperationId,
             "material_ref" => Self::MaterialRef,
             "code" => Self::Code,

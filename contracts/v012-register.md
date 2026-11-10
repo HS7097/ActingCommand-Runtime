@@ -7891,7 +7891,8 @@ free number on the base `2ea50cf5`; each later slice of #434 adds its rows under
 GPU-1's slices do under §1.286.
 
 **LAB-0 itself.** Contracts only: the two-entry contract, the operation table v1 (168 operations:
-53 core, 28 debugging, 40 authoring, 47 rescue; 16 of them reserved), the planned interface rows
+53 core, 28 debugging, 40 authoring, 47 rescue; 16 of them reserved; 170 since LAB-2 added the two
+debugging rows `user-config` and `user-config set`, L2-10), the planned interface rows
 and this section. No code, no test, no gate row, no CI file, no key, no code of the outcome
 catalog, and no live revision raised.
 
@@ -8571,6 +8572,161 @@ line changes.
 a received `OutcomeEnvelope`) and returns `Result<Outcome, String>` rather than a typed builder and
 a registered failure; `apps/actinglab` is on the outcome guard's exemption list. Fix 1 leaves it
 as it is (the coordinator's work order).
+
+#### Slice LAB-5A (0.12.52): the operation table completed: every offered row declares its parameters
+
+Coordinator work order `rd-1108/arch-013/brief-lab5a.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` and its proposal `scratch-lab5a-step0/lab5a-proposed-params.json`
+(both on main `76006500`, the base of this slice); the first of LAB-5's slices. The contract is
+[lab-two-entries.md](lab-two-entries.md) §9.1 to §9.3; the table is
+[lab-operations.json](lab-operations.json). The rule of the slice: no command line changes what it
+accepts or refuses, and no command what it does; only `serve --stdio` changes.
+
+**The coordinator's rulings** (2026-11-10, board #434, in the work order): every row's `params`
+written and `params_more` removed, every parameter it declares kept; a millisecond count stays
+`integer`, a comma list given in one flag and JSON given as text are `string`, a repeated flag is
+`repeat: true`, actinglab's global options a command reads are declared on its row; what the schema
+cannot state goes into the parameter's `note` and the code keeps enforcing it; the types
+`decimal`, `unsigned` and `run_ref`; the members `required_in` and `disruptive`; for the survey's
+differences 1 to 8 and 10 the table follows the code, and difference 9 (`pause`'s default drain
+300 s) stays; `recover`, `debug-package` and `export-evidence` keep ignoring unknown flags on the
+command line through one named list, a debt; `serve --stdio` refuses a parameter its row does not
+declare, for every row; `standard-pack check|compose`'s `--root` and `resource restore`'s and
+`regression`'s `--state-root` are declared as they are, and §9.3's sentence says what they name;
+`record draft`'s `writes` is what its code does; and §11 holds: LAB-5 adds the new MCP server, and
+`actingctl mcp-serve` with its `--via` child stays as it is until LAB-7.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5A-1 | the `params` of 71 rows (the 70 rows actinglab offers that had `params_more`, and `record draft`, which LAB-5 offers): 455 parameters, 433 of them new; their `params_more` removed | contract table | LAB-5A | — | from the survey's proposal, read against the code at the base; where they differ the code won (deviation (c)). Every parameter a row declared is kept, with its note |
+| L5A-2 | types `unsigned`, `decimal`, `run_ref` (`table::ParamType::{Unsigned, Decimal, RunRef}`) | contract vocabulary, behaviour | LAB-5A | — | the words read an `unsigned` as a `u64` (a JSON number of that range in `serve`), a `decimal` as a finite number kept as written (`serve`: a JSON number or that text), a `run_ref` as text. `unsigned`: the six `seed`s (`lab_draw::seed_flag` reads any `u64`, so a seed above the signed range is taken where the command takes it), and the values the commands read as any `u64`: `do --projection-sequence`, `watch --from-sequence|--to-sequence|--after`, `signatures match --input-through|--catalog-through`, `signatures retire --registration-sequence`, `unpin --pin-sequence`, `resource restore --through-sequence`, `scheduling timeline --unix-ms|--monotonic-ms`, `runs --since-unix-ms|--until-unix-ms`. `decimal`: `record start --template-threshold`, `record amend|step --threshold`. `run_ref`: `run show`'s and `run evidence`'s `id` |
+| L5A-3 | members `required_in` (a parameter's, optional) and `disruptive` (a row's, optional, absent false) | contract table, reader | LAB-5A | — | `required_in: ["mcp"]` on `resume`'s `expect` and `pause`'s `reason`, read by nothing yet; `disruptive: true` on `emu stop`, `emu restart`, `app stop`, `app restart`, `drill` and `devices unbind`; MCP's `destructiveHint` is `irreversible` or `disruptive` (§5, §9.1). The schema string stays `actingcommand.lab-operations.v1`: members were added, none changed its meaning |
+| L5A-4 | the survey's differences | contract table | LAB-5A | — | 1: `monitor set` and `run show` lose their dead `params_more`; 2: `run_ref`; 3: `events`' and `evidence read`'s `run` is a `string` noted as a run id; 4: `devices bind|unbind`'s instance noted as an alias only; 5: `devices bind`'s `handle` and `agent claude-hook`'s `action` declared positionals; 6: `runs --instance <x>` stays accepted, noted on the positional; 10: the one-of rules of `facts` and `targets set` in notes. Fix 1: `facts`' instance note said "absent: every instance", which the code refuses (none of instance, `program` and `config` is `<instance>` `required`, two of them `--program` `conflicting`); the fix corrects it (the slice had changed only `prefix`'s note, though this row said corrected) and writes "exactly one of instance, program and config" on the three; `targets set`'s `file` and `targets` say "exactly one of file and targets" (none is `<file>` `required`, both `--targets` `conflicting`; `targets` is a JSON list). 7 and 8 are left (deviation (a)) |
+| L5A-5 | actinglab's words and router (`cli_module::words`, `engine`, `core_ops`) | behaviour | LAB-5A | — | no offered row has `params_more`, so a row passes on only what it declares. `engine::COMMANDS` names the command of every row actinglab's own command serves (before, `params_more` named it) and how its command line reaches it: `AsWritten` for the 55 rows that took their command's further flags (their declared flags go on as written, with actinglab's global options `words::GLOBAL_OPTIONS`; their command reads and checks them, as it did), `Declared` for `app launch|restart|stop` and the two `user-config` rows. `words::LENIENT_ON_COMMAND_LINE` (`recover`, `debug-package`, `export-evidence`): on the command line their further flags and words still go on (the debt below). `words::KEPT_FLAGS` (fix 1; `words::POSITIONAL_FLAGS` before it, `runs --instance` only): the flags a row's command line still hands on as written, as its further flags went (the value, or `true` when none follows; a list when given twice): a positional as its flag (`runs --instance`, `run show --id`, `run evidence --id`, `monitor set --instance`, `op status --op`, `release verify|stage --dir`) and two flags of the source command no row declares (`op status --operation`, `devices bind --root`), which the module writes as further flags, as before. `words::COMPLETED_ROWS` (fix 1): on the 15 core and rescue rows this slice completed, an option the slice declared takes no word beginning with `--` as its value (`value_missing`), as the further flag took none; the options they declared before (`runs --since`, `run evidence --detail`, `monitor set --interval|--expect|--recover`) take the next word, as they did. A global option is recognised with `_` or `-` in its words (fix 1), as a further flag was written with `-`. `serve --stdio` (`words::from_json`) refuses every member a row does not declare. `core_ops` hands `runs`', `run evidence`'s and `gap`'s declared options to `lab-ops` under the flags they went as before (`Argv::options_of`) and `devices bind`'s `handle` as the word after the instance, then (fix 1) its kept `--root` after the module's own (`Argv::further`); the engine writes a flag by its value (`true` the flag alone, `false` nothing, a list item by item, another value the flag and the value) |
+| L5A-6 | the rescue module's rows (`crates/lab-rescue`, `rescue::further_flags`, `rescue::agent_words`) | behaviour | LAB-5A | — | `op status`, `release verify`, `release stage` and the six `agent` rows declare what they took as further flags; the module writes each under its flag as before, and (fix 1) `op status`'s kept `--operation`, which no row declares, too; `agent claude-hook`'s action is its positional `action`, the word after `claude-hook` as before; a switch given `false`, which only `serve` can give, is not written (before, `--name false`, which the installer refused) |
+| L5A-7 | §9.3: `--root` and `--state-root` | contract text, table | LAB-5A | — | `standard-pack check|compose --root` (a game's package root) and `resource restore|regression --state-root` (a Runtime state root the offline command reads), as their consumers pass them; "There is no `--root` and no `--state-root`" now says that no operation takes the installation's root or state root under those names |
+| L5A-8 | `record draft` `writes: false` | contract table | LAB-5A | — | its only code, MCP's `ac_binding_draft` (`apps/actingctl/src/mcp/lab.rs`), changes nothing: it reads the record stop answer (inline, or an export of MCP's checked by its sha256), runs `package preflight` and actingd's `check-config`, which only read, and exports check-config's report into MCP's export directory as a read exports its answer; MCP marks it `readOnlyHint`. Its parameters are that tool's: `record_stop` and `record_stop_export` (`json`), one of the two |
+| L5A-9 | contract text | contract | LAB-5A | — | §9.1 (members, types, the typing rules), §9.2 (the new checks), §9.3 (L5A-7; MCP's actinglab child keeps the envelope until LAB-7, not LAB-5), §5 and §9.1 (`destructiveHint`), §11's mapping row (MCP's counter with LAB-7), open point 9 (170 operations since LAB-2; LAB-0's text above says so too) and open point 10's last sentence |
+
+**Rows left with `params_more`** (15): `convert`, `clean`, `new`, `prepare`, the eight `config file …`
+rows, `instance add`, `instance remove` and `pack remove`. They are rescue rows whose source command
+is not built (LAB-3 (c)); no program offers them, and their parameters are written when the slice
+that builds the source opens them.
+
+**The debt.** `words::LENIENT_ON_COMMAND_LINE`: on the command line `recover`, `debug-package` and
+`export-evidence` still hand every further flag and word to their command, which ignores what it
+does not read, as before; `serve --stdio` refuses them. A later slice makes the three commands
+strict and removes the list.
+
+**Tests.** New: apps row "#434 LAB-5A": `gate_434_lab5a::lab5a_rows_take_what_they_took`
+(actinglab's binary tests; a state root in a temporary folder on which no Runtime runs; no device,
+no clock, no sleep) and `rescue::gate_434_lab5a::rescue_rows_hand_their_declared_parameters_on`
+(`crates/lab-rescue`, logic only). Changed: `lab_ops_table_complete` (LAB-1) checks §9.2's new
+items. Adapted, where this slice changes what they pin: `gate_434_lab2::cli_short_words_parse`
+(`devices bind`'s further word is its `handle`; `regression`'s line gives the `--state-root` the
+row now requires, which its command required before) and the comments of
+`gate_434_lab2b::status_and_run_show_take_their_core_rows` (`run show` no longer takes further
+flags; the same refusal, now by the words). Fix 1 adds to the two new tests: each line it keeps
+(`run show --id`, `run evidence --id`, with `lab-ops` reading the id, `monitor set --instance`,
+`devices bind … --root` with `devices` reading it, `op status --op|--operation` with the module
+writing `--operation`, `release verify|stage --dir`, `watch --run_root`), `runs --instance <x>`
+followed by the positional refused as repeated (the slice had pinned the reverse order as
+repeated, which the base handed on as a list), the refusals of `COMPLETED_ROWS` (`runs
+--task-prefix --cursor c`, `gap --capability --why y`, `release verify --facts --expect-tag <dir>`,
+`agent add --name --client …`) and `runs --since --cursor` refused for its type as before, the two
+lines accepted now in their new order (`op status --check-rollback <op>`, `release stage
+--local-build <dir>`), a missing required parameter refused by the words on a module row (`gap`,
+`actingctl_usage_invalid`) and on an engine row (`unpin`, `validation_failed`), and `serve
+--stdio` refusing `devices bind`'s `root`. It corrects a comment of `gate_434_lab2` (the child's
+envelope until LAB-7).
+
+**Interface.** None raised: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
+`runtime-outcomes` 1; the table's schema string stays (L5A-3). No code, key or location is added.
+
+**Where LAB-5A differs from its work order's letter.**
+
+- (a) Differences 7 (`app launch|restart|stop`'s further flags, `session app`'s `--record`) and 8
+  (`codes`' `--prefix`, `--owner`, `--limit`, `--cursor`) are left: their rows never took further
+  flags, so declaring those would make `actinglab app launch <inst> --record` and `actinglab codes
+  --prefix …` accepted where they are refused today, which the rule of the slice forbids. The rows
+  stay as they are; a slice that may change those command lines (C) adds them.
+- (b) "No offered row carries `params_more`" is checked in two places: `lab-ops` cannot see which
+  rescue rows the rescue module serves, so `lab_ops_table_complete` checks that only a planned
+  rescue row carries it, and actinglab's `gate_434_lab5a` that no row actinglab offers does.
+- (c) Departures from the survey's proposal, the code winning: `unsigned` beyond the seeds where a
+  command reads any `u64` (L5A-2); `decimal` for the three thresholds; `run_ref`; `record draft`'s
+  parameters are its code's (`record_stop_export`, not a file); `signatures match`'s
+  `--input-through` and `--catalog-through` have no default (the code's 0 is refused); notes for
+  the names of L5A-7 and the differences of L5A-4; the notes of `observe`'s `capture` and `op
+  status`'s `op`, which the proposal had dropped, are kept.
+- (d) The command line of the 55 engine rows hands their flags on as written instead of typing
+  them: their own command reads and checks them again, as it did, so a value, a repeated flag or a
+  switch followed by a word reaches it exactly as before (`regression --package` given twice, which
+  the command takes the last of, stays accepted). The core and rescue rows type their new
+  parameters, as they type the others; so, on the command line, a switch no longer takes the word
+  after it as its value: `op status --check-rollback <op>` and `release stage --local-build <dir>`,
+  which the installer refused (the word read as the switch's value was unknown to it), now read the
+  switch and the positional. These two lines change from refused to accepted. Fix 1 (the review
+  of PR #1569 found lines the slice had made refused while this text said no other line changed):
+  every line the further flags let through before is accepted again and goes on as before
+  (`words::KEPT_FLAGS`, L5A-5): `op status --operation <op>` and `op status --op <op>`, `release
+  verify --dir <dir>`, `release stage --dir <dir> …`, `run show --id <id>`, `run evidence --id
+  <id> …`, `monitor set --instance <x> …`, and `actinglab devices bind <alias> <handle> --root
+  <r>`, which the command takes, as before, only when the program runs outside an installed root
+  (with `ACTINGCOMMAND_RUNTIME_STATE_ROOT` naming the state root; inside one the module's own
+  `--root` makes it `repeated`; §9.3 says so); and, found by the fix, an engine row's global
+  option written with `_` (`watch --run_root <r>`), which the further flag wrote with `-`. A value
+  beginning with `--` after an option the slice declared on one of the 15 core and rescue rows it
+  completed (`runs --task-prefix --cursor c`, which the slice read with `c` as the instance) is
+  refused again (`value_missing`, `words::COMPLETED_ROWS`); an option those rows declared before
+  takes the next word, as it did. What still differs from the base on the command line, every
+  shape found: (1) the two lines above, accepted now; (2) a value beginning with `--` after such
+  an option is refused also where the base's command took the next lone flag as that value
+  (`runs --task-prefix --cursor`, `gap --why "--…"`, whose text the base handed on with `_`
+  written `-`); (3) on an engine row, an undeclared flag after a global option given no value
+  (`watch --run-root --x`, which actinglab's parser read as that option's value) is refused. Every
+  other difference is the text of a refusal (e).
+- (e) Refusals that stay refusals with another text. A missing required parameter is refused by
+  the words before the command: on a row of the CLI module or the rescue module (`gap`, `devices
+  bind`, the `agent` rows) with `actingctl_usage_invalid` (`required`, the parameter); on a row
+  actinglab's own command serves (`unpin`, `regression`, `signatures match`, `export-evidence`)
+  with actinglab's `validation_failed` and the details `{argument, argument_problem: required}`
+  (`cli_module::refused_words`), the code the command refused it with before. A flag or word a
+  strict row does not declare is refused by the words naming it, with the same two codes
+  (`unknown`). `regression` with a global option and a missing or undeclared parameter changes from
+  `offline_device_scope_forbidden` to `validation_failed`; so do (found by fix 1) `signatures
+  register|match|retire` and `unpin` with `--dry-run` and a missing required parameter or an
+  undeclared flag, and `export-evidence` with `--dry-run` and no `--out`, from
+  `dry_run_unsupported`. A core row's whole number is handed on re-printed (`runs --limit 05` as
+  `5`, `+5` as `5`): the same value; a value of the wrong type or outside an `enum` is refused by
+  the words with the argument the command named (`--limit abc` `wrong_type`); `agent add --restore
+  x` names `--restore` where the command named `x`; `devices bind <alias>` names `<handle>` where
+  the command named `handle`; `run show` and `monitor set` refuse a further flag before the state
+  root is located.
+- (f) Other texts still say that MCP's actinglab child changes "until LAB-5": the READMEs, the
+  descriptions of `lab_operation_completed` and `lab_operation_check_failed` in the outcome
+  catalog, [resource-verify.md](resource-verify.md), actinglab's golden notes and code comments.
+  This slice corrects the contract's sentences (L5A-9), and fix 1 those in two files the slice
+  edits (`cli_module.rs`'s description and a comment of `gate_434_lab2`: until LAB-7); the others
+  follow the ruling and are corrected by the slice that next changes them.
+
+**What LAB-5A changes live.** On the command line: the two lines of deviation (d) accepted now,
+its shapes (2) and (3) refused now, and the texts of (e). `serve --stdio`, which nothing uses yet,
+refuses every parameter its row does not declare (before, a row with `params_more` passed them on).
+The table gained members and types: a reader of the table outside this repository that refuses
+unknown members learns them when it raises its pin.
+
+**LAB-5A fix 1** (coordinator work order `rd-1108/arch-013/brief-lab5a-fix1.md`, after the
+independent review `rd-1108/arch-013/review-1569-findings.md` of PR #1569 at `d2c710ae`): the lines
+of deviation (d) the slice had made refused are accepted again (`words::KEPT_FLAGS`), a value
+beginning with `--` is refused again where the base refused it (`words::COMPLETED_ROWS`), the
+notes of `facts` and `targets set` say their one-of rules (L5A-4), the texts of (e) say which code
+each refusal has, and the CLI module's description says the child keeps its envelope until LAB-7.
+The table's notes say the kept flags (`run show`'s and `run evidence`'s `id`, `monitor set`'s
+instance, `op status`'s `op`, `release verify|stage`'s `dir`, `devices bind`'s row), and §9.3
+names `devices bind`'s kept `--root`. No row, type, member, code, key or interface is added.
+
+**LAB-5A rollback** (to the release before it). Nothing persisted: code and the table's text.
 
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
