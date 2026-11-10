@@ -20,7 +20,7 @@ use super::*;
 use crate::{OperationRunCap, RunMaxRunsEnd};
 use actingcommand_contract::{
     CandidateFeature, CandidateFeatureMap, CandidateIdentitySource, CandidateRect,
-    CandidateUnknownReason, FactScalar, FrameId,
+    CandidateUnknownReason, FactScalar, FrameId, ScanViewportMotion,
 };
 use actingcommand_device::CaptureBackendName;
 use actingcommand_recognition::color_digest::{ColorDigest, ColorDigestGrid};
@@ -175,15 +175,16 @@ fn frame_id(capture: u32) -> FrameId {
 }
 
 // A scan source that replays a script; every capture costs the settle interval and is the next
-// frame. It keeps every move and the capture on which the end check was reported passed, the
-// frame a list's observation names.
+// frame, captured at the fake clock's time. It keeps every move, and each frame on which the end
+// check was reported passed with its capture time: the frame a list's observation names, as the
+// runtime's source binds it (`ListReadingFrame`).
 struct Fake {
     script: Script,
     current: Option<View>,
     captures: u32,
     clock: Duration,
     drags: Vec<ScanDragMotion>,
-    end_passed_on: Vec<u32>,
+    end_passed_on: Vec<(FrameId, Duration)>,
 }
 
 impl Fake {
@@ -249,7 +250,7 @@ impl ScanSource for Fake {
     }
 
     fn end_passed(&mut self) -> Result<(), ContainedTaskRunError<String>> {
-        self.end_passed_on.push(self.captures);
+        self.end_passed_on.push((frame_id(self.captures), self.clock));
         Ok(())
     }
 }
@@ -305,7 +306,8 @@ fn layout_in(identities: &[String], band_end: i32) -> CandidateLayout {
                  "recognition": {"kind": "ocr_aliases", "max_distance": 1, "minimum_margin": 1,
                                  "minimum_confidence_milli": 800}}},
             {"name": "rank", "value": "ocr_integer", "target": "card/rank",
-             "offset": {"x": 60, "y": 0}, "integer": {"min": 0, "max": 999}}
+             "offset": {"x": 60, "y": 0},
+             "integer": {"min": 0, "max": 999, "minimum_confidence_milli": 800}}
         ]
     }))
     .expect("layout")
@@ -324,9 +326,12 @@ fn rank_column() -> Vec<(String, String)> {
     vec![("rank".to_owned(), "rank".to_owned())]
 }
 
+// What one list reading gave: the list, the source after it, and the session's coverage
+// viewports.
 struct Read {
     list: Result<ListRead, ContainedTaskRunError<String>>,
     fake: Fake,
+    viewports: Vec<ScanDryRunViewport>,
 }
 
 // One list reading of `layout` with `scan` over `script`.
@@ -342,7 +347,11 @@ fn read(scan: &ScanDeclaration, layout: &CandidateLayout, script: Script) -> Rea
     .expect("a list reading's session");
     let mut fake = Fake::new(script);
     let list = session.read_list(&mut fake, KEY_COLUMN, &columns);
-    Read { list, fake }
+    Read {
+        list,
+        fake,
+        viewports: session.summary(None).viewports,
+    }
 }
 
 fn row(id: &str, rank: i64) -> BTreeMap<String, FactScalar> {
@@ -379,8 +388,9 @@ fn three_viewports(list: &[Card]) -> Script {
 // `member.b` with a `rank` column. The list is whole: rows `member.a`, `member.b`, `member.c` in
 // that order (ascending byte order of the key, not the order on the screen), each with its
 // `rank`, at the lowest confidence of the features the rows read (`member.b`'s rank, 955). The
-// end check passed on the third viewport, the fifth capture, which the session reported once:
-// the frame the list is observed on. No capture follows it.
+// end check passed on the third coverage viewport only, whose frame is the fifth capture, taken
+// at 1000 ms on the fake's clock: the session reported that frame, at that capture time, once,
+// as the frame the list is observed on, and no capture follows it.
 #[test]
 fn list_reading_publishes_whole_list() {
     let list = three_cards();
@@ -401,8 +411,22 @@ fn list_reading_publishes_whole_list() {
         read.fake.drags,
         [ScanDragMotion::Advance, ScanDragMotion::Advance]
     );
+    assert_eq!(
+        read.viewports
+            .iter()
+            .map(|viewport| (viewport.motion, viewport.frame_id, viewport.end_check))
+            .collect::<Vec<_>>(),
+        [
+            (ScanViewportMotion::Start, Some(frame_id(1)), false),
+            (ScanViewportMotion::Forward, Some(frame_id(3)), false),
+            (ScanViewportMotion::Forward, Some(frame_id(5)), true),
+        ]
+    );
+    assert_eq!(
+        read.fake.end_passed_on,
+        [(frame_id(5), Duration::from_millis(1000))]
+    );
     assert_eq!(read.fake.captures, 5);
-    assert_eq!(read.fake.end_passed_on, [5]);
     assert!(read.fake.script.captures.is_empty());
 }
 
@@ -425,7 +449,10 @@ fn list_reading_empty_list_is_known() {
         other => panic!("an empty list, got {other:?}"),
     }
     assert!(read.fake.drags.is_empty(), "no input");
-    assert_eq!(read.fake.end_passed_on, [1]);
+    assert_eq!(
+        read.fake.end_passed_on,
+        [(frame_id(1), Duration::from_millis(200))]
+    );
 }
 
 fn missed(read: &Read) -> ListReadingMiss {
@@ -775,13 +802,13 @@ fn package_with(task: &Value, control_patch: impl FnOnce(&mut Value)) -> Vec<u8>
         ],
         "candidate_layouts": task["candidate_layouts"].clone()
     });
-    let pages = json!({
-        "schema_version": "0.3",
-        "pages": ["home", "list", "detail"].map(|page| json!({
+    let pages = ["home", "list", "detail"].map(|page| {
+        json!({
             "id": format!("neutral/{page}"), "required": [format!("page/{page}")],
             "optional": [], "forbidden": []
-        }))
+        })
     });
+    let pages = json!({"schema_version": "0.3", "pages": pages});
     let bytes = |value: &Value| serde_json::to_vec(value).expect("JSON bytes");
     let entries = [
         ("control.json", bytes(&control)),
