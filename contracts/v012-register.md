@@ -8870,7 +8870,9 @@ whose input port fails the test on any call:
   wrong key, use as a prerequisite, and each `judge_result` rule (another string, an older
   schema, a task without a judge step, a page that is no judge step's `from` page, together with
   `busy`, a state reachable under both effect conditions) are each refused with the code and
-  detail of the declaration tables.
+  detail of the declaration tables; two mappings with the same effect condition, page and
+  `judge_result` are refused `invalid_scheduling_outcome_declaration`, field `mapping_overlap`,
+  while the pair `judged` and `unknown` on one condition and page is admitted.
 - `judge_record_reader_rules`: the ledger reader takes `judge_only` with 0 or 2 selected and
   refuses it with `multi_select`, a v2 projection, no `unknown_check` or `outranked_possible`; a
   reader of `ledger` 7 refuses the record (`corrupt_ledger_record`).
@@ -8963,7 +8965,7 @@ whose `ledger` range holds 8, which is UI-L1's console.
 | S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key, unknown_outcome_key}`, all four required, the two keys distinct | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only; ends with `outcome_key` or `unknown_outcome_key` |
 | S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, `ledger` 8 (#434's, shared) | S168-5b | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
 | S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5b | runtime-host | ends that run only |
-| S168C-10 | the optional `task.json` mapping member `judge_result`, a closed vocabulary of `judged` and `unknown` | package format, `package` 9 | S168-5b | resource repositories | maps a judge step's end with that result; no persisted record carries it; [selection-graph.md](selection-graph.md), "Mapping the two keys" |
+| S168C-10 | the optional `task.json` mapping member `judge_result`, a closed vocabulary of `judged` and `unknown` | package format, `package` 9 | S168-5b | resource repositories | maps a judge step's end with that result; two mappings overlap only with the same effect condition, page and `judge_result` (or none on both), so S168-5b changes `SchedulingOutcomeDeclaration::validate` (`mapping_overlap`); no persisted record carries it; [selection-graph.md](selection-graph.md), "Mapping the two keys" |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

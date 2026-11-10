@@ -1225,6 +1225,15 @@ words. The names are neutral examples:
   the pages it lists. A mapping without it never maps a judge step's end; every other end of the
   task is mapped among the mappings without it, by the rules as before, and such a mapping may
   list a judge step's page too.
+- **Overlap.** Today's declaration check, `SchedulingOutcomeDeclaration::validate`
+  (`crates/actingcommand-contract/src/event/payload.rs`), refuses two mappings with the same
+  effect condition that list the same page (`invalid_scheduling_outcome_declaration`, field
+  `mapping_overlap`). S168-5b changes that check: two mappings overlap only when they have the
+  same effect condition, list the same page, and have the same `judge_result` or both have none.
+  A mapping with `judge_result` and a mapping without it, on the same condition and page, do not
+  overlap: the first maps the judge's ends, the second maps every other end at that page. Nor do
+  two mappings whose `judge_result` differs, so the two mappings of the example above, which
+  differ only in `judge_result`, are admitted.
 - **The state rule.** For a judge step's state (its `from` page and the effect condition the walk
   reaches it under), exactly one mapping with that condition and `judged` lists the page, and its
   key is the step's `outcome_key`; exactly one mapping with that condition and `unknown` lists it,
@@ -1243,6 +1252,7 @@ words. The names are neutral examples:
 | `judge_result` is the string `judged` or `unknown` | `invalid_scheduling_outcome_declaration`, field `judge_result` (the source parser: `resource_declaration_invalid`, `InvalidType` at `…/judge_result` for no string, `InvalidValue` there for another string) |
 | task schema `0.9` only | an older schema: `UnconsumedField` at `…/judge_result` |
 | only in a task with a judge step; every page the mapping lists is a judge step's `from` page; never together with `busy` | `invalid_scheduling_outcome_declaration`, field `judge_result` (the source parser: `resource_declaration_invalid`, `InvalidValue` at the declaration); Runtime admission: `contained_task_outcome_declaration_invalid` |
+| no two mappings overlap: the same effect condition, a page both list, and the same `judge_result` or none on both (bullet "Overlap" above) | `invalid_scheduling_outcome_declaration`, field `mapping_overlap`, the refusal and field of today's check, which S168-5b changes in `SchedulingOutcomeDeclaration::validate` |
 | the state rule above | `contained_task_outcome_declaration_incomplete` in a page graph, `task_phases_outcome_incomplete` in a phased route |
 
 ### No input, and how that is enforced
