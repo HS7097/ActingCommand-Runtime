@@ -48,7 +48,8 @@ pub const MAX_STANDARD_PACK_TABLE_ENUM_VALUES: usize = 1024;
 /// The longest allowed value of an `enum_string` column (§2.2).
 pub const MAX_STANDARD_PACK_TABLE_ENUM_VALUE_BYTES: usize = 128;
 /// The most tables of one game root that are read; by file name, each later one is
-/// `table_too_large` (§2.2).
+/// `table_too_large` (§2.2). The names a replacement in place leaves are not counted
+/// ([`crate::replacement_leftover_name`], Workflow #428 TB-R1).
 pub const MAX_STANDARD_PACK_TABLES: usize = 64;
 
 crate::outcome_vocabulary! {
@@ -508,12 +509,22 @@ impl StandardPackTableSummary {
     }
 }
 
+/// Whether the readers of `tables/` read its entry `name` (Workflow #428 TB-R1): every entry but
+/// one a replacement in place leaves ([`crate::replacement_leftover_name`]), which is not read,
+/// has no row and does not count toward the 64. A name that is not UTF-8 is read.
+fn table_entry_read(name: &std::ffi::OsStr) -> bool {
+    !name
+        .to_str()
+        .is_some_and(crate::package::replacement_leftover_name)
+}
+
 /// Reads every table of the game root `game_root` (the directory of `game`) as the Runtime's
 /// startup, check-config and `actingctl packs` read them (§2.3, §2.4): every entry of `tables/`
-/// in file name order, the first 64 parsed with [`parse_standard_pack_table`], each later one
-/// `table_too_large`. Nothing is kept beyond the row count and the column expiries. No
-/// `tables/` directory is no table; a `tables/` that cannot be listed is
-/// `standard_pack_table_unreadable` for the directory.
+/// but the names a replacement in place leaves (Workflow #428 TB-R1,
+/// [`crate::replacement_leftover_name`]: skipped, no row), in file name order, the first 64
+/// parsed with [`parse_standard_pack_table`], each later one `table_too_large`. Nothing is kept
+/// beyond the row count and the column expiries. No `tables/` directory is no table; a
+/// `tables/` that cannot be listed is `standard_pack_table_unreadable` for the directory.
 pub fn read_standard_pack_tables(
     game_root: &Path,
     game: &str,
@@ -533,7 +544,10 @@ pub fn read_standard_pack_tables(
     let mut names = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| unreadable(&directory, &error, IoOp::ReadDir))?;
-        names.push(entry.file_name());
+        let name = entry.file_name();
+        if table_entry_read(&name) {
+            names.push(name);
+        }
     }
     names.sort();
     Ok(names
@@ -604,7 +618,8 @@ pub struct StandardPackTableRead {
 /// Workflow #357 DB-2 (M-357a v1.1 §2.4, K1): the one table `table_id` of the game root
 /// `game_root`, as a run's preparation reads it: read once and parsed with
 /// [`parse_standard_pack_table`], its place among the directory's files judged as
-/// [`read_standard_pack_tables`] judges it (by file name, the 65th or later is `table_too_large`).
+/// [`read_standard_pack_tables`] judges it (by file name, the 65th or later is `table_too_large`;
+/// the names a replacement in place leaves are not counted, Workflow #428 TB-R1).
 /// `None` when the directory or the file is not there.
 pub fn read_standard_pack_table(
     game_root: &Path,
@@ -628,7 +643,10 @@ pub fn read_standard_pack_table(
     let mut names = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| unreadable(&directory, error, IoOp::ReadDir))?;
-        names.push(entry.file_name());
+        let name = entry.file_name();
+        if table_entry_read(&name) {
+            names.push(name);
+        }
     }
     names.sort();
     let Some(rank) = names

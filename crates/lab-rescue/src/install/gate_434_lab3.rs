@@ -25,7 +25,8 @@
 // - `place_holds_only_the_bundles_idle_instances` (item 4): on a neutral bundle, only the idle
 //   instance of the bundle's game is paused and resumed, the other party's pause and the other
 //   game's instance are untouched, `.old-<ms>` is kept, the journal carries the initiator, and
-//   `undo` restores the game root.
+//   `undo` restores the game root; with #428 TB-R1 the bundle also replaces a table, and after
+//   the placement and after `undo` the table reader lists that table alone.
 // Fix 2 (`brief-lab3-fix2.md`):
 // - `rescue_hands_back_its_own_hold_across_a_restart` (item 2): a deploy whose start times out
 //   records no new owner epoch; while no Runtime answers the module's `release-hold` refuses with
@@ -1173,14 +1174,32 @@ fn rescue_renames_its_own_running_image() {
     assert!(kept, "the running image is kept beside its place");
 }
 
-/// The neutral game, pack and server of the placement test (made-up ids, no real game).
+/// The neutral game, pack, table and server of the placement test (made-up ids, no real game).
 const GAME: &str = "neutral-game";
 const PACK: &str = "neutral.pack";
+const TABLE: &str = "neutral_scores";
 
-/// Writes a neutral bundle zip of [`GAME`] to `path`: `bundle.json` with one pack, the pack's
-/// `control.json` (`control`), and the package interface the fixture's installer speaks. The
-/// bytes of its `bundle.json`.
-fn write_bundle(path: &Path, control: &[u8]) -> Vec<u8> {
+/// The bytes of a valid table [`TABLE`] of [`GAME`] (`actingcommand.table.v1`) whose one row
+/// holds `score`.
+fn table_bytes(score: u32) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "schema_version": "actingcommand.table.v1",
+        "game": GAME,
+        "table_id": TABLE,
+        "row_key": ["unit"],
+        "columns": [
+            {"name": "unit", "type": "key"},
+            {"name": "score_milli", "type": "integer", "min": 0, "max": 100000}
+        ],
+        "rows": [["unit.a", score]]
+    }))
+    .expect("JSON")
+}
+
+/// Writes a neutral bundle zip of [`GAME`] to `path`: `bundle.json` with one pack and the table
+/// [`TABLE`], the pack's `control.json` (`control`), `tables/<TABLE>.json` (`table`), and the
+/// package interface the fixture's installer speaks. The bytes of its `bundle.json`.
+fn write_bundle(path: &Path, control: &[u8], table: &[u8]) -> Vec<u8> {
     let bundle = serde_json::to_vec(&json!({
         "schema_version": "actingcommand.bundle.v4",
         "game": GAME,
@@ -1192,6 +1211,7 @@ fn write_bundle(path: &Path, control: &[u8]) -> Vec<u8> {
             "file_count": 1,
             "byte_count": control.len(),
         }],
+        "tables": [TABLE],
     }))
     .expect("JSON");
     let interfaces = serde_json::to_vec(&json!({
@@ -1204,6 +1224,7 @@ fn write_bundle(path: &Path, control: &[u8]) -> Vec<u8> {
         ("bundle.json".to_owned(), bundle.clone()),
         ("interfaces.json".to_owned(), interfaces),
         (format!("packs/{PACK}/control.json"), control.to_vec()),
+        (format!("tables/{TABLE}.json"), table.to_vec()),
     ] {
         writer
             .start_file(name, zip::write::FileOptions::default())
@@ -1218,6 +1239,9 @@ fn write_bundle(path: &Path, control: &[u8]) -> Vec<u8> {
 // and idle, (b) the same game and already paused by another party, (c) another game. Only (a) is
 // paused and resumed; (b)'s pause is kept and (c) is untouched; each replaced item is kept as
 // `.old-<ms>`; the journal `pack_place` carries the initiator; `undo` restores the game root.
+// Workflow #428 TB-R1 (register §1.293): the bundle also replaces a table, whose old copy is kept
+// in `tables/`; after the placement and after `undo` the table reader lists that one table, read,
+// and nothing else.
 #[test]
 fn place_holds_only_the_bundles_idle_instances() {
     let temp = TempDir::new().expect("tempdir");
@@ -1227,10 +1251,24 @@ fn place_holds_only_the_bundles_idle_instances() {
     let packs = temp.path().join("place-packs");
     let game_root = packs.join(GAME);
     fs::create_dir_all(game_root.join(PACK)).expect("the pack folder");
+    fs::create_dir_all(game_root.join("tables")).expect("the tables folder");
     let old_control = br#"{"neutral": 1}"#.to_vec();
     let old_bundle = br#"{"neutral": "the bundle before"}"#.to_vec();
+    let old_table = table_bytes(1000);
     fs::write(game_root.join(PACK).join("control.json"), &old_control).expect("the old pack");
     fs::write(game_root.join("bundle.json"), &old_bundle).expect("the old bundle.json");
+    let table = game_root.join("tables").join(format!("{TABLE}.json"));
+    fs::write(&table, &old_table).expect("the old table");
+    // The tables of the game root as every reader lists them: exactly the one table, read, with
+    // the bytes `expected`; a kept copy beside it is no table.
+    let listed_alone = |expected: &[u8]| {
+        let files = actingcommand_contract::read_standard_pack_tables(game_root.as_path(), GAME)
+            .expect("tables/ is listed");
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert_eq!(files[0].table_id, TABLE, "{files:?}");
+        assert!(files[0].read.is_ok(), "{files:?}");
+        assert_eq!(fs::read(&files[0].path).expect("the table"), expected);
+    };
     let config_path = root.join("actingd.config.json");
     let mut config: Value =
         serde_json::from_slice(&fs::read(&config_path).expect("the configuration")).expect("JSON");
@@ -1242,7 +1280,8 @@ fn place_holds_only_the_bundles_idle_instances() {
     );
     let zip = temp.path().join("neutral-bundle.zip");
     let new_control = br#"{"neutral": 2}"#.to_vec();
-    let new_bundle = write_bundle(&zip, &new_control);
+    let new_table = table_bytes(2000);
+    let new_bundle = write_bundle(&zip, &new_control, &new_table);
 
     host.runtime.boot(&["neutral.a", "neutral.b", "neutral.c"]);
     for instance in host.runtime.instances.borrow_mut().iter_mut() {
@@ -1290,6 +1329,19 @@ fn place_holds_only_the_bundles_idle_instances() {
     };
     assert!(kept(&format!("{PACK}.old-")), "the replaced pack is kept");
     assert!(kept("bundle.json.old-"), "the replaced bundle.json is kept");
+    // The replaced table is kept in `tables/`, and the reader lists the placed table alone.
+    let kept_table = format!("{TABLE}.json.old-");
+    let table_kept = fs::read_dir(game_root.join("tables"))
+        .expect("the tables folder")
+        .flatten()
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(kept_table.as_str())
+        });
+    assert!(table_kept, "the replaced table is kept beside it");
+    listed_alone(new_table.as_slice());
 
     // The journal: kind `pack_place`, with the initiator.
     let written = new_journals(&root, &before);
@@ -1309,6 +1361,12 @@ fn place_holds_only_the_bundles_idle_instances() {
         fs::read(bundle.as_path()).expect("bundle.json again"),
         old_bundle
     );
+    // The old table is back in place; the placed one, set aside beside it, is no table.
+    assert_eq!(
+        fs::read(table.as_path()).expect("the table again"),
+        old_table
+    );
+    listed_alone(old_table.as_slice());
 }
 
 // Fix 3, item 2 (`brief-lab3-fix3.md`; install-cli.md, "The Lab's rescue module", "Only its own

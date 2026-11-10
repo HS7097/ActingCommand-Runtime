@@ -837,8 +837,22 @@ data files beside its package directories, one directory per game below the conf
   arrays as long as `columns` with each cell of its column's type (`table_row_invalid`), within
   its range or `allowed` and `null` only in a nullable column (`table_value_out_of_range`),
   unique on the row key (`table_row_duplicate`). More than 8192 rows or 2 MiB, or a game root's
-  65th table or later by file name, is `table_too_large`; the first 64 are read. A refused table
-  is `standard_pack_table_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`);
+  65th table or later by file name, is `table_too_large`; the first 64 are read. **Names a
+  replacement in place leaves** (Workflow #428 TB-R1, since 0.12.50; `v012-register.md`
+  §1.293): an entry of `tables/` whose name ends in `.part` or holds `.old-`, `.abandoned-` or
+  `.rolledback-` (the contract crate's `replacement_leftover_name`) is no table. These are the
+  part written before a swap and left by an interrupted one (`<name>.new-<ms>.part`), the
+  replaced table kept beside it (`<name>.old-<ms>`, as a deploy kit keeps it too), and what the
+  Lab rescue module's `undo` sets aside (`<name>.abandoned-<ms>`, `<name>.rolledback-<ms>`). Such
+  an entry is skipped by every reader of `tables/`: it is not read, has no row (check-config's
+  `tables`, `actingctl packs` and `ac_packs`, `actinglab resource validate`'s family
+  `standard_pack_tables`), adds no record at startup, and does not count toward the 64, at
+  startup or in a run's preparation: the limit counts the entries that are read, in file name
+  order, after the skip. In a resource repository a selected file of such a name takes no row of
+  the family `standard_pack_tables` and is judged as any path no parser is mapped to. A table's file name,
+  `<table_id>.json`, never matches; a directory or any other name in `tables/` (a file
+  `notes.txt`, say) is read and reported as before. The Runtime deletes and moves nothing. A
+  refused table is `standard_pack_table_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`);
   one that cannot be read, or a `tables/` that cannot be listed, is
   `standard_pack_table_unreadable` with its OS error as the cause. A refused table never breaks
   its game root; the tables of a broken root are neither read nor listed. In a resource
@@ -967,7 +981,9 @@ data files beside its package directories, one directory per game below the conf
   (`standard_pack_registered` with the package count, or the root's failure); a broken root
   never stops the Runtime. Workflow #357 DB-1: at startup every table of a sound game root is
   also read, only to report the refused ones, one more `standard_pack_read` record each
-  (`standard_pack_table_invalid` or `standard_pack_table_unreadable`); nothing is kept and a run
+  (`standard_pack_table_invalid` or `standard_pack_table_unreadable`); an entry whose name a
+  replacement in place leaves is no table and adds no record (Workflow #428 TB-R1, "Tables"
+  above); nothing is kept and a run
   reads no table (DB-2 binds them to runs: [selection-graph.md](selection-graph.md), "Tables"). In a run's preparation, the root of the run's game when it holds
   `interrupts.json`, (Workflow #373 NAV-5) `navigation.json` or (Workflow #392 DA-4)
   `display-layout.json`, and (Workflow #373 NAV-3a)
