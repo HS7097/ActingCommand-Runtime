@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use crate::canonical::canonical_sha256;
 use crate::codes::SelectionPolicyCode;
 use crate::facts::{Candidate, RecordRow, ScalarValue, SelectionFactSnapshot, UnknownReason};
+use crate::list_max::{self, ListMaxRead};
 use crate::schema::{
     FactDeclaration, GateUnknownHandling, LookupKey, MAX_CANDIDATES, RowFilter,
     SELECTION_POLICY_SCHEMA_VERSION, SelectionError, SelectionErrorCode, SelectionMode,
@@ -286,6 +287,7 @@ pub fn evaluate_with_tables(
                 _ => None,
             },
             &|fact_key| resolver.read_fact(fact_key),
+            &|lists| list_max::union_keys(policy, lists, facts, now_unix_ms).ok(),
         )
     });
     let input_sha256 = canonical_sha256(&EvaluationInput {
@@ -325,7 +327,17 @@ pub fn evaluate_with_tables(
             ));
         }
     };
-    let resolver = Resolver::new(policy, facts, lists, tables, now_unix_ms);
+    // Workflow #428 S168-5a: each distinct list maximum is read once, after the lists and before
+    // any candidate (also with none), and says what it read where it is read.
+    let list_maxima = list_max::read_all(policy, tables, facts, now_unix_ms);
+    for read in &list_maxima {
+        list_max_reasons(read, &mut reasons);
+    }
+    let mut resolver = Resolver::new(policy, facts, lists, tables, now_unix_ms);
+    resolver.list_maxima = list_maxima
+        .into_iter()
+        .map(|read| (read.reference, read.reading.value))
+        .collect();
 
     let mut verdicts = Vec::with_capacity(candidates.len());
     let mut survivors: Vec<Ranked> = Vec::new();
@@ -453,6 +465,55 @@ pub fn evaluate_with_tables(
     ))
 }
 
+/// The reasons one list maximum's read adds to the decision's chain (Workflow #428 S168-5a,
+/// "Audit"): a `term_fallback_used` per pin that used its `otherwise`, naming the pin's column
+/// and the gate or term that reads the reference first, then `selection_table_list_max` with
+/// the table, its column, the lists in the order of `lists`, the number of distinct keys of the
+/// union and either the largest value with the smallest key that holds it, or nothing for
+/// `empty`, or the unknown reason.
+fn list_max_reasons(read: &ListMaxRead<'_>, reasons: &mut Vec<DecisionReason>) {
+    let ValueRef::TableMaxOverList {
+        table_id,
+        value_column,
+        lists,
+        ..
+    } = read.reference
+    else {
+        return;
+    };
+    for column in &read.reading.otherwise_columns {
+        reasons.push(DecisionReason::with(
+            Outcome::new(SelectionPolicyCode::TermFallbackUsed)
+                .rule_id(read.rule_id)
+                .table_column(column.as_str()),
+            format!("list maximum of table `{table_id}` read pin `{column}` through its otherwise"),
+        ));
+    }
+    let reading = &read.reading;
+    let outcome = Outcome::new(SelectionPolicyCode::SelectionTableListMax)
+        .table_id(table_id.as_str())
+        .table_column(value_column.as_str())
+        .fact_keys(lists.iter().map(|list| list.fact_key.clone()))
+        .count(reading.count);
+    let (outcome, detail) = match (&reading.value, &reading.maximum_identity) {
+        (Ok(ScalarValue::Integer(maximum)), Some(identity)) => (
+            outcome
+                .maximum(*maximum)
+                .maximum_identity(identity.as_str()),
+            format!("table `{table_id}` maximum={maximum} identity={identity}"),
+        ),
+        (Ok(_), _) => (
+            outcome,
+            format!("table `{table_id}` no listed key of the class: empty"),
+        ),
+        (Err(reason), _) => (
+            outcome.unknown_reason(UnknownReasonToken(*reason)),
+            format!("table `{table_id}` list maximum unknown: {reason:?}"),
+        ),
+    };
+    reasons.push(DecisionReason::with(outcome, detail));
+}
+
 /// One input a gate left undecided, or a term could not use, under [`evaluate_collect`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownInput {
@@ -510,7 +571,8 @@ pub struct CollectedCandidate {
 /// step reads one, through [`evaluate`] and its up-front list check, and the scheduling consumer
 /// refuses such a document at catalog compile for the same reason. A document that declares a
 /// shared table is refused the same way (Workflow #357 DB-2, register §1.65 TB10): dispatch value
-/// goes through the resource line, so scheduling reads no table.
+/// goes through the resource line, so scheduling reads no table. So is a document that reads a
+/// list maximum (Workflow #428 S168-5a), which reads both.
 pub fn evaluate_collect(
     policy: &SelectionPolicy,
     candidates: &[Candidate],
@@ -518,6 +580,12 @@ pub fn evaluate_collect(
     now_unix_ms: u64,
 ) -> Result<Vec<CollectedCandidate>, SelectionError> {
     policy.validate()?;
+    if policy.uses_list_maxima() {
+        return Err(SelectionError::new(
+            SelectionErrorCode::TypeMismatch,
+            "value_source=table_max_over_list option=collect",
+        ));
+    }
     if policy.uses_record_lists() {
         return Err(SelectionError::new(
             SelectionErrorCode::TypeMismatch,
@@ -710,9 +778,10 @@ pub(crate) struct ListUnreadable {
 }
 
 /// The up-front list check. Every record list the document declares is read whole, in
-/// document order; then the rows each `keyed_fact` reference selects with its `where` are
-/// indexed by key. An unreadable list, or one key held by two selected rows, is the reason of
-/// an `unknown` decision, with the list's fact key as its detail.
+/// document order; then the rows each `keyed_fact` reference, and each list a list maximum reads
+/// (Workflow #428 S168-5a), selects with its `where` are indexed by key. An unreadable list, or
+/// one key held by two selected rows, is the reason of an `unknown` decision, with the list's
+/// fact key as its detail.
 pub(crate) fn read_lists<'a>(
     policy: &'a SelectionPolicy,
     facts: &'a SelectionFactSnapshot,
@@ -730,16 +799,23 @@ pub(crate) fn read_lists<'a>(
             lists.insert(declaration.fact_key.as_str(), (key_column.as_str(), rows));
         }
     }
-    let mut index = ListIndex::new();
+    // Workflow #428 S168-5a: each list a list maximum reads is a reference with its `where` too.
+    let mut references = Vec::new();
     for value in policy.value_refs() {
-        let ValueRef::KeyedFact {
-            fact_key,
-            row_filter,
-            ..
-        } = value
-        else {
-            continue;
-        };
+        match value {
+            ValueRef::KeyedFact {
+                fact_key,
+                row_filter,
+                ..
+            } => references.push((fact_key, row_filter)),
+            ValueRef::TableMaxOverList { lists: read, .. } => {
+                references.extend(read.iter().map(|list| (&list.fact_key, &list.row_filter)))
+            }
+            _ => {}
+        }
+    }
+    let mut index = ListIndex::new();
+    for (fact_key, row_filter) in references {
         let reference = (fact_key.as_str(), row_filter.as_ref());
         if index.contains_key(&reference) {
             continue;
@@ -778,6 +854,8 @@ struct Resolver<'a> {
     lists: ListIndex<'a>,
     tables: &'a SelectionTables,
     now_unix_ms: u64,
+    /// Workflow #428 S168-5a: what each distinct list maximum read, before any candidate.
+    list_maxima: Vec<(&'a ValueRef, Result<ScalarValue, UnknownReason>)>,
 }
 
 impl<'a> Resolver<'a> {
@@ -803,7 +881,17 @@ impl<'a> Resolver<'a> {
             lists,
             tables,
             now_unix_ms,
+            list_maxima: Vec::new(),
         }
+    }
+
+    /// The value one list maximum read for the whole evaluation (Workflow #428 S168-5a). A
+    /// reference read no maximum for (none was read before the candidates) is no known value.
+    fn list_max(&self, reference: &ValueRef) -> Result<ScalarValue, UnknownReason> {
+        self.list_maxima
+            .iter()
+            .find(|(read, _)| *read == reference)
+            .map_or(Err(UnknownReason::TypeMismatch), |(_, value)| value.clone())
     }
 
     /// A declared scalar fact in the pinned snapshot, or why it is unknown.
@@ -884,6 +972,7 @@ impl<'a> Resolver<'a> {
             ValueRef::Field { field } => self.read_field(field, candidate),
             ValueRef::Fact { fact_key } => self.read_fact(fact_key),
             ValueRef::Table { .. } => self.table_reading(reference, candidate)?.value,
+            ValueRef::TableMaxOverList { .. } => self.list_max(reference),
             ValueRef::KeyedFact {
                 fact_key,
                 key_field,

@@ -8956,8 +8956,10 @@ S168-5a, 9 tests, on tables loaded with `LoadedTable::load` and fake snapshots:
   `lookup_miss` (a key of the union without a row in the table; a null cell of the class), read
   by an `integer_compare` gate and by a term: under `drop_candidate` each candidate they assess
   is `unknown_dropped` with `lookup_miss`, and its verdict is no static table drop; under
-  `abort_evaluation` the evaluation is `unknown` with `lookup_miss` and the rule, with no
-  verdict; no candidate is ranked on the value and nothing reads 0.
+  `abort_evaluation`, at the evaluator, the evaluation is `unknown` with `lookup_miss` and the
+  rule (`gate_unknown_aborted` or `term_unknown_aborted` with the rule's `rule_id`), nothing is
+  selected, and no candidate is ranked or scored; under either, no candidate is ranked on the
+  value and nothing reads 0.
 
 S168-5b, 7 tests, on fake snapshots whose lists a document reads through `keyed_fact`, tables
 loaded with `LoadedTable::load`, and a fake device whose input port fails the test on any call.
@@ -9094,12 +9096,105 @@ a console whose `ledger` range holds 8, which is UI-L1's console.
 | S168C-2 | `fact.published` of `inventory.list.<name>`: one `record_list` record, `source_detector` `list_reading:` | existing record, new key prefix | S168-4 | runtime-host | §4 below; tagged as every instance key |
 | S168C-3 | `reading_problem` tokens `list_position_unread`, `list_duplicate_key`, `list_rows_exceeded`; the stage `read_list`; the optional value `count` (the catalog's integer key) on `contained_task_resource_reading_unresolved` | outcome vocabularies; an optional value of an existing code | S168-4 | execution-kernel | values the ledger reader only spells; S168-4 adds `count` to the code's `values` as `optional`: the entry is `review: pending`, and the outcome-code writing spec v2.2 (Workflow `rd-1008/errors/outcome-code-writing-spec.md`) lets a pending entry change its keys (§11) and forbids only a required key on a settled one (§2, rule 5) |
 | S168C-4 | `list_reading_key_reserved` (non-fatal request error, `fact_key`) | outcome code | S168-4 | runtime-host | from every origin |
-| S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 list maxima per document, counted as distinct references, and 16 lists per list maximum |
-| S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_keys`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `fact_keys` (`list<token>`, the lists read in the order of `lists`, at most 16 items), `maximum`, `maximum_identity` | outcome code and keys | S168-5a | selection-policy | a decision reason, no record member; `count` is the number of distinct keys of the union |
+| S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 list maxima per document, counted as distinct references, and 16 lists per list maximum; built by S168-5a, since 0.12.50 ("Slice S168-5a" below) |
+| S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_keys`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `fact_keys` (`list<token>`, the lists read in the order of `lists`, at most 16 items), `maximum`, `maximum_identity` | outcome code and keys | S168-5a | selection-policy | a decision reason, no record member; `count` is the number of distinct keys of the union; built by S168-5a, since 0.12.50 (`maximum` `integer`, `maximum_identity` `id`) |
 | S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key, unknown_outcome_key}`, all four required, the two keys distinct | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only; ends with `outcome_key` (a known evaluation, an unknown check that does not block, no candidate `unknown_dropped`) or `unknown_outcome_key` |
 | S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, `ledger` 8 (#434's, shared) | S168-5b | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
 | S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5b | runtime-host | ends that run only |
 | S168C-10 | the optional `task.json` mapping member `judge_result`, a closed vocabulary of `judged` and `unknown` | package format, `package` 9 | S168-5b | resource repositories | maps a judge step's end with that result; two mappings overlap only with the same effect condition, page and `judge_result` (or none on both), so S168-5b changes `SchedulingOutcomeDeclaration::validate` (`mapping_overlap`); no persisted record carries it; [selection-graph.md](selection-graph.md), "Mapping the two keys" |
+
+#### Slice S168-5a (0.12.50): the value source `table_max_over_list`
+
+Coordinator work order `rd-1110/brief-s168-5a.md`; on main `fa8adc67` (Runtime PR #1554, S168-0
+and its three fixes). The contract is [selection-policy.md](selection-policy.md), "Table maximum
+over a list", "Record lists", "In-task consumer" and "Limits"; the interface is
+[component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168". The code is
+`crates/selection-policy` (`schema.rs`, `list_max.rs`, `evaluator.rs`, `bound.rs`, `tables.rs`)
+and the catalog compile's refusal in `crates/policy/src/source.rs`. No game word: the tests' ids
+are the register's made-up ones.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S5A-1 | `ValueRef::TableMaxOverList {table_id, value_column, pins, lists, empty}` and `ListSource {fact_key, where?}` (S168C-5) | selection document, `package` 8 | S168-5a | resource repositories | validated with no table at hand: the table declared (`dangling_reference`), `value_column` declared and `integer` (`type_mismatch`), the pins as a `table` read's, 1 to 16 lists (`missing_required_field`, `limit_exceeded`) with distinct fact keys (`duplicate_id`), each a declared record list, `where` as a `keyed_fact` read's, `empty` an integer within ±(2^53 − 1) (`integer_out_of_range`); read only as a side of `integer_compare` or by a term through `identity` or `threshold`, under `drop_candidate` or `abort_evaluation`; no tie-break key and no `fallback_column` (`type_mismatch`); at most `MAX_LIST_MAXIMA` (32) distinct references, equal references counted once, and `MAX_LISTS_PER_MAXIMUM` (16) lists each |
+| S5A-2 | `list_max::read_all`, `read_list_maximum`, `union_keys` | behaviour | S168-5a | the evaluator | each distinct reference read once, after the up-front check passed and before any candidate (zero candidates included), in the order of its first read (`SelectionPolicy::list_maxima`); steps 1 to 4 of "One read"; the value then serves every candidate's gates and terms; an Unknown read drops under `drop_candidate` (`unknown_dropped`, never a static table drop) and aborts under `abort_evaluation` with the rule |
+| S5A-3 | `selection_table_list_max` (info / none, pending, since 0.12.50); keys `fact_keys` (`list<token>`), `maximum` (`integer`), `maximum_identity` (`id`) (S168C-6) | outcome code and keys | S168-5a | selection-policy | one per distinct reference, right after the three reasons the chain opens with; required `table_id`, `table_column`, `fact_keys`, `count`; `maximum` with `maximum_identity`, nothing for `empty`, or `unknown_reason`; a pin's `otherwise` adds `term_fallback_used` before it |
+| S5A-4 | `SelectionTables::read_rows` takes the union of a reference's lists | behaviour | S168-5a | the evaluator | the hashed input's `tables` holds the row of each key of the union that holds the pins; a document without the source hashes as before |
+| S5A-5 | `upper_bound_with_tables` reads a list maximum exactly | behaviour | S168-5a | the bound | an unknown maximum drops the identity under `drop_candidate` and gives `Unbounded` under `abort_evaluation`, for a gate as for a term |
+| S5A-6 | `SelectionPolicy::uses_list_maxima`; `evaluate_collect` (`value_source=table_max_over_list option=collect`) and the catalog compile (`value_source=table_max_over_list consumer=scheduling`) refuse, `type_mismatch` | behaviour | S168-5a | the scheduling consumer | checked before the record-list and table refusals that such a document also meets, so the refusal names the source |
+
+**Tests.** New: policy row "#428 S168-5a", the register's nine named tests in
+`actingcommand-selection-policy::lib::gate_428_s168_5a` (`table_list_max_reads_largest_of_class`,
+`table_list_max_empty_and_out_of_class`, `table_list_max_missing_key_is_unknown`,
+`table_list_max_validation`, `table_list_max_input_identity`, `table_list_max_union_of_lists`,
+`table_list_max_unusable_list_is_unknown`, `table_list_max_where_skips_rows`,
+`table_list_max_unknown_follows_the_declared_action`), on tables loaded with `LoadedTable::load`
+and fake snapshots, no clock and no sleep; and the catalog compile's half of test 4,
+`actingcommand-policy::lib::source::tests::table_list_max_validation`. No test adapted; no golden
+re-recorded (test 5 reads the DB-2 golden of a document without tables).
+
+**Interface.** `package` stays [3, 7] in this build: S168-4 had not merged on `fa8adc67`, so
+S168-5a is the first of the two and admits its member by code; S168-4 declares [3, 8]. No
+`ledger`, `runtime-client`, `actingd-config` or `runtime-outcomes` raise: the reason is a decision
+reason the record reader only spells.
+
+**Outcome codes.** One code added, `selection_table_list_max` (info / none, pending, since
+0.12.50, owner `selection-policy`); three keys added, `fact_keys`, `maximum`, `maximum_identity`.
+`term_fallback_used` and the vocabulary `unknown_reason` are reused. No persisted structure
+change.
+
+**Contract wording this slice changed** (named by fix 1, work order
+`rd-1110/brief-s168-5a-fix1.md`). Two sentences of [selection-policy.md](selection-policy.md),
+"Table maximum over a list", besides its opening line, which now says that S168-5a built the
+section:
+
+- "One read", step 1: a listed list that is malformed now includes, by name, two rows that its
+  entry's `where` keeps sharing one key, as the up-front check reads it (reading (a) below).
+- "Audit": a pin's `term_fallback_used` now carries `rule_id`, the gate or term that reads the
+  reference first, and `table_column`, the pin's column, one per such pin in the order of
+  `pins` (reading (b) below).
+
+The independent review before fix 1 found both faithful to the contract's meaning.
+
+**Where S168-5a reads the contract.**
+
+- (a) Step 1's "malformed" includes two rows of one list that its entry's `where` keeps sharing
+  one key, as the up-front check reads a reference's list: the up-front check now indexes each
+  list a list maximum reads with its `where`, as it does a `keyed_fact` reference's. Written into
+  selection-policy.md, step 1.
+- (b) A pin's `term_fallback_used` requires a `rule_id`: the gate or term that reads the reference
+  first, one reason per pin that used its `otherwise`, in pin order. Written into "Audit".
+- (c) "Nor can a `fallback_column` name it": the reference decodes an optional `fallback_column`
+  only so that validation refuses it `type_mismatch`, as the contract says, not the decoder.
+- (d) What an abort keeps; existing behaviour that this slice does not change (corrected by fix
+  1, work order `rd-1110/brief-s168-5a-fix1.md`). Under `abort_evaluation` the evaluator's
+  decision keeps the verdicts of the candidates it assessed until then, none given a rank, the
+  last of them that of the candidate whose rule ended the evaluation (`unknown_dropped`, with
+  `gate_unknown_aborted` or `term_unknown_aborted` and the rule's `rule_id`;
+  `evaluate_with_tables` in `crates/selection-policy/src/evaluator.rs`); an evaluation the
+  up-front check ends, before any candidate, keeps no verdict. What the record
+  `task.selection_evaluated` keeps of an abort depends on the step. A single-frame select's
+  record keeps the decision's verdicts as they are, the aborting candidate's included
+  (`selection_record`, `record_verdicts(&decision.candidates)` in
+  `crates/execution-kernel/src/contained_task/selection.rs`). A select over a scan's record keeps
+  none (`scan_selection_record`, in the same file; [selection-graph.md](selection-graph.md),
+  "Record per path": "an abort keeps no verdict"). A judge step's record, as its contract plans
+  it for S168-5b, keeps none ([selection-graph.md](selection-graph.md), "Execution of a judge
+  step", step 4 and the table of results: "`unknown`, no verdict"). Test 9 checks the evaluator
+  only: the evaluation is `unknown` with the read's reason and the rule, and no candidate is
+  ranked or scored.
+- (e) Test 4's catalog half is a test of the same name in `crates/policy`: the selection-policy
+  crate does not link the catalog compiler. Test 4 also refuses a list that is no record list, a
+  `where` outside its list's values, a gate predicate other than `integer_compare`, a `lookup`
+  transform and an `empty` outside the safe integers; test 9 also checks the upper bound.
+
+**What S168-5a changes live.** Nothing runs differently: no package reads a list maximum before
+S168-6, and a document without the source keeps its canonical bytes, `policy_sha256`,
+`input_sha256` and reasons. Admission takes a document that reads the source; a build before it
+refuses one as an unknown value source. The ledger, the configuration and the capacity are
+unchanged.
+
+**S168-5a rollback** (to the release before it). Open, as for any release below `package` 8: no
+package uses the source until S168-6, which comes after S168-4 and S168-5a.
 
 ### 1.292 Slice QP-1 (0.12.49): a ledger page stays inside its sequence bounds whatever the planner chooses (#422; the read-only investigation of 2026-11-10, `rd-1110/ledger-window-plan-findings.md`; the console's ledger window will send pages with `from_sequence`, `to_sequence`, a limit and a snapshot and no instance, which the coordinator ruled acceptable once this slice makes the bound independent of the planner; coordinator work order `rd-1110/brief-qp1-page-plan-bounds.md`)
 

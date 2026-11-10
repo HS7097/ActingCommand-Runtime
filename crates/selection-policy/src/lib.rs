@@ -28,6 +28,7 @@ mod canonical;
 mod codes;
 mod evaluator;
 mod facts;
+mod list_max;
 mod schema;
 mod tables;
 
@@ -46,14 +47,14 @@ pub use facts::{
 };
 pub use schema::{
     AppliesTo, FactDeclaration, FieldDeclaration, GateUnknownHandling, HardGate, IntegerCompareOp,
-    LookupEntry, LookupKey, MAX_CANDIDATES, MAX_ENUM_VALUES, MAX_FACTS, MAX_FIELDS, MAX_GATES,
-    MAX_ID_BYTES, MAX_INTEGER_COMPARE_ADD, MAX_INTEGER_COMPARE_MUL, MAX_LOOKUP_ENTRIES,
-    MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_RECORD_LIST_COLUMNS, MAX_SCORING_TERMS,
-    MAX_TABLE_PINS, MAX_TABLES, MAX_TIE_BREAK_KEYS, OutcomeKeys, Predicate, RowFilter,
-    SELECTION_POLICY_SCHEMA_VERSION, ScoringTerm, SelectionError, SelectionErrorCode,
-    SelectionMode, SelectionPolicy, SelectionRequirement, SortDirection, TableDeclaration,
-    TablePin, TablePinOtherwise, TermUnknownHandling, TieBreakKey, Transform, ValueRef, ValueType,
-    is_rule_id,
+    ListSource, LookupEntry, LookupKey, MAX_CANDIDATES, MAX_ENUM_VALUES, MAX_FACTS, MAX_FIELDS,
+    MAX_GATES, MAX_ID_BYTES, MAX_INTEGER_COMPARE_ADD, MAX_INTEGER_COMPARE_MUL, MAX_LIST_MAXIMA,
+    MAX_LISTS_PER_MAXIMUM, MAX_LOOKUP_ENTRIES, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES,
+    MAX_RECORD_LIST_COLUMNS, MAX_SCORING_TERMS, MAX_TABLE_PINS, MAX_TABLES, MAX_TIE_BREAK_KEYS,
+    OutcomeKeys, Predicate, RowFilter, SELECTION_POLICY_SCHEMA_VERSION, ScoringTerm,
+    SelectionError, SelectionErrorCode, SelectionMode, SelectionPolicy, SelectionRequirement,
+    SortDirection, TableDeclaration, TablePin, TablePinOtherwise, TermUnknownHandling, TieBreakKey,
+    Transform, ValueRef, ValueType, is_rule_id,
 };
 pub use tables::{LoadedTable, SelectionTables, TableBindRefusal};
 
@@ -64,3 +65,7 @@ mod gate_411_b2;
 // Workflow #357 DB-2.
 #[cfg(test)]
 mod gate_357_db2;
+
+// Workflow #428 S168-5a.
+#[cfg(test)]
+mod gate_428_s168_5a;

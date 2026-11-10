@@ -375,8 +375,9 @@ value goes through the resource line (Alice's 121 A); only a task's select step 
 
 ## Table maximum over a list
 
-Workflow #428 S168-5a, written ahead of its code by S168-0 and corrected by its fix 1
-([v012-register.md](v012-register.md) §1.291). A document may read the largest value one integer
+Workflow #428 S168-5a, written ahead of its code by S168-0 and corrected by its fix 1, built by
+S168-5a (since 0.12.50; [v012-register.md](v012-register.md) §1.291, "Slice S168-5a"; the code
+in `crates/selection-policy/src/list_max.rs`). A document may read the largest value one integer
 column of a declared table holds over the keys one or more declared record lists list: how much
 the best listed member is worth in one class of the table. The Runtime knows neither what the
 table nor what the lists mean. The names are neutral examples:
@@ -413,7 +414,8 @@ each predicate depth first and its left side before its right, then the scoring 
 Each read runs these steps:
 
 1. The lists. A listed list that is not usable as section "Record lists" defines it (missing,
-   expired, stale, below its floor, of another type or malformed) makes the read Unknown with
+   expired, stale, below its floor, of another type or malformed, two rows its entry's `where`
+   keeps sharing one key included, as the up-front check reads it) makes the read Unknown with
    that list's reason, the first such list in the order of `lists`, and nothing more is read.
    Every listed list is declared in `facts[]`, so the up-front check of section "Record lists"
    has read it before any candidate: there an unusable list ends the evaluation `unknown`, with
@@ -493,8 +495,9 @@ is in the file and of type `integer`, else `table_mismatch` (`column_absent`, `c
 with (both hashes and the declared requirement, section "Decision") and before any reason of a
 candidate's assessment (an abort's included) and the outcome's reasons, one per distinct
 reference in the order of the reads ("One read"). A pin that used its `otherwise` adds its
-`term_fallback_used` just before its read's reason. An evaluation the up-front check ends adds
-none. The reason carries `table_id`, `table_column` (the `value_column`),
+`term_fallback_used` just before its read's reason, with `rule_id` the gate or term that reads
+the reference first and `table_column` the pin's column, one per such pin in the order of
+`pins`. An evaluation the up-front check ends adds none. The reason carries `table_id`, `table_column` (the `value_column`),
 `fact_keys` (the lists it read, in the order of `lists`: a list value of the catalog's
 `list<token>` type, at most 16 items, so never cut), `count` (the number of distinct keys of the
 union) and either `maximum` with `maximum_identity` (the value and the smallest key, in byte
