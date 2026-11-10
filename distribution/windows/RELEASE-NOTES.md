@@ -9,6 +9,73 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.49
+
+本版是 v0.12.48 之后合并的 2 个 PR：#422 QP-1（#1557）和 #428 S168-0（#1554，只有契约）。先说部署：接口声明都不变（账本仍是 [3, 7]），部署不用带
+`--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；v0.12.48 的安装工具装本版照常；装上以后能退回 v0.12.48，不用带标志，落盘的东西
+v0.12.48 都读得了。没有新键，默认值文件没改，没有新增或退役的结果码。运行上要知道的是这几处：
+
+- **账本的页不管规划器怎么选，都留在序号界内**（QP-1，登记 §1.292）。页语句里的时间条件一律写成不能走索引的 `+e.timestamp_unix_ms`，带不带逐 run
+  链接都一样；不带逐 run 链接的语句，窗口自己的序号条件也写成 `+e.sequence`，只有段界能驱动语句（`crates/ledger/src/global/sqlite.rs` 4759–4772；
+  LN-8d 的链接集页照旧认这种写法，4873）。
+  - 答案不变：读预算没截断的页，行、顺序、游标、读范围和续读都和以前一样。带时间条件的页可能换一个计划，再也不会顺着时间索引把窗口之前的历史
+    整段读一遍（调查在 40 万条记录上量过：一页约 6,500 步，强制走时间索引约 1,800 万步）。
+  - 读预算截断的页，停在哪里取决于计划花了多少工作量，可能和以前停在不同的地方，给的是那个地方的行、游标、读范围和续读。
+  - 窗口不约束的两种读没变，现在写进了契约（`contracts/ledger-observer.md` 1491–1510）：Lab 关系的补读（从关系索引的末尾读到钉点；索引没建好时读
+    整段历史）和 run 恢复（每个 run 经 `ledger_links_run` 从序号 0 读，最多 1,025 条）。Runtime 不限制窗口的宽度。
+  - **控制台只有对本版或更新的 Runtime 才可以在线发时间条件。** 控制台的账本窗口现在不发：UI main（`a56640c2`，账本窗口片 1，还没发版）在线不带
+    时间条件，发出前就拒（`crates/acui-source/src/lib.rs` 649–682）；最新发版 UI v0.12.11 的账本窗口在线仍可能带上时间条件（`crates/acui-model/src/lib.rs`
+    89–101），对本版答案不变，只是不再走时间索引。
+- **S168-0 只是计划中的契约文字**（登记 §1.291）：清单读数写成 `record_list` 事实、清单上的表最大值、不做输入的判断步骤，三片的契约；没有代码、测试、
+  门行、键或码，构建里什么都没变。`package` 8、9 和 `ledger` 8 是计划行，没有生效（`contracts/component-interfaces.md` 297–323）。
+- **LAB-3 的运维规矩到 LAB-7 前照旧：生产照旧用 `actingctl install` 部署**，不对生产根用 Lab 救急模块的 `deploy`、`rollback`、`place` 或
+  `config replace`。`crates/lab-rescue` 自 v0.12.48 没改：模块写的日志 v0.12.48 和本版读得了，v0.12.47 及更早的仍读不了。
+
+配置：接口修订都不变，按代码和 `contracts/component-interfaces.md` 核过。`distribution/windows/component-interfaces.json` 自 v0.12.48 没改：`actingd-config`
+[5, 27]、`ledger` [3, 7]、`runtime-client` [3, 6]、`package` [3, 7]、`install-selection` [1, 1]、`install-control` [0, 1]、`runtime-outcomes` [1, 1]。
+
+- 不升 `ledger`：QP-1 只改读语句的文字，SQLite 格式 2、`actingcommand.event.v3`、表、索引、视图和记录形状都没变。不升 `runtime-client`：
+  `crates/runtime-client` 和合同 crate 自 v0.12.48 没改，请求成员和答复都没变。`component-interfaces.md` 只多了 #434 计划段里的一句（274–275）和
+  S168 的计划段（297–323），都不生效。
+- 配置键：没有新键，也没有去掉的键。`crates/runtime-config`、`apps/actingd`、`actingd.defaults.json` 和 `actingd.config.example.json` 自 v0.12.48 都没改；QP-1 的契约提到的
+  `history_scan_rows`、`history_page_rows` 都是已有的键。
+- 结果码：没有新码，也没有退役的码。`contracts/outcome-codes/` 自 v0.12.48 没改，目录仍是 3897 个码、1747 个位置，29 个分片；本版的发布文件是空的。
+- 程序文件：只有 `crates/ledger` 改了（`sqlite.rs` 和两个测试文件）。`Cargo.toml`、`Cargo.lock`、`.github/`、`apps/`、`tools/` 自 v0.12.48 都没改，
+  workspace 仍是 39 个成员，两个包的文件清单和 v0.12.48 一样；MCP 工具仍是 41 个。
+
+升级与退回（安装工具的代码 `crates/lab-rescue/src/install/` 自 v0.12.48 没改，就是 v0.12.48 说明的“退回”一节核过的那份；行号是它的）：
+
+- **v0.12.48 的安装工具装本版，不用任何单向标志。** 两边的声明逐字相同：`ledger` [3, 7] 的 `previous_max_in_next` 和 `one_way`（7 不大于 7）都过
+  （`plan.rs` 288–301），计划里没有 `ledger_verify`（915）；`next_max_in_installer`、`installer_meets_previous`、`installer_meets_next`、`bundle_max_in_next`
+  和 `installer_knows_keys`（302–376）和装 v0.12.48 时一样；`next_check_config`（902–914）：本版的 check-config 和 v0.12.48 是同一份代码。
+- **退回 v0.12.48：允许，不用标志。** 接口边都过，退回时 `next_check_config` 不算接口边（`plan.rs` 1030–1036）；部署的自动回退（`deploy.rs` 778）和
+  `install undo`（`undo.rs` 388）都是 `accept_ledger_one_way: false`，和 `rollback` 走同一个回退门（`update.rs` 383–505）：本版不写新的记录形状，
+  v0.12.48 的读者读部署之后的账本页（400–437）；开启时间和配置（438–503）两版的 actingd 和配置代码相同。落盘的东西没有 v0.12.48 读不了的：没有新键、
+  新文件、新记录形状，`actingctl install` 写的日志和 v0.12.48 出自同一份代码。退回以后，带时间条件的页又可能被时间索引驱动。
+- 配对：
+  - **部署工具包的 `actingctl install` 命令行对本版的根答得一样**：`release stage`、`guards --for stop`、`update plan [--preview]`、
+    `update apply … --start --detach`、`status [--operation]`、`release-hold` 的代码没变，`crates/lab-rescue/src/install/gate_434_lab3.rs` 415–691 照旧
+    逐条钉住。部署本版跑的是 v0.12.48 的安装工具。
+  - **控制台 UI**（main `a56640c2` 和最新发版 UI v0.12.11 `2461e518` 都把 Runtime crate 钉在 `d06910c6`，即 v0.12.47，`Cargo.toml` 39–44；
+    `crates/acui-setup/component-interfaces.json` 声明 `actingd-config` [5, 27]、`ledger` [3, 7]、`runtime-client` [3, 5]、`runtime-outcomes` [1, 1]）：
+    本版的声明、线上请求和账本形状都和 v0.12.48 一样，控制台对本版照常。它跑的 actingctl 命令 `packs`、`watchdog status --root`
+    （`crates/acui-app/src/workbench/tools.rs` 383、415）和安装器的 `install-transition`、`status`、`request-shutdown`（`crates/acui-setup/src/lifecycle.rs`
+    81、207、220）都没变。控制台离线读账本用的是它钉的账本 crate，要等它改钉才有 QP-1。
+
+运行上的变化：
+
+- 部署本身不改变调度的决定，命令答法照旧；账本页带时间条件时不再顺着时间索引读窗口之前的历史，读预算没截断的页答案不变。
+
+本版合并的 PR：
+
+- #1557 QP-1（#422，登记 §1.292；契约 `ledger-observer.md` §15 的 QP-1 条、`global-ledger-query.md` 的 QP-1 段）：`history_statement` 的时间条件
+  一律带 `+`，不带逐 run 链接的语句窗口的序号条件也带 `+`。新门行 `QP-1` 的 3 个测试（`page_statements_stay_inside_sequence_bounds`、
+  `time_bound_never_drives_a_page`、`page_results_unchanged_by_plan_bounds`）在带 STAT4 的 SQLite 上读查询计划、比对分页结果；改造 1 处
+  （`gate_diag_run::diag_run_t1_a_per_run_read_is_driven_by_its_run_link_index`：A、C 两种形式从“一个 `+` 都没有”改成“只有时间条件带 `+`”）。
+  不升任何接口修订。
+- #1554 S168-0（#428，登记 §1.291）：只有契约，7 个契约文件，写下 S168-4 `read_list`、S168-5a `table_max_over_list`、S168-5b `judge` 的计划；没有
+  代码、测试、门行、键或码，不升现行修订。
+
 ## v0.12.48
 
 本版是 v0.12.47 之后合并的 1 个 PR：#434 LAB-3（#1553）。先说部署：接口声明都不变（账本仍是 [3, 7]），部署不用带 `--accept-ledger-one-way`，
