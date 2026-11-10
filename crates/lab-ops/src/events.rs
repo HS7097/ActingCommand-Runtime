@@ -126,6 +126,12 @@ impl Request {
             ..self.filters.clone()
         }
     }
+
+    /// Workflow #434 LAB-5C: every filter of the read but the instance and `after_sequence`, as
+    /// the query the Runtime is sent holds them.
+    pub const fn filters(&self) -> &EventQuery {
+        &self.filters
+    }
 }
 
 /// What is wrong with one argument or flag. It is the value `argument_problem` (`token`), with
@@ -833,9 +839,15 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     })
 }
 
-fn run_cli(arguments: &[OsString]) -> Result<Value, EventsError> {
+/// Workflow #434 LAB-5C: the read the words after `events` ask for, checked as [`dispatch`] checks
+/// them, before any connection: the state root and the request.
+pub fn cli_request(arguments: &[OsString]) -> Result<(PathBuf, Request), EventsError> {
     let (state_root, parameters) = cli_parameters(arguments)?;
-    let request = parse(&parameters, CLI_MAX_LIMIT)?;
+    Ok((state_root, parse(&parameters, CLI_MAX_LIMIT)?))
+}
+
+fn run_cli(arguments: &[OsString]) -> Result<Value, EventsError> {
+    let (state_root, request) = cli_request(arguments)?;
     let client = RuntimeClient::connect(crate::front::client_config(&state_root))
         .map_err(EventsError::Runtime)?;
     // One Status for the whole call, never one per read of the wait (§2.5).

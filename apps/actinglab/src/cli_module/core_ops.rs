@@ -31,21 +31,39 @@ use actingcommand_lab_ops::table::{Operation, ParamForm};
 use actingcommand_lab_ops::wait::{Waited, wait_at_most};
 use actingcommand_lab_ops::{
     capability_gap, code_lookup, configure, devices, diagnose, emulators, events, evidence_read,
-    fact_publish, facts, frames, ladder_drill, material, observe_export, overview, packs,
-    perf_preset, remedy, routine_summary, run_evidence, run_list, run_show, schedule, scheduling,
-    shutdown, targets, wait, wake_test,
+    fact_publish, facts, frames, ladder_drill, material, material_export, observe_export, overview,
+    packs, perf_preset, remedy, routine_summary, run_evidence, run_list, run_show, schedule,
+    scheduling, shutdown, targets, wait, wake_test,
 };
 use actingcommand_runtime_client::{ContainedTaskResetOutcome, RuntimeClient, RuntimeClientError};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The member a result that is not a JSON object goes under (actingctl's `RESULT_MEMBER`).
 const RESULT_MEMBER: &str = "result";
 /// `pause`'s drain when none is given (the operation table's default).
 const DEFAULT_DRAIN: Duration = Duration::from_secs(300);
+/// Workflow #434 LAB-5C: the options of `events` that MCP `ac_events` took and the row gained,
+/// each handed on under the flag of its name (`exclude_event_types`, a list, goes as one comma
+/// list beside them).
+const EVENTS_OPTIONS: [&str; 13] = [
+    "view",
+    "since_unix_ms",
+    "until_unix_ms",
+    "through_sequence",
+    "event_type",
+    "fact_key",
+    "min_severity",
+    "max_severity",
+    "origin_module",
+    "task_id",
+    "correlation_id",
+    "detail",
+    "wait_s",
+];
 
 /// The operations of this module: the core rows and `run start`, `run stop`, `reset`, `drill`.
 pub(super) fn serves(operation: &Operation) -> bool {
@@ -61,27 +79,18 @@ pub(super) fn serves(operation: &Operation) -> bool {
 /// The operation `operation` with `params`, as its line.
 pub(super) fn answer(operation: &Operation, params: &Map<String, Value>) -> Exit {
     let name = operation.name.as_str();
-    // Offline operations: no state root.
-    match name {
-        "codes" => {
-            let mut argv = Argv::new(&["codes"]);
-            argv.word_of(params, "code");
-            return dispatched(code_lookup::dispatch(&argv.0));
-        }
-        "gap" => {
-            let mut argv = Argv::new(&[capability_gap::COMMAND]);
-            argv.options_of(operation, params, &[]);
-            return dispatched(capability_gap::dispatch(&argv.0));
-        }
-        "packs" => {
-            let mut argv = Argv::new(&["packs"]);
-            argv.flag_of(params, "instance", "--instance");
-            if let Some(root) = place::place().root {
-                argv.flag("--root", root);
-            }
-            return dispatched(packs::dispatch(&argv.0));
-        }
-        _ => {}
+    // Offline operations: no state root; only `packs` reads the install root.
+    let root = if name == "packs" {
+        place::place().root
+    } else {
+        None
+    };
+    if let Some(argv) = offline_words(operation, params, root.as_deref()) {
+        return dispatched(match name {
+            "codes" => code_lookup::dispatch(&argv),
+            "gap" => capability_gap::dispatch(&argv),
+            _ => packs::dispatch(&argv),
+        });
     }
     let located = place::place();
     let state_root = match &located.state_root {
@@ -148,6 +157,44 @@ fn shutdown_line(
     ))
 }
 
+/// Workflow #434 LAB-5C: the words of `codes`, `gap` and `packs`, the offline rows LAB-1 moved
+/// with their parsing, as their command in `lab-ops` is given them (`root`: the install root, which
+/// only `packs` reads); `None` for another row.
+pub(crate) fn offline_words(
+    operation: &Operation,
+    params: &Map<String, Value>,
+    root: Option<&Path>,
+) -> Option<Vec<OsString>> {
+    let argv = match operation.name.as_str() {
+        "codes" => {
+            let mut argv = Argv::new(&["codes"]);
+            argv.word_of(params, "code");
+            // LAB-5C: the list's filters and page (the survey's difference 8), under their flags.
+            argv.flag_of(params, "prefix", "--prefix");
+            argv.flag_of(params, "owner", "--owner");
+            argv.flag_of(params, "limit", "--limit");
+            argv
+        }
+        "gap" => {
+            let mut argv = Argv::new(&[capability_gap::COMMAND]);
+            argv.options_of(operation, params, &[]);
+            argv
+        }
+        "packs" => {
+            let mut argv = Argv::new(&["packs"]);
+            argv.flag_of(params, "instance", "--instance");
+            if let Some(root) = root {
+                argv.flag("--root", root);
+            }
+            // LAB-5C: the rows of one role.
+            argv.flag_of(params, "role", "--role");
+            argv
+        }
+        _ => return None,
+    };
+    Some(argv.0)
+}
+
 /// The operations LAB-1 moved with their parsing, given actingctl's words; `None` for another.
 fn dispatched_with_state_root(
     operation: &Operation,
@@ -155,9 +202,45 @@ fn dispatched_with_state_root(
     place: &Place,
     state_root: &Path,
 ) -> Option<Exit> {
+    let argv = match handed_words(operation, params, place.root.as_deref(), state_root)? {
+        Ok(argv) => argv,
+        Err(exit) => return Some(exit),
+    };
     let detail = cli_line::detail().unwrap_or(Detail::Full);
-    let root = place.root.clone();
     let exit = match operation.name.as_str() {
+        "status" => overview::dispatch(&argv),
+        "summary" => routine_summary::dispatch(&argv, detail),
+        "events" => events::dispatch(&argv),
+        "runs" => run_list::dispatch(&argv),
+        "run evidence" => run_evidence::dispatch(&argv),
+        "diagnose" => diagnose::dispatch(&argv),
+        // Workflow #434 LAB-5C: `remedy set`'s rows given inline go beside its words.
+        "remedy set" => match params.get("rows") {
+            Some(rows) => remedy::dispatch_rows(&argv, rows, detail),
+            None => remedy::dispatch(&argv, detail),
+        },
+        "remedy" | "remedy lift" => remedy::dispatch(&argv, detail),
+        "frame" => observe_export::dispatch(&argv),
+        "preset" | "preset set" => perf_preset::dispatch(&argv, detail),
+        "evidence read" => evidence_read::dispatch(&argv, detail),
+        "devices" | "devices bind" | "devices unbind" => devices::dispatch(&argv),
+        _ => return None,
+    };
+    Some(dispatched(exit))
+}
+
+/// Workflow #434 LAB-5C: the words a row LAB-1 moved with its parsing gives its command in
+/// `lab-ops` (actingctl's words for the row's parameters), built apart from the run so that a test
+/// reads what a row hands on; `root` is the install root, `state_root` the state root. `None` for
+/// a row served here with its parameters; a parameter refused while the words are built is its
+/// line. `remedy set`'s rows given inline are no word: they go beside the words.
+pub(crate) fn handed_words(
+    operation: &Operation,
+    params: &Map<String, Value>,
+    root: Option<&Path>,
+    state_root: &Path,
+) -> Option<Result<Vec<OsString>, Exit>> {
+    let argv = match operation.name.as_str() {
         "status" => {
             let mut argv = Argv::new(&["overview"]);
             argv.state_root(state_root);
@@ -168,7 +251,7 @@ fn dispatched_with_state_root(
             if let Some(root) = root {
                 argv.flag("--root", root);
             }
-            overview::dispatch(&argv.0)
+            argv
         }
         "summary" => {
             let mut argv = Argv::new(&[routine_summary::COMMAND]);
@@ -177,14 +260,14 @@ fn dispatched_with_state_root(
             argv.switch_of(params, "hour", routine_summary::HOUR);
             argv.switch_of(params, "day", routine_summary::DAY);
             argv.flag_of(params, "since", routine_summary::SINCE);
-            routine_summary::dispatch(&argv.0, detail)
+            argv
         }
         "events" => {
             let mut argv = Argv::new(&["events"]);
             argv.state_root(state_root);
             argv.flag_of(params, "instance", "--instance");
             if let Err(exit) = argv.since(params) {
-                return Some(exit);
+                return Some(Err(exit));
             }
             if let Some(types) = list_of(params, "type") {
                 argv.flag("--event-types", types.join(","));
@@ -193,17 +276,24 @@ fn dispatched_with_state_root(
             argv.flag_of(params, "request", "--request-id");
             argv.flag_of(params, "after", "--after-sequence");
             argv.flag_of(params, "limit", "--limit");
-            events::dispatch(&argv.0)
+            // LAB-5C: what MCP `ac_events` took, after the words the row gave before.
+            for name in EVENTS_OPTIONS {
+                argv.flag_of(params, name, &flag_name(name));
+            }
+            if let Some(types) = list_of(params, "exclude_event_types") {
+                argv.flag("--exclude-event-types", types.join(","));
+            }
+            argv
         }
         "runs" => {
             let mut argv = Argv::new(&["runs"]);
             argv.state_root(state_root);
             argv.flag_of(params, "instance", "--instance");
             if let Err(exit) = argv.since(params) {
-                return Some(exit);
+                return Some(Err(exit));
             }
             argv.options_of(operation, params, &["since"]);
-            run_list::dispatch(&argv.0)
+            argv
         }
         "run evidence" => {
             let mut argv = Argv::new(&[run_evidence::COMMAND, run_evidence::ACTION]);
@@ -219,7 +309,7 @@ fn dispatched_with_state_root(
             }
             argv.flag_of(params, "detail", "--detail");
             argv.options_of(operation, params, &["detail"]);
-            run_evidence::dispatch(&argv.0)
+            argv
         }
         "diagnose" => {
             let mut argv = Argv::new(&["diagnose"]);
@@ -230,9 +320,11 @@ fn dispatched_with_state_root(
             argv.flag_of(params, "instance", "--instance");
             argv.flag_of(params, "task", "--task-id");
             if let Err(exit) = argv.since(params) {
-                return Some(exit);
+                return Some(Err(exit));
             }
-            diagnose::dispatch(&argv.0)
+            // LAB-5C: the window's start in unix ms, as MCP `ac_diagnose` took it.
+            argv.flag_of(params, "since_unix_ms", "--since-unix-ms");
+            argv
         }
         "remedy" | "remedy set" | "remedy lift" => {
             let action = match operation.name.as_str() {
@@ -245,14 +337,14 @@ fn dispatched_with_state_root(
             argv.flag_of(params, "instance", "--instance");
             argv.flag_of(params, "game", "--game");
             argv.flag_of(params, "file", "--rows");
-            remedy::dispatch(&argv.0, detail)
+            argv
         }
         "frame" if params.contains_key("out") => {
             let mut argv = Argv::new(&["observe"]);
             argv.state_root(state_root);
             argv.flag_of(params, "instance", "--instance");
             argv.flag_of(params, "out", "--export");
-            observe_export::dispatch(&argv.0)
+            argv
         }
         "preset" | "preset set" => {
             let mut argv = Argv::new(&[perf_preset::COMMAND]);
@@ -263,14 +355,14 @@ fn dispatched_with_state_root(
                 argv.word(perf_preset::GET);
             }
             argv.state_root(state_root);
-            perf_preset::dispatch(&argv.0, detail)
+            argv
         }
         "evidence read" => {
             let mut argv = Argv::new(&[evidence_read::COMMAND, evidence_read::CONFIRM_READ]);
             argv.state_root(state_root);
             argv.flag_of(params, "artifact", "--artifact");
             argv.flag_of(params, "run", "--run");
-            evidence_read::dispatch(&argv.0, detail)
+            argv
         }
         "devices" | "devices bind" | "devices unbind" => {
             let action = match operation.name.as_str() {
@@ -293,11 +385,11 @@ fn dispatched_with_state_root(
             // (`words::KEPT_FLAGS`), after the module's own, as its further flags went before:
             // `devices` takes it only when the module located none.
             argv.further(operation, params);
-            devices::dispatch(&argv.0)
+            argv
         }
         _ => return None,
     };
-    Some(dispatched(exit))
+    Some(Ok(argv.0))
 }
 
 /// The other operations, called with their parameters on `client`.
@@ -351,28 +443,41 @@ fn served(name: &str, params: &Map<String, Value>, client: &RuntimeClient) -> Re
             let status = run_show::read(client, key).map_err(|error| client_failed(&error))?;
             completed(run_show::answer(&status))
         }
-        "material" => {
-            let reference = required_text(params, "ref")?;
-            let offset = unsigned(params, "offset")?.unwrap_or(0);
-            let max_bytes = unsigned(params, "max_bytes")?.unwrap_or(material::DEFAULT_TEXT_BYTES);
-            if !(1..=material::MAX_TEXT_BYTES).contains(&max_bytes) {
-                return Err(cli_line::failure(
-                    &cli_line::usage_invalid(Some("--max-bytes"), ArgumentProblem::OutOfRange)
-                        .range_min(1_u64)
-                        .range_max(material::MAX_TEXT_BYTES),
-                    None,
-                ));
+        "material" => match material_read(params)? {
+            MaterialRead::Text {
+                reference,
+                offset,
+                max_bytes,
+            } => {
+                let found = material::parse_ref(reference)
+                    .and_then(|(position, artifact_id)| {
+                        material::resolve(client, position, artifact_id)
+                    })
+                    .and_then(|found| {
+                        material::read_text(client, &found, offset, max_bytes, &|_: &Value| true)
+                    })
+                    .map_err(material_failed)?;
+                completed(found)
             }
-            let found = material::parse_ref(reference)
-                .and_then(|(position, artifact_id)| {
-                    material::resolve(client, position, artifact_id)
-                })
-                .and_then(|found| {
-                    material::read_text(client, &found, offset, max_bytes, &|_: &Value| true)
-                })
-                .map_err(material_failed)?;
-            completed(found)
-        }
+            // Workflow #434 LAB-5C: the whole material, read within the CLI's read budget (as
+            // `frame --out` reads its frame) and written into `out`.
+            MaterialRead::Whole { reference, out } => {
+                let found = material::parse_ref(reference)
+                    .and_then(|(position, artifact_id)| {
+                        material::resolve(client, position, artifact_id)
+                    })
+                    .map_err(material_failed)?;
+                let deadline = Instant::now() + observe_export::READ_BUDGET;
+                let bytes = material::read_whole(client, &found, deadline, &|| true)
+                    .map_err(material_failed)?;
+                material_written(
+                    &out,
+                    &found.artifact.sha256,
+                    found.artifact.kind.extension(),
+                    &bytes,
+                )
+            }
+        },
         "targets" => {
             let alias = alias_of(client, required_text(params, "instance")?)?;
             let view = targets::view(client, &alias).map_err(|error| client_failed(&error))?;
@@ -885,6 +990,66 @@ fn material_failed(failure: material::Failure) -> Exit {
             &error.outcome().caused_by(reached),
             Some(&error.to_string()),
         ),
+    }
+}
+
+/// Workflow #434 LAB-5C: what one `material` line reads, decided in `served`, after the connection
+/// is made, as the base checked `--max-bytes`' range there (fix 1: so `offset` or `max_bytes`
+/// beside `out` is refused only once actingd answers the connection).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MaterialRead<'a> {
+    /// At most `max_bytes` of the material's text from `offset`: the row without `out`, as before.
+    Text {
+        reference: &'a str,
+        offset: u64,
+        max_bytes: u64,
+    },
+    /// The whole material, written into the directory `out` (MCP `ac_material`'s mode export).
+    Whole { reference: &'a str, out: PathBuf },
+}
+
+/// Workflow #434 LAB-5C: the read `params` ask for. Without `out`, as before: the ref, the slice's
+/// offset (0) and size (`material::DEFAULT_TEXT_BYTES`, from 1 to `material::MAX_TEXT_BYTES`).
+/// With `out`, the whole material into that directory, made absolute; `offset` and `max_bytes`
+/// belong to the slice and are refused beside it (`conflicting`), as MCP refuses them with its
+/// mode export.
+pub(crate) fn material_read(params: &Map<String, Value>) -> Result<MaterialRead<'_>, Exit> {
+    let reference = required_text(params, "ref")?;
+    let Some(out) = text(params, "out") else {
+        let offset = unsigned(params, "offset")?.unwrap_or(0);
+        let max_bytes = unsigned(params, "max_bytes")?.unwrap_or(material::DEFAULT_TEXT_BYTES);
+        if !(1..=material::MAX_TEXT_BYTES).contains(&max_bytes) {
+            return Err(cli_line::failure(
+                &cli_line::usage_invalid(Some("--max-bytes"), ArgumentProblem::OutOfRange)
+                    .range_min(1_u64)
+                    .range_max(material::MAX_TEXT_BYTES),
+                None,
+            ));
+        }
+        return Ok(MaterialRead::Text {
+            reference,
+            offset,
+            max_bytes,
+        });
+    };
+    if let Some(slice) = ["offset", "max_bytes"]
+        .into_iter()
+        .find(|name| params.contains_key(*name))
+    {
+        return Err(usage(&flag_name(slice), ArgumentProblem::Conflicting));
+    }
+    let out = std::path::absolute(out).map_err(|_| usage("--out", ArgumentProblem::Unusable))?;
+    Ok(MaterialRead::Whole { reference, out })
+}
+
+/// Workflow #434 LAB-5C: `material --out`: the whole material's `bytes`, whose `sha256` the read
+/// verified, written into `out` as `<hex>.<extension>` by the writer `frame --out` and MCP share
+/// (`material_export::write`); the line names the file, `{path, sha256, size}` beside
+/// `lab_operation_completed`. A failed write is the writer's `material_export_failed`.
+pub(crate) fn material_written(out: &Path, sha256: &str, extension: &str, bytes: &[u8]) -> Exit {
+    match material_export::write(out, sha256, extension, bytes) {
+        Ok(written) => completed(written),
+        Err(failure) => cli_line::refused(&failure.outcome(), None),
     }
 }
 

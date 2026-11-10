@@ -8777,6 +8777,132 @@ and no gate name changed, so nothing is retired.
 
 **LAB-5D rollback** (to the release before it). Nothing persisted: code only.
 
+#### Slice LAB-5C (0.12.52): the command line gains the parameters only MCP took
+
+Coordinator work order `rd-1108/arch-013/brief-lab5c.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` (§1, §4) and its table of all 170 arguments of today's 41
+MCP tools, `scratch-lab5a-step0/lab5a-mcp-args.csv`, read against main `af7e2557` (LAB-5A merged),
+the base of this slice; where they differ, main won. The contract is
+[lab-two-entries.md](lab-two-entries.md) §9.1; the table is [lab-operations.json](lab-operations.json).
+The rule of the slice: it only adds. Every command line that worked before works the same and
+prints the same; a command line gains options; no default changes; today's MCP server
+(`apps/actingctl/src/mcp`) is not touched.
+
+**The coordinator's rulings** (2026-11-10 and 2026-11-11, board #434, in the work order): no
+regression: every argument one of today's 41 MCP tools takes ends as a parameter of its row (which
+the command line then takes too), as a member the MCP front keeps for itself, or on the list of
+retired arguments. **Members the MCP front keeps** (not parameters of a row): the three cursors
+(`ac_events`, `ac_runs`, `ac_outcome_code`), bound to the MCP server's own session and connection;
+`ac_get_run`'s `handle` (a job handle of the MCP process; a request id handle is `run show`'s
+`id`) and `wait_s`; `ac_stop_run`'s `wait_s`. **Retired**: `action` of `ac_emulator`, `ac_app`
+and `ac_perf_preset` (the row's name carries it; `force-stop` is `app stop`); `ac_remedy_set`'s
+`lift` (the row `remedy lift`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5C-1 | `events` gains `view` (`enum:events\|observation\|changes\|errors\|health\|lab`), `since_unix_ms`, `until_unix_ms`, `through_sequence` (`unsigned`), `event_type`, `fact_key`, `origin_module`, `task_id`, `correlation_id` (`string`), `exclude_event_types` (`list<string>`), `min_severity`, `max_severity` (`enum:debug\|success\|info\|warning\|error\|fatal`), `detail` (`enum:brief\|summary\|payload`, default `brief`) and `wait_s` (`integer`, default 0, 0 to 20) | contract table, behaviour | LAB-5C | — | `core_ops` hands each to `lab-ops`' `events` under the flag of its name, after the words the row gave before, the excluded types as one comma list as `type` goes; `lab-ops` checks them as it checks MCP's (`events::parse`). `since_unix_ms` stands beside `since` (a duration back from now): with both, the two name the window's start (`--since-unix-ms`), and the operation layer refuses the second as `repeated`, as `runs` does; the notes say so. `unsigned` for the times and the sequence, as `runs`' on main, so that a value `lab-ops` refuses is refused with its own range |
+| L5C-2 | `diagnose` gains `since_unix_ms` (`unsigned`) | contract table, behaviour | LAB-5C | — | beside `since`, as L5C-1: both refused by the operation layer as `repeated`; at most 7 days back (`since_out_of_range`), absent 24 hours back |
+| L5C-3 | `codes` gains `prefix`, `owner` (`string`) and `limit` (`integer`, default 20, 1 to 100), the survey's difference 8 | contract table, behaviour | LAB-5C | — | handed on after the code under their flags; with a code `lab-ops` refuses them as `conflicting`, as before on actingctl's line |
+| L5C-4 | `packs` gains `role` (`enum:procedure\|startup\|resource_package`) | contract table, behaviour | LAB-5C | — | the code's `packs::Role` (MCP's schema lists `Role::ALL`); the survey's `Observer\|Operator\|Author` was wrong, main won |
+| L5C-5 | `remedy set` gains `rows` (`json`, `required_in: ["mcp"]`), the rows inline; `file` is no longer required by the row | contract table, behaviour | LAB-5C | — | exactly one of `file` and `rows` (`words::ONE_OF`, on the command line and in `serve --stdio`): neither is refused as before (`<file>` `required`), both as `--rows` `conflicting`. `rows` goes beside the words to `lab-ops`' new `remedy::dispatch_rows`, which bounds it as a rows file is bounded (fix 1: its JSON text, written compactly, above `MAX_ROWS_FILE_BYTES` is `--rows` `out_of_range` with `range_max` the bound, the refusal of a larger file, before anything is sent), reads it as a rows file's content (another shape `--rows` `wrong_type`) and runs `set` as `dispatch` does, with the CLI's detector; `file` alone goes on as before. Two differences from a rows file stay: inline text that is not JSON is refused by the words as `--rows` `wrong_type`, where a file whose content is not JSON is `--rows` `unusable`; and `--rows` takes the rows themselves while a rows file is the positional `file` (actingctl's `remedy set --rows <file>` names a file; actinglab's `remedy set … --rows rows.json` is `wrong_type`). The row's notes say so |
+| L5C-6 | `material` gains `out` (`dir`), in place of MCP's `mode: export` | contract table, behaviour | LAB-5C | — | with `out` the whole material is read (`material::read_whole`, within `observe_export::READ_BUDGET`, as `frame --out` reads its frame) and written into that directory by the writer `frame --out` and MCP share (`material_export::write`), the line naming the file `{path, sha256, size}` with `lab_operation_completed`; `offset` and `max_bytes` beside it are `conflicting`, as MCP refuses them with `mode: export`, but read after the connection is made, as the base checks `--max-bytes`' range (`core_ops::material_read`; MCP refuses them before it connects); without `out`, as before. For the server's slice: `out` lets a caller of `serve` write where it names, as `frame --out` does; the MCP front keeps `out` for itself and passes its own export directory |
+| L5C-7 | `app launch`, `app restart` and `app stop`: no `record` (fix 1) | — | LAB-5C | — | the coordinator's ruling of 2026-11-11 on the review's S5: a row of the core module does not reach the authoring module's recording, and today's MCP `ac_app` runs `session app` without `--record` on purpose. The three rows, their hand-over (`engine::arguments`) and their words are main's; the survey's difference 7 is not taken. `--record` stays the flag of actinglab's own command `session app <action> --instance <i> --record`, on the command line as before. A recorded application step through the table would be a row of the authoring module, in a later slice; not decided |
+| L5C-8 | `lab-ops` additions | behaviour | LAB-5C | — | `events::cli_request` (the read the words ask for, before any connection; `run_cli` reads through it) and `events::Request::filters`; `remedy::dispatch_rows` (with fix 1's bound, `remedy::inline_within_bound`, private); `observe_export::READ_BUDGET` made public. actingctl's lines are unchanged |
+
+**Not parameters** (the rulings above; not added): the cursors of `events` and `codes`, `run
+show`'s `handle` and `wait_s`, `run stop`'s `wait_s`, the retired `action`s and `lift`; and (fix 1,
+the ruling of 2026-11-11) `record` on the core rows `app launch|restart|stop` (L5C-7). `runs`
+keeps the `cursor` LAB-5A declared, since its command line took `--cursor` before LAB-5A (the rule
+of this slice: only adds); the MCP front keeps its own cursor binding for `ac_runs`. Nothing else of
+the survey's table marked `add` was missing from a row on main.
+
+**`required_in`.** `remedy set`'s `rows` carries `required_in: ["mcp"]` (fix 1, the review's S2):
+today's `ac_remedy_set` requires `rows` unless `lift`, and `lift` is retired to its own row `remedy
+lift`, so in today's MCP the rows are required, where the row takes `file` or `rows`. No other
+parameter this slice adds is required in today's MCP tool (`ac_material`'s required `mode` is
+replaced by the optional `out`). Nothing reads `required_in` yet; §9.1 of the contract names
+`rows` beside `resume`'s `expect` and `pause`'s `reason`.
+
+**Defaults and names that differ between today's MCP and the rows** (for the server's slice; none
+changes here; from the survey's `difference` column, checked against main):
+
+- `pause`: drain `drain_timeout_s` integer seconds 1 to 600, default 60 (MCP) against `drain`
+  duration, default 300 s (row); reason default `mcp.pause` against `operator`.
+- `run start`: `deadline_s` integer seconds 60 to 1800, default 1800, against `deadline` duration
+  (1800 s when absent); `recovery_package` against `recovery`. A job against a waiting line:
+  `ac_run_pack` answers `{handle, correlation_id, phase}` at once and submits in a job of its
+  process; the row's line waits for the run's receipt, at most `wait` when given
+  (`command_wait_expired`, naming the run).
+- `emu start|stop|restart`: `ac_emulator` answers `{controlled}` within its 25 s call budget,
+  otherwise `{handle, job_phase}` of a job of its process for `ac_get_run`; the row's line waits
+  for `{controlled}`, at most `wait` when given.
+- `run stop`: `ac_stop_run` sends only the stop through its live job when that MCP process
+  submitted the run (that job lifts the touches), and otherwise waits for the end in a job of its
+  process (`wait_s`, the front's); the row's line sends the stop and the reset and waits for them,
+  up to the longest run deadline (`cancel_only`: the stop alone).
+- `status`: `sections` an array of the block names (an `enum`) in MCP against a `list<string>`
+  on the row, a comma list on the command line.
+- `events`: `limit` 1 to 100 (MCP) against 1 to 256 (the command line), 20 when absent on both,
+  though the row declares no `default` for it; `detail` default `brief` on both; `wait_s` 0 to 20
+  on both (MCP's schema maximum is `events::MAX_WAIT_S`, 20); `after_sequence` against `after`,
+  `event_types` an array against `type`, a `list<string>` (a comma list on the command line),
+  `run_id` against `run`, `request_id` against `request`; `since_unix_ms` beside the row's
+  `since`.
+- `runs`: MCP's `since_unix_ms` (and `until_unix_ms`) are the row's too; the row's `since`, a
+  duration back from now, stands beside it, not with it.
+- `targets`: two MCP tools, `ac_resources_list` and `ac_targets_get`, against one row `targets`.
+- `targets set`: MCP requires `targets` (inline); the row takes `file` or `targets`, exactly one.
+- `run evidence`: `detail` default `full` on both; `limit` default 20, 100 with `summary`, on
+  both; `handle` and `run_id` against one `id`. `run show`: `run_id` against `id`.
+- `codes` and `runs`: `limit` default 20, 1 to 100, on both.
+- `diagnose`: `task_id` against `task`; `since_unix_ms` beside the row's `since`.
+- `observe`, `do`: `sample_scenes` and `scene` folded into one repeated `scene`, oldest first.
+- `record mark`: `request` an object against `request_json` text.
+- `facts`: `key_prefix` against `prefix`; `scope` against the switches `program` and `config` (and
+  the row `config`). `summary`: `granularity` against the switches `hour` and `day`.
+- `resume`: `expected_owner_epoch` and `expected_revision`, two required members, against one
+  `expect` object `{owner_epoch, revision}` (`required_in: ["mcp"]`).
+- `material`: `mode` (`text` or `export` into MCP's export directory) against `out`; `ac_observe`
+  always exports its frame, `frame` only with `out`. `out` lets a caller of `serve` write where it
+  names, as `frame --out` does; the MCP front keeps `out` for itself and passes its export
+  directory.
+- `config set`: `changes` objects `{key, value?}` (null clears) against `KEY=VALUE` words and the
+  row `config clear`.
+- `preset set`: `preset` against `name`. `devices bind|unbind`: `alias` against `instance` (an
+  alias only, as noted). `resource catalog`: `server` against `catalog_server`. `evidence read`:
+  `artifact_id` and `run_id` against `artifact` and `run`. `run stop`: `handle` against `id`.
+- `app`: `instance` an alias against the row's instance (alias, `instance_id` or ADB port).
+
+**Tests.** New: apps row "#434 LAB-5C": `gate_434_lab5c::lab5c_new_parameters_reach_their_function`,
+`gate_434_lab5c::remedy_set_takes_a_rows_file_or_rows_inline` and
+`gate_434_lab5c::material_out_writes_the_whole_material` (actinglab's binary tests; a state root in
+a temporary folder on which no Runtime runs; no device, no sleep). One case reads the system
+clock: `diagnose --since-unix-ms 1`, whose start `lab-ops` measures back from now; 1 ms after the
+epoch is more than seven days back from any clock later than seven days after the epoch, so the
+case is `since_out_of_range` whatever the clock reads. Fix 1 takes the cases that gave `record` to
+`app launch|restart|stop` out of the first test and adds to the second one case: rows inline above
+a rows file's bound are `--rows` `out_of_range` with `range_max` the bound. Unchanged and passing:
+`lab_ops_table_complete`, `gate_434_lab5a`.
+
+**Interface.** None raised: no code, key, location, record or interface revision is added; the
+table's schema string stays (members and types are the ones §9.1 has).
+
+**What LAB-5C changes live.** The command line and `serve --stdio` take the new options; a line
+without them answers as before. `remedy set` with neither `file` nor `rows`, and with both, is
+refused before anything is sent, and so are rows inline above a rows file's bound. `app
+launch|restart|stop` are as on main.
+
+**LAB-5C fix 1** (coordinator work order `rd-1108/arch-013/brief-lab5c-fix1.md`, after the
+independent review `rd-1108/arch-013/review-1573-findings.md` of PR #1573 at `e8df3339`): main
+merged (LAB-5D, CI-OCR-1), both slices kept in this register and in `apps.toml`; `record` taken off
+`app launch|restart|stop` (L5C-7, S5); `rows` given `required_in: ["mcp"]` (S2); rows inline
+bounded as a rows file is (L5C-5, S4); the texts corrected: `wait_s`' maximum 20 (S1), the list of
+defaults and names completed (S3), when `offset` and `max_bytes` beside `out` are refused (N1),
+`out` in `serve` (N2), §9.1's sentence on millisecond counts and JSON (N4), the clock the tests read
+(N5). Fix 1 adds no row, type, code, key or interface.
+
+**LAB-5C rollback** (to the release before it). Nothing persisted: code and the table's text.
+
 #### Slice LAB-5B2 (0.12.52): each strict command's flag list is one constant, held equal to its row
 
 Coordinator work order `rd-1108/arch-013/brief-lab5b2.md`, after the read-only survey
