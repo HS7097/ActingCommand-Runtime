@@ -455,7 +455,12 @@ true one; the table's builder owes the rule.
 **Where it is read.** As a side of an `integer_compare` gate predicate, and as the input of a
 scoring term through `identity` or `threshold`. A gate or a term that reads it declares
 `drop_candidate` or `abort_evaluation`; a substitution is a `type_mismatch` validation error, as
-for a table read: missing data never stands in for a value. A tie-break key cannot read it (it is
+for a table read: missing data never stands in for a value. A list maximum that reads Unknown
+(any row of the case table that reads Unknown) is an Unknown read like a table read's: under
+`drop_candidate` it drops the candidate, `unknown_dropped` with the read's reason; under
+`abort_evaluation` the evaluation is `unknown`, with that reason and the rule. Such a drop is no
+static table drop (section "Tables and `table`": only a `table` read's steps 3 to 5 make one, and
+the lists are instance data), so a step that counts unknown instances counts it. A tie-break key cannot read it (it is
 the same for every candidate), nor can a `fallback_column` name it; both are `type_mismatch`
 validation errors. A document holds at most 32 list maxima, each over at most 16 lists; a 33rd
 is a validation error.
@@ -648,8 +653,9 @@ A select step of a contained task (see [the selection graph](selection-graph.md)
   `none_allowed` and `required_count` at least its layout's slot count, so every candidate that
   survives is chosen and neither `insufficient` nor `ambiguous` can occur; no outcome leads to an
   input; and every outcome, `unknown` included, ends the run normally, with the step's
-  `outcome_key` for a known judgment with no unknown candidate and its `unknown_outcome_key`
-  otherwise.
+  `outcome_key` only for a known evaluation whose unknown check does not block and in which no
+  candidate is `unknown_dropped`, and its `unknown_outcome_key` otherwise
+  ([selection-graph.md](selection-graph.md), "Judge step", "Which key").
 
 This crate is unchanged by that use: the scheduling consumer's `catalog_hash`, which depends on
 the document's serialization, keeps its value.

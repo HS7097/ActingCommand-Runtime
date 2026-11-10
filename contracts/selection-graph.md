@@ -988,9 +988,10 @@ middle of a stage; an `empty` decision without `on_empty` still fails. The admis
 A judge step (Workflow #428 S168-5b, section Judge step) ends the run on its page the same way,
 after its record and with no input, for every result it reaches: a decision with or without
 candidates judged worth, a decision with unknown instances, and an `unknown` evaluation. Its end
-key is the step's `outcome_key` for a known decision with no unknown instance and its
-`unknown_outcome_key` otherwise; a mapping tells the two apart by its `judge_result` (section
-Judge step, "Mapping the two keys").
+key is the step's `outcome_key` only for a known decision whose unknown check does not block and
+in which no candidate is `unknown_dropped`, and its `unknown_outcome_key` otherwise (section Judge
+step, "Which key"); a mapping tells the two apart by its `judge_result` (section Judge step,
+"Mapping the two keys").
 
 ### Expected identity
 
@@ -1159,7 +1160,9 @@ One judge step runs, with no input:
    actionable candidates the kernel keeps from the evaluator (an unresolved consensus feature,
    an identity feature that read no identity; out of the dictionary counts as unknown) and those
    the evaluator drops as unknown, with their upper bound computed as there. A static table drop
-   is none.
+   is no unknown instance here either, as there (section Tables, "Dropped by the table"): the
+   record's unknown check does not count it. For the judge's key it still counts as a candidate
+   that could not be judged ("Which key" below).
 5. The decision is recorded once, as `task.selection_evaluated` (section Records), with the
    confirmation `judge_only` and `unknown_check`.
 6. The kernel records the step's `StepFinished` with `page_label` its page as recognized on F1
@@ -1172,17 +1175,32 @@ One judge step runs, with no input:
 No confirmation frame is captured, no guard is judged, no point is sampled, and no
 `task.effect_intent`, input or `task.effect_completed` belongs to the step.
 
+**Which key.** The run ends with `outcome_key` only when all three hold:
+
+- the evaluation is known (not `unknown`);
+- the record's unknown check does not block (no unknown instance);
+- no candidate of the layout was dropped because a read was Unknown: a table read with no row
+  for the key, a null cell with no fallback, an unusable list, a list maximum that is Unknown
+  ([selection-policy.md](selection-policy.md), "Table maximum over a list"). In the record's
+  words, no candidate is `unknown_dropped`.
+
+Otherwise it ends with `unknown_outcome_key`. A static table drop is such a drop: it is not an
+unknown instance and the unknown check does not count it (step 4), and it still makes the run end
+with `unknown_outcome_key`. A candidate that a gate decides against on a known value (the class
+gate's `absent`, a comparison whose operands are known) is a known decision, `gate_rejected`, and
+does not count.
+
 **Every result ends the run Completed, with one of the two keys:**
 
 | Result | The record | The run |
 | --- | --- | --- |
-| A decision, `selected` (candidates judged worth) or `empty` (none), with no unknown instance: the evaluation is known and the record's unknown check does not block | verbatim; `unknown_check.blocking` `none` | Completed with `outcome_key` |
-| The same with unknown instances: candidates that could not be judged, the named gap; the unknown check blocks | verbatim, with every verdict it has; `blocking` `unknown_instances`, `unknown_instances` their count | Completed with `unknown_outcome_key` |
+| A decision, `selected` (candidates judged worth) or `empty` (none), in which every candidate was judged: the evaluation is known, the record's unknown check does not block, and no candidate is `unknown_dropped` (each is `ranked` or `gate_rejected`) | verbatim; `unknown_check.blocking` `none` | Completed with `outcome_key` |
+| The same with candidates that could not be judged, the named gap: unknown instances (the unknown check blocks), or a candidate `unknown_dropped`, a static table drop included (the check does not block on that alone) | verbatim, with every verdict it has; `blocking` `unknown_instances` and `unknown_instances` their count when there are unknown instances, else `blocking` `none` | Completed with `unknown_outcome_key` |
 | `unknown`: the evaluator ended the evaluation (an unusable record list, an `abort_evaluation` rule) | `unknown`, no verdict, its reason and rule | Completed with `unknown_outcome_key` |
 
 Neither end makes any input, and the record is the same whichever key ends the run. The run's
-scheduling outcome tells a judgment from "could not judge": `outcome_key` for a judgment every
-candidate took part in, `unknown_outcome_key` otherwise, so that a catalog can tell the two apart,
+scheduling outcome tells a judgment from "could not judge": `outcome_key` for a judgment of every
+candidate, `unknown_outcome_key` otherwise, so that a catalog can tell the two apart,
 for example to run the judge again. The record tells the rest apart: the decision's
 own `outcome_key`, the string the document's `applies_to.outcome_keys` declares for its outcome,
 and `unknown_check`. Each verdict tells one candidate apart: `ranked` and chosen (judged worth),
@@ -1218,8 +1236,8 @@ words. The names are neutral examples:
 
 | Word | The end it maps |
 | --- | --- |
-| `judged` | a judge step's end with its `outcome_key`: a known evaluation with no unknown instance |
-| `unknown` | a judge step's end with its `unknown_outcome_key`: an `unknown` evaluation, or unknown instances |
+| `judged` | a judge step's end with its `outcome_key`: a known evaluation, an unknown check that does not block, and no candidate `unknown_dropped` |
+| `unknown` | a judge step's end with its `unknown_outcome_key`: an `unknown` evaluation, unknown instances, or a candidate `unknown_dropped` (section "Execution of a judge step", "Which key") |
 
 - **Which ends.** A mapping with `judge_result` maps only a judge step's end with that result, on
   the pages it lists. A mapping without it never maps a judge step's end; every other end of the

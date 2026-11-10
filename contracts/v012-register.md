@@ -8763,10 +8763,11 @@ what was judged worth) stays in the instance fact store and the ledger.
 |---|---|---|---|---|---|
 | S168-4 | Runtime | L | the design's G-2: the `read_list` effect (declaration gate, parser, admission, the static walk's self-edge and once-per-run rule), the kernel's list read over the scan session with no policy, the three misses and their warning, the host's publication at the successful terminal (stage 2), the reserved prefix `inventory.list.` for clients and for marks; its report says that no package on the three resource repositories' `main` declares a mark under the prefix | S168-0 | `package` 8, with S168-5a |
 | S168-5a | Runtime | M | the design's G-4: the value source `table_max_over_list` in the selection-policy crate (validation, binding, one read per reference over the union of its lists, the reason, the input identity, upper bound, the scheduling refusal); its tests use fake snapshots | S168-0 | `package` 8, with S168-4; no `ledger` |
-| S168-5b | Runtime | L | the design's G-5: the `judge` effect with its two keys and the mapping member `judge_result` (declaration, admission, the kernel's judge path without an input port, the host's refusal of an input for it, the record with `judge_only`, the run's end on one of the two keys); the ledger reader's rules for `judge_only` | S168-4 and S168-5a merged: main declares `package` [3, 8] | `package` 9 and `ledger` 8, in the Runtime release of LAB-6 and LAB-7 |
+| S168-5b | Runtime | L | the design's G-5: the `judge` effect with its two keys and the mapping member `judge_result` (declaration, admission, the kernel's judge path without an input port, the host's refusal of an input for it, the record with `judge_only`, the run's end on one of the two keys, `outcome_key` only when the evaluation is known, the unknown check does not block and no candidate is `unknown_dropped`); the ledger reader's rules for `judge_only` | S168-4 and S168-5a merged: main declares `package` [3, 8] | `package` 9 and `ledger` 8, in the Runtime release of LAB-6 and LAB-7 |
 
-**Named tests**, 24 in all: 10 for S168-4, 8 for S168-5a and 6 for S168-5b (the coordinator's
-ruling R6 after the review). Logic tests with fakes and a fake clock, no sleep; the ids are made
+**Named tests**, 26 in all: 10 for S168-4, 9 for S168-5a and 7 for S168-5b (the coordinator's
+ruling R6 after the review, and one more each for S168-5a and S168-5b by the ruling F3 of fix 3,
+work order `rd-1110/brief-s168-contracts-fix3.md`). Logic tests with fakes and a fake clock, no sleep; the ids are made
 up (`member.a` to `member.z`, `domain.x`, `domain.y`, `state.a`, `state.b`, the keys
 `inventory.list.example_kind_a` and `inventory.list.example_kind_b`, the table `example_values`,
 the serials `TESTSERIAL0001` and `TESTSERIAL0002`).
@@ -8811,7 +8812,7 @@ S168-4, 10 tests, on a fake provider's saved viewports and a fake device:
   @ `…/capacity_fact_key`) and by admission (`contained_task_resource_reading_invalid`,
   `<id>:<reason>`); a mark under `inventory.` outside the prefix is still admitted.
 
-S168-5a, 8 tests, on tables loaded with `LoadedTable::load` and fake snapshots:
+S168-5a, 9 tests, on tables loaded with `LoadedTable::load` and fake snapshots:
 
 - `table_list_max_reads_largest_of_class`: rows (`member.a`, `domain.x`, 5), (`member.b`,
   `domain.x`, 9), (`member.c`, `domain.y`, 7); `lists` [`inventory.list.example_kind_a`] holding
@@ -8841,8 +8842,14 @@ S168-5a, 8 tests, on tables loaded with `LoadedTable::load` and fake snapshots:
 - `table_list_max_where_skips_rows`: a `where` keeping `state.a` leaves out a row of `state.b`
   whose key the table lacks; that key is not looked up, is no miss and is not counted, and the
   read is the largest of the kept keys.
+- `table_list_max_unknown_follows_the_declared_action`: a reference that reads Unknown
+  `lookup_miss` (a key of the union without a row in the table; a null cell of the class), read
+  by an `integer_compare` gate and by a term: under `drop_candidate` each candidate they assess
+  is `unknown_dropped` with `lookup_miss`, and its verdict is no static table drop; under
+  `abort_evaluation` the evaluation is `unknown` with `lookup_miss` and the rule, with no
+  verdict; no candidate is ranked on the value and nothing reads 0.
 
-S168-5b, 6 tests, on fake snapshots whose lists a document reads through `keyed_fact`, tables
+S168-5b, 7 tests, on fake snapshots whose lists a document reads through `keyed_fact`, tables
 loaded with `LoadedTable::load`, and a fake device whose input port fails the test on any call.
 Reading the lists through `keyed_fact` concerns the tests' fixtures only, not the order: S168-5b
 still goes on main only after S168-4 and S168-5a merged ("Order" below).
@@ -8859,7 +8866,15 @@ still goes on main only after S168-4 and S168-5a merged ("Order" below).
 - `judge_stale_list_ends_with_unknown_key`: with the declared list older than the document's
   `max_age_ms`, the record holds `unknown` with no verdict and reason `fact_stale`; the run is
   Completed with the step's `unknown_outcome_key`, never `selection_not_selected`.
-- `judge_performs_no_input`: in the three runs above the fake input port receives no call and
+- `judge_unknown_dropped_candidate_ends_with_unknown_key`: a judge whose document reads a table
+  under `drop_candidate`, with every slot read: one run with one candidate whose key has no row
+  in the table, and one with a candidate whose cell of the class is null and has no fallback,
+  each drop that candidate `unknown_dropped`, a static table drop (`unknown_check.blocking`
+  `none`, `unknown_instances` 0), and each end the run with the step's `unknown_outcome_key`, on
+  the mapping with `judge_result` `unknown`; a run in which a gate decides against a candidate on
+  a known value (the class gate's `absent`, an `integer_compare` whose operands are known) and
+  nothing is `unknown_dropped` ends with the step's `outcome_key`.
+- `judge_performs_no_input`: in the runs above the fake input port receives no call and
   the ledger holds no `task.effect_intent`, input or `task.effect_completed` of the step's
   action; a host handed an effect intent for a judge step's action ends that run
   `contained_task_judge_input_refused` before the device, and a run of another instance
@@ -8921,10 +8936,13 @@ a console whose `ledger` range holds 8, which is UI-L1's console.
 - (c) A list reading reads only a `repeated_anchor` layout over a scan: a list that fits one
   viewport declares the scan too, as an `on_empty` select does, so every written list has
   positive evidence of both ends.
-- (d) The judge's run ends with one of two keys (the coordinator's ruling R4 after the review):
-  `outcome_key` when the evaluation is known and no slot is unknown, `unknown_outcome_key` when
-  the evaluation is `unknown` or the unknown check blocks, both Completed and neither with an
-  input, as the design (§9) tells a judgment from "could not judge". A mapping tells the two
+- (d) The judge's run ends with one of two keys (the coordinator's ruling R4 after the review,
+  made exact by the ruling F3 of fix 3): `outcome_key` only when the evaluation is known, the
+  unknown check does not block and no candidate of the layout was dropped because a read was
+  Unknown (no candidate `unknown_dropped`, a static table drop included), `unknown_outcome_key`
+  otherwise, both Completed and neither with an input, as the design (§9) tells a judgment from
+  "could not judge". A candidate a gate decides against on a known value is a judgment and does
+  not count. A mapping tells the two
   apart on one page by its member `judge_result`, a closed vocabulary of `judged` and `unknown`
   ([selection-graph.md](selection-graph.md), "Judge step", "Mapping the two keys"): `on_empty`'s
   means, one mapping per page and effect condition, cannot, because both keys end on the same
@@ -8966,7 +8984,7 @@ a console whose `ledger` range holds 8, which is UI-L1's console.
 | S168C-4 | `list_reading_key_reserved` (non-fatal request error, `fact_key`) | outcome code | S168-4 | runtime-host | from every origin |
 | S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 list maxima per document and 16 lists per list maximum |
 | S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_keys`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `fact_keys` (`list<token>`, the lists read in the order of `lists`, at most 16 items), `maximum`, `maximum_identity` | outcome code and keys | S168-5a | selection-policy | a decision reason, no record member; `count` is the number of distinct keys of the union |
-| S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key, unknown_outcome_key}`, all four required, the two keys distinct | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only; ends with `outcome_key` or `unknown_outcome_key` |
+| S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key, unknown_outcome_key}`, all four required, the two keys distinct | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only; ends with `outcome_key` (a known evaluation, an unknown check that does not block, no candidate `unknown_dropped`) or `unknown_outcome_key` |
 | S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, `ledger` 8 (#434's, shared) | S168-5b | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
 | S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5b | runtime-host | ends that run only |
 | S168C-10 | the optional `task.json` mapping member `judge_result`, a closed vocabulary of `judged` and `unknown` | package format, `package` 9 | S168-5b | resource repositories | maps a judge step's end with that result; two mappings overlap only with the same effect condition, page and `judge_result` (or none on both), so S168-5b changes `SchedulingOutcomeDeclaration::validate` (`mapping_overlap`); no persisted record carries it; [selection-graph.md](selection-graph.md), "Mapping the two keys" |
