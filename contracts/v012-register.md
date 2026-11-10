@@ -9057,12 +9057,12 @@ One allow-list entry of the outcome guard (G5, `read_list_member` of
 its spelling with the location, and pack-containment, which the kernel depends on, spells it in
 that one function.
 
-**Resource repositories.** Read on GitHub, read only, on each `main`: AzurLane `db49ece0` (82
-`task.json`, 62 marks), Arknights `e44ff68a` (148, 67), BlueArchive `1dd7acef` (88, 58),
-GirlsFrontline2 `501e9f82` (26, 45). No mark or adjustment key lies under `inventory.list.`, no
-task declares a `read_list` step, and no `task.json` names the prefix; a code search over the
-owner found the prefix only in the Runtime's contracts. S168-0's row read "three resource
-repositories"; there are four, and the row and "What each changes at deploy" now say so.
+**Resource repositories.** Read on GitHub, read only, on the `main` of each of the four resource
+repositories: `db49ece0` (82 `task.json`, 62 marks), `e44ff68a` (148, 67), `1dd7acef` (88, 58)
+and `501e9f82` (26, 45). No mark or adjustment key lies under `inventory.list.`, no task declares
+a `read_list` step, and no `task.json` names the prefix; a code search over the owner found the
+prefix only in the Runtime's contracts. S168-0's row read "three resource repositories"; there
+are four, and the row and "What each changes at deploy" now say so.
 
 **At deploy.** No pack declares a list yet, so no run changes. A client's publication under
 `inventory.list.` is refused (no client writes one today), and so are a mark and an adjustment
@@ -9077,9 +9077,10 @@ list.
 - (a) Tests in halves. The named tests that span the kernel and the host are split by crate
   ("Tests" above); the host's halves read a one-screen list, so test 1's three viewports and
   test 3's 257th position are the kernel's. Test 7 reads the published list with the kernel's
-  `dry_run_select` on the instance's snapshot, as a later run's select step would: runtime-host
-  has no selection-policy dependency, and adding one would change `Cargo.lock`. Test 9 fills the
-  host's real store up to its bound with ordinary facts, not a fake store.
+  `dry_run_select` on the instance's snapshot, as a later run's select step would: a select step
+  reads a list through the kernel's evaluation of its document, which is what the test drives,
+  not the selection-policy crate on its own. Test 9 fills the host's real store up to its bound
+  with ordinary facts, not a fake store.
 - (b) Admission runs the declaration gate on the sealed task (`validate_contained_declarations`)
   before its own checks, so a sealed task that breaks a rule the gate checks is refused there
   first (`resource_declaration_invalid` at the pointer). Admission's own refusal is the one of a
