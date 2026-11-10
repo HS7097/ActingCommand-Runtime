@@ -24,6 +24,10 @@
 //! the Runtime ([`Caller::connection`]): a connection made for each call as a front connects, as
 //! actinglab does, or a connection it keeps.
 
+// Workflow #434 LAB-5G1: as in actinglab, where this code was written (its `main.rs` allows it for
+// the crate): a step that ends the call returns the call's line, `Exit`, as its error.
+#![allow(clippy::result_large_err)]
+
 use crate::cli_line::{self, Exit};
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::front::{Connection, Reached};
