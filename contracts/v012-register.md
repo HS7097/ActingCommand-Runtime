@@ -8897,8 +8897,11 @@ S168-4, 10 tests, on a fake provider's saved viewports and a fake device:
   by the gate, and by admission with `contained_task_resource_reading_invalid`
   `<operation id>:<reason>`; task schema `0.8` with `UnconsumedField`; the step runs once per
   run and the walk follows the page's next operation.
-- `list_reading_key_reserved`: `PublishFacts` of `inventory.list.example_kind_a` from the agent,
-  CLI and UI origins is refused `list_reading_key_reserved`, nothing appended.
+- `list_reading_key_reserved`: `PublishFact` and `PublishFacts` of `inventory.list.example_kind_a`
+  from every origin that may publish facts (the agent dispatcher's, Agent and Adapter, which the
+  agent and the CLI's `facts publish` send, and the Runtime's own ordinary publication path) are
+  refused `list_reading_key_reserved`, nothing appended; a CLI or UI origin of its own is refused
+  earlier, when the request is formed (`invalid_agent_dispatcher_origin`), as for any publication.
 - `list_reading_read_by_keyed_fact`: a later run's select step reads the published list through
   `keyed_fact` (a listed key's column, an unlisted key's `absent`); the same list older than the
   document's `max_age_ms` ends the evaluation `unknown` with `fact_stale`.
@@ -8906,9 +8909,10 @@ S168-4, 10 tests, on a fake provider's saved viewports and a fake device:
   publishes a second observation, with a new `source_snapshot_id` and a strictly newer
   observation time, and raises no `fact_source_snapshot_identity_conflict`; the record's age is
   the second read's.
-- `list_reading_full_store_refused`: on a fake store with no free identity, the publication is
-  refused `fact_store_capacity_exceeded`, the run fails `contained_task_resource_reading_rejected`,
-  no active fact is evicted, and a run of another instance (`TESTSERIAL0002`) goes on.
+- `list_reading_full_store_refused`: on a store with no free identity, the run fails
+  `contained_task_resource_reading_rejected`, native detail
+  `<operation id>:fact_store_capacity_exceeded`; no active fact is evicted; a run of another
+  instance (`TESTSERIAL0002`) goes on.
 - `list_reading_mark_key_reserved`: a mark whose `fact_key`, and a `current_capacity` mark whose
   `capacity_fact_key`, is under `inventory.list.` is refused by the gate (`InvalidValue`,
   `resource_reading_fact_key_invalid` @ `…/fact_key`, `resource_reading_capacity_fact_key_invalid`
@@ -9095,7 +9099,7 @@ a console whose `ledger` range holds 8, which is UI-L1's console.
 | S168C-1 | the operation effect `read_list` `{layout_id, key_feature, key_column, columns, fact_key, valid_for_ms, scan}` | package format, `package` 8 | S168-4 | resource repositories | task schema `0.9` page-graph only; once per run |
 | S168C-2 | `fact.published` of `inventory.list.<name>`: one `record_list` record, `source_detector` `list_reading:` | existing record, new key prefix | S168-4 | runtime-host | §4 below; tagged as every instance key |
 | S168C-3 | `reading_problem` tokens `list_position_unread`, `list_duplicate_key`, `list_rows_exceeded`; the stage `read_list`; the optional value `count` (the catalog's integer key) on `contained_task_resource_reading_unresolved` | outcome vocabularies; an optional value of an existing code | S168-4 | execution-kernel | values the ledger reader only spells; S168-4 adds `count` to the code's `values` as `optional`: the entry is `review: pending`, and the outcome-code writing spec v2.2 (Workflow `rd-1008/errors/outcome-code-writing-spec.md`) lets a pending entry change its keys (§11) and forbids only a required key on a settled one (§2, rule 5) |
-| S168C-4 | `list_reading_key_reserved` (non-fatal request error, `fact_key`) | outcome code | S168-4 | runtime-host | from every origin |
+| S168C-4 | `list_reading_key_reserved` (non-fatal request error, `fact_key`) | outcome code | S168-4 | runtime-host | from every origin that may publish facts (the agent dispatcher's, Agent and Adapter, and the Runtime's own publication paths); a CLI or UI origin of its own is refused earlier, when the request is formed (`invalid_agent_dispatcher_origin`), as for any publication (corrected by S168-4) |
 | S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 list maxima per document, counted as distinct references, and 16 lists per list maximum; built by S168-5a, since 0.12.50 ("Slice S168-5a" below) |
 | S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_keys`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `fact_keys` (`list<token>`, the lists read in the order of `lists`, at most 16 items), `maximum`, `maximum_identity` | outcome code and keys | S168-5a | selection-policy | a decision reason, no record member; `count` is the number of distinct keys of the union; built by S168-5a, since 0.12.50 (`maximum` `integer`, `maximum_identity` `id`) |
 | S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key, unknown_outcome_key}`, all four required, the two keys distinct | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only; ends with `outcome_key` (a known evaluation, an unknown check that does not block, no candidate `unknown_dropped`) or `unknown_outcome_key` |
@@ -9218,7 +9222,7 @@ release).
 | S4-5 | the misses `list_position_unread`, `list_duplicate_key`, `list_rows_exceeded`: the warning `contained_task_resource_reading_unresolved` with `count`, one task diagnostic row (`diagnostic_list_miss`) on the step's last viewport | behaviour; existing record | S168-4 | runtime-host | S168C-3; the run goes on; nothing is written for the list |
 | S4-6 | the traces `ContainedTaskTrace::ListReadingFrame { captured_at }` (the frame the end check passed on) and `ListReading { declaration, captured_at, list }` | Runtime-internal seam | S168-4 | the kernel | the host binds the frame for the list's evidence and publishes the list at the run's successful terminal (stage 2) |
 | S4-7 | the publication of `inventory.list.<name>` (S168C-2): one `fact.published` with one `record_list` record, `source_detector` `list_reading:<task>/<operation>`, `source_snapshot_id` `run:<run>/frame:<frame>/<operation>` (`list_reading_snapshot_id`), purpose `FactPublicationPurpose::ListReading` | existing record, new key prefix | S168-4 | runtime-host | observed at the end check's capture time, expiring `valid_for_ms` later; a refusal at the fact store (`fact_store_capacity_exceeded`) fails the run `contained_task_resource_reading_rejected`; `package dry-run` reports the task's post-admission reading `pending_real_execution` |
-| S4-8 | the reserved prefix (S168C-4): every publication of a key under `inventory.list.` but the list reading's own is refused `list_reading_key_reserved` (`fact_key`) before the fact write gate; a mark's `fact_key` or `capacity_fact_key`, and an adjustment's `fact_key`, under the prefix is refused by the marks' key rule | behaviour | S168-4 | runtime-host; resource repositories | `LIST_READING_KEY_PREFIX`, `is_list_reading_key`; from every client origin and from the Runtime's other publication paths; no package on the four resource repositories' `main` declares such a key ("Resource repositories" below) |
+| S4-8 | the reserved prefix (S168C-4): every publication of a key under `inventory.list.` but the list reading's own is refused `list_reading_key_reserved` (`fact_key`) before the fact write gate; a mark's `fact_key` or `capacity_fact_key`, and an adjustment's `fact_key`, under the prefix is refused by the marks' key rule | behaviour | S168-4 | runtime-host; resource repositories | `LIST_READING_KEY_PREFIX`, `is_list_reading_key`; from every origin that may publish facts (the agent dispatcher's, Agent and Adapter) and from the Runtime's other publication paths, a CLI or UI origin of its own being refused earlier, when the request is formed (`invalid_agent_dispatcher_origin`); no package on the four resource repositories' `main` declares such a key ("Resource repositories" below) |
 | S4-9 | `package` [3, 8] in `distribution/windows/component-interfaces.json` | interface declaration | S168-4 | — | [component-interfaces.md](component-interfaces.md), `package` row 8 |
 
 **Tests.** The ten named tests (§1.291 above), each in one or two halves, all new:
@@ -9278,7 +9282,11 @@ list.
   `dry_run_select` on the instance's snapshot, as a later run's select step would: a select step
   reads a list through the kernel's evaluation of its document, which is what the test drives,
   not the selection-policy crate on its own. Test 9 fills the host's real store up to its bound
-  with ordinary facts, not a fake store.
+  with ordinary facts, not a fake store, and reads the run's native detail through the host's
+  test-only record of each refused request, since neither the receipt nor a direct run's records
+  carry it. Test 1's host half asserts that the list was observed between the end frame's
+  `capture.requested` and `capture.completed`, since the ledger holds no device capture time;
+  its kernel half asserts equality with the end-check frame's capture time.
 - (b) Admission runs the declaration gate on the sealed task (`validate_contained_declarations`)
   before its own checks, so a sealed task that breaks a rule the gate checks is refused there
   first (`resource_declaration_invalid` at the pointer). Admission's own refusal is the one of a
@@ -9288,6 +9296,15 @@ list.
 - (c) `<id>:<reason>` for a mark's own rules applies to every mark rule, not only the new prefix
   rule, as the contract reads; and the marks' key rule is the adjustments' too, so an adjustment
   under the prefix is refused as well.
+- (d) S168-0's row S168C-4, the definitions of tests 6 and 9 above, resource-readings.md and
+  instance-fact-store.md said that `list_reading_key_reserved` comes "from every origin",
+  including the CLI's and the UI's. A fact publication of a key outside the families with the
+  origin exception can be formed only from the agent dispatcher's origin (Agent, Adapter); a CLI
+  or UI origin of its own is refused when the request is formed
+  (`invalid_agent_dispatcher_origin`), before any Runtime reads the key. The text was wrong, not
+  the product (the coordinator's ruling 2 of fix 1); this slice corrected those places to "every
+  origin that may publish facts", and test 9's definition to the native detail
+  `<operation id>:fact_store_capacity_exceeded` that carries the store's refusal (ruling 1).
 
 ### 1.292 Slice QP-1 (0.12.49): a ledger page stays inside its sequence bounds whatever the planner chooses (#422; the read-only investigation of 2026-11-10, `rd-1110/ledger-window-plan-findings.md`; the console's ledger window will send pages with `from_sequence`, `to_sequence`, a limit and a snapshot and no instance, which the coordinator ruled acceptable once this slice makes the bound independent of the planner; coordinator work order `rd-1110/brief-qp1-page-plan-bounds.md`)
 

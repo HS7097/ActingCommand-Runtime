@@ -785,8 +785,13 @@ the run the same way.
   (`fact_store_capacity_exceeded`, the run fails `contained_task_resource_reading_rejected`);
   nothing is evicted.
 - A client never writes a list: a `PublishFact` or `PublishFacts` of a key under
-  `inventory.list.` is refused, from every origin, before the fact write gate, as the non-fatal
-  request error `list_reading_key_reserved` (`fact_key`), with nothing appended.
+  `inventory.list.` is refused before the fact write gate, as the non-fatal request error
+  `list_reading_key_reserved` (`fact_key`), with nothing appended, from every origin that may
+  publish facts: the agent dispatcher's (Agent, Adapter), which the agent and the CLI's
+  `facts publish` send, and the Runtime's own ordinary publication path. A CLI or UI origin of
+  its own (Cli, Cli or User, Ui) is refused earlier, when the request is formed
+  (`invalid_agent_dispatcher_origin`), as for any publication of a key outside the families with
+  the origin exception.
 - A mark never writes under `inventory.list.` either: from S168-4, a mark's `fact_key` or
   `capacity_fact_key` under that prefix is refused with the refusals of a mark's other key rules
   (`ResourceReadingDeclaration::validate`, "Declaration" above). The declaration gate refuses it
