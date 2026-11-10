@@ -1473,12 +1473,19 @@ impl PolicyControlState {
         admission: &PolicyAdmissionRecord,
         data: &PolicyExecutionEventData,
     ) -> RuntimeHostResult<()> {
-        self.commit_paced_execution(catalog, intent, admission, data, None)
+        self.commit_paced_execution(catalog, intent, admission, data, None, false)
     }
 
     /// Commits the execution record `data`, checked against the settlement it must be. #385 P-k
     /// (register P6): `budget_elapsed_ms` is the budget time the record carries, which its
     /// settlement compared; `None` for a record settled on its wall time.
+    ///
+    /// UNSET-2 (register §1.295): `late` marks the interrupted settlement of a run an earlier
+    /// start refused to settle (`policy_settlement_dispatch_unsettled`), which a later start
+    /// settles. In ledger order it comes after the later runs of its (task, instance) pair, if
+    /// there are any, so it is checked like any record and then changes nothing of the decision
+    /// memory: no failure streak, pause, backoff or retry round, not the pair's latest failure,
+    /// no owed rerun ended, and its admission's counts stay as the admission took them.
     pub(crate) fn commit_paced_execution(
         &mut self,
         catalog: &CompiledCatalog,
@@ -1486,6 +1493,7 @@ impl PolicyControlState {
         admission: &PolicyAdmissionRecord,
         data: &PolicyExecutionEventData,
         budget_elapsed_ms: Option<u64>,
+        late: bool,
     ) -> RuntimeHostResult<()> {
         let input = match &data.outcome {
             PolicyExecutionOutcome::Succeeded { .. } => PolicyExecutionInput::Succeeded,
@@ -1530,6 +1538,9 @@ impl PolicyControlState {
                 HostCode::PolicyExecutionRecordMismatch,
                 HostLocation::CommitPolicyOutcome,
             ));
+        }
+        if late {
+            return Ok(());
         }
         // SCHED §4.2 item 4: the runtime of a run a condition ended is not counted; the windows
         // keep what they held before its reservation.

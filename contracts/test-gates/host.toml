@@ -3394,3 +3394,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_428_s168_4::list_reading_full_store_refused",
 ]
 incident = ["#428 S168-4"]
+
+# #428 UNSET-2 (0.12.51; register §1.295; brief rd-1110/brief-unset2.md; changes #670's rule R4): a scheduled run cut by a stop after its own failure path released its lease (effect performed), with an effect record and no terminal, which an earlier start refused to settle (UNSET-1's hold), is settled once by the next start (one policy.execution_recorded, one policy.dispatch_completed) and recorded once as policy_settlement_dispatch_closed (Info) under the run's links, with the earlier refusal as failure_code and the operation reconcile_policy_outcomes; a later start writes neither a settlement nor a Warning for it and the pair's eligibility age runs again. The late settlement leaves the pair's failure state as it was, held and replayed the same (no failure streak, pause, backoff or retry round; not its latest failure), whether or not the pair ran since; when it did, its latest run is still the later one
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset2_the_next_start_settles_a_run_cut_after_its_own_release_once",
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset2_a_late_settlement_after_a_later_run_neither_pauses_nor_fails_the_pair",
+]
+incident = ["#428 UNSET-2"]

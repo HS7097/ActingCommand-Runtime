@@ -111,6 +111,14 @@ actingcommand_contract::outcome_codes! {
         /// links). The start carries on: the dispatch stays open, out of the active workloads,
         /// and the run's instance is paused with this code as its reason.
         PolicySettlementDispatchUnsettled => "policy_settlement_dispatch_unsettled": error / none,
+        /// Info (UNSET-2, 0.12.51). A start settled a scheduled run whose settlement an earlier
+        /// start refused and recorded as `policy_settlement_dispatch_unsettled`: the dispatch is
+        /// closed by this start's settlement records. Recorded once, by the start that settled
+        /// it, under the run's links (keys `failure_code`, the earlier refusal's code when
+        /// registered, else that earlier record as a `note` link; `operation`, the start's
+        /// settlement `reconcile_policy_outcomes`; `instance_id`, `task_id`, and `lease_id` when
+        /// the dispatch has one grant; the run id is on the record's links).
+        PolicySettlementDispatchClosed => "policy_settlement_dispatch_closed": info / none,
         /// Error. An operator emulator restart whose Stop phase was not confirmed; after a
         /// Stop whose readiness wait expired its Start still ran (Workflow #381 B F3). The
         /// request's one failure record (keys `restart_phase`, `stop_result`,

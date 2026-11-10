@@ -4593,9 +4593,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The ledger reports scheduled execution recovery interruption conflict.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The ledger refused a recovered settlement of a scheduled run as interrupted (policy_settlement_interrupted): the run has a terminal, so it is settled only from that terminal (#670 R4), whatever the order of its terminal and its lease end; or, for a run whose one run-linked release is its own (effect performed), the settlement is not the interrupted shape the Runtime derives (Severe, the task paused, no retry, runtime 0, timed at that release). A settlement refusal, not terminal: the writer goes on. Since 0.12.51 (UNSET-2) a run with no terminal whose one run-linked release is its own (effect performed) is settled as interrupted also when it has effect or input records; before, such a run was refused with this code.",
+      "common_causes": "A run that wrote its terminal while its lease ended without a run-linked release, or whose release the start recovered after it; a settlement record written by a defect. Before 0.12.51: a scheduled run cut by a stop after its own failure path wrote its lease release and inputs, and before its terminal (production 10-26).",
+      "handling": "The start records policy_settlement_dispatch_unsettled with this code as failure_code, holds the run's instance once and leaves the dispatch open (UNSET-1); later starts record policy_settlement_dispatch_left_open. Report the run id with this code: the run's records fit no settlement the Runtime knows, and a fix in the Runtime is needed. A version that can settle the run settles it at its first start and records policy_settlement_dispatch_closed with this code. Look at the instance's screen once, then lift the hold."
     },
     "scheduled_execution_recovery_lease_not_unique": {
       "category": "error",

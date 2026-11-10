@@ -1553,7 +1553,15 @@ fn load_dispatch_journal(
     let mut journal = DispatchJournal::default();
     let mut control = PolicyControlState::default();
     for event in &events {
-        apply_dispatch_event(store, &mut journal, &mut control, u64::MAX, false, event)?;
+        apply_dispatch_event(
+            store,
+            ledger,
+            &mut journal,
+            &mut control,
+            u64::MAX,
+            false,
+            event,
+        )?;
     }
     for (intent_sequence, count) in failures {
         let dispatch = journal
@@ -1827,7 +1835,15 @@ impl PolicyHost {
         let mut journal = DispatchJournal::default();
         let mut control = PolicyControlState::default();
         for event in &events {
-            apply_dispatch_event(&self.store, &mut journal, &mut control, 0, false, event)?;
+            apply_dispatch_event(
+                &self.store,
+                ledger,
+                &mut journal,
+                &mut control,
+                0,
+                false,
+                event,
+            )?;
         }
         journal.prune();
         Ok(control.value_records(
@@ -2247,6 +2263,7 @@ impl PolicyHost {
         for event in &events {
             apply_dispatch_event(
                 &self.store,
+                ledger,
                 &mut journal,
                 &mut control,
                 u64::MAX,
@@ -4880,11 +4897,14 @@ impl PolicyHost {
     }
 
     /// Commits the record `data` of a dispatch's run; `budget_elapsed_ms` is the budget time
-    /// the record carries (#385 P-k, register P6), which its settlement compared.
+    /// the record carries (#385 P-k, register P6), which its settlement compared. UNSET-2
+    /// (register §1.295): `late` for an interrupted settlement of a run an earlier start refused
+    /// to settle ([`late_settlement_refusal`]), which leaves the decision memory as it was.
     pub(crate) fn commit_execution(
         &mut self,
         data: &PolicyExecutionEventData,
         budget_elapsed_ms: Option<u64>,
+        late: bool,
     ) -> RuntimeHostResult<()> {
         let dispatch = self
             .seen_dispatches
@@ -4927,6 +4947,7 @@ impl PolicyHost {
             admission,
             data,
             budget_elapsed_ms,
+            late,
         )?;
         dispatch.execution = Some(data.clone());
         Ok(())
@@ -5056,6 +5077,7 @@ impl PolicyHost {
         for event in &events {
             apply_dispatch_event(
                 &self.store,
+                ledger,
                 &mut journal,
                 &mut control,
                 control_after,
@@ -5115,6 +5137,7 @@ impl PolicyHost {
         for event in &events {
             apply_dispatch_event(
                 &self.store,
+                ledger,
                 &mut journal,
                 &mut control,
                 self.values_through,
@@ -5252,11 +5275,68 @@ fn withdraw_refused_immediate_retry(
     Ok(())
 }
 
+/// UNSET-2 (register §1.295): whether `outcome` records a run settled as interrupted
+/// (`policy_settlement_interrupted`).
+fn settled_as_interrupted(outcome: &PolicyExecutionOutcome) -> bool {
+    matches!(
+        outcome,
+        PolicyExecutionOutcome::Failed { failure }
+            if failure.outcome.is(SharedCode::PolicySettlementInterrupted)
+    )
+}
+
+/// UNSET-2 (register §1.295): when `execution` settles its run as interrupted, the record of an
+/// earlier start that refused that run's settlement: the run's (`task_id`, `run_id`) first
+/// `policy_settlement_dispatch_unsettled` record through `through`, read by the run's link
+/// index, its `runtime.failed` records only. Such a settlement is late: in ledger order it comes
+/// after the later runs of its (task, instance) pair, if there are any, so it leaves the decision
+/// memory as it was (`PolicyControlState::commit_paced_execution`). The start that settles the
+/// run and every replay of its execution record ask the same records, so they agree.
+pub(crate) fn late_settlement_refusal(
+    ledger: &GlobalLedger,
+    execution: &PolicyExecutionEventData,
+    task_id: Option<&TaskId>,
+    run_id: Option<&RunId>,
+    through: u64,
+) -> actingcommand_ledger::GlobalLedgerResult<Option<PersistedEvent>> {
+    let (Some(task_id), Some(run_id)) = (task_id, run_id) else {
+        return Ok(None);
+    };
+    if !settled_as_interrupted(&execution.outcome) {
+        return Ok(None);
+    }
+    Ok(crate::recovery_read::read_pages(
+        ledger,
+        &EventQuery {
+            to_sequence: Some(through),
+            event_type: Some(EventType::RuntimeFailed),
+            task_id: Some(*task_id),
+            run_id: Some(*run_id),
+            ..EventQuery::default()
+        },
+        through,
+        RECOVERY_PAGE_EVENTS,
+    )?
+    .into_iter()
+    .find(|event| {
+        event.event_type() == EventType::RuntimeFailed
+            && event.links().task_id() == Some(task_id)
+            && event.links().run_id() == Some(run_id)
+            && matches!(
+                event.payload(),
+                EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(record))
+                    if record.outcome().is(HostCode::PolicySettlementDispatchUnsettled)
+            )
+    }))
+}
+
 /// One dispatch event applied to `journal` with the checks recovery runs (R1 to R11), and
 /// its admission or execution to `control` when it lies after `control_after`. With
-/// `applied_skips` an event the journal already holds is not applied to it again.
+/// `applied_skips` an event the journal already holds is not applied to it again. UNSET-2:
+/// whether an interrupted settlement is late is read from `ledger` ([`late_settlement_refusal`]).
 fn apply_dispatch_event(
     store: &CatalogStore,
+    ledger: &GlobalLedger,
     journal: &mut DispatchJournal,
     control: &mut PolicyControlState,
     control_after: u64,
@@ -5444,6 +5524,22 @@ fn apply_dispatch_event(
                     &catalog.compiled,
                     admission,
                 )?;
+                // UNSET-2 (register §1.295): a late interrupted settlement replays as it was
+                // committed, leaving the decision memory as it was.
+                let late = late_settlement_refusal(
+                    ledger,
+                    &data,
+                    event.links().task_id(),
+                    event.links().run_id(),
+                    event.sequence(),
+                )
+                .map_err(|_| {
+                    fatal(
+                        HostCode::PolicyRecoveryFailed,
+                        ContractLocation::RecoverPolicyExecution,
+                    )
+                })?
+                .is_some();
                 // #385 P-k (register P6): a record settled on its budget time replays on it.
                 control.commit_paced_execution(
                     &catalog.compiled,
@@ -5451,6 +5547,7 @@ fn apply_dispatch_event(
                     admission,
                     &data,
                     payload.budget_elapsed_ms(),
+                    late,
                 )?;
             }
             if !applied {

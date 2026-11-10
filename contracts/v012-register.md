@@ -9518,6 +9518,107 @@ Removed with the runner it tested: `env_detection::lock::tests::windows_probe_ti
 (in no gate row). The other tests of the lock are unchanged; none pinned the PowerShell reader's
 text (the Windows fixture `sleeping_child` still starts `powershell.exe`, as a process to kill).
 
+### 1.295 Slice UNSET-2 (0.12.51): a scheduled run cut by a stop after it released its own lease is settled at the next start (#428; production: one scheduled dispatch of 10-26, cut by the 19:12 stop after its failure path wrote the run's own `lease.released` (effect `performed`) and inputs and before its terminal, open ever since and reported by every start, first as `policy_settlement_dispatch_unsettled`, from 0.12.28 as `policy_settlement_dispatch_left_open`, both with `failure_code` `scheduled_execution_recovery_interruption_conflict`; UNSET-1's row: "settling it is UNSET-2, which changes #670's rule"; the coordinator's ruling of 11-10, not Alice's words: the next start settles it, once, and records who closed it and why, with no new request kind and no protocol revision; read-only survey `rd-1110/leftopen-survey.md`; coordinator work order `rd-1110/brief-unset2.md`)
+
+This section changes #670's rule R4 and its pin. [scheduling/README.md](scheduling/README.md)
+("Failures (#419)") and the catalog entries of `policy_settlement_dispatch_closed`,
+`policy_settlement_dispatch_unsettled`, `policy_settlement_dispatch_left_open` and
+`scheduled_execution_recovery_interruption_conflict` are the contract. 1.295 is the next free
+number on main `8d9b4f73`. No persisted ledger shape, wire shape, configuration key, location or
+vocabulary is new or changed; one outcome code is new.
+
+**Why.** The ledger's guarded check of a recovered settlement (`append_recovered_policy_execution`)
+settled a run with no terminal as interrupted from its one run-linked release only when the run
+had no effect or input record, unless the release was the one the start recovered
+(`not_performed`) or the lease ended another way: R4 as pinned by
+`interrupted_policy_execution_recovery_rejects_effects_and_duplicate_release`, effect half. A run
+whose own failure path wrote its release (`performed`) and which a stop cut before its execution
+record had no settlement the Runtime could derive but the interrupted one, and the ledger refused
+it (`scheduled_execution_recovery_interruption_conflict`) at every start. No operation closes a
+dispatch and nothing expires it, so the dispatch stayed open: its (task, instance) pair counted as
+in flight (its eligibility age pinned to 0, no aging in rank, a score-deferred candidate never
+reaching `defer_aging_cap_ms`, no clock-slot planning records) and every start wrote the Warning
+again. Had the stop left no run-linked release, the start would have recovered one and settled the
+same run as interrupted, inputs and all.
+
+**The rule (changes R4).** A run with no terminal whose one run-linked release is its own (effect
+`performed`) is settled as interrupted (`policy_settlement_interrupted`, Severe, the task paused,
+no retry, runtime 0, timed at the release) also when it has effect or input records, the way the
+recovered `not_performed` release is accepted; the check no longer reads those records. A run that
+has a terminal is still settled only from it (an interrupted settlement of it is refused, here
+`scheduled_execution_recovery_failure_conflict`, or `..._interruption_conflict` when its lease end
+was recovered or ended otherwise); more than one run-linked release is still refused
+(`scheduled_execution_recovery_release_not_unique`); nothing else of the check changes. The replay
+of a settlement already recorded takes the same rule, so a start cut between the execution record
+and the completion completes it.
+
+**Who closed it and why.** The start's settlement does not change; with the check changed, the
+next start closes the dispatch once with the records a settlement writes (`policy.execution_recorded`,
+`policy.dispatch_completed`, Scheduler). When an earlier start had refused the run (its first
+`policy_settlement_dispatch_unsettled` record, read by the run's link index before the
+settlement's write), the start then records one `runtime.failed`
+`policy_settlement_dispatch_closed` (Info, new) under the run's links: `operation`
+`reconcile_policy_outcomes` (the start's settlement) and `failure_code` the earlier refusal's code
+(when that record named an unregistered spelling, the earlier record's outcome is a `note` link
+instead). A later start finds the dispatch settled and writes no settlement, no Warning and no
+second record for it.
+
+**The late settlement does not punish the pair.** In ledger order it comes after the later runs
+of its (task, instance) pair, when there are any. Today's rule for an interruption is
+`interruption_lifted_by_restart`: the first interruption of a pair in a row is recorded as its
+failure (Severe, the task paused) and lifted by the restart that recorded it; a second one in a row
+keeps the pair paused until its package changes. Applied to a late settlement that would make the
+old run the pair's latest failure in both cases, would end a later run's backoff or failure streak
+and owed rerun when the pair has run since, and would pause the pair when its latest run before it
+was also an interruption. So an interrupted settlement of a run an earlier start refused leaves
+the decision memory as it was: no failure streak, pause, backoff or retry round, not the pair's
+latest failure, no owed rerun ended, its admission's counts as the admission took them. The
+record is checked against the settlement it must be as any record. The start decides it by the
+run's `policy_settlement_dispatch_unsettled` record before the settlement's write; every replay of
+the execution record (the decision memory's tail, a seeding start, the test replay) reads the same
+record before the execution's sequence, so the held and the replayed decision memory agree.
+
+**After it.** The dispatch is completed: the pair is no longer in flight, its eligibility age runs
+again and its clock-slot planning records are written again, and later starts record nothing for
+it. The other writer of `policy_settlement_dispatch_left_open` (a pending scheduled dispatch whose
+instance is no longer configured, or whose lease ended in more than one way) is unchanged, and a
+run the check still refuses is reported as before (UNSET-1). Not changed by this slice, and left
+to the coordinator: where a pair's latest completed run is chosen by completion order (the
+outcome-key snapshot and `latest_completed_policy_runs`, the dispatch journal's named latest
+completed dispatch, which a later start loads, and the failure count it carries, and
+`actingd suspended`'s latest execution), a late completion stands for its pair when the pair has
+run since, until the pair's next completion. The decision memory is not affected, and in the
+settling start's memory the task snapshots and settlement facts, which order by admission, still
+read the later run.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)), every range as
+main declares it: `ledger`: the check's rule is not a record shape, and a new code is not a shape
+change (its row: a new code "raises no revision"); `runtime-outcomes`: one new code in the catalog
+only; `runtime-client` and the protocol: no request kind, no member. No configuration key.
+
+**At deploy.** At the first start of 0.12.51 a dispatch left open by a run cut after its own
+release is settled once (`policy.execution_recorded`, `policy.dispatch_completed`) and recorded as
+closed (`policy_settlement_dispatch_closed`, with `failure_code`
+`scheduled_execution_recovery_interruption_conflict`); the Warning of every start stops.
+Production has one such dispatch, of 10-26. **Rollback** (below 0.12.51): the settlement stays;
+an older version finds the dispatch closed and reports nothing for it.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| UNSET2-1 | the ledger's check of a recovered interrupted settlement of a run with no terminal and its own run-linked release (`append_recovered_policy_execution`) | rule (no shape; changes #670 R4 and its pin) | UNSET-2 | ledger | `since` 0.12.51; effect and input records no longer read; a terminal and two releases still refused |
+| UNSET2-2 | `runtime.failed` with `policy_settlement_dispatch_closed` (info, `none`; `failure_code`, `operation`, `instance_id`, `task_id`, `lease_id`) | new code of an existing record (host gate row "#428 UNSET-2") | UNSET-2 | UNSET-2 | `since` 0.12.51; once, by the start that settles a run an earlier start refused, under the run's links |
+| UNSET2-3 | a late interrupted settlement leaves the decision memory as it was, at the start and at every replay (`late_settlement_refusal`) | rule (no shape) | UNSET-2 | — | decided by the run's earlier `policy_settlement_dispatch_unsettled` record |
+
+Tests (ledger gate row "#428 UNSET-2"):
+`unset2_own_release_with_inputs_settles_as_interrupted_and_a_terminal_still_refuses`, and
+`interrupted_policy_execution_recovery_accepts_effects_and_rejects_duplicate_release`, the test
+that pinned R4 (`interrupted_policy_execution_recovery_rejects_effects_and_duplicate_release`,
+in no gate row), adapted on purpose and renamed: its effect half now expects the run settled as
+interrupted from its own release; its duplicate-release half is unchanged. Host gate row
+"#428 UNSET-2": `policy_admission::unset2_the_next_start_settles_a_run_cut_after_its_own_release_once`
+(the pair has not run since) and
+`policy_admission::unset2_a_late_settlement_after_a_later_run_neither_pauses_nor_fails_the_pair`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

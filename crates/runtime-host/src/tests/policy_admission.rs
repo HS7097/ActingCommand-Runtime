@@ -1892,6 +1892,302 @@ fn unset1_a_failed_read_of_the_run_records_holds_as_before_and_says_why() {
     host.close().expect("close host");
 }
 
+// UNSET-2 (0.12.51, register §1.295; production 10-26): a scheduled run cut by a stop after its
+// own failure path released its lease, with an effect record and without a terminal, which an
+// earlier start refused to settle, is settled once by the next start, which records who closed
+// it and why; the late settlement leaves its pair's failure state as it was.
+
+/// UNSET-2: evaluates at `now` with `seed` and admits A's dispatch: its run context and its
+/// intent.
+fn unset2_admit_a_at(
+    host: &RuntimeHost,
+    now: u64,
+    seed: u64,
+) -> (PolicyRunContext, DispatchIntent) {
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &pending_policy_facts(),
+            &pending_policy_resources(),
+            EvaluationTime {
+                unix_ms: now,
+                monotonic_ms: now,
+            },
+            seed,
+            PolicyTrigger::Recovery,
+        )
+        .expect("the evaluation");
+    let evaluation = cycle.evaluation.as_ref().expect("evaluation");
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.instance_id == POLICY_INSTANCE_ALIAS)
+        .unwrap_or_else(|| panic!("A's dispatch intent: {evaluation:#?}"))
+        .clone();
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("A's reason chain")
+        .clone();
+    record_policy_approval(host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(host, &intent))
+        .expect("A's admission")
+    else {
+        panic!("expected A's dispatch to be granted");
+    };
+    (context, intent)
+}
+
+/// UNSET-2: the first start: A's dispatch admitted and an effect record of its run written; then
+/// the run's own failure path releases its lease (effect `performed`) and the stop cuts it before
+/// its execution record (the injected append failure latches the Runtime, as a crash ends it).
+/// The run has its own release, an effect record and no terminal. Returns the open dispatch on A
+/// and its intent.
+fn a_dispatch_on_a_cut_after_its_own_release(root: &TempDir) -> (OpenDispatchOnA, DispatchIntent) {
+    let (instance_a, instance_b) = (instance_id(), instance_id());
+    let host = RuntimeHost::start(
+        unset1_config(root, POLICY_NOW_UNIX_MS),
+        two_instance_provider(instance_a, instance_b),
+    )
+    .expect("first start");
+    host.activate_policy_catalog(&pending_policy_sources(1))
+        .expect("two-instance catalog activation");
+    let (context, intent) = unset2_admit_a_at(&host, POLICY_NOW_UNIX_MS, 7);
+    host.append_contained_task_semantic_for_test(
+        context.request(),
+        context.lease_token(),
+        context.issued_task_id(),
+        context.issued_run_id(),
+        TaskSemanticFact::EffectIntent {
+            frame_extent: None,
+            step_index: 0,
+            operation_label: "fixture".to_owned(),
+            action: InputAction::Reset,
+        },
+    )
+    .expect("the run's effect record");
+    host.fail_next_policy_execution_append_for_test()
+        .expect("arm the execution append failure");
+    let error = host
+        .complete_scheduled_policy_failure_without_terminal_for_test(&context)
+        .expect_err("the stop cuts the run before its execution record");
+    assert_eq!(error.code(), "ledger_failure");
+    let run_id = context.run_id();
+    let releases = host
+        .query_persisted_events_for_test(EventQuery {
+            run_id: Some(run_id),
+            event_type: Some(EventType::LeaseReleased),
+            ..EventQuery::default()
+        })
+        .expect("the run's releases");
+    assert_eq!(releases.len(), 1, "the run's own release: {releases:#?}");
+    drop(context);
+    if let Err(error) = host.close() {
+        assert_eq!(error.code(), "ledger_failure", "{error:?}");
+    }
+    (
+        OpenDispatchOnA {
+            instance_a,
+            instance_b,
+            run_id,
+        },
+        intent,
+    )
+}
+
+/// UNSET-2: a restart at `clock_unix_ms` with no refusal injected. The Runtime starts.
+fn unset2_restart(root: &TempDir, open: &OpenDispatchOnA, clock_unix_ms: u64) -> RuntimeHost {
+    let host = RuntimeHost::start(unset1_config(root, clock_unix_ms), open.provider())
+        .expect("the restart");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host
+}
+
+/// UNSET-2: the number of `event_type` records (executions or completions) of `decision_id`.
+fn unset2_decision_records(host: &RuntimeHost, event_type: EventType, decision_id: &str) -> usize {
+    host.query_persisted_events_for_test(EventQuery {
+        event_type: Some(event_type),
+        ..EventQuery::default()
+    })
+    .expect("the policy records")
+    .iter()
+    .filter(|event| match event.payload() {
+        EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
+            payload.decision_id() == decision_id
+        }
+        EventPayload::Policy(PolicyPayload::DispatchCompleted(payload)) => {
+            payload.decision_id() == decision_id
+        }
+        _ => false,
+    })
+    .count()
+}
+
+/// UNSET-2: the run's `policy_settlement_dispatch_closed` records (Info).
+fn closed_records(
+    host: &RuntimeHost,
+    run_id: RunId,
+) -> Vec<actingcommand_contract::outcome::Outcome> {
+    unset1_records(
+        host,
+        run_id,
+        EventSeverity::Info,
+        "policy_settlement_dispatch_closed",
+    )
+}
+
+/// UNSET-2: A's pair's value record (its failure state among it), held and replayed the same.
+fn unset2_pair_record(
+    host: &RuntimeHost,
+    intent: &DispatchIntent,
+) -> actingcommand_contract::PolicyControlStateRecord {
+    let (held, replayed, _) = host
+        .decision_memory_for_test()
+        .expect("the decision memory");
+    let key = format!("decision_memory/{}/{}", intent.instance_id, intent.task_id);
+    let record =
+        |records: &BTreeMap<String, crate::policy_control::PolicyValueRecord>| match records
+            .get(&key)
+        {
+            Some(crate::policy_control::PolicyValueRecord::Control(record)) => (**record).clone(),
+            other => panic!("A's pair's value record: {other:?}"),
+        };
+    assert_eq!(record(&held), record(&replayed), "held and replayed");
+    record(&held)
+}
+
+/// UNSET-2: the settling start's records: the run settled once (one execution record, one
+/// completion), one `policy_settlement_dispatch_closed` naming the start's operation and the
+/// earlier refusal, the one Error of the earlier start and no Warning.
+fn assert_settled_once_and_closed(host: &RuntimeHost, open: &OpenDispatchOnA, decision_id: &str) {
+    assert_eq!(
+        unset2_decision_records(host, EventType::PolicyExecutionRecorded, decision_id),
+        1,
+        "one execution record"
+    );
+    assert_eq!(
+        unset2_decision_records(host, EventType::PolicyDispatchCompleted, decision_id),
+        1,
+        "one completion"
+    );
+    let closed = closed_records(host, open.run_id);
+    assert_eq!(closed.len(), 1, "one record of who closed it: {closed:#?}");
+    assert_eq!(
+        outcome_str(&closed[0], "failure_code"),
+        Some(UNSET1_REFUSAL)
+    );
+    assert_eq!(
+        outcome_str(&closed[0], "operation"),
+        Some("reconcile_policy_outcomes")
+    );
+    assert_eq!(unsettled_errors(host, open.run_id).len(), 1);
+    assert!(left_open_warnings(host, open.run_id).is_empty());
+}
+
+/// UNSET-2 test 1 (the pair has not run since): the first restart refuses the run's settlement
+/// and holds A (UNSET-1). The next start settles it once and records who closed it and why; the
+/// late settlement leaves the pair's failure state as it was (no streak, pause, backoff or retry
+/// round; not its latest failure). A later start writes neither a settlement nor a Warning for
+/// it, and the pair's eligibility age runs again.
+#[test]
+fn unset2_the_next_start_settles_a_run_cut_after_its_own_release_once() {
+    let root = TempDir::new().expect("tempdir");
+    let (open, intent) = a_dispatch_on_a_cut_after_its_own_release(&root);
+    let host = first_hold_of_a(&root, &open);
+    let before = unset2_pair_record(&host, &intent);
+    assert!(before.failure_streak.is_none(), "{before:#?}");
+    host.close().expect("close with A held");
+
+    let host = unset2_restart(&root, &open, POLICY_RESTART_UNIX_MS + 60_000);
+    assert_settled_once_and_closed(&host, &open, &intent.decision_id);
+    let after = unset2_pair_record(&host, &intent);
+    assert_eq!(after.failure_streak, None, "not the pair's latest failure");
+    assert_eq!(after.retry_round, None, "no retry round");
+    host.close().expect("close after the settlement");
+
+    let later = POLICY_RESTART_UNIX_MS + 120_000;
+    let host = unset2_restart(&root, &open, later);
+    assert_settled_once_and_closed(&host, &open, &intent.decision_id);
+    resume_a(&host);
+    let evaluate = |unix_ms: u64, seed: u64, trigger: PolicyTrigger| {
+        host.evaluate_policy_cycle_with_test_inputs(
+            &pending_policy_facts(),
+            &pending_policy_resources(),
+            EvaluationTime {
+                unix_ms,
+                monotonic_ms: unix_ms,
+            },
+            seed,
+            trigger,
+        )
+        .expect("an evaluation after the settlement")
+    };
+    let first = evaluate(later, 9, PolicyTrigger::Recovery);
+    assert!(first.evaluation.is_some(), "the first evaluation ran");
+    let second = evaluate(later + 67_000, 10, PolicyTrigger::Reconciliation);
+    assert!(second.evaluation.is_some(), "the second evaluation ran");
+    let snapshot = host
+        .policy_task_snapshots_for_test(later + 67_000)
+        .expect("the task snapshots")
+        .into_iter()
+        .find(|snapshot| {
+            snapshot.task_id == intent.task_id && snapshot.instance_id == intent.instance_id
+        })
+        .expect("A's pair");
+    assert_eq!(
+        snapshot.eligible_since_unix_ms,
+        Some(later),
+        "the pair's eligibility age runs again"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// UNSET-2 test 2 (the pair has run since): after the first restart held A and a person lifted
+/// the hold, the pair ran again and succeeded while the cut run stayed open. In ledger order the
+/// next start's late settlement comes after that run: it is settled once and recorded as
+/// closed, and it neither pauses the pair nor becomes its latest failure; the pair's latest run
+/// is still the later one.
+#[test]
+fn unset2_a_late_settlement_after_a_later_run_neither_pauses_nor_fails_the_pair() {
+    let root = TempDir::new().expect("tempdir");
+    let (open, intent) = a_dispatch_on_a_cut_after_its_own_release(&root);
+    let host = first_hold_of_a(&root, &open);
+    resume_a(&host);
+    let (later_run, later_intent) = unset2_admit_a_at(&host, POLICY_RESTART_UNIX_MS, 9);
+    assert_ne!(later_intent.decision_id, intent.decision_id);
+    host.complete_scheduled_policy_success_without_terminal_for_test(&later_run)
+        .expect("the later run succeeds");
+    drop(later_run);
+    let before = unset2_pair_record(&host, &intent);
+    assert!(before.failure_streak.is_none(), "{before:#?}");
+    host.close().expect("close after the later run");
+
+    let host = unset2_restart(&root, &open, POLICY_RESTART_UNIX_MS + 60_000);
+    assert_settled_once_and_closed(&host, &open, &intent.decision_id);
+    let after = unset2_pair_record(&host, &intent);
+    assert_eq!(after.failure_streak, None, "not the pair's latest failure");
+    assert_eq!(after.retry_round, before.retry_round, "no retry round");
+    assert!(pause_of_a(&host).is_none(), "A is not paused");
+    let snapshot = host
+        .policy_task_snapshots_for_test(POLICY_RESTART_UNIX_MS + 60_000)
+        .expect("the task snapshots")
+        .into_iter()
+        .find(|snapshot| {
+            snapshot.task_id == intent.task_id && snapshot.instance_id == intent.instance_id
+        })
+        .expect("A's pair");
+    assert_eq!(
+        snapshot.last_dispatched_unix_ms,
+        Some(POLICY_RESTART_UNIX_MS),
+        "the pair's latest run is the later one"
+    );
+    assert_eq!(snapshot.failure_streak, Some(0));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
 fn two_instance_pending_policy_host(root: &TempDir) -> RuntimeHost {
     let host = RuntimeHost::start(
         config(root),
