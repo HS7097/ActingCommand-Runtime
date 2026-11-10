@@ -284,7 +284,7 @@ from the decision layer's:
   read, or read too long ago, is unusable under the up-front check above: "not read" never reads
   as "not present".
 - **An empty list** (the list was read and showed no position) is known and empty: every
-  `keyed_fact` read of it is `absent`, and a list maximum reads its `empty` (section "Table
+  `keyed_fact` read of it is `absent`, and it adds no key to a list maximum (section "Table
   maximum over a list").
 - **Fresh at every read.** Every complete read is a new observation
   (`run:<run id>/frame:<frame id>/<operation id>`) with a strictly newer observation time, also
@@ -295,8 +295,9 @@ from the decision layer's:
   document may declare any of them. To ask whether a key is listed, a document reads a column
   every row holds, such as a `passed` column, with `absent` the other value.
 - **Several lists.** A package may split one list into several (one per kind of member), each
-  its own key and fact identity; a document declares each list it reads in `facts[]` and reads
-  each through its own reference. The identities count as above.
+  its own key and fact identity; a document declares each list it reads in `facts[]`. A
+  `keyed_fact` reads one list; a list maximum reads 1 to 16 of them at once, over the union of
+  their keys (section "Table maximum over a list"). The identities count as above.
 
 ## Tables and `table`
 
@@ -374,17 +375,18 @@ value goes through the resource line (Alice's 121 A); only a task's select step 
 
 ## Table maximum over a list
 
-Workflow #428 S168-5, written ahead of its code by S168-0 ([v012-register.md](v012-register.md)
-§1.291). A document may read the largest value one integer column of a declared table holds over
-the keys a declared record list lists: how much the best listed member is worth in one class of
-the table. The Runtime knows neither what the table nor what the list means. The names are
-neutral examples:
+Workflow #428 S168-5a, written ahead of its code by S168-0 and corrected by its fix 1
+([v012-register.md](v012-register.md) §1.291). A document may read the largest value one integer
+column of a declared table holds over the keys one or more declared record lists list: how much
+the best listed member is worth in one class of the table. The Runtime knows neither what the
+table nor what the lists mean. The names are neutral examples:
 
 ```json
 {"source": "table_max_over_list", "table_id": "member_values", "value_column": "value",
  "pins": [{"column": "domain", "equals": "domain.x"}],
- "list": {"fact_key": "inventory.list.members_kind_a",
-          "where": {"column": "state", "equals": "state.a"}},
+ "lists": [{"fact_key": "inventory.list.members_kind_a",
+            "where": {"column": "state", "equals": "state.a"}},
+           {"fact_key": "inventory.list.members_kind_b"}],
  "empty": {"type": "integer", "value": -1}}
 ```
 
@@ -393,66 +395,101 @@ neutral examples:
 | `table_id` | A table the document declares (section "Tables and `table`") |
 | `value_column` | A declared column of type `integer`. Integers only: a `boolean` or `enum_string` column is a `type_mismatch` validation error |
 | `pins` | As a `table` read's: 0 to 7, exactly the row key's columns but the key, each once, `{column, equals}` or `{column, equals_fact, otherwise?}` |
-| `list.fact_key` | A record list the document declares in `facts[]`; the values of its `key_column` are the keys looked up in the table's key column |
-| `list.where` | Optional, as a `keyed_fact` read's: keeps only the rows whose `enum_string` column equals `equals` |
-| `empty` | Required, `{"type": "integer", "value": n}`, n within ±(2^53 − 1): the known value read when no listed key is of the class. The document states it in the open; the Runtime never supplies one, and it is 0 only when the document writes 0 |
+| `lists` | 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s; none, a 17th or a repeated `fact_key` is a validation error |
+| `lists[].fact_key` | A record list the document declares in `facts[]`; the values of its `key_column` are the keys looked up in the table's key column |
+| `lists[].where` | Optional, as a `keyed_fact` read's: keeps only the rows of its list whose `enum_string` column equals `equals` |
+| `empty` | Required, `{"type": "integer", "value": n}`, n within ±(2^53 − 1): the known value read when every list is usable and no key of the union is of the class. The document states it in the open; the Runtime never supplies one, and it is 0 only when the document writes 0 |
+
+**The union.** The keys a reference reads are the union of the keys its lists hold, each list's
+rows after its own entry's `where`. A key held by several lists counts once: it is one key of the
+union, looked up once.
 
 **One read.** The value does not depend on the candidate: the evaluator reads each distinct
 reference once per evaluation, in this order.
 
-1. The list, by the up-front check of section "Record lists": a list that is missing, expired,
-   stale, below its floor or malformed ends the evaluation `unknown` before any candidate, with
-   no verdict.
+1. The lists. A listed list that is not usable as section "Record lists" defines it (missing,
+   expired, stale, below its floor, of another type or malformed) makes the read Unknown with
+   that list's reason, the first such list in the order of `lists`, and nothing more is read.
+   Every listed list is declared in `facts[]`, so the up-front check of section "Record lists"
+   has read it before any candidate: there an unusable list ends the evaluation `unknown`, with
+   no verdict, as for any declared list.
 2. Each pin's value: the literal, the fact, or its `otherwise` (reason `term_fallback_used`), as
    a `table` read's step 2. Still unavailable, the read is Unknown with the first fact's reason.
-3. Each listed key the `where` keeps, in the list's order. No row of the table has the key: the
-   read is Unknown, `lookup_miss`. The key has rows and none holds the pins: the key is not of
-   the class and adds nothing. The row's cell is null, also by expiry: the read is Unknown,
-   `lookup_miss`.
+3. Each key of the union, in ascending byte order. No row of the table has the key: the read is
+   Unknown, `lookup_miss`. The key has rows and none holds the pins: the key is not of the class
+   and adds nothing. The row's cell is null, also by expiry: the read is Unknown, `lookup_miss`.
+   A row a `where` leaves out gives no key: it is not looked up and is no miss.
 4. The value: the largest cell of the keys of the class; with none, `empty`.
 
 | Case | The read |
 |---|---|
-| The list holds no row, or none that `where` keeps | `empty`, known |
-| No listed key is of the class | `empty`, known |
-| One listed key has no row in the table | Unknown, `lookup_miss`, whatever the others hold: the missing key may hold the largest value |
-| Every listed key has no row in the table | Unknown, `lookup_miss` |
-| A listed key of the class has a null cell | Unknown, `lookup_miss` |
+| A listed list is unusable | Unknown, that list's reason, the first in the order of `lists` (step 1) |
+| Every list is usable and the union is empty (no row, or none that a `where` keeps) | `empty`, known |
+| Every list is usable and no key of the union is of the class | `empty`, known |
+| One key of the union has no row in the table | Unknown, `lookup_miss`, whatever the others hold: the missing key may hold the largest value |
+| Every key of the union has no row in the table | Unknown, `lookup_miss` |
+| A key of the class has a null cell | Unknown, `lookup_miss` |
 | A pin is unavailable | Unknown, the first fact's reason |
-| The list is unusable | The evaluation ends `unknown` (step 1) |
 
 A missing value is never read as 0 and never skipped: only a key the table knows and places
-outside the class adds nothing. So the table that a list maximum reads gives every identity the
-list can hold at least one row.
+outside the class adds nothing.
+
+**What the table owes a list maximum.** So a missing row of a class is a statement, never a gap:
+it says the identity is not of the class. A table a list maximum reads, for every class a
+reference pins, gives
+
+- an identity with a value in the class: a row of the class with the value;
+- an identity that may be of the class, whose value is not known: a row of the class with a null
+  cell, which reads Unknown (`lookup_miss`). The `value_column` is then `nullable`: the table
+  format lets an `integer` column hold null cells ([package-reference.md](package-reference.md),
+  "Tables": `nullable` lets a cell be `null`);
+- an identity known not to be of the class: no row of the class;
+- every identity a listed list can hold: at least one row, so that no key of the union misses;
+  an identity of no class at all gets a row of a class no reference pins.
+
+A row of another class for an identity whose value is unknown would say that the identity is not
+of this class: it would drop out of the maximum silently, the maximum would come out too low, and
+a comparison against it could pass when it must not. The Runtime cannot tell such a row from a
+true one; the table's builder owes the rule.
 
 **Where it is read.** As a side of an `integer_compare` gate predicate, and as the input of a
 scoring term through `identity` or `threshold`. A gate or a term that reads it declares
 `drop_candidate` or `abort_evaluation`; a substitution is a `type_mismatch` validation error, as
 for a table read: missing data never stands in for a value. A tie-break key cannot read it (it is
 the same for every candidate), nor can a `fallback_column` name it; both are `type_mismatch`
-validation errors. A document holds at most 16 list maxima.
+validation errors. A document holds at most 32 list maxima, each over at most 16 lists; a 33rd
+is a validation error.
 
-**Several lists.** A reference reads one list. A value is compared with the largest over several
-lists (a list split by kind of member) by an `all` of `integer_compare` gates, one per list:
-`v > max(A ∪ B)` exactly when `v > max(A)` and `v > max(B)`, given that each reference's `empty`
-lies below every value its class holds.
+**Several lists.** One reference reads every list it names, so a value is compared with the
+largest over a list split by kind of member (one list per kind) by one `integer_compare` against
+one reference that names them all, over their union. A document may still write one reference per
+list when it wants a comparison per list. It then minds that each reference stands alone: one
+whose list holds no key of the class reads its own `empty`, which decides its comparison, so each
+`empty` lies on the side that comparison intends (below every value of the class for "above the
+best listed"); each is Unknown on its own, and an `all` or `any` of the comparisons combines
+three-valued verdicts; a key two lists hold is read by both references; and each reference counts
+against the 32.
 
 **Binding.** `SelectionTables::bind` checks the declared table as for a `table` read: the column
 is in the file and of type `integer`, else `table_mismatch` (`column_absent`, `column_type`).
 
 **Audit.** Each reference read adds one reason to the decision's reason chain,
 `selection_table_list_max` (info), with `table_id`, `table_column` (the `value_column`),
-`fact_key` (the list), `count` (the list's rows `where` kept) and either `maximum` with
-`maximum_identity` (the value and the smallest key, in byte order, that holds it; neither for
-`empty`) or `unknown_reason`. With the record's `policy_sha256` and `input_sha256`, the
+`fact_keys` (the lists it read, in the order of `lists`: a list value of the catalog's
+`list<token>` type, at most 16 items, so never cut), `count` (the number of distinct keys of the
+union) and either `maximum` with `maximum_identity` (the value and the smallest key, in byte
+order, that holds it; neither for `empty`) or `unknown_reason`. The reasons count against the
+decision chain's 128 reasons and the record's 64 KiB ([selection-graph.md](selection-graph.md),
+"Validation and bounds"). With the record's `policy_sha256` and `input_sha256`, the
 `standard_pack_table_read` digest of the table ([selection-graph.md](selection-graph.md),
-"Tables") and the list's rows in the snapshot, a reviewer reads the value again. The values say
+"Tables") and the lists' rows in the snapshot, a reviewer reads the value again. The values say
 what the instance holds: they are account data, and stay in the ledger.
 
-**Input identity.** The hashed input's `tables` member also holds, under the table's id, every
-row the read took (the row of each listed key that holds the pins), each once, as a `table`
-read's rows; the list's rows are already in the snapshot. The hash moves when a contributing row
-or a listed row moves, and for no other row.
+**Input identity.** Every listed list contributes. The hashed input's `tables` member also holds,
+under the table's id, every row the read took (the row of each key of the union that holds the
+pins), each once, as a `table` read's rows; the rows of every listed list are already in the
+snapshot. The hash moves when a contributing row or a row of any listed list moves, and for no
+other row.
 
 **Upper bound.** The read is exact, as a scalar fact is. Unknown, it drops the identity under
 `drop_candidate` and gives `Unbounded` under `abort_evaluation`, as any exact unknown input.
@@ -461,8 +498,8 @@ or a listed row moves, and for no other row.
 a document that uses it (`type_mismatch`).
 
 **Compatibility.** A document that does not use it keeps its canonical bytes, `policy_sha256` and
-`input_sha256`. A reader before S168-5 refuses a document that uses it (an unknown value source).
-In a package it belongs to the `package` revision that S168-5 raises or joins
+`input_sha256`. A reader before S168-5a refuses a document that uses it (an unknown value
+source). In a package it belongs to `package` revision 8, with S168-4's `read_list`
 ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168").
 
 ## Upper bound
@@ -521,7 +558,8 @@ keys 16; lookup entries 512 per transform; enumerated members 1024, the largest
 business identity domain a pack may declare; record-list columns 63 per list;
 predicate depth 16 and predicate nodes 512 per gate, matching the scheduling
 predicate limits; identifiers, fact keys, and outcome keys 128 bytes; one
-document 512 KiB; list maxima 16 per document (Workflow #428 S168-5).
+document 512 KiB; list maxima 32 per document and lists 16 per list maximum (Workflow #428
+S168-5a).
 
 ## Scheduling consumer
 
@@ -603,11 +641,13 @@ A select step of a contained task (see [the selection graph](selection-graph.md)
   The zero-padded candidate IDs make `candidate_id` a stable last tie-break key.
 - The decision is recorded whole in `task.selection_evaluated`, with `policy_sha256`,
   `input_sha256` and the document's package SHA-256.
-- A judge step (Workflow #428 S168-5; [selection-graph.md](selection-graph.md), "Judge step")
+- A judge step (Workflow #428 S168-5b; [selection-graph.md](selection-graph.md), "Judge step")
   consumes a document of its package the same way, with three differences: `selection.mode` is
   `none_allowed` and `required_count` at least its layout's slot count, so every candidate that
   survives is chosen and neither `insufficient` nor `ambiguous` can occur; no outcome leads to an
-  input; and every outcome, `unknown` included, ends the run normally with the step's key.
+  input; and every outcome, `unknown` included, ends the run normally, with the step's
+  `outcome_key` for a known judgment with no unknown candidate and its `unknown_outcome_key`
+  otherwise.
 
 This crate is unchanged by that use: the scheduling consumer's `catalog_hash`, which depends on
 the document's serialization, keeps its value.
