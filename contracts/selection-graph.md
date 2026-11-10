@@ -1138,13 +1138,41 @@ The names are neutral examples:
 | `layout_id` names a `fixed_slots` layout the task declares on the `from` page, whose `unknown_identity` is `reject`: one frame shows every candidate it can hold. A list that scrolls is read by a list reading, never judged on one frame, and a judge declares no `scan` | `judge layout=not_fixed_slots`, `judge scan=declared` |
 | The document passes every check of a select step's (the 512 KiB limit, decode, canonical form, `validate`, `applies_to.candidate_layout_id`, `fields`), with `selection.mode` `none_allowed` and `required_count` at least the layout's slot count (so at most 64 are chosen). Its `required_count` above 1 does not make the step a multi select | `contained_task_select_policy_missing`, `_invalid`, `_mismatch`; `judge mode=not_none_allowed`, `judge required_count=below_slots` |
 | The task declares `scheduling_outcome`, and the step's state is mapped for both keys: exactly one mapping with that state's effect condition and `judge_result` `judged` lists the `from` page, with key `outcome_key`, and exactly one with `judge_result` `unknown` lists it, with key `unknown_outcome_key` (section "Mapping the two keys"; [README.md](README.md), phases; the outcome coverage check of a task without phases) | `contained_task_outcome_declaration_incomplete`, `task_phases_outcome_incomplete` |
-| No member an input uses: `guard`, `expect_after`, `unguarded_trusted_coordinate`, `max_runs`, `on_max_runs` and `on_guard_refused` are refused; `retryable` is `false` | `judge <member>=declared` |
+| No member an input uses, and every other member of the operation as the table "Members of a judge step" below says | as that table says; mostly `judge <member>=declared` |
 | The step is a terminal: the static walk ends there. It is neither the designated operation nor a member of a designated effect set, since it has no effect | `judge designated=declared` |
 | A package with a judge step is no prerequisite or return-home layer, as a package with an `on_empty` step is not: an early end on the step's page would leave the dependent package short of its entry page | `contained_task_prerequisite_incompatible`, `reason=judge_end` |
 
 The declaration gate refuses the structure with `resource_declaration_invalid` at the pointer;
 the parser and Runtime admission refuse the rest before any run, the step rules with
 `contained_task_select_invalid` and the detail token shown.
+
+**Members of a judge step.** Every member the task schema lets an operation carry (the operation
+members of the declaration gate, `DeclarationValidator::operation` in
+`crates/pack-containment/src/source/declarations.rs`, with the effects of S168-4 and S168-5b)
+either applies to a judge step with its existing meaning or is refused, as follows. A member that
+only concerns an input, its confirmation, a retry or recovery of it, or a repeat of the step is
+refused: a judge has none of them. Admission checks these members of a judge step before the
+common operation checks, as it checks a wait step's members (`TaskProgram::validate_wait_steps`;
+[resource-declarations.md](resource-declarations.md), "Wait steps and wait pages"), so a refused
+member gives the refusal shown, the first one in this order:
+
+| Member | On a judge step | Refusal |
+| --- | --- | --- |
+| `id` | applies: the operation's id | as for every operation |
+| `from` | applies: the step's page, which is the page of its layout, so never `any` | a layout on another page: `contained_task_select_invalid`, as for a select step |
+| `to` | required: the `from` page | `judge to=not_from` |
+| `judge` | the effect (the table above) | the table above |
+| `click`, `application`, `select`, `wait`, `read_list` | refused: exactly one effect | the first row of the table above |
+| `when` | applies with its meaning ([resource-declarations.md](resource-declarations.md), "Task schema `0.9` candidate operations"): judged on the frame the step would start on; a judge whose `when` does not hold is withdrawn, writes no record, ends nothing, and the page's next candidate is taken | as for every operation |
+| `retryable` | `false` or absent: a judge's failures end the run on its first attempt, with neither retry nor recovery, as a single-frame select's do | `true`: `judge retryable=declared` |
+| `guard`, `unguarded_trusted_coordinate`, `verify_template`, `expect_after`, `post_delay_ms`, `input_recheck`, `observation_window`, `on_guard_refused` | refused: a guard and its source form, a confirmation, a wait after an input, a recheck of an input, a window after a confirmation, a guard refusal; a judge has no input to guard or confirm | `judge <member>=declared` |
+| `max_attempts`, `retry_interval_ms`, `on_error` | refused: a judge is never retried and never recovers within the run | `judge <member>=declared` |
+| `max_runs`, `on_max_runs` | refused: a judge ends the run the first time it runs, so a per-run cap is never reached | `judge <member>=declared` |
+| `pre_delay_ms`, `pre_wait_freezes_ms`, `post_wait_freezes_ms` | refused: timings around an input, which the kernel does not read and a judge has no use for | `judge <member>=declared` |
+| `transition`, `optional` | refused: `linear_steps` members, and a judge runs in a page graph | `judge <member>=declared` |
+| `threshold`, `method`, `mask`, `maskRange`, `rect_move`, `maa_task`, `maa_task_id` | refused by the gate's existing rule: only beside `verify_template`, which a judge refuses | `UnconsumedField` at the member |
+| `destructive` | refused, as on every operation | `UnconsumedField` at the member |
+| `purpose`, `provenance`, `verified_live`, `effect` (the string member, not an effect), `timeout_ms`, `consumes`, `produces` | apply with their existing meaning: the gate checks their types and the kernel reads none of them; `purpose`, `consumes` and `produces` go to the step's primitive as for every operation (section "Derived documents of a judge step" below) | as for every operation |
 
 ### Execution of a judge step
 

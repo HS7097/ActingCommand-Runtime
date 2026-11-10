@@ -612,8 +612,35 @@ only; the numbers and names are neutral examples, not values:
 | `valid_for_ms` | `1..=31_536_000_000` | `…/read_list/valid_for_ms` |
 | `scan` | required: a select step's `scan` ([selection-graph.md](selection-graph.md), "Select step"), with every static check admission runs on it, but no `early_stop`: every position is read | `MissingField` @ `…/read_list/scan`; `early_stop`: `UnknownField` @ `…/scan/early_stop`; the static checks as a select step's |
 | `guard` | required, any guard a select step takes; judged on every viewport | `MissingField` @ `/operations/<i>/guard` |
-| input members | `expect_after`, `unguarded_trusted_coordinate`, `max_runs`, `on_max_runs` and `on_guard_refused` are refused; `retryable` is `false`: the scan's moves are inputs, and a retry would repeat them | `UnknownField` or `InvalidValue` at the member |
+| the operation's other members | as the table "Members of a `read_list` step" below says | as that table says |
 | any other member of `read_list` | none | `UnknownField` @ `…/read_list/<member>` |
+
+**Members of a `read_list` step.** Every member the task schema lets an operation carry (the
+operation members of the declaration gate, `DeclarationValidator::operation` in
+`crates/pack-containment/src/source/declarations.rs`, with the effects of S168-4 and S168-5b)
+either applies to a `read_list` step with its existing meaning or is refused, as follows. The
+declaration gate refuses at the pointer shown, and admission, which runs the same validation
+before the common operation checks (as it checks a wait step's members first), refuses with
+`contained_task_resource_reading_invalid` as for every row above:
+
+| Member | On a `read_list` step | Refusal @ pointer |
+| --- | --- | --- |
+| `id` | applies: the operation's id, the `reading_id` of its warning and part of its `source_detector` | as for every operation |
+| `from` | applies: the step's page, which is the page of its layout, so never `any` | the `layout_id` row above |
+| `to` | the `from` page | the `to` row above |
+| `read_list` | the effect | the rows above |
+| `click`, `application`, `select`, `wait`, `judge` | refused: exactly one effect | the first row above |
+| `guard` | required | the `guard` row above |
+| `when` | applies with its meaning ([resource-declarations.md](resource-declarations.md), "Task schema `0.9` candidate operations"): a step whose `when` does not hold is withdrawn and the page's next candidate is taken; it has not run, so the once-per-run rule below does not pass it over yet | as for every operation |
+| `retryable` | `false` or absent: the scan's moves are inputs, and a retry would repeat them | `true`: `InvalidValue` @ `/operations/<i>/retryable` |
+| `max_attempts`, `retry_interval_ms`, `on_error` | refused: the step is never retried, and after its moves the run does not recover within itself (section Reading) | `UnknownField` @ `/operations/<i>/<member>` |
+| `unguarded_trusted_coordinate`, `verify_template` | refused: the step declares its guard; `verify_template` is a click's source form of one | `UnknownField` @ `/operations/<i>/<member>` |
+| `expect_after`, `post_delay_ms`, `input_recheck`, `observation_window`, `on_guard_refused` | refused: the step confirms nothing after its moves (its end check is its evidence), has no tap to wait after or recheck, and a guard refusal on a viewport fails the scan | `UnknownField` @ `/operations/<i>/<member>` |
+| `max_runs`, `on_max_runs` | refused: the step runs once per run by its own rule (below) | `UnknownField` @ `/operations/<i>/<member>` |
+| `transition`, `optional` | refused: `linear_steps` members, and a list reading runs in a page graph | `UnknownField` @ `/operations/<i>/<member>` |
+| `threshold`, `method`, `mask`, `maskRange`, `rect_move`, `maa_task`, `maa_task_id` | refused by the gate's existing rule: only beside `verify_template`, which the step refuses | `UnconsumedField` @ the member |
+| `destructive` | refused, as on every operation | `UnconsumedField` @ the member |
+| `purpose`, `provenance`, `verified_live`, `effect` (the string member, not an effect), `timeout_ms`, `pre_delay_ms`, `pre_wait_freezes_ms`, `post_wait_freezes_ms`, `consumes`, `produces` | apply with their existing meaning: the gate checks their types and the kernel reads none of them (the scan paces its moves by its own `settle`); `purpose`, `consumes` and `produces` go to the step's primitive as for every operation ("Derived documents" below) | as for every operation |
 
 A list that fits one viewport declares `scan` too: its start and end checks then both pass on its
 first viewport and the step makes no input. A layout of another kind is refused: one frame of a
