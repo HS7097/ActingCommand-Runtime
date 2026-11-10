@@ -250,7 +250,8 @@ impl ScanSource for Fake {
     }
 
     fn end_passed(&mut self) -> Result<(), ContainedTaskRunError<String>> {
-        self.end_passed_on.push((frame_id(self.captures), self.clock));
+        self.end_passed_on
+            .push((frame_id(self.captures), self.clock));
         Ok(())
     }
 }

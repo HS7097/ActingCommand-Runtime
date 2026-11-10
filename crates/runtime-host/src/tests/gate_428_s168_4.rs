@@ -571,7 +571,10 @@ fn step_end_frame(
     host: &RuntimeHost,
     correlation_id: CorrelationId,
     operation: &str,
-) -> (actingcommand_contract::RunId, actingcommand_contract::FrameId) {
+) -> (
+    actingcommand_contract::RunId,
+    actingcommand_contract::FrameId,
+) {
     let records = run_records(host, correlation_id);
     let step = |finished: bool| {
         records
