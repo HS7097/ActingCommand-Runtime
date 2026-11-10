@@ -29,8 +29,9 @@ use actingcommand_runtime_client::{
     ChannelVia, RuntimeChannel, RuntimeClient, RuntimeClientConfig,
 };
 use cli_information::{
-    help_data, run_config, run_doctor, run_list, run_paths, run_schema, run_status, version_data,
+    help_data, run_config, run_doctor, run_list, run_paths, run_schema, version_data,
 };
+use cli_module::own_line;
 use cli_parse::parse_invocation;
 #[cfg(test)]
 use cli_result::CliErrorExitCode;
@@ -113,8 +114,8 @@ use resource_runtime_support::{
     effective_adb_path_for_instance, effective_resource_root, effective_run_root,
     effective_runtime_endpoint, enforce_path_adb_target_boundary, exit_code_table, find_files,
     list_resource_kind, list_runs, match_metric_name, path_string, process_env_overrides,
-    require_runtime, resolved_adb_json, resolved_adb_json_from, run_explain_run, run_report,
-    run_resource, scene_from_frame, validate_json_file, validate_operation_dir,
+    resolved_adb_json, resolved_adb_json_from, run_explain_run, run_report, run_resource,
+    scene_from_frame, validate_json_file, validate_operation_dir,
 };
 #[cfg(test)]
 use runtime_endpoint::RuntimeEndpointChannel;
@@ -236,9 +237,15 @@ fn main() -> ExitCode {
     actingcommand_runtime_client::set_channel_unsupported_reporter(|outcome| {
         eprintln!("WARN actinglab: {outcome}");
     });
+    // Workflow #434 LAB-2b: a command line with `--via` (MCP's actinglab child) keeps the envelope
+    // until LAB-5, printed without `--json` too when stdout is no terminal, as before; every other
+    // own command line prints the CLI module's line, for people without `--json`.
+    let via_line = own_line::via_line(&arguments);
+    let envelope_by_default =
+        own_line::envelope_by_default(&arguments, !io::stdout().is_terminal());
     // Workflow #434 LAB-2 fix 1: the CLI module answers `serve` and the operations it serves
-    // itself; every other command line is actinglab's own, answered below as before LAB-2.
-    let invocation = match entry(arguments, !io::stdout().is_terminal()) {
+    // itself; every other command line is actinglab's own, answered below.
+    let invocation = match entry(arguments, envelope_by_default) {
         Ok(invocation) => invocation,
         Err(arguments) => return cli_module::main(arguments),
     };
@@ -247,6 +254,18 @@ fn main() -> ExitCode {
     {
         let _ = CHANNEL_VIA.set(via);
     }
+    if via_line {
+        return envelope_main(invocation);
+    }
+    let (exit, json) = own_line::answer(invocation);
+    cli_module::print(&exit, json)
+}
+
+/// Workflow #434 LAB-2b: a command line with `--via` (MCP's actinglab child), printed as before
+/// LAB-2b, byte for byte, until LAB-5: the installation's refusal as `FATAL actinglab: …` on
+/// stderr with exit 1, else the envelope (`--json`, or stdout no terminal) or the output for
+/// people, and the exit codes 0 and 2 to 6.
+fn envelope_main(invocation: OwnInvocation) -> ExitCode {
     // Parsed admission refuses retired production before installation selection takes a slot.
     if invocation.is_ok()
         && let Err(error) = actingcommand_contract::process_installation()
@@ -254,26 +273,30 @@ fn main() -> ExitCode {
         eprintln!("FATAL actinglab: {error}");
         return ExitCode::FAILURE;
     }
-    let result = run_invocation(invocation);
-    let exit_code = result.exit_code();
-    if result.print_json {
-        println!("{}", result.envelope_json());
-    } else {
-        println!("{}", result.human_text());
-    }
-    ExitCode::from(exit_code as u8)
+    let (text, exit_code) = enveloped(&run_invocation(invocation));
+    println!("{text}");
+    ExitCode::from(exit_code)
 }
 
-/// actinglab's own command line, parsed as before LAB-2 (the parser's refusal included), which
-/// `main` runs and prints as before: its output for people, its envelope (`--json`, or stdout
-/// not a terminal) and its exit codes.
+/// What a `--via` command line prints for `result` on stdout, and its exit code (2 to 6 for a
+/// failure): the envelope when the line asked for JSON, else the output for people.
+fn enveloped(result: &CliResult) -> (String, u8) {
+    let text = if result.print_json {
+        result.envelope_json()
+    } else {
+        result.human_text()
+    };
+    (text, result.exit_code() as u8)
+}
+
+/// actinglab's own command line, parsed (the parser's refusal included), which `main` runs and
+/// prints: the CLI module's line ([`own_line`]), or the envelope for a line with `--via`.
 type OwnInvocation = Result<Invocation, (String, bool, CliError)>;
 
-/// What `main` runs for the command line `arguments` (Workflow #434 LAB-2 fix 1, the
-/// coordinator's ruling of 2026-11-10: the slice changes nothing any current consumer of
-/// actinglab gets): actinglab's own invocation, or `Err` with the command line of the CLI
-/// module (`serve`, or an operation it serves itself; `cli_module::route`). `json_default` when
-/// stdout is not a terminal.
+/// What `main` runs for the command line `arguments` (Workflow #434 LAB-2 fix 1): actinglab's own
+/// invocation, or `Err` with the command line of the CLI module (`serve`, or an operation it
+/// serves itself; `cli_module::route`). `json_default` asks for the JSON output without `--json`
+/// (Workflow #434 LAB-2b: only a `--via` line whose stdout is no terminal).
 fn entry(arguments: Vec<String>, json_default: bool) -> Result<OwnInvocation, Vec<String>> {
     match cli_module::route(arguments) {
         cli_module::Route::Module(arguments) => Err(arguments),
@@ -286,9 +309,9 @@ fn entry(arguments: Vec<String>, json_default: bool) -> Result<OwnInvocation, Ve
     }
 }
 
-/// Workflow #434 LAB-2 fix 1: whether `arguments` are a command line of actinglab's own commands,
-/// which keep what they answered before LAB-2: one the parser refuses (its refusal, as before), or
-/// one whose command words name a command of [`execute`] ([`own_command`]).
+/// Workflow #434 LAB-2 fix 1: whether `arguments` are a command line of actinglab's own commands:
+/// one the parser refuses (its refusal), or one whose command words name a command of [`execute`]
+/// ([`own_command`]).
 fn own_command_line(arguments: &[String]) -> bool {
     match parse_invocation(arguments.iter().cloned(), true) {
         Ok(invocation) => own_command(&invocation.command),
@@ -299,13 +322,13 @@ fn own_command_line(arguments: &[String]) -> bool {
 /// actinglab's commands of one word, as [`execute`] dispatches them (keep the two in step;
 /// `gate_434_lab2::consumer_command_lines_take_the_old_path_unchanged` checks every command of
 /// `ratchet/actinglab_commands.json`, which the architecture guard keeps equal to [`execute`]).
-const OWN_COMMANDS: [&str; 33] = [
+/// Workflow #434 LAB-2b: `status` is the core row's (open point 10), not actinglab's own.
+const OWN_COMMANDS: [&str; 32] = [
     "help",
     "version",
     "paths",
     "capabilities",
     "doctor",
-    "status",
     "schema",
     "list",
     "touch-probe",
@@ -353,9 +376,9 @@ const OWN_GROUPS: [&str; 11] = [
 
 /// The groups whose other words the operation table holds: only these subcommands are
 /// actinglab's own (`run evidence`, `run start`, `run stop` and `user-config <key>` are the
-/// table's).
+/// table's; Workflow #434 LAB-2b: `run show` too, open point 10).
 const OWN_SUBCOMMANDS: [(&str, &[&str]); 2] = [
-    ("run", &["list", "show", "open", "summary", "export"]),
+    ("run", &["list", "open", "summary", "export"]),
     ("user-config", &["get", "set"]),
 ];
 
@@ -471,7 +494,6 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "paths" => run_paths(&invocation.global),
         [cmd] if cmd == "capabilities" => run_capabilities(&invocation.global),
         [cmd] if cmd == "doctor" => run_doctor(&invocation.global),
-        [cmd] if cmd == "status" => run_status(&invocation.global, &invocation.args),
         [cmd] if cmd == "schema" => run_schema(&invocation.args),
         [cmd] if cmd == "list" => run_list(&invocation.global, &invocation.args),
         [cmd] if cmd == "touch-probe" => run_touch_probe(&invocation.global, &invocation.args),

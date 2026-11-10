@@ -7,11 +7,11 @@
 //! words, the row's positional words and the further words, then the instance as `--instance`,
 //! the row's options and switches and every further flag as the caller gave it.
 //!
-//! The command answers as it did before LAB-2 (LAB-2 fix 1, the coordinator's ruling of
-//! 2026-11-10): on the command line `main` prints its output and exits with its exit code, and
-//! `serve --stdio` answers the envelope its `--json` prints ([`envelope`]).
+//! The command answers as it does under its own words: on the command line `main` prints its line
+//! and exits with its exit code, and `serve --stdio` answers the line its `--json` prints
+//! ([`line`]; Workflow #434 LAB-2b, the CLI module's line, `super::own_line`).
 
-use super::{JSON, words};
+use super::{JSON, own_line, words};
 use actingcommand_lab_ops::cli_line::{self, Exit};
 use actingcommand_lab_ops::codes::ArgumentProblem;
 use actingcommand_lab_ops::table::{Operation, ParamForm, ParamType};
@@ -42,9 +42,9 @@ fn command_words(operation: &Operation) -> Option<Vec<String>> {
         .map(|(_, words)| words.iter().map(|word| (*word).to_owned()).collect())
 }
 
-/// The answer of `serve --stdio` to `operation` with `params`: the envelope `actinglab --json`
-/// prints for the command line of its command, with that command's exit code.
-pub(super) fn envelope(operation: &Operation, params: &Map<String, Value>) -> Exit {
+/// The answer of `serve --stdio` to `operation` with `params`: the line `actinglab --json` prints
+/// for the command line of its command (Workflow #434 LAB-2b), with its exit code.
+pub(super) fn line(operation: &Operation, params: &Map<String, Value>) -> Exit {
     let Some(words) = arguments(operation, params) else {
         return cli_line::failure(
             &cli_line::usage_invalid(Some(operation.name.as_str()), ArgumentProblem::Unknown),
@@ -52,20 +52,9 @@ pub(super) fn envelope(operation: &Operation, params: &Map<String, Value>) -> Ex
         );
     };
     let line = std::iter::once(JSON.to_owned()).chain(words);
-    let result = crate::run_invocation(crate::cli_parse::parse_invocation(line, true));
-    let code = u8::try_from(result.exit_code()).unwrap_or(1);
-    match serde_json::from_str::<Value>(&result.envelope_json()) {
-        Ok(envelope) => Exit {
-            line: Ok(envelope),
-            developer: None,
-            code,
-        },
-        Err(error) => Exit {
-            line: Err(format!("the envelope cannot be read back: {error}")),
-            developer: None,
-            code: 1,
-        },
-    }
+    own_line::exit(&crate::run_invocation(crate::cli_parse::parse_invocation(
+        line, true,
+    )))
 }
 
 /// The command line of `operation`: its words, the row's positional words, the further words,

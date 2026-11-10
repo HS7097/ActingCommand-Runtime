@@ -3,10 +3,11 @@
 //! `actinglab serve --stdio` (Workflow #434 LAB-2; `contracts/lab-two-entries.md` §8.2): a
 //! resident mode of the Lab core. Each line on stdin is one request `{"op": <operation name>,
 //! "params": {…}}`; each gets one answer line on stdout, in order: the line the operation's
-//! `--json` prints for the same parameters (LAB-2 fix 1). For an operation of the CLI module that
-//! is the line `cli_line` builds (`{…result, "outcome": …}`, or `{"outcome": …}` for a refusal);
-//! for one actinglab's own command serves, the envelope (`ok`, `data`, `error`) `actinglab
-//! --json` prints for that command. A line that is no such request is answered with its refusal
+//! `--json` prints for the same parameters (LAB-2 fix 1), the line `cli_line` builds
+//! (`{…result, "outcome": …}`, or `{"outcome": …}` for a refusal), for an operation one of
+//! actinglab's own commands serves too (Workflow #434 LAB-2b, `super::own_line`: its failure
+//! carries `message` and `details` beside the outcome). A line that is no such request is
+//! answered with its refusal
 //! (`actingctl_usage_invalid`) and the loop goes on; a developer line goes to stderr as the CLI
 //! writes it. The loop ends with stdin, exit 0; a stdin or stdout that fails ends it with the
 //! developer line `actingctl_output_failed`, exit 1. The operations are the CLI's, and the

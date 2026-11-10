@@ -9,11 +9,13 @@ use actingcommand_runtime_client::RuntimeClient;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
+/// actinglab's own `run` words. Workflow #434 LAB-2b: `run show` is the core row's (open point
+/// 10), served by the CLI module; its placeholder here is gone.
 pub(super) fn dispatch(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     match sub {
         "list" => list_runs(&run_root(global)?),
-        "show" | "open" | "summary" | "export" => {
+        "open" | "summary" | "export" => {
             let run_id = flags
                 .positionals
                 .first()

@@ -81,6 +81,9 @@ mod gate_load2;
 // Workflow #434 LAB-2: the CLI module, `serve --stdio` and the recordings' initiator.
 #[path = "gate_434_lab2.rs"]
 mod gate_434_lab2;
+// Workflow #434 LAB-2b: actinglab's own commands print the CLI module's line.
+#[path = "gate_434_lab2b.rs"]
+mod gate_434_lab2b;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

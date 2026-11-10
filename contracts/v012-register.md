@@ -8469,6 +8469,76 @@ journal the rescue module wrote does not decode in the older installer (`initiat
 kinds `config_replace` and `pack_place`): roll back only when no rescue operation is the last one
 or unfinished, or finish it first.
 
+#### Slice LAB-2b (0.12.49): actinglab's own commands print the CLI module's line
+
+Coordinator work order `rd-1108/arch-013/brief-lab2b.md`, its rulings (board #434 6753308292) and
+the coordinator's ruling of 2026-11-10 on the two results that name `outcome`; the read-only census
+`rd-1110/design-lab-own-output.md` (written on `d06910c6`); on main `7910349a` (LAB-3, #1553,
+merged). The contract is [lab-two-entries.md](lab-two-entries.md) §8.2, §9.3 and open point 10,
+which this slice closes. Only the printing of actinglab's own commands changes: their parser,
+global options and results are as before, and MCP's actinglab child gets what it got.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L2b-1 | `cli_module::own_line` (`answer`, `exit`, `success`, `via_line`, `envelope_by_default`) | behaviour | LAB-2b | actinglab's `main`; `serve --stdio` (`engine::line`, formerly `engine::envelope`) | `main` turns an own command's `CliResult` into a `cli_line::Exit` and prints it with `cli_module::print`. Success: `lab_operation_completed` (success), the result's members flat beside `outcome`, a result that is no object under `result`; warnings a result carries stay its member `warnings` (`{code, values}`), the category stays success and no developer line is written. Failure: `{"outcome": {code, category: "error", values}, "message", "details"}`: actinglab's own code, read as a received outcome since not every one of its spellings is registered; `values` the members of the details whose names the catalog registers as the code's values (none for a code it does not list); `details` whole, never flattened, absent when there are none; exit 1 and the developer line `ERROR actinglab: <code> … <message>`. The installation's refusal before the command runs is `cli_line::refused` of its code, as the module's (exit 2 when fatal). Without `--json` the output for people (`cli_module::people`), into a pipe or a file too: `main` asks for JSON by default only on a `--via` line. Exit codes 0, 1 and 2 |
+| L2b-2 | `cli_module::own_line::WRAPPED`, `wrapping_member`: a result that names `outcome` | behaviour | LAB-2b | `resource verify`, `run summary` | the coordinator's ruling of 2026-11-10: a result whose top level has a member named `outcome` is never flattened; it goes whole into one named member its command declares in one place: `resource verify`'s `actinglab.resource-verify.v1` report under `report`, `run summary`'s `actingcommand.run-summary.v1` document under `summary`, unchanged. A result that names `outcome` without a declared member is refused (`actingctl_output_failed`, exit 1, nothing on stdout). The census missed these two commands (its §4.2 and §6.1 named none); no consumer in the census uses them |
+| L2b-3 | a command line with `--via` (`main`'s `envelope_main`, `enveloped`) | behaviour | LAB-2b | MCP's actinglab child (`lab_ops::lab_child`, `--json --via mcp …`) | prints the envelope byte for byte as before (also without `--json` when stdout is no terminal), with the exit codes 0 and 2 to 6 and the installation's refusal `FATAL actinglab: …`, exit 1, until LAB-5; `crates/lab-ops/src/lab_child.rs` and `apps/actingctl/src/mcp` are untouched, and MCP's tools answer as before. `do`'s `lab_operation_check_failed` exits 5 there and 1 on the command line (`lab_operation_call_error` is `pub(crate)` for the test) |
+| L2b-4 | `status` and `run show` to their core rows | removed code | LAB-2b | — | `OWN_COMMANDS` loses `status` and `OWN_SUBCOMMANDS` `run show`, so `main`'s route hands both words to the CLI module (open point 10); deleted: `cli_information::run_status` (a TCP probe of the user configuration's `runtime_endpoint`) with `resource_runtime_support::require_runtime`, the dispatch arm `status`, `run show`'s placeholder in `run_summary::dispatch`, the capability entry `status` and its dry-run declaration ([actinglab-dry-run.md](actinglab-dry-run.md) says so) |
+| L2b-5 | `ratchet/actinglab_commands.json` (45 dispatch arms, 100 commands, 3 pipeline exemptions) | guard snapshot | LAB-2b | the architecture guard | `status` leaves the arms and the commands, `run show` the commands (46 → 45, 102 → 100); README.md and README.zh-CN.md say so |
+| L2b-6 | outcome codes `lab_operation_completed` and `lab_operation_check_failed` (actinglab, pending) | catalog | LAB-2b | — | descriptions only: `lab_operation_completed` widened to actinglab's own commands (with the two wrapped results), `lab_operation_check_failed` says it exits 1 on the command line and 5 through `--via` until LAB-5. No code, key or location added |
+
+**Tests.** New: apps row "#434 LAB-2b" (`gate_434_lab2b`, actinglab's binary tests; an empty
+configuration in a temporary folder, offline fixtures; no Runtime, no device, no clock, no sleep):
+`own_commands_print_the_cli_line`, `own_commands_print_for_people_into_a_pipe`,
+`mcp_child_lines_keep_the_envelope`, `status_and_run_show_take_their_core_rows`,
+`own_results_never_name_outcome` (the ruling's three assertions: no own command's line carries a
+top-level `outcome` other than its own, every command of the snapshot checked through the line's
+builder and the offline commands that need nothing run; `resource verify` and `run summary` carry
+their documents unchanged under `report` and `summary`; a result that names `outcome` without a
+declared member is refused) and `do_check_failure_exits_one`. Adapted, where this slice changes
+what they pin: `gate_434_lab2`'s `cli_json_matches_op_output` and `serve_answers_same_as_cli` (a
+row actinglab's own command serves answers that command's line, not its envelope) and
+`consumer_command_lines_take_the_old_path_unchanged` (the old path is pinned for MCP's `--via mcp`
+lines only); the integration tests that parsed the envelope read the line (the result's members
+at the top level, `outcome.code`, `message`, `details`, exit 1 for every error):
+`lab2_cli_contract`, `package_offline`, `readonly_page_conflict`, `replay_frames`,
+`resource_production_retirement` (the line names no command: its message does),
+`runtime_input_proxy` (its one `tap` line without `--json` passes `--json`), `session_closeout`
+and `c4_runtime_process`. Goldens, by the work order's approval, written from the code and not from
+a binary: `golden/consumers.json` (13 of 15 cases changed to `line`, or `text` for the hotplace
+kit's line without `--json`; the two MCP cases `mcp_child_resource_validate` and
+`mcp_child_package_check` unchanged by a byte) with `consumer_goldens.rs` reading the three forms,
+and `golden/expected.json` (all 30 cases rewritten from the rule: `envelope` became `line`, the
+failures' exit codes 2 to 6 became 1) with `golden_protocol.rs` reading the line;
+`golden/EXIT_CODES.md` and `golden/README.md` say so.
+
+**Interface.** None raised: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
+`runtime-outcomes` 1. actinglab's output line is no declared interface
+([component-interfaces.md](component-interfaces.md) has no row for it, checked on main `7910349a`).
+
+**Where LAB-2b differs from its work order's letter.**
+
+- (a) Two own commands already answered a top-level `outcome` (`resource verify`, `run summary`),
+  which item 6 of the work order said none did; the implementer stopped and reported, and the
+  coordinator ruled the wrapping of L2b-2.
+- (b) `values` are read from the error's details by the catalog's value names, the one place an
+  own command's error holds values; an error without details has none.
+- (c) The capability entry `status` and its dry-run declaration leave with the command; the
+  `exit_codes` table `capabilities` answers is unchanged (the envelope's classes, still true for a
+  `--via` line), since the slice changes the printing only.
+
+**What LAB-2b changes live.** Every consumer of actinglab's own commands but MCP: acmodel's
+validator, the four resource repositories' CI and scripts and the coordinator's hotplace kit get
+the CLI module's line (`--json`) or the text for people (no `--json`, into a pipe too) and exit 1
+for every error. Before a Runtime with LAB-2b is deployed the hotplace kit passes `--json` and reads
+both shapes; each resource repository raises its Tools pin to a release with LAB-2b only in the
+pull request that changes its readers; acmodel's validator changes in one pull request after that
+release. No consumer may set `ACTINGCOMMAND_DETAIL=codes`. MCP's tools answer as before.
+
+**LAB-2b rollback** (to the release before it). actinglab's own commands print the envelope again;
+a consumer that reads both shapes keeps working, one that reads only the new line does not. Nothing
+persisted.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

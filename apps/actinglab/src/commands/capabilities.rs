@@ -60,7 +60,7 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("operation validate", ["offline"], "available"),
         command_cap("operation inspect", ["offline"], "available"),
         command_cap("operation explain", ["offline"], "available"),
-        command_cap("status", ["running_runtime"], "available"),
+        // Workflow #434 LAB-2b: `status` is the CLI module's core row now, not actinglab's own.
         command_cap("run summary", ["running_runtime", "read_only"], "available"),
         command_cap("touch-probe", ["device"], "available"),
         command_cap("tap", ["device"], "available"),

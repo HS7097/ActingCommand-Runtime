@@ -27,6 +27,10 @@ use super::*;
 mod frame;
 mod observation;
 mod operation;
+// Workflow #434 LAB-2b: `gate_434_lab2b::do_check_failure_exits_one` reads `do`'s answer to a
+// failed client check after the receipt.
+#[cfg(test)]
+pub(crate) use operation::lab_operation_call_error;
 
 /// Workflow #410 item 1: the members an observe or do answer adds about its frame; Min never
 /// drops them.

@@ -118,7 +118,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `paths` | no_effect | | |
 | `capabilities` | no_effect | | |
 | `doctor` | no_effect | | |
-| `status` | no_effect | | |
+| `status` | no_effect | | since Workflow #434 LAB-2b the CLI module's core row (it only reads), not actinglab's own command; no capability entry |
 | `devices` | no_effect | | retired |
 | `schema` | no_effect | | |
 | `list` | no_effect | | |
@@ -252,7 +252,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `session lease` | no_effect | | retired |
 | `session record` | mixed | | as `record` |
 | `run list` | no_effect | | |
-| `run show` | no_effect | | |
+| `run show` | no_effect | | since Workflow #434 LAB-2b the CLI module's core row (it only reads), not actinglab's own command |
 | `run open` | no_effect | | |
 | `run summary` | no_effect | | |
 | `run export` | refused | `dry_run_unsupported` | the run id, configuration read, `--out`; no alternative; `details.run_id`; no capability entry |

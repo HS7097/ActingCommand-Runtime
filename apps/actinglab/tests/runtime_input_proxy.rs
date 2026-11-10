@@ -648,11 +648,11 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
                 "--verbose",
             ],
         );
-        assert_eq!(output["data"]["executed"], true);
-        assert_eq!(output["data"]["arrival"]["status"], "reached");
-        request_ids.push(output["data"]["req_id"].as_str().unwrap().to_string());
+        assert_eq!(output["executed"], true);
+        assert_eq!(output["arrival"]["status"], "reached");
+        request_ids.push(output["req_id"].as_str().unwrap().to_string());
         let operation: actingcommand_contract::ContainedLabOperationResult =
-            serde_json::from_value(output["data"]["operation_record"].clone()).unwrap();
+            serde_json::from_value(output["operation_record"].clone()).unwrap();
         frame_hashes.push(
             operation
                 .record
@@ -740,7 +740,7 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
             "--verbose",
         ],
     );
-    let timeout_record = &timeout["error"]["details"];
+    let timeout_record = &timeout["details"];
     assert_eq!(timeout_record["effect"], "performed");
     assert_eq!(timeout_record["arrival"]["status"], "timed_out");
     // #411 A19 (exec key 93): a timed-out arrival answers "the page did not arrive" in its own
@@ -748,7 +748,7 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
     // `after_attachment`.
     assert_eq!(timeout_exit, 3);
     assert_eq!(
-        timeout["error"]["code"],
+        timeout["outcome"]["code"],
         actingcommand_contract::codes::SharedCode::LabArrivalTimeout.as_str()
     );
     let timeout_members = timeout_record
@@ -814,12 +814,12 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
             "Explicit restored goal",
         ],
     );
-    assert_eq!(output["data"]["record_count"], 4);
-    assert_eq!(output["data"]["operation_count"], 2);
-    assert_eq!(output["data"]["awaiting_author_input"], json!([]));
-    assert_eq!(output["data"]["gaps"].as_array().unwrap().len(), 2);
+    assert_eq!(output["record_count"], 4);
+    assert_eq!(output["operation_count"], 2);
+    assert_eq!(output["awaiting_author_input"], json!([]));
+    assert_eq!(output["gaps"].as_array().unwrap().len(), 2);
     assert!(
-        output["data"]["gaps"]
+        output["gaps"]
             .to_string()
             .contains("lab_arrival_not_reached")
     );
@@ -937,7 +937,7 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
         ],
     );
     assert_eq!(
-        pending_output["data"]["awaiting_author_input"],
+        pending_output["awaiting_author_input"],
         json!(["target_page", "entry_page"])
     );
     let pending_task: Value = serde_json::from_slice(
@@ -999,13 +999,10 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
             "pending",
         ],
     );
-    assert_eq!(
-        moved_output["data"]["record_count"],
-        pending_output["data"]["record_count"]
-    );
-    assert_eq!(moved_output["data"]["gaps"], pending_output["data"]["gaps"]);
+    assert_eq!(moved_output["record_count"], pending_output["record_count"]);
+    assert_eq!(moved_output["gaps"], pending_output["gaps"]);
     assert!(
-        !moved_output["data"]["gaps"]
+        !moved_output["gaps"]
             .to_string()
             .contains("material_missing")
     );
@@ -1202,9 +1199,9 @@ fn s2_t5_lab_do_names_its_package_and_restore_pairs_by_package_id() {
             "--verbose",
         ],
     );
-    assert_eq!(output["data"]["executed"], true);
-    let request_id = output["data"]["req_id"].as_str().unwrap().to_string();
-    let prepared = &output["data"]["operation_record"]["record"]["prepared"];
+    assert_eq!(output["executed"], true);
+    let request_id = output["req_id"].as_str().unwrap().to_string();
+    let prepared = &output["operation_record"]["record"]["prepared"];
     assert_eq!(prepared["package_label"], "neutral.test.seed");
     for member in ["expected_package_sha256", "actual_package_sha256"] {
         assert!(prepared.get(member).is_none(), "{member}");
@@ -1246,11 +1243,8 @@ fn s2_t5_lab_do_names_its_package_and_restore_pairs_by_package_id() {
                 "restored",
             ],
         );
-        assert_eq!(
-            restored["data"]["package_label"], "neutral.test.seed",
-            "{repo}"
-        );
-        assert!(restored["data"].get("package_sha256").is_none(), "{repo}");
+        assert_eq!(restored["package_label"], "neutral.test.seed", "{repo}");
+        assert!(restored.get("package_sha256").is_none(), "{repo}");
     }
     let (_, refused) = run_actinglab_failure_json(
         &config,
@@ -1274,9 +1268,9 @@ fn s2_t5_lab_do_names_its_package_and_restore_pairs_by_package_id() {
             "restored",
         ],
     );
-    assert_eq!(refused["error"]["code"], "package_invalid");
+    assert_eq!(refused["outcome"]["code"], "package_invalid");
     assert!(
-        refused["error"]["message"]
+        refused["message"]
             .as_str()
             .unwrap()
             .contains("package identity mismatch"),
@@ -1337,22 +1331,22 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
             "--verbose",
         ],
     );
-    assert_eq!(output["data"]["state"], "recognized");
-    assert_eq!(output["data"]["observation"]["page"], "page");
-    assert_eq!(output["data"]["facts"]["target_evaluation_count"], 1);
+    assert_eq!(output["state"], "recognized");
+    assert_eq!(output["observation"]["page"], "page");
+    assert_eq!(output["facts"]["target_evaluation_count"], 1);
     // Workflow #336 PKG-S2: the projection source names its package by `package_id` only.
     assert_eq!(
-        output["data"]["projection_source"]["package_label"],
+        output["projection_source"]["package_label"],
         "neutral.observation"
     );
     assert!(
-        output["data"]["projection_source"]
+        output["projection_source"]
             .get("actual_package_sha256")
             .is_none()
     );
     assert!(
-        output["data"]["terminal"]["sequence"].as_u64().unwrap()
-            > output["data"]["projection_source"]["projection_sequence"]
+        output["terminal"]["sequence"].as_u64().unwrap()
+            > output["projection_source"]["projection_sequence"]
                 .as_u64()
                 .unwrap()
     );
@@ -1371,11 +1365,14 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
             package.to_str().unwrap(),
         ],
     );
+    // Workflow #434 LAB-2b: the result's members, without the line's own outcome.
+    let mut result = minimum.clone();
+    result.as_object_mut().expect("a line").remove("outcome");
     assert!(
-        serde_json::to_vec(&minimum["data"]).unwrap().len()
+        serde_json::to_vec(&result).unwrap().len()
             <= actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES
     );
-    assert_eq!(minimum["data"]["observation"]["page"], "page");
+    assert_eq!(minimum["observation"]["page"], "page");
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
         actingcommand_runtime_client::RuntimeChannel::Lab,
@@ -1402,7 +1399,7 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
             "--verbose",
         ],
     );
-    assert_eq!(offline["data"]["observation"]["page"], "page");
+    assert_eq!(offline["observation"]["page"], "page");
     assert_eq!(state.captures.load(Ordering::Acquire), before);
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
     let events = client
@@ -1487,7 +1484,7 @@ fn l4_observe_capture_record_stores_the_runtime_frames_capture_backend() {
     );
     host.close().unwrap();
 
-    let answered = &observed["data"]["record"]["frame"];
+    let answered = &observed["record"]["frame"];
     assert_eq!(answered["source"], "runtime_observation", "{observed}");
     assert_eq!(answered["capture_backend"], "adb_screencap", "{observed}");
     let recording: Value = serde_json::from_slice(
@@ -1592,8 +1589,8 @@ fn lab_obs_1_observe(expected: &str, label: &[u8]) -> (Value, Vec<EventType>) {
 #[test]
 fn lab_obs_1_an_unmatched_capture_observe_records_no_rejected_debug_observe() {
     let (answer, records) = lab_obs_1_observe("[0,255,0]", b"lab-obs-1-no-match");
-    assert_eq!(answer["ok"], true, "{answer}");
-    assert_eq!(answer["data"]["state"], "no_match", "{answer}");
+    assert_eq!(answer["outcome"]["category"], "success", "{answer}");
+    assert_eq!(answer["state"], "no_match", "{answer}");
     assert!(
         !records.contains(&EventType::CommandRejected),
         "{records:?}"
@@ -1618,8 +1615,8 @@ fn lab_obs_1_an_unmatched_capture_observe_records_no_rejected_debug_observe() {
 #[test]
 fn lab_obs_1_a_matching_capture_observe_is_unchanged() {
     let (answer, records) = lab_obs_1_observe("[255,0,0]", b"lab-obs-1-page-match");
-    assert_eq!(answer["ok"], true, "{answer}");
-    assert_eq!(answer["data"]["state"], "recognized", "{answer}");
+    assert_eq!(answer["outcome"]["category"], "success", "{answer}");
+    assert_eq!(answer["state"], "recognized", "{answer}");
     assert!(
         !records.contains(&EventType::CommandRejected),
         "{records:?}"
@@ -1733,9 +1730,9 @@ fn l3_ensure_capture_taps_on_a_nemu_input_instance_with_its_guard_frame() {
     );
     host.close().expect("close host");
 
-    assert_eq!(ensure["data"]["state"], "arrived", "{ensure}");
-    assert_eq!(ensure["data"]["executed"], true, "{ensure}");
-    assert_eq!(ensure["data"]["page"], "neutral/page_a", "{ensure}");
+    assert_eq!(ensure["state"], "arrived", "{ensure}");
+    assert_eq!(ensure["executed"], true, "{ensure}");
+    assert_eq!(ensure["page"], "neutral/page_a", "{ensure}");
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
 }
 
@@ -1780,8 +1777,8 @@ fn l3_ensure_capture_presses_a_long_press_edge_as_a_long_tap() {
     );
     host.close().expect("close host");
 
-    assert_eq!(ensure["data"]["state"], "arrived", "{ensure}");
-    assert_eq!(ensure["data"]["page"], "neutral/page_a", "{ensure}");
+    assert_eq!(ensure["state"], "arrived", "{ensure}");
+    assert_eq!(ensure["page"], "neutral/page_a", "{ensure}");
     assert_eq!(state.long_taps.load(Ordering::Acquire), 1);
     assert_eq!(state.swipes.load(Ordering::Acquire), 0);
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
@@ -1821,7 +1818,7 @@ fn l3_do_capture_on_a_long_press_element_sends_a_long_tap_and_its_evidence_verif
             "--verbose",
         ],
     );
-    let elements = observe["data"]["observation"]["elements"]
+    let elements = observe["observation"]["elements"]
         .as_array()
         .unwrap_or_else(|| panic!("observation elements: {observe}"));
     assert_eq!(elements.len(), 1, "the home page's one edge: {observe}");
@@ -1847,10 +1844,10 @@ fn l3_do_capture_on_a_long_press_element_sends_a_long_tap_and_its_evidence_verif
     );
     host.close().expect("close host");
 
-    assert_eq!(action["data"]["executed"], true, "{action}");
-    assert_eq!(action["data"]["effect"], "performed", "{action}");
+    assert_eq!(action["executed"], true, "{action}");
+    assert_eq!(action["effect"], "performed", "{action}");
     let operation: actingcommand_contract::ContainedLabOperationResult =
-        serde_json::from_value(action["data"]["operation_record"].clone())
+        serde_json::from_value(action["operation_record"].clone())
             .expect("the verified operation record");
     let prepared = &operation.record.prepared;
     assert_eq!(
@@ -1985,13 +1982,14 @@ fn l7_capture_forms_of_do_ensure_and_wait_refuse_a_frame_two_pages_match() {
     host.close().expect("close host");
 
     for (form, (exit_code, envelope)) in refusals {
-        assert_eq!(exit_code, 2, "{form}: {envelope}");
+        // Workflow #434 LAB-2b: the CLI module's line exits 1 for every error.
+        assert_eq!(exit_code, 1, "{form}: {envelope}");
         assert_eq!(
-            envelope["error"]["code"], "page_recognition_conflict",
+            envelope["outcome"]["code"], "page_recognition_conflict",
             "{form}: {envelope}"
         );
         assert_eq!(
-            envelope["error"]["details"]["matched_pages"],
+            envelope["details"]["matched_pages"],
             json!(["neutral/home", "neutral/also_home"]),
             "{form}: {envelope}"
         );
@@ -2320,11 +2318,11 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
         ],
     );
     assert_eq!(busy_exit, 4);
-    assert_eq!(busy["error"]["code"], "device_error");
+    assert_eq!(busy["outcome"]["code"], "device_error");
     // Workflow #369 W-3 (S5): the command waits its cap in the instance's queue, then is
     // refused `lease_queue_expired` (`queue_expired`) instead of an immediate `lease_busy`.
     assert!(
-        busy["error"]["message"]
+        busy["message"]
             .as_str()
             .is_some_and(|message| message.contains("runtime code queue_expired"))
     );
@@ -2347,10 +2345,10 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
         ],
     );
     assert_eq!(
-        output["data"]["receipt"]["result"]["kind"],
+        output["receipt"]["result"]["kind"],
         "application_lifecycle_completed"
     );
-    assert_eq!(output["data"]["receipt"]["result"]["action"], "stop");
+    assert_eq!(output["receipt"]["result"]["action"], "stop");
     assert_eq!(state.application_calls.load(Ordering::Acquire), 1);
     assert_eq!(state.application_action.load(Ordering::Acquire), 2);
 
@@ -2369,8 +2367,9 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
             "client.supplied.identity",
         ],
     );
-    assert_eq!(exit_code, 2);
-    assert_eq!(rejected["error"]["code"], "validation_failed");
+    // Workflow #434 LAB-2b: the CLI module's line exits 1 for every error.
+    assert_eq!(exit_code, 1);
+    assert_eq!(rejected["outcome"]["code"], "validation_failed");
     assert_eq!(state.application_calls.load(Ordering::Acquire), 1);
     drop(lease_client);
     host.close().expect("close host");
@@ -2407,13 +2406,10 @@ fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_sta
         &local_app_data,
         ["--json", "session", "status", "--diagnostics"],
     );
-    assert_eq!(status["data"]["running"], true);
+    assert_eq!(status["running"], true);
+    assert_eq!(status["diagnostics"]["liveness"]["authority"], "runtime");
     assert_eq!(
-        status["data"]["diagnostics"]["liveness"]["authority"],
-        "runtime"
-    );
-    assert_eq!(
-        status["data"]["diagnostics"]["instances"]["instances"][0]["instance_alias"],
+        status["diagnostics"]["instances"]["instances"][0]["instance_alias"],
         "node.a"
     );
 
@@ -2430,7 +2426,7 @@ fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_sta
             "status",
         ],
     );
-    assert_eq!(unconfigured["data"]["configured"], false);
+    assert_eq!(unconfigured["configured"], false);
 
     let configured = run_actinglab_json(
         &config_path,
@@ -2450,9 +2446,9 @@ fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_sta
             "60000",
         ],
     );
-    assert_eq!(configured["data"]["status"], "configured");
+    assert_eq!(configured["status"], "configured");
     assert_eq!(
-        configured["data"]["policy"]["runtime_policy"]["expected_page"],
+        configured["policy"]["runtime_policy"]["expected_page"],
         "home"
     );
 
@@ -2469,8 +2465,8 @@ fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_sta
             "clear",
         ],
     );
-    assert_eq!(cleared["data"]["status"], "cleared");
-    assert_eq!(cleared["data"]["state_preserved"], false);
+    assert_eq!(cleared["status"], "cleared");
+    assert_eq!(cleared["state_preserved"], false);
     assert!(!legacy_session_root.exists());
     host.close().expect("close host");
 }
@@ -2517,7 +2513,7 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
         ],
     );
 
-    assert_eq!(stream["data"]["mode"], "bounded_stream");
+    assert_eq!(stream["mode"], "bounded_stream");
     for field in [
         "stream_id",
         "mode",
@@ -2532,14 +2528,11 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
         "events",
         "frames",
     ] {
-        assert!(stream["data"].get(field).is_some(), "missing {field}");
+        assert!(stream.get(field).is_some(), "missing {field}");
     }
-    assert_eq!(
-        stream["data"]["contract"]["schema_version"],
-        "session.stream.v0.1"
-    );
-    assert_eq!(stream["data"]["input_relay"]["status"], "disabled");
-    let frames = stream["data"]["frames"].as_array().expect("stream frames");
+    assert_eq!(stream["contract"]["schema_version"], "session.stream.v0.1");
+    assert_eq!(stream["input_relay"]["status"], "disabled");
+    let frames = stream["frames"].as_array().expect("stream frames");
     assert_eq!(frames.len(), 2);
     for (index, frame) in frames.iter().enumerate() {
         assert_eq!(frame["index"], index);
@@ -2550,7 +2543,7 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
         assert!(frame["artifact"]["object_key"].is_string());
         assert_eq!(frame["frame"]["digest"], frame["artifact"]["sha256"]);
     }
-    let event_types = stream["data"]["events"]
+    let event_types = stream["events"]
         .as_array()
         .expect("stream events")
         .iter()
@@ -2575,7 +2568,7 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
         &local_app_data,
         ["--json", "session", "status"],
     );
-    assert_eq!(reconnected["data"]["running"], true);
+    assert_eq!(reconnected["running"], true);
 
     let (fresh_exit, fresh_error) = run_actinglab_failure_json(
         &config_path,
@@ -2593,9 +2586,9 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
         ],
     );
     assert_eq!(fresh_exit, 2);
-    assert_eq!(fresh_error["error"]["code"], "validation_failed");
+    assert_eq!(fresh_error["outcome"]["code"], "validation_failed");
     assert!(
-        fresh_error["error"]["message"]
+        fresh_error["message"]
             .as_str()
             .is_some_and(|message| message.contains("not supported"))
     );
@@ -2659,10 +2652,17 @@ fn runtime_backed_session_clients_fail_visibly_when_runtime_is_unavailable() {
         ),
     ];
     for (exit_code, failure) in failures {
-        assert_eq!(exit_code, 5);
-        assert_eq!(failure["ok"], false);
-        assert_eq!(failure["error"]["code"], "runtime_not_running");
-        assert!(failure["data"].is_null());
+        // Workflow #434 LAB-2b: the CLI module's line, exit 1, its outcome, message and details
+        // and no result member.
+        assert_eq!(exit_code, 1);
+        assert_eq!(failure["outcome"]["category"], "error");
+        assert_eq!(failure["outcome"]["code"], "runtime_not_running");
+        assert!(
+            failure.as_object().is_some_and(|members| members
+                .keys()
+                .all(|name| matches!(name.as_str(), "outcome" | "message" | "details"))),
+            "{failure}"
+        );
     }
     assert!(!legacy_session_root.exists());
 }
@@ -2755,27 +2755,27 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             package.to_str().expect("package path"),
         ],
     );
-    assert_eq!(output["data"]["authority"], "runtime");
-    assert_eq!(output["data"]["summary"]["task_id"], "task");
+    assert_eq!(output["authority"], "runtime");
+    assert_eq!(output["summary"]["task_id"], "task");
     // Workflow #336 PKG-S4 (option 丙): the package is named by its path; the summary names no
     // digest.
     assert!(
-        output["data"]["summary"].get("verified_sha256").is_none(),
+        output["summary"].get("verified_sha256").is_none(),
         "{output}"
     );
     assert_eq!(
-        output["data"]["terminal_receipt"]["correlation_id"],
-        output["data"]["correlation_id"]
+        output["terminal_receipt"]["correlation_id"],
+        output["correlation_id"]
     );
     assert!(
-        output["data"]["events"]
+        output["events"]
             .as_array()
             .is_some_and(|events| !events.is_empty())
     );
     assert_eq!(state.captures.load(Ordering::Acquire), 0);
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
 
-    let correlation_id = output["data"]["correlation_id"]
+    let correlation_id = output["correlation_id"]
         .as_str()
         .expect("debug correlation");
     let watch = run_actinglab_json(
@@ -2796,16 +2796,16 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             "16",
         ],
     );
-    assert_eq!(watch["data"]["authority"], "runtime_global_ledger");
-    assert_eq!(watch["data"]["progress"]["state"], "advanced");
+    assert_eq!(watch["authority"], "runtime_global_ledger");
+    assert_eq!(watch["progress"]["state"], "advanced");
     assert!(
-        watch["data"]["progress"]["event_count"]
+        watch["progress"]["event_count"]
             .as_u64()
             .is_some_and(|count| count > 0)
     );
-    assert!(watch["data"]["progress"].get("percent").is_none());
-    assert!(watch["data"]["progress"].get("completed").is_none());
-    let first = &watch["data"]["events"][0];
+    assert!(watch["progress"].get("percent").is_none());
+    assert!(watch["progress"].get("completed").is_none());
+    let first = &watch["events"][0];
     let target_sequence = first["sequence"].as_u64().expect("watch event sequence");
     let predecessor_sequence = target_sequence
         .checked_sub(1)
@@ -2842,18 +2842,18 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             "1",
         ],
     );
-    if filtered["data"]["events"] != json!([first])
-        || filtered["data"]["filter"]["correlation_id"] != correlation_id
-        || filtered["data"]["filter"]["origin_module"] != first["origin"]["module"]
+    if filtered["events"] != json!([first])
+        || filtered["filter"]["correlation_id"] != correlation_id
+        || filtered["filter"]["origin_module"] != first["origin"]["module"]
     {
         let mut context = [0_u8; 4 * 1024];
         let mut remaining = &mut context[..];
         let formatted = writeln!(
             remaining,
             "filtered subscription: S={target_sequence}; P={predecessor_sequence}; progress.next_sequence={}; progress.state={}; filter={}",
-            filtered["data"]["progress"]["next_sequence"],
-            filtered["data"]["progress"]["state"],
-            filtered["data"]["filter"],
+            filtered["progress"]["next_sequence"],
+            filtered["progress"]["state"],
+            filtered["filter"],
         );
         let used = 4 * 1024 - remaining.len();
         let text = match std::str::from_utf8(&context[..used]) {
@@ -2868,10 +2868,10 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             );
         }
     }
-    assert_eq!(filtered["data"]["events"], json!([first]));
-    assert_eq!(filtered["data"]["filter"]["correlation_id"], correlation_id);
+    assert_eq!(filtered["events"], json!([first]));
+    assert_eq!(filtered["filter"]["correlation_id"], correlation_id);
     assert_eq!(
-        filtered["data"]["filter"]["origin_module"],
+        filtered["filter"]["origin_module"],
         first["origin"]["module"]
     );
     let absent = run_actinglab_json(
@@ -2898,15 +2898,13 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             "1",
         ],
     );
-    if absent["data"]["events"] != json!([]) || absent["data"]["progress"]["state"] != "idle" {
+    if absent["events"] != json!([]) || absent["progress"]["state"] != "idle" {
         let mut context = [0_u8; 4 * 1024];
         let mut remaining = &mut context[..];
         let formatted = writeln!(
             remaining,
             "absent subscription: S={target_sequence}; P={predecessor_sequence}; progress.next_sequence={}; progress.state={}; filter={}",
-            absent["data"]["progress"]["next_sequence"],
-            absent["data"]["progress"]["state"],
-            absent["data"]["filter"],
+            absent["progress"]["next_sequence"], absent["progress"]["state"], absent["filter"],
         );
         let used = 4 * 1024 - remaining.len();
         let text = match std::str::from_utf8(&context[..used]) {
@@ -2921,8 +2919,8 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             );
         }
     }
-    assert_eq!(absent["data"]["events"], json!([]));
-    assert_eq!(absent["data"]["progress"]["state"], "idle");
+    assert_eq!(absent["events"], json!([]));
+    assert_eq!(absent["progress"]["state"], "idle");
     for invalid in [
         vec!["--origin-module", "unknown"],
         vec!["--diagnostic-code", "unknown"],
@@ -2943,9 +2941,10 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             .env("LOCALAPPDATA", &local_app_data)
             .output()
             .expect("invalid watch command");
+        // Workflow #434 LAB-2b: the CLI module's line exits 1 for every error.
         assert_eq!(
             result.status.code(),
-            Some(2),
+            Some(1),
             "{}",
             String::from_utf8_lossy(&result.stdout)
         );
@@ -3002,9 +3001,9 @@ fn runtime_owned_evidence_export_without_formal_summary_fails_closed() {
     );
     assert!(!export_output.status.success());
     let export = serde_json::from_slice::<Value>(&export_output.stdout).expect("export JSON");
-    assert_eq!(export["ok"], false);
-    assert_eq!(export["error"]["code"], "device_error");
-    let message = export["error"]["message"]
+    assert_eq!(export["outcome"]["category"], "error");
+    assert_eq!(export["outcome"]["code"], "device_error");
+    let message = export["message"]
         .as_str()
         .expect("typed export failure message");
     assert!(message.contains("runtime_request_rejected"));
@@ -3198,11 +3197,11 @@ fn production_do_uses_runtime_capture_and_fenced_input() {
     let envelope = serde_json::from_slice::<Value>(&output.stdout).expect("CLI JSON");
     assert_eq!(
         envelope
-            .pointer("/data/device/authority")
+            .pointer("/device/authority")
             .and_then(Value::as_str),
         Some("runtime_execution_kernel")
     );
-    assert!(envelope.pointer("/data/needs_detection").is_none());
+    assert!(envelope.pointer("/needs_detection").is_none());
     assert_eq!(state.captures.load(Ordering::Acquire), 2);
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
     host.close().expect("close host");
@@ -3266,20 +3265,20 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
     );
     assert_eq!(
         observe
-            .pointer("/data/arbitration/authority")
+            .pointer("/arbitration/authority")
             .and_then(Value::as_str),
         Some("runtime_scheduler")
     );
 
-    let element = observe["data"]["observation"]["elements"][0]["id"]
+    let element = observe["observation"]["elements"][0]["id"]
         .as_str()
         .expect("current element")
         .to_string();
-    let old_sequence = observe["data"]["projection_source"]["projection_sequence"]
+    let old_sequence = observe["projection_source"]["projection_sequence"]
         .as_u64()
         .unwrap()
         .to_string();
-    let old_hash = observe["data"]["projection_source"]["content_sha256"]
+    let old_hash = observe["projection_source"]["content_sha256"]
         .as_str()
         .unwrap();
     let action = run_actinglab_json(
@@ -3303,20 +3302,18 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
         ],
     );
     assert_eq!(
-        action.pointer("/data/executed").and_then(Value::as_bool),
+        action.pointer("/executed").and_then(Value::as_bool),
         Some(true)
     );
     assert_eq!(
-        action
-            .pointer("/data/device/authority")
-            .and_then(Value::as_str),
+        action.pointer("/device/authority").and_then(Value::as_str),
         Some("runtime_execution_kernel")
     );
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
     assert!(state.captures.load(Ordering::Acquire) >= 3);
     assert!(!local_app_data.join("ActingCommand/actinglab/lab2").exists());
     let operation: actingcommand_contract::ContainedLabOperationResult =
-        serde_json::from_value(action["data"]["operation_record"].clone()).unwrap();
+        serde_json::from_value(action["operation_record"].clone()).unwrap();
     assert_eq!(
         operation
             .record
@@ -3406,19 +3403,18 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
                 "--verbose",
             ],
         );
-        assert_eq!(explicit["data"]["executed"], true);
-        assert_eq!(explicit["data"]["effect"], "performed");
+        assert_eq!(explicit["executed"], true);
+        assert_eq!(explicit["effect"], "performed");
         assert_eq!(
-            explicit["data"]["operation_record"]["record"]["prepared"]["selection"]["mode"],
+            explicit["operation_record"]["record"]["prepared"]["selection"]["mode"],
             "coordinates"
         );
         assert_eq!(
-            explicit["data"]["operation_record"]["record"]["prepared"]["selected_element"],
+            explicit["operation_record"]["record"]["prepared"]["selected_element"],
             Value::Null
         );
         assert_eq!(
-            explicit["data"]["operation_record"]["record"]["prepared"]["before_projection"]["projection"]
-                ["matched"],
+            explicit["operation_record"]["record"]["prepared"]["before_projection"]["projection"]["matched"],
             false
         );
     }
@@ -3558,12 +3554,13 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
             "--verbose",
         ],
     );
-    assert_eq!(exit_code, 3, "{failure}");
-    assert_eq!(failure["error"]["code"], "capability_insufficient");
-    assert_eq!(failure["error"]["details"]["failure"]["stage"], "selection");
-    assert_eq!(failure["error"]["details"]["effect"], "not_performed");
+    // Workflow #434 LAB-2b: the CLI module's line exits 1 for every error.
+    assert_eq!(exit_code, 1, "{failure}");
+    assert_eq!(failure["outcome"]["code"], "capability_insufficient");
+    assert_eq!(failure["details"]["failure"]["stage"], "selection");
+    assert_eq!(failure["details"]["effect"], "not_performed");
     assert_eq!(
-        failure["error"]["details"]["ledger"]["authority"],
+        failure["details"]["ledger"]["authority"],
         "runtime_global_ledger"
     );
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
@@ -3608,10 +3605,10 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
         ],
     );
     assert_eq!(
-        outside["error"]["details"]["failure"]["code"],
+        outside["details"]["failure"]["code"],
         "lab_coordinates_out_of_frame"
     );
-    assert_eq!(outside["error"]["details"]["effect"], "not_performed");
+    assert_eq!(outside["details"]["effect"], "not_performed");
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
     assert_eq!(state.captures.load(Ordering::Acquire), 2);
 
@@ -3660,7 +3657,7 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
     });
     assert!(!post_failure.status.success());
     let post_failure: Value = serde_json::from_slice(&post_failure.stdout).unwrap();
-    let details = &post_failure["error"]["details"];
+    let details = &post_failure["details"];
     assert_eq!(details["effect"], "performed");
     assert_eq!(details["executed"], true);
     assert_eq!(details["failure"]["stage"], "after_frame");
@@ -3789,11 +3786,8 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
             semantic_package.to_str().expect("semantic package path"),
         ],
     );
-    assert_eq!(wait_home["data"]["state"], "arrived");
-    assert_eq!(
-        wait_home["data"]["arbitration"]["authority"],
-        "runtime_scheduler"
-    );
+    assert_eq!(wait_home["state"], "arrived");
+    assert_eq!(wait_home["arbitration"]["authority"], "runtime_scheduler");
 
     let ensure = run_actinglab_json(
         &config_path,
@@ -3815,13 +3809,10 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
             semantic_package.to_str().expect("semantic package path"),
         ],
     );
-    assert_eq!(ensure["data"]["state"], "arrived");
-    assert_eq!(ensure["data"]["page"], "arknights/target");
-    assert_eq!(ensure["data"]["executed"], true);
-    assert_eq!(
-        ensure["data"]["arbitration"]["authority"],
-        "runtime_scheduler"
-    );
+    assert_eq!(ensure["state"], "arrived");
+    assert_eq!(ensure["page"], "arknights/target");
+    assert_eq!(ensure["executed"], true);
+    assert_eq!(ensure["arbitration"]["authority"], "runtime_scheduler");
 
     let wait_stable = run_actinglab_json(
         &config_path,
@@ -3839,7 +3830,7 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
             semantic_package.to_str().expect("semantic package path"),
         ],
     );
-    assert_eq!(wait_stable["data"]["state"], "stable");
+    assert_eq!(wait_stable["state"], "stable");
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
     assert!(state.captures.load(Ordering::Acquire) >= 6);
     assert!(!local_app_data.join("ActingCommand/actinglab/lab2").exists());
@@ -4003,8 +3994,9 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
     )
     .expect("runtime host");
 
+    // Workflow #434 LAB-2b: without `--json` a redirected stdout gets the text for people.
     let output = Command::new(env!("CARGO_BIN_EXE_actinglab"))
-        .args(["--instance", "node.a", "tap", "10", "20"])
+        .args(["--json", "--instance", "node.a", "tap", "10", "20"])
         .env("ACTINGLAB_CONFIG_PATH", &config_path)
         .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", &runtime_root)
         .env_remove("ACTINGLAB_REQUIRE_SESSION_DAEMON")
@@ -4020,11 +4012,11 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
     );
     let envelope = serde_json::from_slice::<Value>(&output.stdout).expect("CLI JSON");
     assert_eq!(
-        envelope.pointer("/data/backend").and_then(Value::as_str),
+        envelope.pointer("/backend").and_then(Value::as_str),
         Some("runtime_proxy")
     );
     let outcome = envelope
-        .pointer("/data/input_outcome")
+        .pointer("/input_outcome")
         .expect("single-input outcome");
     assert_eq!(outcome["input_stage"], "committed");
     assert_eq!(outcome["close_stage"], "succeeded");
@@ -4106,14 +4098,14 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     let envelope = serde_json::from_slice::<Value>(&output.stdout).expect("CLI JSON");
     assert_eq!(
         envelope
-            .pointer("/data/runtime_flow/receipt/result/kind")
+            .pointer("/runtime_flow/receipt/result/kind")
             .and_then(Value::as_str),
         Some("contained_task_completed"),
         "unexpected Lab run response: {envelope}"
     );
     assert_eq!(
         envelope
-            .pointer("/data/runtime_flow/receipt/result/final_page")
+            .pointer("/runtime_flow/receipt/result/final_page")
             .and_then(Value::as_str),
         Some("neutral/terminal")
     );
@@ -4725,8 +4717,7 @@ fn rsu1_recognition_regression_replays_the_kept_frames_against_the_original_reco
                 "--package",
                 package.to_str().expect("package"),
             ],
-        )["data"]
-            .clone()
+        )
     };
     let target = |data: &Value, id: &str| {
         data["targets"]
@@ -4887,8 +4878,8 @@ fn labobs_observe_and_do_state_the_frame_coordinates_and_do_attaches_its_result(
             "--preview",
         ],
     );
-    assert_coordinates(&observed["data"]["frame_coordinates"], "observe");
-    assert_preview(&observed["data"]["preview"], "observe");
+    assert_coordinates(&observed["frame_coordinates"], "observe");
+    assert_preview(&observed["preview"], "observe");
 
     // do on a page that stays known: the after page's projection, and no frame file.
     let written_before = frame_files();
@@ -4908,9 +4899,9 @@ fn labobs_observe_and_do_state_the_frame_coordinates_and_do_attaches_its_result(
             package,
         ],
     );
-    assert_eq!(known["data"]["executed"], true, "{known}");
-    assert_coordinates(&known["data"]["frame_coordinates"], "do on a known page");
-    let attachment = &known["data"]["after_attachment"];
+    assert_eq!(known["executed"], true, "{known}");
+    assert_coordinates(&known["frame_coordinates"], "do on a known page");
+    let attachment = &known["after_attachment"];
     assert_eq!(
         attachment
             .as_object()
@@ -4951,12 +4942,9 @@ fn labobs_observe_and_do_state_the_frame_coordinates_and_do_attaches_its_result(
             package,
         ],
     );
-    assert_eq!(unknown["data"]["executed"], true, "{unknown}");
-    assert_coordinates(
-        &unknown["data"]["frame_coordinates"],
-        "do on an unknown page",
-    );
-    let attachment = &unknown["data"]["after_attachment"];
+    assert_eq!(unknown["executed"], true, "{unknown}");
+    assert_coordinates(&unknown["frame_coordinates"], "do on an unknown page");
+    let attachment = &unknown["after_attachment"];
     assert_eq!(
         attachment
             .as_object()
@@ -5000,6 +4988,6 @@ fn labobs_observe_and_do_state_the_frame_coordinates_and_do_attaches_its_result(
             package,
         ],
     );
-    assert_coordinates(&offline["data"]["frame_coordinates"], "offline observe");
+    assert_coordinates(&offline["frame_coordinates"], "offline observe");
     host.close().expect("close host");
 }

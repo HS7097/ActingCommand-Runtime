@@ -23,21 +23,30 @@ fn official_readonly_page_commands_report_every_matching_page() {
 
     for command in ["current-page", "detect-page"] {
         let output = fixture.run(command);
+        // Workflow #434 LAB-2b: the CLI module's line, exit 1, the refusal's outcome, message and
+        // details and no result member.
         assert_eq!(
             output.status.code(),
-            Some(2),
+            Some(1),
             "{command} must fail closed: stdout={} stderr={}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        let envelope: Value = serde_json::from_slice(&output.stdout).expect("JSON envelope");
-        assert_eq!(envelope["ok"], false);
-        assert!(envelope.get("data").is_none() || envelope["data"].is_null());
-        assert_eq!(envelope["error"]["code"], "page_recognition_conflict");
+        let envelope: Value = serde_json::from_slice(&output.stdout).expect("JSON line");
+        assert_eq!(envelope["outcome"]["category"], "error");
+        assert!(
+            envelope
+                .as_object()
+                .expect("a line")
+                .keys()
+                .all(|name| matches!(name.as_str(), "outcome" | "message" | "details")),
+            "{envelope}"
+        );
+        assert_eq!(envelope["outcome"]["code"], "page_recognition_conflict");
         let matched_pages = if command == "detect-page" {
-            &envelope["error"]["details"]["details"]["matched_pages"]
+            &envelope["details"]["details"]["matched_pages"]
         } else {
-            &envelope["error"]["details"]["matched_pages"]
+            &envelope["details"]["matched_pages"]
         };
         assert_eq!(
             matched_pages,

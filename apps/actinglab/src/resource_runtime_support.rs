@@ -3,10 +3,6 @@
 #[path = "resource_declarations.rs"]
 pub(crate) mod resource_declarations;
 
-use super::runtime_endpoint::{
-    runtime_endpoint_policy, runtime_endpoint_policy_json, runtime_tcp_available,
-};
-use super::user_config_store::read_user_config;
 use super::zip_error::{zip_io_error, zip_write_error};
 use super::{
     ALLOW_PATH_ADB_FOR_MUMU_ENV, CliError, CliOutcome, FlagArgs, GlobalOptions, maa_task_graph,
@@ -102,23 +98,6 @@ pub(super) fn run_explain_run(args: &[String]) -> CliOutcome<Value> {
     Ok(json!({
         "run_id": run_id,
         "status": "reserved"
-    }))
-}
-
-pub(super) fn require_runtime(global: &GlobalOptions) -> CliOutcome<Value> {
-    let config = read_user_config()?;
-    let endpoint = effective_runtime_endpoint(global, &config)
-        .ok_or_else(|| CliError::runtime_not_running("runtime endpoint is not configured"))?;
-    let policy = runtime_endpoint_policy(&endpoint)?;
-    if !runtime_tcp_available(&endpoint) {
-        return Err(CliError::runtime_not_running(format!(
-            "Runtime is not reachable at {endpoint}"
-        )));
-    }
-    Ok(json!({
-        "endpoint": endpoint,
-        "connection": "tcp",
-        "policy": runtime_endpoint_policy_json(&policy)
     }))
 }
 

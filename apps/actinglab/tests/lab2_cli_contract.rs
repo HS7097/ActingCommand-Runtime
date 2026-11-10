@@ -119,9 +119,10 @@ fn retired_arbitrator_fails_without_creating_local_state() {
     command.args(["--json", "lab", "arbitrator", "status"]);
     configure_command(&mut command, local.path());
     let output = command.output().expect("actinglab child process");
-    assert_eq!(output.status.code(), Some(6));
+    // Workflow #434 LAB-2b: the CLI module's line exits 1 for every error.
+    assert_eq!(output.status.code(), Some(1));
     assert_eq!(
-        parse_json(&output)["error"]["code"],
+        parse_json(&output)["outcome"]["code"],
         "legacy_lab2_arbitrator_retired"
     );
     assert!(!local.path().join("ActingCommand/actinglab/lab2").exists());
@@ -151,12 +152,9 @@ fn offline_scene_do_is_pure_repeatable_and_state_free() {
             String::from_utf8_lossy(&output.stdout)
         );
         let response = parse_json(&output);
-        assert_eq!(response["data"]["executed"], false);
-        assert_eq!(
-            response["data"]["arbitration"]["authority"],
-            "isolated_offline"
-        );
-        assert_eq!(response["data"]["device"]["mode"], "isolated_offline");
+        assert_eq!(response["executed"], false);
+        assert_eq!(response["arbitration"]["authority"], "isolated_offline");
+        assert_eq!(response["device"]["mode"], "isolated_offline");
     }
     assert!(!local.path().join("ActingCommand/actinglab/lab2").exists());
 }
@@ -166,11 +164,12 @@ fn offline_mode_requires_an_explicit_scene_and_never_falls_back_to_device_io() {
     let fixture = write_fixture();
     let local = TempDir::new().expect("local app data");
     let output = fixture.command(&["--json", "--dry-run", "do", "home_button"], local.path());
-    assert_eq!(output.status.code(), Some(2));
+    // Workflow #434 LAB-2b: the CLI module's line exits 1 for every error.
+    assert_eq!(output.status.code(), Some(1));
     let response = parse_json(&output);
-    assert_eq!(response["error"]["code"], "validation_failed");
+    assert_eq!(response["outcome"]["code"], "validation_failed");
     assert!(
-        response["error"]["message"]
+        response["message"]
             .as_str()
             .expect("message")
             .contains("require --scene")

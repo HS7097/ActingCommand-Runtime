@@ -45,12 +45,16 @@ enum Preparation {
     DetectThenStale,
 }
 
+/// One golden: the case, its exit code and its stdout line. Workflow #434 LAB-2b: every case runs
+/// without `--via`, so the line is the CLI module's (`cli_module::own_line`: the result's members
+/// beside `outcome`, or `{outcome, message, details}`, exit 0 or 1), no longer the envelope;
+/// `expected.json` was rewritten from that rule, not recorded from a binary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct GoldenCase {
     name: String,
     command: String,
     exit_code: i32,
-    envelope: Value,
+    line: Value,
 }
 
 const CASES: &[CaseSpec] = &[
@@ -191,7 +195,7 @@ fn observe_success_projection_is_invariant_to_fixture_root_length() {
 
     assert_eq!(short, long);
     assert_eq!(
-        short.envelope.pointer("/data/frame_path"),
+        short.line.pointer("/frame_path"),
         Some(&json!("observe.png"))
     );
     let expected = read_goldens()
@@ -199,17 +203,17 @@ fn observe_success_projection_is_invariant_to_fixture_root_length() {
         .find(|case| case.name == "observe_success")
         .expect("observe success golden");
     assert_eq!(
-        short.envelope.pointer("/data/observation"),
-        expected.envelope.pointer("/data/observation")
+        short.line.pointer("/observation"),
+        expected.line.pointer("/observation")
     );
     assert_eq!(
-        short.envelope.pointer("/data/actions"),
+        short.line.pointer("/actions"),
         Some(&json!([{
             "id": "home_to_target"
         }]))
     );
     assert_eq!(
-        short.envelope.pointer("/data/targets"),
+        short.line.pointer("/targets"),
         Some(&json!([{
             "id": "home_button",
             "passed": true,
@@ -541,10 +545,10 @@ fn capture_case(case: &CaseSpec, fixture: Fixture) -> GoldenCase {
     fixture.prepare(case.preparation);
     let output = fixture.run(&fixture.args(case.name));
     assert_protocol_channels(case, &output);
-    let mut envelope = parse_single_envelope(&output.stdout, case.name);
-    assert_expected_kind(case, &output, &envelope);
+    let mut line = parse_single_envelope(&output.stdout, case.name);
+    assert_expected_kind(case, &output, &line);
     normalize_value(
-        &mut envelope,
+        &mut line,
         fixture.root(),
         None,
         case.name == "lab_run_success",
@@ -553,12 +557,13 @@ fn capture_case(case: &CaseSpec, fixture: Fixture) -> GoldenCase {
         name: case.name.to_string(),
         command: case.command.to_string(),
         exit_code: output.status.code().unwrap_or(-1),
-        envelope: canonicalize(envelope),
+        line: canonicalize(line),
     }
 }
 
-fn assert_expected_kind(case: &CaseSpec, output: &Output, envelope: &Value) {
-    let ok = envelope.get("ok").and_then(Value::as_bool) == Some(true);
+fn assert_expected_kind(case: &CaseSpec, output: &Output, line: &Value) {
+    // Workflow #434 LAB-2b: the line's own outcome says whether it succeeded.
+    let ok = line.pointer("/outcome/category").and_then(Value::as_str) == Some("success");
     match case.expected_kind {
         ExpectedKind::Success => assert!(
             output.status.success() && ok,
@@ -567,8 +572,8 @@ fn assert_expected_kind(case: &CaseSpec, output: &Output, envelope: &Value) {
             String::from_utf8_lossy(&output.stdout)
         ),
         ExpectedKind::Failure => {
-            let semantic_failure = envelope
-                .pointer("/data/status")
+            let semantic_failure = line
+                .pointer("/status")
                 .and_then(Value::as_str)
                 .is_some_and(|status| matches!(status, "stale" | "needs_detection"));
             assert!(
