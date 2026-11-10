@@ -17,6 +17,7 @@
 //! `next_cursor` one call prints always answers `cursor_invalid` in the next call, by design;
 //! `last_sequence` stays valid across calls and Runtime restarts.
 
+use crate::budget::{self, Budget, Fitted};
 use crate::cli_line;
 use crate::codes::{self, ActingctlCode};
 use crate::instance_selector::{self, SelectorMiss};
@@ -238,6 +239,9 @@ pub enum EventsError {
     CursorEncode(Option<Code>),
     /// The Runtime read failed.
     Runtime(RuntimeClientError),
+    /// Workflow #434 LAB-5D: a payload page its caller's budget did not take could not be written
+    /// whole to the caller's export: the export's outcome (`material_export_failed`).
+    Export(Outcome),
 }
 
 impl EventsError {
@@ -287,6 +291,7 @@ impl EventsError {
                 }
             }
             Self::Runtime(error) => error.outcome(),
+            Self::Export(outcome) => outcome.clone(),
         }
     }
 }
@@ -556,6 +561,133 @@ impl Page {
         }
         Value::Object(result)
     }
+
+    /// Workflow #434 LAB-5D: this page as `detail` answers it within `budget`, each row
+    /// [`row`]`(event, detail, envelope)`: a brief or summary page cut ([`list_within_budget`]), a
+    /// payload page written whole through the budget's export ([`payload_within_budget`]).
+    /// Without a budget the page whole, the page the CLI prints. `bind` writes a cursor as the
+    /// caller binds it to its connection.
+    pub fn within_budget(
+        &self,
+        detail: Detail,
+        envelope: &dyn Fn(&Outcome) -> Value,
+        bind: Binder<'_>,
+        budget: Option<&Budget<'_>>,
+    ) -> Result<Fitted, EventsError> {
+        let rows = self
+            .events()
+            .iter()
+            .map(|event| row(event, detail, envelope))
+            .collect::<Vec<_>>();
+        match detail {
+            Detail::Brief | Detail::Summary => {
+                list_within_budget(rows, budget, &|rows, kept| self.render(rows, kept, bind))
+                    .map(Fitted::whole)
+            }
+            Detail::Payload => {
+                let count = rows.len();
+                let page = self.render(&rows, count, bind)?;
+                payload_within_budget(page, count, budget).map_err(EventsError::Export)
+            }
+        }
+    }
+
+    /// The page with the first `kept` of `rows`, the rows of its events in order (moved
+    /// unchanged from MCP's `ac_events`): with fewer than all, `truncated` and the cursor after
+    /// the last row kept; otherwise the cursor where the Runtime's next page starts, if any.
+    /// `bind` writes a cursor.
+    fn render(&self, rows: &[Value], kept: usize, bind: Binder<'_>) -> Result<Value, EventsError> {
+        let truncated = kept < rows.len();
+        let next = if truncated {
+            Some(self.cursor_after(self.events()[kept - 1].sequence))
+        } else {
+            self.next_cursor().transpose()
+        };
+        let next = next
+            .transpose()
+            .and_then(|next| next.map(|cursor| bind(&cursor)).transpose())?;
+        Ok(self.result(&rows[..kept], next, truncated))
+    }
+}
+
+/// Workflow #434 LAB-5D: how a caller writes a cursor of a page it answers, bound to its own
+/// process and connection ([`CursorBinding::encode`] on its binding); the binding stays the
+/// caller's.
+pub type Binder<'a> = &'a dyn Fn(&RuntimeEventQueryCursor) -> Result<String, EventsError>;
+
+/// Workflow #434 LAB-5D: how [`list_within_budget`] renders a brief or summary page:
+/// `render(rows, kept)` answers the page with the first `kept` of `rows`, or the caller's failure.
+pub type Renderer<'a, E> = &'a dyn Fn(&[Value], usize) -> Result<Value, E>;
+
+/// Workflow #434 LAB-5D (moved unchanged from MCP's `ac_events`): a brief or summary page within
+/// `budget`. `render(rows, kept)` answers the page with the first `kept` of `rows`: with fewer
+/// than all, `truncated` and a cursor after the last row kept. Rows are cut from the end first;
+/// one row alone over the budget has its material list shortened from its end, the row marked
+/// `materials_truncated: true`, rather than be dropped; a row with nothing left to shorten is
+/// given as it is, for the caller to refuse. Without a budget the page whole.
+pub fn list_within_budget<E>(
+    mut rows: Vec<Value>,
+    budget: Option<&Budget<'_>>,
+    render: Renderer<'_, E>,
+) -> Result<Value, E> {
+    let mut kept = rows.len();
+    loop {
+        let result = render(&rows, kept)?;
+        if budget::fits(budget, &result) {
+            return Ok(result);
+        }
+        if kept > 1 {
+            kept -= 1;
+            continue;
+        }
+        // One row alone is over the budget: shorten its material list, and say so, rather than
+        // drop the row.
+        let Some(materials) = rows
+            .first_mut()
+            .and_then(|row| row.get_mut("materials"))
+            .and_then(Value::as_array_mut)
+            .filter(|materials| !materials.is_empty())
+        else {
+            // Nothing left to shorten: the caller refuses it.
+            return Ok(result);
+        };
+        materials.pop();
+        rows[0]["materials_truncated"] = json!(true);
+    }
+}
+
+/// Workflow #434 LAB-5D (moved unchanged from MCP's `ac_events`): a payload page within
+/// `budget`. `page` is the whole page, the page the CLI prints (without its `outcome`), and
+/// `events_count` its rows. It is given whole without a budget, when the budget takes it or for a
+/// caller with no export; otherwise it is written whole through the caller's export
+/// ([`budget::write_json`]) and answered as `{export, events_count, next_cursor?,
+/// last_sequence?}` with the warning `answer_exported` naming the file (`path`).
+pub fn payload_within_budget(
+    page: Value,
+    events_count: usize,
+    budget: Option<&Budget<'_>>,
+) -> Result<Fitted, Outcome> {
+    let Some(export) = budget::export_for(budget, &page) else {
+        return Ok(Fitted::whole(page));
+    };
+    let reference = budget::write_json(export, &page)?;
+    let mut note = Outcome::new(ActingctlCode::AnswerExported);
+    if let Some(path) = reference["path"].as_str() {
+        note = note.path(path);
+    }
+    let mut answer = Map::new();
+    answer.insert("export".to_owned(), reference);
+    answer.insert("events_count".to_owned(), json!(events_count));
+    if let Some(next) = page.get("next_cursor") {
+        answer.insert("next_cursor".to_owned(), next.clone());
+    }
+    if let Some(last) = page.get("last_sequence") {
+        answer.insert("last_sequence".to_owned(), last.clone());
+    }
+    Ok(Fitted {
+        result: Value::Object(answer),
+        exported: Some(note),
+    })
 }
 
 /// Reads one page of `request` with the resolved instance. A page from `after_sequence` starts

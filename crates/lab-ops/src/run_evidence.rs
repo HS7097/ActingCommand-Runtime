@@ -7,7 +7,8 @@
 //! QueryEvents by its request_id, which records nothing. Both sides parse their arguments into
 //! one [`EvidenceRequest`], read it with [`read`] and answer [`Evidence::render`]: stdout is one
 //! line, the same JSON as the `ac_run_evidence` result, with the outcome `run_evidence_reported`
-//! (Workflow #378 A5). Only MCP cuts steps to its output budget (`truncated`, command table §2.2).
+//! (Workflow #378 A5). Only a caller that passes a budget has steps cut (`truncated`, command
+//! table §2.2; Workflow #434 LAB-5D: [`Evidence::within_budget`]; MCP passes its output budget).
 //!
 //! The answer is `{request_id, run_id?, task_id?, steps, final, next_step?, overlay?}`. A step is
 //! `{step_index, page, targets, action?, frames}` in the order the run started its steps:
@@ -37,6 +38,7 @@
 //! - MCP answers a step that alone is over its output budget with its heavy parts referenced, not
 //!   inlined (`Evidence::render_referenced`).
 
+use crate::budget::{self, Budget};
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem, RunState};
 use crate::material_export;
@@ -244,6 +246,34 @@ impl Evidence {
     /// never cut this way.
     pub fn render_referenced(&self, omit: Omit) -> Value {
         self.render_page(1, Some(omit))
+    }
+
+    /// Workflow #434 LAB-5D (moved unchanged from MCP's `ac_run_evidence`): the page within
+    /// `budget`: every step of it without one, the page the CLI prints; with one, as many of its
+    /// steps, from the first, as the budget takes ([`Self::render`]: `truncated`, `next_step`
+    /// after the last step kept). #411 A42: when the page's first step alone does not fit, it is
+    /// answered with its frames left out and referenced, and then its targets too
+    /// ([`Self::render_referenced`]); a page that does not fit even so is given as it is, for the
+    /// caller to refuse.
+    pub fn within_budget(&self, budget: Option<&Budget<'_>>) -> Value {
+        let mut kept = self.page_len();
+        loop {
+            let result = self.render(kept);
+            if budget::fits(budget, &result) || kept == 0 {
+                return result;
+            }
+            if kept == 1 {
+                break;
+            }
+            kept -= 1;
+        }
+        // The page's first step alone is over the budget: its frames referenced, else its targets
+        // too.
+        let frames_referenced = self.render_referenced(Omit::Frames);
+        if budget::fits(budget, &frames_referenced) {
+            return frames_referenced;
+        }
+        self.render_referenced(Omit::FramesAndTargets)
     }
 
     fn render_page(&self, kept: usize, omit: Option<Omit>) -> Value {

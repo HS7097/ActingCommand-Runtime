@@ -21,6 +21,7 @@
 //! without `ui.json` answers as before plus `task_ids` and `irreversible`; a refused `ui.json`
 //! adds its warnings and changes no row.
 
+use crate::budget::{self, Budget, Fitted};
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::instance_selector::SelectorMiss;
@@ -225,6 +226,52 @@ impl Answer {
         }
         Ok(document)
     }
+
+    /// Workflow #434 LAB-5D (moved unchanged from MCP's `ac_packs`): the answer within `budget`.
+    /// The bindings, the document without its `warnings` (which the caller gives beside it),
+    /// when there is no budget, when the budget takes them or for a caller with no export.
+    /// Otherwise the whole document, its warnings included, each as `warning` renders it
+    /// ([`Self::document`]), written through the caller's export as the reads that export write
+    /// theirs ([`budget::write_bytes`]), and answered as `{source, export}`
+    /// ([`budget::exported_header`]) with `answer_exported` counting the warnings the file holds
+    /// (`count`) and naming it (`path`). One that does not encode is `actingctl_output_failed`,
+    /// caused by the encoder's failure.
+    pub fn within_budget(
+        &self,
+        budget: Option<&Budget<'_>>,
+        warning: &dyn Fn(&Outcome) -> Value,
+    ) -> Result<Fitted, Outcome> {
+        let result = serde_json::to_value(&self.packs).map_err(|error| output_failed(&error))?;
+        let Some(export) = budget::export_for(budget, &result) else {
+            return Ok(Fitted::whole(result));
+        };
+        let document = self
+            .document(warning)
+            .map_err(|error| output_failed(&error))?;
+        let bytes =
+            serde_json::to_vec(&Value::Object(document)).map_err(|error| output_failed(&error))?;
+        let reference = budget::write_bytes(export, &bytes)?;
+        let note = Outcome::new(ActingctlCode::AnswerExported).count(self.warnings.len());
+        Ok(budget::exported_header(
+            &result,
+            &EXPORTED_HEADER,
+            reference,
+            note,
+        ))
+    }
+}
+
+/// The members an answer written whole to its caller's export keeps beside `export` (Workflow
+/// #434 LAB-5D: moved from MCP's `ac_packs`).
+const EXPORTED_HEADER: [&str; 1] = ["source"];
+
+/// `actingctl_output_failed`, caused by the encoder's failure (`foreign_data_error`).
+fn output_failed(error: &serde_json::Error) -> Outcome {
+    Outcome::new(ActingctlCode::ActingctlOutputFailed).caused_by(
+        Outcome::new(ContractCode::ForeignDataError)
+            .raw_source(RawSource::Json)
+            .raw_text(error.to_string()),
+    )
 }
 
 /// A refusal of `packs` as its outcome (Workflow #378 A5): the code with its values (a

@@ -24,6 +24,7 @@
 //! line's outcome is the completed receipt's code of the request the command made
 //! (`request_publish_facts_completed`, `request_instance_fact_snapshot_completed`).
 
+use crate::budget::{self, Budget, Fitted};
 use crate::cli_line;
 use crate::codes::ArgumentProblem;
 use crate::instance_selector::{self, SelectorMiss};
@@ -51,6 +52,9 @@ const CLI_DETECTOR: &str = "actingctl.remedy";
 pub const MCP_DETECTOR: &str = "actingctl-mcp.remedy";
 /// The largest rows file read: a fact observation's bound.
 const MAX_ROWS_FILE_BYTES: usize = actingcommand_contract::MAX_FACT_OBSERVATION_BYTES;
+/// The members a `get` answer written whole to its caller's export keeps beside `export`
+/// (Workflow #434 LAB-5D: moved from MCP's `ac_remedy_get`).
+const EXPORTED_HEADER: [&str; 3] = ["instance_alias", "read_at_unix_ms", "in_effect"];
 
 /// The scope a `set` writes: an instance or a game, never a server (a server id is not
 /// game-qualified).
@@ -172,6 +176,15 @@ pub fn get(client: &RuntimeClient, selector: &str) -> Result<Value, Failure> {
         "records": listed,
         "in_effect": in_effect.map(|index| json!(records[index].scope)),
     }))
+}
+
+/// Workflow #434 LAB-5D: the answer of `get` (the operation `remedy`), `answer`, within `budget`,
+/// the one way of the reads that export ([`budget::exported`]): whole without a budget, when it
+/// fits or for a caller with no export; otherwise written whole through the caller's export and
+/// answered as `{instance_alias, read_at_unix_ms, in_effect, export}` with the warning
+/// `answer_exported`.
+pub fn within_budget(answer: Value, budget: Option<&Budget<'_>>) -> Result<Fitted, Outcome> {
+    budget::exported(answer, &EXPORTED_HEADER, budget)
 }
 
 /// `lift` (model-b15 §7.6 item 2): the instance's own record republished unchanged (its rows,

@@ -47,17 +47,13 @@ pub(super) fn run(_context: &ToolContext<'_>, arguments: &Map<String, Value>) ->
     }
 }
 
-/// The page with as many of its rows, from the first, as the output budget lets through.
+/// The page with as many of its rows, from the first, as the output budget lets through; a
+/// result that does not fit even without rows answers output_budget_exceeded. Workflow #434
+/// LAB-5D: the cut is `Page::within_budget`'s, with this server's budget.
 fn within_budget(page: &Page) -> ToolOutcome {
-    let mut kept = page.row_count();
-    loop {
-        let result = page.render(kept).map_err(refused)?;
-        // A result that does not fit even without rows answers output_budget_exceeded.
-        if kept == 0 || tools::fits_success(&result) {
-            return Ok(ToolSuccess::new(result));
-        }
-        kept -= 1;
-    }
+    page.within_budget(Some(&tools::answer_budget()))
+        .map(ToolSuccess::new)
+        .map_err(refused)
 }
 
 /// A refusal of the lookup with the CLI's outcome: the caller's to change is `usage`, a build

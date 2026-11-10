@@ -5,10 +5,13 @@
 //! runtime-client unchanged; this module only selects, pages and bounds it. ac_events lives in
 //! `events` (Workflow #389 MCP-1). Errors and warnings are outcomes (Workflow #378 A5).
 //! ac_overview is `actingctl overview` (`crate::overview`, Workflow #389 MCP-8): the same read
-//! and result, cut here to the output budget in the order of the MCP-0 command table §4.9.
+//! and result, cut to the output budget in the order of the MCP-0 command table §4.9.
 //! #422 OV-24K (v0.12.20): the budget is counted on the bytes sent in the protocol version the
 //! session negotiated, the JSON once where twice does not fit (`tools::fits_sent`); `fact_refresh`
-//! is cut last, and a cut answer says so.
+//! is cut last, and a cut answer says so. Workflow #434 LAB-5D: the cut, its order and its markers
+//! are `overview`'s (`overview::within_budget`); this server passes that budget and says beside a
+//! cut answer that the whole did not fit (`fit_answer`). ac_routine_summary's export is
+//! `routine_summary::within_budget`'s, with this server's budget.
 
 use super::protocol::Era;
 use super::runtime::{self, Connected};
@@ -16,11 +19,12 @@ use super::tools::{
     self, Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, ToolSuccess,
     invalid_argument, out_of_range,
 };
-use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::codes::ArgumentProblem;
 use crate::material;
 use crate::overview::{self, Failure, OverviewRequest, Place, Sections, Warning};
 use actingcommand_contract::outcome::{CauseRelation, Outcome};
 use actingcommand_contract::{ProjectedArtifactReference, RuntimeInstanceStatus};
+use actingcommand_lab_ops::budget::Budget;
 use actingcommand_runtime_client::RuntimeClientError;
 use serde_json::{Map, Value, json};
 use std::env;
@@ -28,30 +32,9 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-/// MCP-0 command table §4.9: the top-level blocks ac_overview cuts first, in this order, when its
-/// answer does not fit the output budget. A slice that adds an overview block registers its place
-/// here in the same PR; a block the answer does not hold is passed over. Workflow #432 AGT-1b:
-/// `agent_wake` is not here: it is a few members of the Status read and is never cut. #428 CW-1:
-/// `catalog.compile_warnings.items` is cut just before `catalog`.
-const CUT_BLOCKS: [&str; 8] = [
-    "host",
-    "startup",
-    "tagged_state",
-    "ledger",
-    "performance",
-    "watchdog",
-    "catalog",
-    "config_generation",
-];
-/// Then each instance row's `run`, from the last row back, then each row's `monitor`, the same
-/// way, then each row's `foreground` (Workflow #389 MCP-5b registers it last of the row blocks: it
-/// is the smallest); then `install.build`.
-const CUT_ROW_BLOCKS: [&str; 3] = ["run", "monitor", "foreground"];
-/// #422 OV-24K: last of all, what the fact refresh waits for: its rows are the warnings an
-/// operator needs (`fact_refresh_unbound`, …), so it outlasts every less urgent block.
-const CUT_LAST: &str = "fact_refresh";
-/// #422 OV-24K: the member of a cut answer listing what was cut, in the order it was cut.
-const TRUNCATED: &str = "truncated";
+// Workflow #434 LAB-5D: the cut the gates of ac_overview read, `overview`'s now.
+#[cfg(test)]
+pub(super) use crate::overview::cut_to_fit;
 // Workflow #434 LAB-1b: ac_material's text bounds and the largest material it exports are
 // `material`'s (`MAX_TEXT_BYTES`, `DEFAULT_TEXT_BYTES`, `material_export::MAX_EXPORT_BYTES`).
 /// Time kept back from the call budget for writing the exported file.
@@ -126,14 +109,14 @@ pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>
 /// bytes sent, the JSON once beside a summary text with every warning where twice does not fit).
 /// An answer that fits is returned whole. Otherwise it is never cut silently: the warning
 /// `output_budget_exceeded` says how many bytes the whole answer takes (`actual_bytes`) and the
-/// budget (`limit_bytes`), and `cut_to_fit` cuts it, naming each cut in `truncated`.
+/// budget (`limit_bytes`), and `overview::within_budget` cuts it with that budget (Workflow #434
+/// LAB-5D), naming each cut in `truncated`.
 pub(super) fn fit_answer(mut result: Value, mut warnings: Vec<Value>, era: Era) -> ToolSuccess {
     if !tools::fits_sent(&result, &warnings, era) {
         let whole = tools::sent_size(&result, &warnings, era);
         warnings.push(tools::budget_exceeded(whole).into_warning());
-        cut_to_fit(&mut result, |result| {
-            tools::fits_sent(result, &warnings, era)
-        });
+        let fits = |result: &Value| tools::fits_sent(result, &warnings, era);
+        result = overview::within_budget(result, Some(&Budget::new(&fits)));
     }
     ToolSuccess { result, warnings }
 }
@@ -150,87 +133,6 @@ fn runtime_failure(
         None => runtime::client_error(error),
     }
 }
-
-/// Cuts `result`, an ac_overview answer, one block at a time in the order of the MCP-0 command
-/// table §4.9 until `fits` takes it: the top-level blocks of [`CUT_BLOCKS`], then each instance
-/// row's `run` from the last row back, then each row's `monitor` the same way, then each row's
-/// `foreground` (MCP-5b), then `install.build`, then `fact_refresh` (#422 OV-24K: its warnings
-/// outlast every less urgent block). Each cut block leaves `<block>_truncated: true` where it
-/// was, and `truncated` lists the JSON pointer of every cut block in the order it was cut (#422
-/// OV-24K). The daemon, the global pause, each row's identity, `emulator_state` (Workflow #390
-/// 九处-1), `backend_selfcheck` (#411 A7), `not_running` (Workflow #386 SR-6b, MCP-19b),
-/// `activity` (Workflow #429 R-0b2), `pause`, `lease_active` and `queued`, `incomplete` and each
-/// `<block>_incomplete` are never cut: an answer that still does not fit when nothing is left to
-/// cut is returned as it is, and the call sends it with as many warnings in the summary text as
-/// fit, or answers `output_budget_exceeded` (`tools::tool_call_result`).
-pub(super) fn cut_to_fit(result: &mut Value, fits: impl Fn(&Value) -> bool) {
-    let mut cut = Vec::new();
-    while !fits(result) {
-        let Some(pointer) = cut_next(result) else {
-            return;
-        };
-        cut.push(pointer);
-        if let Some(members) = result.as_object_mut() {
-            members.insert(TRUNCATED.to_owned(), json!(cut));
-        }
-    }
-}
-
-/// The next cut of [`cut_to_fit`]: the JSON pointer of the block it cut, `None` when nothing is
-/// left to cut.
-fn cut_next(result: &mut Value) -> Option<String> {
-    let members = result.as_object_mut()?;
-    for block in CUT_BLOCKS {
-        // #428 CW-1: the places of the catalog's compile warnings go just before the catalog
-        // block, so their count and codes outlast them.
-        if block == overview::Section::Catalog.name()
-            && let Some(warnings) = members
-                .get_mut(block)
-                .and_then(|catalog| catalog.get_mut(overview::CATALOG_COMPILE_WARNINGS))
-                .and_then(Value::as_object_mut)
-            && warnings.remove("items").is_some()
-        {
-            warnings.insert("items_truncated".to_owned(), json!(true));
-            return Some(format!(
-                "/{block}/{}/items",
-                overview::CATALOG_COMPILE_WARNINGS
-            ));
-        }
-        if members.remove(block).is_some() {
-            members.insert(format!("{block}_truncated"), json!(true));
-            return Some(format!("/{block}"));
-        }
-    }
-    let instances = overview::Section::Instances.name();
-    for block in CUT_ROW_BLOCKS {
-        let Some(rows) = members.get_mut(instances).and_then(Value::as_array_mut) else {
-            break;
-        };
-        for (index, row) in rows.iter_mut().enumerate().rev() {
-            if let Some(row) = row.as_object_mut()
-                && row.remove(block).is_some()
-            {
-                row.insert(format!("{block}_truncated"), json!(true));
-                return Some(format!("/{instances}/{index}/{block}"));
-            }
-        }
-    }
-    let install = overview::Section::Install.name();
-    if let Some(members) = members.get_mut(install).and_then(Value::as_object_mut)
-        && members.remove("build").is_some()
-    {
-        members.insert("build_truncated".to_owned(), json!(true));
-        return Some(format!("/{install}/build"));
-    }
-    if members.remove(CUT_LAST).is_some() {
-        members.insert(format!("{CUT_LAST}_truncated"), json!(true));
-        return Some(format!("/{CUT_LAST}"));
-    }
-    None
-}
-
-/// The members an exported `ac_routine_summary` answer keeps beside `export`.
-const ROUTINE_SUMMARY_EXPORTED_HEADER: [&str; 3] = ["owner_epoch", "granularity", "revision"];
 
 pub(super) const ROUTINE_SUMMARY_DESCRIPTION: &str = "The routine summary's health statistics, the same read and answer as actingctl routine-summary (Workflow #429 R-12): per instance, the policy runs and direct runs the Runtime settled since it started, by task and by an hour (granularity hour) or a calendar day (granularity day) of the Runtime host's local clock (a day across a daylight saving change has 23 or 25 hours), read from the Runtime's memory; nothing is read from or written to the ledger. Health statistics only, never a count of runs done or allowed. Answers {owner_epoch, granularity, revision, instances: [{instance_alias, coverage_from_unix_ms, buckets: [{start_unix_ms, end_unix_ms, revision, tasks: [{task_id, successes, failures: [{code, count}], interruptions}]}]}]}: a run that succeeded is a success, one that failed counts under its outcome code (failures is absent when there is none), one that ended contained_task_cancelled (a stop or a drain's cancel) is an interruption, never a failure; a run counts in the bucket of its settle time. Each instance keeps its last 48 hour buckets and 14 day buckets: coverage_from_unix_ms is when its statistics are complete from, the Runtime's start until an older bucket was dropped, then the start of the oldest bucket kept. revision is the summary's revision now: pass it as since to read only the buckets changed after it; a page whose owner_epoch differs from the one the cursor came with means the Runtime restarted (its memory and revisions begin again), so drop the cursor and read without since. instance (alias, instance_id or ADB port) narrows it to that instance, resolved with one status read; without it every instance. An answer larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {owner_epoch, granularity, revision, export {path, sha256, size}} with the warning answer_exported; narrow it with instance or since.";
 
@@ -323,7 +225,8 @@ pub(super) fn routine_summary_result() -> Value {
 
 /// `ac_routine_summary {granularity, instance?, since?}` (Workflow #429 R-12): the CLI's read
 /// (`crate::routine_summary::read`) on the server's connection, its page the answer; a page larger
-/// than the output budget is exported, as `ac_remedy_get` does.
+/// than the output budget is exported, as `ac_remedy_get` does (Workflow #434 LAB-5D:
+/// `routine_summary::within_budget`, with this server's budget).
 pub(super) fn routine_summary(
     context: &ToolContext<'_>,
     arguments: &Map<String, Value>,
@@ -351,28 +254,9 @@ pub(super) fn routine_summary(
             selector @ Failure::Selector { .. } => ToolError::outcome("usage", selector.outcome()),
         },
     )?;
-    let answer = json!(page);
-    if tools::fits_success(&answer) {
-        return Ok(ToolSuccess::new(answer));
-    }
-    let export = super::events::export_json(&answer)?;
-    let mut exported = ROUTINE_SUMMARY_EXPORTED_HEADER
-        .iter()
-        .filter_map(|member| {
-            answer
-                .get(*member)
-                .map(|value| ((*member).to_owned(), value.clone()))
-        })
-        .collect::<Map<_, _>>();
-    let mut warning = Outcome::new(ActingctlCode::AnswerExported);
-    if let Some(path) = export["path"].as_str() {
-        warning = warning.path(path);
-    }
-    exported.insert("export".to_owned(), export);
-    Ok(ToolSuccess {
-        result: Value::Object(exported),
-        warnings: vec![tools::warning(&warning)],
-    })
+    summary::within_budget(json!(page), Some(&tools::answer_budget()))
+        .map(|answer| tools::fitted(answer, Vec::new()))
+        .map_err(tools::export_failed)
 }
 
 /// The instance an `instance` argument names by alias, instance_id or ADB port, as the
@@ -502,6 +386,13 @@ pub(super) fn export_bytes(
     extension: &str,
     bytes: &[u8],
 ) -> Result<Value, ToolError> {
+    export_writer(sha256, extension, bytes).map_err(tools::export_failed)
+}
+
+/// Workflow #434 LAB-5D: the export writer this server passes in its answer budget
+/// (`lab_ops::budget::Writer`; `tools::answer_budget`): [`export_bytes`]'s write, its failure the
+/// writer's `material_export_failed`.
+pub(super) fn export_writer(sha256: &str, extension: &str, bytes: &[u8]) -> Result<Value, Outcome> {
     crate::material_export::write(&export_directory(), sha256, extension, bytes)
-        .map_err(|failure| ToolError::outcome("runtime", failure.outcome()))
+        .map_err(|failure| failure.outcome())
 }
