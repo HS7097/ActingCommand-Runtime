@@ -2382,7 +2382,7 @@
       "source": ["actingctl install release-hold"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: install release-hold. LAB-3 fix 1: only a hold a rescue operation's journal in this root recorded in its pause step, and of it only the instances that step paused, each while its pause shows the revision recorded; any other reason refuses hold_not_owned and nothing is resumed"
+      "notes": "LAB-3: install release-hold. LAB-3 fix 1 and 2: only a hold a rescue operation's journal in this root recorded in its pause step, and of it only the instances that step paused, each while its pause shows that reason, in any owner epoch (the Runtime's restore numbers the pauses anew); any other reason refuses hold_not_owned and nothing is resumed; a hold that stays answers kept: true with the ways out in next"
     },
     {
       "name": "new",

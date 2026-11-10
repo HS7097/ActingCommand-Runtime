@@ -18,18 +18,30 @@
 // Fix 1 (`brief-lab3-fix1.md`):
 // - `rescue_hands_back_only_its_own_hold` (item 1): another party's `alice-116-scheduler-stop`
 //   is never released nor adopted; `down --reason r1`, `up`, `release-hold r1` resume only what
-//   the module paused, and a pause that no longer shows the revision recorded is left;
+//   the module paused, and (adapted by fix 2, which matches the reason and the alias, not the
+//   revision) a pause of the hold that another party replaced with its own reason is left;
 // - `rescue_renames_its_own_running_image` (item 2): the running image of the process that plans
 //   is renamed aside like `actingctl.exe`, another running `actinglab.exe` still blocks;
 // - `place_holds_only_the_bundles_idle_instances` (item 4): on a neutral bundle, only the idle
 //   instance of the bundle's game is paused and resumed, the other party's pause and the other
 //   game's instance are untouched, `.old-<ms>` is kept, the journal carries the initiator, and
 //   `undo` restores the game root.
+// Fix 2 (`brief-lab3-fix2.md`):
+// - `rescue_hands_back_its_own_hold_across_a_restart` (item 2): a deploy whose start times out
+//   records no new owner epoch; while no Runtime answers the module's `release-hold` refuses with
+//   the hold kept and the ways out named; after another hand starts the Runtime (the restore
+//   numbers the pauses anew), `release-hold <its reason>` resumes exactly the instances its pause
+//   step paused, another party's `alice-116-scheduler-stop` and a later pause of another alias
+//   with another reason untouched;
+// - `rescue_refused_after_its_pause_hands_its_own_back` and
+//   `rescue_keeps_a_global_pause_and_goes_on` (item 3, fix 1's item 3): a refusal after the
+//   operation paused A hands A back, leaves the other party's pause and says `kept: false` only
+//   because nothing of its own stays paused; a global pause is kept, listed, and the stop goes on.
 // The machine is the fake host of `fixture.rs` with its fake Runtime, fake watchdog and fake
 // clock: no device, no sleep; every root is a temporary folder with neutral files.
 
 use super::fixture::{
-    BuildSpec, C1, C2, FakeHost, TAG, code, live_root, run, speaks, word, write_json,
+    BuildSpec, C1, C2, FakeHost, FakeStart, TAG, code, live_root, run, speaks, word, write_json,
 };
 use super::host::{Host, RunningImage};
 use crate::agent_channel::Answer as Answered;
@@ -758,25 +770,297 @@ fn rescue_hands_back_only_its_own_hold() {
     assert_eq!(pause_seen(&host, "neutral.b"), None);
     assert_eq!(pause_seen(&host, "neutral.a"), other);
 
-    // A pause the module set that shows another revision now (lifted and set again by someone
-    // else) is no longer its own: left as it is, and the release says so.
+    // A pause the module set that another party lifted and replaced with a reason of its own is no
+    // longer the module's: left as it is, and nothing of the module's stays to hand back. (Fix 2
+    // adapted this part: the module matches the reason and the alias, since the Runtime's restore
+    // numbers the pauses anew; a pause showing the module's reason at another revision is its own,
+    // `rescue_hands_back_its_own_hold_across_a_restart`.)
     let (down, exit) = rescue_line(&host, &root, "down", json!({"reason": "r2"}));
     assert_eq!(exit, 0, "{down}");
     let (up, exit) = rescue_line(&host, &root, "up", json!({}));
     assert_eq!(exit, 0, "{up}");
-    host.runtime.pause_as("neutral.b", "r2");
+    host.runtime.pause_as("neutral.b", "other-later");
     let again = pause_seen(&host, "neutral.b");
     let (left, exit) = rescue_line(&host, &root, "release-hold", json!({"reason": "r2"}));
-    assert_eq!(exit, 1, "{left}");
-    assert_eq!(
-        top_value(&left, "install_refusal"),
-        "hold_not_owned",
-        "{left}"
-    );
-    assert_eq!(top_value(&left, "aliases"), &json!(["neutral.b"]));
+    assert_eq!(exit, 0, "{left}");
+    assert_eq!(top_code(&left), "install_command_done", "{left}");
+    assert_eq!(left["release"]["resumed"], json!([]), "{left}");
     assert_eq!(pause_seen(&host, "neutral.b"), again);
     assert_eq!(pause_seen(&host, "neutral.a"), other);
     assert_eq!(calls_of(&host, "resume "), ["resume neutral.b"]);
+}
+
+/// Whether the line carries, as its top or as a link at any depth, an outcome `code` whose value
+/// `key` is `value`.
+fn carries(line: &Value, code: &str, key: &str, value: &Value) -> bool {
+    match line {
+        Value::Object(members) => {
+            (members.get("code").and_then(Value::as_str) == Some(code)
+                && members.get("values").and_then(|values| values.get(key)) == Some(value))
+                || members
+                    .values()
+                    .any(|inner| carries(inner, code, key, value))
+        }
+        Value::Array(items) => items.iter().any(|inner| carries(inner, code, key, value)),
+        _ => false,
+    }
+}
+
+/// The root as the installer spells it in its output (`paths.plain`).
+fn plain_root(root: &Path) -> String {
+    super::files::plain(&fs::canonicalize(root).expect("the canonical root"))
+}
+
+// Fix 2, item 2 (`brief-lab3-fix2.md`; install-cli.md, "The Lab's rescue module"): a deploy whose
+// start times out records no new owner epoch. The real Runtime's restore numbers every pause anew
+// (`crates/runtime-host/src/host/scheduling_pause.rs`, revision 1 for a start that is not
+// installer-held), so what is the module's own is its pause step's reason and aliases. A paused by
+// another party with `alice-116-scheduler-stop`; B and C idle, held by the deploy; D registered
+// later and paused with another reason.
+#[test]
+fn rescue_hands_back_its_own_hold_across_a_restart() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, release) = prepared(temp.path(), "restart", &host);
+    host.runtime.boot(&["neutral.a", "neutral.b", "neutral.c"]);
+    host.runtime.pause_as("neutral.a", OTHER_STOP);
+    let epoch_held = host.runtime.owner.borrow().epoch.clone();
+    host.runtime.starts.borrow_mut().push_back(FakeStart::Hangs);
+
+    // The deploy: its new build's start is not ready at its deadline and is left running; the hold
+    // stays, and the answer says so and names the ways out that work today, none another party's.
+    let before = journals(&root);
+    let (deployed, exit) = rescue_line(
+        &host,
+        &root,
+        "deploy",
+        json!({"target": TAG, "dir": word(&release)}),
+    );
+    assert_eq!(exit, 1, "{deployed}");
+    assert_eq!(
+        top_value(&deployed, "install_refusal"),
+        "runtime_start_failed",
+        "{deployed}"
+    );
+    let reason = deployed["hold"]["reason"]
+        .as_str()
+        .expect("the hold's reason")
+        .to_owned();
+    assert!(reason.starts_with("lab-deploy-"), "{deployed}");
+    assert_eq!(deployed["hold"]["kept"], json!(true), "{deployed}");
+    assert_eq!(
+        deployed["next"]["release_hold"],
+        json!(["release-hold", reason])
+    );
+    assert_eq!(
+        deployed["next"]["actingctl_release_hold"],
+        json!([
+            "actingctl",
+            "install",
+            "release-hold",
+            "--root",
+            plain_root(&root),
+            "--reason",
+            reason
+        ])
+    );
+    assert!(!suggests(&deployed, OTHER_STOP), "{deployed}");
+    assert!(!host.runtime.running.get());
+    for alias in ["neutral.b", "neutral.c"] {
+        assert_eq!(
+            host.runtime.pause_of(alias).as_deref(),
+            Some(reason.as_str())
+        );
+    }
+    // No new owner epoch is recorded: the start step has no `ready`, and the pause step's record
+    // is of the epoch the hold was set in.
+    let written = new_journals(&root, &before);
+    let update = written
+        .iter()
+        .find(|(_, journal)| journal["kind"] == "update")
+        .unwrap_or_else(|| panic!("an update journal: {deployed}"));
+    let steps = update.1["steps"].as_array().expect("the steps");
+    let step_of = |kind: &str| {
+        steps
+            .iter()
+            .find(|step| step["kind"] == kind)
+            .unwrap_or_else(|| panic!("a {kind} step"))
+    };
+    assert!(step_of("start")["evidence"]["ready"].is_null());
+    assert_eq!(
+        step_of("pause")["evidence"]["own_pauses"]["owner_epoch"],
+        json!(epoch_held)
+    );
+
+    // While no Runtime answers, the module's `release-hold` refuses; the hold stays, and the
+    // answer says so, with `up` and the ways out.
+    let (early, exit) = rescue_line(&host, &root, "release-hold", json!({"reason": reason}));
+    assert_eq!(exit, 1, "{early}");
+    assert_eq!(
+        top_value(&early, "install_refusal"),
+        "runtime_not_running",
+        "{early}"
+    );
+    assert_eq!(early["hold"]["kept"], json!(true), "{early}");
+    assert_eq!(early["next"]["start"], json!(["up"]), "{early}");
+    assert_eq!(
+        early["next"]["release_hold"],
+        json!(["release-hold", reason])
+    );
+    assert!(!suggests(&early, OTHER_STOP), "{early}");
+
+    // Another hand starts the Runtime: a new owner epoch, every pause restored at revision 1. Then
+    // D, which the configuration gained, gets a pause with another reason.
+    host.runtime.restart_restored();
+    assert_ne!(host.runtime.owner.borrow().epoch, epoch_held);
+    assert_eq!(pause_seen(&host, "neutral.b"), Some((reason.clone(), 1)));
+    host.runtime.register("neutral.d");
+    host.runtime.pause_as("neutral.d", "later-party");
+    let other = pause_seen(&host, "neutral.a");
+    let later = pause_seen(&host, "neutral.d");
+    assert_eq!(
+        other.as_ref().map(|(seen, _)| seen.as_str()),
+        Some(OTHER_STOP)
+    );
+    assert!(calls_of(&host, "resume ").is_empty());
+
+    // `release-hold <its reason>` resumes exactly B and C.
+    let (released, exit) = rescue_line(&host, &root, "release-hold", json!({"reason": reason}));
+    assert_eq!(exit, 0, "{released}");
+    assert_eq!(top_code(&released), "install_command_done", "{released}");
+    assert_eq!(top_value(&released, "count"), &json!(2));
+    assert_eq!(
+        calls_of(&host, "resume "),
+        ["resume neutral.b", "resume neutral.c"]
+    );
+    assert_eq!(released["hold"]["kept"], json!(false), "{released}");
+    assert_eq!(pause_seen(&host, "neutral.b"), None);
+    assert_eq!(pause_seen(&host, "neutral.c"), None);
+    assert_eq!(pause_seen(&host, "neutral.a"), other);
+    assert_eq!(pause_seen(&host, "neutral.d"), later);
+}
+
+// Fix 2, item 3 (fix 1's item 3, `brief-lab3-fix1.md`; contracts/lab-two-entries.md §6): the
+// operation paused A, then the Runtime refuses B's pause (again once its queue is clear). A is
+// handed back at once, C's pause (another party's) is untouched, and the answer says `kept:
+// false` only because nothing of the operation's own stays paused.
+#[test]
+fn rescue_refused_after_its_pause_hands_its_own_back() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, _) = prepared(temp.path(), "refused", &host);
+    host.runtime.boot(&["neutral.a", "neutral.b", "neutral.c"]);
+    host.runtime.pause_as("neutral.c", OTHER_STOP);
+    let other = pause_seen(&host, "neutral.c");
+    *host.runtime.refuse_pause.borrow_mut() = vec!["neutral.b".to_owned(), "neutral.b".to_owned()];
+
+    let (refused, exit) = rescue_line(&host, &root, "down", json!({}));
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(
+        top_value(&refused, "install_refusal"),
+        "runtime_stop_failed",
+        "{refused}"
+    );
+    assert_eq!(top_value(&refused, "alias"), "neutral.b", "{refused}");
+    let reason = refused["hold"]["reason"]
+        .as_str()
+        .expect("the hold's reason")
+        .to_owned();
+    assert!(reason.starts_with("lab-down-"), "{refused}");
+    // A was paused by the operation and handed back; C was never asked.
+    assert!(
+        calls_of(&host, "pause ").contains(&format!("pause neutral.a {reason}")),
+        "{:?}",
+        calls(&host)
+    );
+    assert!(calls_of(&host, "pause neutral.c").is_empty());
+    assert_eq!(calls_of(&host, "resume "), ["resume neutral.a"]);
+    assert_eq!(refused["hold"]["release"]["resumed"], json!(["neutral.a"]));
+    assert_eq!(refused["hold"]["release"]["left"], json!([]));
+    assert_eq!(pause_seen(&host, "neutral.c"), other);
+    // `kept: false`, and nothing of the operation's own stays paused.
+    assert_eq!(refused["hold"]["kept"], json!(false), "{refused}");
+    for alias in ["neutral.a", "neutral.b", "neutral.c"] {
+        assert_ne!(
+            host.runtime.pause_of(alias).as_deref(),
+            Some(reason.as_str()),
+            "{alias}"
+        );
+    }
+    assert!(!suggests(&refused, OTHER_STOP), "{refused}");
+    assert!(host.runtime.running.get(), "nothing was closed");
+    assert!(calls_of(&host, "shutdown").is_empty());
+}
+
+// Fix 2, item 3 (fix 1's item 3; contracts/lab-two-entries.md §6): with a global pause present,
+// the rescue module's stop keeps it, lists it (the `foreign_pauses` row noted `guard_failed`, S0,
+// the journal's row) and goes on: the instances held, the Runtime closed. After `up` and the
+// module's `release-hold`, the global pause is still the same.
+#[test]
+fn rescue_keeps_a_global_pause_and_goes_on() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, _) = prepared(temp.path(), "global", &host);
+    host.runtime.boot(&["neutral.a", "neutral.b"]);
+    host.runtime.pause_global_as("global-party");
+    let global = host.runtime.global_pause.borrow().clone();
+    assert!(global.is_some());
+
+    let before = journals(&root);
+    let (down, exit) = rescue_line(&host, &root, "down", json!({}));
+    assert_eq!(exit, 0, "{down}");
+    assert_eq!(top_code(&down), "install_command_done", "{down}");
+    assert_eq!(top_value(&down, "operation"), "install_stop");
+    let reason = down["hold"]["reason"]
+        .as_str()
+        .expect("the hold's reason")
+        .to_owned();
+    assert_eq!(down["hold"]["kept"], json!(true), "{down}");
+    // Listed: noted, in S0 and in the journal's row.
+    assert!(
+        carries(
+            &down,
+            "install_caveat_noted",
+            "install_caveat",
+            &json!("guard_failed")
+        ),
+        "{down}"
+    );
+    assert_eq!(
+        down["s0"]["pauses"]["global"]["reason"], "global-party",
+        "{down}"
+    );
+    let written = new_journals(&root, &before);
+    assert_eq!(written.len(), 1, "{written:?}");
+    let row = written[0].1["guards"]
+        .as_array()
+        .expect("the guard rows")
+        .iter()
+        .find(|row| row["id"] == "foreign_pauses")
+        .expect("the foreign_pauses row")
+        .clone();
+    assert_eq!(row["values"]["global"]["reason"], "global-party", "{row}");
+    // Went on: both instances held, the Runtime closed, the global pause kept.
+    for alias in ["neutral.a", "neutral.b"] {
+        assert_eq!(
+            host.runtime.pause_of(alias).as_deref(),
+            Some(reason.as_str())
+        );
+    }
+    assert!(!host.runtime.running.get());
+    assert_eq!(calls_of(&host, "shutdown"), ["shutdown"]);
+    assert_eq!(*host.runtime.global_pause.borrow(), global);
+
+    // `up` and the module's `release-hold`: its own pauses handed back, the global pause kept.
+    let (up, exit) = rescue_line(&host, &root, "up", json!({}));
+    assert_eq!(exit, 0, "{up}");
+    let (released, exit) = rescue_line(&host, &root, "release-hold", json!({"reason": reason}));
+    assert_eq!(exit, 0, "{released}");
+    assert_eq!(
+        calls_of(&host, "resume "),
+        ["resume neutral.a", "resume neutral.b"]
+    );
+    assert_eq!(*host.runtime.global_pause.borrow(), global);
 }
 
 // Fix 1, item 2: the rescue module runs from `<root>\tools\actinglab.exe`. The running image of

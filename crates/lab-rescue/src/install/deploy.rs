@@ -38,7 +38,9 @@
 //! reason an instance shows (`hold_not_owned`), keeps a global pause, records the pauses it set
 //! (`own_pauses`), releases only those ([`owned_hold`], [`hold::release_own`]), and hands them
 //! back at once on a refusal before any change on disk ([`hand_back_own`]); `actingctl install`
-//! is unchanged.
+//! is unchanged. Fix 2: what is the module's own is its journal's pause step (the reason and the
+//! instances it paused), in any owner epoch, since the Runtime's restore numbers the pauses anew;
+//! an answer whose hold stays says `kept: true` and names in `next` the ways out that work today.
 
 use super::guards;
 use super::hold::{self, HoldInputs, HoldReport, PauseIntent, ReleaseEvidence, ReleaseIntent};
@@ -465,9 +467,7 @@ fn start(
         if evidence.get("ready_ms").is_none_or(Value::is_null) {
             evidence["ready_ms"] = json!(owner.started_at_unix_ms.saturating_sub(at));
         }
-        return Ok(StepEnd::Done(Some(with_own_pauses(
-            operation, loaded, evidence,
-        ))));
+        return Ok(StepEnd::Done(Some(evidence)));
     }
     operation.start(n)?;
     // `--ack-guard memory` of a stop or composite acknowledges the row before the stop only;
@@ -519,9 +519,7 @@ fn start(
     }
     let evidence = launched.evidence(&commit);
     if launched.ready.is_some() {
-        return Ok(StepEnd::Done(Some(with_own_pauses(
-            operation, loaded, evidence,
-        ))));
+        return Ok(StepEnd::Done(Some(evidence)));
     }
     let failure = launched.failure.clone().unwrap_or_else(|| {
         Outcome::new(crate::codes::ActingctlCode::ExitedDuringStartup).log(&launched.log)
@@ -538,23 +536,6 @@ fn start(
     let mut members = hold_kept(&paths, reason.as_ref(), !launched.left_running);
     members.insert("start".to_owned(), evidence);
     Ok(StepEnd::Ends(refusal, members))
-}
-
-/// Workflow #434 LAB-3 fix 1: a start of the rescue module records again the pauses of the hold it
-/// starts under (its own pause step's, or those of the stop whose S0 it judges against), as the
-/// new Runtime shows them (`own_pauses`, its owner epoch and revisions): the Runtime's restore
-/// numbers them anew, and the module's release matches the revision of the running Runtime's
-/// epoch. Nothing for `actingctl install`, whose journal is unchanged; a status that cannot be
-/// read records nothing, and a later release then leaves those pauses as they are and says so.
-fn with_own_pauses(operation: &Operation<'_>, loaded: &Loaded, mut evidence: Value) -> Value {
-    if super::Face::of(operation.journal()).rescue()
-        && let Some(intent) = pause_intent(operation.journal())
-        && let Ok(Some(seen)) = operation.host().runtime().status(&loaded.state_root)
-    {
-        evidence[hold::OWN_PAUSES] =
-            hold::OwnPauses::seen(&seen, &intent.reason, &intent.instances).value();
-    }
-    evidence
 }
 
 /// The evidence of the newest start step before step `n`.
@@ -949,13 +930,15 @@ fn deferred_for(
     (None, BTreeMap::new())
 }
 
-/// Workflow #434 LAB-3 fix 1 (contracts/lab-two-entries.md §5: the rescue module hands back only
-/// its own hold): the hold `reason` as the rescue module's journals in the root record it (those
-/// with `initiator`; `current`, when given, stands for its journal on disk): `None` unless the
-/// pause step of such a journal took that reason; else the instances those pause steps paused and
-/// the pause records of the module's pause and start steps, oldest first. A journal that cannot
-/// be read counts for nothing, as for every reader that goes through the journals; the
-/// operations folder that cannot be listed is the OS's failure.
+/// Workflow #434 LAB-3 fix 1 and 2 (contracts/lab-two-entries.md §5: the rescue module hands back
+/// only its own hold): the hold `reason` as the rescue module's journals in the root record it
+/// (those with `initiator`; `current`, when given, stands for its journal on disk): `None` unless
+/// the pause step of such a journal took that reason; else the instances those pause steps paused
+/// (the pauses the Runtime accepted, `drained`, and the instances their `own_pauses` record shows
+/// paused with the reason, each one of the step's intent) and the instances they were to pause.
+/// No owner epoch and no revision is read (fix 2: the Runtime's restore numbers the pauses anew).
+/// A journal that cannot be read counts for nothing, as for every reader that goes through the
+/// journals; the operations folder that cannot be listed is the OS's failure.
 pub(crate) fn owned_hold(
     host: &dyn Host,
     paths: &Paths,
@@ -981,42 +964,44 @@ pub(crate) fn owned_hold(
         journals.push(current.clone());
     }
     let mut owned = None::<hold::OwnedHold>;
-    let mut records = Vec::new();
     for journal in journals
         .iter()
         .filter(|journal| journal.initiator.is_some())
     {
-        for step in &journal.steps {
-            let record = hold::OwnPauses::of(step.evidence.as_ref())
-                .filter(|record| &record.reason == reason);
-            match step.kind {
-                StepKind::Pause => {
-                    let Some(intent) =
-                        PauseIntent::of(&step.intent).filter(|intent| &intent.reason == reason)
-                    else {
-                        continue;
-                    };
-                    owned
-                        .get_or_insert_with(hold::OwnedHold::default)
-                        .instances
-                        .extend(intent.instances);
-                    records.extend(record);
-                }
-                StepKind::Start => records.extend(record),
-                _ => {}
-            }
+        for step in journal
+            .steps
+            .iter()
+            .filter(|step| step.kind == StepKind::Pause)
+        {
+            let Some(intent) =
+                PauseIntent::of(&step.intent).filter(|intent| &intent.reason == reason)
+            else {
+                continue;
+            };
+            let recorded = hold::OwnPauses::of(step.evidence.as_ref())
+                .filter(|record| &record.reason == reason)
+                .map(|record| record.revisions.into_keys().collect::<Vec<_>>())
+                .unwrap_or_default();
+            let paused = hold::drained_of(step.evidence.as_ref())
+                .into_keys()
+                .chain(recorded)
+                .filter(|alias| intent.instances.contains(alias));
+            let found = owned.get_or_insert_with(hold::OwnedHold::default);
+            found.paused.extend(paused);
+            found.intended.extend(intent.instances);
         }
     }
-    Ok(owned.map(|owned| hold::OwnedHold { records, ..owned }))
+    Ok(owned)
 }
 
 /// Workflow #434 LAB-3 fix 1 and 3 (contracts/lab-two-entries.md §5, §6): a rescue operation
 /// refused after it paused instances and before anything changed on disk leaves no hold behind:
 /// it hands its own pauses back at once ([`hold::release_own`]) and says so (`hold` `kept: false`
-/// with the release's `resumed` and `left`; an instance left, whose pause is no longer the one
-/// the module set, adds the note `hold_not_owned`). A hand-back that fails keeps the hold: the
-/// failure is a note and `next` names the operation's own `release-hold`. `runtime_down` adds
-/// `install start` to `next` (the close was asked for).
+/// with the release's `resumed` and `left`; an instance left, which shows the hold's reason though
+/// the pause step did not pause it, adds the note `hold_not_owned`). A hand-back that fails keeps
+/// the hold (`kept: true`): the failure is a note and `next` names the operation's own
+/// `release-hold` (the rescue module adds the other ways out). `runtime_down` adds `install
+/// start` to `next` (the close was asked for).
 pub(crate) fn hand_back_own(
     operation: &Operation<'_>,
     loaded: &Loaded,
@@ -1095,8 +1080,9 @@ fn release_hold(
     operation.start(n)?;
     let host = operation.host();
     let runtime = host.runtime();
-    // Workflow #434 LAB-3 fix 1: the rescue module hands back only its own hold: the instances
-    // its pause step paused, each while its pause shows the revision it recorded.
+    // Workflow #434 LAB-3 fix 1 and 2: the rescue module hands back only its own hold: the
+    // instances its pause step paused, each while its pause shows the hold's reason, in whatever
+    // owner epoch the Runtime runs now.
     let released = if super::Face::of(operation.journal()).rescue() {
         let Some(owned) = owned_hold(host, &paths, &reason, Some(operation.journal()))? else {
             return Ok(StepEnd::Ends(
@@ -1116,8 +1102,10 @@ fn release_hold(
     };
     let resumed = match released {
         Ok(Ok(resumed)) => resumed,
-        // An instance of the hold that shows its reason at another revision is not the module's
-        // pause any more: left as it is, and the release says so.
+        // An instance that shows the hold's reason though its pause step did not pause it is not
+        // the module's pause: left as it is, and the release says so. Every pause of the module's
+        // own is handed back by then, so nothing of its own stays paused (`kept: false`) and no
+        // `next` is owed.
         Ok(Err(released)) => {
             let refusal = hold::not_owned(command, &reason, released.left.clone());
             let release = json!(released);
@@ -1952,17 +1940,30 @@ pub(crate) fn release_hold_command(
     if face.rescue() && owned_hold(host, &paths, &reason, None)?.is_none() {
         return Err(hold::not_owned(RELEASE, &reason, Vec::new()));
     }
-    if host
-        .runtime()
-        .status(&loaded.state_root)
-        .map_err(|cause| {
+    let not_running = match host.runtime().status(&loaded.state_root) {
+        Ok(Some(_)) => None,
+        Ok(None) => Some((
             super::refusal(RELEASE, InstallRefusal::RuntimeNotRunning)
-                .joined(CauseRelation::CausedBy, cause)
-        })?
-        .is_none()
-    {
-        return Err(super::refusal(RELEASE, InstallRefusal::RuntimeNotRunning)
-            .path(loaded.state_root.as_path()));
+                .path(loaded.state_root.as_path()),
+            true,
+        )),
+        Err(cause) => Some((
+            super::refusal(RELEASE, InstallRefusal::RuntimeNotRunning)
+                .joined(CauseRelation::CausedBy, cause),
+            false,
+        )),
+    };
+    if let Some((refusal, runtime_down)) = not_running {
+        // Workflow #434 LAB-3 fix 2: the module's own hold stays paused: its answer says so
+        // (`kept: true`) and `next` names the ways out (`up` when no Runtime runs).
+        if face.rescue() {
+            return Ok(Answer {
+                members: hold_kept(&paths, Some(&reason), runtime_down),
+                outcome: refusal,
+                text: None,
+            });
+        }
+        return Err(refusal);
     }
     let opening = Opening {
         kind: OperationKind::ReleaseHold,

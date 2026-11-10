@@ -8323,7 +8323,7 @@ until LAB-7 deletes actingctl.
 | L3-7 | the composites `deploy`, `rollback`, `config replace`, `config restore`, `place`, `alive`; `up`, `down`, `restart`, `unlock`, `check-config`, `ledger verify` | behaviour | LAB-3 | the rescue module | install-cli.md, "The Lab's rescue module"; the operation kinds `config_replace` and `pack_place` and the step `pack_item` are new; each composite's answer lists its steps (`stage`, `plan`, `stop`, `apply`, `start`, `alive`, `release`; `check_config`, `swap`; `plan`, `place`, `schedule`); the hold's reason is `lab-<word>-<unix ms>`; `--detach` runs the module's own command again through the WMI start with `ACTINGCOMMAND_INITIATOR` set to the same word (`Host::detach_rescue`) |
 | L3-8 | `actingcommand_watchdog::{Asked, Answered, answer}` | Runtime-internal interface | LAB-3 | the rescue module (`alive`, `watchdog install`, `watchdog uninstall`) | the watchdog's `status`, `install` and `uninstall` of a root as a report and its outcome, the developer lines it wrote before kept as `warnings`; `actingctl watchdog …` and actingwatch are unchanged |
 | L3-9 | `RuntimeLink::catalog_hash`; `InstanceSeen.game` | Runtime-internal seam | LAB-3 | `place` | the planner's catalog hash (`ScheduleExplanation`) before and after a placement; the game an instance's status names, which `place` holds by; a catalog read that fails before the placement refuses `runtime_not_running` with the failure as its cause, before anything is paused (fix 1) |
-| L3-10 | only the module's own hold (fix 1): `hold::{OwnPauses, OwnedHold, release_own, not_owned}`, `deploy::{owned_hold, hand_back_own}`; the journal evidence member `own_pauses` of the module's `pause` and `start` steps | behaviour; private document member | LAB-3 fix 1 | the rescue module | contract §5, install-cli.md "The Lab's rescue module": `release-hold <reason>` (now required in the table) hands back only a hold one of the module's journals recorded in its pause step, only the instances that step paused, each while its pause shows the revision recorded for the running Runtime's owner epoch (a start of the module records them again after the restore numbers them anew); another reason refuses `hold_not_owned` before anything is asked; `down` refuses a reason an instance shows and never adopts a pause; the release steps of every composite follow the rule; `next` never names a hold the module does not own; a refusal after the module paused something and before a change on disk (pause refused, close incomplete, `place` not idle) hands its pauses back at once (`hold` `kept: false`, `resumed`, `left`); a global pause is kept and listed and the stop goes on (§6); `deploy --reason` is gone from the table (§7's form has none); `actingctl install`'s `release-hold` and `stop` are unchanged |
+| L3-10 | only the module's own hold (fix 1, fix 2): `hold::{OwnPauses, OwnedHold, release_own, not_owned}`, `deploy::{owned_hold, hand_back_own}`, `rescue::ways_out`; the journal evidence member `own_pauses` of the module's `pause` step | behaviour; private document member | LAB-3 fix 1, fix 2 | the rescue module | contract §5, install-cli.md "The Lab's rescue module": `release-hold <reason>` (now required in the table) hands back only a hold one of the module's journals recorded in its pause step, only the instances that step paused (its `drained` and `own_pauses`), each while its pause shows that reason, in any owner epoch (fix 2: the real Runtime's restore numbers every pause anew at revision 1, `runtime-host` `scheduling_pause.rs`, for a start that is not installer-held, so neither epoch nor revision survives a restart; no start step records `own_pauses` any more); an answer whose own pauses stay says `kept: true` (a `release-hold` that finds no Runtime too) and `next` names the ways out that work today (`release_hold`; until LAB-7 `actingctl_release_hold` and `actingctl_resume`); another reason refuses `hold_not_owned` before anything is asked; `down` refuses a reason an instance shows and never adopts a pause; the release steps of every composite follow the rule; `next` never names a hold the module does not own; a refusal after the module paused something and before a change on disk (pause refused, close incomplete, `place` not idle) hands its pauses back at once (`hold` `kept: false`, `resumed`, `left`); a global pause is kept and listed and the stop goes on (§6); `deploy --reason` is gone from the table (§7's form has none); `actingctl install`'s `release-hold` and `stop` are unchanged |
 | L3-11 | `Host::own_pid`; the plan's `running.renamed_own` | Runtime-internal seam; plan answer member | LAB-3 fix 1 | the rescue module's `deploy` and `rollback` | the image of the process that plans (by pid; `<root>\tools\actinglab.exe` running the module) is renamed aside as `actingctl.exe` is, listed only when present; any other running `actinglab.exe` still refuses `running_image_blocks`; `actingctl install`'s planning is unchanged (its own image is `actingctl.exe`, caught first) |
 
 **Tests.** New: apps row "#434 LAB-3", four tests of
@@ -8359,7 +8359,27 @@ pause kept, the other game's instance untouched, `.old-<ms>` kept, `pack_place` 
 scripts read (`guards[].id`, `result`; the preview's `plan_id`, `kind`, `plan.inputs`, `live` and
 `target` `commit` and `speaks`, `edges`, `ledger_verify`, `check_config`, `extra`,
 `config_sha256`, `files`; `status`' `live.commit`, `live.operation_id`, `builds[]`). Item 3 (the
-global pause and the hand-back after a refusal) has no test of its own: the work order names none.
+global pause and the hand-back after a refusal) has its tests from fix 2.
+
+**Tests of fix 2** (coordinator work order `rd-1108/arch-013/brief-lab3-fix2.md`), in the same
+row: `rescue_hands_back_its_own_hold_across_a_restart` (item 2: A paused by another party with
+`alice-116-scheduler-stop`, B and C held by a `deploy` whose start times out and is left running,
+so no new owner epoch is recorded; the answer says `kept: true` and its `next` names the module's
+`release-hold` and `actingctl install release-hold`, never A's reason; while no Runtime answers the
+module's `release-hold` refuses `runtime_not_running` with `kept: true` and `up`; then another
+hand starts the Runtime, whose restore numbers the pauses anew at revision 1 (the fake's
+`restart_restored`), and D, registered later, is paused with another reason; `release-hold <its
+reason>` resumes exactly B and C, A and D untouched); `rescue_refused_after_its_pause_hands_its_own_back`
+(item 3: the Runtime refuses B's pause twice after A's was set; A is handed back, C's
+`alice-116-scheduler-stop` untouched, `hold` `kept: false` with nothing of the operation's own
+paused, nothing closed); `rescue_keeps_a_global_pause_and_goes_on` (item 3: a global pause is kept,
+noted `guard_failed`, listed in S0 and the journal's `foreign_pauses` row; both instances held, the
+Runtime closed; after `up` and `release-hold` the global pause is the same). Adapted:
+`rescue_hands_back_only_its_own_hold`'s last part pinned that a pause of the hold set again with
+the module's reason at another revision is left (`hold_not_owned`); fix 2 deliberately matches the
+reason and the alias, so that pause is the module's own, and the part now pins that a pause of the
+hold another party replaced with its own reason is left and nothing is resumed. The fake Runtime
+gains `pause_global_as`, `register` and `restart_restored` (test support only).
 
 **Interface.** None raised: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
 `runtime-outcomes` 1. Open point 5, judged by the bump rule: `install-root` 1 covers the A/B
@@ -8382,7 +8402,9 @@ locations of `actingctl` are added, pending, since 0.12.48: `install_deploy`,
 `install_config_replace`, `install_alive`, `install_unlock`, `install_check_config`,
 `install_ledger_verify`. Fix 1 adds, the same way, the token `hold_not_owned` to the vocabulary
 `install_refusal` (one `InstallRefusal` variant), and the pending code `install_command_refused`
-takes the existing key `hold_reason` as an optional value: no code and no key added.
+takes the existing key `hold_reason` as an optional value: no code and no key added. Fix 2 adds
+no code, key or token: a `release-hold` with no Runtime answers the existing `runtime_not_running`,
+and the `next` forms `actingctl_release_hold` and `actingctl_resume` are answer members.
 
 **Where LAB-3 differs from its work order's letter.**
 

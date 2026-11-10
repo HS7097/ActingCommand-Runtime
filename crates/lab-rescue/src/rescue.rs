@@ -22,10 +22,12 @@
 //! - **Only its own hold** (§5; LAB-3 fix 1). A hold of the module never takes a pause it did not
 //!   set (`down --reason` refuses a reason an instance shows, `hold_not_owned`), keeps a global
 //!   pause, and hands back only what its own pause step paused, each pause while it still shows
-//!   the revision the module recorded; `release-hold` of a reason no journal of the module
-//!   recorded is `hold_not_owned`, and no answer's `next` names another party's hold. A refusal
-//!   after the module paused something and before anything changed on disk hands its pauses back
-//!   at once. The running image of the module itself is renamed aside like `actingctl.exe`.
+//!   the hold's reason, in any owner epoch (fix 2: the Runtime's restore numbers the pauses anew);
+//!   `release-hold` of a reason no journal of the module recorded is `hold_not_owned`, and no
+//!   answer's `next` names another party's hold. A refusal after the module paused something and
+//!   before anything changed on disk hands its pauses back at once; an answer whose hold stays
+//!   says `kept: true` and names the ways out that work today (`ways_out`). The running image of
+//!   the module itself is renamed aside like `actingctl.exe`.
 //! - **Guards report** (§6). A guard that fails or is not evaluated is noted
 //!   (`install_caveat_noted`, `guard_failed`, `install_guards`) and the operation goes on; a start
 //!   waits for memory up to `install.start.memory_wait_ms` and goes on (open point 4).
@@ -44,7 +46,7 @@ use crate::cli_line::{self, Exit};
 use crate::codes::{ActingctlCode, ArgumentProblem, InstallLocation, InstallRefusal};
 use crate::install::deploy::{self, HoldStart};
 use crate::install::files;
-use crate::install::hold::HoldInputs;
+use crate::install::hold::{HoldInputs, OwnedHold};
 use crate::install::host::{Host, SystemHost};
 use crate::install::journal::{self, Operation, StepKind};
 use crate::install::lock::WriterLock;
@@ -334,7 +336,8 @@ fn module_answer(context: &Context<'_>, mut answer: Answer) -> Answer {
 /// release-hold --reason <r>` is `release-hold <r>`, `install undo --operation <id>` is `undo
 /// <id>`, `install status` is `op status`. Workflow #434 LAB-3 fix 1: a `release-hold` of a hold
 /// the module does not own (an `actingctl install` operation's, which `op status` or `op resume`
-/// may answer) is never suggested: the module would refuse it.
+/// may answer) is never suggested: the module would refuse it. Fix 2: beside the module's own
+/// `release-hold <r>` of a hold it owns, the ways out that work today ([`ways_out`]).
 fn translate_next(context: &Context<'_>, members: &mut Map<String, Value>) {
     let Some(Value::Object(next)) = members.get_mut("next") else {
         return;
@@ -346,28 +349,98 @@ fn translate_next(context: &Context<'_>, members: &mut Map<String, Value>) {
             *form = module;
         }
     }
+    let mut owned = Vec::new();
     next.retain(|_, form| match form.as_array().map(Vec::as_slice) {
         Some([Value::String(verb), Value::String(reason)]) if verb == "release-hold" => {
-            owns(context, reason)
+            match own_hold(context, reason) {
+                Some(found) => {
+                    owned.push(found);
+                    true
+                }
+                None => false,
+            }
         }
         _ => true,
     });
+    for (paths, reason, hold) in &owned {
+        ways_out(context, next, paths, reason, hold);
+    }
     if next.is_empty() {
         members.remove("next");
     }
 }
 
-/// Workflow #434 LAB-3 fix 1: whether the hold `reason` is the module's own in the root: one of
-/// its journals recorded it in its pause step (`install::deploy::owned_hold`). A reason, a root or
-/// an operations folder that cannot be read owns nothing.
-fn owns(context: &Context<'_>, reason: &str) -> bool {
-    let Ok(reason) = SchedulingPauseReason::new(reason) else {
-        return false;
+/// Workflow #434 LAB-3 fix 1: the hold `reason` if it is the module's own in the root: one of its
+/// journals recorded it in its pause step (`install::deploy::owned_hold`), with the root's paths
+/// and what the hold paused. A reason, a root or an operations folder that cannot be read owns
+/// nothing.
+fn own_hold(
+    context: &Context<'_>,
+    reason: &str,
+) -> Option<(Paths, SchedulingPauseReason, OwnedHold)> {
+    let reason = SchedulingPauseReason::new(reason).ok()?;
+    let paths = Paths::resolve(&context.location.root).ok()?;
+    let owned = deploy::owned_hold(context.host, &paths, &reason, None).ok()??;
+    Some((paths, reason, owned))
+}
+
+/// Workflow #434 LAB-3 fix 2 (install-cli.md, "The Lab's rescue module", "Ways out of a kept
+/// hold"): the ways out of the module's own hold `reason` that work today without the module,
+/// added to `next` beside its `release-hold <r>`. Until LAB-7 deletes actingctl:
+/// `actingctl_release_hold`, `actingctl install release-hold --root <root> --reason <r>` (it
+/// resumes the instances paused with exactly that reason, the module's own); and
+/// `actingctl_resume`, for each instance the hold's pause step paused that the running Runtime
+/// shows paused with the reason now, the core `resume` as actingctl runs it (`actingctl resume
+/// --state-root <s> --instance <alias>`, on the CLI channel: the Lab's own `resume` goes on the Lab
+/// channel, whose resume the Runtime refuses until LAB-6). No form names another reason or an
+/// instance whose pause shows one; without a status read there is no `actingctl_resume`.
+fn ways_out(
+    context: &Context<'_>,
+    next: &mut Map<String, Value>,
+    paths: &Paths,
+    reason: &SchedulingPauseReason,
+    owned: &OwnedHold,
+) {
+    next.insert(
+        "actingctl_release_hold".to_owned(),
+        json!([
+            "actingctl",
+            "install",
+            "release-hold",
+            "--root",
+            paths.plain,
+            "--reason",
+            reason
+        ]),
+    );
+    let Ok(Some(seen)) = context.host.runtime().status(&context.location.state_root) else {
+        return;
     };
-    let Ok(paths) = Paths::resolve(&context.location.root) else {
-        return false;
-    };
-    deploy::owned_hold(context.host, &paths, &reason, None).is_ok_and(|owned| owned.is_some())
+    let state_root = files::plain(&context.location.state_root);
+    let resume = seen
+        .instances
+        .iter()
+        .filter(|instance| {
+            owned.paused.contains(&instance.alias)
+                && instance
+                    .pause
+                    .as_ref()
+                    .is_some_and(|pause| &pause.reason == reason)
+        })
+        .map(|instance| {
+            json!([
+                "actingctl",
+                "resume",
+                "--state-root",
+                state_root,
+                "--instance",
+                instance.alias
+            ])
+        })
+        .collect::<Vec<_>>();
+    if !resume.is_empty() {
+        next.insert("actingctl_resume".to_owned(), Value::Array(resume));
+    }
 }
 
 fn module_form(words: &[Value]) -> Option<Value> {
@@ -747,6 +820,10 @@ fn alive_and_release(
             .link(CauseRelation::Related, read.outcome);
         let mut members = Map::new();
         if let Some(reason) = &reason {
+            // LAB-3 fix 2: the hold stays, and the answer says so (`kept: true`).
+            if let Some(hold) = applied.members.get("hold") {
+                members.insert("hold".to_owned(), hold.clone());
+            }
             members.insert(
                 "next".to_owned(),
                 json!({"release_hold": ["release-hold", reason], "alive": ["alive"]}),

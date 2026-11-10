@@ -729,31 +729,53 @@ the rescue face:
   keeps it and lists it; a global pause too is kept and listed (the `foreign_pauses` row notes it)
   and the stop goes on. The hold's reason is the module's `lab-<operation>-<unix ms>` unless the
   caller names one (`down --reason`; `deploy` takes none).
-- **Only its own hold** (LAB-3 fix 1, lab-two-entries.md §5). A hold of the module never takes a
-  pause it did not set: `down --reason <r>` with a reason an instance already shows refuses
-  `hold_not_owned` (`hold_reason`, `aliases`) before anything is paused. The pause step records
-  the pauses it set in its evidence (`own_pauses`: the owner epoch and each instance's
-  revision), and a start of the module records them again for the new Runtime, whose restore
-  numbers them anew. `release-hold <reason>` (the reason is required) hands back only a hold that
-  a journal of the module in this root recorded in its pause step, and of it only the instances
-  that step paused, each only while its pause still shows the revision recorded for the running
-  Runtime's owner epoch; any other reason (another party's, `alice-116-scheduler-stop` say) refuses
-  `hold_not_owned` and nothing is resumed, and an instance of the hold whose pause shows another
-  revision is left as it is and named by the same refusal. Every composite that releases
+- **Only its own hold** (LAB-3 fix 1 and 2, lab-two-entries.md §5). A hold of the module never
+  takes a pause it did not set: `down --reason <r>` with a reason an instance already shows refuses
+  `hold_not_owned` (`hold_reason`, `aliases`) before anything is paused. What is the module's own
+  comes from the operation's journal alone: the reason its pause step took and the instances that
+  step paused (each pause the Runtime accepted, `drained`, and the instances its evidence record
+  `own_pauses` shows paused with the reason, with the owner epoch and revisions as evidence).
+  `release-hold <reason>` (the reason is required) hands back only a hold that a journal of the
+  module in this root recorded in its pause step, and of it only the instances that step paused,
+  each only while its pause shows that reason now, in whatever owner epoch the Runtime runs; any
+  other reason (another party's, `alice-116-scheduler-stop` say) refuses `hold_not_owned` and
+  nothing is resumed. No alias the step did not pause and no instance whose pause shows another
+  reason is ever resumed; an instance the hold was to pause that shows its reason though the step
+  did not pause it is left and named by the same refusal (`left`). Every composite that releases
   (`deploy`, `rollback`, `config replace`, `config restore`, `place`, and an automatic rollback's
   release) follows the same rule, and no answer's `next` names a `release-hold` of a hold the
-  module does not own. A Runtime started otherwise since (the watchdog, `restart`) numbers the
-  pauses anew without a record of the module: its `release-hold` then leaves them and refuses
-  `hold_not_owned` naming them, and the person releases them with `actingctl install release-hold`
-  (until LAB-7) after checking they are the module's. `actingctl install release-hold` and `install
-  stop` are unchanged.
+  module does not own. `actingctl install release-hold` and `install stop` are unchanged.
+- **Why the reason and the alias, not the revision** (fix 2). A changed owner epoch alone never
+  denies the hand-back: the real Runtime's restore does not keep a pause's revision. Every start
+  that is not installer-held (the installer's and the module's starts, which run the watchdog's
+  manual start, the watchdog's own, a reboot's) restores each persisted pause at revision 1 with
+  its reason (`crates/runtime-host/src/host/scheduling_pause.rs`, `restore_scheduling_pauses`);
+  only an installer-held start (actingd's `--install-held`, which neither `actingctl install` nor
+  the module passes) keeps the pauses its transition restored. So the module matches the reason
+  and the alias across epochs, and resumes by the epoch and revision the running Runtime shows. A
+  start of the module whose readiness was never seen (it timed out and was left running) or whose
+  status could not be read therefore leaves no dead end.
 - **No residue after a refusal.** A refusal after the module paused instances and before anything
   changed on disk (the pause step refused, the close did not complete, `place`'s instances not idle
   in time) hands its own pauses back at once by the rule above and says so: `hold` `kept: false`
-  with the release's `resumed` and `left`. A hand-back that fails keeps the hold, its failure a
-  note, and `next` names the operation's own `release-hold`. After a change on disk the hold stays
-  as for `actingctl install` (a failed start or post-check, `place`'s failed checks), its `next`
-  the operation's own `release-hold` (and `undo` where it applies).
+  with the release's `resumed` and `left`; `kept` is false only because nothing of the operation's
+  own stays paused. A hand-back that fails keeps the hold (`kept: true`), its failure a note. After
+  a change on disk the hold stays as for `actingctl install` (a failed start or post-check,
+  `place`'s failed checks), with `kept: true`, `next` naming the ways out below (and `undo` where it
+  applies). A `release-hold` that finds no Runtime answering (or cannot read its status) refuses
+  `runtime_not_running`, its hold kept: `kept: true`, `next` with `up` when none runs.
+- **Ways out of a kept hold** (fix 2). Every answer of the module whose own pauses stay says `hold`
+  `kept: true` and gives in `next` only ways out that work today, none naming another party's
+  hold: `release_hold`, the module's own `release-hold <reason>`; until LAB-7 deletes actingctl,
+  `actingctl_release_hold`, `actingctl install release-hold --root <root> --reason <reason>` (it
+  resumes the instances paused with exactly that reason, the module's own), and `actingctl_resume`,
+  one `actingctl resume --state-root <state root> --instance <alias>` per instance the pause step
+  paused that the running Runtime shows paused with the reason now (none when no status can be
+  read). The core `resume` goes through actingctl until then because the Lab's own
+  `resume <instance>` binds the Lab channel, whose resume the Runtime refuses until LAB-6 deletes
+  the origin gates (lab-two-entries.md §2.4). **After LAB-7** deletes actingctl, what stays is the
+  module's own `release-hold <reason>` and the Lab's core `resume <instance>` (on the Lab channel,
+  which LAB-6 opens for a resume); LAB-7 drops the two `actingctl_*` forms.
 - **Its own running image.** The module runs from `<root>\tools\actinglab.exe`, which an update
   replaces: the image of the process that plans (matched by its process id) is renamed aside as
   `actingctl.exe` is and runs on (`running.renamed_own` in the plan); any other running
@@ -1019,9 +1041,11 @@ never writes: `"initiator": "<word>"` (lab-two-entries.md §4.1) and `"one_way":
 ledger edge it applied; absent otherwise); its undo record carries `"initiator"` too. Kinds
 `config_replace` and `pack_place` are the module's. An older reader that refuses unknown members
 does not read such a journal; `install-root` does not change (lab-two-entries.md, open point 5).
-LAB-3 fix 1: the evidence of the module's `pause` step, and of its `start` step under a hold,
-carries `"own_pauses": {"reason", "owner_epoch", "revisions": {"<alias>": <revision>}}`, the
-pauses the module's release may hand back ("The Lab's rescue module").
+LAB-3 fix 1: the evidence of the module's `pause` step carries `"own_pauses": {"reason",
+"owner_epoch", "revisions": {"<alias>": <revision>}}`, the pauses it set; with the step's
+`drained` it names the instances the module's release may hand back, matched by reason and alias
+(fix 2: no start step records it any more, and the epoch and revisions are evidence only; "The
+Lab's rescue module").
 
 The journal is written `.part` → flushed → renamed before each step starts and after it ends.
 `current.json` is written before the first step and renamed `current.json.finished-<ms>` at the
@@ -2157,8 +2181,8 @@ fragments and this build's enums; the forwarder's codes are in
   `refresh_root_fixed`, `init_slot_locks`, `write_selection`, `commit_selection`, `record_state`,
   `start`, `post_check`, `record_health`, `release_hold`, `reverse_files`, `revert_selection`,
   `clean_check`, `clean_slot`, `clean_builds`, `clean_converted`, `delete_cleaning`,
-  `record_cleanup`; the rescue module's `place` adds (Workflow #434 LAB-3, since 0.12.48)
-  `pack_item`.
+  `record_cleanup`; the rescue module's place composite adds (Workflow #434 LAB-3, since
+  0.12.48) `pack_item`.
 - vocabulary `install_member` (new): `runtime`, `tools`, `ui`.
 - vocabulary `install_row_reason` (new): `target_restores_player_holds`, `no_player_hold_support`,
   `ui_drives_no_installer`.

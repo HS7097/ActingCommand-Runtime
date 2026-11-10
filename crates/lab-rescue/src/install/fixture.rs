@@ -859,6 +859,49 @@ impl FakeRuntime {
         }
     }
 
+    /// Workflow #434 LAB-3 fix 2: sets the global pause (another party's).
+    pub(super) fn pause_global_as(&self, reason: &str) {
+        let revision = self.revisions.get() + 1;
+        self.revisions.set(revision);
+        *self.global_pause.borrow_mut() = Some(PauseSeen {
+            reason: SchedulingPauseReason::new(reason).expect("a pause reason"),
+            revision,
+        });
+    }
+
+    /// Workflow #434 LAB-3 fix 2: registers `alias`, unpaused (an instance the configuration
+    /// gained).
+    pub(super) fn register(&self, alias: &str) {
+        self.instances.borrow_mut().push(InstanceSeen {
+            alias: alias.to_owned(),
+            pause: None,
+            lease_active: false,
+            queued_requests: 0,
+            game: None,
+        });
+    }
+
+    /// Workflow #434 LAB-3 fix 2: the Runtime started by another hand (the watchdog, a reboot)
+    /// after an installer's start was left running: a new owner epoch, the build of the start under
+    /// way (if any), and every persisted pause restored as the real Runtime's restore does for a
+    /// start that is not installer-held (`crates/runtime-host/src/host/scheduling_pause.rs`,
+    /// `restore_scheduling_pauses`): its reason kept, its revision 1.
+    pub(super) fn restart_restored(&self) {
+        if let Some((_, _, build)) = self.pending.borrow_mut().take() {
+            *self.build.borrow_mut() = build;
+        }
+        self.running.set(true);
+        self.next_owner(self.clock.get());
+        for instance in self.instances.borrow_mut().iter_mut() {
+            if let Some(pause) = instance.pause.as_mut() {
+                pause.revision = 1;
+            }
+        }
+        if let Some(pause) = self.global_pause.borrow_mut().as_mut() {
+            pause.revision = 1;
+        }
+    }
+
     /// The pause reason of `alias`, if paused.
     pub(super) fn pause_of(&self, alias: &str) -> Option<String> {
         self.instances
