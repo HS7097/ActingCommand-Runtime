@@ -240,8 +240,8 @@
         "url": "https://github.com/PaddlePaddle/PaddleOCR/blob/v3.7.0/LICENSE"
       },
       "compatibility": {
-        "state": "PendingVerification",
-        "reason": "Pinned files and static shapes are available, but this non-executing materializer cannot prove full Runtime tensor/output/post-processing compatibility."
+        "state": "Ready",
+        "reason": "Verified for the Runtime's CPU execution provider (Workflow #428 CI-OCR-1, 2026-11-10): the Runtime's vision pipeline runs exactly these files in production (the SHA-256 of the detector, recognizer and dictionary of a production vision root equal the three pins below), and a resource repository's frame regression on a hosted runner passed on them (1989 checks in 78 cases, with and without a restored cache). Materialize-VisionRoot.ps1 places them in a vision root; Materialize-TaskToolCache.ps1 loads no model and still records a selection with this component as PendingVerification."
       },
       "artifacts": [
         {

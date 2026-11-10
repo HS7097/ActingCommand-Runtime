@@ -9577,6 +9577,88 @@ Tests (exec gate row "#428 RD-BUDGET-1"):
 existing test changed: none pinned a repeated count (`gate_rc2_a11` and the consumer goldens read
 each file once, and `gate_rv1` asks only for a `read_bytes` above zero).
 
+### 1.296 Slice CI-OCR-1 (0.12.52): a script fills or verifies a CPU vision root from the tool registry (#428; the coordinator's ruling of 2026-11-10 on board #428, not Alice's words: CI runs real OCR on the CPU, under six conditions, and its logic lives once, in the Runtime; coordinator work order `rd-1110/brief-ci-ocr-1.md`)
+
+[vision-model-folders.md](vision-model-folders.md) (section "Vision root") is the contract, and
+`scripts/windows-tools/README.md` (section "CPU vision root") describes the script. 1.296 is the
+next free number on main `76006500`, and the name CI-OCR-1 was free. No persisted ledger shape,
+wire shape, configuration key, outcome code or vocabulary is new or changed, and no Rust code
+changes.
+
+**Why.** A resource repository's frame regression runs `actinglab` on GitHub's hosted Windows
+runners. A runner has no vision root, so every check that needs OCR answered
+`lab_ocr_unavailable` and checked nothing. The coordinator ruled (board #428, 2026-11-10) that CI
+runs real OCR on the CPU under six conditions:
+
+1. addresses and hashes come only from the Runtime's registry
+   `scripts/windows-tools/windows-tool-sources.v1.json`;
+2. files go only into the runner's temporary directory and `actions/cache`;
+3. the CPU execution provider;
+4. the folder layout of [vision-model-folders.md](vision-model-folders.md);
+5. a failed download fails the job after at most three attempts;
+6. one repository's branch first.
+
+That trial passed (1989 checks in 78 cases, twice, with and without a restored cache). It could
+not use `Materialize-TaskToolCache.ps1`, which refuses to finish while a selected component is
+`PendingVerification` (the registry said so of `ppocrv6-medium-onnx`), does not retry and refuses
+a target directory that exists, which a restored cache always is; so it carried about 470 lines of
+its own in a workflow file, which four repositories would have had to copy. **The coordinator's
+ruling:** the logic lives in the Runtime, once, as a small script of its own that the resource
+repositories fetch at their Tools pin's commit and call. The existing materializer keeps its
+behaviour.
+
+**What.** `scripts/windows-tools/Materialize-VisionRoot.ps1` (PowerShell 7) takes `-Destination`
+(the vision root, created when missing), `-Registry` (default: the registry beside it),
+`-ExecutionProvider` (only `cpu`; any other value is refused by name, before anything is read or
+written) and `-Attempts` (per fetched file, default 3, at least 1). It places
+`ort/onnxruntime.dll` and `ort/onnxruntime_providers_shared.dll` (the `pinned_files` of
+`onnxruntime-directml-1.24.4` at their `vision_root_path`, extracted from the pinned package), that
+package's `LICENSE` and `ThirdPartyNotices.txt` in `ort/licenses/onnxruntime/` (its
+`placement_note`), and `models/PP-OCRv6_medium/det.onnx`, `rec.onnx` and `keys.txt` (the three
+artifacts of `ppocrv6-medium-onnx`, flat layout; the trial built the same folder). A file with its
+pinned size and SHA-256 is kept and reported `verified`; any other is removed if present, fetched to
+a temporary name beside it, checked and moved into place (`downloaded`); a file that fails its check
+is never left in place. The license files have no pin of their own and are compared with the
+package's entries, so every run fetches the package once. A failed fetch is tried again up to
+`-Attempts` times, then the run fails. The script holds no address, size or hash, writes nothing
+outside the destination, writes no configuration file and starts no program. Its stdout is one JSON
+line, `{execution_provider, destination, registry {path, sha256}, files [{path, size, sha256, state,
+component}]}`; diagnostics go to stderr; it exits 0 only when every file is in place and verified,
+otherwise 1 with `Materialize-VisionRoot: FAILED: <file>: <reason>`. A hidden test-only parameter
+reads the addresses from a local directory and is refused unless every address the entries name
+is on the reserved host `example.invalid`.
+
+**The registry.** `ppocrv6-medium-onnx`'s `compatibility.state` goes from `PendingVerification`
+to `Ready`, with the evidence as its `reason`: the Runtime's vision pipeline runs exactly these
+files in production (the coordinator compared the three SHA-256 of a production vision root with
+the pins on 2026-11-10: equal), and a hosted runner's frame regression passed on them.
+`ppocrv6-medium-source` keeps `PendingVerification`. `Ready` is the value of the materializer's
+own vocabulary. Of the registry's readers only the new script reads this state (it requires
+`Ready`): `Materialize-TaskToolCache.ps1` decides by the component's id, so a selection with
+`ppocrv6-medium-onnx` is still published as `pending-verification` and fails as before, its
+`pending_verification` now quoting the new reason; `Test-WindowsRemoteBuildTools.ps1` checks only
+`ppocrv6-medium-source`'s state; the Rust readers (`crates/vision-ffi`, `crates/device/build.rs`,
+actingd's adb pin) read other components.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): the registry is
+a tool source, the script's output line is no listed interface, and no Runtime program changes.
+
+**At deploy.** Nothing changes in a deployed Runtime: the script and the registry are repository
+files that a resource repository's CI reads at its Tools pin's commit. 0.12.52 is the first release
+that carries them. **Rollback** (a Tools pin below 0.12.52): the pin has no such script, and a
+resource repository's CI that calls it fails.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CIO-1 | `scripts/windows-tools/Materialize-VisionRoot.ps1` (`-Destination`, `-Registry`, `-ExecutionProvider cpu`, `-Attempts`) and its stdout line | tool script | CI-OCR-1 | — | `since` 0.12.52; the one implementation a resource repository's CI calls; seven files, each `verified` or `downloaded`; the package fetched once per run for the license files |
+| CIO-2 | `windows-tool-sources.v1.json` `ppocrv6-medium-onnx` `compatibility` `{state: Ready, reason}` | tool source | CI-OCR-1 | — | was `PendingVerification`; `ppocrv6-medium-source` unchanged; `Materialize-TaskToolCache.ps1` unchanged and still pending for this component |
+| CIO-3 | `scripts/windows-tools/Test-MaterializeVisionRoot.ps1`, run by the step `Test Windows artifact tooling` of the Windows exact-SHA build | test | CI-OCR-1 | — | no network: a made-up registry on `example.invalid`, made-up files in a local directory, the script as a child process |
+
+Tests (`Test-MaterializeVisionRoot.ps1`, not a Rust gate): `fresh-fill`,
+`second-run-only-verifies`, `wrong-hash-fails-after-attempts`, `missing-registry-entry`,
+`provider-other-than-cpu`. No existing test changed: `Test-WindowsRemoteBuildTools.ps1` pins only
+`ppocrv6-medium-source`'s state.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
