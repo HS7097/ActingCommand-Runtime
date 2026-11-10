@@ -3394,3 +3394,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_428_s168_4::list_reading_full_store_refused",
 ]
 incident = ["#428 S168-4"]
+
+# Workflow #428 S168-5b (the release of LAB-6 and LAB-7; register §1.291, the slice's named tests; brief rd-1110/brief-s168-5b.md; contracts/selection-graph.md, "Judge step", "Mapping the two keys" and "No input, and how that is enforced"), the host's halves, on a fake device's one-screen list read as three fixed slots: a judge step's run is Completed on its page after one step with its record judge_only and no effect, and the host maps its key through the mapping whose judge_result it names (judged for the outcome_key over known slots, unknown for the unknown_outcome_key when a slot reads out of the dictionary); a host handed an effect intent for the judge step's action ends that run contained_task_judge_input_refused before the device, which is handed no input, and a run of another instance goes on with the Runtime healthy; the refused instance runs the judge again and completes with no pause held and the Runtime not poisoned; and (fix 1) a host handed an input with no effect intent after the run's judge record ends that run the same way, before the device
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_428_s168_5b::judge_known_ends_with_outcome_key",
+    "actingcommand-runtime-host::lib::tests::gate_428_s168_5b::judge_unknown_slot_ends_with_unknown_key",
+    "actingcommand-runtime-host::lib::tests::gate_428_s168_5b::judge_performs_no_input",
+]
+incident = ["#428 S168-5b"]

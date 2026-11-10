@@ -103,8 +103,10 @@ pub fn source_file_requests(bundles: &[Bundle]) -> BTreeMap<PathBuf, SourceRead>
             if let Some(template) = operation.get("verify_template").and_then(Value::as_str) {
                 add(bundle.dir.join(template), SourceRead::Metadata);
             }
+            // Workflow #428 S168-5b: a judge step's document is read as a select step's.
             if let Some(path) = operation
                 .pointer("/select/policy/path")
+                .or_else(|| operation.pointer("/judge/policy/path"))
                 .and_then(Value::as_str)
                 .filter(|path| safe_task_local_resource_path(path))
             {
@@ -481,10 +483,15 @@ impl OperationParser {
             // no click is inferred, and it is never a trusted coordinate, so the sealed task
             // carries no such member for it.
             let read_list_step = is_read_list_step(operation);
+            // Workflow #428 S168-5b (`contracts/selection-graph.md`, "Derived documents of a
+            // judge step"): a judge step keeps its `judge` as declared; no click and no guard
+            // are inferred, and it is never a trusted coordinate, so the sealed task carries
+            // none of those members for it.
+            let judge_step = is_judge_step(operation);
             let object = operation.as_object_mut().ok_or_else(|| {
                 CliError::package_invalid(format!("task '{task_id}' operation must be an object"))
             })?;
-            if !select.is_null() || wait_step || read_list_step {
+            if !select.is_null() || wait_step || read_list_step || judge_step {
                 // A select step keeps its select and its declared guard; no click is inferred.
                 object.remove("click");
             } else if application.is_null() {
@@ -494,8 +501,10 @@ impl OperationParser {
                 object.remove("click");
                 object.insert("application".to_string(), application);
             }
-            object.insert("guard".to_string(), guard);
-            if !read_list_step {
+            if !judge_step {
+                object.insert("guard".to_string(), guard);
+            }
+            if !read_list_step && !judge_step {
                 object.insert(
                     "unguarded_trusted_coordinate".to_string(),
                     Value::Bool(trusted_coordinate),
@@ -1289,12 +1298,14 @@ impl OperationParser {
                 // at run time: neither becomes a navigation edge, so no route passes one. #411
                 // B36/B19 (A35-S3): nor does a wait step, which makes no input. Workflow #428
                 // S168-4: nor does a list reading, whose moves a route never passes and whose
-                // `to` is its `from`.
+                // `to` is its `from`. Workflow #428 S168-5b: nor does a judge step, which makes
+                // no tap and whose `to` is its `from`.
                 if (to_pages.is_none() && !is_page_change(operation))
                     || is_application_effect(operation)
                     || is_select_effect(operation)
                     || is_wait_step(operation)
                     || is_read_list_step(operation)
+                    || is_judge_step(operation)
                 {
                     continue;
                 }
@@ -1387,6 +1398,7 @@ impl OperationParser {
                     || is_select_effect(operation)
                     || is_wait_step(operation)
                     || is_read_list_step(operation)
+                    || is_judge_step(operation)
                 {
                     continue;
                 }
@@ -1589,6 +1601,12 @@ impl OperationParser {
                         read_list.clone(),
                     );
                 }
+                // Workflow #428 S168-5b (`contracts/selection-graph.md`, "Derived documents of a
+                // judge step"): a judge step's primitive has a click primitive's shape with no
+                // click and no guard, and adds its `judge` as declared.
+                if let Some(judge) = operation.get("judge").filter(|value| !value.is_null()) {
+                    primitive.insert("judge".to_string(), judge.clone());
+                }
                 primitives.push(Value::Object(primitive));
             }
         }
@@ -1619,6 +1637,32 @@ impl OperationParser {
         bundle: &Bundle,
         operation: &Value,
     ) -> CliOutcome<(Value, Value, Value, Value)> {
+        // Workflow #428 S168-5b (`contracts/selection-graph.md`, "Derived documents of a judge
+        // step"): a judge step makes no input: no click and no guard. It declares no other
+        // effect, no guard and is never a trusted coordinate (the declaration gate's rules).
+        if is_judge_step(operation) {
+            let operation_id = required_string(operation, "id")?;
+            if ["click", "application", "select", "wait"]
+                .into_iter()
+                .chain([declarations::read_list_member()])
+                .any(|effect| operation.get(effect).is_some_and(|value| !value.is_null()))
+            {
+                return Err(CliError::package_invalid(format!(
+                    "operation '{operation_id}' carries a judge step and another effect"
+                )));
+            }
+            if operation.get("guard").is_some_and(|value| !value.is_null())
+                || operation
+                    .get("unguarded_trusted_coordinate")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            {
+                return Err(CliError::package_invalid(format!(
+                    "operation '{operation_id}' judge step declares no guard"
+                )));
+            }
+            return Ok((Value::Null, Value::Null, Value::Null, Value::Null));
+        }
         if let Some(select) = operation.get("select").filter(|value| !value.is_null()) {
             let operation_id = required_string(operation, "id")?;
             if operation.get("click").is_some_and(|value| !value.is_null())
@@ -2146,6 +2190,13 @@ fn is_read_list_step(operation: &Value) -> bool {
         .is_some_and(|value| !value.is_null())
 }
 
+/// Workflow #428 S168-5b (`contracts/selection-graph.md`, "Judge step"): a judge step, an
+/// operation that declares `judge`; its shape is the declaration gate's (it declares no other
+/// effect and no member an input uses), its rules Runtime admission's.
+fn is_judge_step(operation: &Value) -> bool {
+    operation.get("judge").is_some_and(|value| !value.is_null())
+}
+
 /// #411 B36/B19 (A35-S3): the page a confirmation's wait page names, which no other operation
 /// field names.
 fn operation_wait_page_id(operation: &Value) -> Option<&str> {
@@ -2169,8 +2220,8 @@ fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<Str
     let task_json_path = bundle.task_json_path();
     let path = task_json_path.as_path();
     // #411 B36/B19 (A35-S3): a wait step has no click; Workflow #428 S168-4: nor has a list
-    // reading, whose shape is the declaration gate's.
-    if is_wait_step(operation) || is_read_list_step(operation) {
+    // reading, whose shape is the declaration gate's; Workflow #428 S168-5b: nor has a judge step.
+    if is_wait_step(operation) || is_read_list_step(operation) || is_judge_step(operation) {
         return;
     }
     // A select step's shape is the declaration gate's; it carries no other effect.
@@ -3385,6 +3436,20 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
             on_timeout_key: operation
                 .pointer("/wait/on_timeout")
                 .and_then(Value::as_str),
+            // Workflow #428 S168-5b: a judge step ends the run with one of its two keys; its
+            // state is a terminal and the walk follows no destination of it. A judge without its
+            // two string keys is refused, never read as no judge (the declaration gate refuses it
+            // first).
+            judge: operation
+                .get("judge")
+                .filter(|judge| !judge.is_null())
+                .map(|judge| {
+                    Ok::<_, CliError>(actingcommand_contract::TaskPhaseJudge {
+                        outcome_key: phase_judge_key(judge, "outcome_key")?,
+                        unknown_outcome_key: phase_judge_key(judge, "unknown_outcome_key")?,
+                    })
+                })
+                .transpose()?,
         });
     }
     let game = bundle.data["game"].as_str().unwrap_or_default();
@@ -3462,6 +3527,14 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
         &scheduling,
     )
     .map_err(refused)
+}
+
+/// Workflow #428 S168-5b: the key `member` of a judge step's `judge` as the phases walk reads it;
+/// a judge whose key is not a string is the parser's refusal.
+fn phase_judge_key<'a>(judge: &'a Value, member: &str) -> CliOutcome<&'a str> {
+    judge.get(member).and_then(Value::as_str).ok_or_else(|| {
+        CliError::package_invalid(format!("phase operation judge {member} must be a string"))
+    })
 }
 
 /// The pages a task's `entry_page` names: one page, or each page of an entry page set

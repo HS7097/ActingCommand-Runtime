@@ -760,8 +760,11 @@ pub(super) fn entry_busy_outcome(
     final_page: &str,
 ) -> Option<Outcome> {
     let declaration = package.scheduling_outcome()?;
+    // Workflow #428 S168-5b: a layer's end is no judge step's, so it is mapped among the
+    // mappings without `judge_result`.
     let mut mapped = declaration.mappings().iter().filter(|mapping| {
         mapping.effect() == actingcommand_contract::SchedulingEffectCondition::NoDesignatedEffect
+            && mapping.judge_result().is_none()
             && mapping
                 .terminal_pages()
                 .iter()
@@ -1559,6 +1562,15 @@ pub(super) struct RuntimeContainedTask<'a> {
     /// the failure itself when the ledger refused that record too, for the run to join to its
     /// own failure.
     unwritten_selection_record: Option<(bool, Option<RuntimeHostError>)>,
+    /// Workflow #428 S168-5b (`contracts/selection-graph.md`, "No input, and how that is
+    /// enforced", layer 3): the judge steps of the run's own package, by operation id, while its
+    /// layer runs ([`Self::run_main`]). The host accepts no effect intent for their actions.
+    judge_operations: BTreeSet<String>,
+    /// Workflow #428 S168-5b (layer 3, the host's on its own): set once the host has appended a
+    /// `judge_only` record of this run. From then on the run accepts no effect intent and no
+    /// input, whatever operation or layer names it: either ends the run with
+    /// `contained_task_judge_input_refused` before anything reaches the device.
+    judge_recorded: bool,
     /// Workflow #384 D2-S4 (D2 model §3.4): a fact refresh run's requested key set: the run reads
     /// only those keys' marks and runs only the segments that reach them. `None` reads every mark.
     reading_keys: Option<BTreeSet<String>>,
@@ -2088,10 +2100,15 @@ impl RuntimeContainedTask<'_> {
         &mut self,
         prepared: &PreparedContainedTask,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>> {
-        match self.reading_keys.clone() {
+        // Workflow #428 S168-5b: while the run's own package runs, the host knows its judge
+        // steps and accepts no effect intent for their actions.
+        self.judge_operations = prepared.judge_operation_ids();
+        let outcome = match self.reading_keys.clone() {
             Some(keys) => prepared.run_for_reading_keys(self, &keys),
             None => prepared.run(self),
-        }
+        };
+        self.judge_operations.clear();
+        outcome
     }
 
     fn geometry_operation_deadline(&self) -> Result<Instant, RequestFailure> {
@@ -5054,6 +5071,12 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         // STORE-FG-2: what this input expects in front, taken first so that every later input
         // expects the assigned application again, whatever this one's result.
         let foreground = std::mem::take(&mut self.next_input_foreground);
+        // Workflow #428 S168-5b (`contracts/selection-graph.md`, "No input, and how that is
+        // enforced", layer 3): after this run's judge record, no input: the run ends here,
+        // before the device, and only this run.
+        if self.judge_recorded {
+            return Err(judge_input_refused());
+        }
         self.kernel_clock_read()?;
         let input_started = self.task_timing.begin_boundary(
             actingcommand_contract::TaskTimingBoundary::Input,
@@ -5162,6 +5185,50 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 self.record_unwritten_selection(failure);
             }
             return recorded;
+        }
+        // Workflow #428 S168-5b, test only (`judge_performs_no_input`): right after a judge step's
+        // record, the host is handed an effect intent for the step's action (injection 1), or an
+        // input with no intent before it (injection 2), as a faulty interpreter would hand it.
+        #[cfg(test)]
+        {
+            let judged = match &trace {
+                ContainedTaskTrace::SelectionEvaluated {
+                    step_index,
+                    operation_label,
+                    selection,
+                    ..
+                } if matches!(
+                    selection.confirmation,
+                    actingcommand_contract::TaskSelectionConfirmation::JudgeOnly
+                ) =>
+                {
+                    Some((*step_index, operation_label.clone()))
+                }
+                _ => None,
+            };
+            if let Some((step_index, operation_label)) = judged {
+                match self
+                    .host
+                    .judge_effect_intent_injections
+                    .swap(0, Ordering::AcqRel)
+                {
+                    0 => {}
+                    1 => {
+                        self.record(trace)?;
+                        return self.record(ContainedTaskTrace::EffectIntent {
+                            step_index,
+                            operation_label,
+                            action: InputAction::Tap { x: 1, y: 1 },
+                            sampling: None,
+                            guard: actingcommand_execution_kernel::ContainedTaskGuardOutcome::TrustedCoordinate,
+                        });
+                    }
+                    _ => {
+                        self.record(trace)?;
+                        return self.input(InputAction::Tap { x: 1, y: 1 }, None);
+                    }
+                }
+            }
         }
         if !matches!(&trace, ContainedTaskTrace::PackageAdmitted { .. }) {
             self.ensure_active()?;
@@ -5651,6 +5718,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 if let Some(frame_id) = self.last_frame_id {
                     links = links.with_frame_id(frame_id);
                 }
+                let judge_only = matches!(
+                    selection.confirmation,
+                    actingcommand_contract::TaskSelectionConfirmation::JudgeOnly
+                );
                 self.append_task(
                     EventSeverity::Info,
                     links,
@@ -5662,7 +5733,13 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         },
                         AuditInput::new(),
                     ),
-                )
+                )?;
+                // Workflow #428 S168-5b (layer 3): once a judge's record is appended, the run
+                // accepts no effect intent and no input.
+                if judge_only {
+                    self.judge_recorded = true;
+                }
+                Ok(())
             }
             ContainedTaskTrace::EffectIntent {
                 step_index,
@@ -5671,6 +5748,16 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 sampling,
                 guard: _,
             } => {
+                // Workflow #428 S168-5b (`contracts/selection-graph.md`, "No input, and how that
+                // is enforced", layer 3): a judge step makes no input, so an effect intent for its
+                // action, or any effect intent after the run's judge record, ends that run before
+                // the input reaches the device. It ends that run only: the Runtime and the runs
+                // of other instances go on.
+                if self.judge_recorded
+                    || (!self.interrupt_layer && self.judge_operations.contains(&operation_label))
+                {
+                    return Err(judge_input_refused());
+                }
                 action.validate().map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         HostCode::ContainedTaskEffectInvalid,
@@ -6464,6 +6551,9 @@ fn select_scheduling_disposition(
     // compared with its terminal pages. With one or more, step `executed_steps - 1` is the
     // package's own last step (its layer ends after the other layers' steps). Without its own
     // count (`None`) the run's total decides, as before.
+    // Workflow #428 S168-5b: whether the run ended at a judge step, whose last attempt recorded a
+    // `judge_only` decision.
+    let mut judge_end = false;
     if executed_steps == 0 || own_executed_steps == Some(0) {
         let observed_page = events.iter().rev().find_map(|event| {
             let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
@@ -6502,6 +6592,17 @@ fn select_scheduling_disposition(
                 .then_some(sequence)
             })
             .max();
+        judge_end = semantic_facts.clone().any(|(sequence, fact)| {
+            matches!(
+                fact,
+                TaskSemanticFact::SelectionEvaluated { step_index, selection, .. }
+                    if *step_index == final_step
+                        && matches!(
+                            selection.confirmation,
+                            actingcommand_contract::TaskSelectionConfirmation::JudgeOnly
+                        )
+            ) && last_attempt_started.is_none_or(|started| sequence > started)
+        });
         let final_steps = semantic_facts
             .filter_map(|(sequence, fact)| {
                 let TaskSemanticFact::StepFinished {
@@ -6595,11 +6696,31 @@ fn select_scheduling_disposition(
         (None, _) => SchedulingEffectEvidence::NoDesignatedEffect,
     };
     let condition = effect.condition();
+    // Workflow #428 S168-5b (`contracts/selection-graph.md`, "Mapping the two keys"): a judge
+    // step's end is matched among the mappings with the result its kernel key names, every other
+    // end among the mappings without `judge_result`. Admission's state rule makes the `judged`
+    // mapping's key the step's `outcome_key` and the `unknown` one's its `unknown_outcome_key`, so
+    // the kernel's key names the result through the one mapping with `judge_result` that carries
+    // it (keys are unique); a judge end whose key no such mapping carries has no result.
+    let judge_result = if judge_end {
+        let named = declaration
+            .mappings()
+            .iter()
+            .filter(|mapping| mapping.judge_result().is_some())
+            .find(|mapping| selected_outcome_key == Some(mapping.outcome_key()))
+            .and_then(|mapping| mapping.judge_result());
+        Some(named.ok_or_else(|| {
+            scheduling_outcome_failure(HostCode::ContainedTaskOutcomeComparisonConflict)
+        })?)
+    } else {
+        None
+    };
     let matching = declaration
         .mappings()
         .iter()
         .filter(|mapping| {
             mapping.effect() == condition
+                && mapping.judge_result() == judge_result
                 && mapping
                     .terminal_pages()
                     .iter()
@@ -6627,6 +6748,21 @@ fn select_scheduling_disposition(
                 RuntimeErrorCode::RuntimeHalted,
             ))
         })
+}
+
+/// Workflow #428 S168-5b (`contracts/selection-graph.md`, "No input, and how that is enforced"):
+/// the refusal of an effect intent for a judge step's action. It fails that run only: no
+/// terminal is taken here, the Runtime is not poisoned and no other instance's run is touched.
+fn judge_input_refused() -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(
+            HostCode::ContainedTaskJudgeInputRefused,
+            ContractLocation::RunContainedTask,
+            RuntimeErrorCode::ProtocolInvalid,
+        ),
+        RuntimeReceiptState::Failed,
+        None,
+    )
 }
 
 fn scheduling_outcome_failure(code: impl Into<Code>) -> RequestFailure {
@@ -8042,6 +8178,8 @@ impl HostShared {
             diagnostic_step: None,
             diagnostic_physical: None,
             unwritten_selection_record: None,
+            judge_operations: BTreeSet::new(),
+            judge_recorded: false,
             reading_keys,
             kernel_clock_failure: None,
             pacing: RunPacing::UNPACED,
@@ -8110,15 +8248,24 @@ impl HostShared {
             )
         } else if let Some(keys) = runtime.reading_keys.clone() {
             // Workflow #384 D2-S4: a fact refresh run reads only its requested keys.
+            // Workflow #428 S168-5b: the host knows the package's judge steps while it runs, as
+            // on every other branch.
+            runtime.judge_operations = prepared.judge_operation_ids();
             let execution = prepared.run_for_reading_keys(&mut runtime, &keys);
+            runtime.judge_operations.clear();
             execution.and_then(|outcome| runtime.with_layer_end(outcome))
         } else if control.is_host_package() {
             // Workflow #390 EXEC-3 (R24): a run the host starts itself begins a page-graph
             // application entry with its effect; the kernel still owns its run loop.
+            // Workflow #428 S168-5b: the host knows the package's judge steps while it runs.
+            runtime.judge_operations = prepared.judge_operation_ids();
             let execution = prepared.run_host_package(&mut runtime);
+            runtime.judge_operations.clear();
             execution.and_then(|outcome| runtime.with_layer_end(outcome))
         } else {
+            runtime.judge_operations = prepared.judge_operation_ids();
             let execution = prepared.run(&mut runtime);
+            runtime.judge_operations.clear();
             // Workflow #373 NAV-6: the run's steps include those of its interrupt layers.
             execution.and_then(|outcome| runtime.with_layer_end(outcome))
         };

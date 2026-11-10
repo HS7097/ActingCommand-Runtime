@@ -836,3 +836,11 @@ tests = [
     "actingcommand-runtime-client::lib::client::gate_407_gpu1c::official_ocr_reads_directml_and_whole_model_fallback_evidence",
 ]
 incident = ["#407 GPU-1 C"]
+
+# Workflow #428 S168-5b (the release of LAB-6 and LAB-7; register §1.291, the slice's named test 7; contracts/selection-graph.md, "Validation and bounds"; ledger revision 8), the contract's half: a judge step's record with judge_only is read with 0 or 2 selected, with an unknown evaluation whose check counts two kept slots without blocking, and with a known decision an unknown instance blocks; it is refused with multi_select, a v2 projection, no unknown_check, outranked_possible, a known decision that does not block on an unknown instance, or selected outside rank order
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::payload::task_selection::tests::judge_record_reader_rules",
+]
+incident = ["#428 S168-5b"]

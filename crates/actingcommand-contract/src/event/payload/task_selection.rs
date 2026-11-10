@@ -373,6 +373,10 @@ pub enum TaskSelectionConfirmation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         projection: Option<Box<CandidateProjection>>,
     },
+    /// Ledger revision 8 (Workflow #428 S168-5b, register §1.291 S168C-8; shared with Workflow
+    /// #434's LAB-6): a judge step's record, whatever its outcome. No confirmation is attempted
+    /// and no input follows. No member.
+    JudgeOnly,
 }
 
 /// The projection a select step evaluated, tagged by its `schema_version`: v1, one frame, for a
@@ -707,6 +711,10 @@ impl TaskSelectionRecord {
     /// `confirmation`, every other rule names itself. A multi-select record reads rules 1, 4
     /// and 5 as M-357b's M8, M6 and M7, with N its `required_count`.
     fn validate_paths(&self) -> Result<(), SanitizationError> {
+        // Ledger revision 8 (Workflow #428 S168-5b): a judge step's record keeps its own rules.
+        if matches!(self.confirmation, TaskSelectionConfirmation::JudgeOnly) {
+            return self.validate_judge_only();
+        }
         let scan = match &self.projection {
             TaskSelectionProjection::V1(_) => None,
             TaskSelectionProjection::V2(projection) => Some(&**projection),
@@ -813,6 +821,65 @@ impl TaskSelectionRecord {
         self.validate_confirmation(blocking_none, scan.is_some())
     }
 
+    /// Ledger revision 8 (Workflow #428 S168-5b; `contracts/selection-graph.md`, "Validation and
+    /// bounds"): a `judge_only` record has no `multi_select`, a v1 projection of a `fixed_slots`
+    /// layout and `unknown_check`. Its outcome is `selected`, `empty` or `unknown`, and `selected`
+    /// holds exactly its `ranked` verdicts, in rank order (0 to 64; no confirmation is attempted,
+    /// whatever the outcome). With a `selected` or `empty` outcome the check's `blocking` is
+    /// `none` exactly when it counts no unknown instance and `unknown_instances` otherwise; with
+    /// an `unknown` outcome it is `none` whatever the check counts; it is never
+    /// `outranked_possible`. Rule 3 holds as for every record with `unknown_check`: the bound is
+    /// `none_unknown` exactly without an unknown instance.
+    fn validate_judge_only(&self) -> Result<(), SanitizationError> {
+        let TaskSelectionProjection::V1(projection) = &self.projection else {
+            return Err(invalid("confirmation"));
+        };
+        if self.multi_select.is_some()
+            || projection.layout_kind() != crate::CandidateLayoutKind::FixedSlots
+        {
+            return Err(invalid("confirmation"));
+        }
+        let Some(check) = self.unknown_check else {
+            return Err(invalid("unknown_check"));
+        };
+        if (check.upper_bound == TaskSelectionUpperBound::NoneUnknown)
+            != (check.unknown_instances == 0)
+        {
+            return Err(invalid("path_rule_3"));
+        }
+        let blocking = match self.selection_result {
+            TaskSelectionOutcome::Selected { .. } | TaskSelectionOutcome::Empty
+                if check.unknown_instances == 0 =>
+            {
+                TaskSelectionBlocking::None
+            }
+            TaskSelectionOutcome::Selected { .. } | TaskSelectionOutcome::Empty => {
+                TaskSelectionBlocking::UnknownInstances
+            }
+            TaskSelectionOutcome::Unknown { .. } => TaskSelectionBlocking::None,
+            TaskSelectionOutcome::Insufficient { .. } | TaskSelectionOutcome::Ambiguous { .. } => {
+                return Err(invalid("outcome"));
+            }
+        };
+        if check.blocking != blocking {
+            return Err(invalid("unknown_check"));
+        }
+        let mut ranked = self
+            .verdicts
+            .iter()
+            .filter(|verdict| verdict.status == TaskSelectionCandidateStatus::Ranked)
+            .collect::<Vec<_>>();
+        ranked.sort_by_key(|verdict| verdict.rank);
+        if !ranked
+            .iter()
+            .map(|verdict| verdict.candidate_id.as_str())
+            .eq(self.selected.iter().map(String::as_str))
+        {
+            return Err(invalid("selected"));
+        }
+        Ok(())
+    }
+
     /// Path rule 7: a confirmation is attempted ⇔ R selected and B none. A v2 record never
     /// records `matched`, `mismatched`, a decision variant (ledger revision 4) or a track variant
     /// (ledger revision 7), a v1 record never one of the three scan variants, and
@@ -879,6 +946,9 @@ impl TaskSelectionRecord {
             | TaskSelectionConfirmation::TapMarked { .. }
             | TaskSelectionConfirmation::PicksConfirmed { .. }
             | TaskSelectionConfirmation::PicksStopped { .. } => Err(invalid("confirmation")),
+            // Ledger revision 8: a judge step's record keeps its own rules
+            // (`Self::validate_judge_only`).
+            TaskSelectionConfirmation::JudgeOnly => Err(invalid("confirmation")),
         }
     }
 
@@ -1092,7 +1162,8 @@ impl TaskSelectionRecord {
             | TaskSelectionConfirmation::TrackLost { .. }
             | TaskSelectionConfirmation::TapMarked { .. }
             | TaskSelectionConfirmation::PicksConfirmed { .. }
-            | TaskSelectionConfirmation::PicksStopped { .. } => false,
+            | TaskSelectionConfirmation::PicksStopped { .. }
+            | TaskSelectionConfirmation::JudgeOnly => false,
         }
     }
 
@@ -1124,7 +1195,8 @@ impl TaskSelectionRecord {
             | TaskSelectionConfirmation::IdentityUnconfirmed { .. }
             | TaskSelectionConfirmation::PickMatched { .. }
             | TaskSelectionConfirmation::PicksConfirmed { .. }
-            | TaskSelectionConfirmation::PicksStopped { .. } => false,
+            | TaskSelectionConfirmation::PicksStopped { .. }
+            | TaskSelectionConfirmation::JudgeOnly => false,
         }
     }
 

@@ -1042,8 +1042,9 @@ select over a scan.
 (`snapshot:offline:empty` at position 1 of no ledger, instance `offline.simulation`, the
 package's game and server) at the instant the Lab process read when the dry run started, and
 confirms on the same saved frame. The result carries that instant as `selection_now_unix_ms`,
-and the decision fingerprint binds it, only when a select step was evaluated; every other
-result and fingerprint is unchanged. The kernel's `dry_run_select` evaluates one select step on
+and the decision fingerprint binds it, only when a select step, or a judge step (section "Judge
+step", "Account data and offline"), was evaluated; every other result and fingerprint is
+unchanged. The kernel's `dry_run_select` evaluates one select step on
 one saved frame with given facts and instant, for the `actinglab select` tool of a later slice.
 #411 Lab RP: it takes the instance fact snapshot and the package's run parameters, overlaid on
 the snapshot as a run's select step holds them (`session.dispatch.parameter.<name>`; the
@@ -1119,8 +1120,17 @@ Workflow #428 S168-5b, written ahead of its code by S168-0 and corrected by its 
 ([v012-register.md](v012-register.md) §1.291). A judge step evaluates the candidates one frame
 shows with a selection policy, records the decision, and ends the run with one of two keys its
 package declares. It performs no input. Its decision is advice kept in the ledger: no Runtime
-component acts on it. **Status:** until S168-5b a package that declares one is refused
-(`UnknownField` at `/operations/<i>/judge`).
+component acts on it. **Status:** built by S168-5b (`package` revision 9, `ledger` revision 8; it
+ships in the release of LAB-6 and LAB-7, [v012-register.md](v012-register.md) §1.291, "Slice
+S168-5b"). A Runtime before it refuses a package that declares one (`UnknownField` at
+`/operations/<i>/judge`). The code is `crates/execution-kernel/src/contained_task/judge.rs` (the
+effect, its admission and the judge path's decision) with `judge_attempt` in
+`crates/execution-kernel/src/contained_task/selection.rs` (the judge path's projection of F1, its
+snapshot and tables, and its one record), the offline simulation's report of a judge's end
+(`crates/execution-kernel/src/offline.rs`), the declaration gate's `Declaration::judge_step` and
+`Declaration::judge_results`, the static walks of `crates/actingcommand-contract/src/taskflow.rs`
+(`judge_terminal_holds`) and the host's mapping and refusal in
+`crates/runtime-host/src/host/contained_task.rs`.
 
 ### Declaration
 
@@ -1191,7 +1201,8 @@ end is a judge step is refused `task_phases_unreachable` (no terminal); where th
 target or an end page of the stage, the destination would even count as the stage's advance or
 an end page. The page graph's coverage check, `validate_scheduling_outcome_coverage`
 (`crates/execution-kernel/src/contained_task.rs`), likewise takes it as an edge to its own page.
-S168-5b changes them:
+S168-5b changed them (the state rule is `judge_terminal_holds` in
+`crates/actingcommand-contract/src/taskflow.rs`, which both walks share):
 
 - `TaskPhaseOperation` carries the judge's two keys; its two builders fill them,
   `validate_phases_bundle` (`crates/pack-containment/src/source/mod.rs`) and
@@ -1312,7 +1323,7 @@ words. The names are neutral examples:
 - **Overlap.** Today's declaration check, `SchedulingOutcomeDeclaration::validate`
   (`crates/actingcommand-contract/src/event/payload.rs`), refuses two mappings with the same
   effect condition that list the same page (`invalid_scheduling_outcome_declaration`, field
-  `mapping_overlap`). S168-5b changes that check: two mappings overlap only when they have the
+  `mapping_overlap`). S168-5b changed that check: two mappings overlap only when they have the
   same effect condition, list the same page, and have the same `judge_result` or both have none.
   A mapping with `judge_result` and a mapping without it, on the same condition and page, do not
   overlap: the first maps the judge's ends, the second maps every other end at that page. Nor do
@@ -1352,7 +1363,10 @@ Three layers, each sufficient on its own:
    after it, so no later operation runs.
 3. **Host.** The host accepts no `task.effect_intent` and no input for a judge step's action: one
    would end the run with `contained_task_judge_input_refused` (runtime-host, error) before the
-   input reaches the device. It ends that run only, never the Runtime or another instance.
+   input reaches the device. It ends that run only, never the Runtime or another instance. The
+   host holds this on its own: it refuses an effect intent whose operation is one of the package's
+   judge steps, and once it has appended a run's `judge_only` record that run accepts no effect
+   intent and no input at all, whichever operation or layer would send it.
 
 So a judge step that ran is followed in the ledger by no `task.effect_intent`, input or
 `task.effect_completed` of its action. The tests of [v012-register.md](v012-register.md) §1.291
@@ -1382,6 +1396,19 @@ account data, written to the ledger only, and no Runtime path writes them anywhe
 `actinglab replay` runs a judge step with the production interpreter and reports its record;
 `package dry-run` evaluates it with the empty offline snapshot, as it evaluates a select step
 (section Offline), and confirms nothing.
+
+- **The dry run** captures F1 only, evaluates the judge on the empty offline snapshot at the
+  instant the Lab process read when the dry run started, and sends no input: the run ends at the
+  judge. Its `decision` is `{"status": "judge_completed", operation_label, final_page,
+  scheduling_outcome_key, selection}`: the judge step, its page, the key the run ends with (the
+  step's `outcome_key` or its `unknown_outcome_key`, by "Which key") and its record with
+  `judge_only`. The result carries `selection_now_unix_ms`, and the decision fingerprint binds the
+  decision and that instant, as for a select step. The empty snapshot holds no record list, so a
+  document that reads one evaluates `unknown` (`fact_missing`) and the dry run reports the step's
+  `unknown_outcome_key`; a document that reads only the frame's features is judged as the frame
+  shows.
+- **The replay** reports the record as the judge step's `selection`, with no effect and its page
+  as `reached_page`, and the end `completed` with the key as `scheduling_outcome_key`.
 
 ## Records
 
@@ -1435,7 +1462,7 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 | `page_changed` | The confirmation frame is not the step's page. |
 | `guard_failed` `{code}` | The step's guard failed on the confirmation frame. |
 | `capture_failed` `{code}` | The confirmation frame could not be captured. |
-| `judge_only` | A judge step's record, whatever its outcome (Workflow #428 S168-5b, section Judge step; planned `ledger` revision 8, [component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168"): no confirmation is attempted and no input follows. No member. |
+| `judge_only` | A judge step's record, whatever its outcome (Workflow #428 S168-5b, section Judge step; `ledger` revision 8, [component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168"): no confirmation is attempted and no input follows. No member. |
 
 A confirmation is attempted exactly when the outcome is `selected`, except in a judge step's
 record, whose confirmation is always `judge_only` and never attempted. Together with the
@@ -1559,7 +1586,7 @@ A record is checked when it is written and when it is read:
   whose projection is v1 of a `repeated_anchor` layout, carry two 64-hex hashes and, like the
   other confirmations, an optional embedded projection that seals the first; a `tracked`
   `shift_px` is at most 64; neither the decision hash nor the shift is recomputed;
-- `judge_only` (Workflow #428 S168-5b; planned `ledger` revision 8) belongs to a record without
+- `judge_only` (Workflow #428 S168-5b; `ledger` revision 8) belongs to a record without
   `multi_select` whose projection is v1 of a `fixed_slots` layout and which carries
   `unknown_check` with `blocking` `none` or `unknown_instances` (with a `selected` or `empty`
   outcome, `none` exactly when `unknown_instances` is 0; with an `unknown` outcome always `none`,

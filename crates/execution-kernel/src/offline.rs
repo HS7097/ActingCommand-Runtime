@@ -113,6 +113,17 @@ pub enum OfflineDecision {
     NoOp {
         final_page: Option<String>,
     },
+    /// Workflow #428 S168-5b (`contracts/selection-graph.md`, "Account data and offline"): the
+    /// run ended at the judge step `operation_label`, Completed on `final_page` with
+    /// `scheduling_outcome_key`, the step's `outcome_key` or its `unknown_outcome_key`, after it
+    /// recorded `selection`, its decision with the confirmation `judge_only`. No input was sent
+    /// and nothing was confirmed.
+    JudgeCompleted {
+        operation_label: String,
+        final_page: Option<String>,
+        scheduling_outcome_key: String,
+        selection: Box<actingcommand_contract::TaskSelectionRecord>,
+    },
     Refused {
         #[serde(serialize_with = "code_spelling")]
         code: ContainedTaskCode,
@@ -143,7 +154,8 @@ pub struct OfflineSimulationResult {
     pub recognition: Vec<OfflineRecognitionResult>,
     pub decision: OfflineDecision,
     /// The instant a select step evaluated at (Workflow #308): the caller's, read when the
-    /// dry run started. Present only when a select step was evaluated.
+    /// dry run started. Present only when a select step, or (Workflow #428 S168-5b) a judge
+    /// step, was evaluated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection_now_unix_ms: Option<u64>,
     /// Workflow #406 T4: the run's seed, present when the decision's click drew its points from
@@ -292,10 +304,25 @@ fn simulate(
             Ok(outcome) if outcome.executed_steps == 0 => OfflineDecision::WouldComplete {
                 final_page: outcome.final_page,
             },
-            Ok(_) => {
-                return Err(OfflineSimulationError::new(
-                    ExecutionKernelCode::OfflineSimulationExecutedStepInvariant.code(),
-                ));
+            // Workflow #428 S168-5b (`contracts/selection-graph.md`, "Account data and offline"):
+            // a judge step ends the run Completed with no input, so a run that executed a step
+            // and completed is a judge's end, reported with its key and its record. Any other
+            // completed run that executed a step broke the interception.
+            Ok(outcome) => {
+                let invariant = || {
+                    OfflineSimulationError::new(
+                        ExecutionKernelCode::OfflineSimulationExecutedStepInvariant.code(),
+                    )
+                };
+                let judged = runtime.judged.take().ok_or_else(invariant)?;
+                OfflineDecision::JudgeCompleted {
+                    operation_label: judged.operation_label,
+                    final_page: outcome.final_page,
+                    scheduling_outcome_key: outcome
+                        .selected_scheduling_outcome
+                        .ok_or_else(invariant)?,
+                    selection: judged.selection,
+                }
             }
             Err(
                 ContainedTaskRunError::Boundary(OfflineBoundary::EffectIntercepted)
@@ -426,11 +453,19 @@ struct PlannedEffect {
     guard: ContainedTaskGuardOutcome,
 }
 
+/// Workflow #428 S168-5b: the record of the judge step that ended an offline run.
+struct JudgedStep {
+    operation_label: String,
+    selection: Box<actingcommand_contract::TaskSelectionRecord>,
+}
+
 struct OfflineRuntime {
     frames: VecDeque<Frame>,
     capture_count: usize,
     recognition: Vec<OfflineRecognitionResult>,
     planned: Option<PlannedEffect>,
+    /// Workflow #428 S168-5b: the record of a judge step, which ends the run with no input.
+    judged: Option<JudgedStep>,
     /// The caller's instant for a select step; without one a select step is unavailable.
     now_unix_ms: Option<u64>,
     /// Set once a select step evaluated.
@@ -462,6 +497,7 @@ impl OfflineRuntime {
             capture_count: 0,
             recognition: Vec::new(),
             planned: None,
+            judged: None,
             now_unix_ms,
             selection_now_unix_ms: None,
             retains_last_frame,
@@ -607,6 +643,24 @@ impl ContainedTaskRuntime for OfflineRuntime {
                     action,
                     sampling,
                     guard,
+                });
+            }
+            // Workflow #428 S168-5b: a judge step's decision, which the run's end reports.
+            ContainedTaskTrace::SelectionEvaluated {
+                operation_label,
+                selection,
+                ..
+            } if selection.confirmation
+                == actingcommand_contract::TaskSelectionConfirmation::JudgeOnly =>
+            {
+                if self.judged.is_some() {
+                    return Err(OfflineBoundary::Invariant(
+                        ExecutionKernelCode::OfflineSimulationExecutedStepInvariant.code(),
+                    ));
+                }
+                self.judged = Some(JudgedStep {
+                    operation_label,
+                    selection,
                 });
             }
             _ => {}

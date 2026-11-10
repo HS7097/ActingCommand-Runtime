@@ -4279,6 +4279,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_judge_input_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.51",
+      "description": "Workflow #428 S168-5b (contracts/selection-graph.md, Judge step, No input, and how that is enforced): the host was handed a task.effect_intent for the action of a judge step, which makes no input. The run ends with this code before the input reaches the device; the Runtime and the runs of other instances go on.",
+      "common_causes": "An interpreter that tried to make an input for a judge step: a defect of the Runtime, never of a package, whose judge step is admitted only without an input member.",
+      "handling": "Report the run with its ledger records; the judge step's decision is still in its task.selection_evaluated record. Nothing on the device was touched by the refused input."
+    },
     "contained_task_ladder_source_state_invalid": {
       "category": "error",
       "ladder_class": "none",

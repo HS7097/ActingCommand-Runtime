@@ -2871,3 +2871,25 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::resource_runtime_support::resource_declarations::gate_428_rd_budget1::rd_budget1_a_second_read_of_a_path_answers_the_bytes_of_the_first",
 ]
 incident = ["#428 RD-BUDGET-1"]
+
+# Workflow #428 S168-5b (the release of LAB-6 and LAB-7; register §1.291, the slice's named tests; brief rd-1110/brief-s168-5b.md; contracts/selection-graph.md, "Judge step" and "Records"; package revision 9, ledger revision 8), the kernel's and the declaration gate's halves, on a fake device whose input port fails the test on any call, fake snapshots and tables loaded with LoadedTable::load: a judge over three fixed slots records one task.selection_evaluated with judge_only and ends the run Completed on its page with its outcome_key when every slot is judged (two ranked, one gate-rejected, selected in rank order, nothing unknown), with its unknown_outcome_key when a slot reads out of the dictionary (the check blocks with one unknown instance), when the document's list is stale (unknown, fact_stale, no verdict) and when a table drops a candidate unknown_dropped (no row, a null cell; a static table drop the check does not count), while gates deciding on known values end with the outcome_key; the kernel makes no input and records no effect, and its judge module names no type of the device side, nor (fix 1) the body of judge_attempt, which hands the runtime only to its five shared callees; admission refuses every rule of the declaration tables with its code and detail token (fix 1: in a phased route too, task_phases_outcome_incomplete), and the gate each structure and each judge_result rule at its pointer
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_known_ends_with_outcome_key",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_unknown_slot_ends_with_unknown_key",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_stale_list_ends_with_unknown_key",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_unknown_dropped_candidate_ends_with_unknown_key",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_performs_no_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_declaration_refusals",
+    "actingcommand-pack-containment::lib::source::declarations::tests::judge_declaration_refusals",
+]
+incident = ["#428 S168-5b"]
+
+# Workflow #428 S168-5b fix 1 (register §1.291, "Slice S168-5b", the eighth named test; brief rd-1110/brief-s168-5b-fix1.md; contracts/selection-graph.md, "Account data and offline"): package dry-run of a judge package completes and reports the judge's end, its operation, its page, its key and its record with judge_only, evaluated on the empty offline snapshot at the dry run's instant (which the result carries) on the one frame captured, nothing confirmed and no point drawn; a document over the frame's features ends with the outcome_key, and one that reads a record list evaluates unknown (fact_missing, no verdict) and ends with the unknown_outcome_key
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_dry_run_reports_the_judge_end",
+]
+incident = ["#428 S168-5b"]

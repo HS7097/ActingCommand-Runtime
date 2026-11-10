@@ -411,6 +411,19 @@ pub struct TaskPhaseOperation<'a> {
     /// #411 B36/B19 (A35-S3): the outcome key of a wait step's `on_timeout`; the run may end
     /// there, on the step's own page, still busy, so the key's mapping declares `busy`.
     pub on_timeout_key: Option<&'a str>,
+    /// Workflow #428 S168-5b (`contracts/selection-graph.md`, "Judge step"): the two keys of a
+    /// judge step. Its state is a terminal: the run ends there with one of the two, and the walk
+    /// follows no destination of it.
+    pub judge: Option<TaskPhaseJudge<'a>>,
+}
+
+/// Workflow #428 S168-5b: a judge step's two keys, `outcome_key` (its end `judged`) and
+/// `unknown_outcome_key` (its end `unknown`), mapped by the mappings that declare `judge_result`
+/// ([`judge_terminal_holds`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskPhaseJudge<'a> {
+    pub outcome_key: &'a str,
+    pub unknown_outcome_key: &'a str,
 }
 
 /// #411 B16 part 1 (B-train plan §2.11 item 1): an operation's `max_runs` and what its
@@ -463,11 +476,14 @@ pub fn keyed_terminal_holds(
     key: &str,
     lists_page: &dyn Fn(&str) -> bool,
 ) -> bool {
+    // Workflow #428 S168-5b: every end but a judge step's is mapped among the mappings without
+    // `judge_result`.
     let mappings = scheduling
         .mappings()
         .iter()
         .filter(|mapping| {
             mapping.effect() == condition
+                && mapping.judge_result().is_none()
                 && mapping
                     .terminal_pages()
                     .iter()
@@ -475,6 +491,42 @@ pub fn keyed_terminal_holds(
         })
         .collect::<Vec<_>>();
     matches!(mappings.as_slice(), [mapping] if mapping.outcome_key() == key)
+}
+
+/// Workflow #428 S168-5b (`contracts/selection-graph.md`, "Mapping the two keys", the state
+/// rule): a judge step's state (its `from` page, and the effect condition `condition` the walk
+/// reaches it under) is a terminal that needs exactly one mapping with that condition and
+/// `judge_result` `judged` listing the page, whose key is the step's `outcome_key`, and exactly
+/// one with that condition and `unknown` listing it, whose key is the step's
+/// `unknown_outcome_key`. A state reachable under both effect conditions would need two mappings
+/// with one key, which unique keys forbid, so it is refused. The static walk of a phased route
+/// and the Runtime's coverage check of a page graph share this rule.
+pub fn judge_terminal_holds(
+    scheduling: &SchedulingOutcomeDeclaration,
+    condition: SchedulingEffectCondition,
+    judge: TaskPhaseJudge<'_>,
+    lists_page: &dyn Fn(&str) -> bool,
+) -> bool {
+    let holds = |result: crate::SchedulingJudgeResult, key: &str| {
+        let mappings = scheduling
+            .mappings()
+            .iter()
+            .filter(|mapping| {
+                mapping.effect() == condition
+                    && mapping.judge_result() == Some(result)
+                    && mapping
+                        .terminal_pages()
+                        .iter()
+                        .any(|target| lists_page(target.as_str()))
+            })
+            .collect::<Vec<_>>();
+        matches!(mappings.as_slice(), [mapping] if mapping.outcome_key() == key)
+    };
+    holds(crate::SchedulingJudgeResult::Judged, judge.outcome_key)
+        && holds(
+            crate::SchedulingJudgeResult::Unknown,
+            judge.unknown_outcome_key,
+        )
 }
 
 /// #411 B36/B19 (A35-S3; coordinator decision Q11 of 2026-10-21): a wait step's `on_timeout`
@@ -774,11 +826,13 @@ fn validate_phased_route_from(
         }
         if index == phases.len() {
             let condition = crate::DesignatedEffectReach::condition(completed);
+            // Workflow #428 S168-5b: counted among the mappings without `judge_result`.
             if scheduling
                 .mappings()
                 .iter()
                 .filter(|mapping| {
                     mapping.effect() == condition
+                        && mapping.judge_result().is_none()
                         && mapping
                             .terminal_pages()
                             .iter()
@@ -840,6 +894,24 @@ fn validate_phased_route_from(
             for key in operation.keyed_ends() {
                 keyed_terminal(scheduling, completed, &page, key, canonical)?;
                 terminals += 1;
+            }
+            // Workflow #428 S168-5b (`contracts/selection-graph.md`, "The static walks"): a judge
+            // step's state is a terminal under the state rule, and the run ends there: no
+            // destination of it is followed. A judge that declares `when` may be withdrawn, so
+            // the page's next candidate is followed too, as after every such candidate.
+            if let Some(judge) = operation.judge {
+                let condition = crate::DesignatedEffectReach::condition(completed);
+                if !judge_terminal_holds(scheduling, condition, judge, &|target: &str| {
+                    canonical(target) == page
+                }) {
+                    return Err(TaskflowCode::TaskPhasesOutcomeIncomplete.code().into());
+                }
+                terminals += 1;
+                if !operation.may_be_passed_over {
+                    break;
+                }
+                passed_over.push(operation.id);
+                continue;
             }
             // #411 B36/B19 (A35-S3): a wait step's `on_timeout` ends the run still busy.
             if operation
@@ -924,11 +996,13 @@ fn end_page_terminal(
     canonical: &dyn Fn(&str) -> String,
 ) -> Result<(), crate::outcome::Code> {
     let condition = crate::DesignatedEffectReach::condition(completed);
+    // Workflow #428 S168-5b: counted among the mappings without `judge_result`.
     let mapped = scheduling
         .mappings()
         .iter()
         .filter(|mapping| {
             mapping.effect() == condition
+                && mapping.judge_result().is_none()
                 && mapping
                     .terminal_pages()
                     .iter()

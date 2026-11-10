@@ -168,6 +168,8 @@ mod gate_308_l4b;
 // halves.
 mod gate_336_pkgs2;
 mod gate_428_s168_4;
+// Workflow #428 S168-5b: a judge step through the host, the named tests' host halves.
+mod gate_428_s168_5b;
 // Workflow #336 PKG-S3: bindings without a package digest, failure identity v2 and the lift of
 // a pause by a package's content hash.
 mod gate_336_pkgs3;
