@@ -8469,7 +8469,7 @@ journal the rescue module wrote does not decode in the older installer (`initiat
 kinds `config_replace` and `pack_place`): roll back only when no rescue operation is the last one
 or unfinished, or finish it first.
 
-#### Slice LAB-2b (0.12.49): actinglab's own commands print the CLI module's line
+#### Slice LAB-2b (0.12.50): actinglab's own commands print the CLI module's line
 
 Coordinator work order `rd-1108/arch-013/brief-lab2b.md`, its rulings (board #434 6753308292) and
 the coordinator's ruling of 2026-11-10 on the two results that name `outcome`; the read-only census

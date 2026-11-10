@@ -6,11 +6,13 @@
 //! - **Which command lines** ([`route`]; LAB-2 fix 1). The module answers `serve` and the
 //!   operations it serves itself, those that came from actingctl ([`core_ops`]: the core rows
 //!   `lab-ops` serves, `status` and `run show` among them since LAB-2b, and `run start`, `run
-//!   stop`, `reset` and `drill`). Every other command line is actinglab's own, parsed and run by
-//!   `main` with its global options anywhere on the line. Since LAB-2b (open point 10) it prints
-//!   this module's line ([`own_line`]): the output for people by default, `--json` the
-//!   `cli_line` line, exit codes 0, 1 and 2; a line with `--via` (MCP's actinglab child) still
-//!   prints the envelope (`ok`, `data`, `error`) with its exit codes 2 to 6, until LAB-5. A row
+//!   stop`, `reset` and `drill`), also when actinglab's own global options stand before the core
+//!   row's words, so that the row refuses them by name (LAB-2b fix 3; never a line with `--via`).
+//!   Every other command line is actinglab's own, parsed and run by `main` with its global options
+//!   anywhere on the line. Since LAB-2b (open point 10) it prints this module's line
+//!   ([`own_line`]): the output for people by default, `--json` the `cli_line` line, exit codes 0,
+//!   1 and 2; a line with `--via` (MCP's actinglab child) still prints the envelope (`ok`, `data`,
+//!   `error`) with its exit codes 2 to 6, until LAB-5. A row
 //!   actinglab's own command serves under other words (`watch` for `lab watch`, `recover` for
 //!   `session recover`, `user-config [<key>]` for `user-config get`, `app launch` for `session app
 //!   launch` and the like) is given to that command in its words ([`engine`]) and answers as it
@@ -113,6 +115,16 @@ pub(crate) fn route(arguments: Vec<String>) -> Route {
     let Some(table) = loaded else {
         return Route::Module(arguments);
     };
+    // Workflow #434 LAB-2b fix 3: actinglab's own global options before a core row's words
+    // (`--runtime-endpoint <endpoint> status`) give the line to the module as it is, which refuses
+    // the first of them by name, as it refuses one after the words, and sends nothing. A line
+    // with `--via` stays actinglab's own.
+    if named.is_none()
+        && !own_line::via_line(&arguments)
+        && core_row_after_options(table, &arguments)
+    {
+        return Route::Module(arguments);
+    }
     let Some(operation) = named.filter(|operation| !core_ops::serves(operation)) else {
         return Route::Own(arguments);
     };
@@ -137,6 +149,19 @@ pub(crate) fn route(arguments: Vec<String>) -> Route {
             operation.name
         ))),
     }
+}
+
+/// Workflow #434 LAB-2b fix 3: whether the words of the command line `arguments`, actinglab's own
+/// global options taken out, name a core row this module serves that is no command of actinglab's
+/// own (`status`, `run show`).
+fn core_row_after_options(table: &OperationTable, arguments: &[String]) -> bool {
+    let Ok(invocation) = crate::parse_invocation(arguments.iter().cloned(), true) else {
+        return false;
+    };
+    let command_words = [invocation.command, invocation.args].concat();
+    words::named(table, &command_words).is_some_and(|operation| {
+        core_ops::serves(operation) && !crate::own_command(&name_words(&operation.name))
+    })
 }
 
 /// An operation's name as command words.

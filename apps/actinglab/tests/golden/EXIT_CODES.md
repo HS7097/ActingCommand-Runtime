@@ -1,6 +1,6 @@
 # ActingLab CLI Exit-Code Baseline
 
-Source baseline: `f0a5b8536ac19f3df43dcae823c13466ad4d3a13`; since Workflow #434 LAB-2b (0.12.49,
+Source baseline: `f0a5b8536ac19f3df43dcae823c13466ad4d3a13`; since Workflow #434 LAB-2b (0.12.50,
 register §1.287, "Slice LAB-2b"; `contracts/lab-two-entries.md` §9.3) two tables apply.
 
 ## actinglab's command line (every line without `--via`)
@@ -16,6 +16,13 @@ and exit by the line's outcome category, as every operation of the CLI module do
 
 `capabilities` reports this table as its `exit_codes` (`ok`, `error`, `fatal`) on such a line, and
 the table below on a line with `--via` (LAB-2b fix 1).
+
+`status` is no command of actinglab's own since LAB-2b: the command line gives it to the CLI
+module's core row (`contracts/lab-two-entries.md` §9.3). With no Runtime running that row answers
+`runtime_overview_reported` with its `daemon` block offline (`runtime_unavailable`) and exits 0,
+where actinglab's own `status` exited 5 with `runtime_not_running` (the coordinator accepted it on
+2026-11-10, LAB-2b fix 3). A caller that needs to know whether the Runtime runs reads the `daemon`
+block (`online`), not the exit code.
 
 `expected.json` and the `line` and `text` cases of `consumers.json` record these exit codes.
 

@@ -486,8 +486,11 @@ every kind the file names exists; `entries` follows its rule; a `reserved` row h
   printing the `cli_line` line, exit codes 0, 1 and 2) are the core rows that came from actingctl
   (served by `crates/lab-ops`) and `run start`, `run stop`, `reset` and `drill`.
   - **How actinglab tells them apart.** A command line whose words, `--json` taken out, begin with
-    `serve` or with the name of such an operation is the CLI module's; every other one is
-    actinglab's own and is parsed and run by its own dispatch. Two core rows take words that were
+    `serve` or with the name of such an operation is the CLI module's; so is one without `--via`
+    whose words, actinglab's own global options before them taken out, are a core row's (LAB-2b
+    fix 3: `--runtime-endpoint <endpoint> status` is given to the module as it is, which refuses
+    the option by name as it does after the words). Every other one is actinglab's own and is
+    parsed and run by its own dispatch. Two core rows take words that were
     actinglab's own commands, `status` and `run show`: since LAB-2b the command line gives them to
     their core rows too, and actinglab's own `status` (a TCP probe of its user configuration's
     `runtime_endpoint`) and `run show` (a placeholder answering `reserved`) are deleted (open point
@@ -509,6 +512,21 @@ every kind the file names exists; `entries` follows its rule; a `reserved` row h
   - **`status` and `run show`** (open point 10): the command line and `serve --stdio` answer them
     from the CLI module's core rows, `status` with the watchdog block (LAB-2 fix 2 for `serve`,
     LAB-2b for the command line).
+    - **`status` with no Runtime running exits 0** (the coordinator accepted it on 2026-11-10, LAB-2b
+      fix 3). The row reports state, and a Runtime that is not running is a state it reports: it
+      answers `runtime_overview_reported` with its `daemon` block offline (`online` false, class
+      `runtime`, `runtime_unavailable`) and exits 0, as `serve --stdio` answers it, and the
+      operation table marks the Runtime optional for the row. actinglab's own `status` before
+      LAB-2b exited 5 with `runtime_not_running`. A caller that needs to know whether the Runtime
+      runs reads the `daemon` block, not the exit code.
+    - **A global option of actinglab's own, which the row does not take** (`--runtime-endpoint`,
+      `--run-root`, `--verbose` and the others but `--json`, `--version` and `--via`), is refused
+      by name with `actingctl_usage_invalid` (its `argument`, `argument_problem` `unknown`), exit
+      1, before or after the words alike (LAB-2b fix 3), and nothing is sent: the row reaches a
+      Runtime only through the state root's `runtime-info.json`, whose host must be loopback. A
+      line with `--via` stays actinglab's own (its dispatch knows neither word); `--version` before
+      the words makes the line actinglab's `version`, and a value actinglab's parser refuses is
+      its refusal, as before.
   - `--envelope` is gone: nothing needs it once actinglab's own command lines answer as before.
   - The catalog holds no phrase for a code, so the line for people is the code with its values,
     and none is made up; the small table is the result's members. The CLI module locates the
@@ -620,7 +638,7 @@ After LAB-6 the host emits neither `lab_module_not_installed` nor `lab_module_op
 9. **The MCP tool count.** The table has one operation per CLI form (168 in v1), so MCP would list
    that many tools. LAB-5 may present a family (`record`, `package`, `emu`) as one tool with an
    `action` argument; the table stays one row per form either way.
-10. **actinglab's own commands take the new output.** Done (LAB-2b, 0.12.49; the coordinator's
+10. **actinglab's own commands take the new output.** Done (LAB-2b, 0.12.50; the coordinator's
     rulings of 2026-11-10, LAB-2 fix 1 and fix 2, and those of the LAB-2b work order; section
     9.3). actinglab's own commands print the CLI module's output (the line for people, `--json`
     printing the `cli_line` line, exit codes 0, 1 and 2); a result that names `outcome` goes whole
