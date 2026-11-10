@@ -313,7 +313,8 @@ Planned rows, **not in force**: no build declares them. Runtime 0.12.47 declares
 - **Not moved.** `runtime-client`: a list travels in the existing `InstanceFactSnapshot` answer
   and a judge's record in the existing event reads; `list_reading_key_reserved` is the code of a
   denied receipt of an existing shape. `actingd-config`: no key; the bounds (16 `read_list`
-  steps per task, 256 rows per list, 16 list maxima per document) are the formats'.
+  steps per task, 256 rows per list, 32 list maxima per document, 16 lists per list maximum)
+  are the formats'.
   `runtime-outcomes`: new codes in the catalog only. `install-selection`, `install-control`,
   `install-cli`, `install-root`, `player-hold` and `tools-layout`: untouched.
 

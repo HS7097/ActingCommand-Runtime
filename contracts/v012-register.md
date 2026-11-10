@@ -8854,9 +8854,14 @@ whose `ledger` range holds S168-5's revision.
 
 - (a) The design reads 256 active fact identities per instance; the store holds 256 for the whole
   host, shared by every instance, and the contracts book lists there.
-- (b) A list maximum reads one list, as the work order says. The lists split by kind (Q-5) are
-  combined by an `all` of comparisons, one per list, which is exact when each `empty` lies below
-  the class's values.
+- (b) A list maximum reads 1 to 16 lists at once, over the union of their keys, each key counted
+  once (the coordinator's ruling R1 after the review, work order
+  `rd-1110/brief-s168-contracts-fix1.md`; the first work order had one list per reference). The
+  holdings split into 8 lists (Q-5) over 9 domains (Q-2) would otherwise take at least 48
+  references; a document holds at most 32 list maxima. Any listed list that is not usable makes
+  the reference Unknown with its reason; `empty` is read only when every list is usable and no
+  key of the union is of the class ([selection-policy.md](selection-policy.md), "Table maximum
+  over a list").
 - (c) A list reading reads only a `repeated_anchor` layout over a scan: a list that fits one
   viewport declares the scan too, as an `on_empty` select does, so every written list has
   positive evidence of both ends.
@@ -8892,8 +8897,8 @@ whose `ledger` range holds S168-5's revision.
 | S168C-2 | `fact.published` of `inventory.list.<name>`: one `record_list` record, `source_detector` `list_reading:` | existing record, new key prefix | S168-4 | runtime-host | §4 below; tagged as every instance key |
 | S168C-3 | `reading_problem` tokens `list_position_unread`, `list_duplicate_key`, `list_rows_exceeded`; the stage `read_list` | outcome vocabularies | S168-4 | execution-kernel | values the ledger reader only spells |
 | S168C-4 | `list_reading_key_reserved` (non-fatal request error, `fact_key`) | outcome code | S168-4 | runtime-host | from every origin |
-| S168C-5 | the value source `table_max_over_list` | selection document, `package` 8 or 9 | S168-5 | resource repositories | at most 16 per document |
-| S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_key`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `maximum`, `maximum_identity` | outcome code and keys | S168-5 | selection-policy | a decision reason, no record member |
+| S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 per document, at most 16 lists per reference |
+| S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_keys`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `fact_keys` (`list<token>`, the lists read in the order of `lists`, at most 16 items), `maximum`, `maximum_identity` | outcome code and keys | S168-5a | selection-policy | a decision reason, no record member; `count` is the number of distinct keys of the union |
 | S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key}` | package format, `package` 8 or 9 | S168-5 | resource repositories | a terminal; `fixed_slots` only |
 | S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, next `ledger` revision | S168-5 | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
 | S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5 | runtime-host | ends that run only |
