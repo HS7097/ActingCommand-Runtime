@@ -91,6 +91,10 @@ mod gate_434_lab5a;
 // changes.
 #[path = "gate_434_lab5c.rs"]
 mod gate_434_lab5c;
+// Workflow #434 LAB-5G4a: `serve --stdio --front mcp` records `Lab-MCP`; serve refuses a value
+// that begins with `--`.
+#[path = "gate_434_lab5g4a.rs"]
+mod gate_434_lab5g4a;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

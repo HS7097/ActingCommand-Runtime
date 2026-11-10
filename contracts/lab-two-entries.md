@@ -200,12 +200,17 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 ### 4.2 How a process picks its word
 
 - `actinglab-mcp.exe`: `Lab-MCP`. `actingwatch.exe`: `Lab-看门狗`. The console binds `ui`.
-- `actinglab.exe` (the CLI and `serve`): `Lab-CLI`, unless the environment variable
-  `ACTINGCOMMAND_INITIATOR` names `Lab-制包` or `Lab-救急`. The UI sets it for every Lab process it
-  starts: `Lab-制包` for its workbench's `serve`, `Lab-救急` for every other one.
+- `actinglab.exe` (the CLI, and `serve` without `--front`): `Lab-CLI`, unless the environment
+  variable `ACTINGCOMMAND_INITIATOR` names `Lab-制包` or `Lab-救急`. The UI sets it for every Lab
+  process it starts: `Lab-制包` for its workbench's `serve`, `Lab-救急` for every other one.
 - Any other value of the variable, `UI`, `Lab-MCP` and `Lab-看门狗` included, is
   `actingctl_usage_invalid` with `variable` `ACTINGCOMMAND_INITIATOR` (the code moves to actinglab
   with LAB-7, section 12), and nothing is sent or written.
+- `actinglab.exe serve --stdio --front mcp` (LAB-5G4a; the option, section 8.2): `Lab-MCP`, the
+  word of the MCP server whose child it is. With the option the variable, set to anything, is
+  refused before the loop starts (`actingctl_usage_invalid` with `variable`
+  `ACTINGCOMMAND_INITIATOR`): the two would name different words, and the MCP server removes the
+  variable for its children. No other command and no operation's command line takes the option.
 - Like the channel, it is a declaration, not authentication.
 
 ### 4.3 Where it is recorded
@@ -236,9 +241,11 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 - **Recordings.** Each mark and step of a Lab recording carries `initiator` (#350 option B, design
   §3.4); a step that reaches the device is also in G14. LAB-2 writes it (open point 6, the
   coordinator's ruling): the word of section 4.2 for `actinglab.exe` (`Lab-CLI`, or `Lab-制包` /
-  `Lab-救急` from `ACTINGCOMMAND_INITIATOR`), and `Lab-MCP` (section 4.1) when MCP's actinglab
-  child runs the command (`--via mcp`, LAB-2 fix 1), carried by the recording lock and written on
-  each step and mark the command adds ([lab-recording.md](lab-recording.md), "recording.json").
+  `Lab-救急` from `ACTINGCOMMAND_INITIATOR`; `Lab-MCP` for `serve --stdio --front mcp`, LAB-5G4a,
+  whose loop runs actinglab's own commands as MCP's actinglab child runs them), and `Lab-MCP`
+  (section 4.1) when MCP's actinglab child runs the command (`--via mcp`, LAB-2 fix 1), carried by
+  the recording lock and written on each step and mark the command adds
+  ([lab-recording.md](lab-recording.md), "recording.json").
   The recording format changes directly: a recording without it does not decode.
 - **The watchdog.** Its starts stay recorded in its own files as today. A request it sends beyond
   `Health` carries `Lab-看门狗`; today it sends none.
@@ -356,6 +363,27 @@ module and the UI's authoring workbench, so the three front ends share one loop.
 answers the line its `--json` answers (section 9.3): the CLI module's line, for an operation
 actinglab's own command serves too since LAB-2b (open point 10, done), and `status` and `run show`
 from their core rows.
+
+- **`--front mcp`** (LAB-5G4a; the coordinator's rulings, board #434 6769399787 points 9 and
+  10). The MCP server starts its children as `actinglab serve --stdio --front mcp`, an option
+  only `serve --stdio` takes; `mcp` is its one value. Another value, the option twice, or the
+  option without `--stdio` is refused as `serve` refuses an unknown word
+  (`actingctl_usage_invalid`, the word as `argument`, `unknown`; the option without a value
+  `value_missing`), and so is the option with `ACTINGCOMMAND_INITIATOR` set (section 4.2), before
+  the loop starts. With it the process's initiator is `Lab-MCP`: on each step and mark
+  actinglab's own commands add to a recording (section 4.3) and in a rescue row's journal. The
+  connections actinglab's own commands open bind as MCP's `--via mcp` child's do, the Lab channel
+  with `via` `mcp` and the envelope (Lab, Lab), until LAB-6 replaces `via` with the initiator;
+  the core rows `lab-ops` serves, which that child never serves, connect as without the option.
+  The lines stay `serve`'s (each operation's `--json` line), never the envelope a `--via` line
+  prints. Without the option nothing changes.
+- **Values that begin with `--`** (LAB-5G4a; board #434 6775192250 point 16). `serve` builds a
+  command line for the command that serves a row, and a string beginning with `--` would reach
+  that command's parser as a flag. So a parameter whose value is a string that begins with `--`,
+  or a list holding such a string, is refused before anything runs, for every row whichever code
+  serves it: `actingctl_usage_invalid` with the parameter as `argument` and `not_recognised`, as
+  a line, and the loop goes on. Numbers, booleans and strings that begin with one dash are taken
+  as before. The command line does not change (there a word that begins with `--` is a flag).
 
 ### 8.3 The authoring option
 
