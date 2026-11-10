@@ -1454,7 +1454,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
     lab_relations`; it is not tried again before the next start. A close that stops it says
     nothing.
   - No key, code, ledger format or table is added; the location `build_lab_relations` is new.
-- #422 QP-1 (since 0.12.49; [v012-register.md](v012-register.md) §1.291): a view page's history
+- #422 QP-1 (since 0.12.49; [v012-register.md](v012-register.md) §1.292): a view page's history
   statement stays inside its segment whatever SQLite's planner chooses. Before, for a page
   without a per-run link nothing in the statement's text made the walk follow the segment: the
   planner chose the index, and with a time bound it could choose the time index, which takes no

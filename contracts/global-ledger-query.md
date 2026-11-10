@@ -256,7 +256,7 @@ them (the reads they save leave more of its budget), and a page whose Lab
 relations' read the budget would cut is answered.
 
 #422 QP-1 (since 0.12.49; [ledger-observer.md](ledger-observer.md) §15, the
-QP-1 note; [v012-register.md](v012-register.md) §1.291): a Runtime page reads
+QP-1 note; [v012-register.md](v012-register.md) §1.292): a Runtime page reads
 its selection in segments of the sequence (#422 LN-WS), and each statement
 stays inside its segment whatever SQLite's planner chooses. No time bound
 drives a statement: `from_timestamp_unix_ms` and `to_timestamp_unix_ms` are

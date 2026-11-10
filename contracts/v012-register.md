@@ -8998,11 +8998,12 @@ a console whose `ledger` range holds 8, which is UI-L1's console.
 | S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5b | runtime-host | ends that run only |
 | S168C-10 | the optional `task.json` mapping member `judge_result`, a closed vocabulary of `judged` and `unknown` | package format, `package` 9 | S168-5b | resource repositories | maps a judge step's end with that result; two mappings overlap only with the same effect condition, page and `judge_result` (or none on both), so S168-5b changes `SchedulingOutcomeDeclaration::validate` (`mapping_overlap`); no persisted record carries it; [selection-graph.md](selection-graph.md), "Mapping the two keys" |
 
-### 1.291 Slice QP-1 (0.12.49): a ledger page stays inside its sequence bounds whatever the planner chooses (#422; the read-only investigation of 2026-11-10, `rd-1110/ledger-window-plan-findings.md`; the console's ledger window will send pages with `from_sequence`, `to_sequence`, a limit and a snapshot and no instance, which the coordinator ruled acceptable once this slice makes the bound independent of the planner; coordinator work order `rd-1110/brief-qp1-page-plan-bounds.md`)
+### 1.292 Slice QP-1 (0.12.49): a ledger page stays inside its sequence bounds whatever the planner chooses (#422; the read-only investigation of 2026-11-10, `rd-1110/ledger-window-plan-findings.md`; the console's ledger window will send pages with `from_sequence`, `to_sequence`, a limit and a snapshot and no instance, which the coordinator ruled acceptable once this slice makes the bound independent of the planner; coordinator work order `rd-1110/brief-qp1-page-plan-bounds.md`)
 
 [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer) (the QP-1
 note) and [global-ledger-query.md](global-ledger-query.md) (the QP-1 paragraphs) are the
-contract. The number is the next free one on main `7910349a`. No persisted ledger shape, wire
+contract. 1.292 is the next free number on main `fa8adc67`, where #1554 added §1.291 (S168-0);
+this slice had taken 1.291, then the next free one on `7910349a`. No persisted ledger shape, wire
 shape, configuration key, outcome code, index or table is new or changed.
 
 **Why.** A view page reads its selection in segments of the sequence (LN-WS R2:
