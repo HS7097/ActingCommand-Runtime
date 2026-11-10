@@ -8876,11 +8876,13 @@ whose `ledger` range holds S168-5's revision.
 
 1. The `ledger` number: #434 plans 8 for LAB-6. S168-5 in an earlier release takes 8 and moves
    #434's row (and UI-L1's range) to 9; the same release shares 8; after LAB-6, 9.
-2. Fail-closed costs for S168-6: a position whose identity the package's dictionary lacks keeps
-   the whole list unwritten, so the dictionary covers every identity the list can show (the
-   design's G-3); and a listed key the value table lacks makes every list maximum over that list
-   unknown, so S168-2's table gives every identity at least one row (a row of another class for
-   an identity with no value).
+2. Fail-closed costs for S168-6, **answered by R2** (the coordinator's ruling after the review):
+   a position whose identity the package's dictionary lacks keeps the whole list unwritten, so
+   the dictionary covers every identity the list can show (the design's G-3); and what S168-2's
+   table owes a list maximum is the rule of [selection-policy.md](selection-policy.md), "Table
+   maximum over a list", "What the table owes a list maximum": a missing row of a class says
+   the identity is not of the class, so an identity of the class whose value is not known has a
+   row of the class with a null cell, and is never placed in another class only to have a row.
 3. A run's lists are written at its end: a judge reads lists of earlier runs only, so the
    standard package reads its lists in a task that runs before its judge task.
 4. One key per judge run: enough for the console, which reads the record. A catalog that must

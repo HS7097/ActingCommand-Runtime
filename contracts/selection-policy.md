@@ -447,9 +447,9 @@ reference pins, gives
 - every identity a listed list can hold: at least one row, so that no key of the union misses;
   an identity of no class at all gets a row of a class no reference pins.
 
-A row of another class for an identity whose value is unknown would say that the identity is not
-of this class: it would drop out of the maximum silently, the maximum would come out too low, and
-a comparison against it could pass when it must not. The Runtime cannot tell such a row from a
+Giving an identity whose value is unknown only a row in some other class would say that the
+identity is not of this class: it would drop out of the maximum silently, the maximum would come
+out too low, and a comparison against it could pass when it must not. The Runtime cannot tell such a row from a
 true one; the table's builder owes the rule.
 
 **Where it is read.** As a side of an `integer_compare` gate predicate, and as the input of a
