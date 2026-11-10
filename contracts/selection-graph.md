@@ -1143,7 +1143,7 @@ The names are neutral examples:
 | The admission rules of a step that declares `on_empty` apply to a judge step, each as written today in section Select step, "Declaration": the task's post-admission OCR is no comparison (a run would otherwise have two sources for its key; the paragraph "A step that declares `on_empty` is admitted only when…", today `TaskProgram::validate_on_empty_post_admission`); when the task declares `post_admission_fields`, their `page_ids` include the step's `from` page (the same paragraph and function); and every field the policy reads has a domain the layout gives it (the paragraph "For a step that declares `scan` or `on_empty`…", today `bound_inputs` in `prepare_select_steps`), which the upper bound of step 4 of section "Execution of a judge step" is computed with | `judge post_admission_ocr=comparison`, `judge post_admission_fields=from_page_absent`, `upper_bound <detail>` (the details of the `on_empty` rules, with `judge` in place of `on_empty`) |
 | The task declares `scheduling_outcome`, and the step's state is mapped for both keys: exactly one mapping with that state's effect condition and `judge_result` `judged` lists the `from` page, with key `outcome_key`, and exactly one with `judge_result` `unknown` lists it, with key `unknown_outcome_key` (section "Mapping the two keys"; [README.md](README.md), phases; the outcome coverage check of a task without phases) | `contained_task_outcome_declaration_incomplete`, `task_phases_outcome_incomplete` |
 | No member an input uses, and every other member of the operation as the table "Members of a judge step" below says | as that table says; mostly `judge <member>=declared` |
-| The step is a terminal: the static walk ends there. It is neither the designated operation nor a member of a designated effect set, since it has no effect | `judge designated=declared` |
+| The step is a terminal: the static walk ends there (paragraph "The static walks" below). It is neither the designated operation nor a member of a designated effect set, since it has no effect | `judge designated=declared` |
 | A package with a judge step is no prerequisite or return-home layer, as a package with an `on_empty` step is not: an early end on the step's page would leave the dependent package short of its entry page | `contained_task_prerequisite_incompatible`, `reason=judge_end` |
 
 The declaration gate refuses the structure with `resource_declaration_invalid` at the pointer;
@@ -1177,6 +1177,35 @@ member gives the refusal shown, the first one in this order:
 | `threshold`, `method`, `mask`, `maskRange`, `rect_move`, `maa_task`, `maa_task_id` | refused by the gate's existing rule: only beside `verify_template`, which a judge refuses | `UnconsumedField` at the member |
 | `destructive` | refused, as on every operation | `UnconsumedField` at the member |
 | `purpose`, `provenance`, `verified_live`, `effect` (the string member, not an effect), `timeout_ms`, `consumes`, `produces` | apply with their existing meaning: the gate checks their types and the kernel reads none of them; `purpose`, `consumes` and `produces` go to the step's primitive as for every operation (section "Derived documents of a judge step" below) | as for every operation |
+
+**The static walks.** What they do today, read in the code on main `7910349a`: no rule refuses a
+judge step as an end in the middle of a stage, because no walk knows the step; the declaration
+gate refuses `judge` itself first (`UnknownField`, Status above). Were a judge step handed to
+them unchanged, the phased route's walk, `validate_phased_route_from`
+(`crates/actingcommand-contract/src/taskflow.rs`), would take it as an ordinary operation of its
+stage: no keyed end (`TaskPhaseOperation::keyed_ends` knows `on_empty`, a keyed `on_max_runs`, a
+keyed `on_guard_refused` and a wait step's `on_timeout`), and one destination, its `to`, which is
+its `from`. That destination leads back to the state the walk is in, so the path adds nothing
+there: the judge's end is no terminal, its two mappings are not checked, and a route whose only
+end is a judge step is refused `task_phases_unreachable` (no terminal); where the page is a
+target or an end page of the stage, the destination would even count as the stage's advance or
+an end page. The page graph's coverage check, `validate_scheduling_outcome_coverage`
+(`crates/execution-kernel/src/contained_task.rs`), likewise takes it as an edge to its own page.
+S168-5b changes them:
+
+- `TaskPhaseOperation` carries the judge's two keys; its two builders fill them,
+  `validate_phases_bundle` (`crates/pack-containment/src/source/mod.rs`) and
+  `TaskProgram::phase_operations` (`crates/execution-kernel/src/contained_task.rs`).
+- `validate_phased_route_from` takes a judge step's state as a terminal under the state rule of
+  "Mapping the two keys" (`task_phases_outcome_incomplete` otherwise), counts it as a terminal,
+  and follows no destination of it: the run ends there. A judge that declares `when` may be
+  withdrawn, so the page's next candidate is followed too, as after every such candidate.
+- `validate_scheduling_outcome_coverage` does the same in a page graph
+  (`contained_task_outcome_declaration_incomplete`).
+- Every other terminal is mapped among the mappings without `judge_result` ("Which ends"), so
+  each mapping count of one (`keyed_terminal_holds`, `end_page_terminal` and the last stage's
+  target check in `validate_phased_route_from`; the coverage check's terminal count and
+  `keyed_end_coverage`) counts only the mappings without `judge_result`.
 
 ### Execution of a judge step
 
