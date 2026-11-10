@@ -405,7 +405,12 @@ rows after its own entry's `where`. A key held by several lists counts once: it 
 union, looked up once.
 
 **One read.** The value does not depend on the candidate: the evaluator reads each distinct
-reference once per evaluation, in this order.
+reference once per evaluation. Two references are the same reference when their canonical forms
+are equal; any difference, the order of `lists` included, makes two. It reads them after the
+up-front check of the record lists passed and before it assesses any candidate (so also with
+zero candidates), in the order in which they first appear in the document: the gates in order,
+each predicate depth first and its left side before its right, then the scoring terms in order.
+Each read runs these steps:
 
 1. The lists. A listed list that is not usable as section "Record lists" defines it (missing,
    expired, stale, below its floor, of another type or malformed) makes the read Unknown with
@@ -463,10 +468,12 @@ for a table read: missing data never stands in for a value. A list maximum that 
 `drop_candidate` it drops the candidate, `unknown_dropped` with the read's reason; under
 `abort_evaluation` the evaluation is `unknown`, with that reason and the rule. Such a drop is no
 static table drop (section "Tables and `table`": only a `table` read's steps 3 to 5 make one, and
-the lists are instance data), so a step that counts unknown instances counts it. A tie-break key cannot read it (it is
-the same for every candidate), nor can a `fallback_column` name it; both are `type_mismatch`
-validation errors. A document holds at most 32 list maxima, each over at most 16 lists; a 33rd
-is a validation error.
+the lists are instance data), so a step that counts unknown instances counts it. A tie-break key
+cannot read it (it is the same for every candidate), nor can a `fallback_column` name it; both
+are `type_mismatch` validation errors. A document holds at most 32 list maxima, each over at
+most 16 lists; a 33rd is a validation error. The 32 count distinct references (the same
+reference, as "One read" defines it, counts once however often it occurs), since each is read
+once and adds one reason.
 
 **Several lists.** One reference reads every list it names, so a value is compared with the
 largest over a list split by kind of member (one list per kind) by one `integer_compare` against
@@ -482,7 +489,12 @@ against the 32.
 is in the file and of type `integer`, else `table_mismatch` (`column_absent`, `column_type`).
 
 **Audit.** Each reference read adds one reason to the decision's reason chain,
-`selection_table_list_max` (info), with `table_id`, `table_column` (the `value_column`),
+`selection_table_list_max` (info), where the read happens: after the reasons the chain opens
+with (both hashes and the declared requirement, section "Decision") and before any reason of a
+candidate's assessment (an abort's included) and the outcome's reasons, one per distinct
+reference in the order of the reads ("One read"). A pin that used its `otherwise` adds its
+`term_fallback_used` just before its read's reason. An evaluation the up-front check ends adds
+none. The reason carries `table_id`, `table_column` (the `value_column`),
 `fact_keys` (the lists it read, in the order of `lists`: a list value of the catalog's
 `list<token>` type, at most 16 items, so never cut), `count` (the number of distinct keys of the
 union) and either `maximum` with `maximum_identity` (the value and the smallest key, in byte
@@ -568,8 +580,8 @@ keys 16; lookup entries 512 per transform; enumerated members 1024, the largest
 business identity domain a pack may declare; record-list columns 63 per list;
 predicate depth 16 and predicate nodes 512 per gate, matching the scheduling
 predicate limits; identifiers, fact keys, and outcome keys 128 bytes; one
-document 512 KiB; list maxima 32 per document and lists 16 per list maximum (Workflow #428
-S168-5a).
+document 512 KiB; list maxima 32 distinct references per document and lists 16 per list
+maximum (Workflow #428 S168-5a).
 
 ## Scheduling consumer
 

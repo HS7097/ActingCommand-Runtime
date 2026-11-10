@@ -8827,8 +8827,9 @@ S168-5a, 9 tests, on tables loaded with `LoadedTable::load` and fake snapshots:
   evaluation is `unknown`; never 0.
 - `table_list_max_validation`: a `boolean` or `enum_string` `value_column`, an undeclared list or
   table, empty `lists`, a 17th list, a repeated `fact_key`, a substitution, a tie-break key, a
-  `fallback_column` and a 33rd reference are validation errors; `evaluate_collect` and the
-  catalog compile refuse a document that uses the source.
+  `fallback_column` and a 33rd distinct reference are validation errors, while 32 distinct
+  references that occur more than 32 times are not; `evaluate_collect` and the catalog compile
+  refuse a document that uses the source.
 - `table_list_max_input_identity`: a changed cell of a contributing row, or a changed row of any
   listed list, moves `input_sha256`; a changed row of an unlisted key does not; a document
   without the source keeps its `policy_sha256` and `input_sha256` byte for byte.
@@ -8895,9 +8896,11 @@ still goes on main only after S168-4 and S168-5a merged ("Order" below).
   detail of the declaration tables; two mappings with the same effect condition, page and
   `judge_result` are refused `invalid_scheduling_outcome_declaration`, field `mapping_overlap`,
   while the pair `judged` and `unknown` on one condition and page is admitted.
-- `judge_record_reader_rules`: the ledger reader takes `judge_only` with 0 or 2 selected and
-  refuses it with `multi_select`, a v2 projection, no `unknown_check` or `outranked_possible`; a
-  reader of `ledger` 7 refuses the record (`corrupt_ledger_record`).
+- `judge_record_reader_rules`: the ledger reader takes `judge_only` with 0 or 2 selected, and an
+  `unknown` record whose check counts 2 kept slots with `blocking` `none`; it refuses it with
+  `multi_select`, a v2 projection, no `unknown_check`, `outranked_possible`, or a `selected` or
+  `empty` record with `blocking` `none` and `unknown_instances` above 0; a reader of `ledger` 7
+  refuses the record (`corrupt_ledger_record`).
 
 **Order.** S168-4 and S168-5a go side by side: S168-5a depends on S168-0 only (its tests use
 fake snapshots). They ship in one Runtime release, which may ship at any time; the second of the
@@ -8935,7 +8938,7 @@ a console whose `ledger` range holds 8, which is UI-L1's console.
   once (the coordinator's ruling R1 after the review, work order
   `rd-1110/brief-s168-contracts-fix1.md`; the first work order had one list per reference). The
   holdings split into 8 lists (Q-5) over 9 domains (Q-2) would otherwise take at least 48
-  references; a document holds at most 32 list maxima. Any listed list that is not usable makes
+  references; a document holds at most 32 distinct list maxima. Any listed list that is not usable makes
   the reference Unknown with its reason; `empty` is read only when every list is usable and no
   key of the union is of the class ([selection-policy.md](selection-policy.md), "Table maximum
   over a list").
@@ -8988,7 +8991,7 @@ a console whose `ledger` range holds 8, which is UI-L1's console.
 | S168C-2 | `fact.published` of `inventory.list.<name>`: one `record_list` record, `source_detector` `list_reading:` | existing record, new key prefix | S168-4 | runtime-host | §4 below; tagged as every instance key |
 | S168C-3 | `reading_problem` tokens `list_position_unread`, `list_duplicate_key`, `list_rows_exceeded`; the stage `read_list`; the optional value `count` (the catalog's integer key) on `contained_task_resource_reading_unresolved` | outcome vocabularies; an optional value of an existing code | S168-4 | execution-kernel | values the ledger reader only spells; S168-4 adds `count` to the code's `values` as `optional`: the entry is `review: pending`, and the outcome-code writing spec v2.2 (Workflow `rd-1008/errors/outcome-code-writing-spec.md`) lets a pending entry change its keys (§11) and forbids only a required key on a settled one (§2, rule 5) |
 | S168C-4 | `list_reading_key_reserved` (non-fatal request error, `fact_key`) | outcome code | S168-4 | runtime-host | from every origin |
-| S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 list maxima per document and 16 lists per list maximum |
+| S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 list maxima per document, counted as distinct references, and 16 lists per list maximum |
 | S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_keys`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `fact_keys` (`list<token>`, the lists read in the order of `lists`, at most 16 items), `maximum`, `maximum_identity` | outcome code and keys | S168-5a | selection-policy | a decision reason, no record member; `count` is the number of distinct keys of the union |
 | S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key, unknown_outcome_key}`, all four required, the two keys distinct | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only; ends with `outcome_key` (a known evaluation, an unknown check that does not block, no candidate `unknown_dropped`) or `unknown_outcome_key` |
 | S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, `ledger` 8 (#434's, shared) | S168-5b | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |

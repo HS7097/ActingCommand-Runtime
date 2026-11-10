@@ -779,6 +779,25 @@ The rows are account data: they stay in the instance fact store and the ledger, 
 path writes them anywhere else. Offline, `package dry-run` reads no list and reports the task's
 post-admission reading as `pending_real_execution`, as for a task with marks.
 
+### Derived documents
+
+As [selection-graph.md](selection-graph.md), "Select step", "Derived documents" says for a select
+step, with the list reading's own effect:
+
+- **Navigation edge and page operation:** none. The step's moves are inputs a route never
+  passes and its `to` is its `from`, so the source build skips it as it skips a select or wait
+  step.
+- **Primitive:** the shape of a click primitive with `click: null` and the declared `guard`, with
+  `purpose`, `consumes` and `produces` as for every operation, and the `read_list` object added as
+  declared, as a select step's primitive adds `select`. The primitives stay at schema `0.6`.
+- **Sealed task** (`canonical_task`): keeps `read_list` and the declared guard (its page ID
+  canonicalized as for every guard); no click is inferred.
+- **Operation index:** unchanged.
+- **`task.effect_completed`:** none. Each scan move is a `task.effect_intent` of the step's action
+  followed by its input and by no `task.effect_completed`, as a scan's moves are
+  ([selection-graph.md](selection-graph.md), "Select over a scan"); with no tap, the step has no
+  `task.effect_completed` of its own.
+
 ## Never written
 
 `produces` amounts, effective weights, gaps and any other amount the policy computes are never

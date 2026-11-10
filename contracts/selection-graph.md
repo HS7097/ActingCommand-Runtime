@@ -980,8 +980,11 @@ viewport, a single-frame select's frame) and, for a phased task, `phase` with
 page and finishes it with `executed_steps` including the step, `final_page` that page and
 `selected_scheduling_outcome` the `on_empty` key. The host derives the scheduling disposition
 from that last `StepFinished` as for any end: the mapping of the run's effect condition that
-lists the page, whose key it checks against the kernel's. This is the only normal end in the
-middle of a stage; an `empty` decision without `on_empty` still fails. The admission of
+lists the page, whose key it checks against the kernel's. Of a select step's results this is the
+only normal end in the middle of a stage; a judge step ends the run there with every result
+(below), and so do the other keyed ends ([resource-declarations.md](resource-declarations.md),
+"Per-run operation caps and keyed guard refusals", "Wait steps and wait pages"). An `empty`
+decision without `on_empty` still fails. The admission of
 `on_empty`, including the route's terminal and the prerequisite and return-home refusal
 `select_on_empty`, is in section Declaration.
 
@@ -1132,7 +1135,7 @@ The names are neutral examples:
 | Rule | Refusal |
 | --- | --- |
 | `judge` is an effect: exactly one of `click`, `application`, `select`, `wait`, `read_list` and `judge`; task schema `0.9` only; a page-graph task | an older schema: `UnconsumedField` at `/operations/<i>/judge`; `linear_steps`: `contained_task_linear_invalid`, `reason=judge` |
-| `judge` holds `layout_id`, `policy` (`{path}`, a safe task-local `policies/<name>.json`), `outcome_key` and `unknown_outcome_key`, all strings, all four required | `MissingField`, `InvalidType` or `UnknownField` at the member |
+| `judge` holds `layout_id`, `policy`, `outcome_key` and `unknown_outcome_key`, all four required: `layout_id`, `outcome_key` and `unknown_outcome_key` strings, `policy` the object `{path}` with `path` a string, a safe task-local `policies/<name>.json` | `MissingField`, `InvalidType` or `UnknownField` at the member; a `path` outside `policies/<name>.json`: `InvalidValue` at `…/judge/policy/path` |
 | `outcome_key` and `unknown_outcome_key` are distinct | `judge keys=equal` |
 | `to` is the `from` page | `judge to=not_from` |
 | `layout_id` names a `fixed_slots` layout the task declares on the `from` page, whose `unknown_identity` is `reject`: one frame shows every candidate it can hold. A list that scrolls is read by a list reading, never judged on one frame, and a judge declares no `scan` | `judge layout=not_fixed_slots`, `judge scan=declared` |
@@ -1191,7 +1194,12 @@ One judge step runs, with no input:
    the evaluator drops as unknown, with their upper bound computed as there. A static table drop
    is no unknown instance here either, as there (section Tables, "Dropped by the table"): the
    record's unknown check does not count it. For the judge's key it still counts as a candidate
-   that could not be judged ("Which key" below).
+   that could not be judged ("Which key" below). When the evaluation is `unknown` there is no
+   verdict and nothing the evaluator dropped: the check still counts the slots the kernel kept
+   from the evaluator, with their upper bound, as a select over a scan counts its unknown
+   positions when the evaluator aborts (section Select over a scan: "nothing blocks it"), and it
+   never blocks: `blocking` is `none` whatever their count. The run then ends with
+   `unknown_outcome_key` because of the evaluation, not because of the check.
 5. The decision is recorded once, as `task.selection_evaluated` (section Records), with the
    confirmation `judge_only` and `unknown_check`.
 6. The kernel records the step's `StepFinished` with `page_label` its page as recognized on F1
@@ -1225,7 +1233,7 @@ does not count.
 | --- | --- | --- |
 | A decision, `selected` (candidates judged worth) or `empty` (none), in which every candidate was judged: the evaluation is known, the record's unknown check does not block, and no candidate is `unknown_dropped` (each is `ranked` or `gate_rejected`) | verbatim; `unknown_check.blocking` `none` | Completed with `outcome_key` |
 | The same with candidates that could not be judged, the named gap: unknown instances (the unknown check blocks), or a candidate `unknown_dropped`, a static table drop included (the check does not block on that alone) | verbatim, with every verdict it has; `blocking` `unknown_instances` and `unknown_instances` their count when there are unknown instances, else `blocking` `none` | Completed with `unknown_outcome_key` |
-| `unknown`: the evaluator ended the evaluation (an unusable record list, an `abort_evaluation` rule) | `unknown`, no verdict, its reason and rule | Completed with `unknown_outcome_key` |
+| `unknown`: the evaluator ended the evaluation (an unusable record list, an `abort_evaluation` rule) | `unknown`, no verdict, its reason and rule; `unknown_check.blocking` `none`, `unknown_instances` the slots the kernel kept from the evaluator (step 4) | Completed with `unknown_outcome_key` |
 
 Neither end makes any input, and the record is the same whichever key ends the run. The run's
 scheduling outcome tells a judgment from "could not judge": `outcome_key` for a judgment of every
@@ -1320,6 +1328,23 @@ Three layers, each sufficient on its own:
 So a judge step that ran is followed in the ledger by no `task.effect_intent`, input or
 `task.effect_completed` of its action. The tests of [v012-register.md](v012-register.md) §1.291
 pin all three layers.
+
+### Derived documents of a judge step
+
+As section "Derived documents" says for a select step, with the judge's own effect:
+
+- **Navigation edge and page operation:** none. A judge step makes no tap and its `to` is its
+  `from`, so the source build skips it as it skips a select or wait step, and no route passes
+  one.
+- **Primitive:** the shape of a click primitive with `click: null` and `guard: null` (it declares
+  no guard), with `purpose`, `consumes` and `produces` as for every operation, and the `judge`
+  object added as declared, as a select step's primitive adds `select`. The primitives stay at
+  schema `0.6`.
+- **Sealed task** (`canonical_task`): keeps `judge` as declared; no click and no guard are
+  inferred.
+- **Operation index:** unchanged.
+- **`task.effect_completed`:** none, and no `task.effect_intent` (section "Execution of a judge
+  step").
 
 ### Account data and offline
 
@@ -1507,9 +1532,11 @@ A record is checked when it is written and when it is read:
   `shift_px` is at most 64; neither the decision hash nor the shift is recomputed;
 - `judge_only` (Workflow #428 S168-5b; planned `ledger` revision 8) belongs to a record without
   `multi_select` whose projection is v1 of a `fixed_slots` layout and which carries
-  `unknown_check` with `blocking` `none` or `unknown_instances` (`none` exactly when
-  `unknown_instances` is 0; never `outranked_possible`); its outcome is `selected`, `empty` or
-  `unknown`, and `selected` holds exactly the `ranked` verdicts, 0 to 64 of them, in rank order;
+  `unknown_check` with `blocking` `none` or `unknown_instances` (with a `selected` or `empty`
+  outcome, `none` exactly when `unknown_instances` is 0; with an `unknown` outcome always `none`,
+  whatever `unknown_instances` counts; never `outranked_possible`); its outcome is `selected`,
+  `empty` or `unknown`, and `selected` holds exactly the `ranked` verdicts, 0 to 64 of them, in
+  rank order;
   any other confirmation never comes with a judge step's decision;
 - reason codes and confirmation codes are tokens, reason details text of at most 1024 bytes,
   the decision chain holds 1–128 reasons, as for a policy dispatch; labels and IDs are at most
