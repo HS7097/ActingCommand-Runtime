@@ -43,7 +43,9 @@
 
 use crate::agent_channel::{self, Answer as Answered};
 use crate::cli_line::{self, Exit};
-use crate::codes::{ActingctlCode, ArgumentProblem, InstallLocation, InstallRefusal};
+use crate::codes::{
+    ActingctlCode, ArgumentProblem, InstallCaveat, InstallLocation, InstallRefusal,
+};
 use crate::install::deploy::{self, HoldStart};
 use crate::install::files;
 use crate::install::hold::{HoldInputs, OwnedHold};
@@ -324,8 +326,9 @@ fn line(context: &Context<'_>, answer: Answer) -> Exit {
     install::print(module_answer(context, answer))
 }
 
-fn module_answer(context: &Context<'_>, mut answer: Answer) -> Answer {
-    translate_next(context, &mut answer.members);
+pub(crate) fn module_answer(context: &Context<'_>, mut answer: Answer) -> Answer {
+    let notes = translate_next(context, &mut answer.members);
+    answer.outcome = plan::with_notes(answer.outcome, &notes);
     if answer.text.is_some() {
         answer.text = Some(USAGE);
     }
@@ -337,10 +340,14 @@ fn module_answer(context: &Context<'_>, mut answer: Answer) -> Answer {
 /// <id>`, `install status` is `op status`. Workflow #434 LAB-3 fix 1: a `release-hold` of a hold
 /// the module does not own (an `actingctl install` operation's, which `op status` or `op resume`
 /// may answer) is never suggested: the module would refuse it. Fix 2: beside the module's own
-/// `release-hold <r>` of a hold it owns, the ways out that work today ([`ways_out`]).
-fn translate_next(context: &Context<'_>, members: &mut Map<String, Value>) {
+/// `release-hold <r>` of a hold it owns, the ways out that work today ([`ways_out`]). Fix 3: a hold
+/// whose ownership cannot be read (a reason that does not parse, a root or an operations folder
+/// that cannot be read) is not suggested either, and is not dropped silently: the notes returned,
+/// one per such hold, say so ([`ownership_unconfirmed`]); the caller links them to its answer.
+fn translate_next(context: &Context<'_>, members: &mut Map<String, Value>) -> Vec<Outcome> {
+    let mut notes = Vec::new();
     let Some(Value::Object(next)) = members.get_mut("next") else {
-        return;
+        return notes;
     };
     for form in next.values_mut() {
         if let Some(words) = form.as_array()
@@ -351,13 +358,24 @@ fn translate_next(context: &Context<'_>, members: &mut Map<String, Value>) {
     }
     let mut owned = Vec::new();
     next.retain(|_, form| match form.as_array().map(Vec::as_slice) {
-        Some([Value::String(verb), Value::String(reason)]) if verb == "release-hold" => {
-            match own_hold(context, reason) {
-                Some(found) => {
-                    owned.push(found);
+        Some([Value::String(verb), Value::String(given)]) if verb == "release-hold" => {
+            let reason = match SchedulingPauseReason::new(given.as_str()) {
+                Ok(reason) => reason,
+                Err(error) => {
+                    notes.push(ownership_unconfirmed(None, Outcome::new(error.code())));
+                    return false;
+                }
+            };
+            match own_hold(context, &reason) {
+                Ok(Some((paths, hold))) => {
+                    owned.push((paths, reason, hold));
                     true
                 }
-                None => false,
+                Ok(None) => false,
+                Err(cause) => {
+                    notes.push(ownership_unconfirmed(Some(&reason), cause));
+                    false
+                }
             }
         }
         _ => true,
@@ -368,20 +386,36 @@ fn translate_next(context: &Context<'_>, members: &mut Map<String, Value>) {
     if next.is_empty() {
         members.remove("next");
     }
+    notes
 }
 
 /// Workflow #434 LAB-3 fix 1: the hold `reason` if it is the module's own in the root: one of its
 /// journals recorded it in its pause step (`install::deploy::owned_hold`), with the root's paths
-/// and what the hold paused. A reason, a root or an operations folder that cannot be read owns
-/// nothing.
+/// and what the hold paused; `None` when no journal of the module recorded it. Fix 3: a root or an
+/// operations folder that cannot be read is the failure, not "not owned".
 fn own_hold(
     context: &Context<'_>,
-    reason: &str,
-) -> Option<(Paths, SchedulingPauseReason, OwnedHold)> {
-    let reason = SchedulingPauseReason::new(reason).ok()?;
-    let paths = Paths::resolve(&context.location.root).ok()?;
-    let owned = deploy::owned_hold(context.host, &paths, &reason, None).ok()??;
-    Some((paths, reason, owned))
+    reason: &SchedulingPauseReason,
+) -> Result<Option<(Paths, OwnedHold)>, Outcome> {
+    let paths = Paths::resolve(&context.location.root)?;
+    let owned = deploy::owned_hold(context.host, &paths, reason, None)?;
+    Ok(owned.map(|owned| (paths, owned)))
+}
+
+/// Workflow #434 LAB-3 fix 3: the note of a `release-hold` left out of `next` because whether the
+/// hold is the module's own could not be read: `install_caveat_noted` of `install_release_hold`
+/// with `install_caveat` `hold_ownership_unconfirmed`, the hold's reason as `hold_reason` when it
+/// parses, and the failure that kept it from being read as its cause.
+fn ownership_unconfirmed(reason: Option<&SchedulingPauseReason>, cause: Outcome) -> Outcome {
+    let note = install::caveat(
+        InstallLocation::ReleaseHold,
+        InstallCaveat::HoldOwnershipUnconfirmed,
+    );
+    let note = match reason {
+        Some(reason) => note.hold_reason(reason.as_str().to_owned()),
+        None => note,
+    };
+    note.caused_by(cause)
 }
 
 /// Workflow #434 LAB-3 fix 2 (install-cli.md, "The Lab's rescue module", "Ways out of a kept
@@ -594,6 +628,13 @@ fn step(name: &str, outcome: &Outcome, members: Value) -> Value {
     })
 }
 
+/// A finished step of a composite from an installer answer, in the module's words (fix 3: its
+/// outcome carries [`module_answer`]'s notes, its members the module's `next`).
+fn answer_step(context: &Context<'_>, name: &str, answer: &Answer) -> Value {
+    let translated = module_answer(context, answer.clone());
+    step(name, &translated.outcome, Value::Object(translated.members))
+}
+
 /// A composite's answer: its steps so far and the top outcome; a step that refused or failed is
 /// the top, its members (what stays, `next`) beside the steps.
 fn composite_exit(
@@ -603,7 +644,8 @@ fn composite_exit(
     mut members: Map<String, Value>,
 ) -> Exit {
     members.insert("steps".to_owned(), Value::Array(steps));
-    translate_next(context, &mut members);
+    let notes = translate_next(context, &mut members);
+    let top = plan::with_notes(top, &notes);
     if top.category() > Category::Warning {
         return cli_line::receipt(members, &top, true);
     }
@@ -842,11 +884,7 @@ fn alive_and_release(
         if stops(&released) {
             return Err(stopped(context, steps, released));
         }
-        steps.push(step(
-            "release",
-            &released.outcome,
-            Value::Object(module_answer(context, released.clone()).members),
-        ));
+        steps.push(answer_step(context, "release", &released));
     }
     Ok(steps)
 }
@@ -1055,11 +1093,7 @@ fn applied_composite(
             Err(exit) => return exit,
         };
     } else {
-        steps.push(step(
-            "apply",
-            &applied.outcome,
-            Value::Object(module_answer(context, applied.clone()).members),
-        ));
+        steps.push(answer_step(context, "apply", &applied));
     }
     let done = install::done(operation)
         .commit_sha(commit.to_owned())
@@ -1222,11 +1256,7 @@ fn config_swap(context: &Context<'_>, params: &Map<String, Value>, restore: bool
         if stops(&swapped) {
             return Ok(stopped(context, steps, swapped));
         }
-        steps.push(step(
-            "swap",
-            &swapped.outcome,
-            Value::Object(module_answer(context, swapped.clone()).members),
-        ));
+        steps.push(answer_step(context, "swap", &swapped));
         if live {
             steps = match alive_and_release(context, &loaded, command, &swapped, steps) {
                 Ok(steps) => steps,
@@ -1360,11 +1390,7 @@ fn place(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
         if stops(&placed) {
             return Ok(stopped(context, steps, placed));
         }
-        steps.push(step(
-            "place",
-            &placed.outcome,
-            Value::Object(module_answer(context, placed.clone()).members),
-        ));
+        steps.push(answer_step(context, "place", &placed));
         // The schedule after the resume: the planner's catalog, and its rows of the held
         // instances.
         let runtime = context.host.runtime();

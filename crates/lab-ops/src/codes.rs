@@ -634,6 +634,11 @@ actingcommand_contract::outcome_vocabulary! {
         // rescue module a guard that fails or is not evaluated is noted, never refused; the guards
         // as `install_guards`.
         GuardFailed => "guard_failed",
+        // Workflow #434 LAB-3 fix 3 (since 0.12.48; contracts/lab-two-entries.md §5): the rescue
+        // module could not read whether a hold is its own (the reason does not parse, the root or
+        // its operations folder cannot be read), so its `next` leaves the `release-hold` out and
+        // the answer says so (`hold_reason` when the reason parses, the failure as the cause).
+        HoldOwnershipUnconfirmed => "hold_ownership_unconfirmed",
     }
 }
 

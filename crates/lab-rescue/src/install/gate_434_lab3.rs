@@ -37,6 +37,10 @@
 //   `rescue_keeps_a_global_pause_and_goes_on` (item 3, fix 1's item 3): a refusal after the
 //   operation paused A hands A back, leaves the other party's pause and says `kept: false` only
 //   because nothing of its own stays paused; a global pause is kept, listed, and the stop goes on.
+// Fix 3 (`brief-lab3-fix3.md`):
+// - `rescue_notes_a_hold_whose_ownership_cannot_be_read` (item 2): a `release-hold` in `next`
+//   whose ownership cannot be read is left out and noted (`hold_ownership_unconfirmed`), one not
+//   owned is left out without a note.
 // The machine is the fake host of `fixture.rs` with its fake Runtime, fake watchdog and fake
 // clock: no device, no sleep; every root is a temporary folder with neutral files.
 
@@ -45,6 +49,7 @@ use super::fixture::{
 };
 use super::host::{Host, RunningImage};
 use crate::agent_channel::Answer as Answered;
+use crate::codes::InstallLocation;
 use crate::rescue::{self, Context};
 use actingcommand_lab_ops::initiator::Initiator;
 use serde_json::{Map, Value, json};
@@ -1303,5 +1308,89 @@ fn place_holds_only_the_bundles_idle_instances() {
     assert_eq!(
         fs::read(bundle.as_path()).expect("bundle.json again"),
         old_bundle
+    );
+}
+
+// Fix 3, item 2 (`brief-lab3-fix3.md`; install-cli.md, "The Lab's rescue module", "Only its own
+// hold"): a `release-hold` in `next` whose hold the module cannot prove its own is left out, and
+// when the cause is a read failure rather than "not owned" the answer says so. On an adopted root
+// a reason no journal of the module recorded is left out without a note; a reason that does not
+// parse, and on a root whose `install\operations` is a file an operations folder that cannot be
+// listed, are left out with the note `install_caveat_noted` (`hold_ownership_unconfirmed`,
+// `install_release_hold`), the read failure as its cause; the answer itself stays a success.
+#[test]
+fn rescue_notes_a_hold_whose_ownership_cannot_be_read() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (readable, _) = prepared(temp.path(), "readable", &host);
+    let unreadable = live_root(temp.path(), "unreadable", &BuildSpec::new(C1));
+    fs::create_dir_all(unreadable.join("install")).expect("the install folder");
+    fs::write(
+        unreadable.join("install").join("operations"),
+        b"a file, not a folder",
+    )
+    .expect("a file where the operations folder goes");
+
+    // The module's line of an installer answer whose `next` names `release-hold <reason>`.
+    let answered = |root: &Path, reason: &str| -> Value {
+        let location = location(root);
+        let context = Context {
+            host: &host,
+            location: &location,
+            initiator: WORD,
+        };
+        let mut answer = super::Answer::new(super::done(InstallLocation::Stop));
+        answer.members.insert(
+            "next".to_owned(),
+            json!({"release_hold": ["install", "release-hold", "--root", word(root), "--reason", reason]}),
+        );
+        super::print(rescue::module_answer(&context, answer))
+            .line
+            .expect("an encoded line")
+    };
+    let noted = |line: &Value| {
+        carries(
+            line,
+            "install_caveat_noted",
+            "install_caveat",
+            &json!("hold_ownership_unconfirmed"),
+        ) && carries(
+            line,
+            "install_caveat_noted",
+            "operation",
+            &json!("install_release_hold"),
+        )
+    };
+
+    // Not owned: left out, nothing noted.
+    let line = answered(&readable, OTHER_STOP);
+    assert_eq!(top_code(&line), "install_command_done", "{line}");
+    assert!(line.get("next").is_none(), "{line}");
+    assert!(!noted(&line), "{line}");
+
+    // A reason that does not parse: left out and noted, the parse failure as the cause.
+    let line = answered(&readable, "Not A Reason");
+    assert_eq!(top_code(&line), "install_command_done", "{line}");
+    assert!(line.get("next").is_none(), "{line}");
+    assert!(noted(&line), "{line}");
+    assert!(
+        line.to_string()
+            .contains("\"invalid_scheduling_pause_reason\""),
+        "{line}"
+    );
+
+    // An operations folder that cannot be listed: left out and noted with the reason, the OS's
+    // failure as the cause.
+    let line = answered(&unreadable, "r1");
+    assert_eq!(top_code(&line), "install_command_done", "{line}");
+    assert!(line.get("next").is_none(), "{line}");
+    assert!(noted(&line), "{line}");
+    assert!(
+        carries(&line, "install_caveat_noted", "hold_reason", &json!("r1")),
+        "{line}"
+    );
+    assert!(
+        carries(&line, "foreign_os_error", "io_op", &json!("read_dir")),
+        "{line}"
     );
 }

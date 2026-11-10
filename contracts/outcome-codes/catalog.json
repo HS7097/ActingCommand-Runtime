@@ -7725,6 +7725,9 @@
         },
         "guard_failed": {
           "description": "In the Lab's rescue module a guard failed or was not evaluated and the operation went on (contracts/lab-two-entries.md section 6: guards report, never refuse); install_guards names the guards, and the answer and the journal keep their rows. actingctl install refuses the same rows with install_refusal guard_failed instead. (Workflow #434 LAB-3, since 0.12.48)"
+        },
+        "hold_ownership_unconfirmed": {
+          "description": "The Lab's rescue module could not read whether a hold is its own (contracts/lab-two-entries.md section 5): the reason does not parse, or the root or its operations folder cannot be read. The answer's next leaves that release-hold out, as for a hold the module does not own, and this note says why; operation is install_release_hold, hold_reason names the reason when it parses, and the read failure is the caused_by link. Nothing is paused or resumed. (Workflow #434 LAB-3 fix 3, since 0.12.48)"
         }
       }
     },

@@ -744,7 +744,11 @@ the rescue face:
   did not pause it is left and named by the same refusal (`left`). Every composite that releases
   (`deploy`, `rollback`, `config replace`, `config restore`, `place`, and an automatic rollback's
   release) follows the same rule, and no answer's `next` names a `release-hold` of a hold the
-  module does not own. `actingctl install release-hold` and `install stop` are unchanged.
+  module does not own. A hold whose ownership the module cannot read (the reason does not parse,
+  the root or its operations folder cannot be read) is left out of `next` all the same, and the
+  answer says so (fix 3): the note `install_caveat_noted` of `install_release_hold` with
+  `install_caveat` `hold_ownership_unconfirmed`, `hold_reason` when the reason parses, the read
+  failure as its cause. `actingctl install release-hold` and `install stop` are unchanged.
 - **Why the reason and the alias, not the revision** (fix 2). A changed owner epoch alone never
   denies the hand-back: the real Runtime's restore does not keep a pause's revision. Every start
   that is not installer-held (the installer's and the module's starts, which run the watchdog's
