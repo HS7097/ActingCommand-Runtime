@@ -33,6 +33,14 @@
 //! start` in `next`. Every answer reports the runs its drain cut (`runs_not_continued`) and the
 //! idle wakes the Runtime derives again (`idle_wakes_rederived`), never silently (review S2 M6).
 //! Every step is journalled and resumable (`install resume`); nothing is killed or deleted.
+//!
+//! Workflow #434 LAB-3 fix 1: with the rescue face ([`super::Face::Rescue`]) a hold refuses a
+//! reason an instance shows (`hold_not_owned`), keeps a global pause, records the pauses it set
+//! (`own_pauses`), releases only those ([`owned_hold`], [`hold::release_own`]), and hands them
+//! back at once on a refusal before any change on disk ([`hand_back_own`]); `actingctl install`
+//! is unchanged. Fix 2: what is the module's own is its journal's pause step (the reason and the
+//! instances it paused), in any owner epoch, since the Runtime's restore numbers the pauses anew;
+//! an answer whose hold stays says `kept: true` and names in `next` the ways out that work today.
 
 use super::guards;
 use super::hold::{self, HoldInputs, HoldReport, PauseIntent, ReleaseEvidence, ReleaseIntent};
@@ -67,7 +75,7 @@ pub(crate) enum StepEnd {
 
 /// The members of an answer whose hold stays: `next` names `release-hold` with its reason, and
 /// `install start` when the Runtime is down (closed, or a start that failed: review S2 M4).
-fn hold_kept(
+pub(crate) fn hold_kept(
     paths: &Paths,
     reason: Option<&SchedulingPauseReason>,
     runtime_down: bool,
@@ -174,6 +182,8 @@ pub(crate) fn step(
         StepKind::PostCheck => post_check(operation, n, loaded, notes),
         StepKind::ReleaseHold => release_hold(operation, n, loaded),
         StepKind::ReverseFiles => reverse_files(operation, n, loaded, notes),
+        // Workflow #434 LAB-3: the rescue module's `place`.
+        StepKind::PackItem => super::place::item_step(operation, n, loaded, notes),
         _ => Err(state_invalid(
             operation.journal().kind.location(),
             operation.paths().journal(operation.id()),
@@ -206,6 +216,9 @@ fn pause(
         .and_then(|evidence| evidence.get("deferred"))
         .cloned();
     let drained = hold::drained_of(step.evidence.as_ref());
+    // Workflow #434 LAB-3 fix 1: the rescue module keeps a global pause and records the pauses it
+    // set (`own_pauses`), the only ones its release hands back.
+    let rescue = super::Face::of(operation.journal()).rescue();
     operation.start(n)?;
     let host = operation.host();
     match hold::run_pause(
@@ -216,30 +229,48 @@ fn pause(
         &s0_pauses,
         drained,
         loaded.settings.stop_busy_wait_ms,
+        rescue,
     ) {
-        Ok(drained) => Ok(StepEnd::Done(Some(json!({
-            "deferred": deferred,
-            "drained": hold::drained_value(&drained),
-            "held": intent.instances,
-            "known": intent.known,
-            "runs_stopped_at_checkpoint": hold::runs_cut(&drained),
-        })))),
+        Ok((drained, seen)) => {
+            let mut evidence = json!({
+                "deferred": deferred,
+                "drained": hold::drained_value(&drained),
+                "held": intent.instances,
+                "known": intent.known,
+                "runs_stopped_at_checkpoint": hold::runs_cut(&drained),
+            });
+            if rescue && let Some(seen) = &seen {
+                evidence[hold::OWN_PAUSES] =
+                    hold::OwnPauses::seen(seen, &intent.reason, &intent.instances).value();
+            }
+            Ok(StepEnd::Done(Some(evidence)))
+        }
         Err(hold::PauseRefused { refusal, drained }) => {
             // The runs the drains before the refusal cut are journalled and reported (re-review
             // S2 N3).
             let cut = hold::runs_cut(&drained);
-            operation.progress(
-                n,
-                json!({
-                    "deferred": deferred,
-                    "drained": hold::drained_value(&drained),
-                    "held": intent.instances,
-                    "known": intent.known,
-                    "runs_stopped_at_checkpoint": cut,
-                }),
-            )?;
+            let mut evidence = json!({
+                "deferred": deferred,
+                "drained": hold::drained_value(&drained),
+                "held": intent.instances,
+                "known": intent.known,
+                "runs_stopped_at_checkpoint": cut,
+            });
+            // Workflow #434 LAB-3 fix 1: the pauses this step set before it was refused are the
+            // rescue module's own, which it hands back at once.
+            if rescue && let Ok(Some(seen)) = host.runtime().status(&loaded.state_root) {
+                evidence[hold::OWN_PAUSES] =
+                    hold::OwnPauses::seen(&seen, &intent.reason, &intent.instances).value();
+            }
+            operation.progress(n, evidence)?;
             if cut > 0 {
                 notes.push(super::caveat(command, InstallCaveat::RunsNotContinued).count(cut));
+            }
+            if rescue {
+                return Ok(StepEnd::Ends(
+                    refusal,
+                    hand_back_own(operation, loaded, notes, false)?,
+                ));
             }
             // Nothing changed yet (review S2 M4): the instances this hold paused are released
             // again, and the command still ends refused. A release that fails keeps the hold.
@@ -348,11 +379,14 @@ fn close(
         Err(refusal) => {
             // `request-shutdown` sent and its wait passed: the Runtime may still go down, so
             // `next` names `install start` too, which refuses a Runtime still running (re-review
-            // S2 N1).
-            return Ok(StepEnd::Ends(
-                refusal,
-                hold_kept(&paths, reason.as_ref(), true),
-            ));
+            // S2 N1). Workflow #434 LAB-3 fix 1: nothing changed on disk yet, so the rescue module
+            // hands its own pauses back while the Runtime still answers.
+            let members = if super::Face::of(operation.journal()).rescue() {
+                hand_back_own(operation, loaded, notes, true)?
+            } else {
+                hold_kept(&paths, reason.as_ref(), true)
+            };
+            return Ok(StepEnd::Ends(refusal, members));
         }
     };
     notes.extend(caveat);
@@ -448,10 +482,29 @@ fn start(
         .into_iter()
         .filter(|ack| !held || ack != InstallGuard::Memory.as_str())
         .collect::<Vec<_>>();
+    // Workflow #434 LAB-3 (contracts/lab-two-entries.md §6, open point 4): in the rescue module
+    // the start still waits for memory, then goes on and reports the row.
+    let report = super::Face::of(operation.journal()).rescue();
     let launched = {
         let mut progress = |value: &Value| operation.progress(n, value.clone());
-        launch::start(host, &paths, loaded, command, &commit, &acks, &mut progress)
+        launch::start(
+            host,
+            &paths,
+            loaded,
+            command,
+            &commit,
+            &launch::Guarding {
+                acked: &acks,
+                report,
+            },
+            &mut progress,
+        )
     };
+    if let Ok(launched) = &launched
+        && let Some(memory) = &launched.memory_noted
+    {
+        operation.add_guard(memory.clone())?;
+    }
     let launched = match launched {
         Ok(launched) => launched,
         Err(refusal) => {
@@ -503,6 +556,10 @@ fn post_check(
     let command = operation.journal().kind.location();
     let paths = operation.paths().clone();
     let step = operation.journal().steps[n - 1].clone();
+    // Workflow #434 LAB-3: the checks after a placement, not after a start.
+    if super::place::is_place_check(&step.intent) {
+        return super::place::check_step(operation, n, loaded, notes);
+    }
     let rollback = of_rollback(&step.intent);
     let journal = operation.journal().clone();
     let started = start_before(operation, n).unwrap_or(Value::Null);
@@ -873,6 +930,122 @@ fn deferred_for(
     (None, BTreeMap::new())
 }
 
+/// Workflow #434 LAB-3 fix 1 and 2 (contracts/lab-two-entries.md §5: the rescue module hands back
+/// only its own hold): the hold `reason` as the rescue module's journals in the root record it
+/// (those with `initiator`; `current`, when given, stands for its journal on disk): `None` unless
+/// the pause step of such a journal took that reason; else the instances those pause steps paused
+/// (the pauses the Runtime accepted, `drained`, and the instances their `own_pauses` record shows
+/// paused with the reason, each one of the step's intent) and the instances they were to pause.
+/// No owner epoch and no revision is read (fix 2: the Runtime's restore numbers the pauses anew).
+/// A journal that cannot be read counts for nothing, as for every reader that goes through the
+/// journals; the operations folder that cannot be listed is the OS's failure.
+pub(crate) fn owned_hold(
+    host: &dyn Host,
+    paths: &Paths,
+    reason: &SchedulingPauseReason,
+    current: Option<&journal::Journal>,
+) -> Result<Option<hold::OwnedHold>, Outcome> {
+    let mut journals = Vec::new();
+    for id in journal::operation_ids(paths)? {
+        match current {
+            Some(current) if current.operation_id == id => journals.push(current.clone()),
+            _ => {
+                if let Ok(other) = Operation::load(host, paths, &id, InstallLocation::ReleaseHold) {
+                    journals.push(other.journal().clone());
+                }
+            }
+        }
+    }
+    if let Some(current) = current
+        && !journals
+            .iter()
+            .any(|journal| journal.operation_id == current.operation_id)
+    {
+        journals.push(current.clone());
+    }
+    let mut owned = None::<hold::OwnedHold>;
+    for journal in journals
+        .iter()
+        .filter(|journal| journal.initiator.is_some())
+    {
+        for step in journal
+            .steps
+            .iter()
+            .filter(|step| step.kind == StepKind::Pause)
+        {
+            let Some(intent) =
+                PauseIntent::of(&step.intent).filter(|intent| &intent.reason == reason)
+            else {
+                continue;
+            };
+            let recorded = hold::OwnPauses::of(step.evidence.as_ref())
+                .filter(|record| &record.reason == reason)
+                .map(|record| record.revisions.into_keys().collect::<Vec<_>>())
+                .unwrap_or_default();
+            let paused = hold::drained_of(step.evidence.as_ref())
+                .into_keys()
+                .chain(recorded)
+                .filter(|alias| intent.instances.contains(alias));
+            let found = owned.get_or_insert_with(hold::OwnedHold::default);
+            found.paused.extend(paused);
+            found.intended.extend(intent.instances);
+        }
+    }
+    Ok(owned)
+}
+
+/// Workflow #434 LAB-3 fix 1 and 3 (contracts/lab-two-entries.md §5, §6): a rescue operation
+/// refused after it paused instances and before anything changed on disk leaves no hold behind:
+/// it hands its own pauses back at once ([`hold::release_own`]) and says so (`hold` `kept: false`
+/// with the release's `resumed` and `left`; an instance left, which shows the hold's reason though
+/// the pause step did not pause it, adds the note `hold_not_owned`). A hand-back that fails keeps
+/// the hold (`kept: true`): the failure is a note and `next` names the operation's own
+/// `release-hold` (the rescue module adds the other ways out). `runtime_down` adds `install
+/// start` to `next` (the close was asked for).
+pub(crate) fn hand_back_own(
+    operation: &Operation<'_>,
+    loaded: &Loaded,
+    notes: &mut Vec<Outcome>,
+    runtime_down: bool,
+) -> Result<Map<String, Value>, Outcome> {
+    let command = operation.journal().kind.location();
+    let paths = operation.paths().clone();
+    let Some(reason) = hold_of(operation.journal()) else {
+        return Ok(hold_kept(&paths, None, runtime_down));
+    };
+    let owned = owned_hold(operation.host(), &paths, &reason, Some(operation.journal()))?
+        .unwrap_or_default();
+    match hold::release_own(
+        operation.host().runtime(),
+        &loaded.state_root,
+        command,
+        &reason,
+        &owned,
+    ) {
+        Ok(released) => {
+            if !released.left.is_empty() {
+                notes.push(hold::not_owned(command, &reason, released.left.clone()));
+            }
+            let mut members = hold_kept(&paths, None, runtime_down);
+            let release = json!(released);
+            members.insert(
+                "hold".to_owned(),
+                HoldReport {
+                    reason: &reason,
+                    kept: false,
+                    release: Some(&release),
+                }
+                .value(),
+            );
+            Ok(members)
+        }
+        Err(failure) => {
+            notes.push(failure);
+            Ok(hold_kept(&paths, Some(&reason), runtime_down))
+        }
+    }
+}
+
 fn release_hold(
     operation: &mut Operation<'_>,
     n: usize,
@@ -907,8 +1080,47 @@ fn release_hold(
     operation.start(n)?;
     let host = operation.host();
     let runtime = host.runtime();
-    let resumed = match hold::release(runtime, &loaded.state_root, command, &reason) {
-        Ok(resumed) => resumed,
+    // Workflow #434 LAB-3 fix 1 and 2: the rescue module hands back only its own hold: the
+    // instances its pause step paused, each while its pause shows the hold's reason, in whatever
+    // owner epoch the Runtime runs now.
+    let released = if super::Face::of(operation.journal()).rescue() {
+        let Some(owned) = owned_hold(host, &paths, &reason, Some(operation.journal()))? else {
+            return Ok(StepEnd::Ends(
+                hold::not_owned(command, &reason, Vec::new()),
+                Map::new(),
+            ));
+        };
+        hold::release_own(runtime, &loaded.state_root, command, &reason, &owned).map(|released| {
+            if released.left.is_empty() {
+                Ok(released.resumed)
+            } else {
+                Err(released)
+            }
+        })
+    } else {
+        hold::release(runtime, &loaded.state_root, command, &reason).map(Ok)
+    };
+    let resumed = match released {
+        Ok(Ok(resumed)) => resumed,
+        // An instance that shows the hold's reason though its pause step did not pause it is not
+        // the module's pause: left as it is, and the release says so. Every pause of the module's
+        // own is handed back by then, so nothing of its own stays paused (`kept: false`) and no
+        // `next` is owed.
+        Ok(Err(released)) => {
+            let refusal = hold::not_owned(command, &reason, released.left.clone());
+            let release = json!(released);
+            let mut members = Map::new();
+            members.insert(
+                "hold".to_owned(),
+                HoldReport {
+                    reason: &reason,
+                    kept: false,
+                    release: Some(&release),
+                }
+                .value(),
+            );
+            return Ok(StepEnd::Ends(refusal, members));
+        }
         Err(refusal) => {
             return Ok(StepEnd::Ends(
                 refusal,
@@ -999,6 +1211,20 @@ fn hold_caveats(operation: &Operation<'_>, config: &Value, notes: &mut Vec<Outco
     }
 }
 
+/// Workflow #434 LAB-3 (contracts/lab-two-entries.md §6): the caveat `guard_failed` of an
+/// operation the rescue module began, for every journalled guard row that did not pass (an
+/// informational one aside), added once; nothing for `actingctl install`, whose guards refused.
+pub(crate) fn guard_caveats(operation: &Operation<'_>, notes: &mut Vec<Outcome>) {
+    let journal = operation.journal();
+    if !super::Face::of(journal).rescue() || has(notes.as_slice(), InstallCaveat::GuardFailed) {
+        return;
+    }
+    notes.extend(guards::noted(
+        journal.kind.location(),
+        guards::failed_in(&journal.guards),
+    ));
+}
+
 /// Ends `operation` refused: its result recorded and `current.json` retired; the answer carries
 /// `members` (what stays: the hold, the build) and the hold's caveats.
 pub(crate) fn end(
@@ -1009,6 +1235,7 @@ pub(crate) fn end(
     loaded: &Loaded,
 ) -> Result<Answer, Outcome> {
     hold_caveats(&operation, &loaded.config, &mut notes);
+    guard_caveats(&operation, &mut notes);
     // The operation's id on the family's own refusal; a fatal cause that tops it (the
     // fatal-link rule) keeps its own values.
     let refusal = if refusal.is(crate::codes::ActingctlCode::InstallCommandRefused) {
@@ -1053,6 +1280,7 @@ pub(crate) fn finish(
     loaded: &Loaded,
 ) -> Result<Answer, Outcome> {
     hold_caveats(&operation, &loaded.config, &mut notes);
+    guard_caveats(&operation, &mut notes);
     let journal = operation.journal().clone();
     let paths = operation.paths().clone();
     let command = journal.kind.location();
@@ -1168,6 +1396,49 @@ pub(crate) fn finish(
                 .install_operation_id(operation_id.clone())
                 .count(resumed)
         }
+        // Workflow #434 LAB-3: the rescue module's `config replace` (and `config restore`): the
+        // configuration kept aside, the start and its checks.
+        OperationKind::ConfigReplace => {
+            insert(
+                "backup",
+                journal.inputs.get("backup").cloned().unwrap_or(Value::Null),
+            );
+            insert(
+                "config_sha256",
+                journal
+                    .inputs
+                    .get("config_sha256")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
+            if !starts.is_empty() {
+                insert("start", starts[0].clone());
+            }
+            if !checks.is_empty() {
+                insert("post_check", checks[0].clone());
+            }
+            super::done(command)
+                .install_operation_id(operation_id.clone())
+                .installation_changed(true)
+        }
+        // Workflow #434 LAB-3: the rescue module's `place`: the game, each item placed and the
+        // checks after the placement.
+        OperationKind::PackPlace => {
+            insert(
+                "game",
+                journal.inputs.get("game").cloned().unwrap_or(Value::Null),
+            );
+            insert(
+                "placed",
+                json!(evidence_of(&journal, StepKind::PackItem, false)),
+            );
+            if !checks.is_empty() {
+                insert("checks", checks[0].clone());
+            }
+            super::done(command)
+                .install_operation_id(operation_id.clone())
+                .installation_changed(true)
+        }
         OperationKind::ReleaseStage | OperationKind::Adopt => {
             return Err(operation.interrupted(state_invalid(
                 command,
@@ -1180,7 +1451,11 @@ pub(crate) fn finish(
         && !released
         && matches!(
             journal.kind,
-            OperationKind::Update | OperationKind::Rollback | OperationKind::Stop
+            OperationKind::Update
+                | OperationKind::Rollback
+                | OperationKind::Stop
+                | OperationKind::ConfigReplace
+                | OperationKind::PackPlace
         )
     {
         members.extend(hold_kept(&paths, Some(reason), false));
@@ -1245,16 +1520,45 @@ fn composite_steps(
 }
 
 /// The hold's S0, the guards and the deferred record, read from the running Runtime before
-/// anything changes; the guards' refusal as an answer with their rows.
-struct HoldStart {
-    seen: super::runtime::RuntimeSeen,
-    config: super::runtime::ConfigSeen,
-    held: Vec<String>,
-    rows: Vec<guards::GuardRow>,
-    deferred: Value,
+/// anything changes; the guards' refusal as an answer with their rows. Workflow #434 LAB-3: the
+/// hold's inputs as the operation takes them (in the rescue module every pause found on an
+/// instance is a known pause), and the guards' caveat when the rescue module went on past a row.
+pub(crate) struct HoldStart {
+    pub(crate) seen: super::runtime::RuntimeSeen,
+    pub(crate) config: super::runtime::ConfigSeen,
+    pub(crate) held: Vec<String>,
+    pub(crate) rows: Vec<guards::GuardRow>,
+    pub(crate) deferred: Value,
+    pub(crate) hold: HoldInputs,
 }
 
-fn hold_start(
+/// Workflow #434 LAB-3 (contracts/lab-two-entries.md §5): the rescue module's hold: every pause
+/// `seen` shows on an instance, other than the hold's own, is a known pause, kept and listed.
+pub(crate) fn known_from(seen: &super::runtime::RuntimeSeen, hold: &HoldInputs) -> HoldInputs {
+    HoldInputs {
+        reason: hold.reason.clone(),
+        known: pauses_seen(seen, Some(&hold.reason)),
+        only: hold.only.clone(),
+    }
+}
+
+/// Every pause `seen` shows on an instance, by alias, but those with the reason `except`.
+fn pauses_seen(
+    seen: &super::runtime::RuntimeSeen,
+    except: Option<&SchedulingPauseReason>,
+) -> BTreeMap<String, String> {
+    seen.instances
+        .iter()
+        .filter_map(|instance| {
+            let pause = instance.pause.as_ref()?;
+            (Some(&pause.reason) != except)
+                .then(|| (instance.alias.clone(), pause.reason.as_str().to_owned()))
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn hold_start(
     host: &dyn Host,
     paths: &Paths,
     loaded: &Loaded,
@@ -1262,6 +1566,7 @@ fn hold_start(
     hold: &HoldInputs,
     with_memory: bool,
     acks: &[String],
+    face: super::Face,
 ) -> Result<Result<HoldStart, Answer>, Outcome> {
     let runtime = host.runtime();
     let seen = match runtime.status(&loaded.state_root) {
@@ -1277,11 +1582,37 @@ fn hold_start(
             );
         }
     };
+    // Workflow #434 LAB-3 fix 1: the rescue module's hold never takes a pause it did not set: a
+    // reason an instance shows already (`down --reason`) refuses before anything is paused.
+    if face.rescue() {
+        let showing = seen
+            .instances
+            .iter()
+            .filter(|instance| {
+                instance
+                    .pause
+                    .as_ref()
+                    .is_some_and(|pause| pause.reason == hold.reason)
+            })
+            .map(|instance| instance.alias.clone())
+            .collect::<Vec<_>>();
+        if !showing.is_empty() {
+            return Err(hold::not_owned(operation, &hold.reason, showing));
+        }
+    }
     let config = runtime
         .config(&loaded.state_root)
         .map_err(|cause| hold::stop_failed(operation, cause))?;
     let plan_seen = runtime.plan(&loaded.state_root);
-    let held = hold::held_instances(&seen, &hold.reason);
+    let hold = if face.rescue() {
+        known_from(&seen, hold)
+    } else {
+        hold.clone()
+    };
+    let mut held = hold::held_instances(&seen, &hold.reason);
+    if let Some(only) = &hold.only {
+        held.retain(|alias| only.contains(alias));
+    }
     let now = host.now_unix_ms();
     let mut rows = vec![
         guards::foreign_pauses(&seen, Some(&hold.reason), &hold.known),
@@ -1293,7 +1624,7 @@ fn hold_start(
         // S2 M2).
         rows.push(guards::memory_before_stop(host, paths, &loaded.settings));
     }
-    if let Err(refusal) = guards::refuse(operation, &rows, acks) {
+    if let Err(refusal) = guards::judge(face, operation, &rows, acks) {
         return Ok(Err(
             Answer::new(refusal).with("guards", guards::values(&rows))?
         ));
@@ -1305,6 +1636,7 @@ fn hold_start(
         held,
         rows,
         deferred,
+        hold,
     }))
 }
 
@@ -1313,6 +1645,7 @@ fn hold_start(
 /// acknowledgments, the configuration file's SHA-256 (what `config` is judged against) and the
 /// deferred record journalled. A running image that would change and may not be renamed refuses
 /// before anything else.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn open_composite<'h>(
     host: &'h dyn Host,
     paths: &Paths,
@@ -1321,6 +1654,7 @@ pub(crate) fn open_composite<'h>(
     hold: &HoldInputs,
     start: bool,
     acks: &[String],
+    face: super::Face,
 ) -> Result<Result<Operation<'h>, Answer>, Outcome> {
     let operation = planned.inputs.operation;
     if let Some(image) = planned.running.blocked.first() {
@@ -1329,11 +1663,14 @@ pub(crate) fn open_composite<'h>(
             .pid(image.pid);
         return Ok(Err(planned.answer(refusal)?));
     }
-    let begun = match hold_start(host, paths, loaded, operation, hold, start, acks)? {
+    let begun = match hold_start(host, paths, loaded, operation, hold, start, acks, face)? {
         Ok(begun) => begun,
         Err(answer) => return Ok(Err(answer)),
     };
-    let mut acknowledged = if planned.inputs.accept_ledger_one_way {
+    let hold = &begun.hold;
+    // Workflow #434 LAB-3: the rescue module takes no acknowledgment (§5); a one-way edge it
+    // passed is journalled `one_way`.
+    let mut acknowledged = if planned.inputs.accept_ledger_one_way && !face.rescue() {
         vec!["accept_ledger_one_way".to_owned()]
     } else {
         Vec::new()
@@ -1344,6 +1681,8 @@ pub(crate) fn open_composite<'h>(
             PlanKind::Update => OperationKind::Update,
             PlanKind::Rollback => OperationKind::Rollback,
         },
+        initiator: face.initiator(),
+        one_way: face.rescue() && planned.one_way(),
         inputs: json!({
             "commit": planned.target.commit,
             "accept_ledger_one_way": planned.inputs.accept_ledger_one_way,
@@ -1375,8 +1714,12 @@ pub(crate) fn open_composite<'h>(
 }
 
 /// `install stop --root <root> --hold <reason> [--known-pause ALIAS=REASON]... [--ack-guard
-/// <id>]...`.
-pub(crate) fn stop_command(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
+/// <id>]...`. Workflow #434 LAB-3: the rescue module's `down` runs it with its face.
+pub(crate) fn stop_command(
+    words: &[&str],
+    host: &dyn Host,
+    face: super::Face,
+) -> Result<Answer, Outcome> {
     const STOP: InstallLocation = InstallLocation::Stop;
     let flags = Flags::parse_lists(
         words,
@@ -1397,12 +1740,15 @@ pub(crate) fn stop_command(words: &[&str], host: &dyn Host) -> Result<Answer, Ou
     let acks = guards::parse_acks(&flags.list("--ack-guard"))?;
     journal::refuse_unfinished(STOP, &paths)?;
     let loaded = plan::load(&paths, STOP)?;
-    let begun = match hold_start(host, &paths, &loaded, STOP, &hold, false, &acks)? {
+    let begun = match hold_start(host, &paths, &loaded, STOP, &hold, false, &acks, face)? {
         Ok(begun) => begun,
         Err(answer) => return Ok(answer),
     };
+    let hold = begun.hold.clone();
     let opening = Opening {
         kind: OperationKind::Stop,
+        initiator: face.initiator(),
+        one_way: false,
         inputs: json!({
             "hold": hold.reason,
             "known_pauses": hold.known,
@@ -1493,8 +1839,13 @@ fn last_stop(host: &dyn Host, paths: &Paths) -> Option<(String, journal::S0, Opt
     None
 }
 
-/// `install start --root <root> [--ack-guard <id>]...`.
-pub(crate) fn start_command(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
+/// `install start --root <root> [--ack-guard <id>]...`. Workflow #434 LAB-3: the rescue module's
+/// `up` runs it with its face.
+pub(crate) fn start_command(
+    words: &[&str],
+    host: &dyn Host,
+    face: super::Face,
+) -> Result<Answer, Outcome> {
     const START: InstallLocation = InstallLocation::Start;
     let flags = Flags::parse_lists(words, &["--root"], &["--ack-guard"], &[])?;
     let paths = super::resolve_root(&flags)?;
@@ -1525,12 +1876,14 @@ pub(crate) fn start_command(words: &[&str], host: &dyn Host) -> Result<Answer, O
             .joined(CauseRelation::CausedBy, checked.received));
     }
     let rows = vec![guards::adb(host, &paths, &loaded.config, &loaded.settings)];
-    if let Err(refusal) = guards::refuse(START, &rows, &acks) {
+    if let Err(refusal) = guards::judge(face, START, &rows, &acks) {
         return Answer::new(refusal).with("guards", guards::values(&rows));
     }
     let stopped = last_stop(host, &paths);
     let opening = Opening {
         kind: OperationKind::Start,
+        initiator: face.initiator(),
+        one_way: false,
         inputs: json!({
             "commit": live.commit,
             "s0_from": stopped.as_ref().map(|(id, _, _)| id),
@@ -1567,8 +1920,13 @@ pub(crate) fn start_command(words: &[&str], host: &dyn Host) -> Result<Answer, O
     update::run(operation, &loaded)
 }
 
-/// `install release-hold --root <root> --reason <reason>`.
-pub(crate) fn release_hold_command(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
+/// `install release-hold --root <root> --reason <reason>`. Workflow #434 LAB-3: the rescue
+/// module's `release-hold` runs it with its face.
+pub(crate) fn release_hold_command(
+    words: &[&str],
+    host: &dyn Host,
+    face: super::Face,
+) -> Result<Answer, Outcome> {
     const RELEASE: InstallLocation = InstallLocation::ReleaseHold;
     let flags = Flags::parse(words, &["--root", "--reason"], &[])?;
     let paths = super::resolve_root(&flags)?;
@@ -1576,20 +1934,41 @@ pub(crate) fn release_hold_command(words: &[&str], host: &dyn Host) -> Result<An
         .map_err(|_| super::unusable("--reason"))?;
     journal::refuse_unfinished(RELEASE, &paths)?;
     let loaded = plan::load(&paths, RELEASE)?;
-    if host
-        .runtime()
-        .status(&loaded.state_root)
-        .map_err(|cause| {
+    // Workflow #434 LAB-3 fix 1: the rescue module hands back only a hold one of its journals
+    // recorded in its pause step; any other reason, another party's above all, refuses before
+    // anything is asked of the Runtime.
+    if face.rescue() && owned_hold(host, &paths, &reason, None)?.is_none() {
+        return Err(hold::not_owned(RELEASE, &reason, Vec::new()));
+    }
+    let not_running = match host.runtime().status(&loaded.state_root) {
+        Ok(Some(_)) => None,
+        Ok(None) => Some((
             super::refusal(RELEASE, InstallRefusal::RuntimeNotRunning)
-                .joined(CauseRelation::CausedBy, cause)
-        })?
-        .is_none()
-    {
-        return Err(super::refusal(RELEASE, InstallRefusal::RuntimeNotRunning)
-            .path(loaded.state_root.as_path()));
+                .path(loaded.state_root.as_path()),
+            true,
+        )),
+        Err(cause) => Some((
+            super::refusal(RELEASE, InstallRefusal::RuntimeNotRunning)
+                .joined(CauseRelation::CausedBy, cause),
+            false,
+        )),
+    };
+    if let Some((refusal, runtime_down)) = not_running {
+        // Workflow #434 LAB-3 fix 2: the module's own hold stays paused: its answer says so
+        // (`kept: true`) and `next` names the ways out (`up` when no Runtime runs).
+        if face.rescue() {
+            return Ok(Answer {
+                members: hold_kept(&paths, Some(&reason), runtime_down),
+                outcome: refusal,
+                text: None,
+            });
+        }
+        return Err(refusal);
     }
     let opening = Opening {
         kind: OperationKind::ReleaseHold,
+        initiator: face.initiator(),
+        one_way: false,
         inputs: json!({"hold": reason}),
         plan_id: None,
         plan: None,
@@ -1612,8 +1991,14 @@ pub(crate) fn release_hold_command(words: &[&str], host: &dyn Host) -> Result<An
 
 /// `install guards --root <root> --for stop|start [--hold <reason>] [--known-pause
 /// ALIAS=REASON]...`: the guards the command would evaluate now; nothing changes. A hot
-/// placement's guards come with INST-4. `count` is how many guards would refuse.
-pub(crate) fn guards_command(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
+/// placement's guards come with INST-4. `count` is how many guards would refuse. Workflow #434
+/// LAB-3: in the rescue module's `guards` every pause found on an instance is known, and `count`
+/// is how many rows the operation would note (none refuses).
+pub(crate) fn guards_command(
+    words: &[&str],
+    host: &dyn Host,
+    face: super::Face,
+) -> Result<Answer, Outcome> {
     const GUARDS: InstallLocation = InstallLocation::GuardsReport;
     let flags = Flags::parse_lists(
         words,
@@ -1644,6 +2029,11 @@ pub(crate) fn guards_command(words: &[&str], host: &dyn Host) -> Result<Answer, 
                             .collect(),
                     };
                     let plan = runtime.plan(&loaded.state_root);
+                    let known = if face.rescue() {
+                        pauses_seen(&seen, hold.as_ref().map(|hold| &hold.reason))
+                    } else {
+                        known
+                    };
                     rows.push(guards::foreign_pauses(
                         &seen,
                         hold.as_ref().map(|hold| &hold.reason),

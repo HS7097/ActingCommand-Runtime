@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The shutdown wait of `request-shutdown --wait`, `install-transition --wait`, `start`,
-//! `restart` and `install` (Workflow #382 A-1, G11). Workflow #434 LAB-1b: the wait itself moved
-//! to `crates/lab-ops` (`actingcommand_lab_ops::shutdown_wait`), which serves the operation
-//! `shutdown`; this gives its failure as `ActingctlError::ShutdownWait`, as actingctl's callers
-//! and the G11 gate read it.
+//! The shutdown wait of `request-shutdown --wait` and `install-transition --wait` (Workflow #382
+//! A-1, G11). Workflow #434 LAB-1b: the wait itself moved to `crates/lab-ops`
+//! (`actingcommand_lab_ops::shutdown_wait`), which serves the operation `shutdown`; this gives its
+//! failure as `ActingctlError::ShutdownWait`, as actingctl's callers and the G11 gate read it.
+//! `start`, `restart` and `install` (in `crates/lab-rescue` since LAB-3) take the crate's wait
+//! directly.
 
 use crate::ActingctlError;
 use actingcommand_contract::RuntimeShutdownTarget;

@@ -13,6 +13,11 @@
 //! - `<root>\runtime\<program>` beside `<root>\runtime\BUILD-MANIFEST.json`, the programs of a
 //!   single-location root: `<root>`.
 //!
+//! Workflow #434 LAB-3: the Tools member's folder `tools\` in place of `runtime\` reads the same
+//! way (a kept build's `install\builds\<commit>\tools\<program>`, a single-location root's
+//! `<root>\tools\<program>`), since `actinglab.exe` ships in the Tools member until LAB-7 moves it
+//! into the Runtime member (`tools-layout` 5).
+//!
 //! The configuration is the selection's, or `<root>\actingd.config.json` of a root without one;
 //! the state root is its absolute `state_root`. Every failure is a registered outcome: a place
 //! that is no installed root's `install_root_unresolved` with the program as `path`, a selection
@@ -32,6 +37,8 @@ use std::path::{Path, PathBuf};
 
 /// The members' folder of a root, a slot or a kept build that holds the Runtime's programs.
 const RUNTIME_DIRECTORY: &str = "runtime";
+/// Workflow #434 LAB-3: the Tools member's folder, where `actinglab.exe` ships until LAB-7.
+const TOOLS_DIRECTORY: &str = "tools";
 /// The Runtime member's manifest in its folder; it marks a single-location root.
 const BUILD_MANIFEST: &str = "BUILD-MANIFEST.json";
 /// The installer's folder of a root, and its kept builds' folder inside it.
@@ -105,7 +112,9 @@ pub fn locate_from(
 /// or a single-location root; `None` for any other place.
 fn installed_root(program: &Path) -> Option<PathBuf> {
     let directory = program.parent()?;
-    if directory.file_name() != Some(OsStr::new(RUNTIME_DIRECTORY)) {
+    if directory.file_name() != Some(OsStr::new(RUNTIME_DIRECTORY))
+        && directory.file_name() != Some(OsStr::new(TOOLS_DIRECTORY))
+    {
         return None;
     }
     let above = directory.parent()?;

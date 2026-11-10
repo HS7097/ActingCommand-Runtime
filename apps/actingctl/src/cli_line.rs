@@ -42,11 +42,6 @@ pub fn success(result: Map<String, Value>, outcome: &Outcome) -> ExitCode {
     print(actingcommand_lab_ops::cli_line::success(result, outcome))
 }
 
-/// A failed exit: `{"outcome": …}`, then the developer line with `text`.
-pub fn failure(outcome: &Outcome, text: Option<&str>) -> ExitCode {
-    print(actingcommand_lab_ops::cli_line::failure(outcome, text))
-}
-
 /// A refused exit: `{outcome}` and the developer line with `text`, non-zero whatever the top's
 /// category.
 pub fn refused(outcome: &Outcome, text: Option<&str>) -> ExitCode {

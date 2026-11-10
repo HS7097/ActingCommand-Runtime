@@ -21,6 +21,7 @@ members = [
     "crates/ledger-forensics",
     "crates/lab",
     "crates/lab-ops",
+    "crates/lab-rescue",
     "crates/page-detector",
     "crates/pack-containment",
     "crates/policy",
@@ -60,6 +61,7 @@ actingcommand-ledger = { path = "crates/ledger" }
 actingcommand-ledger-forensics = { path = "crates/ledger-forensics" }
 actingcommand-lab = { path = "crates/lab" }
 actingcommand-lab-ops = { path = "crates/lab-ops" }
+actingcommand-lab-rescue = { path = "crates/lab-rescue" }
 actingcommand-onnx-provider-support = { path = "crates/onnx-provider-support" }
 actingcommand-page-detector = { path = "crates/page-detector" }
 actingcommand-pack-containment = { path = "crates/pack-containment" }

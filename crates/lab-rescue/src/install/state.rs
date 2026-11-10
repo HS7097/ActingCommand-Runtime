@@ -236,6 +236,9 @@ impl KindLocation for OperationKind {
             Self::Stop => InstallLocation::Stop,
             Self::Start => InstallLocation::Start,
             Self::ReleaseHold => InstallLocation::ReleaseHold,
+            // Workflow #434 LAB-3: the rescue module's composites.
+            Self::ConfigReplace => InstallLocation::ConfigReplace,
+            Self::PackPlace => InstallLocation::PackPlace,
         }
     }
 }

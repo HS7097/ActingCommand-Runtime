@@ -79,6 +79,10 @@ pub(crate) trait Host {
     fn work_dir(&self) -> PathBuf;
     /// The processes whose image lies under `root`.
     fn processes_under(&self, root: &Path) -> Result<Vec<RunningImage>, Outcome>;
+    /// Workflow #434 LAB-3 fix 1: the process id of the running installer itself, whose image a
+    /// plan renames aside as it renames `actingctl.exe` (the Lab's rescue module runs from
+    /// `<root>\tools\actinglab.exe`); `None` when there is none to match (a test's).
+    fn own_pid(&self) -> Option<u32>;
     /// Runs `program` with `arguments` to its end, at most `timeout_ms` milliseconds, and
     /// captures what it printed. A program still running then is left running (never killed)
     /// and answers [`NotRan::StillRunning`]; one that did not run, the OS's failure.
@@ -126,6 +130,21 @@ pub(crate) trait Host {
     /// watchdog's manual-run method (WMI `Win32_Process.Create`, hidden, no handle of the
     /// caller), in `directory`, its output appended to `log`; its process id.
     fn detach(&self, arguments: &[String], directory: &Path, log: &Path) -> Result<u32, Outcome>;
+    /// Workflow #434 LAB-3: the watchdog's answer for the installation at `root` (`status`,
+    /// `install`, `uninstall`), as `actingctl watchdog` gives it: the rescue module's `alive`,
+    /// `watchdog install` and `watchdog uninstall`.
+    fn watchdog(&self, asked: crate::watchdog::Asked, root: &Path) -> crate::watchdog::Answered;
+    /// Workflow #434 LAB-3: the rescue module run again with `arguments` (its words without
+    /// `--detach`), detached as [`Self::detach`] runs the installer, and with the initiator word
+    /// `initiator` in `ACTINGCOMMAND_INITIATOR` when it is not the default `Lab-CLI`
+    /// (contracts/lab-two-entries.md §4.2: the detached process records the same word).
+    fn detach_rescue(
+        &self,
+        arguments: &[String],
+        initiator: Option<&str>,
+        directory: &Path,
+        log: &Path,
+    ) -> Result<u32, Outcome>;
 }
 
 /// The machine.
@@ -177,6 +196,10 @@ impl Host for SystemHost {
             ActingctlCode::ProcessProbeFailed,
         )?;
         parse_processes(&output, root)
+    }
+
+    fn own_pid(&self) -> Option<u32> {
+        Some(std::process::id())
     }
 
     fn run_program(
@@ -252,7 +275,25 @@ impl Host for SystemHost {
     }
 
     fn detach(&self, arguments: &[String], directory: &Path, log: &Path) -> Result<u32, Outcome> {
-        detach_with_wmi(arguments, directory, log)
+        detach_with_wmi(arguments, None, directory, log)
+    }
+
+    fn watchdog(&self, asked: crate::watchdog::Asked, root: &Path) -> crate::watchdog::Answered {
+        crate::watchdog::answer(
+            asked,
+            root,
+            crate::cli_line::detail().unwrap_or(actingcommand_contract::outcome::Detail::Full),
+        )
+    }
+
+    fn detach_rescue(
+        &self,
+        arguments: &[String],
+        initiator: Option<&str>,
+        directory: &Path,
+        log: &Path,
+    ) -> Result<u32, Outcome> {
+        detach_with_wmi(arguments, initiator, directory, log)
     }
 }
 
@@ -294,8 +335,17 @@ fn actingd_counter(root: &Path, member: &str) -> Option<u64> {
 }
 
 /// `--detach`: the running installer again with `arguments`, through WMI `Win32_Process.Create`
-/// (hidden, no handle of the caller), in `directory`, its output appended to `log`.
-fn detach_with_wmi(arguments: &[String], directory: &Path, log: &Path) -> Result<u32, Outcome> {
+/// (hidden, no handle of the caller), in `directory`, its output appended to `log`. Workflow
+/// #434 LAB-3: a process WMI creates does not take the caller's environment, so the rescue
+/// module's initiator word, when it is not the default, is set for the program by the command
+/// line itself (`set "ACTINGCOMMAND_INITIATOR=<word>"&&`); `initiator` is one of the closed
+/// list's words, never a caller's text.
+fn detach_with_wmi(
+    arguments: &[String],
+    initiator: Option<&str>,
+    directory: &Path,
+    log: &Path,
+) -> Result<u32, Outcome> {
     const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
             $ProgressPreference = 'SilentlyContinue'\n\
             $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0; PriorityClass = [uint32]32 }\n\
@@ -324,7 +374,14 @@ fn detach_with_wmi(arguments: &[String], directory: &Path, log: &Path) -> Result
         .map(|word| format!("\"{word}\""))
         .collect::<Vec<_>>()
         .join(" ");
-    let line = format!("\"{shell}\" /d /s /c \"\"{program}\" {quoted} 1>>\"{log_text}\" 2>&1\"");
+    let declared = initiator.map_or_else(String::new, |word| {
+        format!(
+            "set \"{}={word}\"&& ",
+            actingcommand_lab_ops::initiator::ENVIRONMENT_VARIABLE
+        )
+    });
+    let line =
+        format!("\"{shell}\" /d /s /c \"{declared}\"{program}\" {quoted} 1>>\"{log_text}\" 2>&1\"");
     let line = std::ffi::OsString::from(line);
     let directory = directory.as_os_str();
     let output = crate::watchdog::powershell::run(

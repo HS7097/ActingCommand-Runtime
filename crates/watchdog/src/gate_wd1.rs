@@ -15,8 +15,8 @@
 // - req. 4: report v2 carries `layout` and `config`, with null `generation` and `slot`;
 // - req. 5: `install` on a single root passes the layout precondition and keeps the launcher's;
 // - req. 6: `actingctl start` / `restart` without `--config` still need an A/B selection (its
-//   test, `wd1_start_without_config_still_needs_an_ab_selection`, stays with actingctl's `start`
-//   in `apps/actingctl/src/gate_wd1_start.rs` since Workflow #434 LAB-4);
+//   test, `wd1_start_without_config_still_needs_an_ab_selection`, stays with actingctl's `start`,
+//   in `crates/lab-rescue/src/gate_wd1_start.rs` since Workflow #434 LAB-3);
 // - coordinator decision 5 of 2026-10-18: a deploy that holds `install\writer.lock` exclusively
 //   while it replaces `runtime\` is row 7a: nothing starts.
 // The machine is a fake on the APPS-I3 seams (`start::TickSeams`), as in `gate_382_a4`; a live

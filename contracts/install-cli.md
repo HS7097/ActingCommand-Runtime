@@ -704,6 +704,121 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
   the CLI returns it, neither recomputed nor filtered. `install new` is not built yet (INST-6,
   slice R-15e), so this rule has no code before it; no flag of an existing command changes.
 
+## The Lab's rescue module (Workflow #434 LAB-3, since 0.12.48)
+
+[lab-two-entries.md](lab-two-entries.md) §5 to §7; the rows of module `rescue` in
+[lab-operations.json](lab-operations.json); register §1.287, "Slice LAB-3". The installer's code
+moved from `apps/actingctl` to `crates/lab-rescue` and runs with one of two faces. **`actingctl
+install` keeps the face this document describes (`install-cli` 1), every option, output, code and
+exit, until LAB-7 deletes it**; a journal it writes is byte for byte what it wrote before. The
+Lab's rescue module (`actinglab <row>`, `actinglab serve --stdio`) runs the same commands with
+the rescue face:
+
+- **No root word.** It acts on the root of the `actinglab.exe` that runs it (`<root>\tools\` until
+  LAB-7 moves it to `runtime\`); `--root` and `--state-root` are refused as unknown arguments.
+- **The initiator.** Every journal an operation of the module writes has `initiator` (§4.3 of the
+  contract's words) from before its first step; an `undo` records its own initiator in the undo
+  record; a resumed operation keeps the face its journal began with. `unlock` passes the initiator
+  as actingd's `--actor`.
+- **No confirmation parameters.** `--plan <id>` for an apply, `--accept-ledger-one-way`,
+  `--known-pause`, `--ack-guard`, `--ui-confirmed` and `--via` are refused
+  (`actingctl_usage_invalid`, `argument_problem` `unknown`). `deploy`, `rollback`, `config replace`
+  and `place` plan and apply in one call under the writer lock; `--plan` (a switch) answers the
+  plan only. A one-way ledger edge is journalled `one_way: true` instead of acknowledged.
+- **Every pause is known.** A hold takes every pause it finds on an affected instance as known,
+  keeps it and lists it; a global pause too is kept and listed (the `foreign_pauses` row notes it)
+  and the stop goes on. The hold's reason is the module's `lab-<operation>-<unix ms>` unless the
+  caller names one (`down --reason`; `deploy` takes none).
+- **Only its own hold** (LAB-3 fix 1 and 2, lab-two-entries.md §5). A hold of the module never
+  takes a pause it did not set: `down --reason <r>` with a reason an instance already shows refuses
+  `hold_not_owned` (`hold_reason`, `aliases`) before anything is paused. What is the module's own
+  comes from the operation's journal alone: the reason its pause step took and the instances that
+  step paused (each pause the Runtime accepted, `drained`, and the instances its evidence record
+  `own_pauses` shows paused with the reason, with the owner epoch and revisions as evidence).
+  `release-hold <reason>` (the reason is required) hands back only a hold that a journal of the
+  module in this root recorded in its pause step, and of it only the instances that step paused,
+  each only while its pause shows that reason now, in whatever owner epoch the Runtime runs; any
+  other reason (another party's, `alice-116-scheduler-stop` say) refuses `hold_not_owned` and
+  nothing is resumed. No alias the step did not pause and no instance whose pause shows another
+  reason is ever resumed; an instance the hold was to pause that shows its reason though the step
+  did not pause it is left and named by the same refusal (`left`). Every composite that releases
+  (`deploy`, `rollback`, `config replace`, `config restore`, `place`, and an automatic rollback's
+  release) follows the same rule, and no answer's `next` names a `release-hold` of a hold the
+  module does not own. A hold whose ownership the module cannot read (the reason does not parse,
+  the root or its operations folder cannot be read) is left out of `next` all the same, and the
+  answer says so (fix 3): the note `install_caveat_noted` of `install_release_hold` with
+  `install_caveat` `hold_ownership_unconfirmed`, `hold_reason` when the reason parses, the read
+  failure as its cause. `actingctl install release-hold` and `install stop` are unchanged.
+- **Why the reason and the alias, not the revision** (fix 2). A changed owner epoch alone never
+  denies the hand-back: the real Runtime's restore does not keep a pause's revision. Every start
+  that is not installer-held (the installer's and the module's starts, which run the watchdog's
+  manual start, the watchdog's own, a reboot's) restores each persisted pause at revision 1 with
+  its reason (`crates/runtime-host/src/host/scheduling_pause.rs`, `restore_scheduling_pauses`);
+  only an installer-held start (actingd's `--install-held`, which neither `actingctl install` nor
+  the module passes) keeps the pauses its transition restored. So the module matches the reason
+  and the alias across epochs, and resumes by the epoch and revision the running Runtime shows. A
+  start of the module whose readiness was never seen (it timed out and was left running) or whose
+  status could not be read therefore leaves no dead end.
+- **No residue after a refusal.** A refusal after the module paused instances and before anything
+  changed on disk (the pause step refused, the close did not complete, `place`'s instances not idle
+  in time) hands its own pauses back at once by the rule above and says so: `hold` `kept: false`
+  with the release's `resumed` and `left`; `kept` is false only because nothing of the operation's
+  own stays paused. A hand-back that fails keeps the hold (`kept: true`), its failure a note. After
+  a change on disk the hold stays as for `actingctl install` (a failed start or post-check,
+  `place`'s failed checks), with `kept: true`, `next` naming the ways out below (and `undo` where it
+  applies). A `release-hold` that finds no Runtime answering (or cannot read its status) refuses
+  `runtime_not_running`, its hold kept: `kept: true`, `next` with `up` when none runs.
+- **Ways out of a kept hold** (fix 2). Every answer of the module whose own pauses stay says `hold`
+  `kept: true` and gives in `next` only ways out that work today, none naming another party's
+  hold: `release_hold`, the module's own `release-hold <reason>`; until LAB-7 deletes actingctl,
+  `actingctl_release_hold`, `actingctl install release-hold --root <root> --reason <reason>` (it
+  resumes the instances paused with exactly that reason, the module's own), and `actingctl_resume`,
+  one `actingctl resume --state-root <state root> --instance <alias>` per instance the pause step
+  paused that the running Runtime shows paused with the reason now (none when no status can be
+  read). The core `resume` goes through actingctl until then because the Lab's own
+  `resume <instance>` binds the Lab channel, whose resume the Runtime refuses until LAB-6 deletes
+  the origin gates (lab-two-entries.md §2.4). **After LAB-7** deletes actingctl, what stays is the
+  module's own `release-hold <reason>` and the Lab's core `resume <instance>` (on the Lab channel,
+  which LAB-6 opens for a resume); LAB-7 drops the two `actingctl_*` forms.
+- **Its own running image.** The module runs from `<root>\tools\actinglab.exe`, which an update
+  replaces: the image of the process that plans (matched by its process id) is renamed aside as
+  `actingctl.exe` is and runs on (`running.renamed_own` in the plan); any other running
+  `actinglab.exe` under the root still refuses `running_image_blocks` (an MCP server or another
+  CLI run of it: close it first).
+- **Guards report.** Every row of "Guards" below is evaluated as for `actingctl install` and none
+  refuses: a row that fails or is not evaluated is noted with the warning `install_caveat_noted`,
+  `install_caveat` `guard_failed` and the rows as `install_guards`, and the journal keeps the rows.
+  A start waits for memory up to `install.start.memory_wait_ms` as before, then goes on and
+  journals the row. The preconditions, the writer lock, an unfinished operation, the interface
+  checks, the rollback gate and the checks of the inputs still refuse.
+- **The composites** (operation kinds `config_replace` and `pack_place` are the module's own;
+  `deploy` and `rollback` are an `update` and a `rollback` journal): `deploy <tag|commit>` stages
+  (`--dir`, with its `release-facts.json` when present, or a kept build), plans, and with a Runtime
+  running applies the composite update (stop with hold, apply, start and its checks), waits for the
+  watchdog's `watchdog_alive` within `install.start.ready_timeout_ms` and releases the hold;
+  `config replace <file>` checks the file with the live build's check-config (`--install-root`)
+  before anything changes, then stops with hold, stages it as `actingd.config.json.new-<ms>.part`,
+  swaps it in with the replaced file kept as `actingd.config.json.prev-<ms>`, starts, waits for
+  `alive` and releases (the file's content is never printed, only its SHA-256); `config restore
+  <prev>` does the same with a kept `.prev-<ms>`; `place <bundle.zip>` plans with the contract
+  crate's readers and the `package` edge, holds the instances bound to the bundle's game (the game
+  comes from the bundle), waits until they are idle, places each item `.part` → `.old-<ms>` → in
+  place (step `pack_item`), checks the bundle again and runs `<root>\tools\actinglab.exe
+  standard-pack check` on the placed game root, releases and reads the schedule; `alive [--wait]`
+  is the watchdog's status of the root. `--detach` runs the module's own command again through the
+  WMI start with the same initiator. The download stays outside.
+- **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
+  CLI envelope, as `actingctl install`'s do.
+- **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no
+  `install-root` raise, component-interfaces.md covers the A/B roots only). An installer of
+  v0.12.47 or older does not read a journal the module wrote (its `initiator`, `one_way`, the
+  kinds `config_replace` and `pack_place`): the testing phase keeps no old-version compatibility
+  (Alice, 2026-10-11). `actingctl install` writes its journals byte for byte as before, and this
+  build reads the older ones. **Operational rule until LAB-7:** production keeps deploying through
+  `actingctl install` (the coordinator's deploy kit); the module's `deploy`, `rollback`, `place`
+  and `config replace` are not used on the production root, so no journal an older installer
+  cannot read appears there.
+
 ## Interface checks
 
 From [component-interfaces.md](component-interfaces.md), "Checks per operation". The parties:
@@ -795,7 +910,11 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
 `adb.exe` is never moved and `adb kill-server` is never used; any other running image under the
 root that would change refuses (`running_image_blocks`); unchanged files are never
 touched; MCP servers left on renamed images are listed so the person reconnects them (an MCP
-entry switches its own child; #411 P49).
+entry switches its own child; #411 P49). The Lab's rescue module (LAB-3 fix 1): the image of the
+process that plans, matched by its process id (`<root>\tools\actinglab.exe` running the module),
+is renamed aside the same way and listed as `running.renamed_own`; another running
+`actinglab.exe` still refuses. `actingctl install`'s planning is unchanged: its own image is
+`actingctl.exe`.
 
 ### The rollback gate
 
@@ -920,6 +1039,17 @@ any other schema (`state_invalid`).
  "rollback": {"started_at_unix_ms": 0, "to": "<40 hex>", "failed": ["<check id>"], "reversed_at_unix_ms": 0 | null},
  "result": {…} | null, "finished_at_unix_ms": 0 | null}
 ```
+
+The Lab's rescue module (LAB-3) adds two members after `installer`, which `actingctl install`
+never writes: `"initiator": "<word>"` (lab-two-entries.md §4.1) and `"one_way": true` (a one-way
+ledger edge it applied; absent otherwise); its undo record carries `"initiator"` too. Kinds
+`config_replace` and `pack_place` are the module's. An older reader that refuses unknown members
+does not read such a journal; `install-root` does not change (lab-two-entries.md, open point 5).
+LAB-3 fix 1: the evidence of the module's `pause` step carries `"own_pauses": {"reason",
+"owner_epoch", "revisions": {"<alias>": <revision>}}`, the pauses it set; with the step's
+`drained` it names the instances the module's release may hand back, matched by reason and alias
+(fix 2: no start step records it any more, and the epoch and revisions are evidence only; "The
+Lab's rescue module").
 
 The journal is written `.part` → flushed → renamed before each step starts and after it ends.
 `current.json` is written before the first step and renamed `current.json.finished-<ms>` at the
@@ -2047,14 +2177,16 @@ fragments and this build's enums; the forwarder's codes are in
 - vocabulary `install_rollback_slot_material` (new): `intact`, `cleaned`, `not_intact`.
 - vocabulary `install_rollback_build_material` (new): `kept`, `cleaned`.
 - vocabulary `install_operation_kind` (new): `release_stage`, `adopt`, `update`, `rollback`,
-  `stop`, `start`, `release_hold`, `prepare`, `convert`, `clean`, `restart`.
+  `stop`, `start`, `release_hold`, `prepare`, `convert`, `clean`, `restart`; the rescue module's
+  composites add (Workflow #434 LAB-3, since 0.12.48) `config_replace`, `pack_place`.
 - vocabulary `install_step_kind` (new): `extract`, `copy_build`, `verify_tree`, `place_build`,
   `materialize_part`, `verify_part`, `pause`, `close`, `ledger_verify`, `place_slot`,
   `stage_file`, `swap_file`, `retire_live_files`, `place_entries`, `refresh_entries`,
   `refresh_root_fixed`, `init_slot_locks`, `write_selection`, `commit_selection`, `record_state`,
   `start`, `post_check`, `record_health`, `release_hold`, `reverse_files`, `revert_selection`,
   `clean_check`, `clean_slot`, `clean_builds`, `clean_converted`, `delete_cleaning`,
-  `record_cleanup`.
+  `record_cleanup`; the rescue module's place composite adds (Workflow #434 LAB-3, since
+  0.12.48) `pack_item`.
 - vocabulary `install_member` (new): `runtime`, `tools`, `ui`.
 - vocabulary `install_row_reason` (new): `target_restores_player_holds`, `no_player_hold_support`,
   `ui_drives_no_installer`.
@@ -2094,7 +2226,7 @@ the fragment registers, names the command.
 |---|---|---|
 | `install_command_done` | success | `operation`; `installation_changed` on a mutating command (`false`: nothing to do); `install_operation_id`, `commit_sha`, `tag`, `plan_id`, `count`, `game`, `alias`, `path`, `pid`, `owner_epoch`, `log` as the command has them |
 | `install_caveat_noted` | warning | `operation`, `install_caveat`; `commit_sha`, `count`, `game`, `package_id`, `config_key`, `path` as the caveat has them |
-| `install_command_refused` | error | `operation`, `install_refusal`; `release_checks`, `rollback_gate_parts`, `ledger_sequence`, `install_guards`, `plan_id`, `install_operation_id`, `commit_sha`, `path`, `pid`, `count`, `files`, `game`, `package_id`, `alias`, `aliases`, `config_key` as the reason has them |
+| `install_command_refused` | error | `operation`, `install_refusal`; `release_checks`, `rollback_gate_parts`, `ledger_sequence`, `install_guards`, `plan_id`, `install_operation_id`, `commit_sha`, `path`, `pid`, `count`, `files`, `game`, `package_id`, `alias`, `aliases`, `config_key`, `hold_reason` (LAB-3) as the reason has them |
 | `install_operation_interrupted` | fatal | `operation`, `install_operation_id`: a step failed after a change on disk; the journal names `resume` and `undo`, and until one runs the root cannot run normally |
 | `watchdog_installer_unfinished` | warning | `install_operation_id` when known: the watchdog's decision row 7a″, also the cause of `start_runtime_refused` |
 | `check_config_install_root_invalid` (actingd) | error | `path`: `--install-root` names no install root |
@@ -2116,6 +2248,10 @@ the fragment registers, names the command.
   (`operation_attempt_running`).
 - **`install_refusal`, INST-2**: `runtime_not_running`, `runtime_stop_failed`,
   `post_check_failed`, `deploy_rolled_back` ("Formal stop, start and the hold").
+- **Workflow #434 LAB-3** (since 0.12.48; "The Lab's rescue module"): `install_caveat`
+  `guard_failed` (`install_guards`); `install_refusal` `hold_not_owned` (fix 1; `hold_reason`,
+  `count`, `aliases`), which only the rescue module answers; `install_command_refused` takes the
+  existing key `hold_reason`.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

@@ -164,8 +164,9 @@ fn adopt_steps(commit: &str, ms: u64) -> Vec<PlannedStep> {
     ]
 }
 
-/// `install adopt --root <root>`.
-pub(crate) fn adopt(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
+/// `install adopt --root <root>`. Workflow #434 LAB-3: the rescue module's `adopt` runs it with its
+/// face, so its journal records the initiator.
+pub(crate) fn adopt(words: &[&str], host: &dyn Host, face: super::Face) -> Result<Answer, Outcome> {
     let flags = Flags::parse(words, &["--root"], &[])?;
     let paths = super::resolve_root(&flags)?;
     super::refuse_ab(InstallLocation::Adopt, &paths)?;
@@ -202,6 +203,8 @@ pub(crate) fn adopt(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> 
     }
     let opening = Opening {
         kind: OperationKind::Adopt,
+        initiator: face.initiator(),
+        one_way: false,
         inputs: Value::Object(serde_json::Map::new()),
         plan_id: None,
         plan: None,

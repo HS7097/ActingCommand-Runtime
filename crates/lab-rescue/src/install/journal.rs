@@ -11,6 +11,7 @@ use super::host::{Host, Installer};
 use super::state::{self, Current, CurrentState, InstallState, KindLocation, OperationKind, Paths};
 use crate::codes::{ActingctlCode, InstallLocation, InstallRefusal};
 use actingcommand_contract::outcome::{Detail, Outcome, OutcomeEnvelope};
+use actingcommand_lab_ops::initiator::Initiator;
 // Workflow #434 LAB-4: the operation id's form (`op-<unix_ms>`) moved to `crates/watchdog` with
 // `current.json`, which watchdog row 7a″ reads; `operation_ms` is named here as before.
 use actingcommand_watchdog::install_state::OPERATION_PREFIX;
@@ -44,6 +45,10 @@ pub(crate) enum StepKind {
     PostCheck,
     ReleaseHold,
     ReverseFiles,
+    // Workflow #434 LAB-3 (the step INST-4 planned, contracts/install-cli.md, "Steps"): one item
+    // of the rescue module's `place` (a pack, a table, a root file, or a root file set aside),
+    // each `.part` → `.old-<ms>` → in place, as `swap_file` per item.
+    PackItem,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +96,10 @@ pub(crate) struct Previous {
 pub(crate) struct UndoRecord {
     pub(crate) started_at_unix_ms: u64,
     pub(crate) finished_at_unix_ms: Option<u64>,
+    /// Workflow #434 LAB-3 (contracts/lab-two-entries.md §4.3, §5): who undid the operation, when
+    /// the Lab's rescue module did; absent for `actingctl install undo`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) initiator: Option<Initiator>,
 }
 
 /// Workflow #421 INST-2 (#421 deploy design §4, decision 74 A): the automatic rollback of a
@@ -114,6 +123,16 @@ pub(crate) struct Journal {
     pub(crate) kind: OperationKind,
     pub(crate) root: String,
     pub(crate) installer: Installer,
+    /// Workflow #434 LAB-3 (contracts/lab-two-entries.md §4.3): the initiator of an operation the
+    /// Lab's rescue module began, written before the first step; absent for `actingctl install`,
+    /// whose revision-1 journal is unchanged. Its presence is the operation's face
+    /// ([`super::Face::of`]): a resumed operation keeps the rules it began with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) initiator: Option<Initiator>,
+    /// Workflow #434 LAB-3 (§5): `true` when the rescue module's update or rollback passes a
+    /// one-way ledger edge, which `--accept-ledger-one-way` acknowledged before; absent otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) one_way: bool,
     pub(crate) inputs: Value,
     pub(crate) plan_id: Option<String>,
     pub(crate) plan: Option<Value>,
@@ -140,6 +159,10 @@ impl Journal {
 /// What a new operation records before its first step.
 pub(crate) struct Opening {
     pub(crate) kind: OperationKind,
+    /// Workflow #434 LAB-3: the face's initiator ([`super::Face::initiator`]).
+    pub(crate) initiator: Option<Initiator>,
+    /// Workflow #434 LAB-3: a one-way ledger edge the rescue module passed.
+    pub(crate) one_way: bool,
     pub(crate) inputs: Value,
     pub(crate) plan_id: Option<String>,
     pub(crate) plan: Option<Value>,
@@ -238,6 +261,8 @@ impl<'h> Operation<'h> {
             kind: opening.kind,
             root: paths.plain.clone(),
             installer: host.installer(),
+            initiator: opening.initiator,
+            one_way: opening.one_way,
             inputs: opening.inputs,
             plan_id: opening.plan_id,
             plan: opening.plan,
@@ -384,6 +409,22 @@ impl<'h> Operation<'h> {
         self.write()
     }
 
+    /// Workflow #434 LAB-3: one more member of the operation's inputs, known only once it is
+    /// open (`config replace`'s kept file, named by the operation's own milliseconds).
+    pub(crate) fn set_input(&mut self, member: &str, value: Value) -> Result<(), Outcome> {
+        if let Value::Object(inputs) = &mut self.journal.inputs {
+            inputs.insert(member.to_owned(), value);
+        }
+        self.write()
+    }
+
+    /// Workflow #434 LAB-3 (contracts/lab-two-entries.md §6): one more guard row the operation
+    /// evaluated on its way (a start's `memory` in the rescue module), kept with the others.
+    pub(crate) fn add_guard(&mut self, guard: Value) -> Result<(), Outcome> {
+        self.journal.guards.push(guard);
+        self.write()
+    }
+
     /// Workflow #421 INST-2: records the ledger head of S0, read once the Runtime stopped.
     pub(crate) fn record_s0_head(&mut self, head: u64) -> Result<(), Outcome> {
         let s0 = self.journal.s0.get_or_insert(S0 {
@@ -451,9 +492,10 @@ impl<'h> Operation<'h> {
     }
 
     /// Starts an undo: `current.json` names the operation again when it had ended (refused
-    /// while another operation is unfinished), and the journal records the undo's start. The
-    /// undo's own milliseconds name what it moves aside.
-    pub(crate) fn begin_undo(&mut self) -> Result<u64, Outcome> {
+    /// while another operation is unfinished), and the journal records the undo's start, with its
+    /// `initiator` when the rescue module undoes it (Workflow #434 LAB-3). The undo's own
+    /// milliseconds name what it moves aside.
+    pub(crate) fn begin_undo(&mut self, initiator: Option<Initiator>) -> Result<u64, Outcome> {
         if let Some(undo) = &self.journal.undo {
             return Ok(undo.started_at_unix_ms);
         }
@@ -479,6 +521,7 @@ impl<'h> Operation<'h> {
         self.journal.undo = Some(UndoRecord {
             started_at_unix_ms: now,
             finished_at_unix_ms: None,
+            initiator,
         });
         self.write()?;
         Ok(now)

@@ -21,6 +21,9 @@ actingcommand-lab = { workspace = true }
 # Workflow #434 LAB-2: the CLI module reads the operation table, serves the core operations and
 # picks the process's initiator through the Lab's operation layer.
 actingcommand-lab-ops = { workspace = true }
+# Workflow #434 LAB-3: the rescue and installation module, whose rows the CLI module and
+# `serve --stdio` serve; on Windows only, where it runs.
+actingcommand-lab-rescue = { workspace = true }
 actingcommand-ledger = { workspace = true }
 actingcommand-page-detector = { workspace = true }
 actingcommand-pack-containment = { workspace = true }

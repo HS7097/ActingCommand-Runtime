@@ -391,6 +391,9 @@ fn c3b_client_device_authority_stays_behind_runtime() {
     // Workflow #434 LAB-4: actingctl's watchdog and its launcher moved there.
     collect_rust_files(&root.join("crates/watchdog/src"), &mut files);
     collect_rust_files(&root.join("apps/actingwatch/src"), &mut files);
+    // Workflow #434 LAB-3: actingctl's installer, start, restart and agent channel moved there,
+    // with the Lab's rescue module on them.
+    collect_rust_files(&root.join("crates/lab-rescue/src"), &mut files);
     collect_rust_files(&root.join("crates/runtime-client/src"), &mut files);
     files.push(root.join("apps/actinglab/src/runtime_slice_cli.rs"));
     let forbidden = [
@@ -442,6 +445,9 @@ fn c3b_client_device_authority_stays_behind_runtime() {
         // Workflow #434 LAB-4: actingctl's watchdog and its launcher moved there.
         "actingcommand-watchdog",
         "actingcommand-actingwatch",
+        // Workflow #434 LAB-3: actingctl's installer, start, restart and agent channel moved
+        // there.
+        "actingcommand-lab-rescue",
     ] {
         let package = packages
             .iter()

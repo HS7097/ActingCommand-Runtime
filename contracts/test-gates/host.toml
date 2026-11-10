@@ -632,7 +632,7 @@ incident = ["#402 HS-2"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::install::gate_inst1_update::hs2b_ledger_six_needs_the_one_way_flag_and_refuses_the_rollback_to_five",
+    "actingcommand-lab-rescue::lib::install::gate_inst1_update::hs2b_ledger_six_needs_the_one_way_flag_and_refuses_the_rollback_to_five",
 ]
 incident = ["#402 HS-2b"]
 

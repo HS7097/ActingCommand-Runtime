@@ -92,8 +92,9 @@ impl Failure {
     }
 }
 
-/// Runs `program` with `arguments` within `deadline`.
-fn run(
+/// Runs `program` with `arguments` within `deadline` (Workflow #434 LAB-3: also the rescue
+/// module's children, `standard-pack check` and actingd's `unlock-owner`).
+pub(crate) fn run(
     host: &dyn Host,
     program: &Path,
     arguments: &[&str],

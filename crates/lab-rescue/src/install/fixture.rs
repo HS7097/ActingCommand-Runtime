@@ -318,6 +318,8 @@ pub(super) struct FakeHost {
     pub(super) crash_before_retire: Cell<bool>,
     pub(super) stopped: RefCell<Vec<(String, usize)>>,
     pub(super) processes: RefCell<Vec<RunningImage>>,
+    /// Workflow #434 LAB-3 fix 1: the process id the host answers as its own (none by default).
+    pub(super) own_pid: Cell<Option<u32>>,
     pub(super) programs: Programs,
     #[allow(clippy::type_complexity)]
     pub(super) on_step: RefCell<Option<Box<dyn Fn(usize)>>>,
@@ -367,6 +369,7 @@ impl FakeHost {
             crash_before_retire: Cell::new(false),
             stopped: RefCell::new(Vec::new()),
             processes: RefCell::new(Vec::new()),
+            own_pid: Cell::new(None),
             programs: Programs {
                 refuse_check_config: RefCell::new(Vec::new()),
                 refuse_install_root: RefCell::new(Vec::new()),
@@ -464,6 +467,10 @@ impl Host for FakeHost {
             });
         }
         Ok(images)
+    }
+
+    fn own_pid(&self) -> Option<u32> {
+        self.own_pid.get()
     }
 
     fn run_program(
@@ -657,6 +664,56 @@ impl Host for FakeHost {
         self.detached.borrow_mut().push(arguments.to_vec());
         Ok(9_999)
     }
+
+    /// Workflow #434 LAB-3: the watchdog of the fake Runtime: `status` decides `watchdog_alive`
+    /// while it runs, `watchdog_never_started` otherwise; `install` and `uninstall` succeed.
+    /// Every question is listed in the host's log (`watchdog <word>`).
+    fn watchdog(&self, asked: crate::watchdog::Asked, _root: &Path) -> crate::watchdog::Answered {
+        let (word, outcome) = match asked {
+            crate::watchdog::Asked::Status if self.runtime.running.get() => {
+                let owner = self.runtime.owner.borrow().clone();
+                (
+                    "status",
+                    Outcome::new(ActingctlCode::WatchdogAlive)
+                        .owner_epoch(owner.epoch)
+                        .pid(owner.pid),
+                )
+            }
+            crate::watchdog::Asked::Status => {
+                ("status", Outcome::new(ActingctlCode::WatchdogNeverStarted))
+            }
+            crate::watchdog::Asked::Install => {
+                ("install", Outcome::new(ActingctlCode::WatchdogInstalled))
+            }
+            crate::watchdog::Asked::Uninstall => (
+                "uninstall",
+                Outcome::new(ActingctlCode::WatchdogUninstalled),
+            ),
+        };
+        self.log.borrow_mut().push(format!("watchdog {word}"));
+        crate::watchdog::Answered {
+            line: Some(json!({
+                "schema_version": "actingcommand.watchdog.report.v2",
+                "outcome": outcome.envelope(actingcommand_contract::outcome::Detail::Full),
+                "attention": [],
+            })),
+            outcome,
+            developer_before: Vec::new(),
+        }
+    }
+
+    fn detach_rescue(
+        &self,
+        arguments: &[String],
+        initiator: Option<&str>,
+        _directory: &Path,
+        _log: &Path,
+    ) -> Result<u32, Outcome> {
+        let mut line = initiator.map_or_else(Vec::new, |word| vec![format!("initiator={word}")]);
+        line.extend(arguments.iter().cloned());
+        self.detached.borrow_mut().push(line);
+        Ok(9_999)
+    }
 }
 
 /// Workflow #421 INST-2: how one fake start behaves.
@@ -717,6 +774,10 @@ pub(super) struct FakeRuntime {
     /// The spawn under way: when, how it behaves and its build.
     pending: RefCell<Option<(u64, FakeStart, String)>>,
     revisions: Cell<u64>,
+    /// Workflow #434 LAB-3: the catalog the latest evaluation ran under, and the ones the next
+    /// reads answer, one per read (a new composition the workbench activates).
+    pub(super) catalog: RefCell<Option<String>>,
+    pub(super) catalogs: RefCell<VecDeque<String>>,
 }
 
 impl FakeRuntime {
@@ -749,6 +810,8 @@ impl FakeRuntime {
             calls: RefCell::new(Vec::new()),
             pending: RefCell::new(None),
             revisions: Cell::new(0),
+            catalog: RefCell::new(None),
+            catalogs: RefCell::new(VecDeque::new()),
         }
     }
 
@@ -764,6 +827,7 @@ impl FakeRuntime {
                 pause: None,
                 lease_active: false,
                 queued_requests: 0,
+                game: None,
             })
             .collect();
     }
@@ -792,6 +856,49 @@ impl FakeRuntime {
                 reason: SchedulingPauseReason::new(reason).expect("a pause reason"),
                 revision,
             });
+        }
+    }
+
+    /// Workflow #434 LAB-3 fix 2: sets the global pause (another party's).
+    pub(super) fn pause_global_as(&self, reason: &str) {
+        let revision = self.revisions.get() + 1;
+        self.revisions.set(revision);
+        *self.global_pause.borrow_mut() = Some(PauseSeen {
+            reason: SchedulingPauseReason::new(reason).expect("a pause reason"),
+            revision,
+        });
+    }
+
+    /// Workflow #434 LAB-3 fix 2: registers `alias`, unpaused (an instance the configuration
+    /// gained).
+    pub(super) fn register(&self, alias: &str) {
+        self.instances.borrow_mut().push(InstanceSeen {
+            alias: alias.to_owned(),
+            pause: None,
+            lease_active: false,
+            queued_requests: 0,
+            game: None,
+        });
+    }
+
+    /// Workflow #434 LAB-3 fix 2: the Runtime started by another hand (the watchdog, a reboot)
+    /// after an installer's start was left running: a new owner epoch, the build of the start under
+    /// way (if any), and every persisted pause restored as the real Runtime's restore does for a
+    /// start that is not installer-held (`crates/runtime-host/src/host/scheduling_pause.rs`,
+    /// `restore_scheduling_pauses`): its reason kept, its revision 1.
+    pub(super) fn restart_restored(&self) {
+        if let Some((_, _, build)) = self.pending.borrow_mut().take() {
+            *self.build.borrow_mut() = build;
+        }
+        self.running.set(true);
+        self.next_owner(self.clock.get());
+        for instance in self.instances.borrow_mut().iter_mut() {
+            if let Some(pause) = instance.pause.as_mut() {
+                pause.revision = 1;
+            }
+        }
+        if let Some(pause) = self.global_pause.borrow_mut().as_mut() {
+            pause.revision = 1;
         }
     }
 
@@ -1048,6 +1155,17 @@ impl RuntimeLink for FakeRuntime {
             owner_epoch: owner.epoch,
             started_at_unix_ms: owner.started_at_unix_ms,
         })
+    }
+
+    fn catalog_hash(&self, _state_root: &Path) -> Result<Option<String>, Outcome> {
+        if !self.running.get() {
+            return Err(refused());
+        }
+        self.calls.borrow_mut().push("catalog".to_owned());
+        if let Some(next) = self.catalogs.borrow_mut().pop_front() {
+            *self.catalog.borrow_mut() = Some(next);
+        }
+        Ok(self.catalog.borrow().clone())
     }
 }
 

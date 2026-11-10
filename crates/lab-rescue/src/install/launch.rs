@@ -51,6 +51,18 @@ pub(crate) struct Launched {
     pub(crate) attempts: Vec<Value>,
     pub(crate) samples: Vec<Value>,
     pub(crate) stalled: bool,
+    /// Workflow #434 LAB-3 (contracts/lab-two-entries.md §6): in the rescue module, the `memory`
+    /// row a start went on past after its wait (the row as the journal keeps it); `None` when the
+    /// guard passed or `actingctl install` started.
+    pub(crate) memory_noted: Option<Value>,
+}
+
+/// How a start judges its `memory` guard: the acknowledgments `actingctl install start
+/// --ack-guard` gave, and (Workflow #434 LAB-3, the rescue module) whether the guard only
+/// reports: the start waits up to `install.start.memory_wait_ms`, then goes on.
+pub(crate) struct Guarding<'a> {
+    pub(crate) acked: &'a [String],
+    pub(crate) report: bool,
 }
 
 impl Launched {
@@ -126,9 +138,10 @@ pub(crate) fn start(
     loaded: &Loaded,
     operation: InstallLocation,
     commit: &str,
-    acked: &[String],
+    guarding: &Guarding<'_>,
     progress: &mut dyn FnMut(&Value) -> Result<(), Outcome>,
 ) -> Result<Launched, Outcome> {
+    let acked = guarding.acked;
     let settings = &loaded.settings;
     let runtime = host.runtime();
     let root_plain = observe::plain_path(&paths.root);
@@ -150,6 +163,7 @@ pub(crate) fn start(
         attempts: Vec::new(),
         samples: Vec::new(),
         stalled: false,
+        memory_noted: None,
     };
     let memory_acked = acked.iter().any(|ack| ack == InstallGuard::Memory.as_str());
     for attempt in 1..=settings.start_attempts {
@@ -168,7 +182,14 @@ pub(crate) fn start(
         if memory.result != GuardResult::Pass {
             memory.values["waited_ms"] = json!(host.now_unix_ms().saturating_sub(waited_from));
         }
-        let passes = memory.result == GuardResult::Pass || memory_acked;
+        // Workflow #434 LAB-3 (contracts/lab-two-entries.md §6, open point 4): the rescue
+        // module's start waited as above and goes on; the row is reported.
+        if guarding.report && !memory_acked && memory.result != GuardResult::Pass {
+            launched.memory_noted = guards::values(std::slice::from_ref(&memory))
+                .into_iter()
+                .next();
+        }
+        let passes = memory.result == GuardResult::Pass || memory_acked || guarding.report;
         if !passes {
             if attempt == 1 {
                 return Err(super::refusal(operation, InstallRefusal::GuardFailed)

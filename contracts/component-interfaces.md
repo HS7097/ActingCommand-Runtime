@@ -285,7 +285,11 @@ Also planned by the same design (§5.2), outside the rows above:
 - **The MCP entry's `entry_protocol`** becomes 2, in `mcp-entry\g2\`, its child
   `actinglab-mcp.exe` (LAB-5; [install-cli.md](install-cli.md), "The MCP entry").
 - **`install-root`**: whether the journal's `initiator` and `one_way` raise it is LAB-3's to judge
-  ([lab-two-entries.md](lab-two-entries.md) §13, open point 5).
+  ([lab-two-entries.md](lab-two-entries.md) §13, open point 5). Judged by LAB-3 (0.12.48): no
+  raise. They are optional members of the single-location journal `install-operation.v1`, which
+  `install-root` does not cover, written only by the Lab's rescue module; the A/B journal v2 takes
+  them when R-15c builds it, inside revision 1. `install-cli` stays 1 too: the rescue module's
+  operation kinds `config_replace` and `pack_place` are operations a UI of revision 1 never starts.
 
 ### Planned: Workflow #428 168 (S168-4 and S168-5; [v012-register.md](v012-register.md) §1.291)
 
