@@ -1454,6 +1454,57 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
     lab_relations`; it is not tried again before the next start. A close that stops it says
     nothing.
   - No key, code, ledger format or table is added; the location `build_lab_relations` is new.
+- #422 QP-1 (since 0.12.49; [v012-register.md](v012-register.md) §1.291): a view page's history
+  statement stays inside its segment whatever SQLite's planner chooses. Before, for a page
+  without a per-run link nothing in the statement's text made the walk follow the segment: the
+  planner chose the index, and with a time bound it could choose the time index, which takes no
+  sequence bound (the time bounds are a range on its first column), and read every record of the
+  time range however far before the segment.
+  - **The guarantee.** Every time term of a history statement is written with a unary `+`, with
+    a per-run link or without, so no index serves it and no time bound drives a statement; the
+    window start's lookup (`MIN(sequence)` through the time index, LN-WS above) is a statement
+    of its own and unchanged. A statement without a per-run link writes its window's sequence
+    terms (`from_sequence`, `to_sequence`) with a `+` too: its segment always lies inside the
+    window, so they select nothing more, and the segment's `e.sequence>c AND
+    e.sequence<=end` is the only sequence range an index can take. Every view and link index is
+    (column, sequence), so whichever drives such a statement (the row id, a view index on an
+    equality or `IN`, a link index through `l.sequence=e.sequence`), its search carries the
+    segment's two bounds, and any later search reads the one row of a sequence it gave. The
+    ledger's gate row "QP-1" holds this on `EXPLAIN QUERY PLAN` (values bound) for every view,
+    every filter such a page carries and their pairs, on an empty database and a filled one,
+    each without statistics and after `ANALYZE`. A statement with a per-run link is driven by
+    that link's index as DIAG-RUN made it (P32 A-1 above), which reads only that run's records.
+    Rows, their order, cursors, read scope and continuation are unchanged; only plans may differ.
+  - **The first statement.** A page's first statement spans one sequence and runs whatever the
+    budget (LN-WS above). That is safe since QP-1: every search it makes stays inside its one
+    sequence, so it reads that sequence's rows (with a per-run link, the run's rows the link's
+    index gives within its bounds), and its work does not grow with the history before the
+    window.
+  - **The window's width is the client's.** The Runtime does not limit the distance between
+    `from_sequence` and `to_sequence` (`EventQuery::validate` checks the order of the time and
+    the severity bounds, and no width): a client's window width is its own rule. A wide window
+    costs segments, each bounded and each under the page's budget.
+  - **Two reads of a page that its window does not bound,** unchanged by QP-1:
+    - *The Lab relations* (RB-1 above), read by a Lab-view page before its selection and by any
+      other page at its first own row that names a request, a correlation or a run (IDLE-OV),
+      unless its reader already holds them for its snapshot (QR-2). A reader-pool page past the
+      end of its pool's relation index reads from that end through
+      its snapshot: the Lab anchors in that range (source and type view indexes, the range on
+      their sequence), the link rows in it (the link table's key), and, for a request or a
+      correlation first anchored there, its link rows from the start of the history through
+      the snapshot (their link indexes); in spans of one sequence doubling to
+      `history_scan_rows`. When the index is not built (its build still runs or failed, or a
+      writer's own page, which has none), the page reads the Lab relations of the whole
+      history: every Lab anchor through the source and type indexes, and the runs of every link
+      row that names one of their requests or correlations through those link indexes. Both run
+      under the page's budget and its statement bound; a cut ends the page as IDLE-OV says.
+    - *Run recovery* (LN-6), unless the page asks for none (QR-2): for each run among the
+      page's rows, that run's records from sequence 0 through the snapshot, through the run
+      link's index (`ledger_links_run`), in statements of at most `history_scan_rows` sequences
+      and `history_page_rows` rows, until one more record than a recovery context holds (1 025);
+      the page looks at its budget before each statement and its statement bound holds inside
+      each, and a context the budget cuts is `context_limit`.
+  - No key, code, index, table or ledger format is added.
 - #422 LN-7c Q (`rd-1026/ln7c/final-query.md` §1.5, §5; v0.12.17, `actingd-config` revision
   16): the frame cleaner decides by ledger query on a read-only connection of its own
   ([ledger-store.md](ledger-store.md), "Frame cleaner"). `frame_query_steps_per_second` paces
