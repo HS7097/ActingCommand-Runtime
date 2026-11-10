@@ -412,7 +412,10 @@ reference once per evaluation, in this order.
    that list's reason, the first such list in the order of `lists`, and nothing more is read.
    Every listed list is declared in `facts[]`, so the up-front check of section "Record lists"
    has read it before any candidate: there an unusable list ends the evaluation `unknown`, with
-   no verdict, as for any declared list.
+   no verdict, as for any declared list, with the reason of the first unusable list in the
+   declared order of `facts[]`, and no list maximum is read. Step 1's own order, that of
+   `lists`, is therefore what a direct read of one reference shows (a reference read alone, as a
+   test reads it); a whole evaluation shows the up-front check's.
 2. Each pin's value: the literal, the fact, or its `otherwise` (reason `term_fallback_used`), as
    a `table` read's step 2. Still unavailable, the read is Unknown with the first fact's reason.
 3. Each key of the union, in ascending byte order. No row of the table has the key: the read is
@@ -423,7 +426,7 @@ reference once per evaluation, in this order.
 
 | Case | The read |
 |---|---|
-| A listed list is unusable | Unknown, that list's reason, the first in the order of `lists` (step 1) |
+| A listed list is unusable | Unknown, that list's reason, the first in the order of `lists` (step 1), when the reference is read alone; in a whole evaluation the up-front check ends it first, `unknown` with the first unusable list in the order of `facts[]` |
 | Every list is usable and the union is empty (no row, or none that a `where` keeps) | `empty`, known |
 | Every list is usable and no key of the union is of the class | `empty`, known |
 | One key of the union has no row in the table | Unknown, `lookup_miss`, whatever the others hold: the missing key may hold the largest value |

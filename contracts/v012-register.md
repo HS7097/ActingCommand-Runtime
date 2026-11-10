@@ -8836,9 +8836,15 @@ S168-5a, 9 tests, on tables loaded with `LoadedTable::load` and fake snapshots:
   `member.b`} and `inventory.list.example_kind_b` holding {`member.b`, `member.d`} read the
   largest of the union {a, b, d}; `member.b`, in both lists, is looked up once and counts once;
   `count` is 3 and `fact_keys` names both lists in the order of `lists`.
-- `table_list_max_unusable_list_is_unknown`: with `inventory.list.example_kind_b` stale, the
-  reference reads Unknown `fact_stale` whatever `inventory.list.example_kind_a` holds; with both
-  lists unusable for different reasons, the reason is the first list's in the order of `lists`.
+- `table_list_max_unusable_list_is_unknown`, in two parts. (1) A direct read of one reference,
+  its lists handed in a fake snapshot without the up-front check: with
+  `inventory.list.example_kind_b` stale, the reference reads Unknown `fact_stale` whatever
+  `inventory.list.example_kind_a` holds; with both lists unusable for different reasons, the
+  reason is the first list's in the order of `lists`. (2) A whole evaluation of a document that
+  declares the two lists in `facts[]` in the opposite order of `lists`, both unusable for
+  different reasons: the up-front check ends the evaluation `unknown` before any candidate and
+  before any list maximum is read, with no verdict, no `selection_table_list_max` reason, and the
+  reason of the first unusable list in the declared order of `facts[]`.
 - `table_list_max_where_skips_rows`: a `where` keeping `state.a` leaves out a row of `state.b`
   whose key the table lacks; that key is not looked up, is no miss and is not counted, and the
   read is the largest of the kept keys.
