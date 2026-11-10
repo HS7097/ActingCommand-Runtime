@@ -8572,6 +8572,165 @@ cut: `items_truncated` and the pointer `/catalog/compile_warnings/items` in `tru
 `overview::tests::cw1_a_cut_fact_and_the_catalog_block_say_how_many_rows_are_missing` (fails
 before: the fact had no cut row). No test adapted.
 
+### 1.291 Workflow #428 S168-0 (contracts only): a list reading written as a fact, a table maximum over a list, and a judge-only step; slices S168-4 and S168-5 (Alice's answer to item 168 of 2026-11-08, board #428 6721302838; the 168 design of 2026-11-10, signed by the coordinator with its answers Q-1 to Q-11 on board #430 6755408718, among them Q-4, extend the Runtime with generic pieces, and Q-5, holdings split into several lists with the 256-row bound kept; read on main `d06910c6`; coordinator work order `rd-1110/brief-s168-contracts.md`)
+
+The contracts are [resource-readings.md](resource-readings.md) ("List readings"),
+[instance-fact-store.md](instance-fact-store.md) ("List reading facts" and the capacity ledger),
+[ocr-fields.md](ocr-fields.md), [selection-policy.md](selection-policy.md) ("Record lists",
+"Table maximum over a list", "In-task consumer", "Limits") and
+[selection-graph.md](selection-graph.md) ("Select over a scan", "Ending empty", "Judge step",
+"Records"); the planned revisions are in [component-interfaces.md](component-interfaces.md),
+"Planned: Workflow #428 168". 1.291 was the next free number on `d06910c6`; S168-4 and S168-5 add
+their rows under this section.
+
+**S168-0 itself.** Contracts only: no code, no test, no gate row, no CI file, no configuration
+key, no code of the outcome catalog, and no live revision raised. The three pieces carry no game
+word: a list of keyed rows read from a page, the largest integer of one table column over listed
+keys, and a step that evaluates and records without input. Account data (what an instance holds,
+what was judged worth) stays in the instance fact store and the ledger.
+
+**The two slices.**
+
+| Slice | Repository | Size | What | Depends on | Interfaces |
+|---|---|---|---|---|---|
+| S168-4 | Runtime | L | the design's G-2: the `read_list` effect (declaration gate, parser, admission, the static walk's self-edge and once-per-run rule), the kernel's list read over the scan session with no policy, the three misses and their warning, the host's publication at the successful terminal (stage 2), the reserved prefix `inventory.list.` for clients | S168-0 | `package` 8 |
+| S168-5 | Runtime | L | the design's G-4 and G-5: the value source `table_max_over_list` in the selection-policy crate (validation, binding, one read per reference, the reason, the input identity, upper bound, the scheduling refusal); the `judge` effect (declaration, admission, the kernel's judge path without an input port, the host's refusal of an input for it, the record with `judge_only`, the run's end); the ledger reader's rules for `judge_only` | S168-4 merged | `package` 8 (same release) or 9; `ledger` 8 or 9 |
+
+**Named tests.** Logic tests with fakes and a fake clock, no sleep; the ids are made up
+(`member.a` to `member.z`, `domain.x`, `domain.y`, the key `inventory.list.example_kind_a`, the
+table `example_values`, the serial `TESTSERIAL0001`).
+
+S168-4, on a fake provider's saved viewports and a fake device:
+
+- `list_reading_publishes_whole_list`: a scan over three viewports reading `member.c`,
+  `member.a`, `member.b` with a `rank` column publishes, after the successful terminal, one
+  `fact.published` with one `record_list` record: rows `member.a`, `member.b`, `member.c` in that
+  order; observed at the capture time of the viewport the end check passed on; expiring
+  `valid_for_ms` later; the lowest confidence of the rows' features; `source_detector`
+  `list_reading:<task>/<operation>` and `source_snapshot_id` naming the run and that viewport.
+- `list_reading_empty_list_is_known`: no anchor match, both checks passing on the first
+  viewport: a record with zero rows and confidence 1000, and no input.
+- `list_reading_miss_publishes_nothing`: a position out of the dictionary, two positions with
+  one ID, and a 257th position each publish nothing and write the warning
+  `contained_task_resource_reading_unresolved` with `list_position_unread`,
+  `list_duplicate_key` and `list_rows_exceeded`; the run succeeds; the key's record from before
+  the run stays byte for byte; the third stops its scan at the 257th position.
+- `list_reading_failed_scan_fails_run`: a viewport that does not align ends the run with
+  `selection_scan_alignment_rejected`, stage `read_list`, and the run publishes no list and no
+  reading.
+- `list_reading_declaration_refusals`: each rule of the declaration table refused at its pointer
+  by the gate, and by admission with `contained_task_resource_reading_invalid`
+  `<operation id>:<reason>`; task schema `0.8` with `UnconsumedField`; the step runs once per
+  run and the walk follows the page's next operation.
+- `list_reading_key_reserved`: `PublishFacts` of `inventory.list.example_kind_a` from the agent,
+  CLI and UI origins is refused `list_reading_key_reserved`, nothing appended.
+- `list_reading_read_by_keyed_fact`: a later run's select step reads the published list through
+  `keyed_fact` (a listed key's column, an unlisted key's `absent`); the same list older than the
+  document's `max_age_ms` ends the evaluation `unknown` with `fact_stale`.
+
+S168-5, on tables loaded with `LoadedTable::load`, fake snapshots and a fake device whose input
+port fails the test on any call:
+
+- `table_list_max_reads_largest_of_class`: rows (`member.a`, `domain.x`, 5), (`member.b`,
+  `domain.x`, 9), (`member.c`, `domain.y`, 7); the list {a, b, c} under the pin `domain.x` reads
+  9, and the reason `selection_table_list_max` holds `maximum` 9, `maximum_identity`
+  `member.b`, `count` 3.
+- `table_list_max_empty_and_out_of_class`: an empty list, and the list {`member.c`} under
+  `domain.x`, each read the document's `empty`.
+- `table_list_max_missing_key_is_unknown`: {`member.a`, `member.z`} with `member.z` unknown to
+  the table, every key unknown, and a null cell of the class each read Unknown, `lookup_miss`;
+  under `drop_candidate` the candidate is `unknown_dropped`, under `abort_evaluation` the
+  evaluation is `unknown`; never 0.
+- `table_list_max_validation`: a `boolean` or `enum_string` `value_column`, an undeclared list or
+  table, a substitution, a tie-break key, a `fallback_column` and a 17th reference are validation
+  errors; `evaluate_collect` and the catalog compile refuse a document that uses the source.
+- `table_list_max_input_identity`: a changed cell of a contributing row, or a changed listed
+  row, moves `input_sha256`; a changed row of an unlisted key does not; a document without the
+  source keeps its `policy_sha256` and `input_sha256` byte for byte.
+- `judge_records_and_ends_with_its_key`: a judge over three slots whose candidates are judged
+  worth, not worth and unknown (out of the dictionary) writes one `task.selection_evaluated` with
+  `judge_only`, the three verdicts' kinds, `selected` the worth one and `unknown_check`
+  `blocking` `unknown_instances` with count 1; the run is Completed on the step's page with the
+  step's `outcome_key`.
+- `judge_unknown_ends_with_its_key`: with the declared list stale, the record holds `unknown`
+  with no verdict and the run is Completed with the same key, never `selection_not_selected`.
+- `judge_performs_no_input`: in both runs above the fake input port receives no call and the
+  ledger holds no `task.effect_intent`, input or `task.effect_completed` of the step's action; a
+  host handed an effect intent for a judge step's action ends that run
+  `contained_task_judge_input_refused` before the device, and another instance's run goes on; an
+  architecture guard finds no input type in the kernel's judge module.
+- `judge_declaration_refusals`: a `guard`, an `expect_after`, a `repeated_anchor` layout, a
+  `scan`, a mode other than `none_allowed`, a `required_count` below the slots, a mapping that
+  does not list the page with the key, and use as a prerequisite are each refused with the code
+  and detail of the declaration table.
+- `judge_record_reader_rules`: the ledger reader takes `judge_only` with 0 or 2 selected and
+  refuses it with `multi_select`, a v2 projection, no `unknown_check` or `outranked_possible`; a
+  reader of `ledger` 7 refuses the record (`corrupt_ledger_record`).
+
+**Order.** S168-4 first; S168-5 on main after S168-4 merged (its judge tests read a published
+list; its table tests do not need one). Both before S168-6, the standard package's slice; the
+offline slices S168-1 to S168-3 go on beside them. S168-7, the console's view, needs a console
+whose `ledger` range holds S168-5's revision.
+
+**What each changes at deploy.**
+
+- S168-4: the Runtime declares `package` [3, 8]. No pack declares a list yet, so no run changes.
+  A client's publication under `inventory.list.` is refused from it. The ledger, the
+  configuration and the capacity are unchanged; a rollback to 0.12.47 stays open.
+- S168-5: `package` 8 (in S168-4's release) or [3, 9], and the next `ledger` revision, one way:
+  once a judge step has run, going back to a Runtime that does not read `judge_only` is refused,
+  as for revision 7, and the Runtime combines only with a console whose `ledger` range holds it,
+  so it is deployed with or after that console. No configuration key. A document without the new
+  source and a package without a judge step behave byte for byte as before.
+
+**Where S168-0 differs from the design or the work order.**
+
+- (a) The design reads 256 active fact identities per instance; the store holds 256 for the whole
+  host, shared by every instance, and the contracts book lists there.
+- (b) A list maximum reads one list, as the work order says. The lists split by kind (Q-5) are
+  combined by an `all` of comparisons, one per list, which is exact when each `empty` lies below
+  the class's values.
+- (c) A list reading reads only a `repeated_anchor` layout over a scan: a list that fits one
+  viewport declares the scan too, as an `on_empty` select does, so every written list has
+  positive evidence of both ends.
+- (d) The judge's run ends with one key for every result; the record tells the results apart
+  (the decision's own outcome key and `unknown_check`). A key per result would need mappings that
+  tell results apart on one page (open point 4).
+- (e) The table digests behind a judge's decision are the run's existing
+  `standard_pack_table_read` records, not a new member of the record.
+- (f) A judge reads one frame of a `fixed_slots` layout: a scan moves the list, which is input.
+
+**Open points** for the coordinator.
+
+1. The `ledger` number: #434 plans 8 for LAB-6. S168-5 in an earlier release takes 8 and moves
+   #434's row (and UI-L1's range) to 9; the same release shares 8; after LAB-6, 9.
+2. Fail-closed costs for S168-6: a position whose identity the package's dictionary lacks keeps
+   the whole list unwritten, so the dictionary covers every identity the list can show (the
+   design's G-3); and a listed key the value table lacks makes every list maximum over that list
+   unknown, so S168-2's table gives every identity at least one row (a row of another class for
+   an identity with no value).
+3. A run's lists are written at its end: a judge reads lists of earlier runs only, so the
+   standard package reads its lists in a task that runs before its judge task.
+4. One key per judge run: enough for the console, which reads the record. A catalog that must
+   react to an `unknown` judgment differently needs a per-result mapping condition, a later
+   slice.
+5. `actinglab replay` reports marks' readings but not a list's rows; an authoring aid for S168-6
+   that a later Lab slice may add.
+
+**Rollback.** Nothing to roll back: text only.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S168C-1 | the operation effect `read_list` `{layout_id, key_feature, key_column, columns, fact_key, valid_for_ms, scan}` | package format, `package` 8 | S168-4 | resource repositories | task schema `0.9` page-graph only; once per run |
+| S168C-2 | `fact.published` of `inventory.list.<name>`: one `record_list` record, `source_detector` `list_reading:` | existing record, new key prefix | S168-4 | runtime-host | §4 below; tagged as every instance key |
+| S168C-3 | `reading_problem` tokens `list_position_unread`, `list_duplicate_key`, `list_rows_exceeded`; the stage `read_list` | outcome vocabularies | S168-4 | execution-kernel | values the ledger reader only spells |
+| S168C-4 | `list_reading_key_reserved` (non-fatal request error, `fact_key`) | outcome code | S168-4 | runtime-host | from every origin |
+| S168C-5 | the value source `table_max_over_list` | selection document, `package` 8 or 9 | S168-5 | resource repositories | at most 16 per document |
+| S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_key`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `maximum`, `maximum_identity` | outcome code and keys | S168-5 | selection-policy | a decision reason, no record member |
+| S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key}` | package format, `package` 8 or 9 | S168-5 | resource repositories | a terminal; `fixed_slots` only |
+| S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, next `ledger` revision | S168-5 | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
+| S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5 | runtime-host | ends that run only |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -8651,6 +8810,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`, `device.screen_off_timeout_ms` (per instance, a bound handset only, with a lifetime; §1.59 RD5-2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-5b |
 | `session.remedy.choices` (one per scope: instance, server or game; §1.110 B15-6) | instance | yes | #411 B15 R6 |
 | `session.dispatch.parameter.<name>` (an overlay of a run's snapshots only, never stored; the prefix `session.dispatch.` is refused to publishers; §1.110 B15-7) | — (never stored) | — | #411 B15 R5 |
+| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 256 rows; the prefix is refused to client publishers; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).

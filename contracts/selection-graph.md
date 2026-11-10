@@ -922,6 +922,12 @@ The scan's moves are inputs that come before the selecting tap, so a failure aft
 failure after input: the step is not retried, the task does not recover within itself, and the
 run fails with the failure's code. The selecting tap still comes after every failure path.
 
+The same scan session reads a list for a `read_list` step (Workflow #428 S168-4,
+[resource-readings.md](resource-readings.md), "List readings"): steps 1 and 2 only, with no
+policy, no early stop, no `Return`, no `Confirm` and no tap. Its scan failures end the run as
+here, with the stage `read_list`; a position it could not read is a miss of the list, not a
+failure.
+
 ### Record per path
 
 Workflow #308 SEL-L4b (S0 §3.4). A failure before the decision exists writes no record, as for a
@@ -978,6 +984,11 @@ lists the page, whose key it checks against the kernel's. This is the only norma
 middle of a stage; an `empty` decision without `on_empty` still fails. The admission of
 `on_empty`, including the route's terminal and the prerequisite and return-home refusal
 `select_on_empty`, is in section Declaration.
+
+A judge step (Workflow #428 S168-5, section Judge step) ends the run on its page the same way,
+after its record and with no input, for every result it reaches: a decision with or without
+candidates judged worth, a decision with unknown instances, and an `unknown` evaluation. Its end
+key is the step's own `outcome_key`.
 
 ### Expected identity
 
@@ -1096,6 +1107,115 @@ admitted and before any frame is read, a name the package does not declare (any 
 package that declares none) or a value that is not one of its declared options is
 `not_recognised`. A package that declares no parameter replays exactly as before.
 
+## Judge step
+
+Workflow #428 S168-5, written ahead of its code by S168-0 ([v012-register.md](v012-register.md)
+§1.291). A judge step evaluates the candidates one frame shows with a selection policy, records
+the decision, and ends the run with a key its package declares. It performs no input. Its decision
+is advice kept in the ledger: no Runtime component acts on it. **Status:** until S168-5 a package
+that declares one is refused (`UnknownField` at `/operations/<i>/judge`).
+
+### Declaration
+
+The names are neutral examples:
+
+```json
+{"id": "judge_choices", "from": "choice_page", "to": "choice_page",
+ "judge": {"layout_id": "layout/choices", "policy": {"path": "policies/choices.json"},
+           "outcome_key": "choices_judged"}}
+```
+
+| Rule | Refusal |
+| --- | --- |
+| `judge` is an effect: exactly one of `click`, `application`, `select`, `wait`, `read_list` and `judge`; task schema `0.9` only; a page-graph task | an older schema: `UnconsumedField` at `/operations/<i>/judge`; `linear_steps`: `contained_task_linear_invalid`, `reason=judge` |
+| `judge` holds `layout_id`, `policy` (`{path}`, a safe task-local `policies/<name>.json`) and `outcome_key`, all strings, all required | `MissingField`, `InvalidType` or `UnknownField` at the member |
+| `to` is the `from` page | `judge to=not_from` |
+| `layout_id` names a `fixed_slots` layout the task declares on the `from` page, whose `unknown_identity` is `reject`: one frame shows every candidate it can hold. A list that scrolls is read by a list reading, never judged on one frame, and a judge declares no `scan` | `judge layout=not_fixed_slots`, `judge scan=declared` |
+| The document passes every check of a select step's (the 512 KiB limit, decode, canonical form, `validate`, `applies_to.candidate_layout_id`, `fields`), with `selection.mode` `none_allowed` and `required_count` at least the layout's slot count (so at most 64 are chosen). Its `required_count` above 1 does not make the step a multi select | `contained_task_select_policy_missing`, `_invalid`, `_mismatch`; `judge mode=not_none_allowed`, `judge required_count=below_slots` |
+| The task declares `scheduling_outcome`, and the keyed-terminal rule holds for the step's state: exactly one mapping with that state's effect condition lists the `from` page, and its key is `outcome_key` ([README.md](README.md), phases; the outcome coverage check of a task without phases) | `contained_task_outcome_declaration_incomplete`, `task_phases_outcome_incomplete` |
+| No member an input uses: `guard`, `expect_after`, `unguarded_trusted_coordinate`, `max_runs`, `on_max_runs` and `on_guard_refused` are refused; `retryable` is `false` | `judge <member>=declared` |
+| The step is a terminal: the static walk ends there. It is neither the designated operation nor a member of a designated effect set, since it has no effect | `judge designated=declared` |
+| A package with a judge step is no prerequisite or return-home layer, as a package with an `on_empty` step is not: an early end on the step's page would leave the dependent package short of its entry page | `contained_task_prerequisite_incompatible`, `reason=judge_end` |
+
+The declaration gate refuses the structure with `resource_declaration_invalid` at the pointer;
+the parser and Runtime admission refuse the rest before any run, the step rules with
+`contained_task_select_invalid` and the detail token shown.
+
+### Execution of a judge step
+
+One judge step runs, with no input:
+
+1. Its frame F1, the dispatched frame recognized as its `from` page, is projected with the
+   layout: P1 (as section Execution, step 1).
+2. The host supplies the instance fact snapshot, with the record lists the document declares and
+   the run's parameters, and the evaluation instant, as for a select step (section Execution,
+   step 2). The tables are the run's (section Tables).
+3. The policy is evaluated over P1's actionable candidates (section Execution, step 3).
+4. The unknown instances are counted as for a single-frame select that declares `on_empty`: the
+   actionable candidates the kernel keeps from the evaluator (an unresolved consensus feature,
+   an identity feature that read no identity; out of the dictionary counts as unknown) and those
+   the evaluator drops as unknown, with their upper bound computed as there. A static table drop
+   is none.
+5. The decision is recorded once, as `task.selection_evaluated` (section Records), with the
+   confirmation `judge_only` and `unknown_check`.
+6. The kernel records the step's `StepFinished` with `page_label` its page as recognized on F1
+   (for a phased task, `phase` with `completed: false`), moves the run to Completed on that page
+   and finishes it with `executed_steps` including the step, `final_page` that page and
+   `selected_scheduling_outcome` the step's `outcome_key`. The host derives the disposition from
+   that last `StepFinished` as for any end.
+
+No confirmation frame is captured, no guard is judged, no point is sampled, and no
+`task.effect_intent`, input or `task.effect_completed` belongs to the step.
+
+**Every result ends the run the same way:**
+
+| Result | The record | The run |
+| --- | --- | --- |
+| A decision, `selected` (candidates judged worth) or `empty` (none), with no unknown instance | verbatim; `unknown_check.blocking` `none` | Completed with `outcome_key` |
+| The same with unknown instances: candidates that could not be judged, the named gap | verbatim, with every verdict it has; `blocking` `unknown_instances`, `unknown_instances` their count | Completed with `outcome_key` |
+| `unknown`: the evaluator ended the evaluation (an unusable record list, an `abort_evaluation` rule) | `unknown`, no verdict, its reason and rule | Completed with `outcome_key` |
+
+The record tells the results apart: the decision's own `outcome_key`, the string the document's
+`applies_to.outcome_keys` declares for its outcome, and `unknown_check`. Each verdict tells one
+candidate apart: `ranked` and chosen (judged worth), `gate_rejected` (not worth; the gate that
+decided names why), `unknown_dropped` (could not be judged; its reason). The run's scheduling
+outcome is the step's one `outcome_key` for every result, because one page under one effect
+condition maps to one key.
+
+**Failures before the decision** end the run with their code and write no record, as for a
+single-frame select (section Execution): F1 not projected (`candidate_projection_budget_exceeded`,
+`candidate_feature_failed`, `candidate_feature_provider_missing`,
+`invalid_candidate_projection`), `selection_state_unavailable`,
+`selection_fact_context_mismatch`, `selection_evaluation_failed`, and a record too large or
+invalid (`selection_record_too_large`). None of them follows an input: there is none.
+
+### No input, and how that is enforced
+
+Three layers, each sufficient on its own:
+
+1. **Declaration.** The effect excludes every other effect and every member an input uses, and
+   its layout is `fixed_slots` without a scan, so nothing moves on the page. The declaration
+   gate, the parser and admission refuse anything else before any run.
+2. **Kernel.** The judge path is a function of the projection, the snapshot, the instant, the
+   tables and the document that returns the step's end; it is not handed the run's input port or
+   the step's action seed, so it cannot sample a point or send an input. The run is Completed
+   after it, so no later operation runs.
+3. **Host.** The host accepts no `task.effect_intent` and no input for a judge step's action: one
+   would end the run with `contained_task_judge_input_refused` (runtime-host, error) before the
+   input reaches the device. It ends that run only, never the Runtime or another instance.
+
+So a judge step that ran is followed in the ledger by no `task.effect_intent`, input or
+`task.effect_completed` of its action. The tests of [v012-register.md](v012-register.md) §1.291
+pin all three layers.
+
+### Account data and offline
+
+The verdicts and the list maxima a judge reads depend on what the instance holds: they are
+account data, written to the ledger only, and no Runtime path writes them anywhere else.
+`actinglab replay` runs a judge step with the production interpreter and reports its record;
+`package dry-run` evaluates it with the empty offline snapshot, as it evaluates a select step
+(section Offline), and confirms nothing.
+
 ## Records
 
 ### `task.selection_evaluated`
@@ -1113,7 +1233,9 @@ before any input and before any failure return (section Select step). A multi se
 Multi select below) appends it once, when its tap sequence ends, at its first failure or where
 it stops, before the step's `task.effect_completed`; a decision with nothing to tap is appended
 after the decision, as for a single select. The host appends it linked to the step's action and
-to the last frame the attempt read. A package without a select step never produces the event.
+to the last frame the attempt read. A judge step (Workflow #428 S168-5, section Judge step)
+appends exactly one as well, linked to its action and to F1, before its `StepFinished`. A
+package without a select or judge step never produces the event.
 
 The record has the shape of a `policy.*` decision: identity hashes and a complete breakdown.
 
@@ -1146,8 +1268,10 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 | `page_changed` | The confirmation frame is not the step's page. |
 | `guard_failed` `{code}` | The step's guard failed on the confirmation frame. |
 | `capture_failed` `{code}` | The confirmation frame could not be captured. |
+| `judge_only` | A judge step's record, whatever its outcome (Workflow #428 S168-5, section Judge step; a planned `ledger` revision, [component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168"): no confirmation is attempted and no input follows. No member. |
 
-A confirmation is attempted exactly when the outcome is `selected`. Together with the
+A confirmation is attempted exactly when the outcome is `selected`, except in a judge step's
+record, whose confirmation is always `judge_only` and never attempted. Together with the
 projection, a matched or mismatched record holds both candidate-set hashes. A record with
 `unknown_check` (Workflow #308 SEL-L4b) attempts it only when, besides, nothing blocks the
 decision, and a select over a scan records the v2 projection and its own confirmation kinds
@@ -1218,7 +1342,7 @@ Rules M1–M8 (M-357b §5.2) hold beside the path rules; a violation is
 - M8 (`path_rule_1`): an early-stopped scan holds a full `selected` and no
   `selection_quota_unfilled` decision reason.
 - "A record with `unknown_check` chooses exactly one candidate" holds only without
-  `multi_select`.
+  `multi_select`, and (Workflow #428 S168-5) without the confirmation `judge_only`.
 
 Each tap is one `task.effect_intent` linked to its pick's confirmation frame, before the
 record; a scan's moves between picks never link to a confirmation frame; the step has one
@@ -1268,6 +1392,12 @@ A record is checked when it is written and when it is read:
   whose projection is v1 of a `repeated_anchor` layout, carry two 64-hex hashes and, like the
   other confirmations, an optional embedded projection that seals the first; a `tracked`
   `shift_px` is at most 64; neither the decision hash nor the shift is recomputed;
+- `judge_only` (Workflow #428 S168-5; planned `ledger` revision) belongs to a record without
+  `multi_select` whose projection is v1 of a `fixed_slots` layout and which carries
+  `unknown_check` with `blocking` `none` or `unknown_instances` (`none` exactly when
+  `unknown_instances` is 0; never `outranked_possible`); its outcome is `selected`, `empty` or
+  `unknown`, and `selected` holds exactly the `ranked` verdicts, 0 to 64 of them, in rank order;
+  any other confirmation never comes with a judge step's decision;
 - reason codes and confirmation codes are tokens, reason details text of at most 1024 bytes,
   the decision chain holds 1–128 reasons, as for a policy dispatch; labels and IDs are at most
   256 bytes without control characters.
@@ -1298,3 +1428,6 @@ once before its first tap (M-357b §5.3), so that bound too fails before any inp
   built before DB-3s rejects a ledger that holds one, so the UI build paired with v0.12.0
   pins a Runtime revision that includes DB-3s, and so does `actingledger`. They join ledger
   revision 3 because DB-3s merges before the v0.12.0 tag; 0.12.x adds no member to them.
+  The confirmation `judge_only` (Workflow #428 S168-5) joins the next `ledger` revision: a reader
+  built before it rejects a ledger that holds one, as for `tracked`, so the console and
+  `actingledger` move to a Runtime that knows it before such a ledger reaches them.

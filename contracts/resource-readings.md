@@ -12,7 +12,9 @@ This document covers the declaration, its admission and the kernel reading (slic
 Workflow #384 D2-S2's marks on any page, hand-off and join), the host bridge that publishes the
 readings as instance facts (slice S5b, "Host" below), the recognition maintenance package
 (D2-S2, "Recognition maintenance packages" below) and the resource adjustments of an operation
-(Workflow #384 D2-S3, "Adjustments" below).
+(Workflow #384 D2-S3, "Adjustments" below). A mark writes one number; a list a page shows,
+every position of it, is written as one `record_list` fact by a list reading (Workflow #428
+S168-4, "List readings" below).
 
 ## Declaration
 
@@ -569,6 +571,179 @@ facts (D2-S4). It is an ordinary task package that only navigates and reads.
   one a server declares counts (Workflow #411 A32): the other qualifying packs of a server that
   declares one raise nothing. The resource repositories make it an error once their readers are
   declared (D2-S6).
+
+## List readings
+
+Workflow #428 S168-4, written ahead of its code by S168-0 ([v012-register.md](v012-register.md)
+§1.291). A list reading reads a list a page shows, across as many viewports as it takes, and
+writes it as one instance fact of value `record_list`: one row per position, keyed by the
+position's business identity, with the values the package declares for it. It is the one way a
+package's reading becomes a record-list fact; an OCR field never becomes one
+([ocr-fields.md](ocr-fields.md)). **Status:** until S168-4 a package that declares one is
+refused (`UnknownField` at `/operations/<i>/read_list`).
+
+### Declaration
+
+A list is read by a step: an operation of a task schema `0.9` page-graph task whose effect is
+`read_list`, beside `click`, `application`, `select` and `wait`. The following is the operation
+only; the numbers and names are neutral examples, not values:
+
+```json
+{"id": "read_kind_a", "from": "list_page", "to": "list_page",
+ "read_list": {"layout_id": "layout/members", "key_feature": "member", "key_column": "id",
+               "columns": [{"column": "rank", "feature": "rank"},
+                           {"column": "open", "feature": "open"}],
+               "fact_key": "inventory.list.members_kind_a", "valid_for_ms": 86400000,
+               "scan": {"identity_feature": "member", "axis": "vertical", "advance": {…},
+                        "reposition": {…}, "settle": {…}, "track": {…}, "start": {…},
+                        "end": {…}, "bounds": {…}}},
+ "guard": {…}}
+```
+
+| Member | Rule | Refusal @ pointer |
+| --- | --- | --- |
+| the effect | exactly one of `click`, `application`, `select`, `wait`, `read_list` (and, from Workflow #428 S168-5, `judge`); task schema `0.9` only; a page-graph task (`navigable_route`, phased or not); the task declares `scheduling_outcome`; at most 16 `read_list` operations in a task | an older schema: `UnconsumedField` @ `/operations/<i>/read_list`; `linear_steps`: `contained_task_linear_invalid`, `reason=read_list`; no outcome: `MissingField` @ `/scheduling_outcome`; a 17th: `InvalidValue` @ `/operations` |
+| `to` | the `from` page: the step stays on its page | `InvalidValue` @ `/operations/<i>/to` |
+| `layout_id` | a `repeated_anchor` layout the task declares on the `from` page, whose `unknown_identity` is `reject` | `InvalidValue` @ `…/read_list/layout_id` |
+| `key_feature` | an `identity` feature of the layout; the scan's `identity_feature` | `…/read_list/key_feature` |
+| `key_column` | a token `^[a-z][a-z0-9_]{0,31}$`: the row member that holds the business ID | `…/read_list/key_column` |
+| `columns` | 0 to 63 entries `{column, feature}`: `column` a token as `key_column`, distinct, never the `key_column`; `feature` a feature of the layout other than `key_feature`, each at most once, of value `passed` (a `boolean` column), `ocr_integer` (an `integer` column) or `identity` (a string column, the business ID it reads) | `…/read_list/columns/<j>/column`, `…/columns/<j>/feature` |
+| `fact_key` | starts with `inventory.list.`, satisfies the instance fact key rule, and is unique among every key the task writes (each mark's `fact_key` and `capacity_fact_key`, each other list) | `…/read_list/fact_key` |
+| `valid_for_ms` | `1..=31_536_000_000` | `…/read_list/valid_for_ms` |
+| `scan` | required: a select step's `scan` ([selection-graph.md](selection-graph.md), "Select step"), with every static check admission runs on it, but no `early_stop`: every position is read | `MissingField` @ `…/read_list/scan`; `early_stop`: `UnknownField` @ `…/scan/early_stop`; the static checks as a select step's |
+| `guard` | required, any guard a select step takes; judged on every viewport | `MissingField` @ `/operations/<i>/guard` |
+| input members | `expect_after`, `unguarded_trusted_coordinate`, `max_runs`, `on_max_runs` and `on_guard_refused` are refused; `retryable` is `false`: the scan's moves are inputs, and a retry would repeat them | `UnknownField` or `InvalidValue` at the member |
+| any other member of `read_list` | none | `UnknownField` @ `…/read_list/<member>` |
+
+A list that fits one viewport declares `scan` too: its start and end checks then both pass on its
+first viewport and the step makes no input. A layout of another kind is refused: one frame of a
+list cannot show where the list ends, and a list without positive evidence of both ends is never
+written.
+
+The declaration gate (`resource validate` and every parse) checks the structure, and the parser
+the references, each refusal naming the task's `task.json` and the pointer of the offending field
+as for a select step. Runtime admission runs the same validation on the sealed task and refuses
+a program that breaks it, before any input, with `contained_task_resource_reading_invalid` and
+the detail `<operation id>:<reason>`. A startup, stuck-recovery return-home or prerequisite
+package that declares one is refused as for readings
+(`contained_task_resource_reading_run_kind_unsupported`); a bound recovery entry and
+`recognize_only` take none.
+
+**Once per run.** A `read_list` step runs at most once in a run: once it ran, the page's
+operations are chosen without it, as for an operation whose `max_runs` 1 was reached with
+`on_max_runs` `next_candidate` ([README.md](README.md), "Per-run operation caps"). The static walk
+takes it as an edge from its page to the same page and then follows the page's next operation. A
+requested key set (`run_for_reading_keys`) never leaves one out: a page-graph package runs whole.
+
+### Reading
+
+One `read_list` step runs:
+
+1. **Scan.** The scan session of a select over a scan, its steps 1 and 2
+   ([selection-graph.md](selection-graph.md), "Select over a scan"): the dispatched frame settled
+   as the first viewport; the start check, with a rewind when declared; then the coverage
+   viewports, each with its move, settle, page, guard, alignment, gap and spacing checks and the
+   reading of every position, until the end check passes. No policy is evaluated, so nothing
+   stops it early.
+2. **Rows.** Each position's fixed Known reading is one row: `{<key_column>: <business ID>,
+   <column>: <value>, …}`, each declared column the fixed reading of its feature. The rows are
+   ordered by key, in ascending byte order.
+3. **End.** No `Return`, no `Confirm`, no tap. The kernel records the step's `StepFinished` with
+   `page_label` its page as recognized on its last viewport (for a phased task, `phase` with
+   `completed: false`), and the run goes on.
+
+The list holds only when every position was read. Otherwise it gives no reading:
+
+| `reading_problem` | When |
+| --- | --- |
+| `list_position_unread` | a position that was readable at least once holds no fixed Known reading of its identity or of a column's feature: never Known, contradicted later, or out of the dictionary, which counts as Unknown |
+| `list_duplicate_key` | two positions read the same business ID |
+| `list_rows_exceeded` | a 257th position was read: the list holds more rows than one fact can (256). The scan stops there; nothing is cut to fit |
+
+Each is the warning `contained_task_resource_reading_unresolved` (`reading_id` the operation's
+id, `fact_key`, `reading_problem`, `count`: the unread positions, the repeated keys, or 257),
+written at once as one task diagnostic row of kind `error` (`TaskDiagnosticErrorData::Recognition`,
+phase `post_admission`, without `target_id`) on the step's last viewport. The step completes, the
+run goes on and settles as it would without the list, and the key's earlier record stays until
+its own expiry. A list that gave no reading is never written in part: no row, no empty list and
+no earlier value is published for it.
+
+A failure of the scan itself (the start, a settle, an alignment, a gap, the spacing,
+`selection_scan_identity_mismatch`, the end, `selection_scan_bounds_exceeded`, the page, the
+guard, the geometry, the budget, a projection) ends the run with its code, with the stage
+`read_list`, as for a select over a scan: the moves were inputs, so the step is not retried and
+the run does not recover within itself. A run that fails or is cancelled publishes no list.
+
+Zero positions, with both checks passed, is an empty list: a reading that holds, with no row.
+
+### Publication
+
+The host writes the lists, through `publish_facts`, at a successful terminal, in stage 2 of
+"Host" above: the run's lists travel in memory on its terminal draft, as its readings do (a
+successful terminal that carries lists goes through the three stages as one that carries
+readings), and each list is its own single-record observation, published in the order of the capture times of
+the viewports their end checks passed on, after the readings of the same frame. No write site is
+added.
+
+| Field | Value |
+| --- | --- |
+| `scope` | `{"kind": "instance", "instance_id": <the run's registered instance alias>}` |
+| `key` | `fact_key` |
+| `content` | inline `record_list`, the rows in ascending byte order of their key |
+| `observed_at_unix_ms` | the device capture time of the viewport the end check passed on |
+| `expires_at_unix_ms` | `observed_at_unix_ms + valid_for_ms` |
+| `ttl_policy` | `{"minimum_ms": valid_for_ms, "maximum_ms": valid_for_ms, "source": "detector_contract"}` |
+| `confidence_milli` | the lowest confidence of the features the rows read that carry one (an identity always does; a `passed` feature of a color or composite target carries none); 1000 for an empty list, whose evidence is its passed start and end checks |
+| `source_detector` | `list_reading:<entry task id>/<operation id>` |
+| `source_snapshot_id` | `run:<run id>/frame:<frame id>/<operation id>`, the frame of the observation time |
+| `schema_version` | `fact.v1` |
+| `resource_bundle_hash` | as a reading's |
+| `invalidate_on` | `[]` |
+
+A row holds at most 64 fields (63 columns and the key). An observation the fact record cannot
+hold (over 512 KiB) is `contained_task_resource_reading_rejected` with
+`<operation id>:fact_observation_invalid`, before anything is published, as for a reading; the
+store's refusals are those of "Host" above, `fact_store_capacity_exceeded` among them, and fail
+the run the same way.
+
+### Staleness
+
+- **Every complete read is published**, also when its rows did not change: a new observation (its
+  run and frame) with a strictly newer observation time. A list's age is therefore the age of its
+  last complete read, and `valid_for_ms` bounds it. A document that reads it states its own
+  `max_age_ms` ([selection-policy.md](selection-policy.md), "Record lists").
+- **No invalidation.** A run that changes what a list holds does not drop the list: the package
+  reads it again, or its rows stand until their expiry.
+- **At the run's end.** A run's lists are published at its successful end, so a later step of
+  the same run (a judge step) reads them as they stood before the run.
+- **Nothing refreshes a list on demand.** The fact refresh raises demand only for keys a catalog
+  predicate reads, and no predicate reads a record list ([selection-policy.md](selection-policy.md),
+  "Scheduling consumer"); the standard package schedules its reading task itself.
+
+### Capacity and reserved keys
+
+- Each list is one fact identity, `(instance scope, fact_key)`, whatever its rows and however
+  often they change: the store replaces the record in place. Identities count against the store's
+  256 active facts, shared by the whole host and never reclaimed
+  ([instance-fact-store.md](instance-fact-store.md), "Capacity ledger"). A package may declare
+  several lists, for example one per kind of member, each under its own key: *n* lists cost *n*
+  identities on every instance that runs it. On a full store the publication is refused
+  (`fact_store_capacity_exceeded`, the run fails `contained_task_resource_reading_rejected`);
+  nothing is evicted.
+- A client never writes a list: a `PublishFact` or `PublishFacts` of a key under
+  `inventory.list.` is refused, from every origin, before the fact write gate, as the non-fatal
+  request error `list_reading_key_reserved` (`fact_key`), with nothing appended. A mark may still
+  name such a key (its record is an integer); a document that reads the key as a list then reads
+  `type_mismatch`, never a value.
+
+### Evidence
+
+The list's evidence is the run's own records: the fact record names the run and the viewport;
+every viewport is a capture with its recognition records and every move a `task.effect_intent`
+with its input, as a scan's; a miss is its warning row. No record type and no member is added.
+The rows are account data: they stay in the instance fact store and the ledger, and no Runtime
+path writes them anywhere else. Offline, `package dry-run` reads no list and reports the task's
+post-admission reading as `pending_real_execution`, as for a task with marks.
 
 ## Never written
 

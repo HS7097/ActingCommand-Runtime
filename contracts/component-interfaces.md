@@ -287,6 +287,32 @@ Also planned by the same design (§5.2), outside the rows above:
 - **`install-root`**: whether the journal's `initiator` and `one_way` raise it is LAB-3's to judge
   ([lab-two-entries.md](lab-two-entries.md) §13, open point 5).
 
+### Planned: Workflow #428 168 (S168-4 and S168-5; [v012-register.md](v012-register.md) §1.291)
+
+Planned rows, **not in force**: no build declares them. Runtime 0.12.47 declares `package`
+[3, 7] and `ledger` [3, 7]. S168-0, which writes these rows, raises nothing.
+
+| Interface | Rev | Meaning | Anchor | Slice |
+|---|---|---|---|---|
+| `package` | 8 | revision 7 plus a task schema `0.9` operation's effect `read_list` ([resource-readings.md](resource-readings.md), "List readings"): a list read over a scan and written as one `record_list` fact under `inventory.list.<name>`. A reader before S168-4 refuses an operation that declares it at its declaration gate (`resource_declaration_invalid`, `UnknownField` at `/operations/<i>/read_list`) and at admission; a pack without it keeps its revision, so the Runtime declares [3, 8]. A bundle whose packs declare it declares `package` [8, 8] | `crates/pack-containment/src/source/declarations.rs`, the `read_list` effect (planned) | S168-4 |
+| `package` | 8, or 9 | the operation effect `judge` ([selection-graph.md](selection-graph.md), "Judge step") and, in a selection document, the value source `table_max_over_list` ([selection-policy.md](selection-policy.md), "Table maximum over a list"). They join revision 8 when S168-5 ships in the same Runtime release as S168-4; otherwise S168-5 raises `package` to [3, 9] with them. A reader before S168-5 refuses `judge` at its declaration gate (`UnknownField` at `/operations/<i>/judge`) and a document that reads the source at admission (`contained_task_select_policy_invalid`, an unknown value source); a document without it keeps its canonical bytes and a pack without either keeps its revision. A bundle whose packs use either declares that revision | `crates/selection-policy/src`, the value source (planned); `crates/pack-containment/src/source/declarations.rs`, the `judge` effect (planned) | S168-5 |
+| `ledger` | the next: 8 or 9 (below) | the revision before it plus one word in the closed vocabulary of a `task.selection_evaluated` record's `confirmation` kinds (`TaskSelectionConfirmation`), `judge_only`, with no member, and the reader's rules for it ([selection-graph.md](selection-graph.md), "Records"): no `multi_select`, a v1 projection of a `fixed_slots` layout, `unknown_check` with `blocking` `none` or `unknown_instances`, an outcome `selected`, `empty` or `unknown`, and `selected` exactly the `ranked` verdicts with no confirmation attempted. Nothing else of S168-4 or S168-5 reaches a shape the reader checks: a list is a `fact.published` of the existing `record_list` value; a list maximum's record is a decision reason, `selection_table_list_max`, whose code and keys the reader only spells; a list's misses are existing warning rows with new words of the outcome vocabulary `reading_problem`. SQLite format 2, `actingcommand.event.v3`, the record types, the tables, the indexes and every view's type list are unchanged, so the Runtime still reads every earlier revision from 3. A Runtime whose `ledger` `max` is lower refuses a record with `judge_only` (`TaskSelectionConfirmation` has no catch-all, `corrupt_ledger_record`), so going back to it is refused once the new Runtime has run, as for revision 7, and the Runtime combines only with a console whose `ledger` range holds the new revision | `crates/actingcommand-contract/src/event/payload/task_selection.rs`, `TaskSelectionConfirmation` (planned `JudgeOnly`); `distribution/windows/component-interfaces.json` | S168-5 |
+
+- **Which `ledger` number.** Workflow #434 plans `ledger` 8 for LAB-6 ("Planned: Workflow #434"
+  above). If S168-5 ships in a release before LAB-6's, it takes 8, and #434's planned row moves
+  to 9, with UI-L1's "a `ledger` range that holds 8"; if both ship in one release, they share
+  revision 8, one raise for the release; if LAB-6 ships first, S168-5 takes 9. The coordinator
+  fixes the order ([v012-register.md](v012-register.md) §1.291, open point 1).
+- **S168-4 raises no `ledger`**, for the reasons in the `ledger` row, so it may ship alone, and a
+  rollback from it to 0.12.47 stays open: that build loads an `inventory.list.*` record as any
+  fact and refuses a revision-8 pack.
+- **Not moved.** `runtime-client`: a list travels in the existing `InstanceFactSnapshot` answer
+  and a judge's record in the existing event reads; `list_reading_key_reserved` is the code of a
+  denied receipt of an existing shape. `actingd-config`: no key; the bounds (16 `read_list`
+  steps per task, 256 rows per list, 16 list maxima per document) are the formats'.
+  `runtime-outcomes`: new codes in the catalog only. `install-selection`, `install-control`,
+  `install-cli`, `install-root`, `player-hold` and `tools-layout`: untouched.
+
 ## Bump rule
 
 - A revision rises when a peer that speaks the previous revision can no longer

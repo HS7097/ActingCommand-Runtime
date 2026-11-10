@@ -463,6 +463,41 @@ the declared `valid_for_ms` and `invalidate_on` is empty. The store
 accepts or refuses it like any other observation. No write site is added: the host terminal
 calls the existing `publish_facts`.
 
+## List reading facts (Workflow #428 S168-4)
+
+Written ahead of its code by S168-0 ([v012-register.md](v012-register.md) §1.291). A package's
+list readings ([resource-readings.md](resource-readings.md), "List readings") are written by the
+host, through `publish_facts`, after a run that succeeds: one observation per list with one
+instance-scoped record, its origin the Runtime's own (source and actor `runtime`, origin module
+`fact-store`), with system links. The observation time is the capture time of the viewport the
+list's end check passed on, the TTL the declared `valid_for_ms`, and `invalidate_on` is empty.
+The store accepts or refuses it like any other observation.
+
+| Key | Value | Scope |
+| --- | --- | --- |
+| `inventory.list.<name>` | `record_list`, one row `{<key_column>: <string>, <column>: <boolean, integer or string>, …}` per position of the list, at most 256 rows, in ascending byte order of the key | `instance` only |
+
+- **Family.** The keys are of the `inventory.` family; no family is added. They are the only
+  `record_list` records a package's reading writes.
+- **Whole or not at all.** A record holds every position the list showed. A list that could not
+  be read whole (an unread position, a repeated key, more than 256 positions) is never written,
+  in part or as an empty list: the previous record, or none, stays. So in a usable record a key
+  without a row is not present, and a record that is missing, expired, stale or below a reader's
+  floor is unknown, never an empty list ([selection-policy.md](selection-policy.md), "Facts and
+  unknown", "Record lists"). An empty record is a list read whole that showed no position.
+- **Reserved prefix.** Only the host writes under `inventory.list.` as a list:
+  `PublishFact` and `PublishFacts` of such a key are refused from every origin as
+  `list_reading_key_reserved` (non-fatal, `fact_key`), before the fact write gate, with nothing
+  appended.
+- **Projection.** An ordinary instance fact: visible to `InstanceFactSnapshot` and `ac_facts`,
+  carried with its rows in the snapshot of a select or judge step whose document declares it,
+  and loaded at the start as every tagged instance record. No catalog predicate and no
+  scheduling consumer reads it: record lists stay unusable to the scheduler.
+- **Capacity.** One active fact identity per list per instance, however many rows and however
+  often they change; booked in the capacity ledger below.
+- **Account data.** The rows say what the instance's account holds. They stay in this store and
+  the ledger; no Runtime path writes them to a repository, a report file or any other surface.
+
 ## Display facts
 
 Workflow #392 DA-A (model 392 v1.1, sections 8.1 and 12.1): a device instance's display is
@@ -558,6 +593,7 @@ instances is booked once.
 | instruction lines (reserved) | `session.instructions` | instance, server, game | ≤ 3 (one per scope used) | GOAL-1 | ≤ 9 |
 | display facts | `display.frame_extent`, `.rotation`, `.orientation`, `.aspect` | instance | 4 for an instance bound to a device ("Display facts" above); 0 otherwise | DA-A (#392) | 12 |
 | selector identities (#308 SEL-L2) | — | — | 0: the business identity domain is package data, not a fact | — | 0 |
+| list readings | `inventory.list.<name>` | instance | *L*: the distinct list keys of the packages bound to the instance, one each whatever its rows ("List reading facts" above) | #428 S168-4 | 0 (no package declares a list yet) |
 
 - **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 6 + 0 + 6 + 3 + 3 + 9 + 12 = **104 + *O***
   (UPD-1's application update row included), well under 256.
@@ -573,6 +609,11 @@ instances is booked once.
   published request holds one active fact until it expires. The task request of MCP-17 (a
   `run_once` row in `session.instructions`) replaces them; until it does, the deployment must keep
   the number of live requests small.
+- **List readings** (#428 S168-4): each instance adds its *L*, the lists its bound packages read.
+  A package that splits one list into several (one per kind of member, as the coordinator's
+  answer Q-5 to the 168 design does) costs one identity per list on every instance that runs it,
+  for example 8 lists on one instance: 8. The slice that places the first such package books its
+  *L* in this table.
 - A slice that would push the computed total over 256 for the deployed instance count stops and
   reports instead of merging; the store keeps refusing, not evicting.
 
