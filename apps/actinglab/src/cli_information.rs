@@ -316,7 +316,10 @@ pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {
 pub(super) fn run_list(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let kind = args.first().map(String::as_str).unwrap_or("commands");
     match kind {
-        "commands" => Ok(json!({ "commands": command_capabilities() })),
+        // Workflow #434 LAB-5F: the authoring module's commands only where it is installed.
+        "commands" => Ok(json!({
+            "commands": crate::cli_module::authoring::listed(command_capabilities())?
+        })),
         "targets" | "pages" | "tasks" | "bundles" | "controls" => {
             let config = read_user_config()?;
             let root = effective_resource_root(global, &config).ok_or_else(|| {

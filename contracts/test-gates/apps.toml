@@ -1339,3 +1339,12 @@ tests = [
     "actingcommand-lab-ops::lib::gate_434_lab5d::lab_ops_budget_exports_the_header",
 ]
 incident = ["#434 LAB-5D"]
+
+# Workflow #434 LAB-5F (0.12.52; register §1.287, "Slice LAB-5F"; brief rd-1108/arch-013/brief-lab5f.md; contracts/lab-two-entries.md §8.3 and the coordinator's ruling of 2026-11-10 on #434, point 15): on a made-up single-location installation root in a temporary folder, with lab_module_authoring true the authoring rows are listed (help's commands and options, list commands, capabilities) and a call reaches its command (package fmt writes; regression, given by its short words, answers its command's own refusal); with the key absent, false, a value that is no boolean, a configuration that is no JSON and none at all they are not listed and a call is refused with lab_command_option_disabled (operation the row's name, lab_option authoring, exit 1, a --via line exit 2) before anything is written or sent (package fmt's file unchanged, record start makes no state directory, observe --capture refused), the details naming the configuration or carrying config_read_failed or config_decode_failed as cause; outside any installation root they are listed and served; codes, user-config and (on Windows) op status answer the same in every place; serve --stdio answers an authoring row's call with the line the command line's --json prints, and the other modules' rows as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5f::lab5f_authoring_rows_follow_the_installed_module",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5f::lab5f_serve_answers_as_the_command_line",
+]
+incident = ["#434 LAB-5F"]

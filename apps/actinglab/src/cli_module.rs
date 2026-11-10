@@ -34,7 +34,12 @@
 //!   `ACTINGCOMMAND_INITIATOR`; any other value is refused before anything is sent or written. A
 //!   Lab recording's steps and marks carry it (open point 6, the coordinator's ruling), and
 //!   `Lab-MCP` when MCP's actinglab child (`--via mcp`) adds them.
+//! - **The authoring option** (§8.3; Workflow #434 LAB-5F, [`authoring`]): the authoring rows are
+//!   listed and served only where the authoring module is installed; elsewhere a call is refused
+//!   with `lab_command_option_disabled` before anything is sent or written.
 
+// Workflow #434 LAB-5F: the authoring option.
+pub(crate) mod authoring;
 mod core_ops;
 // Workflow #434 LAB-5A: its command table is read by the slice's test.
 pub(crate) mod engine;

@@ -229,8 +229,10 @@ pub(crate) fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
             })
         })
         .collect::<Vec<_>>();
+    // Workflow #434 LAB-5F: the authoring module's commands only where it is installed.
+    let commands = crate::cli_module::authoring::listed(command_capabilities())?;
     Ok(json!({
-        "commands": command_capabilities(),
+        "commands": commands,
         "session_layer": session_layer_capability_contract(),
         // Workflow #434 LAB-2b fix 1: the exit codes of this command line, `--via` or not.
         "exit_codes": exit_code_table(global.via.is_some()),

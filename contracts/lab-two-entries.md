@@ -366,6 +366,19 @@ from their core rows.
   authoring operations are listed and served. Otherwise they are not listed (CLI help, MCP
   `tools/list`), and a call is refused locally with `lab_command_option_disabled` (`lab_option`
   `authoring`, `operation` the operation); nothing is sent to the Runtime.
+- **Where the Lab runs** (the coordinator's ruling of 2026-11-10 on #434, point 15; LAB-5F). A
+  Lab program inside an installation root (one §9.3's default location finds: started through a
+  root's selection, or from a kept build's or a single-location root's `runtime\` or `tools\`)
+  follows the key of that root's selected configuration, read at each call. A Lab program outside
+  any installation root has no configuration to read: there the authoring module counts as
+  installed (an unpacked Tools package, as the resource repositories' CI and scripts and the
+  coordinator's deployment tools run it). A selected configuration that cannot be read, that is
+  no JSON object or whose key is not a boolean leaves the module not installed, and the refusal
+  says why (its details carry `config_read_failed` or `config_decode_failed` with the
+  configuration's `path`); it is never read as installed. `null` reads as absent, as actingd
+  reads it. The decision is one function of the operation layer, `lab_ops::locate::authoring_module`,
+  which every front end calls. Main has no cargo feature `authoring` yet: every build has the
+  module.
 - `lab_module_debugging` retires (`actingd-config` 28): still accepted when a boolean, with no
   effect, noted with the caveat `config_key_retired` by the commands that read it, as
   `install.guard.blocked_windows` is. The debugging operations are always there.
