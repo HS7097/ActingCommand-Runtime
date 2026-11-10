@@ -5,26 +5,15 @@
 //! UIM:549). Its arguments are the CLI's flags (R2) and its result is the CLI's stdout JSON
 //! (`crate::facts`). The one presentation difference (§2.2): an answer larger than the output
 //! budget is written whole to the export directory and answered as `{scope, read_at_unix_ms,
-//! records_total, records_kept, export}` with the warning `answer_exported`.
+//! records_total, records_kept, export}` with the warning `answer_exported` (Workflow #434 LAB-5D:
+//! by `facts::within_budget`, with this server's budget).
 
-use super::tools::{
-    self, Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
-};
+use super::tools::{self, Arguments, ToolContext, ToolError, ToolOutcome, invalid_argument};
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::facts::{self, FactsRequest, Failure, Scope};
-use actingcommand_contract::outcome::Outcome;
 use serde_json::{Map, Value, json};
 
 const ARGUMENTS: [&str; 3] = ["scope", "instance", "key_prefix"];
-/// The members an exported answer keeps beside `export` (Workflow #429 R-4: the config read's
-/// `config_version` too).
-const EXPORTED_HEADER: [&str; 5] = [
-    "scope",
-    "read_at_unix_ms",
-    "records_total",
-    "records_kept",
-    "config_version",
-];
 
 pub(super) const DESCRIPTION: &str = "Reads facts, as actingctl facts and status --config print them; nothing is recorded in the ledger. scope program: the Runtime's own fact store as snapshot (its records in snapshot.records). scope config: only its config.* records as records (config.subsystems, config.selection when recorded, every config.parameters.<section> in key order) and config_version, the settings' version read with them (an opaque token compared only for equality, the expected_version of the next settings change); config_facts_missing when the Runtime recorded none. scope instance: one instance's facts; instance (alias, instance_id or ADB port, resolved with one status read) is required, and refused with the other scopes. Its snapshot is {instance_alias, server_id, game_id, records}: the instance's own records and those of the server and game its configuration binds it to (server_id and game_id are absent when the configuration binds none). Each record carries scope, key, content, observed_at_unix_ms and expires_at_unix_ms. key_prefix (scope program or instance) keeps only records whose key starts with it. Every answer is {scope, read_at_unix_ms, snapshot or records, records_total (records read), records_kept (records answered)}, with config_version for scope config; read_at_unix_ms is the Runtime's clock at the read, to compare each record's observed_at_unix_ms and expires_at_unix_ms with. An answer larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {scope, read_at_unix_ms, records_total, records_kept, config_version (scope config), export {path, sha256, size}} with the warning answer_exported; narrow it with key_prefix.";
 
@@ -60,27 +49,10 @@ pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
         Failure::Runtime(error) => context.runtime.failure(&connected, &error),
         Failure::Output(error) => super::packs::encode_failed(error),
     })?;
-    if tools::fits_success(&answer) {
-        return Ok(ToolSuccess::new(answer));
-    }
-    let export = super::events::export_json(&answer)?;
-    let mut exported = EXPORTED_HEADER
-        .iter()
-        .filter_map(|member| {
-            answer
-                .get(*member)
-                .map(|value| ((*member).to_owned(), value.clone()))
-        })
-        .collect::<Map<_, _>>();
-    let mut warning = Outcome::new(ActingctlCode::AnswerExported);
-    if let Some(path) = export["path"].as_str() {
-        warning = warning.path(path);
-    }
-    exported.insert("export".to_owned(), export);
-    Ok(ToolSuccess {
-        result: Value::Object(exported),
-        warnings: vec![tools::warning(&warning)],
-    })
+    // Workflow #434 LAB-5D: the export and its header are `facts`'.
+    facts::within_budget(answer, Some(&tools::answer_budget()))
+        .map(|answer| tools::fitted(answer, Vec::new()))
+        .map_err(tools::export_failed)
 }
 
 pub(super) fn input() -> Value {

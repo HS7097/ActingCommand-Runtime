@@ -18,6 +18,10 @@
 //!   requests on a connection it is given (for `app`, through the actinglab child it runs) and
 //!   shapes its answer, which actingctl's CLI and MCP server call and wrap as before; [`served`]
 //!   names the function that serves each core operation of LAB-1 and LAB-1b.
+//! - Workflow #434 LAB-5D: [`budget`], the answer budget. It is the caller's: the reads whose MCP
+//!   answers were cut or exported in MCP's own code (`status`, `diagnose`, `events`, `schedule`,
+//!   `runs`, `run evidence`, `codes`; `facts`, `packs`, `remedy`, `summary`) do it here, each in
+//!   its module's `within_budget`, only when the caller passes a budget.
 
 #![forbid(unsafe_code)]
 
@@ -117,6 +121,10 @@ pub mod served;
 pub mod front;
 pub mod ladder_drill;
 
+// Workflow #434 LAB-5D: the answer budget, the caller's: what it passes to say that an answer
+// must fit and where one that does not is written whole; the reads that cut or export take it.
+pub mod budget;
+
 // Test-only: Workflow #434 LAB-1, the slice's named tests (`lab_ops_table_complete`,
 // `lab_ops_locate_defaults`).
 #[cfg(test)]
@@ -124,6 +132,10 @@ mod gate_434_lab1;
 // Test-only: Workflow #434 LAB-1b, the slice's named test (`lab_ops_core_rows_served_by_lab_ops`).
 #[cfg(test)]
 mod gate_434_lab1b;
+// Test-only: Workflow #434 LAB-5D, the slice's named tests (`lab_ops_no_budget_whole_answer`,
+// `lab_ops_budget_cuts_keep_their_markers`, `lab_ops_budget_exports_the_header`).
+#[cfg(test)]
+mod gate_434_lab5d;
 // Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
 #[cfg(test)]
 #[path = "../../../tests/support/standard_pack_schedule.rs"]
