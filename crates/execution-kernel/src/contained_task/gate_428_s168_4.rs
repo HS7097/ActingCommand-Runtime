@@ -38,8 +38,9 @@ const FIRST_ROW: i32 = 60;
 const PITCH: i32 = 100;
 const KEY_COLUMN: &str = "id";
 
-// One card of a synthetic list: its row, its identity (Known or not), its signature colour and
-// its rank, with the confidence each reading carries.
+// One card of a synthetic list: its row, its identity (Known or not), its signature colour (the
+// three quantized levels of a `color_digest.v1` cell, each at most 31) and its rank, with the
+// confidence each reading carries.
 #[derive(Debug, Clone)]
 struct Card {
     row: i32,
@@ -366,9 +367,9 @@ fn row(id: &str, rank: i64) -> BTreeMap<String, FactScalar> {
 // colour far from the others'.
 fn three_cards() -> Vec<Card> {
     let mut cards = vec![
-        card(0, "member.c", [200, 10, 10], 5),
-        card(1, "member.a", [10, 200, 10], 7),
-        card(2, "member.b", [10, 10, 200], 9),
+        card(0, "member.c", [25, 2, 2], 5),
+        card(1, "member.a", [2, 25, 2], 7),
+        card(2, "member.b", [2, 2, 25], 9),
     ];
     cards[0].identity_confidence = 980;
     cards[1].identity_confidence = 990;
@@ -464,10 +465,11 @@ fn missed(read: &Read) -> ListReadingMiss {
 }
 
 // The grid of the 257th position: three columns at a row pitch of 100 px over the full band
-// (y 60 to 540, five rows), `rows` rows of distinct identities, each column's colour of its own.
+// (y 60 to 540, five rows), `rows` rows of distinct identities, each column's colour of its own
+// (its blue level raised by at most 6, so at most 31).
 fn grid(rows: usize) -> Vec<(i32, Card)> {
     const CROSSES: [i32; 3] = [20, 140, 260];
-    const COLORS: [[u8; 3]; 3] = [[200, 10, 10], [10, 200, 10], [10, 10, 200]];
+    const COLORS: [[u8; 3]; 3] = [[25, 2, 2], [2, 25, 2], [2, 2, 25]];
     (0..rows * 3)
         .map(|index| {
             let mut card = card(
