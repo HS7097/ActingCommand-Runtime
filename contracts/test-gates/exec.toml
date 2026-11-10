@@ -2852,3 +2852,11 @@ tests = [
     "actingcommand-pack-containment::lib::source::declarations::tests::list_reading_mark_key_reserved",
 ]
 incident = ["#428 S168-4"]
+
+# Workflow #71 FLK-10 (0.12.51; register §1.294; brief rd-1110/brief-flk10-native-process-inspector.md): on Windows the Lab's environment-detection lock reads its holder's start from the operating system, no helper program started, as the text the PowerShell reader printed, the .NET ticks of the UTC creation time: the current process reads as alive with an integer token that reads the same twice, a process id that cannot exist reads as missing, and two fixed FILETIME values convert to the ticks worked by hand
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::env_detection::lock::tests::flk10_windows_holder_start_is_read_from_the_system_as_dotnet_ticks",
+]
+incident = ["#71 FLK-10"]

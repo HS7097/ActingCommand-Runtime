@@ -91,6 +91,65 @@ pub fn probe_process(pid: u32) -> ProcessProbe {
     }
 }
 
+/// Workflow #71 FLK-10: one process id's creation time exactly as the operating system keeps it,
+/// read with the same limited query, the same exit check and the same codes as
+/// [`probe_process`]. The Lab's environment-detection lock names its holder's start with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessCreationProbe {
+    /// A running process has this id; its creation time as a Windows `FILETIME`, 100 ns
+    /// intervals since 1601-01-01T00:00:00Z, after the Unix epoch.
+    Running { created_at_windows_100ns: u64 },
+    /// No running process has this id: none exists, or the one that exists has exited.
+    NotRunning,
+    /// The operating system did not decide, for example because it refused the query.
+    Unknown(Code),
+}
+
+/// Reads one process's creation time; see [`ProcessCreationProbe`]. On an operating system other
+/// than Windows the answer is `process_probe_unsupported`.
+pub fn probe_process_creation(pid: u32) -> ProcessCreationProbe {
+    #[cfg(windows)]
+    {
+        windows::probe_process_creation(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        ProcessCreationProbe::Unknown(HostMetricsCode::ProcessProbeUnsupported.code())
+    }
+}
+
+/// Workflow #71 FLK-10: this host's DNS host name, the host-name part of the computer's full DNS
+/// name, which `hostname.exe` prints (on Windows `GetComputerNameExW` with
+/// `ComputerNameDnsHostname`), read without starting a program. A failed query is the operating
+/// system's error; an operating system other than Windows answers `Unsupported`.
+pub fn dns_host_name() -> std::io::Result<String> {
+    #[cfg(windows)]
+    {
+        windows::dns_host_name()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+}
+
+/// Workflow #71 FLK-10: fills `buffer` from the operating system's random number generator (on
+/// Windows `BCryptGenRandom` with the system-preferred generator), without starting a program. A
+/// failed call is an error with its status; an operating system other than Windows answers
+/// `Unsupported`.
+pub fn fill_system_random(buffer: &mut [u8]) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        windows::fill_system_random(buffer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = buffer;
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+}
+
 /// What the operating system reports about the host's internet connectivity (Workflow #369 S6a,
 /// from #361 P3). It is the operating system's own status (on Windows
 /// `GetNetworkConnectivityHint`, which its network connectivity status indicator keeps): reading
