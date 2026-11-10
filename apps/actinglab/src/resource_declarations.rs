@@ -14,8 +14,8 @@ use actingcommand_contract::{
     StandardPackRootIssue, StandardPackTableIssue, page_projection::ProjectionMetadata,
     parse_pack_loading, parse_standard_pack_interrupts, parse_standard_pack_loading,
     parse_standard_pack_navigation, parse_standard_pack_pages, parse_standard_pack_schedule,
-    parse_standard_pack_table, resource_declaration::ProcedureBindingConfigFile,
-    validate_bundle_maintenance_declarations,
+    parse_standard_pack_table, replacement_leftover_name,
+    resource_declaration::ProcedureBindingConfigFile, validate_bundle_maintenance_declarations,
 };
 use actingcommand_lab::{parse_environment_catalog_value, validate_control_declaration};
 use actingcommand_pack_containment::source::{
@@ -455,9 +455,13 @@ impl DeclarationReader {
         let bytes = self.read(path, MAX_DOCUMENT_BYTES)?;
         let text =
             std::str::from_utf8(&bytes).map_err(|_| invalid(path, "declaration is not UTF-8"))?;
-        let family = if parent == Path::new(STANDARD_PACK_TABLES_DIRECTORY) {
+        let family = if parent == Path::new(STANDARD_PACK_TABLES_DIRECTORY)
+            && !replacement_leftover_name(name)
+        {
             // Workflow #357 DB-1 (M-357a v1.1 §2.3; register §1.65 TB5, the files part): a shared
             // table of the repository root's `tables/`, before any family named by file name.
+            // Workflow #428 TB-R1: a name a replacement in place leaves is no table and takes no
+            // row of this family; it is judged as any other path below.
             self.standard_pack_table(path, name, &bytes)?;
             "standard_pack_tables"
         } else if name == "task.json"
@@ -631,7 +635,8 @@ impl DeclarationReader {
     /// Workflow #357 DB-1 (M-357a v1.1 §2.2, §2.3): one table file of the repository root's
     /// `tables/`, checked as the Runtime checks it (the repository's table names its game
     /// itself), and refused as `table_too_large` when it is the directory's 65th or later by file
-    /// name, as the Runtime reads only the first 64.
+    /// name, as the Runtime reads only the first 64. Workflow #428 TB-R1: as the Runtime, it does
+    /// not count the names a replacement in place leaves (`replacement_leftover_name`).
     fn standard_pack_table(&self, path: &Path, name: &str, bytes: &[u8]) -> CliOutcome<()> {
         let directory = Path::new(STANDARD_PACK_TABLES_DIRECTORY);
         let absolute = self.checked_path(directory)?;
@@ -640,6 +645,7 @@ impl DeclarationReader {
             .map(|entry| entry.map(|entry| entry.file_name()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| invalid(directory, &format!("read tables entry: {error}")))?;
+        names.retain(|entry| !entry.to_str().is_some_and(replacement_leftover_name));
         names.sort();
         let rank = names.iter().position(|entry| entry.to_str() == Some(name));
         if rank.is_some_and(|rank| rank >= MAX_STANDARD_PACK_TABLES) {

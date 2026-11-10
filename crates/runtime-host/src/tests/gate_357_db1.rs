@@ -6,7 +6,8 @@
 //! `standard_pack_table_unreadable`; one bad table leaves its root registered, adds one record
 //! and the Runtime starts; a directory with only `tables/` is `bundle_missing`; a broken root's
 //! tables are neither read nor listed; the 65th table by file name is `table_too_large` and the
-//! first 64 are read. Synthetic `neutral` games and neutral tables only.
+//! first 64 are read. Workflow #428 TB-R1 (register §1.293): the names a replacement in place
+//! leaves in `tables/` are skipped. Synthetic `neutral` games and neutral tables only.
 
 use super::*;
 use actingcommand_contract::outcome::{Category, Outcome};
@@ -304,4 +305,150 @@ fn db1_the_65th_table_is_too_large_and_the_first_64_are_read() {
         text(too_large, "standard_pack_problem"),
         Some("table_too_large")
     );
+}
+
+/// Workflow #428 TB-R1 (register §1.293; package-reference.md, "Tables"): the names a replacement
+/// in place leaves in `tables/` (an old copy `<name>.old-<ms>`, a part `<name>.new-<ms>.part`, and
+/// what `undo` sets aside, `<name>.abandoned-<ms>` and `<name>.rolledback-<ms>`) are skipped.
+/// Beside one valid table, check-config and the reader list the table alone; with 64 valid tables
+/// and leftovers whose names sort before, between and after them, all 64 are read and none is
+/// `table_too_large`; a file `notes.txt` and an invalid table are still reported as
+/// `standard_pack_table_invalid`, and at startup only they add a `standard_pack_read` record.
+#[test]
+fn table_listing_skips_replacement_leftovers() {
+    // One row of check-config's `tables`: the table id, its row count, and its problem's code
+    // and `standard_pack_problem`.
+    type Row = (String, Option<usize>, Option<(String, Option<String>)>);
+    let rows = |root: &Path| -> Vec<Row> {
+        let report = inspect_standard_packs(Some(root), NOW_UNIX_MS);
+        let [neutral] = report.games.as_slice() else {
+            panic!("one game root: {:?}", report.games);
+        };
+        neutral
+            .tables
+            .as_ref()
+            .expect("a sound root lists its tables")
+            .iter()
+            .map(|table| {
+                (
+                    table.table_id.clone(),
+                    table.row_count,
+                    table.problem.as_ref().map(|problem| {
+                        (
+                            problem.code().as_str().to_owned(),
+                            text(problem, "standard_pack_problem").map(str::to_owned),
+                        )
+                    }),
+                )
+            })
+            .collect()
+    };
+    let invalid = |problem: &str| {
+        Some((
+            "standard_pack_table_invalid".to_owned(),
+            Some(problem.to_owned()),
+        ))
+    };
+    let temp = TempDir::new().expect("tempdir");
+
+    // One valid table and every name the rescue module's `place`, its `undo` and an interrupted
+    // swap leave beside it: the table alone is listed and read.
+    let root = temp.path().join("packages");
+    let game = root.join("neutral");
+    write_json(&game.join("bundle.json"), &bundle("neutral"));
+    let tables = game.join("tables");
+    write_json(
+        &tables.join("unit_ranks.json"),
+        &table("neutral", "unit_ranks", 3),
+    );
+    for leftover in [
+        "unit_ranks.json.old-1767225600000",
+        "unit_ranks.json.new-1767225600001.part",
+        "unit_ranks.json.abandoned-1767225600002",
+        "unit_ranks.json.rolledback-1767225600003",
+    ] {
+        write_json(&tables.join(leftover), &table("neutral", "unit_ranks", 2));
+    }
+    let expected: [Row; 1] = [("unit_ranks".to_owned(), Some(3), None)];
+    assert_eq!(rows(root.as_path()), expected);
+    let files = actingcommand_contract::read_standard_pack_tables(game.as_path(), "neutral")
+        .expect("tables/ is listed");
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert_eq!(files[0].table_id, "unit_ranks");
+    assert!(files[0].path.ends_with("unit_ranks.json"), "{files:?}");
+    assert!(files[0].read.is_ok(), "{files:?}");
+
+    // 64 valid tables and leftovers whose names sort before, between and after them: all 64 are
+    // read, none is `table_too_large`, and a run's reader reads the 64th as well.
+    let many_root = temp.path().join("many-packages");
+    let many = many_root.join("neutral");
+    write_json(&many.join("bundle.json"), &bundle("neutral"));
+    for index in 0..64 {
+        let table_id = format!("t{index:02}");
+        write_json(
+            &many.join("tables").join(format!("{table_id}.json")),
+            &table("neutral", &table_id, 1),
+        );
+    }
+    for leftover in [
+        "s99.json.old-1767225600000",
+        "t00.json.new-1767225600001.part",
+        "t31.json.old-1767225600002",
+        "t31.json.abandoned-1767225600003",
+        "t63.json.rolledback-1767225600004",
+        "u00.json.old-1767225600005",
+    ] {
+        write_json(
+            &many.join("tables").join(leftover),
+            &table("neutral", "t00", 1),
+        );
+    }
+    let expected = (0..64)
+        .map(|index| (format!("t{index:02}"), Some(1), None))
+        .collect::<Vec<Row>>();
+    assert_eq!(rows(many_root.as_path()), expected);
+    let last = actingcommand_contract::read_standard_pack_table(many.as_path(), "neutral", "t63");
+    assert!(
+        matches!(last, Ok(Some(_))),
+        "the 64th table is read: {last:?}"
+    );
+
+    // A file of another name and a real table that is invalid are still read and reported.
+    fs::write(tables.join("notes.txt"), b"notes, not a table").expect("a file of another name");
+    let mut duplicate = table("neutral", "unit_scores", 2);
+    duplicate["rows"][1][0] = json!("unit.000");
+    write_json(&tables.join("unit_scores.json"), &duplicate);
+    let expected: [Row; 3] = [
+        ("notes.txt".to_owned(), None, invalid("malformed")),
+        ("unit_ranks".to_owned(), Some(3), None),
+        (
+            "unit_scores".to_owned(),
+            None,
+            invalid("table_row_duplicate"),
+        ),
+    ];
+    assert_eq!(rows(root.as_path()), expected);
+
+    // At startup the root's record and one per refused entry, none for a leftover.
+    let host = start(&temp, &root);
+    let reads = standard_pack_reads(&host);
+    let codes = reads
+        .iter()
+        .map(|outcome| outcome.code().as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        codes,
+        [
+            "standard_pack_registered",
+            "standard_pack_table_invalid",
+            "standard_pack_table_invalid",
+        ],
+        "{reads:?}"
+    );
+    assert!(ends_with(&reads[1], &["tables", "notes.txt"]), "{reads:?}");
+    assert!(
+        ends_with(&reads[2], &["tables", "unit_scores.json"]),
+        "{reads:?}"
+    );
+    host.close().expect("close runtime host");
 }

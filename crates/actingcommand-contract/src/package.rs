@@ -195,6 +195,38 @@ pub fn reserved_package_id(package_id: &str) -> bool {
         || name.contains(".old-")
 }
 
+/// Workflow #428 TB-R1: whether `name`, an entry of a game root's `tables/` directory, is one a
+/// replacement in place leaves there rather than a table. The readers of `tables/`
+/// ([`crate::read_standard_pack_tables`], [`crate::read_standard_pack_table`] and `actinglab
+/// resource validate`) skip such an entry: it is not read, has no row, and does not count toward
+/// the 64 tables. Each name is one the Lab rescue module's `place` of a table, its `undo` or an
+/// interrupted swap leaves beside `<table_id>.json` (crate `lab-rescue`, `src/install/`):
+///
+/// - `<name>.new-<ms>.part`: the new table written before it is renamed in (`place.rs`, `steps`
+///   and `item_step`), left by a step interrupted before that rename; the `<name>.part` that
+///   [`reserved_package_id`] reserves;
+/// - `<name>.old-<ms>`: the table it replaced, kept beside it (`place.rs`, `steps`; `update.rs`,
+///   `swap`); the `<name>.old-<unix_ms>` that [`reserved_package_id`] reserves, which a deploy
+///   kit's replacement in place keeps as well;
+/// - `<name>.abandoned-<ms>`: a part set aside (`undo.rs`, `set_aside`), either one an earlier
+///   attempt left half-written (`place.rs`, `item_step`) or the part of a step `undo` reverses
+///   (`place.rs`, `reverse_item`);
+/// - `<name>.rolledback-<ms>`: the placed table that `undo` sets aside (`place.rs`,
+///   `reverse_item`; `undo.rs`, `set_aside`).
+///
+/// The names are matched as the code writes them, in lower case. A table's file name,
+/// `<table_id>.json` with a table id of `[a-z][a-z0-9_]*`, holds no `-` and ends with `.json`, so
+/// it never matches; any other name (`notes.txt`, say) is read and reported as before. The rule
+/// is wider than [`reserved_package_id`]'s two names, which stays as it is: that one says what a
+/// bundle's pack may be named (the `package` interface), this one what the readers of an
+/// installed game root's `tables/` ignore.
+pub fn replacement_leftover_name(name: &str) -> bool {
+    name.ends_with(".part")
+        || [".old-", ".abandoned-", ".rolledback-"]
+            .iter()
+            .any(|marker| name.contains(marker))
+}
+
 /// What a maintenance declaration makes of its pack. Workflow #373 NAV-3a (M-373 §3.8): the use
 /// `prerequisite` is retired, since every pack of a game root's `bundle.json` is a prerequisite
 /// package of that game's registry; a declaration that still names it is an unknown use and is

@@ -1083,9 +1083,9 @@ M-357a adds no ledger shape and no wire shape: a table read is recorded through 
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| TB1 | game-root file `tables/<table_id>.json` (`actingcommand.table.v1`) | resource file format, not a ledger shape | DB-1 (reader; contract checks `parse_standard_pack_table`; canonical-JSON reader moves into the contract crate) | resource side (DB-4) | `{schema_version, game, table_id, row_key [1..=8], columns [2..=32] {name, type: key \| integer {min, max} \| boolean \| enum_string {allowed}, nullable?, valid_until_unix_s? (nullable columns only)}, rows [1..=8192] [cells]}`; one `key` column = `row_key[0]`; rows unique on `row_key`; canonical JSON; ≤2 MiB; ≤64 tables per game root (beyond 64, by file name, each is `table_too_large`); `tables` is a reserved directory of the game root; `tables/` without `bundle.json` is `bundle_missing`; in a resource repository, `tables/*.json` at the repository root only; [package-reference.md](package-reference.md), "Standard package root" |
-| TB2 | `runtime.lifecycle_observed` phase `standard_pack_read` (N4): one more record per refused table at startup | existing record and phase, new outcome codes `standard_pack_table_invalid`, `standard_pack_table_unreadable` | DB-1 | DB-1 | REG §1.12 N4 "At startup one per game root" becomes "one per game root, plus one per refused table"; the root's own record is unchanged; a refused table never fails the root or the start; tables of a broken root are not read |
-| TB3 | check-config v1 report: `standard_packs.games[].tables` `[{table_id, path, row_count?, problem?, expired_columns?}]`; `warnings` entries `standard_pack_table_invalid:<game>`, `standard_pack_table_column_expired:<game>` | interface member | DB-1 | DB-1 | schema stays `v1` (additive, as G8); present for every sound game root, empty when it has no `tables/`; not listed for a broken root |
+| TB1 | game-root file `tables/<table_id>.json` (`actingcommand.table.v1`) | resource file format, not a ledger shape | DB-1 (reader; contract checks `parse_standard_pack_table`; canonical-JSON reader moves into the contract crate) | resource side (DB-4) | `{schema_version, game, table_id, row_key [1..=8], columns [2..=32] {name, type: key \| integer {min, max} \| boolean \| enum_string {allowed}, nullable?, valid_until_unix_s? (nullable columns only)}, rows [1..=8192] [cells]}`; one `key` column = `row_key[0]`; rows unique on `row_key`; canonical JSON; ≤2 MiB; ≤64 tables per game root (beyond 64, by file name, each is `table_too_large`); `tables` is a reserved directory of the game root; `tables/` without `bundle.json` is `bundle_missing`; in a resource repository, `tables/*.json` at the repository root only; [package-reference.md](package-reference.md), "Standard package root"; TB-R1 (§1.293, 0.12.50): the names a replacement in place leaves in `tables/` are no tables, skipped by every reader and not counted toward the 64 |
+| TB2 | `runtime.lifecycle_observed` phase `standard_pack_read` (N4): one more record per refused table at startup | existing record and phase, new outcome codes `standard_pack_table_invalid`, `standard_pack_table_unreadable` | DB-1 | DB-1 | REG §1.12 N4 "At startup one per game root" becomes "one per game root, plus one per refused table"; the root's own record is unchanged; a refused table never fails the root or the start; tables of a broken root are not read; TB-R1 (§1.293, 0.12.50): no record for a name a replacement in place leaves |
+| TB3 | check-config v1 report: `standard_packs.games[].tables` `[{table_id, path, row_count?, problem?, expired_columns?}]`; `warnings` entries `standard_pack_table_invalid:<game>`, `standard_pack_table_column_expired:<game>` | interface member | DB-1 | DB-1 | schema stays `v1` (additive, as G8); present for every sound game root, empty when it has no `tables/`; not listed for a broken root; TB-R1 (§1.293, 0.12.50): no row for a name a replacement in place leaves |
 | TB4 | `actingctl packs` ↔ `ac_packs`: top-level `standard_packs.games[].tables`, same shape as TB3 | read output (no persisted record, no Runtime request) | DB-1 | DB-1 | per game, not per instance (`actingctl packs` resolves no game for an instance); `result_schema` updated (additive); fills A6's "a shared-table path (DB-1) … come later" |
 | TB5 | `actinglab resource validate` family `standard_pack_tables` | tool family | DB-1 (files); DB-2 (bind cross-check, identity coverage) | — | files: TB1 checks; cross-check: every package policy of the root that declares `tables` is bound with `SelectionTables::bind` (K2); coverage: identities of the layout's catalog with no row are a warning, an error for a document that reads the table under `abort_evaluation`; per-document rules and K3 stay in the `selection_policy` family; the coverage code uses the tool's own domain prefix |
 | TB6 | selection-policy document (`actingcommand.selection-policy.v1`): optional `tables [≤8] {table_id, path, row_key, columns}`; `ValueRef::Table` (`source: "table"`) `{table_id, key_field, pins [≤7] {column, equals: ScalarValue \| equals_fact, otherwise? {equals \| equals_fact}}, value_column, fallback_column?, absent?}` | pack format (package interface), additive | DB-2 | resource side | `schema_version` unchanged; a document without `tables` keeps its canonical bytes, `policy_sha256` and `input_sha256`; `table_id` equals the file's id and `path` is `tables/<table_id>.json`; `key_field` is the layout's identity field; readers of `table` declare `drop_candidate` or `abort_evaluation`; `absent` in gates only; `fallback_column` in terms only; a pinned read needs an `absent` gate on the same table, key and pins first; a tie-break may read a table only where a drop or abort gate or term reads the same table, key and pins; a v0.12.0 build refuses such a document (`contained_task_select_policy_invalid`) |
@@ -9375,6 +9375,68 @@ Adapted, as the requirement deliberately changes what it pinned:
 `gate_diag_run::diag_run_t1_a_per_run_read_is_driven_by_its_run_link_index` pinned that forms A
 and C of stop 1 (no per-run link) carry no `+` at all; their time terms now carry one, and no
 other term does.
+
+### 1.293 Slice TB-R1 (0.12.50): the table reader does not read the names a replacement in place leaves (#428; on 11-10 production reported `standard_pack_table_invalid` (`table_id_mismatch`, `/table_id`) for a file `tables/<table_id>.json.old-<unix_ms>` that a deploy kit kept beside the table it replaced, and the Lab rescue module's `place` keeps a replaced table there too; the coordinator's ruling, not Alice's words: change the reader, not the placer; coordinator work order `rd-1110/brief-tbr1-table-listing-leftovers.md`)
+
+[package-reference.md](package-reference.md) ("Tables", "When the Runtime reads it") and
+[actingd-check-config.md](actingd-check-config.md) (a sound game root's `tables`) are the
+contract; this section amends §1.65 TB1 to TB3. 1.293 is the next free number on main
+`dfc1d96f` and still is on `2e949752` (#1558 merged), and the name TB-R1 was free. No persisted
+ledger shape, wire shape, configuration key, outcome code or vocabulary is new or changed.
+
+**Why.** `read_standard_pack_tables` listed every entry of `tables/`, read each as a table and
+took the first 64 by name. A kept copy was reported as an invalid table at every start (one
+`standard_pack_read` record), by check-config and by `actingctl packs`, and enough of them would
+have pushed real tables past the 64th place (`table_too_large`). The placer's `undo` and its
+journal rely on the copy beside the item, and the other readers of a game root read only the
+names `bundle.json` and the root files give.
+
+**What.** The contract crate's `replacement_leftover_name` says which names a replacement in
+place leaves, matched as the code writes them: a name ending in `.part`, or holding `.old-`,
+`.abandoned-` or `.rolledback-`. In `tables/` the rescue module leaves them so (crate
+`lab-rescue`, `src/install/`): `<name>.new-<ms>.part`, the part `place` writes before it renames
+it in, left by an interrupted step (`place.rs`, `steps`, `item_step`); `<name>.old-<ms>`, the
+replaced table kept beside it (`place.rs`, `steps`; `update.rs`, `swap`), as a deploy kit keeps
+its `.old-<stamp>`; `<name>.abandoned-<ms>`, a part set aside by a retried step or by `undo`, and
+`<name>.rolledback-<ms>`, the placed table `undo` sets aside (`place.rs`, `item_step`,
+`reverse_item`; `undo.rs`, `set_aside`). The first two are the two names `reserved_package_id`
+reserves (NAV-T); the other two are not, so the rule is its own. `reserved_package_id` is
+unchanged: it says what a bundle's pack may be named (the `package` interface), this rule what
+the readers of an installed root's `tables/` ignore. Every reader of `tables/` skips such an
+entry before it sorts and counts: `read_standard_pack_tables` (the Runtime's startup,
+check-config, `actingctl packs` and `ac_packs`), `read_standard_pack_table` (a run's
+preparation and the Lab's dry run, which judge a table's place among the same entries) and
+`actinglab resource validate` (its count for `table_too_large`; a selected file of such a name
+takes no row of the family `standard_pack_tables` and is judged as any path no parser is mapped
+to). A table's file name, `<table_id>.json`, never matches.
+
+**Unchanged.** A real table that is invalid is reported as before; a directory or any other name
+in `tables/` (`notes.txt`, say) is read and reported as before; a root without such names lists,
+reads and records as before. The Runtime deletes and moves nothing.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)); every range
+stays as main declares it ([3, 7] for `package` and `ledger`, [3, 6] for `runtime-client` on
+`2e949752`). `package`: what a bundle may contain does not change (the bundle index and
+`reserved_package_id` are untouched; only what the reader of an installed root ignores).
+`ledger`: no record shape changes (an existing `standard_pack_read` record is no longer written
+for such a name). `runtime-client` and `runtime-outcomes`: no shape and no code changes;
+check-config's `tables` and the `packs` answer lose rows of an unchanged shape.
+
+**At deploy.** A game root with leftover copies in `tables/` stops reporting them; no table that
+was read before reads differently. **Rollback** (below 0.12.50): a Runtime before this release
+still reports them, so the old reports come back; nothing else changes.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| TBR1-1 | `replacement_leftover_name`: the names a replacement in place leaves | contract crate predicate (no shape) | TB-R1 | — | `since` 0.12.50; a `.part` suffix, or `.old-`, `.abandoned-`, `.rolledback-` in the name; amends TB1 |
+| TBR1-2 | check-config's `standard_packs.games[].tables` (TB3), `actingctl packs` / `ac_packs` (TB4) and the startup's `standard_pack_read` records (TB2) | fewer rows and records, same shapes | TB-R1 | — | an entry of such a name has no row and no record and does not count toward the 64 |
+| TBR1-3 | `actinglab resource validate`, family `standard_pack_tables` (TB5) | tool family | TB-R1 | — | such a name takes no row of the family and is not counted for `table_too_large` |
+
+Tests (host gate row "#428 TB-R1"): `gate_357_db1::table_listing_skips_replacement_leftovers`.
+Adapted, as the requirement deliberately extends what it pins:
+`gate_434_lab3::place_holds_only_the_bundles_idle_instances` (apps fragment, the LAB-3 row), whose
+fixture had no table: its bundle now also carries one table that the placement replaces, and
+after the placement and after `undo` the table reader lists that table alone, read.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

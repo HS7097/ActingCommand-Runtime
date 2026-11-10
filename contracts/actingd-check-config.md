@@ -914,7 +914,14 @@ without a `tables/` directory and `null` for a broken root, whose tables are not
 read. Each refused table adds its problem as a `note` link, each expired column
 one `standard_pack_table_column_expired` (warning; `game`, `path`,
 `table_column`), and a `tables/` that cannot be listed its
-`standard_pack_table_unreadable`; the outcome stays `check_config_passed`:
+`standard_pack_table_unreadable`; the outcome stays `check_config_passed`.
+Workflow #428 TB-R1 (since 0.12.50; `v012-register.md` §1.293): an entry of
+`tables/` whose name is one a replacement in place leaves (ending in `.part`,
+or holding `.old-`, `.abandoned-` or `.rolledback-`: a part, a kept old copy,
+what `undo` sets aside) has no row in `tables` and adds no note, and it does not
+count toward the 64 tables: the limit counts the listed entries, in file name
+order, after the skip. A directory or any other name in `tables/` is listed as
+before (`package-reference.md`, "Tables"):
 
 ```json
 {"game":"neutral","bundle_version":4,"pack_count":1,"root_files":["bundle.json"],"problem":null,"tables":[{"table_id":"unit_scores","path":"D:/runtime/packages/neutral/tables/unit_scores.json","row_count":3,"expired_columns":["secondary_milli"]},{"table_id":"unit_ranks","path":"D:/runtime/packages/neutral/tables/unit_ranks.json","problem":{"code":"standard_pack_table_invalid","category":"error","values":{"operation":"standard_pack_read","game":"neutral","path":"D:/runtime/packages/neutral/tables/unit_ranks.json","standard_pack_problem":"table_row_duplicate","json_pointer":"/rows/1"}}}]}

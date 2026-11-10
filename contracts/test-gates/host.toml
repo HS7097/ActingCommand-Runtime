@@ -3372,6 +3372,14 @@ tests = [
 ]
 incident = ["#428 CW-1"]
 
+# #428 TB-R1 (0.12.50; register §1.293; brief rd-1110/brief-tbr1-table-listing-leftovers.md; contracts/package-reference.md, "Tables"): the names a replacement in place leaves in a game root's tables/ (an old copy <name>.old-<ms>, a part <name>.new-<ms>.part, and what undo sets aside, <name>.abandoned-<ms> and <name>.rolledback-<ms>) are skipped: beside one valid table, check-config and read_standard_pack_tables list the table alone; with 64 valid tables and leftovers whose names sort before, between and after them, all 64 are read, none is table_too_large, and read_standard_pack_table reads the 64th; a file notes.txt and an invalid table are still reported as standard_pack_table_invalid, and at startup only they add a standard_pack_read record
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_357_db1::table_listing_skips_replacement_leftovers",
+]
+incident = ["#428 TB-R1"]
+
 # Workflow #428 S168-4 (0.12.50; register §1.291, the slice's named tests; brief rd-1110/brief-s168-4.md; contracts/resource-readings.md, "List readings", and contracts/instance-fact-store.md, "List reading facts"), the host's halves, on a fake device's one-screen list: a run publishes the list whole after its successful terminal as one record_list record (rows in ascending byte order of the key, its lifetime from the detector contract, the lowest confidence, source list_reading:<task>/<operation>, the run and the frame in its snapshot id), the step finishing on its page with no input; an empty list is a record with no row and confidence 1000; an unread position or a repeated key publishes nothing, keeps the earlier record byte for byte and writes one warning row with its count; a scan that does not align fails the run with its code at the stage read_list and publishes nothing; a client's PublishFacts under inventory.list. from the agent, CLI and UI, and the Runtime's ordinary path, is refused list_reading_key_reserved with nothing appended; a select step's document reads the published list through keyed_fact (a listed key's column, an unlisted key's absent) and an older list as fact_stale; an unchanged second read publishes a new, strictly newer observation; and on a full store the publication is refused, the run fails contained_task_resource_reading_rejected, nothing is evicted and another instance's run goes on
 [[gate]]
 coverage = "Y"
