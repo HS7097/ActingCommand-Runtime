@@ -2248,7 +2248,9 @@ pub(crate) fn run_arbitrator(_global: &GlobalOptions, args: &[String]) -> CliOut
     ))
 }
 
-pub(crate) fn capability_summary(config: &UserConfig) -> Value {
+/// The Lab-2 commands' capabilities, with the exit codes of the command line `capabilities`
+/// answers: `via` when it carries `--via` (Workflow #434 LAB-2b fix 1).
+pub(crate) fn capability_summary(config: &UserConfig, via: bool) -> Value {
     let commands = lab2_command_contracts()
         .into_iter()
         .map(command_contract_summary)
@@ -2266,7 +2268,7 @@ pub(crate) fn capability_summary(config: &UserConfig) -> Value {
             "event_type": "recovery.state.changed"
         },
         "error_codes": lab2_error_code_table(),
-        "exit_codes": exit_code_table(),
+        "exit_codes": exit_code_table(via),
         "escape_toolbox": escape_toolbox_groups()
     })
 }

@@ -1017,7 +1017,9 @@ fn consumer_command_lines_take_the_old_path_unchanged() {
             now.0
         );
     }
-    // What MCP reads of a success.
+    // What MCP reads of a success. What the hotplace kit and the resource repositories read of
+    // `standard-pack check` and `standard-pack compose` is asserted on the CLI module's line by
+    // `gate_434_lab2b::own_commands_print_the_cli_line` (LAB-2b fix 1).
     let validated = through_main(&words_of(lines[0].0), true);
     let validated: Value = serde_json::from_str(&validated.0).unwrap();
     assert_eq!(

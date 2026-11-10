@@ -451,13 +451,24 @@ every kind the file names exists; `entries` follows its rule; a `reserved` row h
     (`actingctl_output_failed`, exit 1, nothing on stdout), so a later command cannot collide
     silently.
   - **Failure**: `{"outcome": {code, category: "error", values}, "message", "details"}`. The code
-    is actinglab's own; `values` are the members of the details whose names the outcome catalog
-    registers as that code's values (none for a code the catalog does not list); `message` is the
-    error's; `details` are its details nested whole, never flattened (some carry an `outcome` of
-    their own), and absent when it has none. Exit 1, with the developer line on stderr.
-  - **Exit codes** 0, 1 and 2, by the outcome's category; a fatal is the installation's refusal
-    before the command runs (the module's `cli_line::refused`).
-  - **Without `--json`** the output for people, also when stdout is a pipe or a file.
+    is actinglab's own. `values` (LAB-2b fix 1): when the details carry an outcome of the same code
+    (they are one, or their member `outcome` is one, as `resource verify`'s report and the
+    `{outcome}` of the Lab's OCR, touch, recording and standard-pack refusals), that outcome's
+    values; otherwise the members of the details whose names the outcome catalog registers as that
+    code's values (none for a code the catalog does not list). `message` is the error's; `details`
+    are its details nested whole, never flattened (some carry an `outcome` of their own), and
+    absent when it has none. Exit 1, with the developer line on stderr.
+  - **Exit codes** 0, 1 and 2, by the outcome's category (LAB-2b fix 1): 0 ends a success; 1 ends
+    every failure, and the installation's refusal before the command runs, which is the module's
+    `cli_line::refused` of the installation's code: every such code is an error, so the line exits
+    1, writes `ERROR actinglab: <code>` on stderr and prints `{outcome}` on stdout (the code for
+    people without `--json`), where actinglab before LAB-2b wrote `FATAL actinglab: …`, printed
+    nothing on stdout and exited 1, as a `--via` line still does; 2 ends an outcome of category
+    fatal, which no own command line has today. `capabilities` reports these three as its
+    `exit_codes` (`ok`, `error`, `fatal`); on a `--via` line it reports the envelope's classes, as
+    before.
+  - **Without `--json`** the output for people, also when stdout is a pipe or a file, and also for
+    a missing option value (LAB-2b fix 1), which a `--via` line still prints as the envelope.
   - `ACTINGCOMMAND_DETAIL=codes` removes `values` from the line, as from every CLI line: no
     consumer may set it.
   - Its consumers changed with it (open point 10): acmodel's validator, the four resource

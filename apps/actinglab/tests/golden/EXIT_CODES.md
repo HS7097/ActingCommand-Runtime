@@ -11,8 +11,11 @@ and exit by the line's outcome category, as every operation of the CLI module do
 | Outcome category | Exit code | Lines |
 | --- | ---: | --- |
 | success, info, warning | 0 | every own command that succeeded (`lab_operation_completed`); a result's own warnings stay its member and do not change the category |
-| error | 1 | every own command's refusal or failure, whatever its error class (`validation_failed`, `package_invalid`, `target_not_visible`, `device_error`, `runtime_not_running`, `lab_operation_check_failed`, the retired and not implemented paths) |
-| fatal | 2 | the installation's refusal before the command runs, when its code is fatal (a refusal is never 0) |
+| error | 1 | every own command's refusal or failure, whatever its error class (`validation_failed`, `package_invalid`, `target_not_visible`, `device_error`, `runtime_not_running`, `lab_operation_check_failed`, the retired and not implemented paths); and the installation's refusal before the command runs, every code of which is an error: `ERROR actinglab: <code>` on stderr and `{outcome}` on stdout (LAB-2b fix 1) |
+| fatal | 2 | an outcome of category fatal; no own command line has one today |
+
+`capabilities` reports this table as its `exit_codes` (`ok`, `error`, `fatal`) on such a line, and
+the table below on a line with `--via` (LAB-2b fix 1).
 
 `expected.json` and the `line` and `text` cases of `consumers.json` record these exit codes.
 

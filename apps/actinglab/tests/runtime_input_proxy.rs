@@ -744,9 +744,10 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
     assert_eq!(timeout_record["effect"], "performed");
     assert_eq!(timeout_record["arrival"]["status"], "timed_out");
     // #411 A19 (exec key 93): a timed-out arrival answers "the page did not arrive" in its own
-    // code (exit 3), not device_error, and `arrival` is the last member of its details, after
-    // `after_attachment`.
-    assert_eq!(timeout_exit, 3);
+    // code, not device_error, and `arrival` is the last member of its details, after
+    // `after_attachment`. Workflow #434 LAB-2b (fix 1): the CLI module's line exits 1 for every
+    // error (the envelope's exit 3 stays a `--via` line's).
+    assert_eq!(timeout_exit, 1);
     assert_eq!(
         timeout["outcome"]["code"],
         actingcommand_contract::codes::SharedCode::LabArrivalTimeout.as_str()
@@ -2317,7 +2318,8 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
             "force-stop",
         ],
     );
-    assert_eq!(busy_exit, 4);
+    // Workflow #434 LAB-2b (fix 1): the CLI module's line exits 1 for every error.
+    assert_eq!(busy_exit, 1);
     assert_eq!(busy["outcome"]["code"], "device_error");
     // Workflow #369 W-3 (S5): the command waits its cap in the instance's queue, then is
     // refused `lease_queue_expired` (`queue_expired`) instead of an immediate `lease_busy`.
@@ -2585,7 +2587,8 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
             "--require-fresh",
         ],
     );
-    assert_eq!(fresh_exit, 2);
+    // Workflow #434 LAB-2b (fix 1): the CLI module's line exits 1 for every error.
+    assert_eq!(fresh_exit, 1);
     assert_eq!(fresh_error["outcome"]["code"], "validation_failed");
     assert!(
         fresh_error["message"]

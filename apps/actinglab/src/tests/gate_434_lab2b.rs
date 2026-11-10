@@ -8,9 +8,14 @@
 //   members flat beside `outcome` (`lab_operation_completed`, success), or `{outcome (its own code,
 //   error, the values the catalog registers for it), message, details (whole)}`; warnings stay a
 //   member of the result; the global options before or after the words print the same line; the
-//   exit codes are 0, 1 and 2 only.
+//   exit codes are 0, 1 and 2 only. Fix 1 (the review of PR #1556): a failure whose details carry
+//   an outcome of its own code gives the line that outcome's values, every value the catalog
+//   requires among them, for every such failure found; what the hotplace kit and the resource
+//   repositories read of `standard-pack check` and `standard-pack compose` is at the top level of
+//   the line; `capabilities` reports the exit codes of the line it answers.
 // - `own_commands_print_for_people_into_a_pipe`: without `--json`, with stdout redirected (the
-//   hotplace kit's `standard-pack check`), the text for people, never JSON.
+//   hotplace kit's `standard-pack check`), the text for people, never JSON; fix 1: a missing
+//   option value too, while a `--via` line keeps its envelope.
 // - `mcp_child_lines_keep_the_envelope`: a `--json --via mcp …` line prints through `main`'s path
 //   the envelope the parse-and-run path prints, byte for byte, with its exit codes 2 to 6 (the
 //   consumer goldens pin it against main's code, `tests/consumer_goldens.rs`).
@@ -112,6 +117,119 @@ fn names(line: &Value) -> Vec<String> {
         .keys()
         .cloned()
         .collect()
+}
+
+/// The values the outcome catalog requires for `code`.
+fn required_values(code: &str) -> Vec<String> {
+    actingcommand_contract::outcome::catalog_json()
+        .expect("the embedded outcome catalog")
+        .get("codes")
+        .and_then(|codes| codes.get(code))
+        .and_then(|entry| entry.get("values"))
+        .and_then(Value::as_object)
+        .map(|values| {
+            values
+                .iter()
+                .filter(|(_, presence)| presence.as_str() == Some("required"))
+                .map(|(name, _)| name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Fix 1: the failure line `line` of `case`, whose details carry an outcome of the line's own code
+/// (the details are one, or their member `outcome` is one): the line's values are that outcome's,
+/// every value the catalog requires for the code among them, and the details are whole.
+fn assert_nested_values(case: &str, line: &Value) {
+    let code = line["outcome"]["code"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{case}: no code: {line}"));
+    assert_eq!(line["outcome"]["category"], "error", "{case}: {line}");
+    let details = &line["details"];
+    let nested = if details["code"] == code {
+        details
+    } else {
+        &details["outcome"]
+    };
+    assert_eq!(
+        nested["code"], code,
+        "{case}: the details carry no outcome of {code}: {line}"
+    );
+    assert!(nested["values"].is_object(), "{case}: {line}");
+    assert_eq!(
+        line["outcome"]["values"], nested["values"],
+        "{case}: {line}"
+    );
+    for name in required_values(code) {
+        assert!(
+            line["outcome"]["values"].get(name.as_str()).is_some(),
+            "{case}: {code} requires {name}: {line}"
+        );
+    }
+}
+
+/// `bytes` at `path`, its folders made first.
+fn write_file(path: &Path, bytes: &[u8]) {
+    fs::create_dir_all(path.parent().expect("a parent folder")).unwrap();
+    fs::write(path, bytes).unwrap();
+}
+
+/// An installed game root `<directory>/neutral/` whose only root file is `bundle.json`, listing
+/// `packs`, each a package directory below the root (the resource tooling's E1 fixture).
+fn listing_root(directory: &Path, packs: &[&str]) -> PathBuf {
+    let root = directory.join("neutral");
+    fs::create_dir_all(&root).unwrap();
+    let listed = packs
+        .iter()
+        .map(|package_id| {
+            json!({
+                "package_id": package_id, "server": "test", "entry_task_id": "task",
+                "path": format!("packs/{package_id}"), "file_count": 3, "byte_count": 64
+            })
+        })
+        .collect::<Vec<_>>();
+    write_file(
+        &root.join("bundle.json"),
+        &serde_json::to_vec_pretty(&json!({
+            "schema_version": "actingcommand.bundle.v4", "game": "neutral", "packs": listed
+        }))
+        .unwrap(),
+    );
+    root
+}
+
+/// The package `package_id` below `root` whose `task.json` breaks off inside its third line, so
+/// its admission refuses it (the resource tooling's E1 T3 fixture).
+fn refused_package(root: &Path, package_id: &str) {
+    let pack = root.join(package_id);
+    write_file(
+        &pack.join("control.json"),
+        &serde_json::to_vec_pretty(&json!({
+            "schema_version": "Lab-1y.control.v2",
+            "package_id": package_id,
+            "execution_mode": "navigable_route",
+            "game": "neutral",
+            "server": "test",
+            "resolution": {"width": 16, "height": 9},
+            "entry_task_id": "task",
+            "capture_interval_ms": 10,
+            "step_timeout_ms": 600,
+            "timeout_ms": 8000,
+            "max_steps": 2
+        }))
+        .unwrap(),
+    );
+    write_file(
+        &pack.join("resources/operations/resources.json"),
+        &serde_json::to_vec_pretty(
+            &json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
+        )
+        .unwrap(),
+    );
+    write_file(
+        &pack.join("resources/operations/task/task.json"),
+        b"{\n  \"schema_version\": \"0.9\",\n  \"task_id\": \"ta",
+    );
 }
 
 #[test]
@@ -249,6 +367,339 @@ fn own_commands_print_the_cli_line() {
     );
     assert_eq!(text.line.unwrap()["result"], "neutral text");
 
+    // Fix 1: what the hotplace kit and the resource repositories read of `standard-pack check
+    // --json`, and the hotplace kit of `standard-pack compose --json`, at the top level of the line
+    // (the check's members `gate_434_lab2::consumer_command_lines_take_the_old_path_unchanged` read
+    // from the envelope's `data` before LAB-2b).
+    let (exit, text) = printed_own(&words_of(&[
+        "--json",
+        "standard-pack",
+        "check",
+        "--root",
+        paths.root.as_str(),
+    ]));
+    codes.insert(exit.code);
+    assert_eq!(exit.code, 0, "{text}");
+    let line = one_line(&text);
+    assert_eq!(line["outcome"]["code"], COMPLETED, "{line}");
+    assert_eq!(line["status"], "checked", "{line}");
+    assert_eq!(line["pack_count"], 4, "{line}");
+    assert_eq!(
+        line["root_files"],
+        json!(["bundle.json", "pages.json", "navigation.json"]),
+        "{line}"
+    );
+    let warnings = line["warnings"].as_array().expect("the check's warnings");
+    assert_eq!(warnings.len(), 1, "{line}");
+    assert_eq!(
+        warnings[0]["code"], "package_bundle_entry_page_unlisted",
+        "{line}"
+    );
+    let composing = TempDir::new().unwrap();
+    let packs = composing.path().join("standard-packs");
+    let game = packs.join(super::gate_386_rlt::GAME);
+    write_file(
+        &game.join("bundle.json"),
+        &serde_json::to_vec_pretty(&super::gate_386_rlt::bundle()).unwrap(),
+    );
+    write_file(
+        &game.join("schedule.json"),
+        &serde_json::to_vec_pretty(&super::gate_386_rlt::schedule()).unwrap(),
+    );
+    let binding = |instance: &str| {
+        format!(
+            "{instance}={}/{}",
+            super::gate_386_rlt::GAME,
+            super::gate_386_rlt::SERVER
+        )
+    };
+    let (binding_a, binding_b) = (
+        binding(super::gate_386_rlt::INSTANCE_A),
+        binding(super::gate_386_rlt::INSTANCE_B),
+    );
+    let packs_text = packs.to_str().expect("a UTF-8 path").to_owned();
+    let out = composing.path().join("composed");
+    let out_text = out.to_str().expect("a UTF-8 path").to_owned();
+    let (exit, text) = printed_own(&words_of(&[
+        "--json",
+        "standard-pack",
+        "compose",
+        "--root",
+        packs_text.as_str(),
+        "--instance",
+        binding_a.as_str(),
+        "--instance",
+        binding_b.as_str(),
+        "--out",
+        out_text.as_str(),
+    ]));
+    codes.insert(exit.code);
+    assert_eq!(exit.code, 0, "{text}");
+    let line = one_line(&text);
+    assert_eq!(line["outcome"]["code"], COMPLETED, "{line}");
+    assert_eq!(line["status"], "composed", "{line}");
+    assert_eq!(
+        [
+            &line["tasks"],
+            &line["pools"],
+            &line["profiles"],
+            &line["events"]
+        ],
+        [&json!(2), &json!(2), &json!(4), &json!(2)],
+        "{line}"
+    );
+    let games = line["games"].as_array().expect("the bound games");
+    assert_eq!(games.len(), 1, "{line}");
+    assert_eq!(games[0]["game_id"], super::gate_386_rlt::GAME, "{line}");
+    assert_eq!(
+        games[0]["instances"],
+        json!([
+            super::gate_386_rlt::INSTANCE_A,
+            super::gate_386_rlt::INSTANCE_B
+        ]),
+        "{line}"
+    );
+    assert_eq!(
+        line["manifest"][0]["package_id"],
+        super::gate_386_rlt::PACKAGE,
+        "{line}"
+    );
+    assert!(
+        line["rules_digest"]
+            .as_str()
+            .is_some_and(|digest| !digest.is_empty()),
+        "{line}"
+    );
+    assert_eq!(line["warnings"], json!([]), "{line}");
+
+    // Fix 1: every failure of actinglab's own commands whose details carry an outcome of its own
+    // code (the details are one, or their member `outcome` is one) gives the line that outcome's
+    // values, every value the catalog requires among them, with the details whole. Each is run
+    // where an offline fixture reaches it, else built by the code that builds it, else as its
+    // site builds it.
+    let mut nested: Vec<(&str, u8, Value)> = Vec::new();
+    let verify = |repo: &str, work: &str, report: &str| {
+        words_of(&[
+            "--json",
+            "resource",
+            "verify",
+            "--repo",
+            repo,
+            "--source-repository",
+            "neutral-owner/neutral-resources",
+            "--work",
+            work,
+            "--report",
+            report,
+        ])
+    };
+    let path_text = |path: PathBuf| path.to_str().expect("a UTF-8 path").to_owned();
+    let report = path_text(temp.path().join("verify-report.json"));
+    // `resource verify` (`resource_verify.rs`, `outcome_error`): an existing `--work`, refused
+    // before anything is read; the details are the outcome itself.
+    let (exit, text) = printed_own(&verify(&paths.repo, &paths.runs, &report));
+    nested.push((
+        "resource verify of an existing --work",
+        exit.code,
+        one_line(&text),
+    ));
+    // `resource verify`: a `--repo` that is no Git checkout fails the checkout precondition; the
+    // details are the report, whose own `outcome` is the precondition's.
+    let not_a_checkout = temp.path().join("not-a-checkout");
+    fs::create_dir_all(&not_a_checkout).unwrap();
+    let (exit, text) = printed_own(&verify(
+        &path_text(not_a_checkout),
+        &path_text(temp.path().join("verify-work")),
+        &report,
+    ));
+    let line = one_line(&text);
+    assert_eq!(
+        line["details"]["schema_version"], "actinglab.resource-verify.v1",
+        "{line}"
+    );
+    nested.push(("resource verify of no checkout", exit.code, line));
+    // `standard-pack check` (resource tooling `standard_pack_check.rs`): an edge to the feature
+    // package (`navigation_package_invalid`), a package its admission refuses
+    // (`package_refused`), a folder with no root file (`root_invalid`) and a `bundle.json` that
+    // lists no pack (`package_directory.rs`, `packs_empty`): each `{outcome}`.
+    let navigation = TempDir::new().unwrap();
+    let roots = TempDir::new().unwrap();
+    let refused_root = listing_root(&roots.path().join("refused"), &["neutral.test.task"]);
+    refused_package(&refused_root, "neutral.test.task");
+    let no_root = roots.path().join("missing").join("neutral");
+    fs::create_dir_all(&no_root).unwrap();
+    for (case, root) in [
+        (
+            "standard-pack check of an edge to a feature package",
+            crate::standard_pack_cli::gate_373_navt::game_root(
+                &navigation,
+                crate::standard_pack_cli::gate_373_navt::FEATURES,
+            ),
+        ),
+        ("standard-pack check of a refused package", refused_root),
+        ("standard-pack check of no root file", no_root),
+        (
+            "standard-pack check of no pack",
+            listing_root(&roots.path().join("empty"), &[]),
+        ),
+    ] {
+        let root = path_text(root);
+        let (exit, text) = printed_own(&words_of(&[
+            "--json",
+            "standard-pack",
+            "check",
+            "--root",
+            root.as_str(),
+        ]));
+        nested.push((case, exit.code, one_line(&text)));
+    }
+    // An offline replay without an OCR model (crates/lab `ocr.rs`, `unavailable_error`, as
+    // `offline_ocr` refuses with it; here the provider of no installation): `{outcome}` with the
+    // OCR target.
+    let ocr = actingcommand_lab::LabOcr::from_installation(None)
+        .unavailable_error(Some("fixture/ocr"))
+        .expect("no OCR model without an installation");
+    let exit = own_line::exit(&CliResult::err("replay".to_owned(), ocr, true));
+    let code = exit.code;
+    let line = exit.line.expect("the line");
+    assert_eq!(
+        line["outcome"]["values"]["target_id"], "fixture/ocr",
+        "{line}"
+    );
+    nested.push(("replay without an OCR model", code, line));
+    // A draw whose touch keys cannot be read (crates/lab `touch.rs`, `unreadable`, as `lab_draw`
+    // refuses with it): `{outcome}` with the key.
+    let touch = actingcommand_lab::LabTouch::from_runtime_configuration(
+        br#"{"touch": {"sampling": {"sigma_ratio_milli": 0}}}"#,
+    )
+    .sampling()
+    .expect_err("a touch key outside its range");
+    let exit = own_line::exit(&CliResult::err("replay".to_owned(), touch, true));
+    let code = exit.code;
+    let line = exit.line.expect("the line");
+    assert_eq!(
+        line["outcome"]["values"]["config_key"], "touch.sampling.sigma_ratio_milli",
+        "{line}"
+    );
+    nested.push(("replay with an unreadable touch key", code, line));
+    // Built as their sites build them, which need a Lab recording, a loading table or a failing
+    // disk: `record mark`'s click that follows no template (crates/lab `recording/follow.rs`,
+    // `follow_invalid`: `{step, outcome}`), `package loading`'s refused table (resource tooling
+    // `package_loading.rs`, `refused`: `{outcome, issues}`) and `standard-pack compose`'s failed
+    // write (resource tooling `standard_pack_schedule.rs`, `write_failed`: `{outcome}`).
+    let follow = json!({
+        "schema_version": OUTCOME_SCHEMA_VERSION,
+        "code": "record_click_follow_invalid",
+        "category": "error",
+        "values": {
+            "mark_id": "neutral_mark",
+            "follow_problem": "not_template",
+            "stage": "record_click_follow_check"
+        }
+    });
+    let issue = json!({
+        "schema_version": OUTCOME_SCHEMA_VERSION,
+        "code": "standard_pack_root_invalid",
+        "category": "error",
+        "values": {
+            "game": "neutral",
+            "path": "loading.json",
+            "standard_pack_problem": "loading_invalid",
+            "json_pointer": "/packages/0"
+        }
+    });
+    let written = actingcommand_contract::outcome::Outcome::from_io_error(
+        &std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        actingcommand_contract::outcome::IoOp::Write,
+    )
+    .envelope(actingcommand_contract::outcome::Detail::Full);
+    for (case, command, code, details) in [
+        (
+            "record mark of a click that follows no template",
+            "record mark",
+            "record_click_follow_invalid",
+            json!({"step": 1, "outcome": follow}),
+        ),
+        (
+            "package loading of a refused table",
+            "package loading",
+            "standard_pack_root_invalid",
+            json!({"outcome": issue.clone(), "issues": [issue]}),
+        ),
+        (
+            "standard-pack compose of a failed write",
+            "standard-pack compose",
+            "foreign_os_error",
+            json!({"outcome": written}),
+        ),
+    ] {
+        let error = actingcommand_contract::LabError::new(
+            actingcommand_contract::LabErrorClass::UsageValidation,
+            code,
+            format!("{case} (fixture)"),
+            &[],
+        )
+        .with_details(details);
+        let exit = own_line::exit(&CliResult::err(command.to_owned(), error, true));
+        nested.push((case, exit.code, exit.line.expect("the line")));
+    }
+    let mut covered = BTreeSet::new();
+    for (case, code, line) in &nested {
+        codes.insert(*code);
+        assert_eq!(*code, 1, "{case}: {line}");
+        assert_nested_values(case, line);
+        covered.insert(
+            line["outcome"]["code"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        );
+    }
+    for code in [
+        "resource_verify_output_exists",
+        "package_bundle_navigation_package_invalid",
+        "package_invalid",
+        "standard_pack_root_invalid",
+        "package_bundle_packs_empty",
+        "lab_ocr_unavailable",
+        "config_value_invalid",
+        "record_click_follow_invalid",
+        "foreign_os_error",
+    ] {
+        assert!(covered.contains(code), "{code}: {covered:?}");
+    }
+
+    // Fix 1, the coordinator's ruling: `capabilities` reports the exit codes of the line it
+    // answers: 0, 1 and 2 on this line; with `--via` (MCP's child) the envelope's classes, as
+    // before.
+    let (exit, text) = printed_own(&words_of(&["--json", "capabilities"]));
+    codes.insert(exit.code);
+    assert_eq!(exit.code, 0, "{text}");
+    let line = one_line(&text);
+    let line_codes = json!([
+        {"exit_code": 0, "meaning": "ok"},
+        {"exit_code": 1, "meaning": "error"},
+        {"exit_code": 2, "meaning": "fatal"}
+    ]);
+    assert_eq!(line["exit_codes"], line_codes, "{line}");
+    assert_eq!(line["lab2_cli"]["exit_codes"], line_codes, "{line}");
+    let via = run_cli(["--json", "--via", "mcp", "capabilities"], true);
+    let data = via
+        .envelope
+        .data
+        .as_ref()
+        .expect("capabilities through --via");
+    let envelope_codes = json!([
+        {"exit_code": 0, "meaning": "ok"},
+        {"exit_code": 2, "meaning": "usage_or_validation"},
+        {"exit_code": 3, "meaning": "safety_blocked"},
+        {"exit_code": 4, "meaning": "device_or_instance"},
+        {"exit_code": 5, "meaning": "runtime_not_running"},
+        {"exit_code": 6, "meaning": "not_implemented_or_scheduler_not_available"}
+    ]);
+    assert_eq!(data["exit_codes"], envelope_codes);
+    assert_eq!(data["lab2_cli"]["exit_codes"], envelope_codes);
+
     assert!(codes.iter().all(|code| *code <= 2), "{codes:?}");
     set_missing_config_env();
 }
@@ -306,6 +757,41 @@ fn own_commands_print_for_people_into_a_pipe() {
     ]);
     assert!(own_line::envelope_by_default(&via, true));
     assert!(!own_line::envelope_by_default(&via, false));
+
+    // Fix 1: a missing option value follows the rule too: the text for people without `--json`,
+    // the line with it; a `--via` line keeps its envelope, at a terminal too, as before.
+    let missing = words_of(&["standard-pack", "check", "--run-root"]);
+    let (exit, text) = printed_own(&missing);
+    assert_eq!(exit.code, 1, "{text}");
+    assert!(serde_json::from_str::<Value>(&text).is_err(), "{text}");
+    assert!(text.starts_with("validation_failed"), "{text}");
+    assert!(text.contains("missing value for --run-root"), "{text}");
+    let (exit, text) = printed_own(&words_of(&[
+        "--json",
+        "standard-pack",
+        "check",
+        "--run-root",
+    ]));
+    assert_eq!(exit.code, 1, "{text}");
+    let line = one_line(&text);
+    assert_eq!(line["outcome"]["code"], "validation_failed", "{line}");
+    assert_eq!(line["message"], "missing value for --run-root", "{line}");
+    let via_missing = words_of(&["--via", "mcp", "standard-pack", "check", "--run-root"]);
+    let (text, code) = match entry(
+        via_missing.clone(),
+        own_line::envelope_by_default(&via_missing, false),
+    ) {
+        Ok(invocation) => enveloped(&run_invocation(invocation)),
+        Err(module) => panic!("{via_missing:?} is actinglab's own command line: {module:?}"),
+    };
+    assert_eq!(code, 2, "{text}");
+    let envelope: Value = serde_json::from_str(&text).expect("the envelope");
+    assert_eq!(envelope["ok"], false, "{envelope}");
+    assert_eq!(envelope["error"]["code"], "validation_failed", "{envelope}");
+    assert_eq!(
+        envelope["error"]["message"], "missing value for --run-root",
+        "{envelope}"
+    );
     set_missing_config_env();
 }
 

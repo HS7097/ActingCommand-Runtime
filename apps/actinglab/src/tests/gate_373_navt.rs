@@ -17,7 +17,8 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-const FEATURES: &str = "neutral.test.features";
+// Workflow #434 LAB-2b fix 1: `gate_434_lab2b` refuses an edge to the feature package too.
+pub(crate) const FEATURES: &str = "neutral.test.features";
 pub(crate) const HOME_TO_SHOP: &str = "neutral.test.home_to_shop";
 const RETURN_HOME: &str = "neutral.test.return_home";
 const STAGE: &str = "neutral.test.stage";

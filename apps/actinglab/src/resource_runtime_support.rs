@@ -493,14 +493,25 @@ pub(super) fn contains_string_value(value: &Value, needle: &str) -> bool {
     }
 }
 
-pub(super) fn exit_code_table() -> Value {
+/// The exit codes `capabilities` reports for the command line it answers (Workflow #434 LAB-2b
+/// fix 1, the coordinator's ruling): a line with `--via` (`via`, MCP's actinglab child) keeps the
+/// envelope's classes until LAB-5, unchanged; every other line exits by its outcome's category, as
+/// the CLI module's line does.
+pub(super) fn exit_code_table(via: bool) -> Value {
+    if via {
+        return json!([
+            {"exit_code": 0, "meaning": "ok"},
+            {"exit_code": 2, "meaning": "usage_or_validation"},
+            {"exit_code": 3, "meaning": "safety_blocked"},
+            {"exit_code": 4, "meaning": "device_or_instance"},
+            {"exit_code": 5, "meaning": "runtime_not_running"},
+            {"exit_code": 6, "meaning": "not_implemented_or_scheduler_not_available"}
+        ]);
+    }
     json!([
         {"exit_code": 0, "meaning": "ok"},
-        {"exit_code": 2, "meaning": "usage_or_validation"},
-        {"exit_code": 3, "meaning": "safety_blocked"},
-        {"exit_code": 4, "meaning": "device_or_instance"},
-        {"exit_code": 5, "meaning": "runtime_not_running"},
-        {"exit_code": 6, "meaning": "not_implemented_or_scheduler_not_available"}
+        {"exit_code": 1, "meaning": "error"},
+        {"exit_code": 2, "meaning": "fatal"}
     ])
 }
 

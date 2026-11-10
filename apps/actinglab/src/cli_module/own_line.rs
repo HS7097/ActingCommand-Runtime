@@ -15,13 +15,17 @@
 //!   that declares none is refused with `actingctl_output_failed` (exit 1) and nothing on stdout,
 //!   so no line ever carries a second `outcome` and a command that would collide fails loud.
 //! - **Failure.** `{"outcome": {code, category: "error", values}, "message", "details"}`: the code
-//!   is actinglab's own; `values` are the members of the details whose names the outcome catalog
+//!   is actinglab's own; `values` are those of the outcome of the same code the details carry (the
+//!   details are one, or their member `outcome` is one: `resource verify`'s report, a refusal whose
+//!   details are `{outcome}`), else the members of the details whose names the outcome catalog
 //!   registers as that code's values (none for a code the catalog does not list); `message` is the
 //!   error's message; `details` its details, nested whole and never flattened (some carry an
 //!   `outcome` of their own), absent when the error has none. Exit 1, and the developer line
 //!   `ERROR actinglab: <code> … <message>` on stderr.
-//! - **Exit codes** 0, 1 and 2, by the outcome's category. A fatal is the installation's refusal
-//!   before the command runs, which is the module's own (`cli_line::refused`).
+//! - **Exit codes** 0, 1 and 2, by the outcome's category: 0 a success; 1 every failure, and the
+//!   installation's refusal before the command runs (the module's `cli_line::refused` of its code;
+//!   every such code is an error, so the developer line is `ERROR actinglab: <code>` and stdout
+//!   carries `{outcome}`); 2 an outcome of category fatal, which no own command line has today.
 //! - **Without `--json`** the lines for people (`super::people`), into a pipe or a file too.
 //! - **A command line with `--via`** (only MCP's actinglab child sends one) is not answered here:
 //!   `main` prints the envelope for it as before, byte for byte, with its exit codes 2 to 6, until
@@ -45,6 +49,9 @@ const RESULT_MEMBER: &str = "result";
 /// The failure line's members beside its outcome.
 const MESSAGE: &str = "message";
 const DETAILS: &str = "details";
+/// The members of an outcome nested in a failure's details that name its code and its values.
+const CODE_MEMBER: &str = "code";
+const VALUES_MEMBER: &str = "values";
 
 /// The commands whose result has a top-level member named `outcome`, each with the one member
 /// its line carries that result in, whole and unchanged (the coordinator's ruling of 2026-11-10 on
@@ -147,25 +154,16 @@ fn failure(error: &EnvelopeError) -> Exit {
     cli_line::finish(Some(members), &outcome, false, Some(error.message.as_str()))
 }
 
-/// actinglab's error code `spelling` as the line's outcome: category error, and as its values the
-/// members of `details` whose names the outcome catalog registers as the code's values. actinglab
-/// still carries its codes as spellings, and not every one is registered, so the outcome is read
-/// as one received from that channel, which is relayed and never checked as an emission.
+/// actinglab's error code `spelling` as the line's outcome: category error, and as its values
+/// those of the outcome of the same code `details` carries ([`nested_values`]), else the members
+/// of `details` whose names the outcome catalog registers as the code's values
+/// ([`registered_values`]). actinglab still carries its codes as spellings, and not every one is
+/// registered, so the outcome is read as one received from that channel, which is relayed and
+/// never checked as an emission.
 fn received(spelling: &str, details: Option<&Value>) -> Result<Outcome, String> {
-    let catalog = catalog_json()
-        .map_err(|error| format!("the embedded outcome catalog does not parse: {error}"))?;
-    let registered = catalog
-        .get("codes")
-        .and_then(|codes| codes.get(spelling))
-        .and_then(|entry| entry.get("values"))
-        .and_then(Value::as_object);
-    let values = match (registered, details.and_then(Value::as_object)) {
-        (Some(keys), Some(details)) => details
-            .iter()
-            .filter(|(name, _)| keys.contains_key(name.as_str()))
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect::<Map<_, _>>(),
-        _ => Map::new(),
+    let values = match nested_values(spelling, details) {
+        Some(values) => values.clone(),
+        None => registered_values(spelling, details)?,
     };
     serde_json::from_value::<OutcomeEnvelope>(json!({
         "schema_version": OUTCOME_SCHEMA_VERSION,
@@ -175,4 +173,40 @@ fn received(spelling: &str, details: Option<&Value>) -> Result<Outcome, String> 
     }))
     .map(OutcomeEnvelope::into_outcome)
     .map_err(|error| format!("the outcome of actinglab's code {spelling} does not build: {error}"))
+}
+
+/// The values of the outcome of the code `spelling` that `details` carries: `details` itself when
+/// it is one, else its member `outcome` when that is one (Workflow #434 LAB-2b fix 1: a refusal
+/// that nests its values, as `resource verify`'s report or the `{outcome}` of the Lab's OCR, touch
+/// and standard-pack refusals, keeps them on the line). `None` when it carries none.
+fn nested_values<'a>(spelling: &str, details: Option<&'a Value>) -> Option<&'a Map<String, Value>> {
+    let details = details?;
+    [Some(details), details.get(OUTCOME)]
+        .into_iter()
+        .flatten()
+        .filter(|outcome| outcome.get(CODE_MEMBER).and_then(Value::as_str) == Some(spelling))
+        .find_map(|outcome| outcome.get(VALUES_MEMBER).and_then(Value::as_object))
+}
+
+/// The members of `details` whose names the outcome catalog registers as the values of the code
+/// `spelling`: none for a code the catalog does not list, or without details.
+fn registered_values(
+    spelling: &str,
+    details: Option<&Value>,
+) -> Result<Map<String, Value>, String> {
+    let catalog = catalog_json()
+        .map_err(|error| format!("the embedded outcome catalog does not parse: {error}"))?;
+    let registered = catalog
+        .get("codes")
+        .and_then(|codes| codes.get(spelling))
+        .and_then(|entry| entry.get(VALUES_MEMBER))
+        .and_then(Value::as_object);
+    Ok(match (registered, details.and_then(Value::as_object)) {
+        (Some(keys), Some(details)) => details
+            .iter()
+            .filter(|(name, _)| keys.contains_key(name.as_str()))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect(),
+        _ => Map::new(),
+    })
 }
