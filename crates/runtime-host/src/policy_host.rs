@@ -1298,8 +1298,9 @@ impl DispatchJournal {
 /// UNSET-2 (register §1.296): with `recorded_through`, the position of the value records the
 /// journal loaded or wrote, a dispatch completed after it is kept too, because the decision
 /// memory's re-alignment applies the dispatch records after that position to the dispatches the
-/// journal holds (`refresh_dispatch_tail`). Only a late settlement completes outside the bound
-/// (after more than [`REMEDY_JOURNAL_MAX_RUNS`] later runs of its pair), and it is pruned at the
+/// journal holds (`refresh_dispatch_tail`). Only a late settlement completes outside the bound:
+/// one of a task of the remedy journal, whose value record names every admitted run the journal
+/// keeps, after more than [`REMEDY_JOURNAL_MAX_RUNS`] later runs of its pair. It is pruned at the
 /// first pruning after a value record past its completion.
 fn prune_journal(
     seen: &mut BTreeMap<String, SeenDispatch>,
@@ -2031,6 +2032,73 @@ pub(crate) fn largest_journal_for_synthetic_dispatches_for_test(dispatches: u64)
         largest = largest.max(seen.len()).max(order.len());
     }
     largest
+}
+
+/// UNSET-2 (register §1.296, UNSET2-5), tests: one (task, instance) pair's late settlement, a
+/// dispatch admitted before [`REMEDY_JOURNAL_MAX_RUNS`] later ones of its pair (each admitted and
+/// completed in turn), so outside the journal's bound, and completed after all of them at
+/// `late_completed`; the journal pruned once with `recorded_through` ([`prune_journal`], which
+/// reads only the dispatches' lifecycles and sequences). Whether the journal keeps the late
+/// dispatch, and how many dispatches it keeps.
+#[cfg(test)]
+pub(crate) fn journal_keeps_a_late_completion_for_test(
+    late_completed: u64,
+    recorded_through: Option<u64>,
+) -> (bool, usize) {
+    let later = u64::try_from(REMEDY_JOURNAL_MAX_RUNS).expect("the journal's bound");
+    let dispatch = |index: u64, intent_sequence: u64, completed_sequence: u64| {
+        let decision_id = format!("decision-{index}");
+        let data = PolicyDispatchEventData {
+            decision_id: decision_id.clone(),
+            task_id: "task-synthetic".to_owned(),
+            instance_id: "instance-synthetic".to_owned(),
+            operation_id: "operation-synthetic".to_owned(),
+            procedure_binding_digest: format!("sha256:{}", "0".repeat(64)),
+            reason_chain_id: format!("chain-{index}"),
+            reasons: Vec::new(),
+            catalog_hash: format!("sha256:{}", "1".repeat(64)),
+            catalog_version: 1,
+            input_ledger_position: intent_sequence - 1,
+            fact_snapshot_id: format!("snapshot-{index}"),
+            approval_fact_ids: Vec::new(),
+            urgency_milli: 0,
+        };
+        (
+            decision_id,
+            SeenDispatch {
+                data,
+                admission: None,
+                execution: None,
+                completed_run: None,
+                intent_sequence,
+                admitted_sequence: Some(intent_sequence + 1),
+                rejected_sequence: None,
+                completed_sequence: Some(completed_sequence),
+                lifecycle: DispatchLifecycle::Completed,
+                failures: Some(0),
+                expected_duration_ms: None,
+                settled_late: index == 0,
+            },
+        )
+    };
+    let mut dispatches = vec![dispatch(0, 1, late_completed)];
+    for index in 1..=later {
+        let intent_sequence = index * 4 + 1;
+        dispatches.push(dispatch(index, intent_sequence, intent_sequence + 3));
+    }
+    assert!(
+        late_completed > later * 4 + 4,
+        "the late dispatch completes after the later ones"
+    );
+    let mut seen = BTreeMap::new();
+    let mut order = BTreeMap::new();
+    for (decision_id, dispatch) in dispatches {
+        order.insert(dispatch.intent_sequence, decision_id.clone());
+        seen.insert(decision_id, dispatch);
+    }
+    let mut pruned = BTreeSet::new();
+    prune_journal(&mut seen, &mut order, &mut pruned, recorded_through);
+    (seen.contains_key("decision-0"), seen.len())
 }
 
 /// SCH-M ED-2 (§3.4 D-15): the duration an admission's own projection gives an intent's pair:
