@@ -8853,8 +8853,10 @@ S168-5a, 9 tests, on tables loaded with `LoadedTable::load` and fake snapshots:
   `lookup_miss` (a key of the union without a row in the table; a null cell of the class), read
   by an `integer_compare` gate and by a term: under `drop_candidate` each candidate they assess
   is `unknown_dropped` with `lookup_miss`, and its verdict is no static table drop; under
-  `abort_evaluation` the evaluation is `unknown` with `lookup_miss` and the rule, with no
-  verdict; no candidate is ranked on the value and nothing reads 0.
+  `abort_evaluation`, at the evaluator, the evaluation is `unknown` with `lookup_miss` and the
+  rule (`gate_unknown_aborted` or `term_unknown_aborted` with the rule's `rule_id`), nothing is
+  selected, and no candidate is ranked or scored; under either, no candidate is ranked on the
+  value and nothing reads 0.
 
 S168-5b, 7 tests, on fake snapshots whose lists a document reads through `keyed_fact`, tables
 loaded with `LoadedTable::load`, and a fake device whose input port fails the test on any call.
@@ -8993,6 +8995,10 @@ a console whose `ledger` range holds 8, which is UI-L1's console.
 | S168C-4 | `list_reading_key_reserved` (non-fatal request error, `fact_key`) | outcome code | S168-4 | runtime-host | from every origin |
 | S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 list maxima per document, counted as distinct references, and 16 lists per list maximum; built by S168-5a, since 0.12.49 ("Slice S168-5a" below) |
 | S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_keys`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `fact_keys` (`list<token>`, the lists read in the order of `lists`, at most 16 items), `maximum`, `maximum_identity` | outcome code and keys | S168-5a | selection-policy | a decision reason, no record member; `count` is the number of distinct keys of the union; built by S168-5a, since 0.12.49 (`maximum` `integer`, `maximum_identity` `id`) |
+| S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key, unknown_outcome_key}`, all four required, the two keys distinct | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only; ends with `outcome_key` (a known evaluation, an unknown check that does not block, no candidate `unknown_dropped`) or `unknown_outcome_key` |
+| S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, `ledger` 8 (#434's, shared) | S168-5b | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
+| S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5b | runtime-host | ends that run only |
+| S168C-10 | the optional `task.json` mapping member `judge_result`, a closed vocabulary of `judged` and `unknown` | package format, `package` 9 | S168-5b | resource repositories | maps a judge step's end with that result; two mappings overlap only with the same effect condition, page and `judge_result` (or none on both), so S168-5b changes `SchedulingOutcomeDeclaration::validate` (`mapping_overlap`); no persisted record carries it; [selection-graph.md](selection-graph.md), "Mapping the two keys" |
 
 #### Slice S168-5a (0.12.49): the value source `table_max_over_list`
 
@@ -9033,6 +9039,19 @@ reason the record reader only spells.
 `term_fallback_used` and the vocabulary `unknown_reason` are reused. No persisted structure
 change.
 
+**Contract wording this slice changed** (named by fix 1, work order
+`rd-1110/brief-s168-5a-fix1.md`). Two sentences of [selection-policy.md](selection-policy.md),
+"Table maximum over a list", besides its opening line, which now says that S168-5a built the
+section:
+
+- "One read", step 1: a listed list that is malformed now includes, by name, two rows that its
+  entry's `where` keeps sharing one key, as the up-front check reads it (reading (a) below).
+- "Audit": a pin's `term_fallback_used` now carries `rule_id`, the gate or term that reads the
+  reference first, and `table_column`, the pin's column, one per such pin in the order of
+  `pins` (reading (b) below).
+
+The independent review before fix 1 found both faithful to the contract's meaning.
+
 **Where S168-5a reads the contract.**
 
 - (a) Step 1's "malformed" includes two rows of one list that its entry's `where` keeps sharing
@@ -9043,9 +9062,23 @@ change.
   first, one reason per pin that used its `otherwise`, in pin order. Written into "Audit".
 - (c) "Nor can a `fallback_column` name it": the reference decodes an optional `fallback_column`
   only so that validation refuses it `type_mismatch`, as the contract says, not the decoder.
-- (d) Under `abort_evaluation` the evaluator keeps, as for every abort, the verdict of the
-  candidate whose rule ended the evaluation; the record keeps none ([selection-graph.md](selection-graph.md),
-  "an abort keeps no verdict"). Test 9 checks that no candidate ranks or scores.
+- (d) What an abort keeps; existing behaviour that this slice does not change (corrected by fix
+  1, work order `rd-1110/brief-s168-5a-fix1.md`). Under `abort_evaluation` the evaluator's
+  decision keeps the verdicts of the candidates it assessed until then, none given a rank, the
+  last of them that of the candidate whose rule ended the evaluation (`unknown_dropped`, with
+  `gate_unknown_aborted` or `term_unknown_aborted` and the rule's `rule_id`;
+  `evaluate_with_tables` in `crates/selection-policy/src/evaluator.rs`); an evaluation the
+  up-front check ends, before any candidate, keeps no verdict. What the record
+  `task.selection_evaluated` keeps of an abort depends on the step. A single-frame select's
+  record keeps the decision's verdicts as they are, the aborting candidate's included
+  (`selection_record`, `record_verdicts(&decision.candidates)` in
+  `crates/execution-kernel/src/contained_task/selection.rs`). A select over a scan's record keeps
+  none (`scan_selection_record`, in the same file; [selection-graph.md](selection-graph.md),
+  "Record per path": "an abort keeps no verdict"). A judge step's record, as its contract plans
+  it for S168-5b, keeps none ([selection-graph.md](selection-graph.md), "Execution of a judge
+  step", step 4 and the table of results: "`unknown`, no verdict"). Test 9 checks the evaluator
+  only: the evaluation is `unknown` with the read's reason and the rule, and no candidate is
+  ranked or scored.
 - (e) Test 4's catalog half is a test of the same name in `crates/policy`: the selection-policy
   crate does not link the catalog compiler. Test 4 also refuses a list that is no record list, a
   `where` outside its list's values, a gate predicate other than `integer_compare`, a `lookup`
@@ -9059,10 +9092,6 @@ unchanged.
 
 **S168-5a rollback** (to the release before it). Open, as for any release below `package` 8: no
 package uses the source until S168-6, which comes after S168-4 and S168-5a.
-| S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key, unknown_outcome_key}`, all four required, the two keys distinct | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only; ends with `outcome_key` (a known evaluation, an unknown check that does not block, no candidate `unknown_dropped`) or `unknown_outcome_key` |
-| S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, `ledger` 8 (#434's, shared) | S168-5b | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
-| S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5b | runtime-host | ends that run only |
-| S168C-10 | the optional `task.json` mapping member `judge_result`, a closed vocabulary of `judged` and `unknown` | package format, `package` 9 | S168-5b | resource repositories | maps a judge step's end with that result; two mappings overlap only with the same effect condition, page and `judge_result` (or none on both), so S168-5b changes `SchedulingOutcomeDeclaration::validate` (`mapping_overlap`); no persisted record carries it; [selection-graph.md](selection-graph.md), "Mapping the two keys" |
 
 ### 1.292 Slice QP-1 (0.12.49): a ledger page stays inside its sequence bounds whatever the planner chooses (#422; the read-only investigation of 2026-11-10, `rd-1110/ledger-window-plan-findings.md`; the console's ledger window will send pages with `from_sequence`, `to_sequence`, a limit and a snapshot and no instance, which the coordinator ruled acceptable once this slice makes the bound independent of the planner; coordinator work order `rd-1110/brief-qp1-page-plan-bounds.md`)
 
