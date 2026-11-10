@@ -499,9 +499,7 @@ fn package_dry_run_rejects_malformed_schema_0_7_in_the_formal_parser() {
     let output = fixture.run(&[], "malformed-schema-0.7.zip");
     assert_error_code(&output, "package_invalid");
     let error = envelope(&output);
-    let message = error["error"]["message"]
-        .as_str()
-        .expect("declaration error");
+    let message = error["message"].as_str().expect("declaration error");
     assert!(message.contains("/post_admission_ocr/unexpected"));
     assert!(message.contains("UnknownField"));
     assert!(
@@ -792,9 +790,10 @@ fn package_dry_run_cannot_be_false_greened_by_version() {
         let output = run_actinglab(&fixture.temp, args);
         assert!(!output.status.success());
         let result = envelope(&output);
-        assert_eq!(result["ok"], false);
-        assert_eq!(result["command"], "package dry-run");
-        assert_eq!(result["error"]["code"], "validation_failed");
+        // Workflow #434 LAB-2b: the line names no command; `package dry-run`'s refusal, not
+        // `version`'s answer (`lab_operation_completed`, exit 0).
+        assert_eq!(result["outcome"]["category"], "error");
+        assert_eq!(result["outcome"]["code"], "validation_failed");
         assert!(!out.exists(), "{} unexpectedly created", out.display());
     }
 }
@@ -1017,8 +1016,9 @@ fn envelope(output: &Output) -> Value {
     })
 }
 
+/// The result's members: Workflow #434 LAB-2b, flat beside the line's own `outcome`.
 fn envelope_data(output: &Output) -> Value {
-    envelope(output)["data"].clone()
+    envelope(output)
 }
 
 fn capability<'a>(data: &'a Value, command: &str) -> &'a Value {
@@ -1038,11 +1038,11 @@ fn assert_success(output: &Output, decision_status: &str) {
         String::from_utf8_lossy(&output.stderr)
     );
     let envelope = envelope(output);
-    assert_eq!(envelope["ok"], true);
-    assert_eq!(envelope["data"]["status"], "offline_simulation");
-    assert_eq!(envelope["data"]["executed"], false);
-    assert_eq!(envelope["data"]["decision"]["status"], decision_status);
-    assert_eq!(envelope["data"]["production_global_ledger_written"], false);
+    assert_eq!(envelope["outcome"]["category"], "success");
+    assert_eq!(envelope["status"], "offline_simulation");
+    assert_eq!(envelope["executed"], false);
+    assert_eq!(envelope["decision"]["status"], decision_status);
+    assert_eq!(envelope["production_global_ledger_written"], false);
 }
 
 fn assert_deferred_post_admission_ocr(status: &Value) {
@@ -1064,9 +1064,9 @@ fn assert_failure(output: &Output) {
         String::from_utf8_lossy(&output.stderr)
     );
     let envelope = envelope(output);
-    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["outcome"]["category"], "error");
     assert!(
-        envelope["error"]["code"]
+        envelope["outcome"]["code"]
             .as_str()
             .is_some_and(|code| !code.is_empty()),
         "failure did not expose a stable error code: {envelope}"
@@ -1075,13 +1075,13 @@ fn assert_failure(output: &Output) {
 
 fn assert_error_code(output: &Output, expected: &str) {
     assert_failure(output);
-    assert_eq!(envelope(output)["error"]["code"], expected);
+    assert_eq!(envelope(output)["outcome"]["code"], expected);
 }
 
 fn assert_refusal_receipt(output: &Output, path: &Path, expected: &str) {
     assert_error_code(output, expected);
     let response = envelope(output);
-    let details = &response["error"]["details"];
+    let details = &response["details"];
     assert_eq!(details["status"], "refused");
     assert_eq!(details["decision"]["status"], "refused");
     assert_eq!(details["decision"]["code"], expected);

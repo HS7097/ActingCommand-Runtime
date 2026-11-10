@@ -2,10 +2,10 @@ use crate::runtime_endpoint::runtime_endpoint_check;
 use crate::user_config_keys::{config_get, config_set};
 use crate::user_config_store::{config_path, read_user_config, write_user_config};
 use crate::{
-    CliError, CliOutcome, FlagArgs, GlobalOptions, RUNTIME_VERSION, SCHEMA_VERSION,
-    command_capabilities, effective_resource_root, effective_run_root, effective_runtime_endpoint,
-    lab2_cli, list_resource_kind, path_string, process_env_overrides,
-    reject_legacy_session_routing, require_runtime, resolved_adb_json, resolved_adb_json_from,
+    CliError, CliOutcome, GlobalOptions, RUNTIME_VERSION, SCHEMA_VERSION, command_capabilities,
+    effective_resource_root, effective_run_root, effective_runtime_endpoint, lab2_cli,
+    list_resource_kind, path_string, process_env_overrides, resolved_adb_json,
+    resolved_adb_json_from,
 };
 use actingcommand_device::resolve_adb_path;
 use serde_json::{Value, json};
@@ -236,17 +236,6 @@ pub(super) fn run_doctor(global: &GlobalOptions) -> CliOutcome<Value> {
         "checks": checks,
         "note": "doctor is diagnostic; runtime/device unavailability is reported without blocking offline commands"
     }))
-}
-
-pub(super) fn run_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    reject_legacy_session_routing(&flags)?;
-    require_runtime(global).map(|data| {
-        json!({
-            "state": "running",
-            "runtime": data,
-        })
-    })
 }
 
 pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {

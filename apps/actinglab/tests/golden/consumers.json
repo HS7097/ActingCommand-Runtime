@@ -4,24 +4,18 @@
     "consumer": "acmodel's validator (UI model/src/acmodel/export/validator.py)",
     "args": ["--json", "resource", "validate", "--repo", "<ROOT>/repo", "--changed-path", ".github/workflows/ci.yml"],
     "exit_code": 0,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "resource validate",
-      "data": {
-        "entries": [
-          {"path": ".github/workflows/ci.yml", "reason": "workflow_configuration", "status": "excluded"}
-        ],
-        "read_bytes": 0,
-        "read_files": [],
-        "repo": "<ROOT>/repo",
-        "schema_version": "actinglab.resource-declarations.v1",
-        "scope": "declarations_only",
-        "status": "valid",
-        "warnings": []
-      },
-      "ok": true,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
+    "line": {
+      "entries": [
+        {"path": ".github/workflows/ci.yml", "reason": "workflow_configuration", "status": "excluded"}
+      ],
+      "outcome": {"category": "success", "code": "lab_operation_completed", "schema_version": "actingcommand.outcome.v1", "values": {}},
+      "read_bytes": 0,
+      "read_files": [],
+      "repo": "<ROOT>/repo",
+      "schema_version": "actinglab.resource-declarations.v1",
+      "scope": "declarations_only",
+      "status": "valid",
+      "warnings": []
     }
   },
   {
@@ -29,24 +23,18 @@
     "consumer": "the resource repositories' resource-declarations.yml and scripts/validate-local.ps1",
     "args": ["--json", "resource", "validate", "--repo", "<ROOT>/repo", "--changed-paths-file", ".git/resource-changed-paths"],
     "exit_code": 0,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "resource validate",
-      "data": {
-        "entries": [
-          {"path": ".github/workflows/ci.yml", "reason": "workflow_configuration", "status": "excluded"}
-        ],
-        "read_bytes": 27,
-        "read_files": [".git/resource-changed-paths"],
-        "repo": "<ROOT>/repo",
-        "schema_version": "actinglab.resource-declarations.v1",
-        "scope": "declarations_only",
-        "status": "valid",
-        "warnings": []
-      },
-      "ok": true,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
+    "line": {
+      "entries": [
+        {"path": ".github/workflows/ci.yml", "reason": "workflow_configuration", "status": "excluded"}
+      ],
+      "outcome": {"category": "success", "code": "lab_operation_completed", "schema_version": "actingcommand.outcome.v1", "values": {}},
+      "read_bytes": 27,
+      "read_files": [".git/resource-changed-paths"],
+      "repo": "<ROOT>/repo",
+      "schema_version": "actinglab.resource-declarations.v1",
+      "scope": "declarations_only",
+      "status": "valid",
+      "warnings": []
     }
   },
   {
@@ -92,60 +80,36 @@
     "name": "resource_package_preflight",
     "consumer": "the resource repositories' resource-declarations.yml, scripts/validate-local.ps1, scripts/bundle.ps1 and scripts/regression.ps1",
     "args": ["--json", "package", "preflight", "--package", "<ROOT>/packs/missing"],
-    "exit_code": 2,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "package preflight",
-      "error": {
-        "blocked_by": [],
-        "code": "package_invalid",
-        "details": {
-          "coverage": {"declaration_parse": "not_completed", "execution": "not_run", "package_load": "failed", "task_prepare": "not_run"}
-        },
-        "message": "<ANY>"
+    "exit_code": 1,
+    "line": {
+      "details": {
+        "coverage": {"declaration_parse": "not_completed", "execution": "not_run", "package_load": "failed", "task_prepare": "not_run"}
       },
-      "ok": false,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
+      "message": "<ANY>",
+      "outcome": {"category": "error", "code": "package_invalid", "schema_version": "actingcommand.outcome.v1", "values": {}}
     }
   },
   {
     "name": "run_root_package_preflight",
     "consumer": "a resource repository's script with a leading --run-root",
     "args": ["--json", "--run-root", "<ROOT>/runs", "package", "preflight", "--package", "<ROOT>/packs/missing"],
-    "exit_code": 2,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "package preflight",
-      "error": {
-        "blocked_by": [],
-        "code": "package_invalid",
-        "details": {
-          "coverage": {"declaration_parse": "not_completed", "execution": "not_run", "package_load": "failed", "task_prepare": "not_run"}
-        },
-        "message": "<ANY>"
+    "exit_code": 1,
+    "line": {
+      "details": {
+        "coverage": {"declaration_parse": "not_completed", "execution": "not_run", "package_load": "failed", "task_prepare": "not_run"}
       },
-      "ok": false,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
+      "message": "<ANY>",
+      "outcome": {"category": "error", "code": "package_invalid", "schema_version": "actingcommand.outcome.v1", "values": {}}
     }
   },
   {
     "name": "resource_package_fmt_check",
     "consumer": "the resource repositories' bundle-check.yml and scripts/validate-local.ps1",
     "args": ["--json", "package", "fmt", "--package", "<ROOT>/packs/neutral.json", "--check"],
-    "exit_code": 2,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "package fmt",
-      "error": {
-        "blocked_by": [],
-        "code": "validation_failed",
-        "message": "package fmt takes a content directory; <ROOT>/packs/neutral.json is a file"
-      },
-      "ok": false,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
+    "exit_code": 1,
+    "line": {
+      "message": "package fmt takes a content directory; <ROOT>/packs/neutral.json is a file",
+      "outcome": {"category": "error", "code": "validation_failed", "schema_version": "actingcommand.outcome.v1", "values": {}}
     }
   },
   {
@@ -156,47 +120,28 @@
       "--maintenance", "<ROOT>/maintenance.json", "--out", "<ROOT>/bundle", "--source-repository", "neutral/resources",
       "--source-commit", "0000000000000000000000000000000000000000"
     ],
-    "exit_code": 2,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "package bundle",
-      "error": {
-        "blocked_by": [],
-        "code": "validation_failed",
-        "message": "<ROOT>/maintenance.json: EOF while parsing a list at line 1 column 1"
-      },
-      "ok": false,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
+    "exit_code": 1,
+    "line": {
+      "message": "<ROOT>/maintenance.json: EOF while parsing a list at line 1 column 1",
+      "outcome": {"category": "error", "code": "validation_failed", "schema_version": "actingcommand.outcome.v1", "values": {}}
     }
   },
   {
     "name": "resource_standard_pack_check",
     "consumer": "the resource repositories' scripts/bundle.ps1",
     "args": ["--json", "standard-pack", "check", "--root", "<ROOT>/not-a-root"],
-    "exit_code": 2,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "standard-pack check",
-      "error": {"blocked_by": [], "code": "validation_failed", "message": "--root <ROOT>/not-a-root is no directory"},
-      "ok": false,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
+    "exit_code": 1,
+    "line": {
+      "message": "--root <ROOT>/not-a-root is no directory",
+      "outcome": {"category": "error", "code": "validation_failed", "schema_version": "actingcommand.outcome.v1", "values": {}}
     }
   },
   {
     "name": "hotplace_standard_pack_check_without_json",
     "consumer": "the coordinator's hotplace kit (hotplace.ps1: no --json, stdout redirected to a file)",
     "args": ["standard-pack", "check", "--root", "<ROOT>/not-a-root"],
-    "exit_code": 2,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "standard-pack check",
-      "error": {"blocked_by": [], "code": "validation_failed", "message": "--root <ROOT>/not-a-root is no directory"},
-      "ok": false,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
-    }
+    "exit_code": 1,
+    "text": "validation_failed\n  message  --root <ROOT>/not-a-root is no directory"
   },
   {
     "name": "hotplace_standard_pack_compose",
@@ -205,70 +150,51 @@
       "--json", "standard-pack", "compose", "--root", "<ROOT>/not-a-root", "--instance", "neutral.a=neutral/test",
       "--out", "<ROOT>/composed"
     ],
-    "exit_code": 2,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "standard-pack compose",
-      "error": {"blocked_by": [], "code": "validation_failed", "message": "--root <ROOT>/not-a-root is no directory"},
-      "ok": false,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
+    "exit_code": 1,
+    "line": {
+      "message": "--root <ROOT>/not-a-root is no directory",
+      "outcome": {"category": "error", "code": "validation_failed", "schema_version": "actingcommand.outcome.v1", "values": {}}
     }
   },
   {
     "name": "regression_observe_verbose",
     "consumer": "the resource repositories' scripts/regression.ps1 (--json --verbose observe)",
     "args": ["--json", "--verbose", "observe", "--scene", "<ROOT>/scene.png", "--package", "<ROOT>/packs/missing"],
-    "exit_code": 2,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "observe",
-      "error": {"blocked_by": [], "code": "package_invalid", "message": "<ANY>"},
-      "ok": false,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
+    "exit_code": 1,
+    "line": {
+      "message": "<ANY>",
+      "outcome": {"category": "error", "code": "package_invalid", "schema_version": "actingcommand.outcome.v1", "values": {}}
     }
   },
   {
     "name": "run_root_observe_verbose",
     "consumer": "a resource repository's regression script with a leading --run-root",
     "args": ["--json", "--run-root", "<ROOT>/runs", "--verbose", "observe", "--scene", "<ROOT>/scene.png", "--package", "<ROOT>/packs/missing"],
-    "exit_code": 2,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "observe",
-      "error": {"blocked_by": [], "code": "package_invalid", "message": "<ANY>"},
-      "ok": false,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
+    "exit_code": 1,
+    "line": {
+      "message": "<ANY>",
+      "outcome": {"category": "error", "code": "package_invalid", "schema_version": "actingcommand.outcome.v1", "values": {}}
     }
   },
   {
     "name": "regression_recognize",
     "consumer": "the resource repositories' scripts/regression.ps1 (recognize --target)",
     "args": ["--json", "recognize", "--target", "neutral_target", "--scene", "<ROOT>/scene.png", "--package", "<ROOT>/packs/missing"],
-    "exit_code": 2,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "recognize",
-      "error": {"blocked_by": [], "code": "package_invalid", "message": "<ANY>"},
-      "ok": false,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
+    "exit_code": 1,
+    "line": {
+      "message": "<ANY>",
+      "outcome": {"category": "error", "code": "package_invalid", "schema_version": "actingcommand.outcome.v1", "values": {}}
     }
   },
   {
     "name": "regression_detect_page",
     "consumer": "the resource repositories' scripts/regression.ps1 (detect-page)",
     "args": ["--json", "detect-page", "--scene", "<ROOT>/scene.png", "--package", "<ROOT>/packs/missing"],
-    "exit_code": 2,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "detect-page",
-      "error": {"blocked_by": [], "code": "package_invalid", "details": "<ANY>", "message": "<ANY>"},
-      "ok": false,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
+    "exit_code": 1,
+    "line": {
+      "details": "<ANY>",
+      "message": "<ANY>",
+      "outcome": {"category": "error", "code": "package_invalid", "schema_version": "actingcommand.outcome.v1", "values": "<ANY>"}
     }
   }
 ]

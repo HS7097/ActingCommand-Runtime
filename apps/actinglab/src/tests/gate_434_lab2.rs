@@ -14,22 +14,23 @@
 //   command serves go to that command in its words.
 // - `cli_json_matches_op_output`: through `main`'s entry, a core word prints its line for people
 //   by default (into a pipe too) and with `--json` the line `lab-ops` builds for it; a row
-//   actinglab's own command serves answers that command's envelope, as its own words do.
+//   actinglab's own command serves answers that command's line, as its own words do (LAB-2b: the
+//   CLI module's line, no longer the envelope).
 // - `serve_answers_same_as_cli`: one answer line per request line, the line the operation's
-//   `--json` prints (the module's line, or actinglab's envelope); a request that is no operation
-//   is refused and the loop goes on.
+//   `--json` prints (the module's line, for actinglab's own commands too since LAB-2b); a request
+//   that is no operation is refused and the loop goes on.
 // - `recording_steps_and_marks_carry_the_initiator` (the work order's fourth test): a recording's
 //   steps and marks carry the process's initiator word (§4.2), `ACTINGCOMMAND_INITIATOR` changes
 //   it, a word the variable may not name is refused and nothing is written, and through MCP's
 //   actinglab child (`--via mcp`) the word is `Lab-MCP` (§4.1).
 // - `consumer_command_lines_take_the_old_path_unchanged` (fix 1; renamed in fix 2): every command
-//   of actinglab's dispatch is actinglab's own on `main`'s route, its words unchanged, and each
-//   command line its consumers send (acmodel's validator, the resource repositories' CI and
-//   scripts, the coordinator's hotplace kit, MCP's `--via mcp` child) prints through `main`'s
-//   entry exactly what the same line prints through the parse-and-run path without the route
-//   (this build's code of before LAB-2), with the same exit code, against the same fixture, the
-//   request id each run issues masked: the route changes no output. That this output is main's is pinned by the integration goldens
-//   (`tests/golden_protocol.rs`, `tests/consumer_goldens.rs`).
+//   of actinglab's dispatch is actinglab's own on `main`'s route, its words unchanged. Since
+//   Workflow #434 LAB-2b only MCP's `--via mcp` child keeps the old path: each of its command lines
+//   prints through `main`'s entry exactly the envelope the same line prints through the
+//   parse-and-run path without the route, with the same exit code (0, or 2 to 6), against the
+//   same fixture, the request id each run issues masked. That this output is main's is pinned by
+//   the integration goldens' MCP cases (`tests/consumer_goldens.rs`); the other consumers' lines
+//   are `gate_434_lab2b`'s.
 // Fakes only: an empty configuration in a temporary folder, offline frames and fixtures; no
 // Runtime, no device, no clock, no sleep.
 
@@ -333,8 +334,8 @@ fn cli_json_matches_op_output() {
         }
     }
 
-    // A row actinglab's own command serves, named by its short words: that command's envelope,
-    // byte for byte as its own words give it, and its exit code.
+    // A row actinglab's own command serves, named by its short words: the line that command
+    // prints for its own words (Workflow #434 LAB-2b: the CLI module's line), and its exit code.
     let temp = TempDir::new().unwrap();
     set_config_env(temp.path().join("config.json"));
     let set = run_cli(
@@ -350,23 +351,25 @@ fn cli_json_matches_op_output() {
     assert_eq!(set.exit_code(), 0, "{}", set.envelope_json());
     let short = match entry(
         words_of(&["--json", "user-config", "instance.neutral.serial"]),
-        true,
+        false,
     ) {
-        Ok(invocation) => run_invocation(invocation),
+        Ok(invocation) => cli_module::own_line::answer(invocation),
         Err(module) => {
             panic!("user-config is actinglab's own command, not the module's {module:?}")
         }
     };
-    let own = run_cli(
+    let own = cli_module::own_line::answer(parse_invocation(
         ["--json", "user-config", "get", "instance.neutral.serial"],
-        true,
-    );
-    assert_eq!(short.envelope_json(), own.envelope_json());
-    assert_eq!((short.exit_code(), own.exit_code()), (0, 0));
+        false,
+    ));
     assert_eq!(
-        short.envelope.data.as_ref().unwrap()["value"],
-        json!("TESTSERIAL0001")
+        cli_module::stdout_text(&short.0, short.1),
+        cli_module::stdout_text(&own.0, own.1)
     );
+    assert_eq!((short.0.code, own.0.code, short.1), (0, 0, true));
+    let line = short.0.line.expect("the line");
+    assert_eq!(line["value"], json!("TESTSERIAL0001"));
+    assert_eq!(line["outcome"]["code"], "lab_operation_completed");
     set_missing_config_env();
 }
 
@@ -415,18 +418,23 @@ fn serve_answers_same_as_cli() {
         lines[0],
         cli_module::stdout_text(&cli, true).expect("the CLI's line")
     );
-    // An operation actinglab's own command serves: the envelope `actinglab --json` prints for it.
-    let own = run_cli(
+    // An operation actinglab's own command serves: the line `actinglab --json` prints for it
+    // (Workflow #434 LAB-2b: the CLI module's line).
+    let (own, json) = cli_module::own_line::answer(parse_invocation(
         ["--json", "user-config", "get", "instance.neutral.serial"],
-        true,
+        false,
+    ));
+    assert!(json);
+    assert_eq!(
+        lines[1],
+        cli_module::stdout_text(&own, true).expect("the command's line")
     );
-    assert_eq!(lines[1], own.envelope_json());
     let answers = lines
         .iter()
         .map(|line| serde_json::from_str::<Value>(line).expect("one JSON answer per line"))
         .collect::<Vec<_>>();
-    assert_eq!(answers[1]["ok"], true);
-    assert_eq!(answers[1]["data"]["value"], "TESTSERIAL0001");
+    assert_eq!(answers[1]["outcome"]["code"], "lab_operation_completed");
+    assert_eq!(answers[1]["value"], "TESTSERIAL0001");
     assert_eq!(answers[2]["outcome"]["code"], "actingctl_usage_invalid");
     assert_eq!(answers[2]["outcome"]["values"]["argument"], "frobnicate");
     assert_eq!(answers[3]["outcome"]["code"], "actingctl_usage_invalid");
@@ -777,10 +785,18 @@ fn without_the_route(line: &[String], json_default: bool) -> (String, i32) {
     )))
 }
 
-/// What `main` prints for `line` now: its entry, then the same run and print.
-fn through_main(line: &[String], json_default: bool) -> (String, i32) {
-    match entry(line.to_vec(), json_default) {
-        Ok(invocation) => printed(&run_invocation(invocation)),
+/// What `main` prints for the `--via` line `line` now (Workflow #434 LAB-2b: the envelope path),
+/// stdout a terminal or not (`piped`): its entry, then the same run and print.
+fn through_main(line: &[String], piped: bool) -> (String, i32) {
+    assert!(cli_module::own_line::via_line(line), "{line:?}");
+    match entry(
+        line.to_vec(),
+        cli_module::own_line::envelope_by_default(line, piped),
+    ) {
+        Ok(invocation) => {
+            let (text, code) = enveloped(&run_invocation(invocation));
+            (text, i32::from(code))
+        }
         Err(module) => {
             panic!("{line:?} is actinglab's own command line, not the module's {module:?}")
         }
@@ -864,7 +880,7 @@ fn consumer_command_lines_take_the_old_path_unchanged() {
 
     let temp = TempDir::new().unwrap();
     set_config_env(temp.path().join("config.json"));
-    // A resource repository: a declaration and a changed-paths file (Git's `--name-status -z`).
+    // A resource repository with one declaration.
     let repo_path = temp.path().join("repo");
     fs::create_dir_all(&repo_path).unwrap();
     fs::write(
@@ -872,129 +888,17 @@ fn consumer_command_lines_take_the_old_path_unchanged() {
         br#"{"schema_version":"actingcommand.declaration-exclusions.v1","directories":["regression"]}"#,
     )
     .unwrap();
-    fs::write(
-        repo_path.join("changed.list"),
-        "M\0declaration-exclusions.json\0",
-    )
-    .unwrap();
     let repo = repo_path.to_str().unwrap();
-    // An installed game root (NAV-T's fixture) for the standard-pack check.
-    let root_path = crate::standard_pack_cli::gate_373_navt::game_root(
-        &temp,
-        crate::standard_pack_cli::gate_373_navt::HOME_TO_SHOP,
-    );
-    let root = root_path.to_str().unwrap();
     // A package and a scene that do not exist: the commands' own refusals.
     let package_path = temp.path().join("packs").join("neutral.pack");
     let package = package_path.to_str().unwrap();
     let scene_path = temp.path().join("scene.png");
     let scene = scene_path.to_str().unwrap();
-    let runs_path = temp.path().join("runs");
-    let runs = runs_path.to_str().unwrap();
 
-    let lines: [(&[&str], bool); 14] = [
-        // acmodel's validator (UI `model/src/acmodel/export/validator.py`).
-        (
-            &[
-                "--json",
-                "resource",
-                "validate",
-                "--repo",
-                repo,
-                "--changed-path",
-                "declaration-exclusions.json",
-            ],
-            true,
-        ),
-        // The resource repositories' CI and scripts.
-        (
-            &[
-                "--json",
-                "resource",
-                "validate",
-                "--repo",
-                repo,
-                "--changed-paths-file",
-                "changed.list",
-            ],
-            true,
-        ),
-        (
-            &["--json", "package", "preflight", "--package", package],
-            true,
-        ),
-        (
-            &["--json", "package", "fmt", "--package", package, "--check"],
-            true,
-        ),
-        (&["--json", "standard-pack", "check", "--root", root], true),
-        (
-            &[
-                "--json",
-                "recognize",
-                "--target",
-                "neutral_target",
-                "--package",
-                package,
-                "--scene",
-                scene,
-            ],
-            true,
-        ),
-        (
-            &[
-                "--json",
-                "--verbose",
-                "observe",
-                "--package",
-                package,
-                "--scene",
-                scene,
-            ],
-            true,
-        ),
-        (
-            &[
-                "--json",
-                "detect-page",
-                "--package",
-                package,
-                "--scene",
-                scene,
-            ],
-            true,
-        ),
-        // A leading `--run-root` (one repository's regression script).
-        (
-            &[
-                "--json",
-                "--run-root",
-                runs,
-                "--verbose",
-                "observe",
-                "--scene",
-                scene,
-                "--package",
-                package,
-            ],
-            true,
-        ),
-        (
-            &[
-                "--json",
-                "--run-root",
-                runs,
-                "package",
-                "preflight",
-                "--package",
-                package,
-            ],
-            true,
-        ),
-        // The hotplace kit: no `--json`, stdout redirected; and the same at a terminal.
-        (&["standard-pack", "check", "--root", root], true),
-        (&["standard-pack", "check", "--root", root], false),
-        // MCP's actinglab child (`lab_ops::lab_child`): `--json --via mcp …`, the envelope.
+    // Workflow #434 LAB-2b: only MCP's actinglab child (`lab_ops::lab_child`, `--json --via mcp
+    // …`) keeps the old path, the envelope, until LAB-5; every other consumer's line prints the
+    // CLI module's line (`gate_434_lab2b`). Stdout redirected, and the same at a terminal.
+    let lines: [(&[&str], bool); 8] = [
         (
             &[
                 "--json",
@@ -1008,6 +912,20 @@ fn consumer_command_lines_take_the_old_path_unchanged() {
                 "declaration-exclusions.json",
             ],
             true,
+        ),
+        (
+            &[
+                "--json",
+                "--via",
+                "mcp",
+                "resource",
+                "validate",
+                "--repo",
+                repo,
+                "--changed-path",
+                "declaration-exclusions.json",
+            ],
+            false,
         ),
         (
             &[
@@ -1021,38 +939,93 @@ fn consumer_command_lines_take_the_old_path_unchanged() {
             ],
             true,
         ),
+        (
+            &[
+                "--json",
+                "--via",
+                "mcp",
+                "package",
+                "check",
+                "--package",
+                package,
+            ],
+            false,
+        ),
+        (
+            &[
+                "--json",
+                "--via",
+                "mcp",
+                "package",
+                "preflight",
+                "--package",
+                package,
+            ],
+            true,
+        ),
+        (
+            &[
+                "--json",
+                "--via",
+                "mcp",
+                "observe",
+                "--package",
+                package,
+                "--scene",
+                scene,
+            ],
+            true,
+        ),
+        (
+            &[
+                "--json",
+                "--via",
+                "mcp",
+                "detect-page",
+                "--package",
+                package,
+                "--scene",
+                scene,
+            ],
+            true,
+        ),
+        (
+            &["--via", "mcp", "package", "check", "--package", package],
+            true,
+        ),
     ];
-    for (line, json_default) in lines {
+    for (line, piped) in lines {
         let line = words_of(line);
-        let now = run_ids_masked(through_main(&line, json_default));
+        let now = run_ids_masked(through_main(&line, piped));
         assert_eq!(
             now,
-            run_ids_masked(without_the_route(&line, json_default)),
+            run_ids_masked(without_the_route(&line, piped)),
             "{line:?}"
         );
-        if json_default {
-            // The envelope its consumers read: `ok`, and `data` or `error`.
-            let envelope: Value = serde_json::from_str(&now.0).expect("the envelope");
-            let ok = envelope["ok"].as_bool().expect("ok");
-            assert_eq!(ok, now.1 == 0, "{line:?}: {}", now.0);
-            assert!(
-                envelope.get(if ok { "data" } else { "error" }).is_some(),
-                "{line:?}: {}",
-                now.0
-            );
-        }
+        // The envelope MCP's child reads: `ok`, and `data` or `error`; exit 0 or 2 to 6.
+        let envelope: Value = serde_json::from_str(&now.0).expect("the envelope");
+        let ok = envelope["ok"].as_bool().expect("ok");
+        assert_eq!(ok, now.1 == 0, "{line:?}: {}", now.0);
+        assert!(
+            now.1 == 0 || (2..=6).contains(&now.1),
+            "{line:?}: {}",
+            now.1
+        );
+        assert!(
+            envelope.get(if ok { "data" } else { "error" }).is_some(),
+            "{line:?}: {}",
+            now.0
+        );
     }
-    // What acmodel and the hotplace kit read of a success.
+    // What MCP reads of a success. What the hotplace kit and the resource repositories read of
+    // `standard-pack check` and `standard-pack compose` is asserted on the CLI module's line by
+    // `gate_434_lab2b::own_commands_print_the_cli_line` (LAB-2b fix 1).
     let validated = through_main(&words_of(lines[0].0), true);
     let validated: Value = serde_json::from_str(&validated.0).unwrap();
     assert_eq!(
         validated["data"]["entries"][0]["status"], "valid",
         "{validated}"
     );
-    let checked = through_main(&words_of(lines[10].0), true);
-    let checked: Value = serde_json::from_str(&checked.0).unwrap();
-    assert_eq!(checked["data"]["status"], "checked", "{checked}");
-    assert_eq!(checked["data"]["pack_count"], 4, "{checked}");
 
     // The hotplace kit's offline composition writes its `--out`: `main` parses it as before.
     let compose = words_of(&[

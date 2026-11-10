@@ -71,17 +71,23 @@ actinglab [--json] resource verify --repo <checkout> --source-repository <owner>
   - Steps do not stop at their first finding when the underlying check can go on:
     `declarations`, `admission`, `format`, `pins` and `bundle`'s index and read-back checks list
     every failure.
-- **Result.**
-  - **Exit 0:** `ok: true`, and the data is the report.
-  - **Exit 2, a failed step:** `resource_verify_failed`. `details` is the report; its outcome's
+- **Result.** Since Workflow #434 LAB-2b the command prints the CLI module's line
+  ([lab-two-entries.md](lab-two-entries.md) §9.3), and every error exits 1; with `--via` (MCP's
+  actinglab child, which does not run this command) the envelope and the exit codes below in
+  parentheses stay until LAB-5.
+  - **Exit 0:** the line's member `report` is the whole report, unchanged, beside the line's own
+    `outcome` `lab_operation_completed`: the report has its own top-level `outcome`, so it is never
+    flattened (the coordinator's ruling of 2026-11-10 on LAB-2b; envelope: `ok: true`, the data is
+    the report).
+  - **Exit 1 (2), a failed step:** `resource_verify_failed`. `details` is the report; its outcome's
     causes are each failed step's first failure, with `step`.
-  - **Exit 2, a precondition:** `resource_verify_checkout_invalid`,
+  - **Exit 1 (2), a precondition:** `resource_verify_checkout_invalid`,
     `resource_verify_checkout_dirty`, `resource_verify_base_invalid` or
     `resource_verify_git_failed`, with the report in `details`.
-  - **Exit 2, a usage error before anything is read:** `validation_failed` or
+  - **Exit 1 (2), a usage error before anything is read:** `validation_failed` or
     `resource_verify_output_exists`, and no report.
-  - **A report that cannot be written:** `resource_verify_report_write_failed` (exit 2). stdout
-    still carries the whole result: `details` is the report.
+  - **A report that cannot be written:** `resource_verify_report_write_failed` (exit 1 (2)).
+    stdout still carries the whole result: `details` is the report.
 - **Refusals.**
   - Global `--dry-run`: `dry_run_unsupported`, after flag parsing only, with no alternative (the
     command writes its work directory and report).

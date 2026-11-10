@@ -44,7 +44,7 @@ fn replay_frames_runs_a_package_without_asking_and_exits_by_how_the_run_ended() 
 
     let output = replay(&temp, &package, &completed, Some(&facts));
     assert!(output.status.success(), "{}", describe(&output));
-    let data = &envelope(&output)["data"];
+    let data = &envelope(&output);
     assert_eq!(data["mode"], "offline_replay");
     assert_eq!(data["executed"], false);
     assert_eq!(data["production_global_ledger_written"], false);
@@ -70,8 +70,8 @@ fn replay_frames_runs_a_package_without_asking_and_exits_by_how_the_run_ended() 
     let short = frames(&temp, "short", &[(HOME, READY)]);
     let output = replay(&temp, &package, &short, None);
     assert!(!output.status.success(), "{}", describe(&output));
-    let error = &envelope(&output)["error"];
-    assert_eq!(error["code"], "replay_run_refused");
+    let error = &envelope(&output);
+    assert_eq!(error["outcome"]["code"], "replay_run_refused");
     let details = &error["details"];
     assert_eq!(details["executed"], false);
     assert_eq!(details["end"]["status"], "refused");
@@ -110,8 +110,8 @@ fn replay_frames_without_an_ocr_model_reports_ocr_unavailable_before_evaluating(
 
     let output = replay(&temp, &package, &sequence, None);
     assert!(!output.status.success(), "{}", describe(&output));
-    let error = &envelope(&output)["error"];
-    assert_eq!(error["code"], "lab_ocr_unavailable");
+    let error = &envelope(&output);
+    assert_eq!(error["outcome"]["code"], "lab_ocr_unavailable");
     let outcome = &error["details"]["outcome"];
     assert_eq!(outcome["code"], "lab_ocr_unavailable");
     assert_eq!(outcome["values"]["target_id"], "fixture/ocr");
@@ -132,8 +132,8 @@ fn replay_scan_of_a_step_that_is_not_a_select_exits_with_replay_scan_refused() {
 
     let output = replay_scan(&temp, &package, &sequence, "branch", &scan);
     assert!(!output.status.success(), "{}", describe(&output));
-    let error = &envelope(&output)["error"];
-    assert_eq!(error["code"], "replay_scan_refused");
+    let error = &envelope(&output);
+    assert_eq!(error["outcome"]["code"], "replay_scan_refused");
     let details = &error["details"];
     assert_eq!(details["mode"], "offline_scan_replay");
     assert_eq!(details["executed"], false);
@@ -174,8 +174,8 @@ fn replay_scan_without_an_ocr_model_reports_ocr_unavailable_before_evaluating() 
 
     let output = replay_scan(&temp, &package, &sequence, "branch", &scan);
     assert!(!output.status.success(), "{}", describe(&output));
-    let error = &envelope(&output)["error"];
-    assert_eq!(error["code"], "lab_ocr_unavailable");
+    let error = &envelope(&output);
+    assert_eq!(error["outcome"]["code"], "lab_ocr_unavailable");
     let outcome = &error["details"]["outcome"];
     assert_eq!(outcome["code"], "lab_ocr_unavailable");
     assert_eq!(outcome["values"]["target_id"], "fixture/ocr");
@@ -206,7 +206,7 @@ fn observe_lists_an_operation_with_several_destinations() {
         ],
     );
     assert!(output.status.success(), "{}", describe(&output));
-    let data = &envelope(&output)["data"];
+    let data = &envelope(&output);
     assert_eq!(data["page"], "neutral/home");
     let actions = data["actions"].as_array().unwrap();
     let branch = actions
@@ -471,6 +471,8 @@ fn run_actinglab<'a>(temp: &TempDir, args: impl IntoIterator<Item = &'a OsStr>) 
         .expect("run actinglab")
 }
 
+/// The line actinglab prints (Workflow #434 LAB-2b: the CLI module's line, the result's members
+/// beside `outcome`, or `{outcome, message, details}`).
 fn envelope(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout)
         .unwrap_or_else(|error| panic!("parse CLI JSON: {error}\n{}", describe(output)))

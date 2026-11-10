@@ -60,7 +60,7 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("operation validate", ["offline"], "available"),
         command_cap("operation inspect", ["offline"], "available"),
         command_cap("operation explain", ["offline"], "available"),
-        command_cap("status", ["running_runtime"], "available"),
+        // Workflow #434 LAB-2b: `status` is the CLI module's core row now, not actinglab's own.
         command_cap("run summary", ["running_runtime", "read_only"], "available"),
         command_cap("touch-probe", ["device"], "available"),
         command_cap("tap", ["device"], "available"),
@@ -232,12 +232,13 @@ pub(crate) fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
     Ok(json!({
         "commands": command_capabilities(),
         "session_layer": session_layer_capability_contract(),
-        "exit_codes": exit_code_table(),
+        // Workflow #434 LAB-2b fix 1: the exit codes of this command line, `--via` or not.
+        "exit_codes": exit_code_table(global.via.is_some()),
         "recognition_match_policy": recognition_match_policy,
         "schema_domains": schema_capabilities(),
         "capture_backends": capture_backend_capabilities(),
         "touch_backends": touch_backend_capabilities(),
-        "lab2_cli": lab2_cli::capability_summary(&config),
+        "lab2_cli": lab2_cli::capability_summary(&config, global.via.is_some()),
         "discovered_recognition_packs": discovered
     }))
 }

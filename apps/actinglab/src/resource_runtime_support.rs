@@ -3,10 +3,6 @@
 #[path = "resource_declarations.rs"]
 pub(crate) mod resource_declarations;
 
-use super::runtime_endpoint::{
-    runtime_endpoint_policy, runtime_endpoint_policy_json, runtime_tcp_available,
-};
-use super::user_config_store::read_user_config;
 use super::zip_error::{zip_io_error, zip_write_error};
 use super::{
     ALLOW_PATH_ADB_FOR_MUMU_ENV, CliError, CliOutcome, FlagArgs, GlobalOptions, maa_task_graph,
@@ -102,23 +98,6 @@ pub(super) fn run_explain_run(args: &[String]) -> CliOutcome<Value> {
     Ok(json!({
         "run_id": run_id,
         "status": "reserved"
-    }))
-}
-
-pub(super) fn require_runtime(global: &GlobalOptions) -> CliOutcome<Value> {
-    let config = read_user_config()?;
-    let endpoint = effective_runtime_endpoint(global, &config)
-        .ok_or_else(|| CliError::runtime_not_running("runtime endpoint is not configured"))?;
-    let policy = runtime_endpoint_policy(&endpoint)?;
-    if !runtime_tcp_available(&endpoint) {
-        return Err(CliError::runtime_not_running(format!(
-            "Runtime is not reachable at {endpoint}"
-        )));
-    }
-    Ok(json!({
-        "endpoint": endpoint,
-        "connection": "tcp",
-        "policy": runtime_endpoint_policy_json(&policy)
     }))
 }
 
@@ -514,14 +493,25 @@ pub(super) fn contains_string_value(value: &Value, needle: &str) -> bool {
     }
 }
 
-pub(super) fn exit_code_table() -> Value {
+/// The exit codes `capabilities` reports for the command line it answers (Workflow #434 LAB-2b
+/// fix 1, the coordinator's ruling): a line with `--via` (`via`, MCP's actinglab child) keeps the
+/// envelope's classes until LAB-5, unchanged; every other line exits by its outcome's category, as
+/// the CLI module's line does.
+pub(super) fn exit_code_table(via: bool) -> Value {
+    if via {
+        return json!([
+            {"exit_code": 0, "meaning": "ok"},
+            {"exit_code": 2, "meaning": "usage_or_validation"},
+            {"exit_code": 3, "meaning": "safety_blocked"},
+            {"exit_code": 4, "meaning": "device_or_instance"},
+            {"exit_code": 5, "meaning": "runtime_not_running"},
+            {"exit_code": 6, "meaning": "not_implemented_or_scheduler_not_available"}
+        ]);
+    }
     json!([
         {"exit_code": 0, "meaning": "ok"},
-        {"exit_code": 2, "meaning": "usage_or_validation"},
-        {"exit_code": 3, "meaning": "safety_blocked"},
-        {"exit_code": 4, "meaning": "device_or_instance"},
-        {"exit_code": 5, "meaning": "runtime_not_running"},
-        {"exit_code": 6, "meaning": "not_implemented_or_scheduler_not_available"}
+        {"exit_code": 1, "meaning": "error"},
+        {"exit_code": 2, "meaning": "fatal"}
     ])
 }
 
