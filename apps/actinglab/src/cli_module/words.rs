@@ -141,6 +141,12 @@ pub(crate) const COMPLETED_ROWS: [(&str, &[&str]); 15] = [
     ("agent notice", &[]),
 ];
 
+/// Workflow #434 LAB-5C: the rows that take exactly one of two parameters, the first of which the
+/// row required alone before (operation, the first, the second): a line with neither is refused as
+/// the first missing (`required`), as before, and one with both as the second `conflicting`, on
+/// the command line and in `serve --stdio` alike. `remedy set`'s rows file, or its rows inline.
+pub(crate) const ONE_OF: [(&str, &str, &str); 1] = [("remedy set", "file", "rows")];
+
 /// One operation and its parameters.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Call {
@@ -378,8 +384,33 @@ fn shown(param: &Param) -> String {
     }
 }
 
-/// Every required parameter is given.
+/// Every required parameter is given; Workflow #434 LAB-5C: and exactly one of each pair of
+/// [`ONE_OF`].
 fn required(operation: &Operation, params: &Map<String, Value>) -> Result<(), Outcome> {
+    for (row, first, second) in ONE_OF {
+        if row != operation.name {
+            continue;
+        }
+        let shown_of = |name: &str| {
+            operation
+                .params
+                .iter()
+                .find(|param| param.name == name)
+                .map(shown)
+        };
+        match (params.contains_key(first), params.contains_key(second)) {
+            (false, false) => {
+                return Err(usage(shown_of(first).as_deref(), ArgumentProblem::Required));
+            }
+            (true, true) => {
+                return Err(usage(
+                    shown_of(second).as_deref(),
+                    ArgumentProblem::Conflicting,
+                ));
+            }
+            _ => {}
+        }
+    }
     match operation
         .params
         .iter()

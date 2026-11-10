@@ -37,7 +37,8 @@
 //!   `serve --stdio --front mcp` process, an MCP server's child, whose rescue rows take `Lab-MCP`
 //!   too ([`serve::Front`]).
 
-mod core_ops;
+// Workflow #434 LAB-5C: what a row hands `lab-ops` is read by the slice's test.
+pub(crate) mod core_ops;
 // Workflow #434 LAB-5A: its command table is read by the slice's test.
 pub(crate) mod engine;
 // Workflow #434 LAB-2b: the line actinglab's own commands print.
