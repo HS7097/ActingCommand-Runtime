@@ -1,9 +1,11 @@
 # Windows build artifacts and task-local tools
 
-These scripts provide two fail-closed, on-demand paths for Windows work:
+These scripts provide three fail-closed, on-demand paths for Windows work:
 
 - download one GitHub Actions artifact built from one complete Runtime commit SHA;
-- materialize explicitly selected tools under a caller-owned task workspace on drive `D:`.
+- materialize explicitly selected tools under a caller-owned task workspace on drive `D:`;
+- fill or verify one vision root for the CPU execution provider (`Materialize-VisionRoot.ps1`,
+  below), the one implementation a resource repository's CI calls.
 
 They do not install global tools, change `PATH`, use system `%TEMP%`, or execute ADB,
 MuMu/Nemu, model, provider, or Runtime binaries.
@@ -100,7 +102,10 @@ on drive `D:`. Component selection is explicit:
 - `ppocrv6-medium-onnx` downloads pinned official ONNX detector/recognizer files
   and the v3.7.0 dictionary. Because this script must not load a model/provider,
   the result is recorded as `PendingVerification` and fails before it can be used
-  as a ready Runtime contract.
+  as a ready Runtime contract. The script decides this by the component's id and
+  does not read its `compatibility.state`, which says `Ready` since Workflow #428
+  CI-OCR-1 (the Runtime's vision pipeline runs these files; see the entry's
+  `reason`). `Materialize-VisionRoot.ps1` places these files in a vision root.
 - `onnxruntime-gpu-1.24.4` downloads the exact official ONNX Runtime v1.24.4
   Windows GPU archive and extracts only `onnxruntime.dll`,
   `onnxruntime_providers_shared.dll`, and `onnxruntime_providers_cuda.dll` under
@@ -119,6 +124,8 @@ on drive `D:`. Component selection is explicit:
   (`contracts/vision-model-folders.md`). The sizes and SHA-256 of `pinned_files`
   equal the runtime pin in `crates/vision-ffi/src/runtime_pin.rs` (a logic test
   holds them equal, and `Test-WindowsRemoteBuildTools.ps1` freezes both entries).
+  `onnxruntime-directml-1.24.4` also pins its two license files the same way
+  (`pinned_license_files`, Workflow #428 CI-OCR-1).
 - `mumu-nemu-installed` records metadata for one explicit installed root and
   `nx_device` version. Vendor files remain in place and are never copied or run.
 
@@ -139,6 +146,63 @@ backend, fallback state, execution state, and cleanup classification. `Ready`
 means exact bytes were materialized; `functional_validation_performed` remains
 false. The `provider-v0.3` component that copied a caller's v0.3 provider closure
 is retired with the provider DLL (Workflow #360).
+
+## CPU vision root
+
+`Materialize-VisionRoot.ps1` (Workflow #428 CI-OCR-1, section CI-OCR-1 of
+[the register](../../contracts/v012-register.md)) fills or verifies one vision root for the CPU
+execution provider from `windows-tool-sources.v1.json`. It is the one implementation: a resource
+repository's CI fetches it, with the registry beside it, at its Tools pin's commit and calls it; no
+repository keeps a copy of its logic. `Materialize-TaskToolCache.ps1` keeps its own behaviour.
+
+```powershell
+pwsh -NoProfile -File scripts/windows-tools/Materialize-VisionRoot.ps1 `
+  -Destination "$env:RUNNER_TEMP\runtime-tools\vision" `
+  -ExecutionProvider cpu
+```
+
+- `-Destination`: the vision root; created when it does not exist (a restored cache exists).
+- `-Registry`: the registry; by default `windows-tool-sources.v1.json` beside the script.
+- `-ExecutionProvider`: only `cpu` is taken; any other value (`directml` among them) is refused
+  by name. The files of a DirectML vision root are not placed here.
+- `-Attempts`: attempts per fetched file, at least 1, default 3.
+
+It places, in the layout of [vision-model-folders.md](../../contracts/vision-model-folders.md):
+
+| Under the vision root | From |
+|---|---|
+| `ort/onnxruntime.dll`, `ort/onnxruntime_providers_shared.dll` | the `pinned_files` of `onnxruntime-directml-1.24.4` at their `vision_root_path`, extracted from the package that entry pins |
+| `ort/licenses/onnxruntime/LICENSE`, `ort/licenses/onnxruntime/ThirdPartyNotices.txt` | the `pinned_license_files` of the same entry at their `vision_root_path`, extracted from the same package, as the entry's `placement_note` asks; a registry without them is refused |
+| `models/PP-OCRv6_medium/det.onnx`, `rec.onnx`, `keys.txt` | the artifacts `PP-OCRv6_medium_det_onnx`, `PP-OCRv6_medium_rec_onnx` and `ppocrv6_dict` of `ppocrv6-medium-onnx`, in the flat layout (the folder name is the `model_ref`); the entry's `compatibility.state` must be `Ready` |
+
+Every address, size and SHA-256 comes from the registry; the script holds none. Every file has a
+pin, the license files included. A file that exists with its pinned size and SHA-256 is kept
+(`verified`). Any other file is removed if present, fetched to a temporary name beside it, checked
+for size and SHA-256 and moved into place (`downloaded`); a fetched file that fails its check is
+removed. A fetch that fails (a network error, an HTTP status other than 200, a wrong length or
+SHA-256, no complete answer within five minutes) is tried again, 5 s, 10 s, … later, up to
+`-Attempts` times; then the run fails. The package (12.5 MB) is fetched only when a file it pins
+(a runtime or a license file) did not verify, and only those files are extracted from it; a
+package entry that differs from its pin fails the run and is not left in place. A run on a complete
+vision root (a restored cache) fetches nothing at all. The package is fetched into the destination
+under a temporary name and removed before the script ends; nothing is written outside the
+destination.
+
+It writes no configuration file and starts no program: the caller writes its configuration and
+runs its own self-check. On success it prints one JSON line on stdout and exits 0:
+
+```json
+{"execution_provider":"cpu","destination":"…","registry":{"path":"…","sha256":"<SHA-256 of the registry file>"},"files":[{"path":"ort/onnxruntime.dll","size":17328152,"sha256":"…","state":"verified","component":"onnxruntime-directml-1.24.4"},…]}
+```
+
+`files` lists all seven files, each `verified` or `downloaded`. Diagnostics go to stderr. Any
+other outcome exits 1 with `Materialize-VisionRoot: FAILED: <file>: <reason>` on stderr; nothing is
+skipped silently.
+
+`Test-MaterializeVisionRoot.ps1` checks it without the network: a made-up registry on the reserved
+host `example.invalid` and made-up files served from a local directory through a hidden test-only
+parameter, which the script refuses unless every address of the entries it reads is on that host.
+The `Test Windows artifact tooling` step of the Windows exact-SHA build runs it.
 
 ## Cleanup
 

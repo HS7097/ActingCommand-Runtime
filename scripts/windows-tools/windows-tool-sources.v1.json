@@ -159,6 +159,22 @@
           "sha256": "265c8daf29637cb259cac8be9f08f2cd45f3883f0f0e4949cbfddd5b4cbec3b6"
         }
       ],
+      "pinned_license_files": [
+        {
+          "path": "LICENSE",
+          "vision_root_path": "ort/licenses/onnxruntime/LICENSE",
+          "size": 1094,
+          "sha256": "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674",
+          "hash_provenance": "Workflow #428 CI-OCR-1: size and SHA-256 of this entry of the package pinned above (archive.sha256), read by Materialize-VisionRoot.ps1 on a GitHub-hosted Windows runner on 2026-11-11, two runs with identical values (the script's own output line)"
+        },
+        {
+          "path": "ThirdPartyNotices.txt",
+          "vision_root_path": "ort/licenses/onnxruntime/ThirdPartyNotices.txt",
+          "size": 331175,
+          "sha256": "fb0af774b4d7cffc5b9d046f2aaeade2f37df2f80abf8033c95dfffcc77a8866",
+          "hash_provenance": "Workflow #428 CI-OCR-1: size and SHA-256 of this entry of the package pinned above (archive.sha256), read by Materialize-VisionRoot.ps1 on a GitHub-hosted Windows runner on 2026-11-11, two runs with identical values (the script's own output line)"
+        }
+      ],
       "placement_note": "Workflow #407 GPU-1 (design rd-1031/perf-407/design-gpu1.md section 5): the DirectML runtime of a vision root. Neither the Runtime package, the Tools package nor the installer carries it; whoever places it copies the pinned_files to their vision_root_path and LICENSE and ThirdPartyNotices.txt to ort/licenses/onnxruntime/. crates/vision-ffi/src/runtime_pin.rs pins the same sizes and SHA-256 (a logic test holds them equal)."
     },
     "directml-1.15.4": {
@@ -240,8 +256,8 @@
         "url": "https://github.com/PaddlePaddle/PaddleOCR/blob/v3.7.0/LICENSE"
       },
       "compatibility": {
-        "state": "PendingVerification",
-        "reason": "Pinned files and static shapes are available, but this non-executing materializer cannot prove full Runtime tensor/output/post-processing compatibility."
+        "state": "Ready",
+        "reason": "Verified for the Runtime's CPU execution provider (Workflow #428 CI-OCR-1, 2026-11-10): the Runtime's vision pipeline runs exactly these files in production (the SHA-256 of the detector, recognizer and dictionary of a production vision root equal the three pins below), and a resource repository's frame regression on a hosted runner passed on them (1989 checks in 78 cases, with and without a restored cache). Materialize-VisionRoot.ps1 places them in a vision root; Materialize-TaskToolCache.ps1 loads no model and still records a selection with this component as PendingVerification."
       },
       "artifacts": [
         {
