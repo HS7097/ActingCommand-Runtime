@@ -2606,7 +2606,10 @@ impl ViewReader<'_> {
     ///   page that its budget stops answers a cursor past its start. A page looks at its budget
     ///   before each later span and stops at the end of the last whole statement when it is
     ///   spent, and a statement its bound interrupts (R1) ends the selection there too. The rows
-    ///   and their order are those of one unbounded statement.
+    ///   and their order are those of one unbounded statement. #422 QP-1: no time bound drives a
+    ///   statement, and in a statement without a per-run link the span is the only sequence range
+    ///   an index can take (`history_statement`); every search of such a statement stays inside
+    ///   its span, so its exempt first statement reads one sequence whatever the planner chooses.
     /// - R3: a first page (`limit.1`) with `from_timestamp_unix_ms` starts at the window's first
     ///   record (`time_start`) minus one; when the bound interrupts that lookup, the page starts
     ///   where it would have. #422 QR-2: `limit.2`, a reader-pool thread's memo, gives the first
@@ -4727,6 +4730,20 @@ fn history_statement(
     // sequence 0, inside its first step. So every other indexable term (event type, origin, time,
     // severity, instance) is written with a unary `+`, which no index serves; the rows and their
     // order are the same.
+    //
+    // #422 QP-1 (rd-1110/ledger-window-plan-findings.md): a statement's span (`e.sequence>?`,
+    // `e.sequence<=?`) bounds it only when the index that drives it takes those bounds. Each view
+    // and link index is (column, sequence): an equality on its column lets the span enter as its
+    // second term, but a range on its column does not, and the time bounds are such a range on
+    // the time index: a statement driven by it reads every record of its time range, however far
+    // before the span. So a time term is written with a unary `+` in every statement, with a
+    // per-run link or without, and no time bound drives a statement (the window start's lookup,
+    // `TIME_START`, is a statement of its own). A statement without a per-run link also writes its
+    // window's sequence terms (`from_sequence`, `to_sequence`) with a `+`: every caller's span
+    // lies inside the window (it starts after `from_sequence - 1` and ends at `to_sequence` at the
+    // latest), so they select nothing more, and the span's pair is then the only sequence range
+    // an index can take, whichever index drives (a link index takes it through
+    // `l.sequence=e.sequence`). The rows and their order are the same.
     let per_run = [
         query.request_id.is_some(),
         query.correlation_id.is_some(),
@@ -4740,15 +4757,16 @@ fn history_statement(
     ]
     .contains(&true);
     let unindexed = if per_run { "+" } else { "" };
+    let window = if per_run { "" } else { "+" };
     for (clause, value) in [
-        ("e.sequence>=?".to_owned(), query.from_sequence),
-        ("e.sequence<=?".to_owned(), query.to_sequence),
+        (format!("{window}e.sequence>=?"), query.from_sequence),
+        (format!("{window}e.sequence<=?"), query.to_sequence),
         (
-            format!("{unindexed}e.timestamp_unix_ms>=?"),
+            "+e.timestamp_unix_ms>=?".to_owned(),
             query.from_timestamp_unix_ms,
         ),
         (
-            format!("{unindexed}e.timestamp_unix_ms<?"),
+            "+e.timestamp_unix_ms<?".to_owned(),
             query.to_timestamp_unix_ms,
         ),
     ] {
@@ -4846,12 +4864,13 @@ fn history_statement(
     // the `artifact_id` index of `ledger_artifacts`. An empty set selects no row.
     // LN-8d (#422): a link set with no other row condition picks the page's sequences in each
     // dimension's own index, ordered and limited there (`linked_page_sequences`), so a page reads
-    // at most `rows` rows of each dimension, whatever the set selects after it.
+    // at most `rows` rows of each dimension, whatever the set selects after it. (#422 QP-1: a
+    // window's sequence term written with a `+` is still a sequence condition.)
     if let Some(set) = selection.links
         && view.is_none()
         && clauses
             .iter()
-            .all(|clause| clause.starts_with("e.sequence"))
+            .all(|clause| clause.trim_start_matches('+').starts_with("e.sequence"))
     {
         let lower = query
             .from_sequence
@@ -5918,6 +5937,12 @@ mod gate_ln7c_f6;
 #[cfg(test)]
 #[path = "sqlite/gate_diag_run.rs"]
 mod gate_diag_run;
+
+// #422 QP-1: a page's statements stay inside their segment whatever the planner chooses, and no
+// time bound drives one.
+#[cfg(test)]
+#[path = "sqlite/gate_qp1.rs"]
+mod gate_qp1;
 
 // ROUT-L RL-1c fix 3 (#411 M1): the suspended report's latest-time and newest-first statements
 // read through their indexes with no sort.
