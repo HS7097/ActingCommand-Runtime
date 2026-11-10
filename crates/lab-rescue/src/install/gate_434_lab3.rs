@@ -12,17 +12,32 @@
 //   release, in the answer's steps and in what the fake Runtime was asked;
 // - `actingctl_install_answers_the_deploy_kit_as_before` (the work order's fourth): `actingctl
 //   install` answers the coordinator's deploy kit's command lines as before LAB-3, its journals
-//   without the rescue module's members.
+//   without the rescue module's members; with fix 1 (`rd-1108/arch-013/brief-lab3-fix1.md`, item
+//   5) also the kit's `guards … --known-pause`, `update plan` without `--preview` and `status
+//   --operation`, and the members the kit's scripts read.
+// Fix 1 (`brief-lab3-fix1.md`):
+// - `rescue_hands_back_only_its_own_hold` (item 1): another party's `alice-116-scheduler-stop`
+//   is never released nor adopted; `down --reason r1`, `up`, `release-hold r1` resume only what
+//   the module paused, and a pause that no longer shows the revision recorded is left;
+// - `rescue_renames_its_own_running_image` (item 2): the running image of the process that plans
+//   is renamed aside like `actingctl.exe`, another running `actinglab.exe` still blocks;
+// - `place_holds_only_the_bundles_idle_instances` (item 4): on a neutral bundle, only the idle
+//   instance of the bundle's game is paused and resumed, the other party's pause and the other
+//   game's instance are untouched, `.old-<ms>` is kept, the journal carries the initiator, and
+//   `undo` restores the game root.
 // The machine is the fake host of `fixture.rs` with its fake Runtime, fake watchdog and fake
 // clock: no device, no sleep; every root is a temporary folder with neutral files.
 
-use super::fixture::{BuildSpec, C1, C2, FakeHost, TAG, code, live_root, run, word, write_json};
-use super::host::Host;
+use super::fixture::{
+    BuildSpec, C1, C2, FakeHost, TAG, code, live_root, run, speaks, word, write_json,
+};
+use super::host::{Host, RunningImage};
 use crate::agent_channel::Answer as Answered;
 use crate::rescue::{self, Context};
 use actingcommand_lab_ops::initiator::Initiator;
 use serde_json::{Map, Value, json};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -414,6 +429,55 @@ fn actingctl_install_answers_the_deploy_kit_as_before() {
     assert_done(&staged, "install_release_stage");
     assert_eq!(super::print(staged).code, 0);
 
+    // precheck.ps1 and guards_summary.ps1: `install guards --root <r> --for stop --hold <h>
+    // --known-pause <alias>=<reason>`; the kit reads each row's `id` and `result`.
+    let guarded = run(
+        &host,
+        &[
+            "guards",
+            "--root",
+            word(&root),
+            "--for",
+            "stop",
+            "--hold",
+            "deploy-kit",
+            "--known-pause",
+            "neutral.b=alice-116",
+        ],
+    );
+    assert_done(&guarded, "install_guards_report");
+    let rows = guarded.members["guards"]
+        .as_array()
+        .expect("the guard rows")
+        .clone();
+    assert!(!rows.is_empty(), "{guarded:?}");
+    for row in &rows {
+        assert!(row["id"].is_string() && row["result"].is_string(), "{row}");
+    }
+    let foreign = rows
+        .iter()
+        .find(|row| row["id"] == "foreign_pauses")
+        .expect("the foreign_pauses row");
+    assert_eq!(foreign["result"], "pass", "{foreign}");
+    assert_eq!(super::print(guarded).code, 0);
+
+    // deploy.ps1's `plan`: `install update plan --root <r> --build <c>` without `--preview` is
+    // refused while the Runtime runs.
+    let unpreviewed = run(
+        &host,
+        &["update", "plan", "--root", word(&root), "--build", C2],
+    );
+    assert_eq!(
+        code(&unpreviewed),
+        "install_command_refused",
+        "{unpreviewed:?}"
+    );
+    assert_eq!(
+        unpreviewed.outcome.value("install_refusal"),
+        Some(&json!("runtime_running"))
+    );
+    assert_eq!(super::print(unpreviewed).code, 1);
+
     // `install update plan --root <r> --build <c> --preview`.
     let planned = run(
         &host,
@@ -432,6 +496,35 @@ fn actingctl_install_answers_the_deploy_kit_as_before() {
         .as_str()
         .expect("a plan id")
         .to_owned();
+    // summarize_plan.py and plan_members.py: the members they read from the preview's line.
+    let line = super::print(planned.clone())
+        .line
+        .expect("the preview's line");
+    assert_eq!(line["outcome"]["code"], "install_command_done");
+    assert!(line["outcome"]["category"].is_string(), "{line}");
+    assert_eq!(line["plan_id"], json!(plan));
+    assert_eq!(line["kind"], "update");
+    let document = &line["plan"];
+    assert!(document["inputs"].is_object(), "{document}");
+    assert_eq!(document["live"]["commit"], C1);
+    assert_eq!(document["target"]["commit"], C2);
+    assert!(document["live"]["speaks"].is_object(), "{document}");
+    assert!(document["target"]["speaks"].is_object(), "{document}");
+    let edges = document["edges"].as_array().expect("the edges");
+    assert!(!edges.is_empty(), "{document}");
+    for edge in edges {
+        assert!(
+            edge["interface"].is_string()
+                && edge["check"].is_string()
+                && edge["result"].is_string(),
+            "{edge}"
+        );
+    }
+    assert!(document["ledger_verify"].is_boolean(), "{document}");
+    assert!(document["check_config"].is_object(), "{document}");
+    assert!(document["extra"].is_array(), "{document}");
+    assert!(document["config_sha256"].is_string(), "{document}");
+    assert!(document["files"].is_array(), "{document}");
 
     // The kit's apply with `--detach`: answered at once, the same words run again without it.
     let apply = [
@@ -489,6 +582,7 @@ fn actingctl_install_answers_the_deploy_kit_as_before() {
     );
     let written = new_journals(&root, &before);
     assert_eq!(written.len(), 1);
+    let applied_id = written[0].0.clone();
     let journal = &written[0].1;
     assert!(journal.get("initiator").is_none(), "{journal}");
     assert!(journal.get("one_way").is_none(), "{journal}");
@@ -517,10 +611,41 @@ fn actingctl_install_answers_the_deploy_kit_as_before() {
         Some("alice-116")
     );
 
-    // `install status --root <r>`.
+    // `install status --root <r>`: guards_summary.ps1 and wait_live.ps1 read `live.commit`,
+    // `live.operation_id` and each kept build's `commit`, `tag` and `operation_id`.
     let status = run(&host, &["status", "--root", word(&root)]);
     assert_done(&status, "install_status");
+    assert_eq!(status.members["live"]["commit"], C2);
+    assert_eq!(status.members["live"]["operation_id"], json!(applied_id));
+    let kept = status.members["builds"]
+        .as_array()
+        .expect("the kept builds")
+        .iter()
+        .find(|build| build["commit"] == C2)
+        .expect("the staged build")
+        .clone();
+    assert_eq!(kept["tag"], TAG);
+    assert!(kept["operation_id"].is_string(), "{kept}");
     assert_eq!(super::print(status).code, 0);
+
+    // deploy.ps1's `status -Operation <id>`: `install status --root <r> --operation <id>`.
+    let followed = run(
+        &host,
+        &[
+            "status",
+            "--root",
+            word(&root),
+            "--operation",
+            applied_id.as_str(),
+        ],
+    );
+    assert_done(&followed, "install_status");
+    assert_eq!(
+        followed.members["journal"]["operation_id"],
+        json!(applied_id)
+    );
+    assert_eq!(followed.members["live"]["commit"], C2);
+    assert_eq!(super::print(followed).code, 0);
 
     // The confirmations `actingctl install` keeps until LAB-7: an unnamed foreign pause still
     // refuses the stop, and a missing `--plan` is still its usage error with its own usage text.
@@ -546,4 +671,353 @@ fn actingctl_install_answers_the_deploy_kit_as_before() {
         "{usage:?}"
     );
     assert_eq!(super::print(usage).code, 1);
+}
+
+/// The pause `alias` shows on the fake Runtime: its reason and its revision.
+fn pause_seen(host: &FakeHost, alias: &str) -> Option<(String, u64)> {
+    host.runtime
+        .instances
+        .borrow()
+        .iter()
+        .find(|instance| instance.alias == alias)
+        .and_then(|instance| instance.pause.as_ref())
+        .map(|pause| (pause.reason.as_str().to_owned(), pause.revision))
+}
+
+/// Whether a `next` form of the line names `reason`.
+fn suggests(line: &Value, reason: &str) -> bool {
+    line["next"]
+        .as_object()
+        .is_some_and(|next| next.values().any(|form| form.to_string().contains(reason)))
+}
+
+/// Every call of the fake Runtime that starts with `prefix`.
+fn calls_of(host: &FakeHost, prefix: &str) -> Vec<String> {
+    calls(host)
+        .into_iter()
+        .filter(|call| call.starts_with(prefix))
+        .collect()
+}
+
+/// Another party's stop, as production carries it on its instances.
+const OTHER_STOP: &str = "alice-116-scheduler-stop";
+
+// Fix 1, item 1 (contract §5; install-cli.md, "The Lab's rescue module"): the rescue module hands
+// back only its own hold. Instance A carries another party's pause `alice-116-scheduler-stop`,
+// instance B is idle.
+#[test]
+fn rescue_hands_back_only_its_own_hold() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, _) = prepared(temp.path(), "own", &host);
+    host.runtime.boot(&["neutral.a", "neutral.b"]);
+    host.runtime.pause_as("neutral.a", OTHER_STOP);
+    let other = pause_seen(&host, "neutral.a");
+    assert!(other.is_some());
+
+    // `release-hold alice-116-scheduler-stop`: refused; nothing is resumed or journalled.
+    let before = journals(&root);
+    let (refused, exit) = rescue_line(&host, &root, "release-hold", json!({"reason": OTHER_STOP}));
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(top_code(&refused), "install_command_refused", "{refused}");
+    assert_eq!(top_value(&refused, "install_refusal"), "hold_not_owned");
+    assert_eq!(top_value(&refused, "hold_reason"), OTHER_STOP);
+    assert!(!suggests(&refused, OTHER_STOP), "{refused}");
+    assert!(new_journals(&root, &before).is_empty());
+
+    // `down --reason alice-116-scheduler-stop`: refused before anything is paused.
+    let (refused, exit) = rescue_line(&host, &root, "down", json!({"reason": OTHER_STOP}));
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(
+        top_value(&refused, "install_refusal"),
+        "hold_not_owned",
+        "{refused}"
+    );
+    assert_eq!(top_value(&refused, "aliases"), &json!(["neutral.a"]));
+    assert!(!suggests(&refused, OTHER_STOP), "{refused}");
+    assert!(new_journals(&root, &before).is_empty());
+    assert!(host.runtime.running.get());
+    assert!(calls(&host).is_empty(), "{:?}", calls(&host));
+    assert_eq!(pause_seen(&host, "neutral.a"), other);
+    assert_eq!(pause_seen(&host, "neutral.b"), None);
+
+    // `down --reason r1` holds B only and closes the Runtime; `up` starts it again, whose restore
+    // numbers the pauses anew; `release-hold r1` resumes B only, and A's pause is unchanged.
+    let (down, exit) = rescue_line(&host, &root, "down", json!({"reason": "r1"}));
+    assert_eq!(exit, 0, "{down}");
+    assert_eq!(host.runtime.pause_of("neutral.b").as_deref(), Some("r1"));
+    assert_eq!(pause_seen(&host, "neutral.a"), other);
+    assert!(!suggests(&down, OTHER_STOP), "{down}");
+    let (up, exit) = rescue_line(&host, &root, "up", json!({}));
+    assert_eq!(exit, 0, "{up}");
+    let (released, exit) = rescue_line(&host, &root, "release-hold", json!({"reason": "r1"}));
+    assert_eq!(exit, 0, "{released}");
+    assert_eq!(top_code(&released), "install_command_done", "{released}");
+    assert_eq!(top_value(&released, "count"), &json!(1));
+    assert_eq!(calls_of(&host, "resume "), ["resume neutral.b"]);
+    assert_eq!(pause_seen(&host, "neutral.b"), None);
+    assert_eq!(pause_seen(&host, "neutral.a"), other);
+
+    // A pause the module set that shows another revision now (lifted and set again by someone
+    // else) is no longer its own: left as it is, and the release says so.
+    let (down, exit) = rescue_line(&host, &root, "down", json!({"reason": "r2"}));
+    assert_eq!(exit, 0, "{down}");
+    let (up, exit) = rescue_line(&host, &root, "up", json!({}));
+    assert_eq!(exit, 0, "{up}");
+    host.runtime.pause_as("neutral.b", "r2");
+    let again = pause_seen(&host, "neutral.b");
+    let (left, exit) = rescue_line(&host, &root, "release-hold", json!({"reason": "r2"}));
+    assert_eq!(exit, 1, "{left}");
+    assert_eq!(
+        top_value(&left, "install_refusal"),
+        "hold_not_owned",
+        "{left}"
+    );
+    assert_eq!(top_value(&left, "aliases"), &json!(["neutral.b"]));
+    assert_eq!(pause_seen(&host, "neutral.b"), again);
+    assert_eq!(pause_seen(&host, "neutral.a"), other);
+    assert_eq!(calls_of(&host, "resume "), ["resume neutral.b"]);
+}
+
+// Fix 1, item 2: the rescue module runs from `<root>\tools\actinglab.exe`. The running image of
+// the process that plans (matched by its pid) is renamed aside as `actingctl.exe` is; another
+// running `actinglab.exe` still blocks.
+#[test]
+fn rescue_renames_its_own_running_image() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let with_lab = |commit: &str| {
+        let mut build = BuildSpec::new(commit);
+        build.tools.files.push((
+            "actinglab.exe".to_owned(),
+            format!("neutral lab {commit}").into_bytes(),
+        ));
+        build
+    };
+    let root = live_root(temp.path(), "image", &with_lab(C1));
+    assert_done(
+        &run(&host, &["adopt", "--root", word(&root)]),
+        "install_adopt",
+    );
+    let release = temp.path().join("image-release");
+    let target = with_lab(C2);
+    target.write_release(&release);
+    let facts = release.join("release-facts.json");
+    write_json(&facts, &target.facts(&release));
+    assert_done(
+        &run(
+            &host,
+            &[
+                "release",
+                "stage",
+                "--root",
+                word(&root),
+                "--dir",
+                word(&release),
+                "--facts",
+                word(&facts),
+            ],
+        ),
+        "install_release_stage",
+    );
+    let lab = super::files::plain(
+        &fs::canonicalize(&root)
+            .expect("the canonical root")
+            .join("tools")
+            .join("actinglab.exe"),
+    );
+    let image = |pid: u32| RunningImage {
+        pid,
+        path: lab.clone(),
+        mcp_serve: false,
+        parent_pid: None,
+    };
+    // This process (5101) and another actinglab (5102) run the live `tools\actinglab.exe`.
+    host.own_pid.set(Some(5101));
+    *host.processes.borrow_mut() = vec![image(5101), image(5102)];
+
+    // The plan: the other actinglab blocks, the program that plans is renamed aside.
+    let (planned, exit) = rescue_line(&host, &root, "deploy", json!({"target": C2, "plan": true}));
+    assert_eq!(exit, 1, "{planned}");
+    assert_eq!(
+        top_value(&planned, "install_refusal"),
+        "running_image_blocks",
+        "{planned}"
+    );
+    assert_eq!(top_value(&planned, "pid"), &json!(5102));
+    let pids = |member: &str| {
+        planned["running"][member]
+            .as_array()
+            .map(|images| {
+                images
+                    .iter()
+                    .filter_map(|image| image["pid"].as_u64())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(pids("renamed_own"), [5101], "{planned}");
+    assert_eq!(pids("blocked"), [5102], "{planned}");
+
+    // Without the other one the deploy goes through: the running image is renamed aside and
+    // kept, and the new build's takes its place.
+    host.processes
+        .borrow_mut()
+        .retain(|image| image.pid == 5101);
+    let (deployed, exit) = rescue_line(&host, &root, "deploy", json!({"target": C2}));
+    assert_eq!(exit, 0, "{deployed}");
+    assert_eq!(top_code(&deployed), "install_command_done", "{deployed}");
+    let tools = root.join("tools");
+    assert_eq!(
+        fs::read(tools.join("actinglab.exe")).expect("the new image"),
+        format!("neutral lab {C2}").into_bytes()
+    );
+    let kept = fs::read_dir(tools.as_path())
+        .expect("the tools folder")
+        .flatten()
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("actinglab.exe.old-")
+        });
+    assert!(kept, "the running image is kept beside its place");
+}
+
+/// The neutral game, pack and server of the placement test (made-up ids, no real game).
+const GAME: &str = "neutral-game";
+const PACK: &str = "neutral.pack";
+
+/// Writes a neutral bundle zip of [`GAME`] to `path`: `bundle.json` with one pack, the pack's
+/// `control.json` (`control`), and the package interface the fixture's installer speaks. The
+/// bytes of its `bundle.json`.
+fn write_bundle(path: &Path, control: &[u8]) -> Vec<u8> {
+    let bundle = serde_json::to_vec(&json!({
+        "schema_version": "actingcommand.bundle.v4",
+        "game": GAME,
+        "packs": [{
+            "package_id": PACK,
+            "server": "neutral-server",
+            "entry_task_id": "neutral.entry",
+            "path": format!("packs/{PACK}"),
+            "file_count": 1,
+            "byte_count": control.len(),
+        }],
+    }))
+    .expect("JSON");
+    let interfaces = serde_json::to_vec(&json!({
+        "schema_version": "actingcommand.component-interfaces.v1",
+        "speaks": speaks(),
+    }))
+    .expect("JSON");
+    let mut writer = zip::ZipWriter::new(fs::File::create(path).expect("create the bundle"));
+    for (name, bytes) in [
+        ("bundle.json".to_owned(), bundle.clone()),
+        ("interfaces.json".to_owned(), interfaces),
+        (format!("packs/{PACK}/control.json"), control.to_vec()),
+    ] {
+        writer
+            .start_file(name, zip::write::FileOptions::default())
+            .expect("start a zip entry");
+        writer.write_all(&bytes).expect("write a zip entry");
+    }
+    writer.finish().expect("finish the bundle");
+    bundle
+}
+
+// Fix 1, item 4: `place` on a fake Runtime with three instances: (a) bound to the bundle's game
+// and idle, (b) the same game and already paused by another party, (c) another game. Only (a) is
+// paused and resumed; (b)'s pause is kept and (c) is untouched; each replaced item is kept as
+// `.old-<ms>`; the journal `pack_place` carries the initiator; `undo` restores the game root.
+#[test]
+fn place_holds_only_the_bundles_idle_instances() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = live_root(temp.path(), "place", &BuildSpec::new(C1));
+    // The standard-pack root the configuration names, with what the bundle replaces.
+    let packs = temp.path().join("place-packs");
+    let game_root = packs.join(GAME);
+    fs::create_dir_all(game_root.join(PACK)).expect("the pack folder");
+    let old_control = br#"{"neutral": 1}"#.to_vec();
+    let old_bundle = br#"{"neutral": "the bundle before"}"#.to_vec();
+    fs::write(game_root.join(PACK).join("control.json"), &old_control).expect("the old pack");
+    fs::write(game_root.join("bundle.json"), &old_bundle).expect("the old bundle.json");
+    let config_path = root.join("actingd.config.json");
+    let mut config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("the configuration")).expect("JSON");
+    config["standard_packs"] = json!({"root": packs});
+    write_json(&config_path, &config);
+    assert_done(
+        &run(&host, &["adopt", "--root", word(&root)]),
+        "install_adopt",
+    );
+    let zip = temp.path().join("neutral-bundle.zip");
+    let new_control = br#"{"neutral": 2}"#.to_vec();
+    let new_bundle = write_bundle(&zip, &new_control);
+
+    host.runtime.boot(&["neutral.a", "neutral.b", "neutral.c"]);
+    for instance in host.runtime.instances.borrow_mut().iter_mut() {
+        let game = if instance.alias == "neutral.c" {
+            "neutral-other"
+        } else {
+            GAME
+        };
+        instance.game = Some(game.to_owned());
+    }
+    host.runtime.pause_as("neutral.b", "other-party");
+    let other = pause_seen(&host, "neutral.b");
+
+    let before = journals(&root);
+    let (placed, exit) = rescue_line(&host, &root, "place", json!({"bundle": word(&zip)}));
+    assert_eq!(exit, 0, "{placed}");
+    assert_eq!(top_code(&placed), "install_command_done", "{placed}");
+    assert_eq!(top_value(&placed, "operation"), "install_pack_place");
+
+    // Only (a) was paused and resumed; (b)'s pause stays; (c) was not touched.
+    let paused = calls_of(&host, "pause ");
+    assert_eq!(paused.len(), 1, "{:?}", calls(&host));
+    assert!(
+        paused[0].starts_with("pause neutral.a lab-place-"),
+        "{paused:?}"
+    );
+    assert_eq!(calls_of(&host, "resume "), ["resume neutral.a"]);
+    assert_eq!(pause_seen(&host, "neutral.a"), None);
+    assert_eq!(pause_seen(&host, "neutral.b"), other);
+    assert_eq!(pause_seen(&host, "neutral.c"), None);
+
+    // The items placed, each replaced one kept beside its place as `.old-<ms>`.
+    let control = game_root.join(PACK).join("control.json");
+    let bundle = game_root.join("bundle.json");
+    assert_eq!(fs::read(&control).expect("the placed pack"), new_control);
+    assert_eq!(
+        fs::read(&bundle).expect("the placed bundle.json"),
+        new_bundle
+    );
+    let kept = |prefix: &str| {
+        fs::read_dir(game_root.as_path())
+            .expect("the game root")
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().starts_with(prefix))
+    };
+    assert!(kept(&format!("{PACK}.old-")), "the replaced pack is kept");
+    assert!(kept("bundle.json.old-"), "the replaced bundle.json is kept");
+
+    // The journal: kind `pack_place`, with the initiator.
+    let written = new_journals(&root, &before);
+    assert_eq!(written.len(), 1, "{written:?}");
+    let (operation_id, journal) = &written[0];
+    assert_eq!(journal["kind"], "pack_place");
+    assert_eq!(journal["initiator"], WORD.as_str());
+
+    // `undo` restores the game root: the placed items set aside, the kept ones back in place.
+    let (undone, exit) = rescue_line(&host, &root, "undo", json!({"op": operation_id}));
+    assert_eq!(exit, 0, "{undone}");
+    assert_eq!(
+        fs::read(control.as_path()).expect("the pack again"),
+        old_control
+    );
+    assert_eq!(
+        fs::read(bundle.as_path()).expect("bundle.json again"),
+        old_bundle
+    );
 }

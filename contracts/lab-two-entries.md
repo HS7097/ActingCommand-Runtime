@@ -318,6 +318,16 @@ Alice's answer 4. From LAB-3, in the rescue module:
   until the slice that builds the source; until LAB-6 the module's requests to a running Runtime
   go on the CLI channel, as `actingctl install`'s do, since the Runtime refuses a pause, a resume
   and a shutdown from a Lab envelope until LAB-6 deletes those origin gates (§2.4).
+- **"Only the operation's own hold"** (§5), as LAB-3 fix 1 builds it ([install-cli.md](install-cli.md),
+  "The Lab's rescue module"): `release-hold <reason>` hands back only a hold that a journal of the
+  module in this root recorded in its pause step, only the instances that step paused, each while
+  its pause shows the revision recorded; any other reason refuses `hold_not_owned` and nothing is
+  resumed; `down` refuses a reason an instance already shows and never adopts a pause; every
+  composite that releases follows the same rule; a refusal after the module paused something and
+  before anything changed on disk hands its pauses back at once. A global pause is kept and
+  listed (§6). `deploy` takes no `--reason` (its form above has none). Until LAB-7 production
+  deploys through `actingctl install`: an installer of v0.12.47 or older cannot read a journal
+  the module writes (no `install-root` raise; open point 5).
 
 ## 8 The Lab's modules
 

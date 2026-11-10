@@ -79,6 +79,10 @@ pub(crate) trait Host {
     fn work_dir(&self) -> PathBuf;
     /// The processes whose image lies under `root`.
     fn processes_under(&self, root: &Path) -> Result<Vec<RunningImage>, Outcome>;
+    /// Workflow #434 LAB-3 fix 1: the process id of the running installer itself, whose image a
+    /// plan renames aside as it renames `actingctl.exe` (the Lab's rescue module runs from
+    /// `<root>\tools\actinglab.exe`); `None` when there is none to match (a test's).
+    fn own_pid(&self) -> Option<u32>;
     /// Runs `program` with `arguments` to its end, at most `timeout_ms` milliseconds, and
     /// captures what it printed. A program still running then is left running (never killed)
     /// and answers [`NotRan::StillRunning`]; one that did not run, the OS's failure.
@@ -192,6 +196,10 @@ impl Host for SystemHost {
             ActingctlCode::ProcessProbeFailed,
         )?;
         parse_processes(&output, root)
+    }
+
+    fn own_pid(&self) -> Option<u32> {
+        Some(std::process::id())
     }
 
     fn run_program(

@@ -126,6 +126,12 @@ pub(crate) struct Running {
     pub(crate) owner_lock_held: bool,
     /// Running `actingctl.exe` images that are renamed aside and keep running.
     pub(crate) renamed: Vec<RunningImage>,
+    /// Workflow #434 LAB-3 fix 1: the image of the process that plans, when it would change and
+    /// is not `actingctl.exe` (the Lab's rescue module run from `<root>\tools\actinglab.exe`):
+    /// renamed aside as `actingctl.exe` is, and running on; matched by its process id, so any other
+    /// running `actinglab.exe` still blocks. Absent from `actingctl install`'s answers.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) renamed_own: Vec<RunningImage>,
     /// Running images that would change and may not be renamed (`adb.exe` among them).
     pub(crate) blocked: Vec<RunningImage>,
     /// #411 P49 (MCP-ENTRY review L9): the pids of the MCP entries running under the root
@@ -927,6 +933,7 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
             .trim_end_matches('\\')
             .to_lowercase()
     );
+    let own_pid = host.own_pid();
     for image in images {
         let lower = image.path.to_lowercase();
         let relative = lower
@@ -949,6 +956,9 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
         }
         if name == RENAMABLE_IMAGE {
             running.renamed.push(image);
+        } else if Some(image.pid) == own_pid {
+            // Workflow #434 LAB-3 fix 1: the program that plans, renamed aside like actingctl.exe.
+            running.renamed_own.push(image);
         } else {
             running.blocked.push(image);
         }

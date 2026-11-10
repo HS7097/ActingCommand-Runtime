@@ -318,6 +318,8 @@ pub(super) struct FakeHost {
     pub(super) crash_before_retire: Cell<bool>,
     pub(super) stopped: RefCell<Vec<(String, usize)>>,
     pub(super) processes: RefCell<Vec<RunningImage>>,
+    /// Workflow #434 LAB-3 fix 1: the process id the host answers as its own (none by default).
+    pub(super) own_pid: Cell<Option<u32>>,
     pub(super) programs: Programs,
     #[allow(clippy::type_complexity)]
     pub(super) on_step: RefCell<Option<Box<dyn Fn(usize)>>>,
@@ -367,6 +369,7 @@ impl FakeHost {
             crash_before_retire: Cell::new(false),
             stopped: RefCell::new(Vec::new()),
             processes: RefCell::new(Vec::new()),
+            own_pid: Cell::new(None),
             programs: Programs {
                 refuse_check_config: RefCell::new(Vec::new()),
                 refuse_install_root: RefCell::new(Vec::new()),
@@ -464,6 +467,10 @@ impl Host for FakeHost {
             });
         }
         Ok(images)
+    }
+
+    fn own_pid(&self) -> Option<u32> {
+        self.own_pid.get()
     }
 
     fn run_program(

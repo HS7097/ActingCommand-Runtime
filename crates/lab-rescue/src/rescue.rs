@@ -19,6 +19,13 @@
 //!   one-way update is journalled `one_way: true`), no `--known-pause` (every pause found on an
 //!   instance is kept and listed), no `--ack-guard`; a confirmation parameter given anyway is
 //!   `actingctl_usage_invalid` (`unknown`).
+//! - **Only its own hold** (§5; LAB-3 fix 1). A hold of the module never takes a pause it did not
+//!   set (`down --reason` refuses a reason an instance shows, `hold_not_owned`), keeps a global
+//!   pause, and hands back only what its own pause step paused, each pause while it still shows
+//!   the revision the module recorded; `release-hold` of a reason no journal of the module
+//!   recorded is `hold_not_owned`, and no answer's `next` names another party's hold. A refusal
+//!   after the module paused something and before anything changed on disk hands its pauses back
+//!   at once. The running image of the module itself is renamed aside like `actingctl.exe`.
 //! - **Guards report** (§6). A guard that fails or is not evaluated is noted
 //!   (`install_caveat_noted`, `guard_failed`, `install_guards`) and the operation goes on; a start
 //!   waits for memory up to `install.start.memory_wait_ms` and goes on (open point 4).
@@ -306,17 +313,17 @@ fn installer(
     }
     let declared = named.iter().map(|(param, _)| *param).collect::<Vec<_>>();
     words.extend(further(params, &declared));
-    line(context.install(&words))
+    line(context, context.install(&words))
 }
 
 /// The line of an installer answer, in the module's words: `next` names the module's operations,
 /// and a usage refusal the module's usage.
-fn line(answer: Answer) -> Exit {
-    install::print(module_answer(answer))
+fn line(context: &Context<'_>, answer: Answer) -> Exit {
+    install::print(module_answer(context, answer))
 }
 
-fn module_answer(mut answer: Answer) -> Answer {
-    translate_next(&mut answer.members);
+fn module_answer(context: &Context<'_>, mut answer: Answer) -> Answer {
+    translate_next(context, &mut answer.members);
     if answer.text.is_some() {
         answer.text = Some(USAGE);
     }
@@ -325,8 +332,10 @@ fn module_answer(mut answer: Answer) -> Answer {
 
 /// The `next` forms of an answer in the module's words: `install start` is `up`, `install
 /// release-hold --reason <r>` is `release-hold <r>`, `install undo --operation <id>` is `undo
-/// <id>`, `install status` is `op status`.
-fn translate_next(members: &mut Map<String, Value>) {
+/// <id>`, `install status` is `op status`. Workflow #434 LAB-3 fix 1: a `release-hold` of a hold
+/// the module does not own (an `actingctl install` operation's, which `op status` or `op resume`
+/// may answer) is never suggested: the module would refuse it.
+fn translate_next(context: &Context<'_>, members: &mut Map<String, Value>) {
     let Some(Value::Object(next)) = members.get_mut("next") else {
         return;
     };
@@ -337,6 +346,28 @@ fn translate_next(members: &mut Map<String, Value>) {
             *form = module;
         }
     }
+    next.retain(|_, form| match form.as_array().map(Vec::as_slice) {
+        Some([Value::String(verb), Value::String(reason)]) if verb == "release-hold" => {
+            owns(context, reason)
+        }
+        _ => true,
+    });
+    if next.is_empty() {
+        members.remove("next");
+    }
+}
+
+/// Workflow #434 LAB-3 fix 1: whether the hold `reason` is the module's own in the root: one of
+/// its journals recorded it in its pause step (`install::deploy::owned_hold`). A reason, a root or
+/// an operations folder that cannot be read owns nothing.
+fn owns(context: &Context<'_>, reason: &str) -> bool {
+    let Ok(reason) = SchedulingPauseReason::new(reason) else {
+        return false;
+    };
+    let Ok(paths) = Paths::resolve(&context.location.root) else {
+        return false;
+    };
+    deploy::owned_hold(context.host, &paths, &reason, None).is_ok_and(|owned| owned.is_some())
 }
 
 fn module_form(words: &[Value]) -> Option<Value> {
@@ -402,7 +433,7 @@ fn down(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
         "--hold".to_owned(),
         reason,
     ];
-    line(context.install(&words))
+    line(context, context.install(&words))
 }
 
 /// The probe period of `alive --wait` (the readiness probe's, fixed by the contract).
@@ -492,9 +523,14 @@ fn step(name: &str, outcome: &Outcome, members: Value) -> Value {
 
 /// A composite's answer: its steps so far and the top outcome; a step that refused or failed is
 /// the top, its members (what stays, `next`) beside the steps.
-fn composite_exit(steps: Vec<Value>, top: Outcome, mut members: Map<String, Value>) -> Exit {
+fn composite_exit(
+    context: &Context<'_>,
+    steps: Vec<Value>,
+    top: Outcome,
+    mut members: Map<String, Value>,
+) -> Exit {
     members.insert("steps".to_owned(), Value::Array(steps));
-    translate_next(&mut members);
+    translate_next(context, &mut members);
     if top.category() > Category::Warning {
         return cli_line::receipt(members, &top, true);
     }
@@ -507,9 +543,9 @@ fn stops(answer: &Answer) -> bool {
 }
 
 /// A failed step's answer as the composite's end.
-fn stopped(steps: Vec<Value>, answer: Answer) -> Exit {
-    let answer = module_answer(answer);
-    composite_exit(steps, answer.outcome, answer.members)
+fn stopped(context: &Context<'_>, steps: Vec<Value>, answer: Answer) -> Exit {
+    let answer = module_answer(context, answer);
+    composite_exit(context, steps, answer.outcome, answer.members)
 }
 
 /// The kept build `target` names: a commit (8 hex digits or more, its kept build's prefix) or a
@@ -716,7 +752,7 @@ fn alive_and_release(
                 json!({"release_hold": ["release-hold", reason], "alive": ["alive"]}),
             );
         }
-        return Err(composite_exit(steps, refusal, members));
+        return Err(composite_exit(context, steps, refusal, members));
     }
     if let Some(reason) = reason {
         let released = context.install(&[
@@ -727,22 +763,23 @@ fn alive_and_release(
             reason,
         ]);
         if stops(&released) {
-            return Err(stopped(steps, released));
+            return Err(stopped(context, steps, released));
         }
         steps.push(step(
             "release",
             &released.outcome,
-            Value::Object(module_answer(released.clone()).members),
+            Value::Object(module_answer(context, released.clone()).members),
         ));
     }
     Ok(steps)
 }
 
-/// `deploy <tag|commit> [--dir <dir>] [--reason <r>] [--plan] [--detach]` (§7): stage (from
-/// `--dir`, its `release-facts.json` when present; without `--dir` a kept build), plan (a preview
-/// while a Runtime runs), then with a Runtime running the composite update (stop with hold, apply,
-/// start and its checks) followed by `alive` and the release, without one the update alone.
-/// `--plan` answers the plan only; `--detach` runs it detached.
+/// `deploy <tag|commit> [--dir <dir>] [--plan] [--detach]` (§7): stage (from `--dir`, its
+/// `release-facts.json` when present; without `--dir` a kept build), plan (a preview while a
+/// Runtime runs), then with a Runtime running the composite update (stop with hold, apply, start
+/// and its checks) followed by `alive` and the release, without one the update alone. `--plan`
+/// answers the plan only; `--detach` runs it detached. The hold's reason is always the module's
+/// own `lab-deploy-<ms>` (LAB-3 fix 1: the table's `--reason` is gone, as §7's form has none).
 fn deploy(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
     const DEPLOY: InstallLocation = InstallLocation::Deploy;
     let target = text(params, "target").unwrap_or_default().to_owned();
@@ -792,7 +829,7 @@ fn deploy(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
             }
             let staged = context.install(&words);
             if stops(&staged) {
-                return stopped(steps, staged);
+                return stopped(context, steps, staged);
             }
             let commit = staged
                 .outcome
@@ -818,12 +855,12 @@ fn deploy(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
     };
     let Some(commit) = commit else {
         let refusal = install::refusal(DEPLOY, InstallRefusal::BuildNotKept).path(paths.builds());
-        return composite_exit(steps, refusal, Map::new());
+        return composite_exit(context, steps, refusal, Map::new());
     };
     // 2. plan.
     let live = match running(context, &loaded, DEPLOY) {
         Ok(live) => live,
-        Err(outcome) => return composite_exit(steps, outcome, Map::new()),
+        Err(outcome) => return composite_exit(context, steps, outcome, Map::new()),
     };
     let mut plan_words = vec![
         "update".to_owned(),
@@ -838,7 +875,7 @@ fn deploy(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
     }
     let planned = context.install(&plan_words);
     if stops(&planned) {
-        return stopped(steps, planned);
+        return stopped(context, steps, planned);
     }
     let plan_id = planned
         .members
@@ -856,7 +893,7 @@ fn deploy(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
             .commit_sha(commit)
             .plan_id(plan_id)
             .installation_changed(false);
-        return composite_exit(steps, done, Map::new());
+        return composite_exit(context, steps, done, Map::new());
     }
     applied_composite(
         context, &paths, &loaded, DEPLOY, "--build", &commit, &plan_id, live, steps,
@@ -907,7 +944,7 @@ fn applied_composite(
             },
         ) {
             Ok(reason) => reason,
-            Err(outcome) => return composite_exit(steps, outcome, Map::new()),
+            Err(outcome) => return composite_exit(context, steps, outcome, Map::new()),
         };
         words.extend([
             "--stop".to_owned(),
@@ -926,7 +963,7 @@ fn applied_composite(
         if let Some(operation_id) = operation_id {
             steps.extend(composite_steps(context, paths, &operation_id, &applied));
         }
-        return stopped(steps, applied);
+        return stopped(context, steps, applied);
     }
     let operation_id = applied
         .members
@@ -944,7 +981,7 @@ fn applied_composite(
         steps.push(step(
             "apply",
             &applied.outcome,
-            Value::Object(module_answer(applied.clone()).members),
+            Value::Object(module_answer(context, applied.clone()).members),
         ));
     }
     let done = install::done(operation)
@@ -954,7 +991,7 @@ fn applied_composite(
         .link(CauseRelation::Related, applied.outcome);
     let mut members = Map::new();
     members.insert("runtime_running".to_owned(), Value::Bool(live));
-    composite_exit(steps, done, members)
+    composite_exit(context, steps, done, members)
 }
 
 /// `rollback [--to <tag|commit>] [--plan] [--detach]`: to the build the live one replaced unless
@@ -985,7 +1022,7 @@ fn rollback(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
     };
     let Some(commit) = to else {
         let refusal = install::refusal(ROLLBACK, InstallRefusal::BuildNotKept).path(paths.builds());
-        return composite_exit(Vec::new(), refusal, Map::new());
+        return composite_exit(context, Vec::new(), refusal, Map::new());
     };
     let live = match running(context, &loaded, ROLLBACK) {
         Ok(live) => live,
@@ -1005,7 +1042,7 @@ fn rollback(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
     let planned = context.install(&plan_words);
     let mut steps = Vec::new();
     if stops(&planned) {
-        return stopped(steps, planned);
+        return stopped(context, steps, planned);
     }
     let plan_id = planned
         .members
@@ -1023,7 +1060,7 @@ fn rollback(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
             .commit_sha(commit)
             .plan_id(plan_id)
             .installation_changed(false);
-        return composite_exit(steps, done, Map::new());
+        return composite_exit(context, steps, done, Map::new());
     }
     applied_composite(
         context, &paths, &loaded, ROLLBACK, "--to", &commit, &plan_id, live, steps,
@@ -1068,7 +1105,7 @@ fn config_swap(context: &Context<'_>, params: &Map<String, Value>, restore: bool
             let done = install::done(command).installation_changed(false);
             let mut members = Map::new();
             members.insert("unchanged".to_owned(), Value::Bool(true));
-            return Ok(composite_exit(steps, done, members));
+            return Ok(composite_exit(context, steps, done, members));
         }
         let _lock = WriterLock::take(&paths, loaded.settings.lock_wait_ms, command)?;
         journal::refuse_unfinished(command, &paths)?;
@@ -1090,7 +1127,7 @@ fn config_swap(context: &Context<'_>, params: &Map<String, Value>, restore: bool
                 context.face(),
             )? {
                 Ok(begun) => Some(begun),
-                Err(answer) => return Ok(stopped(steps, answer)),
+                Err(answer) => return Ok(stopped(context, steps, answer)),
             }
         } else {
             None
@@ -1106,12 +1143,12 @@ fn config_swap(context: &Context<'_>, params: &Map<String, Value>, restore: bool
         let operation_id = operation.id().to_owned();
         let swapped = crate::install::update::run(operation, &loaded)?;
         if stops(&swapped) {
-            return Ok(stopped(steps, swapped));
+            return Ok(stopped(context, steps, swapped));
         }
         steps.push(step(
             "swap",
             &swapped.outcome,
-            Value::Object(module_answer(swapped.clone()).members),
+            Value::Object(module_answer(context, swapped.clone()).members),
         ));
         if live {
             steps = match alive_and_release(context, &loaded, command, &swapped, steps) {
@@ -1133,7 +1170,7 @@ fn config_swap(context: &Context<'_>, params: &Map<String, Value>, restore: bool
                 .unwrap_or(Value::Null),
         );
         members.insert("runtime_running".to_owned(), Value::Bool(live));
-        Ok(composite_exit(steps, done, members))
+        Ok(composite_exit(context, steps, done, members))
     };
     run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
 }
@@ -1192,7 +1229,7 @@ fn place(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
                 .plan_id(placement.id.clone())
                 .game(placement.game.clone())
                 .installation_changed(false);
-            return Ok(composite_exit(steps, done, members));
+            return Ok(composite_exit(context, steps, done, members));
         }
         if seen.is_none() {
             return Err(
@@ -1217,14 +1254,19 @@ fn place(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
             context.face(),
         )? {
             Ok(begun) => begun,
-            Err(answer) => return Ok(stopped(steps, answer)),
+            Err(answer) => return Ok(stopped(context, steps, answer)),
         };
+        // LAB-3 fix 1 (Fail Loud): the composition check after the placement compares with this
+        // read; one that fails refuses before anything is paused.
         let catalog_before = context
             .host
             .runtime()
             .catalog_hash(&loaded.state_root)
-            .ok()
-            .flatten();
+            .map_err(|cause| {
+                install::refusal(PLACE, InstallRefusal::RuntimeNotRunning)
+                    .path(&loaded.state_root)
+                    .joined(CauseRelation::CausedBy, cause)
+            })?;
         let operation = place::open(
             context.host,
             &paths,
@@ -1239,12 +1281,12 @@ fn place(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
         let operation_id = operation.id().to_owned();
         let placed = crate::install::update::run(operation, &loaded)?;
         if stops(&placed) {
-            return Ok(stopped(steps, placed));
+            return Ok(stopped(context, steps, placed));
         }
         steps.push(step(
             "place",
             &placed.outcome,
-            Value::Object(module_answer(placed.clone()).members),
+            Value::Object(module_answer(context, placed.clone()).members),
         ));
         // The schedule after the resume: the planner's catalog, and its rows of the held
         // instances.
@@ -1271,7 +1313,7 @@ fn place(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
             .game(placement.game.clone())
             .installation_changed(true)
             .link(CauseRelation::Related, placed.outcome);
-        Ok(composite_exit(steps, done, members))
+        Ok(composite_exit(context, steps, done, members))
     };
     run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
 }

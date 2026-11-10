@@ -23,6 +23,11 @@
 //! is not continued mid-run (its task is evaluated again from its start: the caveat
 //! `runs_not_continued`), and the owed idle wakes of a build without a read for them are not
 //! recorded (the caveat `idle_wakes_rederived`): both are the follow-up's (#421 S2 report).
+//!
+//! Workflow #434 LAB-3 fix 1 (`contracts/install-cli.md`, "The Lab's rescue module"): a hold of
+//! the Lab's rescue module never takes a pause it did not set, keeps a global pause, and its
+//! release ([`release_own`]) resumes only the instances its pause step paused, each while its
+//! pause still shows the revision the module recorded ([`OwnPauses`]).
 
 use super::Flags;
 use super::host::Host;
@@ -406,9 +411,12 @@ pub(crate) struct PauseRefused {
 /// all at once, and drained, how each drain ended recorded (`drained`, the earlier record kept
 /// when the step runs again); a pause refused while its instance had a queued request is tried
 /// again once after its queue cleared within `busy_wait_ms`. Then the status must show the hold
-/// on every instance of the intent, and on every other instance the pause S0 had or none. A
-/// Runtime that no longer runs keeps its persisted pauses: the step is then done as far as it
-/// got. A refusal carries the drains recorded so far.
+/// on every instance of the intent, and on every other instance the pause S0 had or none; a
+/// global pause refuses, unless `keep_global` (Workflow #434 LAB-3 fix 1: the rescue module keeps
+/// and lists it, contracts/lab-two-entries.md §6). A Runtime that no longer runs keeps its
+/// persisted pauses: the step is then done as far as it got. The drains and the status the step
+/// checked last (none when no Runtime answered); a refusal carries the drains recorded so far.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_pause(
     host: &dyn Host,
     state_root: &Path,
@@ -417,7 +425,8 @@ pub(crate) fn run_pause(
     s0_pauses: &BTreeMap<String, String>,
     mut drained: BTreeMap<String, Drained>,
     busy_wait_ms: u64,
-) -> Result<BTreeMap<String, Drained>, PauseRefused> {
+    keep_global: bool,
+) -> Result<(BTreeMap<String, Drained>, Option<RuntimeSeen>), PauseRefused> {
     match pause_all(
         host,
         state_root,
@@ -426,12 +435,14 @@ pub(crate) fn run_pause(
         s0_pauses,
         &mut drained,
         busy_wait_ms,
+        keep_global,
     ) {
-        Ok(()) => Ok(drained),
+        Ok(seen) => Ok((drained, seen)),
         Err(refusal) => Err(PauseRefused { refusal, drained }),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pause_all(
     host: &dyn Host,
     state_root: &Path,
@@ -440,13 +451,14 @@ fn pause_all(
     s0_pauses: &BTreeMap<String, String>,
     drained: &mut BTreeMap<String, Drained>,
     busy_wait_ms: u64,
-) -> Result<(), Outcome> {
+    keep_global: bool,
+) -> Result<Option<RuntimeSeen>, Outcome> {
     let runtime = host.runtime();
     let Some(seen) = runtime
         .status(state_root)
         .map_err(|cause| stop_failed(operation, cause))?
     else {
-        return Ok(());
+        return Ok(None);
     };
     let pending = intent
         .instances
@@ -516,12 +528,12 @@ fn pause_all(
         })
         .map(|instance| instance.alias.clone())
         .collect::<Vec<_>>();
-    if seen.global_pause.is_some() || !unexpected.is_empty() {
+    if (seen.global_pause.is_some() && !keep_global) || !unexpected.is_empty() {
         return Err(super::refusal(operation, InstallRefusal::RuntimeStopFailed)
             .count(unexpected.len())
             .aliases(unexpected));
     }
-    Ok(())
+    Ok(Some(seen))
 }
 
 /// The drains as the pause step's evidence records them.
@@ -644,6 +656,158 @@ pub(crate) fn release(
         resumed.push(instance.alias.clone());
     }
     Ok(resumed)
+}
+
+/// The evidence member of a pause or start step that holds an [`OwnPauses`] record.
+pub(crate) const OWN_PAUSES: &str = "own_pauses";
+
+/// Workflow #434 LAB-3 fix 1 (contracts/lab-two-entries.md §5: `release-hold` hands back only the
+/// operation's own hold): the pauses a hold of the Lab's rescue module set, as its journal records
+/// them: in the owner epoch `owner_epoch`, each instance its pause step paused with `reason` and
+/// the revision that pause showed. The pause step records it once its pauses are set; a start of
+/// the module records it again for the new Runtime, whose restore numbers the pauses anew.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct OwnPauses {
+    pub(crate) reason: SchedulingPauseReason,
+    pub(crate) owner_epoch: String,
+    pub(crate) revisions: BTreeMap<String, u64>,
+}
+
+impl OwnPauses {
+    /// The pauses with `reason` that `seen` shows on `instances`.
+    pub(crate) fn seen(
+        seen: &RuntimeSeen,
+        reason: &SchedulingPauseReason,
+        instances: &[String],
+    ) -> Self {
+        Self {
+            reason: reason.clone(),
+            owner_epoch: seen.owner_epoch.clone(),
+            revisions: seen
+                .instances
+                .iter()
+                .filter(|instance| instances.contains(&instance.alias))
+                .filter_map(|instance| {
+                    let pause = instance
+                        .pause
+                        .as_ref()
+                        .filter(|pause| &pause.reason == reason)?;
+                    Some((instance.alias.clone(), pause.revision))
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn value(&self) -> Value {
+        record_value(self)
+    }
+
+    /// The record a step's evidence holds, if any.
+    pub(crate) fn of(evidence: Option<&Value>) -> Option<Self> {
+        serde_json::from_value(evidence?.get(OWN_PAUSES)?.clone()).ok()
+    }
+}
+
+/// Workflow #434 LAB-3 fix 1: a hold of the rescue module as the module's journals in the root
+/// record it: the instances its pause steps paused, and the pause records ([`OwnPauses`]) of
+/// those steps and of the module's starts since, oldest first.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct OwnedHold {
+    pub(crate) instances: std::collections::BTreeSet<String>,
+    pub(crate) records: Vec<OwnPauses>,
+}
+
+/// What a release of the rescue module's own hold did: the instances it resumed, and the
+/// instances of the hold that show its reason at another revision or in another owner epoch than
+/// the module recorded, which are no longer the module's pauses and are left as they are.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub(crate) struct OwnRelease {
+    pub(crate) resumed: Vec<String>,
+    pub(crate) left: Vec<String>,
+}
+
+/// Workflow #434 LAB-3 fix 1: the release of the rescue module's own hold `reason`. Each instance
+/// the hold's pause steps paused is resumed, by the pause it shows, only while that pause has
+/// `reason` and the revision the latest record of the running Runtime's owner epoch holds for it;
+/// one of them that shows `reason` otherwise is left (`left`). No other instance and no other
+/// pause, a global pause or another party's above all, is ever touched. A failure as
+/// [`release`]'s.
+pub(crate) fn release_own(
+    runtime: &dyn RuntimeLink,
+    state_root: &Path,
+    operation: InstallLocation,
+    reason: &SchedulingPauseReason,
+    owned: &OwnedHold,
+) -> Result<OwnRelease, Outcome> {
+    let seen = runtime
+        .status(state_root)
+        .map_err(|cause| {
+            super::refusal(operation, InstallRefusal::RuntimeNotRunning)
+                .joined(CauseRelation::CausedBy, cause)
+        })?
+        .ok_or_else(|| super::refusal(operation, InstallRefusal::RuntimeNotRunning))?;
+    let mut recorded = BTreeMap::new();
+    for record in owned
+        .records
+        .iter()
+        .filter(|record| &record.reason == reason && record.owner_epoch == seen.owner_epoch)
+    {
+        recorded.extend(
+            record
+                .revisions
+                .iter()
+                .map(|(alias, revision)| (alias.clone(), *revision)),
+        );
+    }
+    let mut released = OwnRelease::default();
+    for instance in &seen.instances {
+        if !owned.instances.contains(&instance.alias) {
+            continue;
+        }
+        let Some(pause) = instance
+            .pause
+            .as_ref()
+            .filter(|pause| &pause.reason == reason)
+        else {
+            continue;
+        };
+        if recorded.get(&instance.alias) != Some(&pause.revision) {
+            released.left.push(instance.alias.clone());
+            continue;
+        }
+        runtime
+            .resume(
+                state_root,
+                &instance.alias,
+                &seen.owner_epoch,
+                pause.revision,
+            )
+            .map_err(|cause| {
+                super::refusal(operation, InstallRefusal::RuntimeNotRunning)
+                    .alias(instance.alias.clone())
+                    .joined(CauseRelation::CausedBy, cause)
+            })?;
+        released.resumed.push(instance.alias.clone());
+    }
+    Ok(released)
+}
+
+/// Workflow #434 LAB-3 fix 1: the refusal `hold_not_owned` of `operation`: the hold `reason` is
+/// not the rescue module's own (no journal of the module recorded it in its pause step), or the
+/// instances `aliases` show it already (`down`), or show it at another revision than the module
+/// recorded (`release-hold`). Nothing was resumed or paused by it.
+pub(crate) fn not_owned(
+    operation: InstallLocation,
+    reason: &SchedulingPauseReason,
+    aliases: Vec<String>,
+) -> Outcome {
+    let refusal = super::refusal(operation, InstallRefusal::HoldNotOwned)
+        .hold_reason(reason.as_str().to_owned());
+    if aliases.is_empty() {
+        refusal
+    } else {
+        refusal.count(aliases.len()).aliases(aliases)
+    }
 }
 
 /// The hand-back of the deferred work after the release at `released_at_unix_ms`: per

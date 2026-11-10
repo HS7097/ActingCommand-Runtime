@@ -2265,7 +2265,7 @@
     },
     "hold_reason": {
       "type": "name",
-      "description": "The deployment pause reason a form was computed for (install-cli.md, \"Forms\"; design 3.1, v4.1)."
+      "description": "The deployment pause reason a form was computed for (install-cli.md, \"Forms\"; design 3.1, v4.1), or (Workflow #434 LAB-3 fix 1) the hold's reason a refusal hold_not_owned names."
     },
     "s0_from": {
       "type": "id",
@@ -7512,7 +7512,7 @@
           "description": "A server's maintenance role moves to another package while an instance binds the old one (package_id; INST-4)."
         },
         "instances_not_idle": {
-          "description": "A hot placement found the affected instances not idle in time (aliases); they stay paused (INST-4)."
+          "description": "A hot placement found the affected instances not idle in time (aliases); they stay paused (INST-4). The Lab's rescue module's place hands its own pauses back at once, since nothing changed on disk yet (Workflow #434 LAB-3 fix 1, since 0.12.48)."
         },
         "instance_invalid": {
           "description": "An instance add or remove was refused (alias; INST-5)."
@@ -7612,6 +7612,9 @@
         },
         "layout_single_convert_first": {
           "description": "Design 5.8 step 6: after the single-location update and rollback code is removed, a single-location root answers this: convert it first. (R-15b, since 0.12.35)"
+        },
+        "hold_not_owned": {
+          "description": "The Lab's rescue module hands back only its own hold (contracts/lab-two-entries.md section 5): release-hold of a reason no journal of the module recorded in its pause step, down with a reason an instance already shows (aliases), or a release that found the reason on an instance at another revision or owner epoch than the module recorded (aliases, left as they are). hold_reason names the reason. Nothing is paused or resumed by the refusal; another party's pause is never touched. (Workflow #434 LAB-3 fix 1, since 0.12.48)"
         }
       }
     },

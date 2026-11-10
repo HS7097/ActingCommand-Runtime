@@ -18,13 +18,15 @@
 //!   `<dst>.new-<ms>.part`, the item in place renamed `<dst>.old-<ms>` and kept, the part renamed
 //!   in, the content checked; a root file the zip no longer carries renamed `<dst>.old-<ms>`),
 //!   the first item waiting until those instances are idle within `install.hot.idle_wait_ms`
-//!   (`instances_not_idle` otherwise, the instances staying paused); then the checks after the
-//!   placement (`post_check`: the plan of the same bundle again, every item now unchanged; the
-//!   Tools' `actinglab.exe standard-pack check` of the game root; the new composition, the
-//!   catalog the Runtime's latest evaluation ran under changed within
-//!   `standard_packs.check_interval_ms` plus `install.hot.idle_wait_ms` when the game's
-//!   `schedule.json` changed), a failed check ending the command `post_check_failed` with the
-//!   instances staying paused; then the release of the hold (`release_hold`).
+//!   (`instances_not_idle` otherwise; nothing changed yet, so the operation's own pauses are
+//!   handed back at once, LAB-3 fix 1); then the checks after the placement (`post_check`: the
+//!   plan of the same bundle again, every item now unchanged; the Tools' `actinglab.exe
+//!   standard-pack check` of the game root; the new composition, the catalog the Runtime's
+//!   latest evaluation ran under changed within `standard_packs.check_interval_ms` plus
+//!   `install.hot.idle_wait_ms` when the game's `schedule.json` changed), a failed check ending
+//!   the command `post_check_failed` with the instances staying paused (the items are placed:
+//!   `undo`, then `release-hold`); then the release of the hold (`release_hold`: only the
+//!   instances the pause step paused, each while it shows the revision recorded).
 //!
 //! Nothing is deleted: every replaced item is kept beside its place, and `undo` puts them back.
 
@@ -736,11 +738,16 @@ fn held_of(
 }
 
 /// Waits until the held instances hold no lease and nothing is queued, within
-/// `install.hot.idle_wait_ms`; `Some` with the refusal `instances_not_idle` (the instances
-/// staying paused) when they are not.
-fn wait_idle(operation: &Operation<'_>, loaded: &Loaded) -> Result<Option<StepEnd>, Outcome> {
+/// `install.hot.idle_wait_ms`; `Some` with the refusal `instances_not_idle` when they are not.
+/// Workflow #434 LAB-3 fix 1: nothing changed on disk yet, so the operation hands its own pauses
+/// back at once and says so (`super::deploy::hand_back_own`).
+fn wait_idle(
+    operation: &Operation<'_>,
+    loaded: &Loaded,
+    notes: &mut Vec<Outcome>,
+) -> Result<Option<StepEnd>, Outcome> {
     let host = operation.host();
-    let (reason, held) = held_of(operation);
+    let (_, held) = held_of(operation);
     let since = host.now_unix_ms();
     loop {
         let seen = host
@@ -760,7 +767,7 @@ fn wait_idle(operation: &Operation<'_>, loaded: &Loaded) -> Result<Option<StepEn
         if host.now_unix_ms().saturating_sub(since) >= loaded.settings.hot_idle_wait_ms {
             return Ok(Some(StepEnd::Ends(
                 super::refusal(PLACE, InstallRefusal::InstancesNotIdle).aliases(busy),
-                hold_kept(operation.paths(), reason.as_ref(), false),
+                super::deploy::hand_back_own(operation, loaded, notes, false)?,
             )));
         }
         host.pause_ms(POLL_MS);
@@ -802,12 +809,13 @@ pub(crate) fn item_step(
     operation: &mut Operation<'_>,
     n: usize,
     loaded: &Loaded,
+    notes: &mut Vec<Outcome>,
 ) -> Result<StepEnd, Outcome> {
     let item: Item = operation.intent(n)?;
     let command = operation.journal().kind.location();
     if item.first
         && operation.journal().steps[n - 1].state == StepState::Planned
-        && let Some(end) = wait_idle(operation, loaded)?
+        && let Some(end) = wait_idle(operation, loaded, notes)?
     {
         return Ok(end);
     }

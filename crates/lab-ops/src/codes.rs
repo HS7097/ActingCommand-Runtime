@@ -567,6 +567,11 @@ actingcommand_contract::outcome_vocabulary! {
         StateRootMismatch => "state_root_mismatch",
         StateRootPlaceholder => "state_root_placeholder",
         LayoutSingleConvertFirst => "layout_single_convert_first",
+        // Workflow #434 LAB-3 fix 1 (since 0.12.48; contracts/lab-two-entries.md §5): the Lab's
+        // rescue module hands back only its own hold; a reason no journal of the module recorded
+        // in its pause step, a `down` reason an instance shows already, or a pause that no longer
+        // shows the revision the module recorded is not its own (`hold_reason`, `aliases`).
+        HoldNotOwned => "hold_not_owned",
     }
 }
 
