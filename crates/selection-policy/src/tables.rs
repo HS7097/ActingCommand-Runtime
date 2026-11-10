@@ -25,8 +25,8 @@ use serde_json::Value;
 
 use crate::facts::{Candidate, ScalarValue, UnknownReason};
 use crate::schema::{
-    SelectionError, SelectionErrorCode, SelectionPolicy, TableDeclaration, TablePin, ValueRef,
-    ValueType,
+    ListSource, SelectionError, SelectionErrorCode, SelectionPolicy, TableDeclaration, TablePin,
+    ValueRef, ValueType,
 };
 
 /// One table as a run holds it: fixed at the instant it was loaded, its rows indexed by key.
@@ -88,13 +88,18 @@ impl LoadedTable {
         self.by_key.keys().map(String::as_str)
     }
 
-    fn cell(&self, row: usize, column: &str) -> Option<&StandardPackTableCell> {
+    pub(crate) fn cell(&self, row: usize, column: &str) -> Option<&StandardPackTableCell> {
         let position = *self.positions.get(column)?;
         self.table.rows.get(row)?.get(position)
     }
 
+    /// Whether some row has the key (Workflow #428 S168-5a: a key of a list no row has is a miss).
+    pub(crate) fn has_key(&self, key: &str) -> bool {
+        self.by_key.contains_key(key)
+    }
+
     /// The row of `key` whose pinned columns hold `pins`; the row key is unique, so at most one.
-    fn row_of(&self, key: &str, pins: &[(&str, ScalarValue)]) -> Option<usize> {
+    pub(crate) fn row_of(&self, key: &str, pins: &[(&str, ScalarValue)]) -> Option<usize> {
         self.by_key.get(key)?.iter().copied().find(|&row| {
             pins.iter().all(|(column, value)| {
                 self.cell(row, column)
@@ -113,7 +118,7 @@ fn cell_holds(cell: &StandardPackTableCell, value: &ScalarValue) -> bool {
     }
 }
 
-fn cell_value(cell: &StandardPackTableCell) -> Option<ScalarValue> {
+pub(crate) fn cell_value(cell: &StandardPackTableCell) -> Option<ScalarValue> {
     match cell {
         StandardPackTableCell::Null => None,
         StandardPackTableCell::Integer(value) => Some(ScalarValue::Integer(*value)),
@@ -207,6 +212,11 @@ impl SelectionTables {
             );
         }
         Ok(Self { tables: bound })
+    }
+
+    /// The loaded table bound under `table_id` (Workflow #428 S168-5a: a list maximum reads it).
+    pub(crate) fn loaded(&self, table_id: &str) -> Option<&LoadedTable> {
+        self.tables.get(table_id).map(|bound| bound.loaded.as_ref())
     }
 
     /// `dangling_reference` for a table `policy` declares and nothing bound (D15).
@@ -315,16 +325,47 @@ impl SelectionTables {
     /// The rows the evaluation's references read for `candidates`, for the input identity (§3.7):
     /// by `table_id`, each row an object of its key column and its declared columns, ordered by
     /// the row key's projection, each row once. `key_of` gives a candidate's key the way a read
-    /// takes it, so a candidate whose key is unknown reads no row.
+    /// takes it, so a candidate whose key is unknown reads no row. Workflow #428 S168-5a: a list
+    /// maximum adds the row of each key of its union (`union_of` gives it when every listed list
+    /// is usable) that holds its pins, whether or not the row is of the largest value.
     pub(crate) fn read_rows(
         &self,
         policy: &SelectionPolicy,
         candidates: &[Candidate],
         key_of: &dyn Fn(&str, &Candidate) -> Option<String>,
         fact: &dyn Fn(&str) -> Result<ScalarValue, UnknownReason>,
+        union_of: &dyn Fn(&[ListSource]) -> Option<BTreeSet<String>>,
     ) -> BTreeMap<String, Vec<BTreeMap<String, Value>>> {
         let mut read: BTreeMap<&str, BTreeSet<usize>> = BTreeMap::new();
         for reference in policy.value_refs() {
+            if let ValueRef::TableMaxOverList {
+                table_id,
+                pins,
+                lists,
+                ..
+            } = reference
+            {
+                let Some(bound) = self.tables.get(table_id) else {
+                    continue;
+                };
+                let mut otherwise_column = None;
+                let pinned = pins
+                    .iter()
+                    .map(|pin| {
+                        pin_value(pin, fact, &mut otherwise_column)
+                            .map(|value| (pin.column.as_str(), value))
+                    })
+                    .collect::<Result<Vec<_>, _>>();
+                let (Ok(pinned), Some(keys)) = (pinned, union_of(lists.as_slice())) else {
+                    continue;
+                };
+                for key in &keys {
+                    if let Some(row) = bound.loaded.row_of(key, &pinned) {
+                        read.entry(table_id.as_str()).or_default().insert(row);
+                    }
+                }
+                continue;
+            }
             let ValueRef::Table {
                 table_id,
                 key_field,
@@ -412,8 +453,9 @@ fn row_object(bound: &BoundTable, row: usize) -> BTreeMap<String, Value> {
 }
 
 /// A pin's value (§3.4 step 2): the literal, the fact, or the fact's `otherwise`, which is noted.
-/// Still unavailable, the read keeps the first fact's reason.
-fn pin_value(
+/// Still unavailable, the read keeps the first fact's reason. A list maximum's pins are read the
+/// same way (Workflow #428 S168-5a, step 2).
+pub(crate) fn pin_value(
     pin: &TablePin,
     fact: &dyn Fn(&str) -> Result<ScalarValue, UnknownReason>,
     otherwise_column: &mut Option<String>,

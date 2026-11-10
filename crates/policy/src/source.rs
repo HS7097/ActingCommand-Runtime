@@ -123,6 +123,18 @@ pub(crate) fn parse_selection_document(
         .value
         .validate()
         .map_err(|error| selection_diagnostic(source, schema_version, error))?;
+    // Workflow #428 S168-5a: a list maximum reads record lists and a table, so it stays a select
+    // step's; refused first, so the refusal names the value source.
+    if parsed.value.uses_list_maxima() {
+        return Err(selection_diagnostic(
+            source,
+            schema_version,
+            SelectionError::new(
+                SelectionErrorCode::TypeMismatch,
+                "value_source=table_max_over_list consumer=scheduling",
+            ),
+        ));
+    }
     // The scheduling consumer reads scalar facts only: its snapshot carries no list rows, and
     // its call, the collect option, refuses a document that declares a record list, which only
     // `keyed_fact` reads in a task's select step. Refusing here keeps that out of the catalog.
@@ -726,6 +738,60 @@ mod tests {
         let error = parse_selection_document(&source).expect_err("a table for scheduling");
         assert_eq!(error.code, CatalogDiagnosticCode::TypeMismatch);
         assert_eq!(error.source.document, SchedulingDocumentKind::Selection);
+    }
+
+    /// Workflow #428 S168-5a, the named test `table_list_max_validation`, its catalog half (the
+    /// selection-policy crate's test of the same name holds the rest): a document valid for an
+    /// in-task select step that reads `table_max_over_list` is refused at the catalog compile
+    /// with `type_mismatch`, naming the value source, and not silently skipped.
+    #[test]
+    fn table_list_max_validation() {
+        let maximum = serde_json::json!({
+            "source": "table_max_over_list", "table_id": "example_values",
+            "value_column": "value",
+            "pins": [{"column": "domain", "equals": {"type": "string", "value": "domain.x"}}],
+            "lists": [{"fact_key": "inventory.list.example_kind_a"}],
+            "empty": {"type": "integer", "value": -1}
+        });
+        let document = serde_json::json!({
+            "schema_version": "actingcommand.selection-policy.v1",
+            "policy_id": "policy-list-max",
+            "applies_to": {"candidate_layout_id": "layout-a", "outcome_keys": {
+                "selected": "s", "empty": "e", "insufficient": "i", "ambiguous": "a", "unknown": "u"
+            }},
+            "fields": [{"name": "member",
+                        "value_type": {"type": "enum_string", "allowed": ["member.a"]}}],
+            "facts": [{"fact_key": "inventory.list.example_kind_a",
+                       "value_type": {"type": "record_list", "key_column": "id", "columns": {}},
+                       "max_age_ms": 3_600_000, "minimum_confidence_milli": 1_000}],
+            "tables": [{"table_id": "example_values", "path": "tables/example_values.json",
+                        "row_key": ["member", "domain"],
+                        "columns": {
+                            "domain": {"type": "enum_string", "allowed": ["domain.x", "domain.y"]},
+                            "value": {"type": "integer"}
+                        }}],
+            "gates": [],
+            "scoring": [{"term_id": "term-best", "value": maximum,
+                         "transform": {"kind": "identity"}, "weight_milli": 1000,
+                         "on_unknown": {"kind": "drop_candidate"}}],
+            "selection": {"mode": "none_allowed", "required_count": 1},
+            "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+        });
+        let policy: actingcommand_selection_policy::SelectionPolicy =
+            serde_json::from_value(document.clone()).expect("the document decodes");
+        policy.validate().expect("valid for an in-task select step");
+        let source = CatalogDocumentSource::new(
+            "memory://selection.json",
+            serde_json::to_vec(&document).expect("document bytes"),
+        );
+        let error = parse_selection_document(&source).expect_err("a list maximum for scheduling");
+        assert_eq!(error.code, CatalogDiagnosticCode::TypeMismatch);
+        assert_eq!(error.source.document, SchedulingDocumentKind::Selection);
+        assert!(
+            error.reason.contains("table_max_over_list"),
+            "{}",
+            error.reason
+        );
     }
 
     #[test]

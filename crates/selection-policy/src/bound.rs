@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 
 use crate::evaluator::{ListIndex, read_lists, transform};
 use crate::facts::{ScalarValue, SelectionFactSnapshot, UnknownReason};
+use crate::list_max;
 use crate::schema::{
     FactDeclaration, GateUnknownHandling, IntegerCompareOp, LookupKey, Predicate, ScoringTerm,
     SelectionError, SelectionErrorCode, SelectionPolicy, TermUnknownHandling, Transform, ValueRef,
@@ -137,6 +138,13 @@ pub fn upper_bound_with_tables(
     let Ok(lists) = read_lists(policy, facts, now_unix_ms) else {
         return Ok(UpperBound::Unbounded);
     };
+    // Workflow #428 S168-5a: a list maximum is exact, as a scalar fact is, and the same for every
+    // identity, so it is read once here too.
+    let list_maxima: Vec<(&ValueRef, Option<ScalarValue>)> =
+        list_max::read_all(policy, tables, facts, now_unix_ms)
+            .into_iter()
+            .map(|read| (read.reference, read.reading.value.ok()))
+            .collect();
     let facts_by_key: BTreeMap<&str, &FactDeclaration> = policy
         .facts
         .iter()
@@ -152,6 +160,7 @@ pub fn upper_bound_with_tables(
             lists: &lists,
             tables,
             now_unix_ms,
+            list_maxima: &list_maxima,
         };
         match hypothesis.score(policy) {
             Score::Excluded => {}
@@ -210,6 +219,8 @@ struct Hypothesis<'a> {
     lists: &'a ListIndex<'a>,
     tables: &'a SelectionTables,
     now_unix_ms: u64,
+    /// Workflow #428 S168-5a: what each distinct list maximum read; `None` when unknown.
+    list_maxima: &'a [(&'a ValueRef, Option<ScalarValue>)],
 }
 
 impl Hypothesis<'_> {
@@ -219,7 +230,10 @@ impl Hypothesis<'_> {
             // Workflow #357 DB-2 (§3.6): missing table data is static, so a gate that reads a
             // table and cannot hold never lets the identity through: dropped under
             // `drop_candidate`; under `abort_evaluation` it ends the evaluation when unknown.
-            if gate.predicate.reads_table() {
+            // Workflow #428 S168-5a: a gate that reads a list maximum takes no substitution
+            // either, so an unknown maximum drops the identity under `drop_candidate` and has no
+            // finite bound under `abort_evaluation`.
+            if gate.predicate.reads_table() || gate.predicate.reads_list_max() {
                 if !possible.truth {
                     if possible.unknown && gate.on_unknown == GateUnknownHandling::AbortEvaluation {
                         return Score::Unbounded;
@@ -300,6 +314,12 @@ impl Hypothesis<'_> {
                     })
                     .value
                     .ok(),
+            ),
+            ValueRef::TableMaxOverList { .. } => Reading::Exact(
+                self.list_maxima
+                    .iter()
+                    .find(|(read, _)| *read == reference)
+                    .and_then(|(_, value)| value.clone()),
             ),
         }
     }

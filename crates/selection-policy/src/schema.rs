@@ -60,6 +60,13 @@ pub const MAX_INTEGER_COMPARE_MUL: u64 = 1_000_000;
 /// The largest `add` magnitude of an `integer_compare` predicate, 2^53 - 1, as a value test's
 /// (Workflow #411 B2).
 pub const MAX_INTEGER_COMPARE_ADD: u64 = (1 << 53) - 1;
+/// Workflow #428 S168-5a: the most distinct list maxima one document reads, the same reference
+/// counted once however often it occurs.
+pub const MAX_LIST_MAXIMA: usize = 32;
+/// Workflow #428 S168-5a: the most record lists one list maximum reads.
+pub const MAX_LISTS_PER_MAXIMUM: usize = 16;
+/// Workflow #428 S168-5a: the largest magnitude of a list maximum's `empty`, 2^53 - 1.
+const MAX_LIST_MAXIMUM_EMPTY: u64 = (1 << 53) - 1;
 
 /// Whether `id` can name a hard gate or a scoring term. A selection reason carries the id as
 /// its outcome value `rule_id` (Workflow #378 A2-P), whose key type is `token`: lowercase ASCII
@@ -267,6 +274,34 @@ pub enum ValueRef {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         absent: Option<ScalarValue>,
     },
+    /// Workflow #428 S168-5a (contracts/selection-policy.md, "Table maximum over a list"): the
+    /// largest integer of the shared table `table_id`'s `value_column`, under `pins`, over the
+    /// union of the keys the record lists `lists` hold. It is the same for every candidate, so an
+    /// evaluation reads each distinct reference once, before any candidate. With every list
+    /// usable and no key of the union of the class, it reads the document's `empty`; a key the
+    /// table has no row for, or a null cell of the class, is unknown (`lookup_miss`), never 0.
+    TableMaxOverList {
+        table_id: String,
+        value_column: String,
+        pins: Vec<TablePin>,
+        lists: Vec<ListSource>,
+        empty: ScalarValue,
+        /// Never valid: a list maximum has no fallback. The member decodes so that validation
+        /// refuses it as the contract says (`type_mismatch`), not the decoder.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback_column: Option<String>,
+    },
+}
+
+/// One record list a list maximum reads (Workflow #428 S168-5a): a list the document declares
+/// in `facts[]` and, as a `keyed_fact` read's, an optional `where` that keeps only its rows of
+/// one kind. The values of the list's `key_column` are the keys looked up in the table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListSource {
+    pub fact_key: String,
+    #[serde(rename = "where", default, skip_serializing_if = "Option::is_none")]
+    pub row_filter: Option<RowFilter>,
 }
 
 /// One pin of a `table` read (M-357a v1.1 §3.2): the row-key column `column` holds the literal
@@ -324,6 +359,11 @@ impl ValueRef {
 
     pub(crate) fn is_table(&self) -> bool {
         matches!(self, Self::Table { .. })
+    }
+
+    /// Whether the reference is a list maximum (Workflow #428 S168-5a).
+    pub(crate) fn is_list_max(&self) -> bool {
+        matches!(self, Self::TableMaxOverList { .. })
     }
 
     /// Whether two `table` reads read one row of one table: the same table, key field and pins.
@@ -528,6 +568,30 @@ impl Predicate {
         let mut values = Vec::new();
         self.collect_values(&mut values);
         values.into_iter().any(ValueRef::is_table)
+    }
+
+    /// Whether the predicate reads a list maximum (Workflow #428 S168-5a).
+    pub(crate) fn reads_list_max(&self) -> bool {
+        let mut values = Vec::new();
+        self.collect_values(&mut values);
+        values.into_iter().any(ValueRef::is_list_max)
+    }
+
+    /// Whether a list maximum is read anywhere but as a side of an `integer_compare`, the only
+    /// place a gate may read one (Workflow #428 S168-5a).
+    fn reads_list_max_outside_compare(&self) -> bool {
+        match self {
+            Self::IntegerAtLeast { value, .. }
+            | Self::IntegerAtMost { value, .. }
+            | Self::IntegerEquals { value, .. }
+            | Self::BooleanEquals { value, .. }
+            | Self::StringIn { value, .. } => value.is_list_max(),
+            Self::IntegerCompare { .. } => false,
+            Self::All { of } | Self::Any { of } => {
+                of.iter().any(Self::reads_list_max_outside_compare)
+            }
+            Self::Not { of } => of.reads_list_max_outside_compare(),
+        }
     }
 }
 
@@ -739,6 +803,25 @@ impl SelectionPolicy {
                     format!("gate={} reads=table on_unknown", gate.gate_id),
                 ));
             }
+            // Workflow #428 S168-5a: a gate reads a list maximum only as a side of an
+            // `integer_compare`, and missing data never stands in for its verdict.
+            if gate.predicate.reads_list_max() {
+                if matches!(
+                    gate.on_unknown,
+                    GateUnknownHandling::SubstituteVerdict { .. }
+                ) {
+                    return Err(SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        format!("gate={} reads=table_max_over_list on_unknown", gate.gate_id),
+                    ));
+                }
+                if gate.predicate.reads_list_max_outside_compare() {
+                    return Err(SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        format!("gate={} table_max_over_list=predicate", gate.gate_id),
+                    ));
+                }
+            }
             let mut values = Vec::new();
             gate.predicate.collect_values(&mut values);
             for value in values {
@@ -798,10 +881,46 @@ impl SelectionPolicy {
                 }
                 check_class_gate(&term.value, &self.gates, &term.term_id)?;
             }
+            // Workflow #428 S168-5a: a term reads a list maximum through `identity` or
+            // `threshold`, and missing data never stands in for its value.
+            if term.value.is_list_max() {
+                if matches!(term.on_unknown, TermUnknownHandling::SubstituteMilli { .. }) {
+                    return Err(SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        format!("term={} reads=table_max_over_list on_unknown", term.term_id),
+                    ));
+                }
+                if matches!(term.transform, Transform::Lookup { .. }) {
+                    return Err(SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        format!("term={} table_max_over_list=transform", term.term_id),
+                    ));
+                }
+            }
+        }
+
+        // Workflow #428 S168-5a: each distinct list maximum is read once and adds one reason.
+        let list_maxima = self.list_maxima().len();
+        if list_maxima > MAX_LIST_MAXIMA {
+            return Err(SelectionError::new(
+                SelectionErrorCode::LimitExceeded,
+                format!(
+                    "table_max_over_list holds {list_maxima} distinct references above the \
+                     {MAX_LIST_MAXIMA} limit"
+                ),
+            ));
         }
 
         for key in &self.tie_break {
             if let TieBreakKey::Value { value, .. } = key {
+                // Workflow #428 S168-5a: a list maximum is the same for every candidate, so it
+                // orders nothing.
+                if value.is_list_max() {
+                    return Err(SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        "tie_break table_max_over_list".to_owned(),
+                    ));
+                }
                 // Workflow #357 DB-2 (§3.4): a tie-break may read a table only where a gate or a
                 // term reads the same row, so every ranked candidate has that row.
                 if value.is_table() {
@@ -865,6 +984,42 @@ impl SelectionPolicy {
     /// consumer reads one; the scheduling consumer refuses such a document (register §1.65 TB10).
     pub fn uses_tables(&self) -> bool {
         !self.tables.is_empty()
+    }
+
+    /// Whether this document reads a list maximum (Workflow #428 S168-5a). Only an in-task
+    /// consumer reads one; the scheduling consumer refuses such a document.
+    pub fn uses_list_maxima(&self) -> bool {
+        self.value_refs().into_iter().any(ValueRef::is_list_max)
+    }
+
+    /// The distinct list maxima the gates and the terms read, each once, in the order of their
+    /// first read: the gates in order, each predicate depth first and its left side before its
+    /// right, then the terms in order (Workflow #428 S168-5a, "One read"). Each comes with the
+    /// gate or term that reads it first. Two references are one when they are equal, which is
+    /// when their canonical forms are.
+    pub(crate) fn list_maxima(&self) -> Vec<(&ValueRef, &str)> {
+        let mut reads: Vec<(&ValueRef, &str)> = Vec::new();
+        for gate in &self.gates {
+            let mut values = Vec::new();
+            gate.predicate.collect_values(&mut values);
+            reads.extend(
+                values
+                    .into_iter()
+                    .map(|value| (value, gate.gate_id.as_str())),
+            );
+        }
+        reads.extend(
+            self.scoring
+                .iter()
+                .map(|term| (&term.value, term.term_id.as_str())),
+        );
+        let mut maxima: Vec<(&ValueRef, &str)> = Vec::new();
+        for (value, rule_id) in reads {
+            if value.is_list_max() && !maxima.iter().any(|(seen, _)| *seen == value) {
+                maxima.push((value, rule_id));
+            }
+        }
+        maxima
     }
 
     /// The candidate fields the document's `table` reads key their rows by (K3: each must be the
@@ -1058,7 +1213,95 @@ impl<'a> Scope<'a> {
                 }
                 Ok(column)
             }
+            ValueRef::TableMaxOverList {
+                table_id,
+                value_column,
+                pins,
+                lists,
+                empty,
+                fallback_column,
+            } => {
+                let mismatch = |member: &str| {
+                    SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        format!("owner={owner} table={table_id} table_max_over_list={member}"),
+                    )
+                };
+                let dangling = |member: &str| {
+                    SelectionError::new(
+                        SelectionErrorCode::DanglingReference,
+                        format!("owner={owner} table={table_id} table_max_over_list={member}"),
+                    )
+                };
+                let table = self
+                    .tables
+                    .get(table_id.as_str())
+                    .copied()
+                    .ok_or_else(|| dangling("table_id"))?;
+                if fallback_column.is_some() {
+                    return Err(mismatch("fallback_column"));
+                }
+                let column = table
+                    .columns
+                    .get(value_column)
+                    .ok_or_else(|| dangling("value_column"))?;
+                if !matches!(column, ValueType::Integer) {
+                    return Err(mismatch("value_column"));
+                }
+                self.check_pins(table, pins, owner)?;
+                self.check_lists(lists, owner)?;
+                match empty {
+                    ScalarValue::Integer(value)
+                        if value.unsigned_abs() <= MAX_LIST_MAXIMUM_EMPTY => {}
+                    ScalarValue::Integer(_) => {
+                        return Err(SelectionError::new(
+                            SelectionErrorCode::IntegerOutOfRange,
+                            format!("owner={owner} table={table_id} table_max_over_list=empty"),
+                        ));
+                    }
+                    _ => return Err(mismatch("empty")),
+                }
+                Ok(column)
+            }
         }
+    }
+
+    /// A list maximum's `lists` (Workflow #428 S168-5a): 1 to 16 entries with distinct fact
+    /// keys, each a record list the document declares, each `where` over an enumerated column
+    /// of that list and one of its members, as a `keyed_fact` read's.
+    fn check_lists(&self, lists: &[ListSource], owner: &str) -> Result<(), SelectionError> {
+        if lists.is_empty() {
+            return Err(SelectionError::new(
+                SelectionErrorCode::MissingRequiredField,
+                format!("owner={owner} table_max_over_list=lists"),
+            ));
+        }
+        check_limit(lists.len(), MAX_LISTS_PER_MAXIMUM, owner)?;
+        let mut seen = BTreeSet::new();
+        for list in lists {
+            let fact_key = &list.fact_key;
+            let refuse = |code: SelectionErrorCode, member: &str| {
+                SelectionError::new(
+                    code,
+                    format!("owner={owner} fact={fact_key} table_max_over_list={member}"),
+                )
+            };
+            if !seen.insert(fact_key.as_str()) {
+                return Err(refuse(SelectionErrorCode::DuplicateId, "lists"));
+            }
+            let ValueType::RecordList { columns, .. } = self.fact(fact_key, owner)? else {
+                return Err(refuse(SelectionErrorCode::TypeMismatch, "fact_key"));
+            };
+            if let Some(filter) = &list.row_filter {
+                match columns.get(&filter.column) {
+                    None => return Err(refuse(SelectionErrorCode::DanglingReference, "where")),
+                    Some(ValueType::EnumString { allowed })
+                        if allowed.iter().any(|member| member == &filter.equals) => {}
+                    Some(_) => return Err(refuse(SelectionErrorCode::TypeMismatch, "where")),
+                }
+            }
+        }
+        Ok(())
     }
 
     /// A read's pins (§3.2): at most 7, each a literal of its column's type or a scalar fact of

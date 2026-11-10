@@ -510,6 +510,33 @@
       "description": "A selection candidate's tie-break key is unknown, so the candidate orders after every candidate whose key is known.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "selection_table_list_max": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "table_id": "required",
+        "table_column": "required",
+        "fact_keys": "required",
+        "count": "required",
+        "maximum": "optional",
+        "maximum_identity": "optional",
+        "unknown_reason": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.49",
+      "description": "A selection evaluation read one list maximum, once before any candidate: the largest integer of the standard-pack table table_id's column table_column over the union of the keys of the record lists fact_keys (count distinct keys), with the smallest key that holds it (maximum, maximum_identity), neither when no listed key is of the pinned class (the document's empty), or the reason the read is unknown (unknown_reason) (Workflow #428 S168-5a).",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   }
 }

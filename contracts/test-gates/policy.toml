@@ -1194,3 +1194,20 @@ tests = [
     "actingcommand-policy::lib::tests::gate_411_p19::p19_the_served_check_reads_the_own_last_result",
 ]
 incident = ["#411 P19"]
+
+# Workflow #428 S168-5a (register §1.291, the slice's nine named tests; contracts/selection-policy.md, "Table maximum over a list"; since 0.12.49): the value source table_max_over_list {table_id, value_column, pins, lists, empty} reads the largest integer of one table column over the union of the keys of 1 to 16 record lists, each key once, read once per distinct reference before any candidate; empty when every list is usable and no key of the union is of the class; Unknown lookup_miss for a key the table has no row for or a null cell of the class, never 0, dropping or aborting as the rule declares and never a static table drop; an unusable list Unknown with the first in the order of lists when read alone, the up-front check first in a whole evaluation; a where skips rows; the reason selection_table_list_max; the input identity; every validation rule; evaluate_collect and the catalog compile (the policy crate's test of the same name) refuse the document
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-selection-policy::lib::gate_428_s168_5a::table_list_max_reads_largest_of_class",
+    "actingcommand-selection-policy::lib::gate_428_s168_5a::table_list_max_empty_and_out_of_class",
+    "actingcommand-selection-policy::lib::gate_428_s168_5a::table_list_max_missing_key_is_unknown",
+    "actingcommand-selection-policy::lib::gate_428_s168_5a::table_list_max_validation",
+    "actingcommand-selection-policy::lib::gate_428_s168_5a::table_list_max_input_identity",
+    "actingcommand-selection-policy::lib::gate_428_s168_5a::table_list_max_union_of_lists",
+    "actingcommand-selection-policy::lib::gate_428_s168_5a::table_list_max_unusable_list_is_unknown",
+    "actingcommand-selection-policy::lib::gate_428_s168_5a::table_list_max_where_skips_rows",
+    "actingcommand-selection-policy::lib::gate_428_s168_5a::table_list_max_unknown_follows_the_declared_action",
+    "actingcommand-policy::lib::source::tests::table_list_max_validation",
+]
+incident = ["#428 S168-5a"]

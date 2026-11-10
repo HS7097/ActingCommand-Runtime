@@ -756,4 +756,10 @@ outcome_keys! {
     warning_code: code,
     compile_warnings: records(warning_code, json_pointer),
     // ---- #428 CW-1: end ----
+    // ---- #428 S168-5a (what a list maximum read, contracts/selection-policy.md "Table maximum
+    // over a list"): begin ----
+    fact_keys: list(token),
+    maximum: integer,
+    maximum_identity: id,
+    // ---- #428 S168-5a: end ----
 }
