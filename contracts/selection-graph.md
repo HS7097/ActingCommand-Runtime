@@ -1182,8 +1182,8 @@ No confirmation frame is captured, no guard is judged, no point is sampled, and 
 
 Neither end makes any input, and the record is the same whichever key ends the run. The run's
 scheduling outcome tells a judgment from "could not judge": `outcome_key` for a judgment every
-candidate took part in, `unknown_outcome_key` otherwise, so that a catalog can react to the second
-(run the judge again once its inputs are known). The record tells the rest apart: the decision's
+candidate took part in, `unknown_outcome_key` otherwise, so that a catalog can tell the two apart,
+for example to run the judge again. The record tells the rest apart: the decision's
 own `outcome_key`, the string the document's `applies_to.outcome_keys` declares for its outcome,
 and `unknown_check`. Each verdict tells one candidate apart: `ranked` and chosen (judged worth),
 `gate_rejected` (not worth; the gate that decided names why), `unknown_dropped` (could not be
