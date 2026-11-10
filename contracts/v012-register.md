@@ -8469,6 +8469,109 @@ journal the rescue module wrote does not decode in the older installer (`initiat
 kinds `config_replace` and `pack_place`): roll back only when no rescue operation is the last one
 or unfinished, or finish it first.
 
+#### Slice LAB-2b (0.12.50): actinglab's own commands print the CLI module's line
+
+Coordinator work order `rd-1108/arch-013/brief-lab2b.md`, its rulings (board #434 6753308292) and
+the coordinator's ruling of 2026-11-10 on the two results that name `outcome`; the read-only census
+`rd-1110/design-lab-own-output.md` (written on `d06910c6`); on main `7910349a` (LAB-3, #1553,
+merged). The contract is [lab-two-entries.md](lab-two-entries.md) §8.2, §9.3 and open point 10,
+which this slice closes. Only the printing of actinglab's own commands changes: their parser,
+global options and results are as before, and MCP's actinglab child gets what it got.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L2b-1 | `cli_module::own_line` (`answer`, `exit`, `success`, `via_line`, `envelope_by_default`) | behaviour | LAB-2b | actinglab's `main`; `serve --stdio` (`engine::line`, formerly `engine::envelope`) | `main` turns an own command's `CliResult` into a `cli_line::Exit` and prints it with `cli_module::print`. Success: `lab_operation_completed` (success), the result's members flat beside `outcome`, a result that is no object under `result`; warnings a result carries stay its member `warnings` (`{code, values}`), the category stays success and no developer line is written. Failure: `{"outcome": {code, category: "error", values}, "message", "details"}`: actinglab's own code, read as a received outcome since not every one of its spellings is registered; `values` those of the outcome of the same code the details carry (they are one, or their member `outcome` is one; fix 1), else the members of the details whose names the catalog registers as the code's values (none for a code it does not list); `details` whole, never flattened, absent when there are none; exit 1 and the developer line `ERROR actinglab: <code> … <message>`. The installation's refusal before the command runs is `cli_line::refused` of its code, as the module's: every such code is an error, so exit 1, `ERROR actinglab: <code>` and `{outcome}` on stdout (fix 1). Without `--json` the output for people (`cli_module::people`), into a pipe or a file too: `main` asks for JSON by default only on a `--via` line. Exit codes 0, 1 and 2 |
+| L2b-2 | `cli_module::own_line::WRAPPED`, `wrapping_member`: a result that names `outcome` | behaviour | LAB-2b | `resource verify`, `run summary` | the coordinator's ruling of 2026-11-10: a result whose top level has a member named `outcome` is never flattened; it goes whole into one named member its command declares in one place: `resource verify`'s `actinglab.resource-verify.v1` report under `report`, `run summary`'s `actingcommand.run-summary.v1` document under `summary`, unchanged. A result that names `outcome` without a declared member is refused (`actingctl_output_failed`, exit 1, nothing on stdout). The census missed these two commands (its §4.2 and §6.1 named none); no consumer in the census uses them |
+| L2b-3 | a command line with `--via` (`main`'s `envelope_main`, `enveloped`) | behaviour | LAB-2b | MCP's actinglab child (`lab_ops::lab_child`, `--json --via mcp …`) | prints the envelope byte for byte as before (also without `--json` when stdout is no terminal), with the exit codes 0 and 2 to 6 and the installation's refusal `FATAL actinglab: …`, exit 1, until LAB-5; `crates/lab-ops/src/lab_child.rs` and `apps/actingctl/src/mcp` are untouched, and MCP's tools answer as before. `do`'s `lab_operation_check_failed` exits 5 there and 1 on the command line (`lab_operation_call_error` is `pub(crate)` for the test) |
+| L2b-4 | `status` and `run show` to their core rows | removed code | LAB-2b | — | `OWN_COMMANDS` loses `status` and `OWN_SUBCOMMANDS` `run show`, so `main`'s route hands both words to the CLI module (open point 10); deleted: `cli_information::run_status` (a TCP probe of the user configuration's `runtime_endpoint`) with `resource_runtime_support::require_runtime`, the dispatch arm `status`, `run show`'s placeholder in `run_summary::dispatch`, the capability entry `status` and its dry-run declaration ([actinglab-dry-run.md](actinglab-dry-run.md) says so) |
+| L2b-5 | `ratchet/actinglab_commands.json` (45 dispatch arms, 100 commands, 3 pipeline exemptions) | guard snapshot | LAB-2b | the architecture guard | `status` leaves the arms and the commands, `run show` the commands (46 → 45, 102 → 100); both READMEs say so |
+| L2b-6 | outcome codes `lab_operation_completed` and `lab_operation_check_failed` (actinglab, pending) | catalog | LAB-2b | — | descriptions only: `lab_operation_completed` widened to actinglab's own commands (with the two wrapped results), `lab_operation_check_failed` says it exits 1 on the command line and 5 through `--via` until LAB-5. No code, key or location added |
+
+**Tests.** New: apps row "#434 LAB-2b" (`gate_434_lab2b`, actinglab's binary tests; an empty
+configuration in a temporary folder, offline fixtures; no Runtime, no device, no clock, no sleep):
+`own_commands_print_the_cli_line`, `own_commands_print_for_people_into_a_pipe`,
+`mcp_child_lines_keep_the_envelope`, `status_and_run_show_take_their_core_rows`,
+`own_results_never_name_outcome` (the ruling's three assertions: no own command's line carries a
+top-level `outcome` other than its own, every command of the snapshot checked through the line's
+builder and the offline commands that need nothing run; `resource verify` and `run summary` carry
+their documents unchanged under `report` and `summary`; a result that names `outcome` without a
+declared member is refused) and `do_check_failure_exits_one`. Adapted, where this slice changes
+what they pin: `gate_434_lab2`'s `cli_json_matches_op_output` and `serve_answers_same_as_cli` (a
+row actinglab's own command serves answers that command's line, not its envelope) and
+`consumer_command_lines_take_the_old_path_unchanged` (the old path is pinned for MCP's `--via mcp`
+lines only); the integration tests that parsed the envelope read the line (the result's members
+at the top level, `outcome.code`, `message`, `details`, exit 1 for every error):
+`lab2_cli_contract`, `package_offline`, `readonly_page_conflict`, `replay_frames`,
+`resource_production_retirement` (the line names no command: its message does),
+`runtime_input_proxy` (its one `tap` line without `--json` passes `--json`), `session_closeout`
+and `c4_runtime_process`. Goldens, by the work order's approval, written from the code and not from
+a binary: `golden/consumers.json` (13 of 15 cases changed to `line`, or `text` for the hotplace
+kit's line without `--json`; the two MCP cases `mcp_child_resource_validate` and
+`mcp_child_package_check` unchanged by a byte) with `consumer_goldens.rs` reading the three forms,
+and `golden/expected.json` (all 30 cases rewritten from the rule: `envelope` became `line`, the
+failures' exit codes 2 to 6 became 1) with `golden_protocol.rs` reading the line;
+`golden/EXIT_CODES.md` and `golden/README.md` say so.
+
+**Interface.** None raised: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
+`runtime-outcomes` 1. actinglab's output line is no declared interface
+([component-interfaces.md](component-interfaces.md) has no row for it, checked on main `7910349a`).
+
+**Where LAB-2b differs from its work order's letter.**
+
+- (a) Two own commands already answered a top-level `outcome` (`resource verify`, `run summary`),
+  which item 6 of the work order said none did; the implementer stopped and reported, and the
+  coordinator ruled the wrapping of L2b-2.
+- (b) `values` come from the error's details, the one place an own command's error holds values
+  (fix 1): when the details carry an outcome of the error's own code (they are one, as
+  `resource verify`'s refusals of an existing output, or their member `outcome` is one, as its
+  report and the `{outcome}` of the Lab's OCR, touch, recording and standard-pack refusals), its
+  values; otherwise the details' members the catalog registers as the code's values. An error
+  without details has none.
+- (c) The capability entry `status` and its dry-run declaration leave with the command. The
+  `exit_codes` table `capabilities` answers is the line's (fix 1, the coordinator's ruling): on a
+  line without `--via` 0 `ok`, 1 `error` and 2 `fatal`, at the top and in `lab2_cli`; on a `--via`
+  line the envelope's classes, byte for byte as before.
+
+**What LAB-2b changes live.** Every consumer of actinglab's own commands but MCP: acmodel's
+validator, the four resource repositories' CI and scripts and the coordinator's hotplace kit get
+the CLI module's line (`--json`) or the text for people (no `--json`, into a pipe too) and exit 1
+for every error. Before a Runtime with LAB-2b is deployed the hotplace kit passes `--json` and reads
+both shapes; each resource repository raises its Tools pin to a release with LAB-2b only in the
+pull request that changes its readers; acmodel's validator changes in one pull request after that
+release. No consumer may set `ACTINGCOMMAND_DETAIL=codes`. MCP's tools answer as before.
+
+**LAB-2b rollback** (to the release before it). actinglab's own commands print the envelope again;
+a consumer that reads both shapes keeps working, one that reads only the new line does not. Nothing
+persisted.
+
+**LAB-2b fix 1** (coordinator work order `rd-1108/arch-013/brief-lab2b-fix1.md`: an independent
+review of PR #1556 and its CI). This register's L2b-5 row named a README file the neutrality guard
+refuses; it says "both READMEs" now. A failure's `values` come from an outcome of its own code
+nested in its details (L2b-1, deviation (b)); every such failure found is in
+`own_commands_print_the_cli_line`: `resource verify`'s existing output (the details are the
+outcome) and failed checkout (the report's own `outcome`), `standard-pack check`'s refused edge,
+refused package, missing root file and empty pack table (`{outcome}`), the Lab's OCR and touch-key
+refusals (`{outcome}`), and, built as their sites build them, `record mark`'s click that follows
+no template (`{step, outcome}`), `package loading`'s refused table (`{outcome, issues}`) and
+`standard-pack compose`'s failed write (`{outcome}`). The installation's refusal on a line without
+`--via` is an error (exit 1, `ERROR`, `{outcome}`), where the path before LAB-2b wrote `FATAL` and
+nothing on stdout ([lab-two-entries.md](lab-two-entries.md) §9.3 says which exits end with 1 and
+which with 2). `capabilities` reports the line's exit codes (deviation (c)). A missing option value
+prints for people without `--json` and the line with it; a `--via` line keeps the envelope (the
+parser's `require_raw`). Tests: the members the hotplace kit and the resource repositories read of
+`standard-pack check` (`status`, `pack_count`, `root_files`, `warnings`) and the hotplace kit of
+`standard-pack compose` (`status`, `games`, `tasks`, `pools`, `profiles`, `events`, `manifest`,
+`rules_digest`, `warnings`) are asserted at the top level of the line in
+`own_commands_print_the_cli_line` (the check's `status` and `pack_count` had been dropped from
+`consumer_command_lines_take_the_old_path_unchanged` with the envelope); `runtime_input_proxy`'s
+three exit codes that still read the envelope's classes (3, 4, 2) read 1. Nothing on a `--via`
+line changes.
+
+**Known debt.** `cli_module::own_line` builds the line's outcome from JSON (`json!`, read back as
+a received `OutcomeEnvelope`) and returns `Result<Outcome, String>` rather than a typed builder and
+a registered failure; `apps/actinglab` is on the outcome guard's exemption list. Fix 1 leaves it
+as it is (the coordinator's work order).
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
@@ -8853,8 +8956,10 @@ S168-5a, 9 tests, on tables loaded with `LoadedTable::load` and fake snapshots:
   `lookup_miss` (a key of the union without a row in the table; a null cell of the class), read
   by an `integer_compare` gate and by a term: under `drop_candidate` each candidate they assess
   is `unknown_dropped` with `lookup_miss`, and its verdict is no static table drop; under
-  `abort_evaluation` the evaluation is `unknown` with `lookup_miss` and the rule, with no
-  verdict; no candidate is ranked on the value and nothing reads 0.
+  `abort_evaluation`, at the evaluator, the evaluation is `unknown` with `lookup_miss` and the
+  rule (`gate_unknown_aborted` or `term_unknown_aborted` with the rule's `rule_id`), nothing is
+  selected, and no candidate is ranked or scored; under either, no candidate is ranked on the
+  value and nothing reads 0.
 
 S168-5b, 7 tests, on fake snapshots whose lists a document reads through `keyed_fact`, tables
 loaded with `LoadedTable::load`, and a fake device whose input port fails the test on any call.
@@ -8991,12 +9096,105 @@ a console whose `ledger` range holds 8, which is UI-L1's console.
 | S168C-2 | `fact.published` of `inventory.list.<name>`: one `record_list` record, `source_detector` `list_reading:` | existing record, new key prefix | S168-4 | runtime-host | §4 below; tagged as every instance key |
 | S168C-3 | `reading_problem` tokens `list_position_unread`, `list_duplicate_key`, `list_rows_exceeded`; the stage `read_list`; the optional value `count` (the catalog's integer key) on `contained_task_resource_reading_unresolved` | outcome vocabularies; an optional value of an existing code | S168-4 | execution-kernel | values the ledger reader only spells; S168-4 adds `count` to the code's `values` as `optional`: the entry is `review: pending`, and the outcome-code writing spec v2.2 (Workflow `rd-1008/errors/outcome-code-writing-spec.md`) lets a pending entry change its keys (§11) and forbids only a required key on a settled one (§2, rule 5) |
 | S168C-4 | `list_reading_key_reserved` (non-fatal request error, `fact_key`) | outcome code | S168-4 | runtime-host | from every origin |
-| S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 list maxima per document, counted as distinct references, and 16 lists per list maximum |
-| S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_keys`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `fact_keys` (`list<token>`, the lists read in the order of `lists`, at most 16 items), `maximum`, `maximum_identity` | outcome code and keys | S168-5a | selection-policy | a decision reason, no record member; `count` is the number of distinct keys of the union |
+| S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 list maxima per document, counted as distinct references, and 16 lists per list maximum; built by S168-5a, since 0.12.50 ("Slice S168-5a" below) |
+| S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_keys`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `fact_keys` (`list<token>`, the lists read in the order of `lists`, at most 16 items), `maximum`, `maximum_identity` | outcome code and keys | S168-5a | selection-policy | a decision reason, no record member; `count` is the number of distinct keys of the union; built by S168-5a, since 0.12.50 (`maximum` `integer`, `maximum_identity` `id`) |
 | S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key, unknown_outcome_key}`, all four required, the two keys distinct | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only; ends with `outcome_key` (a known evaluation, an unknown check that does not block, no candidate `unknown_dropped`) or `unknown_outcome_key` |
 | S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, `ledger` 8 (#434's, shared) | S168-5b | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
 | S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5b | runtime-host | ends that run only |
 | S168C-10 | the optional `task.json` mapping member `judge_result`, a closed vocabulary of `judged` and `unknown` | package format, `package` 9 | S168-5b | resource repositories | maps a judge step's end with that result; two mappings overlap only with the same effect condition, page and `judge_result` (or none on both), so S168-5b changes `SchedulingOutcomeDeclaration::validate` (`mapping_overlap`); no persisted record carries it; [selection-graph.md](selection-graph.md), "Mapping the two keys" |
+
+#### Slice S168-5a (0.12.50): the value source `table_max_over_list`
+
+Coordinator work order `rd-1110/brief-s168-5a.md`; on main `fa8adc67` (Runtime PR #1554, S168-0
+and its three fixes). The contract is [selection-policy.md](selection-policy.md), "Table maximum
+over a list", "Record lists", "In-task consumer" and "Limits"; the interface is
+[component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168". The code is
+`crates/selection-policy` (`schema.rs`, `list_max.rs`, `evaluator.rs`, `bound.rs`, `tables.rs`)
+and the catalog compile's refusal in `crates/policy/src/source.rs`. No game word: the tests' ids
+are the register's made-up ones.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S5A-1 | `ValueRef::TableMaxOverList {table_id, value_column, pins, lists, empty}` and `ListSource {fact_key, where?}` (S168C-5) | selection document, `package` 8 | S168-5a | resource repositories | validated with no table at hand: the table declared (`dangling_reference`), `value_column` declared and `integer` (`type_mismatch`), the pins as a `table` read's, 1 to 16 lists (`missing_required_field`, `limit_exceeded`) with distinct fact keys (`duplicate_id`), each a declared record list, `where` as a `keyed_fact` read's, `empty` an integer within ±(2^53 − 1) (`integer_out_of_range`); read only as a side of `integer_compare` or by a term through `identity` or `threshold`, under `drop_candidate` or `abort_evaluation`; no tie-break key and no `fallback_column` (`type_mismatch`); at most `MAX_LIST_MAXIMA` (32) distinct references, equal references counted once, and `MAX_LISTS_PER_MAXIMUM` (16) lists each |
+| S5A-2 | `list_max::read_all`, `read_list_maximum`, `union_keys` | behaviour | S168-5a | the evaluator | each distinct reference read once, after the up-front check passed and before any candidate (zero candidates included), in the order of its first read (`SelectionPolicy::list_maxima`); steps 1 to 4 of "One read"; the value then serves every candidate's gates and terms; an Unknown read drops under `drop_candidate` (`unknown_dropped`, never a static table drop) and aborts under `abort_evaluation` with the rule |
+| S5A-3 | `selection_table_list_max` (info / none, pending, since 0.12.50); keys `fact_keys` (`list<token>`), `maximum` (`integer`), `maximum_identity` (`id`) (S168C-6) | outcome code and keys | S168-5a | selection-policy | one per distinct reference, right after the three reasons the chain opens with; required `table_id`, `table_column`, `fact_keys`, `count`; `maximum` with `maximum_identity`, nothing for `empty`, or `unknown_reason`; a pin's `otherwise` adds `term_fallback_used` before it |
+| S5A-4 | `SelectionTables::read_rows` takes the union of a reference's lists | behaviour | S168-5a | the evaluator | the hashed input's `tables` holds the row of each key of the union that holds the pins; a document without the source hashes as before |
+| S5A-5 | `upper_bound_with_tables` reads a list maximum exactly | behaviour | S168-5a | the bound | an unknown maximum drops the identity under `drop_candidate` and gives `Unbounded` under `abort_evaluation`, for a gate as for a term |
+| S5A-6 | `SelectionPolicy::uses_list_maxima`; `evaluate_collect` (`value_source=table_max_over_list option=collect`) and the catalog compile (`value_source=table_max_over_list consumer=scheduling`) refuse, `type_mismatch` | behaviour | S168-5a | the scheduling consumer | checked before the record-list and table refusals that such a document also meets, so the refusal names the source |
+
+**Tests.** New: policy row "#428 S168-5a", the register's nine named tests in
+`actingcommand-selection-policy::lib::gate_428_s168_5a` (`table_list_max_reads_largest_of_class`,
+`table_list_max_empty_and_out_of_class`, `table_list_max_missing_key_is_unknown`,
+`table_list_max_validation`, `table_list_max_input_identity`, `table_list_max_union_of_lists`,
+`table_list_max_unusable_list_is_unknown`, `table_list_max_where_skips_rows`,
+`table_list_max_unknown_follows_the_declared_action`), on tables loaded with `LoadedTable::load`
+and fake snapshots, no clock and no sleep; and the catalog compile's half of test 4,
+`actingcommand-policy::lib::source::tests::table_list_max_validation`. No test adapted; no golden
+re-recorded (test 5 reads the DB-2 golden of a document without tables).
+
+**Interface.** `package` stays [3, 7] in this build: S168-4 had not merged on `fa8adc67`, so
+S168-5a is the first of the two and admits its member by code; S168-4 declares [3, 8]. No
+`ledger`, `runtime-client`, `actingd-config` or `runtime-outcomes` raise: the reason is a decision
+reason the record reader only spells.
+
+**Outcome codes.** One code added, `selection_table_list_max` (info / none, pending, since
+0.12.50, owner `selection-policy`); three keys added, `fact_keys`, `maximum`, `maximum_identity`.
+`term_fallback_used` and the vocabulary `unknown_reason` are reused. No persisted structure
+change.
+
+**Contract wording this slice changed** (named by fix 1, work order
+`rd-1110/brief-s168-5a-fix1.md`). Two sentences of [selection-policy.md](selection-policy.md),
+"Table maximum over a list", besides its opening line, which now says that S168-5a built the
+section:
+
+- "One read", step 1: a listed list that is malformed now includes, by name, two rows that its
+  entry's `where` keeps sharing one key, as the up-front check reads it (reading (a) below).
+- "Audit": a pin's `term_fallback_used` now carries `rule_id`, the gate or term that reads the
+  reference first, and `table_column`, the pin's column, one per such pin in the order of
+  `pins` (reading (b) below).
+
+The independent review before fix 1 found both faithful to the contract's meaning.
+
+**Where S168-5a reads the contract.**
+
+- (a) Step 1's "malformed" includes two rows of one list that its entry's `where` keeps sharing
+  one key, as the up-front check reads a reference's list: the up-front check now indexes each
+  list a list maximum reads with its `where`, as it does a `keyed_fact` reference's. Written into
+  selection-policy.md, step 1.
+- (b) A pin's `term_fallback_used` requires a `rule_id`: the gate or term that reads the reference
+  first, one reason per pin that used its `otherwise`, in pin order. Written into "Audit".
+- (c) "Nor can a `fallback_column` name it": the reference decodes an optional `fallback_column`
+  only so that validation refuses it `type_mismatch`, as the contract says, not the decoder.
+- (d) What an abort keeps; existing behaviour that this slice does not change (corrected by fix
+  1, work order `rd-1110/brief-s168-5a-fix1.md`). Under `abort_evaluation` the evaluator's
+  decision keeps the verdicts of the candidates it assessed until then, none given a rank, the
+  last of them that of the candidate whose rule ended the evaluation (`unknown_dropped`, with
+  `gate_unknown_aborted` or `term_unknown_aborted` and the rule's `rule_id`;
+  `evaluate_with_tables` in `crates/selection-policy/src/evaluator.rs`); an evaluation the
+  up-front check ends, before any candidate, keeps no verdict. What the record
+  `task.selection_evaluated` keeps of an abort depends on the step. A single-frame select's
+  record keeps the decision's verdicts as they are, the aborting candidate's included
+  (`selection_record`, `record_verdicts(&decision.candidates)` in
+  `crates/execution-kernel/src/contained_task/selection.rs`). A select over a scan's record keeps
+  none (`scan_selection_record`, in the same file; [selection-graph.md](selection-graph.md),
+  "Record per path": "an abort keeps no verdict"). A judge step's record, as its contract plans
+  it for S168-5b, keeps none ([selection-graph.md](selection-graph.md), "Execution of a judge
+  step", step 4 and the table of results: "`unknown`, no verdict"). Test 9 checks the evaluator
+  only: the evaluation is `unknown` with the read's reason and the rule, and no candidate is
+  ranked or scored.
+- (e) Test 4's catalog half is a test of the same name in `crates/policy`: the selection-policy
+  crate does not link the catalog compiler. Test 4 also refuses a list that is no record list, a
+  `where` outside its list's values, a gate predicate other than `integer_compare`, a `lookup`
+  transform and an `empty` outside the safe integers; test 9 also checks the upper bound.
+
+**What S168-5a changes live.** Nothing runs differently: no package reads a list maximum before
+S168-6, and a document without the source keeps its canonical bytes, `policy_sha256`,
+`input_sha256` and reasons. Admission takes a document that reads the source; a build before it
+refuses one as an unknown value source. The ledger, the configuration and the capacity are
+unchanged.
+
+**S168-5a rollback** (to the release before it). Open, as for any release below `package` 8: no
+package uses the source until S168-6, which comes after S168-4 and S168-5a.
 
 #### Slice S168-4 (0.12.50): `read_list`, a list read from a page and published whole
 

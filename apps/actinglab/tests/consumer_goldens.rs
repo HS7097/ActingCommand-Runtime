@@ -2,17 +2,25 @@
 
 //! Workflow #434 LAB-2 fix 2 (register §1.287, "Slice LAB-2"; `contracts/lab-two-entries.md`
 //! §9.3; the coordinator's ruling of 2026-11-10): the command lines actinglab's current consumers
-//! send print what main `c76ce040` printed for them. Each case of `golden/consumers.json` is one
-//! consumer's command line in its own shape (`--json` or none with stdout redirected, `--via mcp`,
-//! a leading `--run-root`, `--verbose` before the words, `--package` naming a content directory),
-//! run through the production `actinglab` binary against a sealed temporary fixture; its exit code
-//! and its envelope are compared with the golden. The goldens were written from main's code (its
-//! `main` printing `CliResult`'s envelope, and each command's own answer or refusal), not
+//! send print what is pinned for them. Each case of `golden/consumers.json` is one consumer's
+//! command line in its own shape (`--json` or none with stdout redirected, `--via mcp`, a leading
+//! `--run-root`, `--verbose` before the words, `--package` naming a content directory), run
+//! through the production `actinglab` binary against a sealed temporary fixture; its exit code and
+//! its stdout are compared with the golden:
+//! - `envelope`: MCP's actinglab child (`--json --via mcp …`), which keeps the envelope main
+//!   `c76ce040` printed until LAB-5 (Workflow #434 LAB-2b); these cases are unchanged;
+//! - `line`: every other consumer's `--json` line since LAB-2b, the CLI module's line
+//!   (`cli_module::own_line`): the result's members beside `outcome`, or `{outcome, message,
+//!   details}`, exit 0 or 1;
+//! - `text`: a line without `--json` into a redirected stdout, the text for people since LAB-2b.
+//!
+//! The goldens were written from the code (main's for the envelope; LAB-2b's `own_line` and
+//! `cli_module::people` for the line and the text, with each command's own answer or refusal), not
 //! recorded by running a binary. `<ROOT>` stands for the fixture's folder, and `\` is read as `/`.
 //! A member whose golden value is `"<ANY>"` must be there, with any value: the text an admission
-//! or the operating system writes (a refusal's message and details), which these lines do not
-//! pin. The protocol goldens (`golden_protocol.rs`) pin the other shapes (global options before
-//! the words, `--zip`).
+//! or the operating system writes (a refusal's message and details, and the outcome's values taken
+//! from such details), which these lines do not pin. The protocol goldens (`golden_protocol.rs`)
+//! pin the other shapes (global options before the words, `--zip`).
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -33,7 +41,15 @@ struct ConsumerCase {
     consumer: String,
     args: Vec<String>,
     exit_code: i32,
-    envelope: Value,
+    /// MCP's `--via mcp` child: the envelope, as main printed it.
+    #[serde(default)]
+    envelope: Option<Value>,
+    /// Every other `--json` line: the CLI module's line (Workflow #434 LAB-2b).
+    #[serde(default)]
+    line: Option<Value>,
+    /// A line without `--json`: the text for people (Workflow #434 LAB-2b).
+    #[serde(default)]
+    text: Option<String>,
 }
 
 #[test]
@@ -68,24 +84,44 @@ fn consumer_command_lines_print_what_main_printed() {
             .expect("run actinglab");
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let mut envelope: Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|error| {
-            panic!(
-                "{} ({}): stdout is no envelope ({error}): {stdout}; stderr: {stderr}",
-                case.name, case.consumer
-            )
-        });
-        normalize(&mut envelope, root);
         assert_eq!(
             output.status.code(),
             Some(case.exit_code),
-            "{} ({}): {envelope}; stderr: {stderr}",
+            "{} ({}): {stdout}; stderr: {stderr}",
             case.name,
             case.consumer
         );
-        if let Some(difference) = differs(&case.envelope, &envelope, "") {
+        let golden = match (&case.envelope, &case.line, &case.text) {
+            (Some(golden), None, None) | (None, Some(golden), None) => golden,
+            (None, None, Some(text)) => {
+                // The text for people: one block, `<ROOT>` and `/` normalized.
+                let mut printed = Value::String(stdout.trim_end_matches(['\r', '\n']).to_owned());
+                normalize(&mut printed, root);
+                assert_eq!(
+                    printed.as_str(),
+                    Some(text.as_str()),
+                    "{} ({}): stderr: {stderr}",
+                    case.name,
+                    case.consumer
+                );
+                continue;
+            }
+            _ => panic!(
+                "{} ({}): a case holds exactly one of envelope, line and text",
+                case.name, case.consumer
+            ),
+        };
+        let mut printed: Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|error| {
             panic!(
-                "{} ({}): {difference}\nexpected {}\nprinted  {envelope}",
-                case.name, case.consumer, case.envelope
+                "{} ({}): stdout is no JSON line ({error}): {stdout}; stderr: {stderr}",
+                case.name, case.consumer
+            )
+        });
+        normalize(&mut printed, root);
+        if let Some(difference) = differs(golden, &printed, "") {
+            panic!(
+                "{} ({}): {difference}\nexpected {golden}\nprinted  {printed}",
+                case.name, case.consumer
             );
         }
     }

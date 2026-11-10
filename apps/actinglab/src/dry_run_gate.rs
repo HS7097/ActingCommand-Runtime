@@ -284,7 +284,6 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("schema", Mode::NoEffect),
     ("list", Mode::NoEffect),
     ("capabilities", Mode::NoEffect),
-    ("status", Mode::NoEffect),
     ("resource validate", Mode::NoEffect),
     ("resource catalog", Mode::NoEffect),
     ("resource compile-maa", Mode::NoEffect),

@@ -2608,6 +2608,18 @@
         "json_pointer": "required"
       },
       "description": "The compile warnings of the composed catalog the scheduler workbench activated that the game's schedule.json gave: each warning's code and its JSON pointer in that file, each place once, in code then pointer order (#428 CW-1, contracts/standard-pack-schedule.md \"The scheduler workbench\")."
+    },
+    "fact_keys": {
+      "type": "list<token>",
+      "description": "The record-list fact keys a list maximum read, in the order of its lists, at most 16 (Workflow #428 S168-5a, contracts/selection-policy.md \"Table maximum over a list\")."
+    },
+    "maximum": {
+      "type": "integer",
+      "description": "The largest value a list maximum read: the largest integer of its table column over the listed keys of the pinned class (Workflow #428 S168-5a)."
+    },
+    "maximum_identity": {
+      "type": "id",
+      "description": "The smallest listed key, in byte order, whose row holds a list maximum's largest value: a business identity, never screen text (Workflow #428 S168-5a)."
     }
   },
   "vocabularies": {

@@ -81,6 +81,9 @@ mod gate_load2;
 // Workflow #434 LAB-2: the CLI module, `serve --stdio` and the recordings' initiator.
 #[path = "gate_434_lab2.rs"]
 mod gate_434_lab2;
+// Workflow #434 LAB-2b: actinglab's own commands print the CLI module's line.
+#[path = "gate_434_lab2b.rs"]
+mod gate_434_lab2b;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
@@ -510,16 +513,23 @@ fn version_outputs_json_envelope() {
     assert_eq!(result.envelope.command, "version");
 }
 
+/// Workflow #434 LAB-2b fix 2: actinglab's own `status` is the CLI module's core row now (its case
+/// without a Runtime is in `gate_434_lab2b::status_and_run_show_take_their_core_rows`).
+/// `session status` takes the own dispatcher's path to the Runtime: with no Runtime on the state
+/// root it ends `runtime_not_running`, exit 5 on the envelope this path prints.
 #[test]
-fn status_without_runtime_is_exit_five() {
+fn session_status_without_runtime_is_exit_five() {
     let _guard = env_lock();
     let temp = TempDir::new().unwrap();
     set_config_env(temp.path().join("config.json"));
+    let state_root = temp.path().join("state");
+    fs::create_dir_all(&state_root).unwrap();
+    let _runtime_env = use_runtime_state_root(&state_root);
 
-    let result = run_cli(["--json", "status"], true);
+    let result = run_cli(["--json", "session", "status"], true);
     set_missing_config_env();
 
-    assert_eq!(result.exit_code(), 5);
+    assert_eq!(result.exit_code(), 5, "{}", result.envelope_json());
     assert_eq!(
         result.envelope.error.as_ref().unwrap().code,
         "runtime_not_running"

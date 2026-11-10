@@ -218,8 +218,9 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
 /// `req_id`, `correlation_id` and `receipt_state`, the `effect` and `executed` its record reports
 /// (as an answer of `do` states them), the record's `failure` (`null` when it reports none), and
 /// the client's own `client_code` and `client_message`. A call the Runtime refused or never
-/// answered stays a device error, as before.
-fn lab_operation_call_error(error: RuntimeClientError) -> CliError {
+/// answered stays a device error, as before. Workflow #434 LAB-2b: on the command line the CLI
+/// module's line exits 1 with it; a `--via` line (MCP's actinglab child) still exits 5.
+pub(crate) fn lab_operation_call_error(error: RuntimeClientError) -> CliError {
     let Some(answer) = error.lab_operation_answer() else {
         return CliError::device(error.to_string());
     };

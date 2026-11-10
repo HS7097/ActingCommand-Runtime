@@ -59,5 +59,8 @@ actingcommand_contract::outcome_codes! {
         CandidateScored => "candidate_scored": info / none,
         /// Info. Workflow #378 A2-P.
         TieBreakUnknown => "tie_break_unknown": info / none,
+        /// Info. Workflow #428 S168-5a (keys `table_id`, `table_column`, `fact_keys`, `count`,
+        /// optional `maximum`, `maximum_identity`, `unknown_reason`): what one list maximum read.
+        SelectionTableListMax => "selection_table_list_max": info / none,
     }
 }

@@ -19,13 +19,14 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-const GAME: &str = "game-a";
-const SERVER: &str = "server-a";
-const INSTANCE_A: &str = "fixture-instance-a";
-const INSTANCE_B: &str = "fixture-instance-b";
+// Workflow #434 LAB-2b fix 1: `gate_434_lab2b` composes this root too, as the hotplace kit does.
+pub(super) const GAME: &str = "game-a";
+pub(super) const SERVER: &str = "server-a";
+pub(super) const INSTANCE_A: &str = "fixture-instance-a";
+pub(super) const INSTANCE_B: &str = "fixture-instance-b";
 // catalog-a's task id; the package its rule runs has the same name.
 const RULE: &str = "fixture.observe";
-const PACKAGE: &str = "fixture.observe";
+pub(super) const PACKAGE: &str = "fixture.observe";
 const RETURN_PACKAGE: &str = "fixture.return";
 const HELD_PACKAGE: &str = "fixture.extra";
 
@@ -52,7 +53,7 @@ fn catalog_a(text: &str, member: &str) -> Value {
 /// catalog-a as `schedule.json`: no scope; the task without its entrypoint, procedure and
 /// instance overrides, naming its package; each event valid from the epoch; the package no rule
 /// runs held.
-fn schedule() -> Value {
+pub(super) fn schedule() -> Value {
     let mut rules = catalog_a(
         include_str!("../../../../contracts/scheduling/examples/catalog-a/tasks.json"),
         "tasks",
@@ -92,7 +93,7 @@ fn schedule() -> Value {
 }
 
 /// The game root's registry: three packages on `server-a`, the return-home one in maintenance.
-fn bundle() -> Value {
+pub(super) fn bundle() -> Value {
     // Built before `json!`, which reads a `[` as a JSON array and takes no method call after it.
     let packs = [PACKAGE, RETURN_PACKAGE, HELD_PACKAGE].map(|package_id| {
         json!({

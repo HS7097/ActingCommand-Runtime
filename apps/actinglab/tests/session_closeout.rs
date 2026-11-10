@@ -40,15 +40,25 @@ fn json_output(output: &Output) -> Value {
     })
 }
 
+/// Workflow #434 LAB-2b: a failure line carries its outcome, message and details, no result.
+fn no_result(line: &Value) -> bool {
+    line.as_object().is_some_and(|members| {
+        members
+            .keys()
+            .all(|name| matches!(name.as_str(), "outcome" | "message" | "details"))
+    })
+}
+
 fn assert_retired(output: Output) {
-    assert_eq!(output.status.code(), Some(6));
+    // Workflow #434 LAB-2b: the CLI module's line exits 1 for every error.
+    assert_eq!(output.status.code(), Some(1));
     let envelope = json_output(&output);
-    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["outcome"]["category"], "error");
     assert_eq!(
-        envelope["error"]["code"],
+        envelope["outcome"]["code"],
         "legacy_session_authority_retired"
     );
-    assert!(envelope["data"].is_null());
+    assert!(no_result(&envelope), "{envelope}");
 }
 
 #[test]
@@ -125,8 +135,8 @@ fn runtime_clients_reconnect_without_restoring_session_file_authority() {
         String::from_utf8_lossy(&first.stderr)
     );
     let first = json_output(&first);
-    assert_eq!(first["data"]["running"], true);
-    let runtime_pid = first["data"]["info"]["pid"].clone();
+    assert_eq!(first["running"], true);
+    let runtime_pid = first["info"]["pid"].clone();
 
     let stream = run_actinglab(
         &config_path,
@@ -145,7 +155,7 @@ fn runtime_clients_reconnect_without_restoring_session_file_authority() {
     );
     assert!(stream.status.success());
     let stream = json_output(&stream);
-    assert_eq!(stream["data"]["frames"].as_array().map(Vec::len), Some(2));
+    assert_eq!(stream["frames"].as_array().map(Vec::len), Some(2));
     runtime.assert_alive();
 
     let reconnected = run_actinglab(
@@ -157,7 +167,7 @@ fn runtime_clients_reconnect_without_restoring_session_file_authority() {
     );
     assert!(reconnected.status.success());
     let reconnected = json_output(&reconnected);
-    assert_eq!(reconnected["data"]["info"]["pid"], runtime_pid);
+    assert_eq!(reconnected["info"]["pid"], runtime_pid);
     assert!(!legacy_state.exists());
 
     runtime.stop_clean();
@@ -172,9 +182,9 @@ fn runtime_clients_reconnect_without_restoring_session_file_authority() {
         &legacy_state,
         &["--json", "session", "status"],
     );
-    assert_eq!(unavailable.status.code(), Some(5));
+    assert_eq!(unavailable.status.code(), Some(1));
     let unavailable = json_output(&unavailable);
-    assert_eq!(unavailable["error"]["code"], "runtime_not_running");
-    assert!(unavailable["data"].is_null());
+    assert_eq!(unavailable["outcome"]["code"], "runtime_not_running");
+    assert!(no_result(&unavailable), "{unavailable}");
     assert!(!legacy_state.exists());
 }

@@ -3,19 +3,20 @@
 //! The CLI module of `actinglab.exe` and `actinglab serve --stdio` (Workflow #434 LAB-2; register
 //! §1.287, "Slice LAB-2"; `contracts/lab-two-entries.md` §4.2, §8.2 and §9.3).
 //!
-//! - **Which command lines** ([`route`]; LAB-2 fix 1, the coordinator's ruling of 2026-11-10:
-//!   this slice changes nothing any current consumer of actinglab gets). The module answers
-//!   `serve` and the operations it serves itself, those that came from actingctl ([`core_ops`]:
-//!   the core rows `lab-ops` serves, and `run start`, `run stop`, `reset` and `drill`). Every
-//!   other command line is actinglab's own and `main` answers it as before LAB-2: its output for
-//!   people, its `--json` envelope (`ok`, `data`, `error`) and its exit codes, with its global
-//!   options anywhere on the line. Two core rows take words actinglab's own commands had before
-//!   LAB-2, `status` and `run show`: on the command line those words stay actinglab's own commands
-//!   until actinglab's commands move to the new output (the contract's open point 10); the rows
-//!   answer through `serve --stdio`. A row actinglab's own command serves under other words
-//!   (`watch` for `lab watch`, `recover` for `session recover`, `user-config [<key>]` for
-//!   `user-config get`, `app launch` for `session app launch` and the like) is given to that
-//!   command in its words ([`engine`]) and answers as it does.
+//! - **Which command lines** ([`route`]; LAB-2 fix 1). The module answers `serve` and the
+//!   operations it serves itself, those that came from actingctl ([`core_ops`]: the core rows
+//!   `lab-ops` serves, `status` and `run show` among them since LAB-2b, and `run start`, `run
+//!   stop`, `reset` and `drill`), also when actinglab's own global options stand before the core
+//!   row's words, so that the row refuses them by name (LAB-2b fix 3; never a line with `--via`).
+//!   Every other command line is actinglab's own, parsed and run by `main` with its global options
+//!   anywhere on the line. Since LAB-2b (open point 10) it prints this module's line
+//!   ([`own_line`]): the output for people by default, `--json` the `cli_line` line, exit codes 0,
+//!   1 and 2; a line with `--via` (MCP's actinglab child) still prints the envelope (`ok`, `data`,
+//!   `error`) with its exit codes 2 to 6, until LAB-5. A row
+//!   actinglab's own command serves under other words (`watch` for `lab watch`, `recover` for
+//!   `session recover`, `user-config [<key>]` for `user-config get`, `app launch` for `session app
+//!   launch` and the like) is given to that command in its words ([`engine`]) and answers as it
+//!   does.
 //! - **Words.** Short words taken from the operation table (`contracts/lab-operations.json`): the
 //!   operations of the core, debugging and authoring modules that LAB-1, LAB-1b and LAB-2 built
 //!   ([`words`]). Every operation offered is a table row. The instance is a positional (an alias,
@@ -26,8 +27,8 @@
 //!   `{…result, "outcome": …}`. Exit codes 0, 1 and 2, by the outcome's category; a refusal exits
 //!   at least 1.
 //! - **`serve --stdio`.** One `{op, params}` per line on stdin, one answer per line on stdout:
-//!   the line the operation's `--json` prints, the module's line for the module's operations and
-//!   the envelope for actinglab's own commands ([`serve`]).
+//!   the line the operation's `--json` prints, the module's line for every operation, actinglab's
+//!   own commands included (LAB-2b; [`serve`]).
 //! - **Initiator** (§4.1, §4.2). `Lab-CLI`, or `Lab-制包` / `Lab-救急` from
 //!   `ACTINGCOMMAND_INITIATOR`; any other value is refused before anything is sent or written. A
 //!   Lab recording's steps and marks carry it (open point 6, the coordinator's ruling), and
@@ -35,6 +36,8 @@
 
 mod core_ops;
 mod engine;
+// Workflow #434 LAB-2b: the line actinglab's own commands print.
+pub(crate) mod own_line;
 mod place;
 pub(crate) mod serve;
 pub(crate) mod words;
@@ -71,8 +74,8 @@ const INITIATOR_TEXT: &str = "ACTINGCOMMAND_INITIATOR takes Lab-制包 or Lab-�
 pub(crate) enum Route {
     /// `serve`, or an operation this module serves itself: the module's lines.
     Module(Vec<String>),
-    /// actinglab's own command line, as given or in the words of the row's command: answered by
-    /// `main` as before LAB-2.
+    /// actinglab's own command line, as given or in the words of the row's command: parsed and
+    /// run by `main`, printed with [`own_line`] (or as the envelope with `--via`).
     Own(Vec<String>),
     /// The short words of a row actinglab's own command serves, refused: the operation's name,
     /// whether the line asks for `--json`, and actinglab's usage error, answered by `main` as its
@@ -112,6 +115,16 @@ pub(crate) fn route(arguments: Vec<String>) -> Route {
     let Some(table) = loaded else {
         return Route::Module(arguments);
     };
+    // Workflow #434 LAB-2b fix 3: actinglab's own global options before a core row's words
+    // (`--runtime-endpoint <endpoint> status`) give the line to the module as it is, which refuses
+    // the first of them by name, as it refuses one after the words, and sends nothing. A line
+    // with `--via` stays actinglab's own.
+    if named.is_none()
+        && !own_line::via_line(&arguments)
+        && core_row_after_options(table, &arguments)
+    {
+        return Route::Module(arguments);
+    }
     let Some(operation) = named.filter(|operation| !core_ops::serves(operation)) else {
         return Route::Own(arguments);
     };
@@ -136,6 +149,19 @@ pub(crate) fn route(arguments: Vec<String>) -> Route {
             operation.name
         ))),
     }
+}
+
+/// Workflow #434 LAB-2b fix 3: whether the words of the command line `arguments`, actinglab's own
+/// global options taken out, name a core row this module serves that is no command of actinglab's
+/// own (`status`, `run show`).
+fn core_row_after_options(table: &OperationTable, arguments: &[String]) -> bool {
+    let Ok(invocation) = crate::parse_invocation(arguments.iter().cloned(), true) else {
+        return false;
+    };
+    let command_words = [invocation.command, invocation.args].concat();
+    words::named(table, &command_words).is_some_and(|operation| {
+        core_ops::serves(operation) && !crate::own_command(&name_words(&operation.name))
+    })
 }
 
 /// An operation's name as command words.
@@ -297,7 +323,7 @@ pub(crate) fn admitted() -> Result<(), Exit> {
 }
 
 /// The answer to `call`: an operation of this module its line; one of actinglab's own commands
-/// serves the envelope its `--json` prints (`serve --stdio`).
+/// serves the line its `--json` prints (`serve --stdio`; [`own_line`], Workflow #434 LAB-2b).
 pub(crate) fn answer(table: &OperationTable, call: &Call) -> Exit {
     let Some(operation) = table.operation(&call.name) else {
         return cli_line::failure(
@@ -313,7 +339,7 @@ pub(crate) fn answer(table: &OperationTable, call: &Call) -> Exit {
     if operation.module == OperationModule::Rescue {
         return rescue::line(rescue::answer(call));
     }
-    engine::envelope(operation, &call.params)
+    engine::line(operation, &call.params)
 }
 
 /// Workflow #434 LAB-3: the rescue module's rows (`crates/lab-rescue`), for the root actinglab

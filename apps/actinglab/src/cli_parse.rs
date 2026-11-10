@@ -34,6 +34,10 @@ where
         ..Default::default()
     };
     let raw = args.into_iter().map(Into::into).collect::<Vec<_>>();
+    // Workflow #434 LAB-2b fix 1: a missing option value prints what the line asks for, the JSON
+    // line with `--json` and the text for people without it; a `--via` line (MCP's actinglab
+    // child) keeps its envelope, as before.
+    let via = crate::cli_module::own_line::via_line(&raw);
     let mut rest = Vec::new();
     let mut index = 0usize;
 
@@ -42,34 +46,48 @@ where
             option if command_option(&rest, option) => {
                 rest.push(option.to_owned());
                 index += 1;
-                rest.push(require_raw(&raw, index, option)?);
+                rest.push(require_raw(&raw, index, option, global.json || via)?);
             }
             "--json" => global.json = true,
             "--run-root" => {
                 index += 1;
-                global.run_root = Some(PathBuf::from(require_raw(&raw, index, "--run-root")?));
+                global.run_root = Some(PathBuf::from(require_raw(
+                    &raw,
+                    index,
+                    "--run-root",
+                    global.json || via,
+                )?));
             }
             "--instance" => {
                 index += 1;
-                global.instance = Some(require_raw(&raw, index, "--instance")?);
+                global.instance = Some(require_raw(&raw, index, "--instance", global.json || via)?);
             }
             "--instances" => {
                 index += 1;
-                global.instances = Some(split_csv(&require_raw(&raw, index, "--instances")?));
+                global.instances = Some(split_csv(&require_raw(
+                    &raw,
+                    index,
+                    "--instances",
+                    global.json || via,
+                )?));
             }
             "--profile" => {
                 index += 1;
-                global.profile = Some(require_raw(&raw, index, "--profile")?);
+                global.profile = Some(require_raw(&raw, index, "--profile", global.json || via)?);
             }
             "--resource-root" => {
                 index += 1;
-                global.resource_root =
-                    Some(PathBuf::from(require_raw(&raw, index, "--resource-root")?));
+                global.resource_root = Some(PathBuf::from(require_raw(
+                    &raw,
+                    index,
+                    "--resource-root",
+                    global.json || via,
+                )?));
             }
             // Workflow #389 U-2: the counter that forwarded the work (model section 3.2 rule 7).
             "--via" => {
                 index += 1;
-                let value = require_raw(&raw, index, "--via")?;
+                let value = require_raw(&raw, index, "--via", global.json || via)?;
                 global.via = Some(match value.as_str() {
                     "mcp" => ChannelVia::Mcp,
                     "ui" => ChannelVia::Ui,
@@ -87,19 +105,24 @@ where
             "--quiet" => global.quiet = true,
             "--game" => {
                 index += 1;
-                global.game = Some(require_raw(&raw, index, "--game")?);
+                global.game = Some(require_raw(&raw, index, "--game", global.json || via)?);
             }
             "--server" => {
                 index += 1;
-                global.server = Some(require_raw(&raw, index, "--server")?);
+                global.server = Some(require_raw(&raw, index, "--server", global.json || via)?);
             }
             "--runtime-endpoint" => {
                 index += 1;
-                global.runtime_endpoint = Some(require_raw(&raw, index, "--runtime-endpoint")?);
+                global.runtime_endpoint = Some(require_raw(
+                    &raw,
+                    index,
+                    "--runtime-endpoint",
+                    global.json || via,
+                )?);
             }
             "--capture-backend" | "--backend" => {
                 index += 1;
-                let value = require_raw(&raw, index, raw[index - 1].as_str())?;
+                let value = require_raw(&raw, index, raw[index - 1].as_str(), global.json || via)?;
                 global.capture_backend =
                     Some(CaptureBackendChoice::parse(&value).map_err(|err| {
                         (
@@ -111,7 +134,7 @@ where
             }
             "--touch-backend" => {
                 index += 1;
-                let value = require_raw(&raw, index, "--touch-backend")?;
+                let value = require_raw(&raw, index, "--touch-backend", global.json || via)?;
                 global.touch_backend = Some(TouchBackendChoice::parse(&value).map_err(|err| {
                     (
                         "help".to_string(),
@@ -189,15 +212,18 @@ where
     })
 }
 
+/// The value of the option `name` at `index`, or the usage error that it is missing, printed as
+/// JSON when `json` (Workflow #434 LAB-2b fix 1: the line's `--json`, or a `--via` line).
 fn require_raw(
     raw: &[String],
     index: usize,
     name: &str,
+    json: bool,
 ) -> Result<String, (String, bool, CliError)> {
     raw.get(index).cloned().ok_or_else(|| {
         (
             "unknown".to_string(),
-            true,
+            json,
             CliError::usage(format!("missing value for {name}")),
         )
     })

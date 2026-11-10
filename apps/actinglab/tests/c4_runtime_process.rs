@@ -40,10 +40,10 @@ fn actinglab_runtime_adapter_is_disposable_and_emits_runtime_flow_data() {
     );
     let observe_json: Value = serde_json::from_slice(&observe.stdout).expect("observe JSON");
     assert_eq!(
-        observe_json["data"]["receipt"]["result"]["kind"],
+        observe_json["receipt"]["result"]["kind"],
         "readonly_observation_completed"
     );
-    assert!(observe_json["data"]["events"].is_array());
+    assert!(observe_json["events"].is_array());
     assert_eq!(
         support::backend_events(root.path()),
         ["capture_open", "capture"]
@@ -70,10 +70,10 @@ fn actinglab_runtime_adapter_is_disposable_and_emits_runtime_flow_data() {
     );
     let reset_json: Value = serde_json::from_slice(&reset.stdout).expect("reset JSON");
     assert_eq!(
-        reset_json["data"]["receipt"]["result"]["kind"],
+        reset_json["receipt"]["result"]["kind"],
         "safe_reset_completed"
     );
-    assert!(reset_json["data"]["events"].is_array());
+    assert!(reset_json["events"].is_array());
     assert_eq!(
         support::backend_events(root.path()),
         ["capture_open", "capture", "open", "reset"]
