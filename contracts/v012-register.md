@@ -10280,6 +10280,103 @@ test outside this slice changed: `Test-WindowsRemoteBuildTools.ps1` pins only
 `ppocrv6-medium-source`'s state and the entry's two `pinned_files`, and `gate_407_gpu1a` reads
 only `pinned_files`.
 
+### 1.298 Slice VIS-LOAD-1 (0.12.52): a model's one-time load is outside the OCR request's deadline (#428; a resource repository's CI frame regression runs each case as its own `actinglab` process on a hosted runner, on the CPU, and with targets that declare `timeout_ms` 1000, 2 of 7 runs of the same commit failed there, each on one to four of 157 OCR checks, with `candidate_feature_failed` … `Timeout: fatal vision FFI error in ppocr_ctc_engine: PPOCR recognizer could not start before the configured timeout`; the coordinator's ruling of 11-11, not Alice's words: a model's one-time load is not inference, the request's deadline bounds inference, the load a request triggers happens before its clock starts, and the packages' timeouts are not changed for this; coordinator work order `rd-1110/brief-vis-load-1.md`)
+
+[vision-model-folders.md](vision-model-folders.md), "Startup and first use", is the contract: it
+already said that a model's own load does not count against a target's `timeout_ms`, and gains
+one sentence that the `timeout_ms` bounds inference and not a model's one-time load. 1.298 is the
+next free number: main `4116cbf4` holds 1.297, CI-OCR-1, merged as PR #1567. No
+persisted ledger shape, wire shape, configuration key, diagnostics member, outcome code, location
+or vocabulary is new or changed, and no package's `timeout_ms` or its bounds (1 to 60 000) change.
+
+**Why.** The OCR engine (`providers/ppocr-onnx-json`) turns a request's `timeout_ms` into one
+deadline, and each stage first asks what is left of it (`remaining_inference_budget`); a stage
+that finds nothing left fails with `Timeout`, "<stage> could not start before the configured
+timeout". On a route that detects first, the detector's session was built lazily inside the
+request, after that deadline was taken, so the first such request of a process paid the detector's
+load out of its inference budget. A resident Runtime pays it once after each start; the Lab pays it
+in every process.
+
+**What.** A request takes its deadline only once every session its route needs is built: it decides
+its route, builds the detector when the route detects and the detector is not built yet, and then
+takes the deadline. The detection's budget is the whole `timeout_ms` and each later stage gets what
+the earlier ones left, as before. A load that fails fails the request with the load's own error, as
+before. No second timeout is added for loading: a load is bounded by no target's `timeout_ms`. The
+request path is one function over the model's stages (`read_request` over the trait
+`RequestStages`) so that the logic tests run it over a fake; its deadline and each stage's budget
+are read on the engine's monotonic clock (`Instant::elapsed` from the engine's load), and
+production's only stages are the engine's ONNX Runtime sessions.
+
+**What is loaded where, and against which clock.**
+
+- The recognizer's session, the dictionary and ONNX Runtime's initialisation: at the model's load
+  (`load_ocr`), which the kernel runs before it calls the engine and does not charge to
+  `timeout_ms` (Workflow #360). Outside the deadline, before and after.
+- The detector's session, its file read again and checked against the hash the load verified (and
+  on DirectML its node-placement shadow): on the model's first request that detects. Inside the
+  deadline before; outside after.
+- A DirectML detector that cannot be built under `gpu_fallback` `cpu` (GPU-1 B2, §1.286): the
+  recognizer is built again on the CPU and the detector there. This answers the detector load's own
+  build failure, not a failure of the request's inference, and it is part of the one load call, so
+  it moved with it. Inside before; outside after.
+- The rebuild after a failed DirectML run (GPU-1 E, §1.286): the failing request fails
+  (`ProviderUnavailable`), the kernel unloads the engine, and the model's next request loads it
+  again through the kernel's `load_ocr`, outside the deadline before and after; the rebuilt
+  engine's detector is then built as any detector is. Unchanged.
+- Each inference's run options and inference watchdog: inference, inside the deadline, as before.
+
+**The outer bounds of a vision request.** None fires on a slow load where the engine's deadline
+would not, except the run-level bounds below, which bound a run's wall time and already counted the
+recognizer's load; none is changed.
+
+- `crates/vision-ffi`: no deadline or watchdog; it checks only that `timeout_ms` is 1 to 60 000.
+- `crates/onnx-provider-support`, `InferenceWatchdog`: started per stage with what is left of the
+  budget; it bounds that stage's inference only.
+- The kernel's `VisionFfiProvider::call_ocr` (`crates/execution-kernel/src/provider.rs`), which the
+  Runtime and the Lab (`crates/lab/src/ocr.rs`, the same provider over the same engine on the CPU,
+  with no bound of its own) both use: its deadline of `timeout_ms` bounds the wait for the model's
+  lock and, as `load_ocr`'s `wait_deadline`, the wait for another request's runtime
+  initialisation; the model's own load is not charged, and the engine gets `timeout_ms` less those
+  waits. A request that waits for the lock while another request of the same model builds the
+  detector pays that wait, as it pays the wait for any load another request makes (#360's rule,
+  unchanged). Its PERF-READ timing measures the engine call, a detector load included as before; it
+  is a measurement and bounds nothing.
+- The recognition pack: under a sample deadline it refuses to start an OCR target whose
+  `timeout_ms` exceeds what is left (`recognition sample budget insufficient`), which a load does
+  not change; a saved frame's OCR (`evaluate_saved_artifact_ocr`) caps the target's `timeout_ms` by
+  what its deadline leaves, which the engine then spends on inference only. Its text-read budget
+  counts calls and area, not time.
+- Run-level bounds: the run's budget and a sampling deadline (`recognition_sample_deadline_exceeded`,
+  checked after each evaluation), the host's join of handed-off readings
+  (`scheduling.fact_refresh.recognition_join_timeout_ms`; a reading not back in time is the miss
+  `join_timeout`) and the saved-artifact OCR request's 120-second deadline bound the wall time of a
+  run or request, everything in it included, and none interrupts a provider call. A detector load
+  longer than what such a bound leaves ends that run or request as a slow recognizer load already
+  could; they are not the request's deadline, and the ruling leaves them as they are.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): no record, payload
+member, closed vocabulary or configuration key changes; the engine's request path and its clock are
+Runtime-internal, and a request whose inference runs out answers the same code and text.
+
+**At deploy.** A package's OCR `timeout_ms` now bounds inference only: the first detecting request
+after a start no longer fails because the detector was still loading. Nothing else changes; no
+configuration key; no interface. **Rollback** (below 0.12.52): the first request of a process that
+detects pays the detector's load out of its `timeout_ms` again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| VISL1-1 | the OCR engine's request path (`providers/ppocr-onnx-json`, `read_request` over `RequestStages`) | Runtime-internal behaviour | VIS-LOAD-1 | — | `since` 0.12.52; the route's sessions are built before the deadline is taken; the deadline and each stage's budget on the engine's monotonic clock; errors unchanged |
+| VISL1-2 | what a target's `timeout_ms` bounds ([vision-model-folders.md](vision-model-folders.md)) | contract sentence | VIS-LOAD-1 | — | inference, not a model's one-time load; values and bounds unchanged |
+
+Tests (exec gate row "#428 VIS-LOAD-1"):
+`gate_428_vis_load1::vis_load1_a_detector_load_longer_than_the_timeout_leaves_inference_its_whole_budget`
+and `gate_428_vis_load1::vis_load1_inference_past_the_timeout_still_fails_with_its_timeout`, both
+running `read_request` over a test-only fake whose detector load takes five times the request's
+`timeout_ms` and whose inferences take what they are told, on the fake's own clock (no wall clock,
+no sleep, no model file). No existing test changed: none called the request path,
+`remaining_inference_budget` or the detector's load (`gate_407_gpu1b1`, `gate_407_gpu1b2` and
+`gate_407_gpu1e` build sessions through `ModelSessions` over their own fakes).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -56,6 +56,9 @@ mod gate_407_gpu1b2;
 // Workflow #407 GPU-1 E: the rebuild after a failed GPU run, over a fake ONNX Runtime.
 #[cfg(test)]
 mod gate_407_gpu1e;
+// Workflow #428 VIS-LOAD-1: a model's one-time load is outside the request's deadline, over a fake.
+#[cfg(test)]
+mod gate_428_vis_load1;
 mod nn;
 
 const NODE_PLACEMENT_DIAGNOSTIC_ENV: &str = "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC";
@@ -686,6 +689,7 @@ impl VisionModelLoader for PpocrCtcLoader {
                 detector_sha256,
                 pending_diagnostics: diagnostics,
                 gpu_runs,
+                clock_origin: Instant::now(),
             }),
             model_sha256,
             waited_on_others,
@@ -793,6 +797,9 @@ struct PpocrCtcModel {
     pending_diagnostics: PpocrDiagnostics,
     /// Workflow #407 GPU-1 E: the model's GPU-run history, which outlives this engine.
     gpu_runs: GpuRuns,
+    /// Workflow #428 VIS-LOAD-1: the origin of the clock a request's deadline is read on
+    /// ([`RequestStages::clock`]).
+    clock_origin: Instant,
 }
 
 /// Workflow #407 GPU-1 B2: one model file a session is built from: its verified bytes and its
@@ -1365,99 +1372,187 @@ impl OcrEngine for PpocrCtcModel {
     }
 }
 
-impl PpocrCtcModel {
-    /// Reads the request; `ran` records the roles whose sessions ran.
-    fn read_region(
+/// Workflow #428 VIS-LOAD-1: what one request runs on: the model's sessions, the detector's built
+/// on first use, and the clock the request's deadline is read on. [`read_request`] is the one path
+/// of a request, over ONNX Runtime's sessions ([`PpocrCtcModel`]) and, in the logic tests, over a
+/// fake whose load and inferences take the time they are told to.
+trait RequestStages {
+    /// Now on the request's clock, from an origin of the implementor's.
+    fn clock(&self) -> Duration;
+
+    /// Whether the detector's session is built.
+    fn has_detector(&self) -> bool;
+
+    /// Builds the detector's session: the model's one-time load of it.
+    fn ready_detector(&mut self, diagnostics: &mut PpocrDiagnostics) -> VisionFfiResult<()>;
+
+    /// The recognizer's text of `region`, its inference bounded by `budget`.
+    fn recognize(
         &mut self,
-        request: OcrInferenceRequestView<'_>,
-        diagnostics: &mut PpocrDiagnostics,
-        ran: &mut InvocationRoles,
-    ) -> Result<OcrInferenceResult, ProviderInvokeError> {
-        let inference_deadline = Instant::now()
-            .checked_add(Duration::from_millis(request.timeout_ms))
-            .ok_or_else(|| {
-                ProviderInvokeError::from("PPOCR inference deadline overflowed".to_string())
-            })?;
-        let frame = &request.frame;
-        let merge_gap_factor = match read_route(
+        frame: &VisionFrameView<'_>,
+        region: VisionRect,
+        budget: Duration,
+    ) -> Result<DecodedText, ProviderInvokeError>;
+
+    /// The detector's boxes inside `region`, merged with `merge_gap_factor`, its inference
+    /// bounded by `budget`.
+    fn detect(
+        &mut self,
+        frame: &VisionFrameView<'_>,
+        region: VisionRect,
+        merge_gap_factor: Option<u32>,
+        budget: Duration,
+    ) -> Result<Vec<DetectedTextBox>, ProviderInvokeError>;
+}
+
+impl RequestStages for PpocrCtcModel {
+    fn clock(&self) -> Duration {
+        self.clock_origin.elapsed()
+    }
+
+    fn has_detector(&self) -> bool {
+        self.sessions.detector.is_some()
+    }
+
+    fn ready_detector(&mut self, diagnostics: &mut PpocrDiagnostics) -> VisionFfiResult<()> {
+        self.load_detector(diagnostics)
+    }
+
+    fn recognize(
+        &mut self,
+        frame: &VisionFrameView<'_>,
+        region: VisionRect,
+        budget: Duration,
+    ) -> Result<DecodedText, ProviderInvokeError> {
+        recognize_region(
+            &mut self.sessions.recognizer.session,
+            &self.dictionary,
+            &self.params,
             frame,
-            request.region,
-            request.blocks,
-            self.params.detector.merge_gap_factor,
-        ) {
-            ReadRoute::Region => {
-                ran.recognizer = true;
-                let decoded = recognize_region(
-                    &mut self.sessions.recognizer.session,
-                    &self.dictionary,
-                    &self.params,
-                    frame,
-                    request.region,
-                    remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
-                )?;
-                return Ok(canonical_roi_result(decoded, request.region));
-            }
-            ReadRoute::Detect { merge_gap_factor } => merge_gap_factor,
-        };
-        if self.sessions.detector.is_none() {
-            self.load_detector(diagnostics)?;
-        }
+            region,
+            budget,
+        )
+    }
+
+    fn detect(
+        &mut self,
+        frame: &VisionFrameView<'_>,
+        region: VisionRect,
+        merge_gap_factor: Option<u32>,
+        budget: Duration,
+    ) -> Result<Vec<DetectedTextBox>, ProviderInvokeError> {
         let detector = &mut self
             .sessions
             .detector
             .as_mut()
             .ok_or_else(|| "PPOCR detector session is unavailable".to_string())?
             .session;
-        ran.detector = true;
-        let detected = detect_text_regions(
+        detect_text_regions(
             detector,
             &self.params,
             frame,
-            request.region,
+            region,
             merge_gap_factor,
-            remaining_inference_budget(inference_deadline, "PPOCR detector")?,
-        )?;
-        let (detected, count) = keep_detected_boxes(detected, self.params.detector.max_boxes);
-        let mut blocks = Vec::new();
-        for detected_box in &detected {
+            budget,
+        )
+    }
+}
+
+/// Reads `request` on `stages`; `ran` records the roles whose sessions ran. Workflow #428
+/// VIS-LOAD-1: every session the request's route needs is built before the request's deadline is
+/// taken, so its `timeout_ms` bounds inference and never the one-time load of a model: the
+/// detector, built on the model's first request that detects, is loaded first. No load is bounded
+/// by a `timeout_ms`, and a load that fails fails the request with its own error.
+fn read_request(
+    stages: &mut impl RequestStages,
+    folder_gap_factor: u32,
+    max_boxes: u32,
+    request: OcrInferenceRequestView<'_>,
+    diagnostics: &mut PpocrDiagnostics,
+    ran: &mut InvocationRoles,
+) -> Result<OcrInferenceResult, ProviderInvokeError> {
+    let frame = &request.frame;
+    let route = read_route(frame, request.region, request.blocks, folder_gap_factor);
+    if matches!(route, ReadRoute::Detect { .. }) && !stages.has_detector() {
+        stages.ready_detector(diagnostics)?;
+    }
+    let inference_deadline = stages
+        .clock()
+        .checked_add(Duration::from_millis(request.timeout_ms))
+        .ok_or_else(|| {
+            ProviderInvokeError::from("PPOCR inference deadline overflowed".to_string())
+        })?;
+    let merge_gap_factor = match route {
+        ReadRoute::Region => {
             ran.recognizer = true;
-            let decoded = recognize_region(
-                &mut self.sessions.recognizer.session,
-                &self.dictionary,
-                &self.params,
-                frame,
-                detected_box.rect,
-                remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
-            )?;
-            if !decoded.text.is_empty() {
-                blocks.push(OcrTextBlock {
-                    text: decoded.text,
-                    rect: detected_box.rect,
-                    confidence: decoded.confidence.or(Some(detected_box.confidence)),
-                });
-            }
+            let budget =
+                remaining_inference_budget(inference_deadline, stages.clock(), "PPOCR recognizer")?;
+            let decoded = stages.recognize(frame, request.region, budget)?;
+            return Ok(canonical_roi_result(decoded, request.region));
         }
-        let text = blocks
-            .iter()
-            .map(|block| block.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let confidence = average_confidence(blocks.iter().filter_map(|block| block.confidence));
-        Ok(OcrInferenceResult {
-            ppocr_diagnostics: Vec::new(),
-            text,
-            blocks,
-            confidence,
-            backend: VisionBackendKind::FastDeployPpocr,
-            warnings: Vec::new(),
-            // Only a request that chose `Detect` reports its count; an implicit full-frame
-            // read keeps its result as before (Workflow #396 REC-1).
-            detection: matches!(request.blocks, OcrBlockMode::Detect { .. }).then_some(count),
-        })
+        ReadRoute::Detect { merge_gap_factor } => merge_gap_factor,
+    };
+    ran.detector = true;
+    let budget = remaining_inference_budget(inference_deadline, stages.clock(), "PPOCR detector")?;
+    let detected = stages.detect(frame, request.region, merge_gap_factor, budget)?;
+    let (detected, count) = keep_detected_boxes(detected, max_boxes);
+    let mut blocks = Vec::new();
+    for detected_box in &detected {
+        ran.recognizer = true;
+        let budget =
+            remaining_inference_budget(inference_deadline, stages.clock(), "PPOCR recognizer")?;
+        let decoded = stages.recognize(frame, detected_box.rect, budget)?;
+        if !decoded.text.is_empty() {
+            blocks.push(OcrTextBlock {
+                text: decoded.text,
+                rect: detected_box.rect,
+                confidence: decoded.confidence.or(Some(detected_box.confidence)),
+            });
+        }
+    }
+    let text = blocks
+        .iter()
+        .map(|block| block.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let confidence = average_confidence(blocks.iter().filter_map(|block| block.confidence));
+    Ok(OcrInferenceResult {
+        ppocr_diagnostics: Vec::new(),
+        text,
+        blocks,
+        confidence,
+        backend: VisionBackendKind::FastDeployPpocr,
+        warnings: Vec::new(),
+        // Only a request that chose `Detect` reports its count; an implicit full-frame
+        // read keeps its result as before (Workflow #396 REC-1).
+        detection: matches!(request.blocks, OcrBlockMode::Detect { .. }).then_some(count),
+    })
+}
+
+impl PpocrCtcModel {
+    /// Reads the request ([`read_request`] on this model's sessions); `ran` records the roles
+    /// whose sessions ran.
+    fn read_region(
+        &mut self,
+        request: OcrInferenceRequestView<'_>,
+        diagnostics: &mut PpocrDiagnostics,
+        ran: &mut InvocationRoles,
+    ) -> Result<OcrInferenceResult, ProviderInvokeError> {
+        let detector = &self.params.detector;
+        let (folder_gap_factor, max_boxes) = (detector.merge_gap_factor, detector.max_boxes);
+        read_request(
+            self,
+            folder_gap_factor,
+            max_boxes,
+            request,
+            diagnostics,
+            ran,
+        )
     }
 
-    /// Builds the detector session on the first full-frame request, from bytes whose hash
-    /// equals the detector hash verified when the model was loaded, on the model's route
+    /// Builds the detector session on the first full-frame request, before that request's
+    /// deadline is taken (Workflow #428 VIS-LOAD-1), from bytes whose hash equals the detector
+    /// hash verified when the model was loaded, on the model's route
     /// ([`ModelSessions::build_detector`]): a DirectML detector resolves its adapter again and
     /// must find it at the model's index (design §1.4), and one that cannot be built under
     /// `gpu_fallback` `cpu` moves the whole model to the CPU (design §2.3).
@@ -2632,12 +2727,15 @@ fn detect_text_regions(
     ))
 }
 
+/// What is left at `now` of a request's inference budget, which ends at `deadline`, both on the
+/// request's clock ([`RequestStages::clock`]); nothing left fails the stage that was to start.
 fn remaining_inference_budget(
-    deadline: Instant,
+    deadline: Duration,
+    now: Duration,
     stage: &str,
 ) -> Result<Duration, ProviderInvokeError> {
     deadline
-        .checked_duration_since(Instant::now())
+        .checked_sub(now)
         .filter(|remaining| !remaining.is_zero())
         .ok_or_else(|| {
             ProviderInvokeError::timeout(format!(
