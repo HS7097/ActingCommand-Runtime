@@ -560,6 +560,20 @@ struct SeenDispatch {
     /// SCH-M ED-2 (coordinator ruling 10-24 14:1x): the duration its intent record says it
     /// reserved, when that is not its task spec's declared one; recovery reserves it again.
     expected_duration_ms: Option<u64>,
+    /// UNSET-2 (register §1.296, ruling L2): its execution settles its run as interrupted
+    /// although an earlier start refused that run's settlement ([`late_settlement_refusal`]), so
+    /// it is not a failure of its pair: its failure count is its pair's as it was.
+    settled_late: bool,
+}
+
+/// UNSET-2 (register §1.296, ruling L1): the order in which a (task, instance) pair's dispatches
+/// stand for it: admission order, `(admitted_sequence, intent_sequence)`, as
+/// [`fold_settlements_by`] and the task snapshots order them. A pair runs one dispatch at a time,
+/// so this is also the order in which they complete, except for a late settlement (a dispatch a
+/// start refused to settle and a later start settled), which completes after the pair's later
+/// runs.
+fn admission_order(dispatch: &SeenDispatch) -> (Option<u64>, u64) {
+    (dispatch.admitted_sequence, dispatch.intent_sequence)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1263,8 +1277,14 @@ struct DispatchJournal {
 }
 
 impl DispatchJournal {
-    fn prune(&mut self) {
-        prune_journal(&mut self.seen, &mut self.order, &mut self.pruned);
+    /// [`prune_journal`]; `recorded_through` as there.
+    fn prune(&mut self, recorded_through: Option<u64>) {
+        prune_journal(
+            &mut self.seen,
+            &mut self.order,
+            &mut self.pruned,
+            recorded_through,
+        );
     }
 }
 
@@ -1274,10 +1294,19 @@ impl DispatchJournal {
 /// [`REMEDY_JOURNAL_MAX_RUNS`] admitted dispatches, which hold the latest completed one and the
 /// remedy journal's runs. The rest is read on demand. A pair that loses an admitted dispatch is
 /// noted in `pruned`.
+///
+/// UNSET-2 (register §1.296): with `recorded_through`, the position of the value records the
+/// journal loaded or wrote, a dispatch completed after it is kept too, because the decision
+/// memory's re-alignment applies the dispatch records after that position to the dispatches the
+/// journal holds (`refresh_dispatch_tail`). Only a late settlement completes outside the bound:
+/// one of a task of the remedy journal, whose value record names every admitted run the journal
+/// keeps, after more than [`REMEDY_JOURNAL_MAX_RUNS`] later runs of its pair. It is pruned at the
+/// first pruning after a value record past its completion.
 fn prune_journal(
     seen: &mut BTreeMap<String, SeenDispatch>,
     order: &mut BTreeMap<u64, String>,
     pruned: &mut BTreeSet<(String, String)>,
+    recorded_through: Option<u64>,
 ) {
     let mut pairs = BTreeMap::<(String, String), (Vec<u64>, u64)>::new();
     for dispatch in seen.values() {
@@ -1319,7 +1348,12 @@ fn prune_journal(
             let kept = dispatch.intent_sequence == latest_intent
                 || dispatch
                     .admitted_sequence
-                    .is_some_and(|sequence| oldest_kept.is_some_and(|oldest| sequence >= oldest));
+                    .is_some_and(|sequence| oldest_kept.is_some_and(|oldest| sequence >= oldest))
+                || recorded_through.is_some_and(|through| {
+                    dispatch
+                        .completed_sequence
+                        .is_some_and(|completed| completed > through)
+                });
             (!kept).then(|| {
                 (
                     decision_id.clone(),
@@ -1342,7 +1376,10 @@ fn prune_journal(
 /// Workflow #422 LN-4 (coordinator ruling 2, 10-26): the consecutive failed runs of the pair of
 /// `dispatch` through it as it completes: 0 after a success, otherwise one more than through the
 /// pair's previous completed dispatch in `seen` (the journal never prunes a pair's latest
-/// completed dispatch).
+/// completed dispatch). UNSET-2 (register §1.296, rulings L1 and L2): the previous one is the
+/// pair's latest other completed dispatch in admission order ([`admission_order`]), and a late
+/// settlement (`settled_late`) is not a failure of its pair: it keeps that dispatch's count, as
+/// if its run did not exist.
 fn failures_through(
     seen: &BTreeMap<String, SeenDispatch>,
     decision_id: &str,
@@ -1358,40 +1395,48 @@ fn failures_through(
     if !failed {
         return 0;
     }
-    seen.iter()
+    let previous = seen
+        .iter()
         .filter(|(other_id, other)| {
             other_id.as_str() != decision_id
                 && other.data.task_id == dispatch.data.task_id
                 && other.data.instance_id == dispatch.data.instance_id
                 && other.completed_sequence.is_some()
         })
-        .max_by_key(|(_, other)| other.completed_sequence)
+        .max_by_key(|(_, other)| admission_order(other))
         .and_then(|(_, other)| other.failures)
-        .unwrap_or(0)
-        .saturating_add(1)
+        .unwrap_or(0);
+    if dispatch.settled_late {
+        previous
+    } else {
+        previous.saturating_add(1)
+    }
 }
 
 /// Workflow #422 LN-4 (register §1.184 LN4-7): per (task, instance), the dispatches its value
 /// record names, in intent order: every open one, the latest completed one and, for a task of
-/// the remedy journal (`remedy_task`), every admitted one the journal keeps.
+/// the remedy journal (`remedy_task`), every admitted one the journal keeps. UNSET-2 (register
+/// §1.296, ruling L1): the latest completed one in admission order ([`admission_order`]), so a
+/// late settlement never stands for a pair that ran after it.
 fn journal_records_of(
     seen: &BTreeMap<String, SeenDispatch>,
     remedy_task: &dyn Fn(&str) -> bool,
 ) -> BTreeMap<(String, String), Vec<PolicyJournalDispatchRecord>> {
-    let mut latest_completed = BTreeMap::<(&str, &str), (u64, u64)>::new();
+    let mut latest_completed = BTreeMap::<(&str, &str), (Option<u64>, u64)>::new();
     for dispatch in seen.values() {
-        let Some(completed) = dispatch.completed_sequence else {
+        if dispatch.completed_sequence.is_none() {
             continue;
-        };
+        }
         let pair = (
             dispatch.data.task_id.as_str(),
             dispatch.data.instance_id.as_str(),
         );
+        let order = admission_order(dispatch);
         if latest_completed
             .get(&pair)
-            .is_none_or(|(latest, _)| *latest < completed)
+            .is_none_or(|latest| *latest < order)
         {
-            latest_completed.insert(pair, (completed, dispatch.intent_sequence));
+            latest_completed.insert(pair, order);
         }
     }
     let mut records = BTreeMap::<(String, String), Vec<PolicyJournalDispatchRecord>>::new();
@@ -1553,7 +1598,15 @@ fn load_dispatch_journal(
     let mut journal = DispatchJournal::default();
     let mut control = PolicyControlState::default();
     for event in &events {
-        apply_dispatch_event(store, &mut journal, &mut control, u64::MAX, false, event)?;
+        apply_dispatch_event(
+            store,
+            LateReads::Fatal(ledger),
+            &mut journal,
+            &mut control,
+            u64::MAX,
+            false,
+            event,
+        )?;
     }
     for (intent_sequence, count) in failures {
         let dispatch = journal
@@ -1827,9 +1880,17 @@ impl PolicyHost {
         let mut journal = DispatchJournal::default();
         let mut control = PolicyControlState::default();
         for event in &events {
-            apply_dispatch_event(&self.store, &mut journal, &mut control, 0, false, event)?;
+            apply_dispatch_event(
+                &self.store,
+                LateReads::Fatal(ledger),
+                &mut journal,
+                &mut control,
+                0,
+                false,
+                event,
+            )?;
         }
-        journal.prune();
+        journal.prune(None);
         Ok(control.value_records(
             &dispatch_clocks_of(&journal.seen)?,
             &self.journal_records(&journal.seen),
@@ -1856,8 +1917,8 @@ impl PolicyHost {
             )
         })?;
         let mut journal =
-            self.rebuilt_journal(ledger, through, HostLocation::RecoverPolicyDispatches)?;
-        journal.prune();
+            self.rebuilt_journal(ledger, through, HostLocation::RecoverPolicyDispatches, true)?;
+        journal.prune(None);
         Ok(journal_for_test(&journal.seen, &journal.pruned))
     }
 }
@@ -1956,6 +2017,7 @@ pub(crate) fn largest_journal_for_synthetic_dispatches_for_test(dispatches: u64)
             lifecycle: DispatchLifecycle::Completed,
             failures: None,
             expected_duration_ms: None,
+            settled_late: false,
         };
         let failures = failures_through(&seen, &decision_id, &dispatch);
         order.insert(intent_sequence, decision_id.clone());
@@ -1966,10 +2028,77 @@ pub(crate) fn largest_journal_for_synthetic_dispatches_for_test(dispatches: u64)
                 ..dispatch
             },
         );
-        prune_journal(&mut seen, &mut order, &mut pruned);
+        prune_journal(&mut seen, &mut order, &mut pruned, None);
         largest = largest.max(seen.len()).max(order.len());
     }
     largest
+}
+
+/// UNSET-2 (register §1.296, UNSET2-5), tests: one (task, instance) pair's late settlement, a
+/// dispatch admitted before [`REMEDY_JOURNAL_MAX_RUNS`] later ones of its pair (each admitted and
+/// completed in turn), so outside the journal's bound, and completed after all of them at
+/// `late_completed`; the journal pruned once with `recorded_through` ([`prune_journal`], which
+/// reads only the dispatches' lifecycles and sequences). Whether the journal keeps the late
+/// dispatch, and how many dispatches it keeps.
+#[cfg(test)]
+pub(crate) fn journal_keeps_a_late_completion_for_test(
+    late_completed: u64,
+    recorded_through: Option<u64>,
+) -> (bool, usize) {
+    let later = u64::try_from(REMEDY_JOURNAL_MAX_RUNS).expect("the journal's bound");
+    let dispatch = |index: u64, intent_sequence: u64, completed_sequence: u64| {
+        let decision_id = format!("decision-{index}");
+        let data = PolicyDispatchEventData {
+            decision_id: decision_id.clone(),
+            task_id: "task-synthetic".to_owned(),
+            instance_id: "instance-synthetic".to_owned(),
+            operation_id: "operation-synthetic".to_owned(),
+            procedure_binding_digest: format!("sha256:{}", "0".repeat(64)),
+            reason_chain_id: format!("chain-{index}"),
+            reasons: Vec::new(),
+            catalog_hash: format!("sha256:{}", "1".repeat(64)),
+            catalog_version: 1,
+            input_ledger_position: intent_sequence - 1,
+            fact_snapshot_id: format!("snapshot-{index}"),
+            approval_fact_ids: Vec::new(),
+            urgency_milli: 0,
+        };
+        (
+            decision_id,
+            SeenDispatch {
+                data,
+                admission: None,
+                execution: None,
+                completed_run: None,
+                intent_sequence,
+                admitted_sequence: Some(intent_sequence + 1),
+                rejected_sequence: None,
+                completed_sequence: Some(completed_sequence),
+                lifecycle: DispatchLifecycle::Completed,
+                failures: Some(0),
+                expected_duration_ms: None,
+                settled_late: index == 0,
+            },
+        )
+    };
+    let mut dispatches = vec![dispatch(0, 1, late_completed)];
+    for index in 1..=later {
+        let intent_sequence = index * 4 + 1;
+        dispatches.push(dispatch(index, intent_sequence, intent_sequence + 3));
+    }
+    assert!(
+        late_completed > later * 4 + 4,
+        "the late dispatch completes after the later ones"
+    );
+    let mut seen = BTreeMap::new();
+    let mut order = BTreeMap::new();
+    for (decision_id, dispatch) in dispatches {
+        order.insert(dispatch.intent_sequence, decision_id.clone());
+        seen.insert(decision_id, dispatch);
+    }
+    let mut pruned = BTreeSet::new();
+    prune_journal(&mut seen, &mut order, &mut pruned, recorded_through);
+    (seen.contains_key("decision-0"), seen.len())
 }
 
 /// SCH-M ED-2 (§3.4 D-15): the duration an admission's own projection gives an intent's pair:
@@ -2174,6 +2303,7 @@ impl PolicyHost {
             ledger,
             snapshot_ledger_position,
             HostLocation::ProjectPolicyDispatches,
+            false,
         )?;
         let limit = usize::from(page_request.limit());
         let mut dispatches = Vec::with_capacity(limit.saturating_add(1));
@@ -2226,12 +2356,16 @@ impl PolicyHost {
 
     /// Workflow #422 LN-4: the dispatch journal of every dispatch record through `through`, read
     /// on demand page by page (LN-5's SQLite reads), with the checks recovery runs; the decision
-    /// memory is not touched. A read that fails is fatal at `location`.
+    /// memory is not touched. A read that fails is fatal at `location`. UNSET-2 (register
+    /// §1.296): with `failure_counts`, each interrupted settlement is read for whether it is late
+    /// ([`LateReads::OnDemand`]), which its pair's failure count depends on; a decision page,
+    /// which projects lifecycles only, does not read it ([`LateReads::Skipped`]).
     fn rebuilt_journal(
         &self,
         ledger: &GlobalLedger,
         through: u64,
         location: HostLocation,
+        failure_counts: bool,
     ) -> RuntimeHostResult<DispatchJournal> {
         // #419 LN-WS-F (R1): a read the writer did not answer in time, or stopped at its budget,
         // fails only the request that reads the history (a decision page, a strategic report at
@@ -2242,11 +2376,17 @@ impl PolicyHost {
                     fatal(HostCode::PolicyRecoveryFailed, location)
                 })
             })?;
+        let reads = if failure_counts {
+            LateReads::OnDemand(ledger, location)
+        } else {
+            LateReads::Skipped
+        };
         let mut journal = DispatchJournal::default();
         let mut control = PolicyControlState::default();
         for event in &events {
             apply_dispatch_event(
                 &self.store,
+                reads,
                 &mut journal,
                 &mut control,
                 u64::MAX,
@@ -2299,6 +2439,7 @@ impl PolicyHost {
             ledger,
             ledger_position,
             HostLocation::ProjectPolicyTaskState,
+            true,
         )?;
         self.task_runtime_snapshots_of(&journal.seen, ledger_position, eligibility_as_of_unix_ms)
     }
@@ -2306,7 +2447,11 @@ impl PolicyHost {
     /// Workflow #422 LN-4: whether the resident journal holds, for each pair it holds pruned, a
     /// dispatch admitted and a dispatch completed at or before `ledger_position`. A pair's pruned
     /// dispatches are older than every admitted one it keeps, so its latest admitted and its
-    /// latest completed dispatch at that position are then resident.
+    /// latest completed dispatch at that position are then resident. UNSET-2 (register §1.296): a
+    /// late settlement the journal keeps past its bound until a value record follows it
+    /// ([`prune_journal`]) was admitted before the pruned ones, but it completed after the
+    /// earliest completion among the dispatches the bound keeps, so a position this answers
+    /// still has those dispatches' latest admitted and latest completed one resident.
     fn journal_answers_at(&self, ledger_position: u64) -> bool {
         if self.pruned_pairs.is_empty() {
             return true;
@@ -4210,10 +4355,12 @@ impl PolicyHost {
             withdraw_refused_immediate_retry(&self.store, &mut self.control, outcome_payload)?;
         }
         // Workflow #422 LN-4 (coordinator ruling 2): a pair's earlier rejected intent leaves.
+        // UNSET-2 (register §1.296): a dispatch completed after the value records stays.
         prune_journal(
             &mut self.seen_dispatches,
             &mut self.dispatch_order,
             &mut self.pruned_pairs,
+            self.values_loaded.then_some(self.values_through),
         );
         Ok(())
     }
@@ -4340,9 +4487,12 @@ impl PolicyHost {
         // Workflow #372 K5: the completions of an id a task continues count as that task's, so
         // a pair's entry is keyed by the task and holds its accounting group's latest completed
         // run, whose own identity names the id it ran as.
+        // UNSET-2 (register §1.296, ruling L1): the latest in admission order
+        // (`admission_order`), as `latest_completed_policy_runs`, which the dispatch's projection
+        // checks it against; a late settlement never stands for a pair that ran after it.
         let accounting = accounting_tasks(&active.compiled);
-        let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
-        for (sequence, dispatch) in self.seen_dispatches.values().filter_map(completion_of) {
+        let mut latest = BTreeMap::<(&str, &str), &SeenDispatch>::new();
+        for (_, dispatch) in self.seen_dispatches.values().filter_map(completion_of) {
             let task_id = accounting
                 .get(dispatch.data.task_id.as_str())
                 .copied()
@@ -4353,14 +4503,14 @@ impl PolicyHost {
             let key = (task_id, dispatch.data.instance_id.as_str());
             if latest
                 .get(&key)
-                .is_none_or(|(current, _)| *current < sequence)
+                .is_none_or(|current| admission_order(current) < admission_order(dispatch))
             {
-                latest.insert(key, (sequence, dispatch));
+                latest.insert(key, dispatch);
             }
         }
         let completed_runs = latest
             .into_iter()
-            .filter_map(|((task_id, instance_id), (_, dispatch))| {
+            .filter_map(|((task_id, instance_id), dispatch)| {
                 dispatch
                     .completed_run
                     .clone()
@@ -4423,33 +4573,38 @@ impl PolicyHost {
     /// Workflow #399: the latest completion is taken before its run identity is read. A pair
     /// whose latest completion has none (its catalog did not reference the task's outcome) has
     /// no authoritative outcome and is not counted, so an older run never stands for it.
+    ///
+    /// UNSET-2 (register §1.296, ruling L1): the pair's latest completed run in admission order
+    /// (`admission_order`), as `outcome_key_snapshot`; a late settlement, which completes after
+    /// the pair's later runs, never stands for a pair that ran after it.
     pub(crate) fn latest_completed_policy_runs(
         &self,
         limit: usize,
     ) -> RuntimeHostResult<Vec<CompletedPolicyRunIdentity>> {
-        let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
-        for (sequence, dispatch) in self.seen_dispatches.values().filter_map(completion_of) {
+        let mut latest = BTreeMap::<(&str, &str), &SeenDispatch>::new();
+        for (_, dispatch) in self.seen_dispatches.values().filter_map(completion_of) {
             let key = (
                 dispatch.data.task_id.as_str(),
                 dispatch.data.instance_id.as_str(),
             );
+            let order = admission_order(dispatch);
             match latest.get(&key) {
-                // A completion sequence is the completion event's own; equal means corruption.
-                Some((existing, _)) if *existing == sequence => {
+                // An admission order names the dispatch's own intent; equal means corruption.
+                Some(existing) if admission_order(existing) == order => {
                     return Err(fatal(
                         HostCode::PolicyOutcomeReplayOrderConflict,
                         HostLocation::RecoverPolicySchedulingOutcomes,
                     ));
                 }
-                Some((existing, _)) if *existing > sequence => {}
+                Some(existing) if admission_order(existing) > order => {}
                 _ => {
-                    latest.insert(key, (sequence, dispatch));
+                    latest.insert(key, dispatch);
                 }
             }
         }
         let runs = latest
             .into_values()
-            .filter_map(|(_, dispatch)| dispatch.completed_run.as_ref())
+            .filter_map(|dispatch| dispatch.completed_run.as_ref())
             .collect::<Vec<_>>();
         if runs.len() > limit {
             return Err(fatal(
@@ -4712,10 +4867,13 @@ impl PolicyHost {
         dispatch.lifecycle = DispatchLifecycle::Completed;
         dispatch.failures = Some(failures);
         // Workflow #422 LN-4 (coordinator ruling 2): the journal keeps only what it bounds.
+        // UNSET-2 (register §1.296): and, once the value records are loaded or seeded, every
+        // dispatch completed after their position, which the next re-alignment reads.
         prune_journal(
             &mut self.seen_dispatches,
             &mut self.dispatch_order,
             &mut self.pruned_pairs,
+            self.values_loaded.then_some(self.values_through),
         );
         Ok(())
     }
@@ -4880,11 +5038,15 @@ impl PolicyHost {
     }
 
     /// Commits the record `data` of a dispatch's run; `budget_elapsed_ms` is the budget time
-    /// the record carries (#385 P-k, register P6), which its settlement compared.
+    /// the record carries (#385 P-k, register P6), which its settlement compared. UNSET-2
+    /// (register §1.296): `late` for an interrupted settlement of a run an earlier start refused
+    /// to settle ([`late_settlement_refusal`]), which leaves the decision memory as it was and
+    /// keeps its pair's failure count (`settled_late`).
     pub(crate) fn commit_execution(
         &mut self,
         data: &PolicyExecutionEventData,
         budget_elapsed_ms: Option<u64>,
+        late: bool,
     ) -> RuntimeHostResult<()> {
         let dispatch = self
             .seen_dispatches
@@ -4927,8 +5089,10 @@ impl PolicyHost {
             admission,
             data,
             budget_elapsed_ms,
+            late,
         )?;
         dispatch.execution = Some(data.clone());
+        dispatch.settled_late = late;
         Ok(())
     }
 
@@ -5056,6 +5220,7 @@ impl PolicyHost {
         for event in &events {
             apply_dispatch_event(
                 &self.store,
+                LateReads::Fatal(ledger),
                 &mut journal,
                 &mut control,
                 control_after,
@@ -5063,7 +5228,7 @@ impl PolicyHost {
                 event,
             )?;
         }
-        journal.prune();
+        journal.prune(None);
         self.pinned_dispatches = self.pinned_of(&journal.seen)?;
         self.seen_dispatches = journal.seen;
         self.dispatch_order = journal.order;
@@ -5078,9 +5243,10 @@ impl PolicyHost {
     /// read, each applied to the journal unless it already is, and each admission and execution
     /// among them to the decision memory. Every dispatch change writes its pair's record under
     /// the guard it was applied under, so a dispatch with an event after the records' position
-    /// is open or its pair's latest completed one, which the journal keeps. Before the seeding
-    /// wrote the records, the journal and the decision memory are rebuilt from every dispatch
-    /// event.
+    /// is open or its pair's latest completed one, which the journal keeps; UNSET-2 (register
+    /// §1.296): or a late settlement, which the journal keeps until a value record follows its
+    /// completion ([`prune_journal`]). Before the seeding wrote the records, the journal and the
+    /// decision memory are rebuilt from every dispatch event.
     fn refresh_dispatch_tail(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
         if !self.values_loaded {
             return self.recover_dispatches(ledger, PolicyControlState::default(), 0);
@@ -5115,6 +5281,7 @@ impl PolicyHost {
         for event in &events {
             apply_dispatch_event(
                 &self.store,
+                LateReads::Fatal(ledger),
                 &mut journal,
                 &mut control,
                 self.values_through,
@@ -5122,7 +5289,7 @@ impl PolicyHost {
                 event,
             )?;
         }
-        journal.prune();
+        journal.prune(Some(self.values_through));
         self.pinned_dispatches = self.pinned_of(&journal.seen)?;
         self.seen_dispatches = journal.seen;
         self.dispatch_order = journal.order;
@@ -5228,6 +5395,7 @@ fn seen_intent_of(
             lifecycle: DispatchLifecycle::Intent,
             failures: None,
             expected_duration_ms: payload.expected_duration_ms(),
+            settled_late: false,
         },
     ))
 }
@@ -5252,11 +5420,119 @@ fn withdraw_refused_immediate_retry(
     Ok(())
 }
 
+/// UNSET-2 (register §1.296): whether `outcome` records a run settled as interrupted
+/// (`policy_settlement_interrupted`).
+pub(crate) fn settled_as_interrupted(outcome: &PolicyExecutionOutcome) -> bool {
+    matches!(
+        outcome,
+        PolicyExecutionOutcome::Failed { failure }
+            if failure.outcome.is(SharedCode::PolicySettlementInterrupted)
+    )
+}
+
+/// UNSET-2 (register §1.296): when `execution` settles its run as interrupted, the record of an
+/// earlier start that refused that run's settlement: the run's (`task_id`, `run_id`) first
+/// `policy_settlement_dispatch_unsettled` record through `through`, read by the run's link
+/// index, its `runtime.failed` records only. Such a settlement is late: in ledger order it comes
+/// after the later runs of its (task, instance) pair, if there are any, so it leaves the decision
+/// memory as it was (`PolicyControlState::commit_paced_execution`) and keeps its pair's failure
+/// count (`failures_through`). The start that settles the run and every replay of its execution
+/// record ask the same records, so they agree.
+pub(crate) fn late_settlement_refusal(
+    ledger: &GlobalLedger,
+    execution: &PolicyExecutionEventData,
+    task_id: Option<&TaskId>,
+    run_id: Option<&RunId>,
+    through: u64,
+) -> actingcommand_ledger::GlobalLedgerResult<Option<PersistedEvent>> {
+    let (Some(task_id), Some(run_id)) = (task_id, run_id) else {
+        return Ok(None);
+    };
+    if !settled_as_interrupted(&execution.outcome) {
+        return Ok(None);
+    }
+    Ok(crate::recovery_read::read_pages(
+        ledger,
+        &EventQuery {
+            to_sequence: Some(through),
+            event_type: Some(EventType::RuntimeFailed),
+            task_id: Some(*task_id),
+            run_id: Some(*run_id),
+            ..EventQuery::default()
+        },
+        through,
+        RECOVERY_PAGE_EVENTS,
+    )?
+    .into_iter()
+    .find(|event| {
+        event.event_type() == EventType::RuntimeFailed
+            && event.links().task_id() == Some(task_id)
+            && event.links().run_id() == Some(run_id)
+            && matches!(
+                event.payload(),
+                EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(record))
+                    if record.outcome().is(HostCode::PolicySettlementDispatchUnsettled)
+            )
+    }))
+}
+
+/// UNSET-2 (register §1.296): how a replay of dispatch records learns whether an interrupted
+/// settlement is late ([`late_settlement_refusal`]), which the decision memory and its pair's
+/// failure count depend on.
+#[derive(Clone, Copy)]
+enum LateReads<'a> {
+    /// Read from the ledger; a failed read is fatal (a start, the decision memory's
+    /// re-alignment, a test's replay).
+    Fatal(&'a GlobalLedger),
+    /// Read from the ledger on demand, for a task snapshot at an earlier position: a read the
+    /// writer did not answer in time, or stopped at its budget, fails only that request at the
+    /// location, as the history read itself does; any other failure is fatal there.
+    OnDemand(&'a GlobalLedger, HostLocation),
+    /// Not read: a decision page projects each dispatch's lifecycle, which a late settlement does
+    /// not change, and never uses the failure counts or the decision memory of its journal.
+    Skipped,
+}
+
+impl LateReads<'_> {
+    /// Whether the execution record `event`, whose data is `data`, is a late settlement.
+    fn settled_late(
+        self,
+        data: &PolicyExecutionEventData,
+        event: &PersistedEvent,
+    ) -> RuntimeHostResult<bool> {
+        let (ledger, on_demand) = match self {
+            Self::Fatal(ledger) => (ledger, None),
+            Self::OnDemand(ledger, location) => (ledger, Some(location)),
+            Self::Skipped => return Ok(false),
+        };
+        late_settlement_refusal(
+            ledger,
+            data,
+            event.links().task_id(),
+            event.links().run_id(),
+            event.sequence(),
+        )
+        .map(|refusal| refusal.is_some())
+        .map_err(|error| match on_demand {
+            Some(location) => crate::host::tolerant_ledger_read_error(&error, location, || {
+                fatal(HostCode::PolicyRecoveryFailed, location)
+            }),
+            None => fatal(
+                HostCode::PolicyRecoveryFailed,
+                ContractLocation::RecoverPolicyExecution,
+            ),
+        })
+    }
+}
+
 /// One dispatch event applied to `journal` with the checks recovery runs (R1 to R11), and
 /// its admission or execution to `control` when it lies after `control_after`. With
-/// `applied_skips` an event the journal already holds is not applied to it again.
+/// `applied_skips` an event the journal already holds is not applied to it again. UNSET-2
+/// (register §1.296): whether an interrupted settlement is late is read as `reads` says, once
+/// where its record is applied to the journal or to `control` ([`late_settlement_refusal`]).
 fn apply_dispatch_event(
     store: &CatalogStore,
+    reads: LateReads<'_>,
     journal: &mut DispatchJournal,
     control: &mut PolicyControlState,
     control_after: u64,
@@ -5430,6 +5706,14 @@ fn apply_dispatch_event(
                     ContractLocation::RecoverPolicyExecution,
                 ));
             }
+            // UNSET-2 (register §1.296): a late interrupted settlement replays as it was
+            // committed: it leaves the decision memory as it was and keeps its pair's failure
+            // count. A record the journal holds already keeps what was read when it was applied.
+            let late = if counts || !applied {
+                reads.settled_late(&data, event)?
+            } else {
+                dispatch.settled_late
+            };
             if counts {
                 let admission = dispatch.admission.as_ref().ok_or_else(|| {
                     fatal(
@@ -5451,10 +5735,12 @@ fn apply_dispatch_event(
                     admission,
                     &data,
                     payload.budget_elapsed_ms(),
+                    late,
                 )?;
             }
             if !applied {
                 dispatch.execution = Some(data);
+                dispatch.settled_late = late;
             }
         }
         // The query reads the dispatch and execution types only; the value records of
@@ -6197,11 +6483,19 @@ fn fold_settlements_by<'a>(
                     HostLocation::ProjectPolicySettlement,
                 )
             })?,
-            (false, None) => completed
-                .get(&key)
-                .and_then(|run| run.failures)
-                .unwrap_or(0)
-                .saturating_add(1),
+            (false, None) => {
+                let previous = completed
+                    .get(&key)
+                    .and_then(|run| run.failures)
+                    .unwrap_or(0);
+                // UNSET-2 (register §1.296, ruling L2): a late settlement is not a failure of
+                // its pair (`failures_through`).
+                if dispatch.settled_late {
+                    previous
+                } else {
+                    previous.saturating_add(1)
+                }
+            }
         };
         settlements.insert(
             key.clone(),

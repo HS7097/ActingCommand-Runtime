@@ -3337,9 +3337,9 @@ parallel slices.
 | LN4-3 | L6 `runtime.lifecycle_observed` phase `tagged_state_enabled` | first writer of a registered phase | LN-4 | LN-4 | written once by a start without the marker, after the value records it seeds; its report `ledger_tagged_state_seeded` `{count}` is the keys seeded. A root's first start (no `runtime.started` or `runtime.takeover` before it, the `lifecycle` row `last_start`) has no earlier epoch to seed and writes no marker; the root's next start seeds what that epoch recorded |
 | LN4-4 | `GlobalLedger::index_records(role, prefixes)` | Runtime-internal interface | LN-4 | — | one writer command: the rows of `state`, `open` or `lifecycle` with a key prefix, a point read of each row's record, the §11.5 step 3 checks; a store that keeps no index answers `ledger_selection_query_unsupported`; reads count as `Query` in the writer's peak |
 | LN4-5 | the agent dispatcher prunes an ended session | Runtime-internal behaviour | LN-4 | — | §11.2 "sessions are not kept": at a session's end its request records leave memory; a completed session's wake, trigger and session leave too, an escalated one keeps its status and wake for the person; a resent response of an ended session is answered from the ledger; the wake reconciliation reads only the previous epoch's planning signals and wakes |
-| LN4-6 | `refresh_dispatches` | Runtime-internal behaviour | LN-4 | — | rebuilds the decision memory from the latest value records and reads only the dispatch records after the records' position (each dispatch change writes its pair's record under its guard, so a dispatch with a later record is open or its pair's latest completed one, which the journal keeps); before the seeding wrote the records it replays as before |
-| LN4-7 | L7 `dispatches[]?` of `{intent_sequence, admitted_sequence?, completed_sequence?, failures?}` (≤ 128 entries, strictly increasing intents; `admitted` > `intent`; `completed` > `admitted` only with `failures`) | new optional member of a registered type (coordinator ruling 3, 10-26) | LN-4 | LN-4 | the smallest member that lets a start find a pair's latest completed dispatch by indexed reads: the sequences of the dispatches the journal keeps of the pair, which the start point-reads (the execution is read among the executions between the admission and the completion). It names the open dispatches, the latest completed one and, for a task of the remedy journal (one that declares a remedy or provides a capability), its latest runs (at most 64). `failures` is the pair's consecutive failed runs through that dispatch, the per-pair consecutive-failure count of ruling 2, kept at each completion. Empty while the pair has none; absent in earlier records (no old-version compatibility, Alice 10-11) |
-| LN4-8 | the policy host's dispatch journal | Runtime-internal behaviour (coordinator rulings 1 and 2, 10-26) | LN-4 | — | bounded, never by the event count: per (task, instance) the open dispatches, the latest intent and the latest 64 admitted dispatches (the latest completed one and the remedy journal's runs). A pair's settlement reads its latest executed run and the count its completion keeps, no fold over all runs. Decision pages, the task runtime projection at a position the journal does not answer, and a replayed admission of a decision it no longer holds read the dispatch history on demand, page by page (LN-5's SQLite reads under the read budget) |
+| LN4-6 | `refresh_dispatches` | Runtime-internal behaviour | LN-4 | — | rebuilds the decision memory from the latest value records and reads only the dispatch records after the records' position (each dispatch change writes its pair's record under its guard, so a dispatch with a later record is open or its pair's latest completed one, which the journal keeps; UNSET-2, §1.296: or a late settlement, which the journal keeps until a value record follows its completion); before the seeding wrote the records it replays as before |
+| LN4-7 | L7 `dispatches[]?` of `{intent_sequence, admitted_sequence?, completed_sequence?, failures?}` (≤ 128 entries, strictly increasing intents; `admitted` > `intent`; `completed` > `admitted` only with `failures`) | new optional member of a registered type (coordinator ruling 3, 10-26) | LN-4 | LN-4 | the smallest member that lets a start find a pair's latest completed dispatch by indexed reads: the sequences of the dispatches the journal keeps of the pair, which the start point-reads (the execution is read among the executions between the admission and the completion). It names the open dispatches, the latest completed one (the latest in admission order, UNSET-2, §1.296, so a late settlement never stands for a pair that ran after it) and, for a task of the remedy journal (one that declares a remedy or provides a capability), its latest runs (at most 64). `failures` is the pair's consecutive failed runs through that dispatch, the per-pair consecutive-failure count of ruling 2, kept at each completion; for a late settlement (UNSET-2, §1.296) it is the count of the pair's latest other completed dispatch in admission order, the late run not counted: when the pair has not completed a run admitted after it, the pair's count before it (0 when the pair had no failure, though the late dispatch itself failed); when it has, the count of the latest such run. Empty while the pair has none; absent in earlier records (no old-version compatibility, Alice 10-11) |
+| LN4-8 | the policy host's dispatch journal | Runtime-internal behaviour (coordinator rulings 1 and 2, 10-26) | LN-4 | — | bounded, never by the event count: per (task, instance) the open dispatches, the latest intent and the latest 64 admitted dispatches (the latest completed one, in admission order, and the remedy journal's runs); UNSET-2 (§1.296): once the value records are loaded or seeded, also a dispatch completed after their position, until a value record follows it. A pair's settlement reads its latest executed run and the count its completion keeps, no fold over all runs. Decision pages, the task runtime projection at a position the journal does not answer, and a replayed admission of a decision it no longer holds read the dispatch history on demand, page by page (LN-5's SQLite reads under the read budget) |
 
 Deviations, as the coordinator ruled them (10-26 ruling 4): a session escalated to a person keeps
 its status and its wake until it completes (LN4-5), and the wake reconciliation looks back one
@@ -7891,7 +7891,8 @@ free number on the base `2ea50cf5`; each later slice of #434 adds its rows under
 GPU-1's slices do under §1.286.
 
 **LAB-0 itself.** Contracts only: the two-entry contract, the operation table v1 (168 operations:
-53 core, 28 debugging, 40 authoring, 47 rescue; 16 of them reserved), the planned interface rows
+53 core, 28 debugging, 40 authoring, 47 rescue; 16 of them reserved; 170 since LAB-2 added the two
+debugging rows `user-config` and `user-config set`, L2-10), the planned interface rows
 and this section. No code, no test, no gate row, no CI file, no key, no code of the outcome
 catalog, and no live revision raised.
 
@@ -8571,6 +8572,161 @@ line changes.
 a received `OutcomeEnvelope`) and returns `Result<Outcome, String>` rather than a typed builder and
 a registered failure; `apps/actinglab` is on the outcome guard's exemption list. Fix 1 leaves it
 as it is (the coordinator's work order).
+
+#### Slice LAB-5A (0.12.52): the operation table completed: every offered row declares its parameters
+
+Coordinator work order `rd-1108/arch-013/brief-lab5a.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` and its proposal `scratch-lab5a-step0/lab5a-proposed-params.json`
+(both on main `76006500`, the base of this slice); the first of LAB-5's slices. The contract is
+[lab-two-entries.md](lab-two-entries.md) §9.1 to §9.3; the table is
+[lab-operations.json](lab-operations.json). The rule of the slice: no command line changes what it
+accepts or refuses, and no command what it does; only `serve --stdio` changes.
+
+**The coordinator's rulings** (2026-11-10, board #434, in the work order): every row's `params`
+written and `params_more` removed, every parameter it declares kept; a millisecond count stays
+`integer`, a comma list given in one flag and JSON given as text are `string`, a repeated flag is
+`repeat: true`, actinglab's global options a command reads are declared on its row; what the schema
+cannot state goes into the parameter's `note` and the code keeps enforcing it; the types
+`decimal`, `unsigned` and `run_ref`; the members `required_in` and `disruptive`; for the survey's
+differences 1 to 8 and 10 the table follows the code, and difference 9 (`pause`'s default drain
+300 s) stays; `recover`, `debug-package` and `export-evidence` keep ignoring unknown flags on the
+command line through one named list, a debt; `serve --stdio` refuses a parameter its row does not
+declare, for every row; `standard-pack check|compose`'s `--root` and `resource restore`'s and
+`regression`'s `--state-root` are declared as they are, and §9.3's sentence says what they name;
+`record draft`'s `writes` is what its code does; and §11 holds: LAB-5 adds the new MCP server, and
+`actingctl mcp-serve` with its `--via` child stays as it is until LAB-7.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5A-1 | the `params` of 71 rows (the 70 rows actinglab offers that had `params_more`, and `record draft`, which LAB-5 offers): 455 parameters, 433 of them new; their `params_more` removed | contract table | LAB-5A | — | from the survey's proposal, read against the code at the base; where they differ the code won (deviation (c)). Every parameter a row declared is kept, with its note |
+| L5A-2 | types `unsigned`, `decimal`, `run_ref` (`table::ParamType::{Unsigned, Decimal, RunRef}`) | contract vocabulary, behaviour | LAB-5A | — | the words read an `unsigned` as a `u64` (a JSON number of that range in `serve`), a `decimal` as a finite number kept as written (`serve`: a JSON number or that text), a `run_ref` as text. `unsigned`: the six `seed`s (`lab_draw::seed_flag` reads any `u64`, so a seed above the signed range is taken where the command takes it), and the values the commands read as any `u64`: `do --projection-sequence`, `watch --from-sequence|--to-sequence|--after`, `signatures match --input-through|--catalog-through`, `signatures retire --registration-sequence`, `unpin --pin-sequence`, `resource restore --through-sequence`, `scheduling timeline --unix-ms|--monotonic-ms`, `runs --since-unix-ms|--until-unix-ms`. `decimal`: `record start --template-threshold`, `record amend|step --threshold`. `run_ref`: `run show`'s and `run evidence`'s `id` |
+| L5A-3 | members `required_in` (a parameter's, optional) and `disruptive` (a row's, optional, absent false) | contract table, reader | LAB-5A | — | `required_in: ["mcp"]` on `resume`'s `expect` and `pause`'s `reason`, read by nothing yet; `disruptive: true` on `emu stop`, `emu restart`, `app stop`, `app restart`, `drill` and `devices unbind`; MCP's `destructiveHint` is `irreversible` or `disruptive` (§5, §9.1). The schema string stays `actingcommand.lab-operations.v1`: members were added, none changed its meaning |
+| L5A-4 | the survey's differences | contract table | LAB-5A | — | 1: `monitor set` and `run show` lose their dead `params_more`; 2: `run_ref`; 3: `events`' and `evidence read`'s `run` is a `string` noted as a run id; 4: `devices bind|unbind`'s instance noted as an alias only; 5: `devices bind`'s `handle` and `agent claude-hook`'s `action` declared positionals; 6: `runs --instance <x>` stays accepted, noted on the positional; 10: the one-of rules of `facts` and `targets set` in notes. Fix 1: `facts`' instance note said "absent: every instance", which the code refuses (none of instance, `program` and `config` is `<instance>` `required`, two of them `--program` `conflicting`); the fix corrects it (the slice had changed only `prefix`'s note, though this row said corrected) and writes "exactly one of instance, program and config" on the three; `targets set`'s `file` and `targets` say "exactly one of file and targets" (none is `<file>` `required`, both `--targets` `conflicting`; `targets` is a JSON list). 7 and 8 are left (deviation (a)) |
+| L5A-5 | actinglab's words and router (`cli_module::words`, `engine`, `core_ops`) | behaviour | LAB-5A | — | no offered row has `params_more`, so a row passes on only what it declares. `engine::COMMANDS` names the command of every row actinglab's own command serves (before, `params_more` named it) and how its command line reaches it: `AsWritten` for the 55 rows that took their command's further flags (their declared flags go on as written, with actinglab's global options `words::GLOBAL_OPTIONS`; their command reads and checks them, as it did), `Declared` for `app launch|restart|stop` and the two `user-config` rows. `words::LENIENT_ON_COMMAND_LINE` (`recover`, `debug-package`, `export-evidence`): on the command line their further flags and words still go on (the debt below). `words::KEPT_FLAGS` (fix 1; `words::POSITIONAL_FLAGS` before it, `runs --instance` only): the flags a row's command line still hands on as written, as its further flags went (the value, or `true` when none follows; a list when given twice): a positional as its flag (`runs --instance`, `run show --id`, `run evidence --id`, `monitor set --instance`, `op status --op`, `release verify|stage --dir`) and two flags of the source command no row declares (`op status --operation`, `devices bind --root`), which the module writes as further flags, as before. `words::COMPLETED_ROWS` (fix 1): on the 15 core and rescue rows this slice completed, an option the slice declared takes no word beginning with `--` as its value (`value_missing`), as the further flag took none; the options they declared before (`runs --since`, `run evidence --detail`, `monitor set --interval|--expect|--recover`) take the next word, as they did. A global option is recognised with `_` or `-` in its words (fix 1), as a further flag was written with `-`. `serve --stdio` (`words::from_json`) refuses every member a row does not declare. `core_ops` hands `runs`', `run evidence`'s and `gap`'s declared options to `lab-ops` under the flags they went as before (`Argv::options_of`) and `devices bind`'s `handle` as the word after the instance, then (fix 1) its kept `--root` after the module's own (`Argv::further`); the engine writes a flag by its value (`true` the flag alone, `false` nothing, a list item by item, another value the flag and the value) |
+| L5A-6 | the rescue module's rows (`crates/lab-rescue`, `rescue::further_flags`, `rescue::agent_words`) | behaviour | LAB-5A | — | `op status`, `release verify`, `release stage` and the six `agent` rows declare what they took as further flags; the module writes each under its flag as before, and (fix 1) `op status`'s kept `--operation`, which no row declares, too; `agent claude-hook`'s action is its positional `action`, the word after `claude-hook` as before; a switch given `false`, which only `serve` can give, is not written (before, `--name false`, which the installer refused) |
+| L5A-7 | §9.3: `--root` and `--state-root` | contract text, table | LAB-5A | — | `standard-pack check|compose --root` (a game's package root) and `resource restore|regression --state-root` (a Runtime state root the offline command reads), as their consumers pass them; "There is no `--root` and no `--state-root`" now says that no operation takes the installation's root or state root under those names |
+| L5A-8 | `record draft` `writes: false` | contract table | LAB-5A | — | its only code, MCP's `ac_binding_draft` (`apps/actingctl/src/mcp/lab.rs`), changes nothing: it reads the record stop answer (inline, or an export of MCP's checked by its sha256), runs `package preflight` and actingd's `check-config`, which only read, and exports check-config's report into MCP's export directory as a read exports its answer; MCP marks it `readOnlyHint`. Its parameters are that tool's: `record_stop` and `record_stop_export` (`json`), one of the two |
+| L5A-9 | contract text | contract | LAB-5A | — | §9.1 (members, types, the typing rules), §9.2 (the new checks), §9.3 (L5A-7; MCP's actinglab child keeps the envelope until LAB-7, not LAB-5), §5 and §9.1 (`destructiveHint`), §11's mapping row (MCP's counter with LAB-7), open point 9 (170 operations since LAB-2; LAB-0's text above says so too) and open point 10's last sentence |
+
+**Rows left with `params_more`** (15): `convert`, `clean`, `new`, `prepare`, the eight `config file …`
+rows, `instance add`, `instance remove` and `pack remove`. They are rescue rows whose source command
+is not built (LAB-3 (c)); no program offers them, and their parameters are written when the slice
+that builds the source opens them.
+
+**The debt.** `words::LENIENT_ON_COMMAND_LINE`: on the command line `recover`, `debug-package` and
+`export-evidence` still hand every further flag and word to their command, which ignores what it
+does not read, as before; `serve --stdio` refuses them. A later slice makes the three commands
+strict and removes the list.
+
+**Tests.** New: apps row "#434 LAB-5A": `gate_434_lab5a::lab5a_rows_take_what_they_took`
+(actinglab's binary tests; a state root in a temporary folder on which no Runtime runs; no device,
+no clock, no sleep) and `rescue::gate_434_lab5a::rescue_rows_hand_their_declared_parameters_on`
+(`crates/lab-rescue`, logic only). Changed: `lab_ops_table_complete` (LAB-1) checks §9.2's new
+items. Adapted, where this slice changes what they pin: `gate_434_lab2::cli_short_words_parse`
+(`devices bind`'s further word is its `handle`; `regression`'s line gives the `--state-root` the
+row now requires, which its command required before) and the comments of
+`gate_434_lab2b::status_and_run_show_take_their_core_rows` (`run show` no longer takes further
+flags; the same refusal, now by the words). Fix 1 adds to the two new tests: each line it keeps
+(`run show --id`, `run evidence --id`, with `lab-ops` reading the id, `monitor set --instance`,
+`devices bind … --root` with `devices` reading it, `op status --op|--operation` with the module
+writing `--operation`, `release verify|stage --dir`, `watch --run_root`), `runs --instance <x>`
+followed by the positional refused as repeated (the slice had pinned the reverse order as
+repeated, which the base handed on as a list), the refusals of `COMPLETED_ROWS` (`runs
+--task-prefix --cursor c`, `gap --capability --why y`, `release verify --facts --expect-tag <dir>`,
+`agent add --name --client …`) and `runs --since --cursor` refused for its type as before, the two
+lines accepted now in their new order (`op status --check-rollback <op>`, `release stage
+--local-build <dir>`), a missing required parameter refused by the words on a module row (`gap`,
+`actingctl_usage_invalid`) and on an engine row (`unpin`, `validation_failed`), and `serve
+--stdio` refusing `devices bind`'s `root`. It corrects a comment of `gate_434_lab2` (the child's
+envelope until LAB-7).
+
+**Interface.** None raised: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
+`runtime-outcomes` 1; the table's schema string stays (L5A-3). No code, key or location is added.
+
+**Where LAB-5A differs from its work order's letter.**
+
+- (a) Differences 7 (`app launch|restart|stop`'s further flags, `session app`'s `--record`) and 8
+  (`codes`' `--prefix`, `--owner`, `--limit`, `--cursor`) are left: their rows never took further
+  flags, so declaring those would make `actinglab app launch <inst> --record` and `actinglab codes
+  --prefix …` accepted where they are refused today, which the rule of the slice forbids. The rows
+  stay as they are; a slice that may change those command lines (C) adds them.
+- (b) "No offered row carries `params_more`" is checked in two places: `lab-ops` cannot see which
+  rescue rows the rescue module serves, so `lab_ops_table_complete` checks that only a planned
+  rescue row carries it, and actinglab's `gate_434_lab5a` that no row actinglab offers does.
+- (c) Departures from the survey's proposal, the code winning: `unsigned` beyond the seeds where a
+  command reads any `u64` (L5A-2); `decimal` for the three thresholds; `run_ref`; `record draft`'s
+  parameters are its code's (`record_stop_export`, not a file); `signatures match`'s
+  `--input-through` and `--catalog-through` have no default (the code's 0 is refused); notes for
+  the names of L5A-7 and the differences of L5A-4; the notes of `observe`'s `capture` and `op
+  status`'s `op`, which the proposal had dropped, are kept.
+- (d) The command line of the 55 engine rows hands their flags on as written instead of typing
+  them: their own command reads and checks them again, as it did, so a value, a repeated flag or a
+  switch followed by a word reaches it exactly as before (`regression --package` given twice, which
+  the command takes the last of, stays accepted). The core and rescue rows type their new
+  parameters, as they type the others; so, on the command line, a switch no longer takes the word
+  after it as its value: `op status --check-rollback <op>` and `release stage --local-build <dir>`,
+  which the installer refused (the word read as the switch's value was unknown to it), now read the
+  switch and the positional. These two lines change from refused to accepted. Fix 1 (the review
+  of PR #1569 found lines the slice had made refused while this text said no other line changed):
+  every line the further flags let through before is accepted again and goes on as before
+  (`words::KEPT_FLAGS`, L5A-5): `op status --operation <op>` and `op status --op <op>`, `release
+  verify --dir <dir>`, `release stage --dir <dir> …`, `run show --id <id>`, `run evidence --id
+  <id> …`, `monitor set --instance <x> …`, and `actinglab devices bind <alias> <handle> --root
+  <r>`, which the command takes, as before, only when the program runs outside an installed root
+  (with `ACTINGCOMMAND_RUNTIME_STATE_ROOT` naming the state root; inside one the module's own
+  `--root` makes it `repeated`; §9.3 says so); and, found by the fix, an engine row's global
+  option written with `_` (`watch --run_root <r>`), which the further flag wrote with `-`. A value
+  beginning with `--` after an option the slice declared on one of the 15 core and rescue rows it
+  completed (`runs --task-prefix --cursor c`, which the slice read with `c` as the instance) is
+  refused again (`value_missing`, `words::COMPLETED_ROWS`); an option those rows declared before
+  takes the next word, as it did. What still differs from the base on the command line, every
+  shape found: (1) the two lines above, accepted now; (2) a value beginning with `--` after such
+  an option is refused also where the base's command took the next lone flag as that value
+  (`runs --task-prefix --cursor`, `gap --why "--…"`, whose text the base handed on with `_`
+  written `-`); (3) on an engine row, an undeclared flag after a global option given no value
+  (`watch --run-root --x`, which actinglab's parser read as that option's value) is refused. Every
+  other difference is the text of a refusal (e).
+- (e) Refusals that stay refusals with another text. A missing required parameter is refused by
+  the words before the command: on a row of the CLI module or the rescue module (`gap`, `devices
+  bind`, the `agent` rows) with `actingctl_usage_invalid` (`required`, the parameter); on a row
+  actinglab's own command serves (`unpin`, `regression`, `signatures match`, `export-evidence`)
+  with actinglab's `validation_failed` and the details `{argument, argument_problem: required}`
+  (`cli_module::refused_words`), the code the command refused it with before. A flag or word a
+  strict row does not declare is refused by the words naming it, with the same two codes
+  (`unknown`). `regression` with a global option and a missing or undeclared parameter changes from
+  `offline_device_scope_forbidden` to `validation_failed`; so do (found by fix 1) `signatures
+  register|match|retire` and `unpin` with `--dry-run` and a missing required parameter or an
+  undeclared flag, and `export-evidence` with `--dry-run` and no `--out`, from
+  `dry_run_unsupported`. A core row's whole number is handed on re-printed (`runs --limit 05` as
+  `5`, `+5` as `5`): the same value; a value of the wrong type or outside an `enum` is refused by
+  the words with the argument the command named (`--limit abc` `wrong_type`); `agent add --restore
+  x` names `--restore` where the command named `x`; `devices bind <alias>` names `<handle>` where
+  the command named `handle`; `run show` and `monitor set` refuse a further flag before the state
+  root is located.
+- (f) Other texts still say that MCP's actinglab child changes "until LAB-5": the READMEs, the
+  descriptions of `lab_operation_completed` and `lab_operation_check_failed` in the outcome
+  catalog, [resource-verify.md](resource-verify.md), actinglab's golden notes and code comments.
+  This slice corrects the contract's sentences (L5A-9), and fix 1 those in two files the slice
+  edits (`cli_module.rs`'s description and a comment of `gate_434_lab2`: until LAB-7); the others
+  follow the ruling and are corrected by the slice that next changes them.
+
+**What LAB-5A changes live.** On the command line: the two lines of deviation (d) accepted now,
+its shapes (2) and (3) refused now, and the texts of (e). `serve --stdio`, which nothing uses yet,
+refuses every parameter its row does not declare (before, a row with `params_more` passed them on).
+The table gained members and types: a reader of the table outside this repository that refuses
+unknown members learns them when it raises its pin.
+
+**LAB-5A fix 1** (coordinator work order `rd-1108/arch-013/brief-lab5a-fix1.md`, after the
+independent review `rd-1108/arch-013/review-1569-findings.md` of PR #1569 at `d2c710ae`): the lines
+of deviation (d) the slice had made refused are accepted again (`words::KEPT_FLAGS`), a value
+beginning with `--` is refused again where the base refused it (`words::COMPLETED_ROWS`), the
+notes of `facts` and `targets set` say their one-of rules (L5A-4), the texts of (e) say which code
+each refusal has, and the CLI module's description says the child keeps its envelope until LAB-7.
+The table's notes say the kept flags (`run show`'s and `run evidence`'s `id`, `monitor set`'s
+instance, `op status`'s `op`, `release verify|stage`'s `dir`, `devices bind`'s row), and §9.3
+names `devices bind`'s kept `--root`. No row, type, member, code, key or interface is added.
+
+**LAB-5A rollback** (to the release before it). Nothing persisted: code and the table's text.
 
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
@@ -9577,11 +9733,275 @@ Tests (exec gate row "#428 RD-BUDGET-1"):
 existing test changed: none pinned a repeated count (`gate_rc2_a11` and the consumer goldens read
 each file once, and `gate_rv1` asks only for a `read_bytes` above zero).
 
-### 1.296 Slice CI-OCR-1 (0.12.52): a script fills or verifies a CPU vision root from the tool registry (#428; the coordinator's ruling of 2026-11-10 on board #428, not Alice's words: CI runs real OCR on the CPU, under six conditions, and its logic lives once, in the Runtime; coordinator work order `rd-1110/brief-ci-ocr-1.md`)
+### 1.296 Slice UNSET-2 (0.12.51): a scheduled run cut by a stop after it released its own lease is settled at the next start (#428; production: one scheduled dispatch of 10-26, cut by the 19:12 stop after its failure path wrote the run's own `lease.released` (effect `performed`) and inputs and before its terminal, open ever since and reported by every start, first as `policy_settlement_dispatch_unsettled`, from 0.12.28 as `policy_settlement_dispatch_left_open`, both with `failure_code` `scheduled_execution_recovery_interruption_conflict`; UNSET-1's row: "settling it is UNSET-2, which changes #670's rule"; the coordinator's ruling of 11-10, not Alice's words: the next start settles it, once, and records who closed it and why, with no new request kind and no protocol revision; read-only survey `rd-1110/leftopen-survey.md`; coordinator work order `rd-1110/brief-unset2.md`; fix round 1 after the review `rd-1110/review-1564-findings.md`, the coordinator's rulings L1 to L4 of 11-10, not Alice's words: `rd-1110/brief-unset2-fix1.md`; fix round 2 after the first run of its host tests and the second review `rd-1110/review-1564-fix1-findings.md`: `rd-1110/brief-unset2-fix2.md`)
+
+This section changes #670's rule R4 and its pin, and the order in which the host takes a pair's
+latest completed run. [scheduling/README.md](scheduling/README.md) ("Failures (#419)") and the
+catalog entries of `policy_settlement_dispatch_closed`, `policy_settlement_dispatch_unsettled`,
+`policy_settlement_dispatch_left_open` and `scheduled_execution_recovery_interruption_conflict`
+are the contract. 1.296 is the next free number: Runtime PR #1565 takes 1.295 (fix round 1
+renumbered this section, first written as 1.295 on main `8d9b4f73`). No persisted ledger shape,
+wire shape, configuration key, location or vocabulary is new or changed; one outcome code is new.
+LN4-6, LN4-7 and LN4-8 (§1.184) are corrected in place.
+
+**Why.** The ledger's guarded check of a recovered settlement (`append_recovered_policy_execution`)
+settled a run with no terminal as interrupted from its one run-linked release only when the run
+had no effect or input record, unless the release was the one the start recovered
+(`not_performed`) or the lease ended another way: R4 as pinned by
+`interrupted_policy_execution_recovery_rejects_effects_and_duplicate_release`, effect half. A run
+whose own failure path wrote its release (`performed`) and which a stop cut before its execution
+record had no settlement the Runtime could derive but the interrupted one, and the ledger refused
+it (`scheduled_execution_recovery_interruption_conflict`) at every start. No operation closes a
+dispatch and nothing expires it, so the dispatch stayed open: its (task, instance) pair counted as
+in flight (its eligibility age pinned to 0, no aging in rank, a score-deferred candidate never
+reaching `defer_aging_cap_ms`, no clock-slot planning records) and every start wrote the Warning
+again. Had the stop left no run-linked release, the start would have recovered one and settled the
+same run as interrupted, inputs and all.
+
+**The rule (changes R4).** A run with no terminal whose one run-linked release is its own (effect
+`performed`) is settled as interrupted (`policy_settlement_interrupted`, Severe, the task paused,
+no retry, runtime 0, timed at the release) also when it has effect or input records, the way the
+recovered `not_performed` release is accepted; the check no longer reads those records. A run that
+has a terminal is still settled only from it (an interrupted settlement of it is refused, here
+`scheduled_execution_recovery_failure_conflict`, or `..._interruption_conflict` when its lease end
+was recovered or ended otherwise); more than one run-linked release is still refused
+(`scheduled_execution_recovery_release_not_unique`); nothing else of the check changes. The replay
+of a settlement already recorded takes the same rule, so a start cut between the execution record
+and the completion completes it.
+
+**Who closed it and why.** The start's settlement does not change; with the check changed, the
+next start closes the dispatch once with the records a settlement writes (`policy.execution_recorded`,
+`policy.dispatch_completed`, Scheduler). When an earlier start had refused the run (its first
+`policy_settlement_dispatch_unsettled` record, read by the run's link index before the
+settlement's write), the start then records one `runtime.failed`
+`policy_settlement_dispatch_closed` (Info, new) under the run's links: `operation`
+`reconcile_policy_outcomes` (the start's settlement) and `failure_code` the earlier refusal's code
+(when that record named an unregistered spelling, the earlier record's outcome is a `note` link
+instead). A later start finds the dispatch settled and writes no settlement, no Warning and no
+second record for it. Two windows (fix round 1):
+
+- A stop that cuts the settling start between the execution record and the completion leaves the
+  completion to the next start (its pending completions, `reconcile_policy_dispatches`). That
+  start reads the run's earlier refusal by the completion's run links and records
+  `policy_settlement_dispatch_closed` itself, after the completion. Two inexact details stay
+  (fix round 2 leaves them, as neither is a one-line change): that record's `operation` is
+  `reconcile_policy_outcomes` there too, though the step that completes the dispatch is
+  `reconcile_policy_dispatches` (the operation would have to be carried per late settlement);
+  and it reads the earlier refusal through the completion's sequence, where every replay reads
+  through the execution record's (the journal does not keep that sequence). The two reads differ
+  only for a `policy_settlement_dispatch_unsettled` record between the execution record and the
+  completion, which only a start that refused the completion writes; the second review found
+  that unreachable, since a refused completion stays refused. No test cuts a start there: the
+  execution record and the completion are appended by one ledger command
+  (`reconcile_scheduled_policy_settlement`), so the cut needs a hook inside the ledger's
+  settlement path, not one of the host's `fail_next_…_for_test` hooks.
+- A stop that cuts a start between the completion and that record leaves the record unwritten, and
+  no later start writes it (none scans the ledger for it). The record can be missing after such a
+  cut; the settlement (`policy.execution_recorded`) and the completion
+  (`policy.dispatch_completed`) are the lasting records.
+
+**The late settlement is not a failure of its pair.** In ledger order it comes after the later
+runs of its (task, instance) pair, when there are any ("R" below; "N" when there are none). Today's
+rule for an interruption is `interruption_lifted_by_restart`: the first interruption of a pair in a
+row is recorded as its failure (Severe, the task paused) and lifted by the restart that recorded
+it; a second one in a row keeps the pair paused until its package changes. Applied to a late
+settlement that would make the old run the pair's latest failure in both cases, would end a later
+run's backoff or failure streak and owed rerun in R, and would pause the pair when its latest run
+before it was also an interruption. So an interrupted settlement of a run an earlier start refused
+leaves the decision memory as it was: no failure streak, pause, backoff or retry round, not the
+pair's latest failure, no owed rerun ended, its admission's counts as the admission took them. The
+record is checked against the settlement it must be as any record. The start decides it by the
+run's `policy_settlement_dispatch_unsettled` record before the settlement's write; every replay of
+the execution record (the decision memory's re-alignment, a load, a seeding start, a read on
+demand, the test replay) reads the same record before the execution's sequence, so the held and
+the replayed state agree. Fix round 1 (the review found that wherever the host took a pair's
+latest completed run by completion order, a late completion stood for the pair in R, and that
+then every start after the settling one failed with `runtime_fact_stale`; the coordinator's
+rulings):
+
+- **Admission order (L1).** Wherever the host takes a pair's latest completed dispatch or run, it
+  takes the latest in admission order, `(admitted_sequence, intent_sequence)`, the order
+  `fold_settlements_by` and the task snapshots already used: the latest completed dispatch a
+  pair's value record names (`journal_records_of`, LN4-7) and the previous completed dispatch a
+  completion counts its failures from (`failures_through`); the outcome-key snapshot and the runs
+  whose authoritative outcomes a start or the online reconciliation recovers
+  (`outcome_key_snapshot`, `latest_completed_policy_runs`, which the dispatch's projection checks
+  against each other); and `actingd suspended`, which orders a pair's executions by their dispatch
+  intents' sequences. A pair runs one dispatch at a time on its instance, so for every other
+  completion this is the order it completed in. The other readers of a pair's runs order by
+  admission already (the task snapshots, the settlement facts, the remedy journal, the dispatch
+  clocks) or hold one run per pair (`recover_authoritative_policy_outcomes`, whose sort by
+  completion sequence runs over pairs).
+- **Not a failure, anywhere (L2).** A late completion keeps the failure count of its pair's latest
+  other completed dispatch in admission order instead of adding one (`failures_through`; the
+  journal's flag `settled_late`, set where the execution is committed or replayed, from the same
+  record), and the task snapshot of an executed late run not yet completed adds none either
+  (`fold_settlements_by`). So neither the task snapshot's `failure_streak` (the journal's
+  `failures`, failed runs in a row) nor the decision memory's failure streak (its `count`, the
+  same error in a row) counts the late run; they are two different counters, and each stays
+  what it was without the late run. The snapshot's validation allows a failed latest run with an
+  unchanged count. `actingd suspended` leaves a late settlement out of its pair's executions (an
+  interrupted execution whose run has a `policy_settlement_dispatch_unsettled` record before it):
+  the pair's failures in a row and its latest failure are those without it.
+- **What stays visible (L3).** The run itself reads as interrupted. In N it is the pair's latest
+  run in admission order: its task snapshot shows it, failed, with the pair's failures in a row as
+  before, and the pair's outcome is missing, as after any interrupted latest run; its settlement
+  facts are recorded, newer than the pair's earlier ones. In R the later run stays the pair's
+  latest everywhere, and no settlement fact of the pair is recorded again.
+- **The cut run's retry round (fix round 2).** A pair's normal admission opens its retry round
+  (`commit_admission`; an immediate rerun opens none), so in N the round the cut run's own
+  admission opened is part of the pair's failure state before the settlement, and it is the
+  same after it, as L2 asks (the first run of the host tests found it there; the test had
+  expected none). In R the later run's admission replaced it, and the later run's success ended
+  that round or its failure kept it. The round never delays anything: it is read only to offer
+  and to admit an immediate rerun (R22, `immediate_retry_pairs`), and only while the pair's
+  failure state is a `retry_scheduled` failure with a failure identity, the instant lies in the
+  round's own activity window (before its `until_unix_ms`, that window's end) and the round's
+  budgets leave room. The late settlement sets no failure state, so the round offers and admits
+  exactly what it did before the settlement; the round of a run cut on an earlier day, as
+  production's of 10-26, offers nothing, since its window has ended. It ends as any round does:
+  at the pair's next success, at its next normal admission (which opens the next round), when a
+  later admission or settlement on its instance finds its budget spent, or when an admission
+  refuses an immediate rerun (`policy_retry_round_ended`); past its window it stays in the value
+  record, inert, until then.
+- **The journal keeps a late completion until a value record follows it.** The value record of a
+  task of the remedy journal (one that declares a remedy or provides a capability) names every
+  admitted run the journal keeps (LN4-7), so a late settlement of such a task after more than 64
+  later admitted runs of its pair completes outside the journal's bound (LN4-8), while the
+  decision memory's re-alignment still applies its records, which lie after the value records'
+  position (LN4-6). For any other task the journal a start loads holds the pair's open
+  dispatches, its latest completed one and the records after the value records, so the late
+  completion stays inside the bound however many runs the pair had. Once the value records are
+  loaded or seeded, the journal keeps a dispatch completed after their position until a value
+  record follows it (`prune_journal`), so the re-alignment finds it; the next pruning after that
+  record drops it. `journal_answers_at` answers as before: the late run completed after the
+  earliest completion the bound keeps.
+
+**Starts after it (L4).** Every start of 0.12.51 after the settling one loads the pair's value
+record and takes from it the pair's latest completed run in admission order (in R the later run,
+with its own failure count), so the journal it loads, its task snapshots, the settlement facts it
+derives again (`record_policy_settlement_facts_on_start`) and its outcome-key snapshot read that
+run: it starts, records no settlement fact for the pair, and a rule on the task's outcome decides
+as before the settlement.
+
+**A rollback (corrected in fix round 2, after the second review).** No shape changed and no
+member was added, so a start of an earlier version (v0.12.50, v0.12.49) loads the same value
+records and facts, reads the closed record as a code it does not act on, and starts and schedules
+in every case; no interface is raised ([component-interfaces.md](component-interfaces.md): a
+revision rises when an older peer can no longer work with the change). What it reads:
+
+- In N, and in R for a task outside the remedy journal, the value record names the pair's latest
+  run in admission order (in R the later run alone), and v0.12.50 reads it as the pair's latest,
+  as 0.12.51 does.
+- In R for a task of the remedy journal (one that declares a remedy or provides a capability),
+  the value record also names the late completion (LN4-7). v0.12.50 takes a pair's latest
+  completed run by completion order (`outcome_key_snapshot`, `latest_completed_policy_runs`), so
+  it reads the late run as the pair's latest: the pair's outcome key is missing until the pair's
+  next completion, and a rule on that outcome decides as after an interrupted latest run until
+  then. Its failure count stays right (the late completion kept the later run's count). This is
+  v0.12.50's own completion-order rule meeting an out-of-order completion in the ledger, not a
+  changed shape.
+- A late completion's `failures` leaves the late run out (LN4-7); v0.12.50 reads it as the pair's
+  count through that dispatch, which is the pair's count without the late run.
+
+The edge: a settling start of 0.12.51 cut after the settlement records and before its value
+records, followed by a start of v0.12.50. That start's re-alignment commits the late execution
+under its older rule, as the pair's latest failure, and its value record then names the late
+dispatch as the pair's latest completed one (by completion order; alone, for a task outside the
+remedy journal). That start starts. In R the start after it fails with `runtime_fact_stale`,
+which is fatal, on either version: it loads only the late run and records that run's settlement
+facts over the later run's newer ones; only a run the pair completes in between avoids it. In N
+it does not fail. Hence the operating rule: after a deploy of 0.12.51, do not go back to v0.12.50
+before one start of 0.12.51 has completed after the settlement.
+
+**The online path.** The changed check also serves the online settlement of abandoned and inactive
+runs (`reconcile_scheduled_policy_outcomes_for` with no start, #427-A). A run with its own
+`performed` release and no terminal reaches it only through `inactive_policy_settlements`, and only
+when the run has no effect or input record and its release carries its dispatch intent's links;
+the ledger accepted that shape before this slice too, and the run is settled there as an ordinary,
+fresh interruption. With an effect or input record no online path takes it
+(`policy_run_effect_started`; the abandoned-lane path waits on a run-linked release that does not
+record `not_performed`), and the next start settles it as a fresh interruption. A run a start
+refused to settle stays quarantined, out of the pending settlements, for the life of that host, so
+the online path never meets a late settlement. Nothing changes there.
+
+**After it.** The dispatch is completed: the pair is no longer in flight, its eligibility age runs
+again and its clock-slot planning records are written again, and later starts record nothing for
+it. The other writer of `policy_settlement_dispatch_left_open` (a pending scheduled dispatch whose
+instance is no longer configured, or whose lease ended in more than one way) is unchanged, and a
+run the check still refuses is reported as before (UNSET-1).
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)), every range as
+main declares it: `ledger`: the check's rule is not a record shape, and a new code is not a shape
+change (its row: a new code "raises no revision"); the value records (register L7, LN4-7) keep
+their shape, and the latest completed dispatch they name is the pair's latest run in admission
+order, as every other completion's is (a remedy-journal pair's record in R also names the late
+completion, which v0.12.50 reads by its own completion order: "A rollback" above; an older peer
+still starts and schedules, so no revision rises); `runtime-outcomes`: one new code in the
+catalog only; `runtime-client` and the protocol: no request kind, no member. No configuration key.
+
+**At deploy.** At the first start of 0.12.51 a dispatch left open by a run cut after its own
+release is settled once (`policy.execution_recorded`, `policy.dispatch_completed`) and recorded as
+closed (`policy_settlement_dispatch_closed`, with `failure_code`
+`scheduled_execution_recovery_interruption_conflict`); the Warning of every start stops.
+Production has one such dispatch, of 10-26; the pair's failure state stays as it was. Later
+starts of 0.12.51 read the pair's latest run in admission order (the later run when the pair ran
+since) and start as before. A **rollback** to v0.12.50 keeps the settlement, reports nothing for
+the closed dispatch and starts; it reads the pair's latest run in admission order too, except for
+a task that declares a remedy or provides a capability when the pair ran since: v0.12.50 then
+reads the late run as the pair's latest, and the pair's outcome key is missing until the pair's
+next completion. The edge: a settling start of 0.12.51 cut after the settlement and before its
+value records, followed by a start of v0.12.50: that start starts, and when the pair ran since,
+the start after it fails with `runtime_fact_stale`, on either version, unless the pair completed
+a run in between. Operating rule: after a deploy of 0.12.51, do not go back to v0.12.50 before
+one start of 0.12.51 has completed after the settlement.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| UNSET2-1 | the ledger's check of a recovered interrupted settlement of a run with no terminal and its own run-linked release (`append_recovered_policy_execution`) | rule (no shape; changes #670 R4 and its pin) | UNSET-2 | ledger | `since` 0.12.51; effect and input records no longer read; a terminal and two releases still refused |
+| UNSET2-2 | `runtime.failed` with `policy_settlement_dispatch_closed` (info, `none`; `failure_code`, `operation`, `instance_id`, `task_id`, `lease_id`) | new code of an existing record (host gate row "#428 UNSET-2") | UNSET-2 | UNSET-2 | `since` 0.12.51; once, by the start that completes the settlement of a run an earlier start refused (the settling start, or the next one after a cut before the completion), under the run's links; missing after a cut between the completion and it |
+| UNSET2-3 | a late interrupted settlement is not a failure of its pair: the decision memory as it was, its completion keeping the pair's failure count (`settled_late`), left out by `actingd suspended`, at the start and at every replay and load (`late_settlement_refusal`) | rule (no shape) | UNSET-2 | — | decided by the run's earlier `policy_settlement_dispatch_unsettled` record |
+| UNSET2-4 | a pair's latest completed dispatch or run is its latest in admission order (`journal_records_of`, `failures_through`, `outcome_key_snapshot`, `latest_completed_policy_runs`, `actingd suspended`) | rule (no shape; corrects LN4-7) | UNSET-2 fix 1 | — | the value records keep their shape; a remedy-journal pair's record in R also names the late completion, which v0.12.50 reads by completion order ("A rollback") |
+| UNSET2-5 | the dispatch journal keeps a dispatch completed after the value records' position until a value record follows it (`prune_journal`) | Runtime-internal behaviour (amends LN4-6, LN4-8) | UNSET-2 fix 1 | — | only a late settlement of a task of the remedy journal (more than 64 later runs) completes outside the bound |
+
+Tests (ledger gate row "#428 UNSET-2"):
+`unset2_own_release_with_inputs_settles_as_interrupted_and_a_terminal_still_refuses`, and
+`interrupted_policy_execution_recovery_accepts_effects_and_rejects_duplicate_release`, the test
+that pinned R4 (`interrupted_policy_execution_recovery_rejects_effects_and_duplicate_release`,
+in no gate row), adapted on purpose and renamed: its effect half now expects the run settled as
+interrupted from its own release; its duplicate-release half is unchanged. Host gate row
+"#428 UNSET-2", all in `policy_admission`:
+`unset2_the_next_start_settles_a_run_cut_after_its_own_release_once` (N: settled once, closed
+once, no Warning, the pair's failure state as before at the settling start and the next one,
+the retry round the cut run's admission opened included, the eligibility age runs again);
+`unset2_r_the_starts_after_a_late_settlement_start_and_read_the_later_run` (fix round 1 test 1,
+R with a later success, the settling start and two more);
+`unset2_r_a_rule_on_the_task_outcome_decides_after_the_settlement_as_before` (test 2, R with a
+referenced outcome key and a consumer of it; on a device-backed instance, since a person's resume
+of an instance is refused for a fixture simulation, `fixture_execution_scope_forbidden`);
+`unset2_r_a_later_failure_keeps_its_backoff_and_its_own_count` (test 3);
+`unset2_n_the_starts_after_a_late_settlement_keep_the_failure_state` (test 4, N, with and without
+an earlier interruption of the pair);
+`unset2_r_actingd_suspended_reports_the_later_run_not_the_late_interruption` (test 5; fix round 2:
+the later run failed and paused its task, and the report lists the pair once, as suspended by
+the later run with its own count); and
+`unset2_the_journal_keeps_a_late_completion_until_a_value_record_follows_it` (fix round 2, the
+journal's pruning with and without the value records' position, UNSET2-5). Test 1 replaces the
+first round's `unset2_a_late_settlement_after_a_later_run_neither_pauses_nor_fails_the_pair`,
+which checked the settling start only. Fix round 2 corrected two tests after their first run, each
+by building it as its requirement asks, no production check changed: test
+`unset2_the_next_start_settles_a_run_cut_after_its_own_release_once` expected no retry round after
+the settlement, where L2 asks for the one before it (the cut run's own); test 2 ran on a fixture
+simulation, whose resume the request path refuses. Not tested: a late settlement of a
+remedy-journal task after more than 64 later runs at host level (the journal's pruning is tested
+alone), the closed record's first window (see "Two windows"), a rollback and its edge.
+
+### 1.297 Slice CI-OCR-1 (0.12.52): a script fills or verifies a CPU vision root from the tool registry (#428; the coordinator's ruling of 2026-11-10 on board #428, not Alice's words: CI runs real OCR on the CPU, under six conditions, and its logic lives once, in the Runtime; coordinator work order `rd-1110/brief-ci-ocr-1.md`)
 
 [vision-model-folders.md](vision-model-folders.md) (section "Vision root") is the contract, and
-`scripts/windows-tools/README.md` (section "CPU vision root") describes the script. 1.296 is the
-next free number on main `76006500`, and the name CI-OCR-1 was free. No persisted ledger shape,
+`scripts/windows-tools/README.md` (section "CPU vision root") describes the script. 1.297 is the
+next free number: Runtime PR #1564 took 1.296 (on main `af7e2557`), and the name CI-OCR-1 was
+free. No persisted ledger shape,
 wire shape, configuration key, outcome code or vocabulary is new or changed, and no Rust code
 changes.
 

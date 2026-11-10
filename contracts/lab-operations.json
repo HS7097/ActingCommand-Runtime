@@ -96,10 +96,10 @@
       "name": "facts",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
-        {"name": "program", "form": "switch", "type": "boolean", "required": false, "note": "the program's facts"},
-        {"name": "config", "form": "switch", "type": "boolean", "required": false, "note": "the configuration facts"},
-        {"name": "prefix", "form": "option", "type": "string", "required": false, "note": "only keys under this prefix"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "the instance whose facts are read; exactly one of instance, program and config (none is refused as <instance> required, two as --program conflicting)"},
+        {"name": "program", "form": "switch", "type": "boolean", "required": false, "note": "the program's facts; exactly one of instance, program and config"},
+        {"name": "config", "form": "switch", "type": "boolean", "required": false, "note": "the configuration facts; exactly one of instance, program and config"},
+        {"name": "prefix", "form": "option", "type": "string", "required": false, "note": "only keys under this prefix; with instance or program"}
       ],
       "output": "a fact snapshot (one instance, the program or the configuration); the configuration's with config_version",
       "writes": false,
@@ -154,7 +154,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
         {"name": "since", "form": "option", "type": "duration", "required": false, "note": "how far back, for example 10m"},
         {"name": "type", "form": "option", "type": "list<string>", "required": false, "note": "event types"},
-        {"name": "run", "form": "option", "type": "request_id", "required": false},
+        {"name": "run", "form": "option", "type": "string", "required": false, "note": "a run_id (run_<32 hex>)"},
         {"name": "request", "form": "option", "type": "request_id", "required": false},
         {"name": "after", "form": "option", "type": "integer", "required": false, "note": "ledger sequence cursor"},
         {"name": "limit", "form": "option", "type": "integer", "required": false}
@@ -173,10 +173,16 @@
       "name": "runs",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
-        {"name": "since", "form": "option", "type": "duration", "required": false}
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"},
+        {"name": "since", "form": "option", "type": "duration", "required": false},
+        {"name": "since_unix_ms", "form": "option", "type": "unsigned", "required": false, "note": "absolute window start; not with since"},
+        {"name": "until_unix_ms", "form": "option", "type": "unsigned", "required": false},
+        {"name": "task_prefix", "form": "option", "type": "string", "required": false},
+        {"name": "dispatch", "form": "option", "type": "enum:manual|scheduled", "required": false},
+        {"name": "state", "form": "option", "type": "enum:open|succeeded|failed|cancelled|interrupted_unterminated", "required": false},
+        {"name": "limit", "form": "option", "type": "integer", "required": false, "default": "20", "note": "1 to 100"},
+        {"name": "cursor", "form": "option", "type": "string", "required": false}
       ],
-      "params_more": "actingctl runs",
       "output": "the run list",
       "writes": false,
       "irreversible": false,
@@ -191,9 +197,8 @@
       "name": "run show",
       "module": "core",
       "params": [
-        {"name": "id", "form": "positional", "type": "request_id", "required": true}
+        {"name": "id", "form": "positional", "type": "run_ref", "required": true, "note": "on the command line also --id <id>, in place of the positional"}
       ],
-      "params_more": "MCP ac_get_run",
       "output": "one run: its receipt, state and steps",
       "writes": false,
       "irreversible": false,
@@ -209,10 +214,11 @@
       "name": "run evidence",
       "module": "core",
       "params": [
-        {"name": "id", "form": "positional", "type": "request_id", "required": true},
-        {"name": "detail", "form": "option", "type": "string", "required": false}
+        {"name": "id", "form": "positional", "type": "run_ref", "required": true, "note": "on the command line also --id <id>, in place of the positional"},
+        {"name": "detail", "form": "option", "type": "enum:full|summary", "required": false, "default": "full"},
+        {"name": "from_step", "form": "option", "type": "integer", "required": false, "default": "0"},
+        {"name": "limit", "form": "option", "type": "integer", "required": false, "note": "1 to 100; default 20, 100 with detail summary"}
       ],
-      "params_more": "actingctl run evidence",
       "output": "the run's evidence: steps, frames and their material references",
       "writes": false,
       "irreversible": false,
@@ -282,9 +288,9 @@
       "module": "core",
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true},
-        {"name": "file", "form": "positional", "type": "file", "required": false, "note": "a whole targets document"},
-        {"name": "targets", "form": "option", "type": "json", "required": false, "note": "the targets inline, instead of a file"},
-        {"name": "valid_days", "form": "option", "type": "integer", "required": false}
+        {"name": "file", "form": "positional", "type": "file", "required": false, "note": "a whole targets document; exactly one of file and targets (none is refused as <file> required, both as --targets conflicting)"},
+        {"name": "targets", "form": "option", "type": "json", "required": false, "note": "the targets inline, a JSON list, instead of a file; exactly one of file and targets"},
+        {"name": "valid_days", "form": "option", "type": "integer", "required": false, "note": "with targets"}
       ],
       "output": "the applied table (ResourceTargetsApplied)",
       "writes": true,
@@ -428,7 +434,7 @@
       "module": "core",
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
-        {"name": "reason", "form": "option", "type": "string", "required": false, "note": "CLI short form -r"},
+        {"name": "reason", "form": "option", "type": "string", "required": false, "required_in": ["mcp"], "note": "CLI short form -r"},
         {"name": "drain", "form": "option", "type": "duration", "required": false, "default": "300s"}
       ],
       "output": "the pause state",
@@ -447,7 +453,7 @@
       "module": "core",
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
-        {"name": "expect", "form": "option", "type": "json", "required": false, "note": "the pause the resume lifts, as read from status"}
+        {"name": "expect", "form": "option", "type": "json", "required": false, "required_in": ["mcp"], "note": "the pause the resume lifts, as read from status"}
       ],
       "output": "the pause state",
       "writes": true,
@@ -545,12 +551,11 @@
       "name": "monitor set",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
         {"name": "interval", "form": "option", "type": "duration", "required": false},
         {"name": "expect", "form": "option", "type": "string", "required": false},
         {"name": "recover", "form": "option", "type": "boolean", "required": false}
       ],
-      "params_more": "actingctl monitor-set",
       "output": "the monitor policy",
       "writes": true,
       "irreversible": false,
@@ -620,7 +625,7 @@
       "module": "core",
       "params": [
         {"name": "artifact", "form": "option", "type": "string", "required": false, "note": "one of artifact, run"},
-        {"name": "run", "form": "option", "type": "request_id", "required": false}
+        {"name": "run", "form": "option", "type": "string", "required": false, "note": "a run_id (run_<32 hex>); one of artifact and run"}
       ],
       "output": "the confirmation record",
       "writes": true,
@@ -660,6 +665,7 @@
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
+      "disruptive": true,
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ControlEmulatorInstance", "Status"],
@@ -678,6 +684,7 @@
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
+      "disruptive": true,
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ControlEmulatorInstance", "Status"],
@@ -729,6 +736,7 @@
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
+      "disruptive": true,
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ApplicationLifecycle"],
@@ -746,6 +754,7 @@
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
+      "disruptive": true,
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ApplicationLifecycle"],
@@ -792,8 +801,10 @@
     {
       "name": "gap",
       "module": "core",
-      "params": [],
-      "params_more": "actingctl capability-gap",
+      "params": [
+        {"name": "capability", "form": "option", "type": "string", "required": true, "note": "one line, at most 120 characters"},
+        {"name": "why", "form": "option", "type": "string", "required": true, "note": "one line, at most 500 characters"}
+      ],
       "output": "the recorded gap",
       "writes": true,
       "irreversible": false,
@@ -822,9 +833,9 @@
       "name": "devices bind",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "the instance's alias: devices takes no instance_id and no ADB port"},
+        {"name": "handle", "form": "positional", "type": "string", "required": true, "note": "a device handle from devices, for example usb:7"}
       ],
-      "params_more": "actingctl devices bind",
       "output": "the binding written to the state root's private binding file",
       "writes": true,
       "irreversible": false,
@@ -833,17 +844,19 @@
       "requests": [],
       "source": ["actingctl devices bind", "MCP ac_device_bind"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-5A fix 1: on the command line a further --root <r> still goes on to the command, as before LAB-5A; the command takes it only when the program runs outside an installed root (inside one, the located --root makes it repeated). Not a parameter: serve --stdio refuses it"
     },
     {
       "name": "devices unbind",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "the instance's alias: devices takes no instance_id and no ADB port"}
       ],
       "output": "the binding removed",
       "writes": true,
       "irreversible": false,
+      "disruptive": true,
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
@@ -1081,9 +1094,10 @@
       "name": "tap",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "x", "form": "positional", "type": "integer", "required": true},
+        {"name": "y", "form": "positional", "type": "integer", "required": true}
       ],
-      "params_more": "actinglab tap",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1098,9 +1112,13 @@
       "name": "swipe",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "x1", "form": "positional", "type": "integer", "required": true},
+        {"name": "y1", "form": "positional", "type": "integer", "required": true},
+        {"name": "x2", "form": "positional", "type": "integer", "required": true},
+        {"name": "y2", "form": "positional", "type": "integer", "required": true},
+        {"name": "duration_ms", "form": "positional", "type": "integer", "required": true}
       ],
-      "params_more": "actinglab swipe",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1115,9 +1133,11 @@
       "name": "long-tap",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "x", "form": "positional", "type": "integer", "required": true},
+        {"name": "y", "form": "positional", "type": "integer", "required": true},
+        {"name": "duration_ms", "form": "positional", "type": "integer", "required": true}
       ],
-      "params_more": "actinglab long-tap",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1132,9 +1152,9 @@
       "name": "key",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "key", "form": "positional", "type": "string", "required": true, "note": "back, home, menu, enter, escape or a key code"}
       ],
-      "params_more": "actinglab key",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1149,9 +1169,9 @@
       "name": "text",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "text", "form": "positional", "type": "string", "required": true, "repeat": true, "note": "the words are joined with one space"}
       ],
-      "params_more": "actinglab text",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1168,7 +1188,6 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
-      "params_more": "actinglab touch-probe",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1183,9 +1202,28 @@
       "name": "recover",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "capture", "form": "switch", "type": "boolean", "required": false},
+        {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
+        {"name": "scene", "form": "option", "type": "file", "required": false, "note": "an offline PNG frame"},
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false},
+        {"name": "fresh_delay_ms", "form": "option", "type": "integer", "required": false, "default": "160"},
+        {"name": "to", "form": "option", "type": "string", "required": false, "default": "home"},
+        {"name": "max_actions", "form": "option", "type": "integer", "required": false, "default": "3"},
+        {"name": "step_timeout_ms", "form": "option", "type": "integer", "required": false, "default": "5000"},
+        {"name": "poll_ms", "form": "option", "type": "integer", "required": false, "default": "500"},
+        {"name": "seed", "form": "option", "type": "unsigned", "required": false},
+        {"name": "startup_login", "form": "switch", "type": "boolean", "required": false},
+        {"name": "startup_max_rounds", "form": "option", "type": "integer", "required": false, "default": "25"},
+        {"name": "startup_interval_ms", "form": "option", "type": "integer", "required": false, "default": "2000"},
+        {"name": "startup_login_file", "form": "option", "type": "file", "required": false},
+        {"name": "stale_capture", "form": "switch", "type": "boolean", "required": false},
+        {"name": "diagnose", "form": "switch", "type": "boolean", "required": false, "note": "with stale_capture"},
+        {"name": "navigation", "form": "option", "type": "file", "required": false},
+        {"name": "pack", "form": "option", "type": "file", "required": false},
+        {"name": "pack_root", "form": "option", "type": "dir", "required": false},
+        {"name": "pages", "form": "option", "type": "file", "required": false}
       ],
-      "params_more": "actinglab session recover",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1194,13 +1232,38 @@
       "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
       "source": ["actinglab session recover", "actinglab session recover --stale-capture"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-5A: on the command line the further flags and words of its command still go on to it (it ignores a flag it does not read); serve --stdio refuses them. A debt: a later slice makes the command strict"
     },
     {
       "name": "do",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab do",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "target", "form": "positional", "type": "string", "required": false, "note": "offline the target, with capture a Runtime element id; also --target"},
+        {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
+        {"name": "capture", "form": "switch", "type": "boolean", "required": false},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "tap", "form": "option", "type": "string", "required": false, "note": "x,y"},
+        {"name": "swipe", "form": "option", "type": "string", "required": false, "note": "x1,y1,x2,y2,duration-ms"},
+        {"name": "operation", "form": "option", "type": "string", "required": false},
+        {"name": "projection_sequence", "form": "option", "type": "unsigned", "required": false},
+        {"name": "projection_hash", "form": "option", "type": "string", "required": false},
+        {"name": "after_page", "form": "option", "type": "string", "required": false},
+        {"name": "after_timeout_ms", "form": "option", "type": "integer", "required": false, "note": "100 to 10000, default 5000"},
+        {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
+        {"name": "allow_destructive", "form": "switch", "type": "boolean", "required": false},
+        {"name": "destructive", "form": "switch", "type": "boolean", "required": false},
+        {"name": "record", "form": "switch", "type": "boolean", "required": false},
+        {"name": "tap_rect", "form": "option", "type": "string", "required": false, "note": "x,y,w,h, with record"},
+        {"name": "seed", "form": "option", "type": "unsigned", "required": false},
+        {"name": "preview", "form": "switch", "type": "boolean", "required": false},
+        {"name": "test_capture_delay_ms", "form": "option", "type": "integer", "required": false, "note": "test only"},
+        {"name": "fields", "form": "option", "type": "string", "required": false, "note": "comma-separated answer members kept whole"},
+        {"name": "verbose", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --verbose"},
+        {"name": "pretty", "form": "switch", "type": "boolean", "required": false}
+      ],
       "output": "as today's command: the action and its after frame",
       "writes": true,
       "irreversible": false,
@@ -1215,8 +1278,24 @@
     {
       "name": "ensure",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab ensure",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
+        {"name": "capture", "form": "switch", "type": "boolean", "required": false},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
+        {"name": "to", "form": "option", "type": "string", "required": false, "note": "the page; also --page"},
+        {"name": "page", "form": "option", "type": "string", "required": false, "note": "the same as to"},
+        {"name": "allow_destructive", "form": "switch", "type": "boolean", "required": false},
+        {"name": "step_timeout_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "poll_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "seed", "form": "option", "type": "unsigned", "required": false},
+        {"name": "test_capture_delay_ms", "form": "option", "type": "integer", "required": false, "note": "test only"},
+        {"name": "fields", "form": "option", "type": "string", "required": false, "note": "comma-separated answer members kept whole"},
+        {"name": "verbose", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --verbose"},
+        {"name": "pretty", "form": "switch", "type": "boolean", "required": false}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1230,8 +1309,21 @@
     {
       "name": "wait",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab wait",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
+        {"name": "capture", "form": "switch", "type": "boolean", "required": false},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "page", "form": "option", "type": "string", "required": false},
+        {"name": "stable", "form": "option", "type": "string", "required": false, "note": "a target"},
+        {"name": "timeout_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "poll_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "test_capture_delay_ms", "form": "option", "type": "integer", "required": false, "note": "test only"},
+        {"name": "fields", "form": "option", "type": "string", "required": false, "note": "comma-separated answer members kept whole"},
+        {"name": "verbose", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --verbose"},
+        {"name": "pretty", "form": "switch", "type": "boolean", "required": false}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1245,8 +1337,17 @@
     {
       "name": "tap-target",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab tap-target",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "target", "form": "option", "type": "string", "required": true, "note": "also the first positional"},
+        {"name": "seed", "form": "option", "type": "unsigned", "required": false},
+        {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
+        {"name": "allow_destructive", "form": "switch", "type": "boolean", "required": false},
+        {"name": "scene", "form": "option", "type": "file", "required": false, "note": "an offline PNG frame"},
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1260,8 +1361,19 @@
     {
       "name": "navigate",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab navigate",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "to", "form": "option", "type": "string", "required": true},
+        {"name": "seed", "form": "option", "type": "unsigned", "required": false},
+        {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
+        {"name": "allow_destructive", "form": "switch", "type": "boolean", "required": false},
+        {"name": "step_timeout_ms", "form": "option", "type": "integer", "required": false, "default": "5000"},
+        {"name": "poll_ms", "form": "option", "type": "integer", "required": false, "default": "500"},
+        {"name": "scene", "form": "option", "type": "file", "required": false, "note": "an offline PNG frame"},
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1282,6 +1394,7 @@
       "output": "the drill's receipt",
       "writes": true,
       "irreversible": false,
+      "disruptive": true,
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["DrillRecoveryLadder", "Status"],
@@ -1293,8 +1406,29 @@
     {
       "name": "watch",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab lab watch",
+      "params": [
+        {"name": "from_sequence", "form": "option", "type": "unsigned", "required": false},
+        {"name": "to_sequence", "form": "option", "type": "unsigned", "required": false},
+        {"name": "event_type", "form": "option", "type": "string", "required": false},
+        {"name": "minimum_severity", "form": "option", "type": "string", "required": false},
+        {"name": "source", "form": "option", "type": "string", "required": false},
+        {"name": "origin_module", "form": "option", "type": "string", "required": false},
+        {"name": "diagnostic_code", "form": "option", "type": "string", "required": false},
+        {"name": "instance_id", "form": "option", "type": "string", "required": false},
+        {"name": "request_id", "form": "option", "type": "string", "required": false},
+        {"name": "correlation_id", "form": "option", "type": "string", "required": false},
+        {"name": "req", "form": "option", "type": "string", "required": false, "note": "the same condition as correlation_id"},
+        {"name": "causation_id", "form": "option", "type": "string", "required": false},
+        {"name": "task_id", "form": "option", "type": "string", "required": false},
+        {"name": "run_id", "form": "option", "type": "string", "required": false},
+        {"name": "lease_id", "form": "option", "type": "string", "required": false},
+        {"name": "frame_id", "form": "option", "type": "string", "required": false},
+        {"name": "action_id", "form": "option", "type": "string", "required": false},
+        {"name": "recognition_id", "form": "option", "type": "string", "required": false},
+        {"name": "after", "form": "option", "type": "unsigned", "required": false, "default": "0"},
+        {"name": "wait_ms", "form": "option", "type": "integer", "required": false, "default": "1000"},
+        {"name": "max_events", "form": "option", "type": "integer", "required": false, "default": "64"}
+      ],
       "output": "the subscribed events, batch by batch",
       "writes": false,
       "irreversible": false,
@@ -1308,8 +1442,22 @@
     {
       "name": "signatures register",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab lab signatures register",
+      "params": [
+        {"name": "signature_id", "form": "option", "type": "string", "required": false},
+        {"name": "signature_version", "form": "option", "type": "integer", "required": false},
+        {"name": "origin_module", "form": "option", "type": "string", "required": false},
+        {"name": "diagnostic_code", "form": "option", "type": "string", "required": false},
+        {"name": "event_type", "form": "option", "type": "string", "required": false},
+        {"name": "minimum_severity", "form": "option", "type": "string", "required": false},
+        {"name": "lifecycle_stage", "form": "option", "type": "string", "required": false},
+        {"name": "lifecycle_operation", "form": "option", "type": "string", "required": false},
+        {"name": "lifecycle_code", "form": "option", "type": "string", "required": false},
+        {"name": "cause_phase", "form": "option", "type": "string", "required": false},
+        {"name": "cause_source", "form": "option", "type": "string", "required": false},
+        {"name": "resource_kind", "form": "option", "type": "string", "required": false},
+        {"name": "resource_phase", "form": "option", "type": "string", "required": false},
+        {"name": "quiescence", "form": "option", "type": "string", "required": false}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1323,8 +1471,13 @@
     {
       "name": "signatures match",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab lab signatures match",
+      "params": [
+        {"name": "input_state_root", "form": "option", "type": "dir", "required": true},
+        {"name": "input_through", "form": "option", "type": "unsigned", "required": false, "note": "at least 1: absent or 0 is refused"},
+        {"name": "catalog_through", "form": "option", "type": "unsigned", "required": false, "note": "at least 1: absent or 0 is refused"},
+        {"name": "limit", "form": "option", "type": "integer", "required": false},
+        {"name": "cursor", "form": "option", "type": "string", "required": false, "note": "a JSON cursor of at most 4096 bytes"}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1338,8 +1491,12 @@
     {
       "name": "signatures retire",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab lab signatures retire",
+      "params": [
+        {"name": "signature_id", "form": "option", "type": "string", "required": false},
+        {"name": "signature_version", "form": "option", "type": "integer", "required": false},
+        {"name": "registration_event_id", "form": "option", "type": "string", "required": false},
+        {"name": "registration_sequence", "form": "option", "type": "unsigned", "required": false}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1353,8 +1510,11 @@
     {
       "name": "unpin",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab lab unpin",
+      "params": [
+        {"name": "artifact_id", "form": "option", "type": "string", "required": true},
+        {"name": "pin_sequence", "form": "option", "type": "unsigned", "required": true},
+        {"name": "pin_event_id", "form": "option", "type": "string", "required": true}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1368,8 +1528,10 @@
     {
       "name": "debug-package",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab lab debug-package",
+      "params": [
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1378,13 +1540,18 @@
       "requests": ["DebugPackage"],
       "source": ["actinglab lab debug-package"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-5A: on the command line the further flags and words of its command still go on to it (it ignores a flag it does not read); serve --stdio refuses them. A debt: a later slice makes the command strict"
     },
     {
       "name": "export-evidence",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab lab export-evidence",
+      "params": [
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "out", "form": "option", "type": "path", "required": true},
+        {"name": "outcome", "form": "option", "type": "enum:success|failure|cancelled", "required": false, "default": "success"}
+      ],
       "output": "as today's command: the copy written",
       "writes": true,
       "irreversible": false,
@@ -1393,13 +1560,15 @@
       "requests": ["ExportEvidence"],
       "source": ["actinglab lab export-evidence"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-5A: on the command line the further flags and words of its command still go on to it (it ignores a flag it does not read); serve --stdio refuses them. A debt: a later slice makes the command strict"
     },
     {
       "name": "recognize-artifact",
       "module": "debugging",
-      "params": [],
-      "params_more": "actinglab recognize-artifact",
+      "params": [
+        {"name": "request", "form": "option", "type": "file", "required": true, "note": "a saved-artifact OCR request, at most 65536 bytes"}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1524,9 +1693,20 @@
       "name": "observe",
       "module": "authoring",
       "params": [
-        {"name": "capture", "form": "switch", "type": "boolean", "required": false, "note": "capture a live frame through the Runtime"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "capture", "form": "switch", "type": "boolean", "required": false, "note": "capture a live frame through the Runtime"},
+        {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "targets", "form": "option", "type": "string", "required": false, "note": "comma-separated target ids"},
+        {"name": "with_frame", "form": "option", "type": "path", "required": false},
+        {"name": "preview", "form": "switch", "type": "boolean", "required": false},
+        {"name": "record", "form": "switch", "type": "boolean", "required": false},
+        {"name": "test_capture_delay_ms", "form": "option", "type": "integer", "required": false, "note": "test only"},
+        {"name": "fields", "form": "option", "type": "string", "required": false, "note": "comma-separated answer members kept whole"},
+        {"name": "verbose", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --verbose"},
+        {"name": "pretty", "form": "switch", "type": "boolean", "required": false}
       ],
-      "params_more": "actinglab observe",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1540,8 +1720,21 @@
     {
       "name": "record start",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab record start",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "task_id", "form": "option", "type": "string", "required": true},
+        {"name": "force", "form": "switch", "type": "boolean", "required": false},
+        {"name": "holder", "form": "option", "type": "string", "required": false},
+        {"name": "lease_holder", "form": "option", "type": "string", "required": false, "note": "read when holder is absent"},
+        {"name": "record_id", "form": "option", "type": "string", "required": false},
+        {"name": "lease_id", "form": "option", "type": "string", "required": false},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"},
+        {"name": "game", "form": "option", "type": "string", "required": false, "note": "actinglab's global --game"},
+        {"name": "server", "form": "option", "type": "string", "required": false, "note": "actinglab's global --server"},
+        {"name": "locale", "form": "option", "type": "string", "required": false},
+        {"name": "template_threshold", "form": "option", "type": "decimal", "required": false, "note": "a number 0 to 1"},
+        {"name": "metric", "form": "option", "type": "enum:ccoeff_normed|ccorr_normed", "required": false}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1555,8 +1748,48 @@
     {
       "name": "record mark",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab record mark",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "request", "form": "option", "type": "file", "required": false, "note": "an actingcommand.lab-record-mark.v1 request file"},
+        {"name": "request_json", "form": "option", "type": "string", "required": false, "note": "the same request as JSON text"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"},
+        {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
+        {"name": "step", "form": "option", "type": "integer", "required": false},
+        {"name": "frame", "form": "option", "type": "string", "required": false},
+        {"name": "sample", "form": "option", "type": "string", "required": false, "repeat": true},
+        {"name": "page", "form": "option", "type": "string", "required": false},
+        {"name": "template", "form": "option", "type": "string", "required": false, "repeat": true, "note": "<id>=x,y,w,h[@x,y,w,h]"},
+        {"name": "scales", "form": "option", "type": "string", "required": false, "note": "f,..."},
+        {"name": "color", "form": "option", "type": "string", "required": false, "repeat": true, "note": "<id>=x,y,w,h"},
+        {"name": "reuse", "form": "option", "type": "string", "required": false, "repeat": true},
+        {"name": "remove", "form": "option", "type": "string", "required": false, "repeat": true},
+        {"name": "click", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
+        {"name": "click_from", "form": "option", "type": "string", "required": false},
+        {"name": "click_follow", "form": "option", "type": "string", "required": false},
+        {"name": "click_guard", "form": "option", "type": "string", "required": false},
+        {"name": "click_retry", "form": "option", "type": "integer", "required": false},
+        {"name": "replace_click", "form": "switch", "type": "boolean", "required": false},
+        {"name": "transition", "form": "option", "type": "enum:none|page|window", "required": false},
+        {"name": "transition_timeout_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "min_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "max_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "replace_transition", "form": "switch", "type": "boolean", "required": false},
+        {"name": "drop_step", "form": "option", "type": "integer", "required": false},
+        {"name": "reopen_step", "form": "option", "type": "integer", "required": false},
+        {"name": "close_step", "form": "switch", "type": "boolean", "required": false},
+        {"name": "to_transition", "form": "option", "type": "integer", "required": false},
+        {"name": "application", "form": "option", "type": "string", "required": false},
+        {"name": "optional", "form": "switch", "type": "boolean", "required": false},
+        {"name": "not_optional", "form": "switch", "type": "boolean", "required": false},
+        {"name": "settle_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "forbid", "form": "option", "type": "string", "required": false, "repeat": true},
+        {"name": "anchor", "form": "option", "type": "string", "required": false},
+        {"name": "no_anchor", "form": "switch", "type": "boolean", "required": false},
+        {"name": "drag_to", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
+        {"name": "long_press", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
+        {"name": "duration_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "brake_corner", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1570,8 +1803,10 @@
     {
       "name": "record status",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab record status",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1585,8 +1820,20 @@
     {
       "name": "record stop",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab record stop",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "lab_dir", "form": "option", "type": "dir", "required": false},
+        {"name": "package_id", "form": "option", "type": "string", "required": false},
+        {"name": "requires", "form": "option", "type": "string", "required": false},
+        {"name": "game", "form": "option", "type": "string", "required": false, "note": "actinglab's global --game"},
+        {"name": "server", "form": "option", "type": "string", "required": false, "note": "actinglab's global --server"},
+        {"name": "locale", "form": "option", "type": "string", "required": false},
+        {"name": "timeout_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "arrival_timeout_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "application_arrival_timeout_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1600,8 +1847,11 @@
     {
       "name": "record candidates",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab record candidates",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "step_id", "form": "option", "type": "string", "required": true, "note": "also the first positional"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1615,8 +1865,26 @@
     {
       "name": "record amend",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab record amend",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "step_id", "form": "option", "type": "string", "required": false, "note": "also the first positional"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"},
+        {"name": "from_drift_diagnostics", "form": "option", "type": "file", "required": false},
+        {"name": "candidate_index", "form": "option", "type": "integer", "required": false},
+        {"name": "auto_candidate", "form": "option", "type": "integer", "required": false},
+        {"name": "contrast_frame", "form": "option", "type": "file", "required": false},
+        {"name": "id", "form": "option", "type": "string", "required": false},
+        {"name": "region", "form": "option", "type": "string", "required": false},
+        {"name": "color_check", "form": "switch", "type": "boolean", "required": false},
+        {"name": "no_color_check", "form": "switch", "type": "boolean", "required": false},
+        {"name": "threshold", "form": "option", "type": "decimal", "required": false, "note": "a number 0 to 1"},
+        {"name": "clear_threshold", "form": "switch", "type": "boolean", "required": false},
+        {"name": "from", "form": "option", "type": "string", "required": false},
+        {"name": "to", "form": "option", "type": "string", "required": false},
+        {"name": "click", "form": "option", "type": "string", "required": false},
+        {"name": "destructive", "form": "switch", "type": "boolean", "required": false},
+        {"name": "non_destructive", "form": "switch", "type": "boolean", "required": false}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1631,9 +1899,32 @@
       "name": "record step",
       "module": "authoring",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "kind", "form": "option", "type": "string", "required": true},
+        {"name": "step_id", "form": "option", "type": "string", "required": false},
+        {"name": "id", "form": "option", "type": "string", "required": false},
+        {"name": "region", "form": "option", "type": "string", "required": false},
+        {"name": "threshold", "form": "option", "type": "decimal", "required": false, "note": "a number 0 to 1"},
+        {"name": "color_check", "form": "switch", "type": "boolean", "required": false},
+        {"name": "from", "form": "option", "type": "string", "required": false},
+        {"name": "to", "form": "option", "type": "string", "required": false},
+        {"name": "destructive", "form": "switch", "type": "boolean", "required": false},
+        {"name": "frame", "form": "option", "type": "file", "required": false},
+        {"name": "source_frame", "form": "option", "type": "file", "required": false},
+        {"name": "capture", "form": "switch", "type": "boolean", "required": false},
+        {"name": "current_frame", "form": "switch", "type": "boolean", "required": false},
+        {"name": "artifact_dir", "form": "option", "type": "dir", "required": false},
+        {"name": "fresh_delay_ms", "form": "option", "type": "integer", "required": false},
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false},
+        {"name": "contrast_frame", "form": "option", "type": "file", "required": false},
+        {"name": "negative_frame", "form": "option", "type": "file", "required": false},
+        {"name": "click", "form": "option", "type": "string", "required": false},
+        {"name": "swipe", "form": "option", "type": "string", "required": false},
+        {"name": "drag", "form": "option", "type": "string", "required": false},
+        {"name": "long_press", "form": "option", "type": "string", "required": false},
+        {"name": "long_tap", "form": "option", "type": "string", "required": false},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
-      "params_more": "actinglab record step",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1647,10 +1938,12 @@
     {
       "name": "record draft",
       "module": "authoring",
-      "params": [],
-      "params_more": "MCP ac_binding_draft",
+      "params": [
+        {"name": "record_stop", "form": "option", "type": "json", "required": false, "note": "an ac_record_stop answer with its lab parts; one of record_stop and record_stop_export"},
+        {"name": "record_stop_export", "form": "option", "type": "json", "required": false, "note": "{path, sha256}: an exported ac_record_stop answer, read only from MCP's export directory and only when its sha256 matches; one of record_stop and record_stop_export"}
+      ],
       "output": "the binding draft: preflight and the actingd check-config child",
-      "writes": true,
+      "writes": false,
       "irreversible": false,
       "runtime": "offline",
       "entries": ["lab"],
@@ -1658,13 +1951,14 @@
       "source": ["MCP ac_binding_draft", "actinglab package preflight (its first step)"],
       "slice": "LAB-5",
       "status": "planned",
-      "notes": "LAB-2 moved it to LAB-5: its source is MCP's ac_binding_draft (package preflight and an actingd check-config child), no command of actinglab; LAB-5 builds it with MCP from the table"
+      "notes": "LAB-2 moved it to LAB-5: its source is MCP's ac_binding_draft (package preflight and an actingd check-config child), no command of actinglab; LAB-5 builds it with MCP from the table. LAB-5A: writes false: its only code, MCP ac_binding_draft, changes nothing (readOnlyHint true): it reads the record stop answer, runs package preflight and actingd check-config, which only read, and exports check-config's report as a read exports its answer"
     },
     {
       "name": "package check",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab package check",
+      "params": [
+        {"name": "package", "form": "option", "type": "path", "required": true}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1678,8 +1972,10 @@
     {
       "name": "package preflight",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab package preflight",
+      "params": [
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1693,8 +1989,9 @@
     {
       "name": "package validate",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab package validate",
+      "params": [
+        {"name": "zip", "form": "option", "type": "file", "required": true}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1708,8 +2005,9 @@
     {
       "name": "package inspect",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab package inspect",
+      "params": [
+        {"name": "zip", "form": "option", "type": "file", "required": true}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1723,8 +2021,20 @@
     {
       "name": "package bundle",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab package bundle",
+      "params": [
+        {"name": "applications", "form": "option", "type": "file", "required": true},
+        {"name": "packs_root", "form": "option", "type": "dir", "required": true},
+        {"name": "out", "form": "option", "type": "dir", "required": true},
+        {"name": "source_repository", "form": "option", "type": "string", "required": false},
+        {"name": "source_commit", "form": "option", "type": "string", "required": false},
+        {"name": "maintenance", "form": "option", "type": "file", "required": false},
+        {"name": "pages", "form": "option", "type": "file", "required": false},
+        {"name": "interrupts", "form": "option", "type": "file", "required": false},
+        {"name": "navigation", "form": "option", "type": "file", "required": false},
+        {"name": "schedule", "form": "option", "type": "file", "required": false},
+        {"name": "display_layout", "form": "option", "type": "file", "required": false},
+        {"name": "loading", "form": "option", "type": "file", "required": false}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1738,8 +2048,12 @@
     {
       "name": "package loading",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab package loading",
+      "params": [
+        {"name": "root_file", "form": "option", "type": "file", "required": true},
+        {"name": "packs_root", "form": "option", "type": "dir", "required": true},
+        {"name": "write", "form": "switch", "type": "boolean", "required": false},
+        {"name": "check", "form": "switch", "type": "boolean", "required": false}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1753,8 +2067,10 @@
     {
       "name": "package fmt",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab package fmt",
+      "params": [
+        {"name": "package", "form": "option", "type": "dir", "required": true},
+        {"name": "check", "form": "switch", "type": "boolean", "required": false}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1768,8 +2084,14 @@
     {
       "name": "package edit",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab package edit",
+      "params": [
+        {"name": "package", "form": "option", "type": "dir", "required": true},
+        {"name": "patch", "form": "option", "type": "file", "required": false},
+        {"name": "file", "form": "option", "type": "string", "required": false},
+        {"name": "add", "form": "option", "type": "string", "required": false, "note": "a JSON pointer"},
+        {"name": "replace", "form": "option", "type": "string", "required": false, "note": "a JSON pointer"},
+        {"name": "value", "form": "option", "type": "string", "required": false, "note": "one JSON value, as text"}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1822,8 +2144,12 @@
     {
       "name": "resource catalog",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab resource catalog",
+      "params": [
+        {"name": "repo", "form": "option", "type": "dir", "required": true},
+        {"name": "catalog", "form": "option", "type": "file", "required": true, "note": "relative to repo"},
+        {"name": "catalog_server", "form": "option", "type": "string", "required": true},
+        {"name": "field", "form": "option", "type": "string", "required": false, "default": "business_id"}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1837,8 +2163,11 @@
     {
       "name": "resource validate",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab resource validate",
+      "params": [
+        {"name": "repo", "form": "option", "type": "dir", "required": true},
+        {"name": "changed_path", "form": "option", "type": "string", "required": false, "repeat": true},
+        {"name": "changed_paths_file", "form": "option", "type": "file", "required": false}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1852,8 +2181,14 @@
     {
       "name": "resource verify",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab resource verify",
+      "params": [
+        {"name": "repo", "form": "option", "type": "dir", "required": true},
+        {"name": "source_repository", "form": "option", "type": "string", "required": true, "note": "owner/name"},
+        {"name": "work", "form": "option", "type": "dir", "required": true},
+        {"name": "report", "form": "option", "type": "file", "required": true},
+        {"name": "commit", "form": "option", "type": "string", "required": false, "note": "40 hex, must be HEAD"},
+        {"name": "base", "form": "option", "type": "string", "required": false}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1867,8 +2202,18 @@
     {
       "name": "resource restore",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab resource restore",
+      "params": [
+        {"name": "repo", "form": "option", "type": "dir", "required": true, "note": "a new directory"},
+        {"name": "state_root", "form": "option", "type": "dir", "required": true, "note": "the Runtime state root the restore reads, not the installation's"},
+        {"name": "request_id", "form": "option", "type": "request_id", "required": true, "repeat": true, "note": "1 to 32"},
+        {"name": "through_sequence", "form": "option", "type": "unsigned", "required": true, "note": "at least 1"},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "task_id", "form": "option", "type": "string", "required": true},
+        {"name": "entry_page", "form": "option", "type": "string", "required": false},
+        {"name": "target_page", "form": "option", "type": "string", "required": false, "repeat": true},
+        {"name": "goal", "form": "option", "type": "string", "required": false}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1882,8 +2227,12 @@
     {
       "name": "resource compile-maa",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab resource compile-maa",
+      "params": [
+        {"name": "repo", "form": "option", "type": "dir", "required": true},
+        {"name": "maa_tasks", "form": "option", "type": "dir", "required": true},
+        {"name": "facts", "form": "switch", "type": "boolean", "required": false},
+        {"name": "task", "form": "option", "type": "string", "required": false, "repeat": true, "note": "more than one only with facts"}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1913,8 +2262,9 @@
     {
       "name": "standard-pack check",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab standard-pack check",
+      "params": [
+        {"name": "root", "form": "option", "type": "dir", "required": true, "note": "a game's package root, not the installation's"}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1928,8 +2278,11 @@
     {
       "name": "standard-pack compose",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab standard-pack compose",
+      "params": [
+        {"name": "root", "form": "option", "type": "dir", "required": true, "note": "a game's package root, not the installation's"},
+        {"name": "instance", "form": "option", "type": "string", "required": true, "repeat": true, "note": "<alias>=<game>/<server>, once per bound instance; not the instance type: a binding"},
+        {"name": "out", "form": "option", "type": "dir", "required": true}
+      ],
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1943,8 +2296,13 @@
     {
       "name": "scheduling compile",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab scheduling compile",
+      "params": [
+        {"name": "tasks", "form": "option", "type": "file", "required": true},
+        {"name": "pools", "form": "option", "type": "file", "required": true},
+        {"name": "activity", "form": "option", "type": "file", "required": true},
+        {"name": "timeline", "form": "option", "type": "file", "required": true},
+        {"name": "selection", "form": "option", "type": "file", "required": false}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1958,8 +2316,19 @@
     {
       "name": "scheduling timeline",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab scheduling timeline",
+      "params": [
+        {"name": "tasks", "form": "option", "type": "file", "required": true},
+        {"name": "pools", "form": "option", "type": "file", "required": true},
+        {"name": "activity", "form": "option", "type": "file", "required": true},
+        {"name": "timeline", "form": "option", "type": "file", "required": true},
+        {"name": "selection", "form": "option", "type": "file", "required": false},
+        {"name": "event_id", "form": "option", "type": "string", "required": false, "repeat": true},
+        {"name": "unix_ms", "form": "option", "type": "unsigned", "required": true},
+        {"name": "monotonic_ms", "form": "option", "type": "unsigned", "required": true},
+        {"name": "instance_id", "form": "option", "type": "string", "required": true},
+        {"name": "server_id", "form": "option", "type": "string", "required": true},
+        {"name": "game_id", "form": "option", "type": "string", "required": true}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1973,8 +2342,10 @@
     {
       "name": "operation validate",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab operation validate",
+      "params": [
+        {"name": "repo", "form": "option", "type": "dir", "required": true},
+        {"name": "operation_dir", "form": "option", "type": "dir", "required": true}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1988,8 +2359,9 @@
     {
       "name": "operation inspect",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab operation inspect",
+      "params": [
+        {"name": "operation_dir", "form": "option", "type": "dir", "required": true}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2003,8 +2375,9 @@
     {
       "name": "operation explain",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab operation explain",
+      "params": [
+        {"name": "operation_dir", "form": "option", "type": "dir", "required": true}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2018,8 +2391,12 @@
     {
       "name": "regression",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab recognition-regression",
+      "params": [
+        {"name": "state_root", "form": "option", "type": "dir", "required": true, "note": "the Runtime state root the evidence was recorded on, read offline; not the installation's"},
+        {"name": "evidence", "form": "option", "type": "file", "required": true, "repeat": true},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2033,8 +2410,16 @@
     {
       "name": "replay",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab replay",
+      "params": [
+        {"name": "package", "form": "option", "type": "path", "required": true},
+        {"name": "frames", "form": "option", "type": "dir", "required": true},
+        {"name": "facts", "form": "option", "type": "file", "required": false},
+        {"name": "select", "form": "option", "type": "string", "required": false},
+        {"name": "scan", "form": "option", "type": "file", "required": false},
+        {"name": "parameter", "form": "option", "type": "key_value", "required": false, "repeat": true},
+        {"name": "seed", "form": "option", "type": "unsigned", "required": false},
+        {"name": "standard_pack_root", "form": "option", "type": "dir", "required": false}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2048,8 +2433,13 @@
     {
       "name": "recognize",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab recognize",
+      "params": [
+        {"name": "target", "form": "option", "type": "string", "required": true},
+        {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2064,8 +2454,13 @@
     {
       "name": "detect-page",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab detect-page",
+      "params": [
+        {"name": "check_pages", "form": "switch", "type": "boolean", "required": false},
+        {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2080,8 +2475,12 @@
     {
       "name": "current-page",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab current-page",
+      "params": [
+        {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2096,8 +2495,13 @@
     {
       "name": "is-visible",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab is-visible",
+      "params": [
+        {"name": "target", "form": "option", "type": "string", "required": true, "note": "also the first positional"},
+        {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2112,8 +2516,15 @@
     {
       "name": "locate",
       "module": "authoring",
-      "params": [],
-      "params_more": "actinglab locate",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "template", "form": "option", "type": "file", "required": true, "note": "also the first positional"},
+        {"name": "metric", "form": "option", "type": "enum:ccorr_normed|ccoeff_normed", "required": false, "default": "ccorr_normed"},
+        {"name": "scene", "form": "option", "type": "file", "required": false, "note": "an offline PNG frame"},
+        {"name": "capture", "form": "switch", "type": "boolean", "required": false},
+        {"name": "fresh_delay_ms", "form": "option", "type": "integer", "required": false, "default": "160"},
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
+      ],
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2304,9 +2715,9 @@
       "name": "op status",
       "module": "rescue",
       "params": [
-        {"name": "op", "form": "positional", "type": "operation_id", "required": false, "note": "absent: the installation's state"}
+        {"name": "op", "form": "positional", "type": "operation_id", "required": false, "note": "absent: the installation's state; on the command line also --op <op>, in place of the positional, or the installer's own --operation <op>"},
+        {"name": "check_rollback", "form": "switch", "type": "boolean", "required": false}
       ],
-      "params_more": "actingctl install status",
       "output": "the installation's state, or one operation's progress",
       "writes": false,
       "irreversible": false,
@@ -2408,9 +2819,11 @@
       "name": "release verify",
       "module": "rescue",
       "params": [
-        {"name": "dir", "form": "positional", "type": "dir", "required": true}
+        {"name": "dir", "form": "positional", "type": "dir", "required": true, "note": "on the command line also --dir <dir>, in place of the positional"},
+        {"name": "facts", "form": "option", "type": "file", "required": false},
+        {"name": "expect_tag", "form": "option", "type": "string", "required": false},
+        {"name": "expect_commit", "form": "option", "type": "string", "required": false}
       ],
-      "params_more": "actingctl install release verify",
       "output": "the verified release",
       "writes": false,
       "irreversible": false,
@@ -2426,9 +2839,12 @@
       "name": "release stage",
       "module": "rescue",
       "params": [
-        {"name": "dir", "form": "positional", "type": "dir", "required": true}
+        {"name": "dir", "form": "positional", "type": "dir", "required": true, "note": "on the command line also --dir <dir>, in place of the positional"},
+        {"name": "facts", "form": "option", "type": "file", "required": false},
+        {"name": "expect_tag", "form": "option", "type": "string", "required": false},
+        {"name": "expect_commit", "form": "option", "type": "string", "required": false},
+        {"name": "local_build", "form": "switch", "type": "boolean", "required": false}
       ],
-      "params_more": "actingctl install release stage",
       "output": "the kept build",
       "writes": true,
       "irreversible": false,
@@ -2807,8 +3223,15 @@
     {
       "name": "agent add",
       "module": "rescue",
-      "params": [],
-      "params_more": "actingctl agent-channel add",
+      "params": [
+        {"name": "name", "form": "option", "type": "string", "required": true},
+        {"name": "client", "form": "option", "type": "string", "required": true},
+        {"name": "native_id", "form": "option", "type": "string", "required": true},
+        {"name": "dsh_app_root", "form": "option", "type": "dir", "required": false},
+        {"name": "dsh_home", "form": "option", "type": "dir", "required": false},
+        {"name": "dsh_node", "form": "option", "type": "file", "required": false},
+        {"name": "restore", "form": "option", "type": "enum:on|off", "required": false}
+      ],
       "output": "as today's command (agent-forward.md)",
       "writes": true,
       "irreversible": false,
@@ -2823,8 +3246,9 @@
     {
       "name": "agent remove",
       "module": "rescue",
-      "params": [],
-      "params_more": "actingctl agent-channel remove",
+      "params": [
+        {"name": "name", "form": "option", "type": "string", "required": true}
+      ],
       "output": "as today's command (agent-forward.md)",
       "writes": true,
       "irreversible": false,
@@ -2840,7 +3264,6 @@
       "name": "agent list",
       "module": "rescue",
       "params": [],
-      "params_more": "actingctl agent-channel list",
       "output": "as today's command (agent-forward.md)",
       "writes": false,
       "irreversible": false,
@@ -2855,8 +3278,9 @@
     {
       "name": "agent claude-hook",
       "module": "rescue",
-      "params": [],
-      "params_more": "actingctl agent-channel claude-hook",
+      "params": [
+        {"name": "action", "form": "positional", "type": "enum:start|end", "required": true}
+      ],
       "output": "as today's command (agent-forward.md)",
       "writes": true,
       "irreversible": false,
@@ -2871,8 +3295,9 @@
     {
       "name": "agent claude-register",
       "module": "rescue",
-      "params": [],
-      "params_more": "actingctl agent-channel claude-register",
+      "params": [
+        {"name": "name", "form": "option", "type": "string", "required": true}
+      ],
       "output": "as today's command (agent-forward.md)",
       "writes": true,
       "irreversible": false,
@@ -2888,7 +3313,6 @@
       "name": "agent notice",
       "module": "rescue",
       "params": [],
-      "params_more": "actingctl agent-channel notice",
       "output": "as today's command (agent-forward.md)",
       "writes": true,
       "irreversible": false,

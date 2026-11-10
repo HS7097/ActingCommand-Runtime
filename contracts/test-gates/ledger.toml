@@ -912,3 +912,12 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_w1_8::w1_8_l2_b_the_published_head_of_a_sealed_writer_is_ledger_write_failed",
 ]
 incident = ["#422 W1-8"]
+
+# #428 UNSET-2 (0.12.51; register §1.296; brief rd-1110/brief-unset2.md; changes #670's rule R4 and its pin): a run with no terminal whose one run-linked release is its own (the failure path's, effect performed) is settled as interrupted from that release also with input or effect records, once (the same settlement again is the recorded one and appends nothing); the same run with a terminal is still refused (scheduled_execution_recovery_failure_conflict), and two run-linked releases are still refused (scheduled_execution_recovery_release_not_unique). The second test is the one that pinned the old rule, its effect half adapted on purpose
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::unset2_own_release_with_inputs_settles_as_interrupted_and_a_terminal_still_refuses",
+    "actingcommand-ledger::lib::global::tests::interrupted_policy_execution_recovery_accepts_effects_and_rejects_duplicate_release",
+]
+incident = ["#428 UNSET-2"]

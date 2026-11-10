@@ -1417,31 +1417,15 @@ impl<B: DurableStorage> EventStore<B> {
                     && event.links().run_id() == recovered_links.run_id()
             })
             .collect::<Vec<_>>();
-        // The run's effect and input records: a run with one is never settled as interrupted.
-        let run_effects = self
-            .run_records(
-                recovered_links.run_id(),
-                &[
-                    EventType::TaskEffectIntent,
-                    EventType::TaskEffectCompleted,
-                    EventType::InputIntent,
-                    EventType::InputCommitted,
-                    EventType::InputFailed,
-                ],
-            )?
-            .into_iter()
-            .any(|event| {
-                event.links().task_id() == recovered_links.task_id()
-                    && event.links().run_id() == recovered_links.run_id()
-                    && matches!(
-                        event.event_type(),
-                        EventType::TaskEffectIntent
-                            | EventType::TaskEffectCompleted
-                            | EventType::InputIntent
-                            | EventType::InputCommitted
-                            | EventType::InputFailed
-                    )
-            });
+        // UNSET-2 (register §1.296; changes #670's rule R4 and its pin): a run with no terminal
+        // whose one run-linked release is its own (the failure path's, effect `performed`) is
+        // settled as interrupted from that release also when it has effect or input records, as
+        // a run whose release the start recovered (`not_performed`) is; its effect and input
+        // records are no longer read here. A run cut by a stop after it wrote its own release
+        // and before its terminal has no other settlement, and its dispatch stayed open at every
+        // start before. A run that has a terminal is still settled only from it, and more than
+        // one run-linked release is still refused
+        // (`scheduled_execution_recovery_release_not_unique`).
         // The run's requests a recovered settlement is measured from
         // (`matching_scheduled_task_requests`).
         let run_requests = self.run_records(
@@ -1541,7 +1525,6 @@ impl<B: DurableStorage> EventStore<B> {
                 EventType::LeaseReleased => {
                     same_task_run_chain(source_fact.links(), recovered_links)
                         && terminals.is_empty()
-                        && !run_effects
                         && matches!(
                             execution.policy_result(),
                             PolicyExecutionOutcome::Failed { failure }
@@ -1721,7 +1704,6 @@ impl<B: DurableStorage> EventStore<B> {
                     || !same_task_run_chain(source_fact.links(), recovered_links)
                     || !terminals.is_empty()
                     || source_fact.timestamp_unix_ms() != execution.observed_at_unix_ms()
-                    || run_effects
                     || !matches!(
                         execution.policy_result(),
                         PolicyExecutionOutcome::Failed { failure }
