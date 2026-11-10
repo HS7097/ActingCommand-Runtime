@@ -87,8 +87,14 @@
         );
     }
 
+    // Workflow #434 LAB-2b fix 2: actinglab's own `status`, which refused an untrusted remote
+    // endpoint here, is the CLI module's core row now (its case is in
+    // `gate_434_lab2b::status_and_run_show_take_their_core_rows`). `doctor` takes the same path
+    // through the own dispatcher: the endpoint of `--runtime-endpoint`
+    // (`effective_runtime_endpoint`) through `runtime_endpoint_policy`, before any TCP probe. The
+    // endpoint is refused and never probed: only a probed endpoint's check carries `reachable`.
     #[test]
-    fn status_blocks_untrusted_remote_runtime_endpoint() {
+    fn doctor_refuses_untrusted_remote_runtime_endpoint_before_any_request() {
         let _guard = env_lock();
         set_missing_config_env();
         let result = run_cli(
@@ -96,15 +102,41 @@
                 "--json",
                 "--runtime-endpoint",
                 "http://example.invalid:4317",
-                "status",
+                "doctor",
             ],
             true,
         );
-        assert_eq!(result.exit_code(), 3);
+        assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
+        let checks = result
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("checks")
+            .and_then(Value::as_array)
+            .unwrap();
+        let runtime = checks
+            .iter()
+            .find(|check| check.get("name").and_then(Value::as_str) == Some("runtime_endpoint"))
+            .expect("runtime endpoint check");
+        assert_eq!(runtime.get("ok").and_then(Value::as_bool), Some(false));
         assert_eq!(
-            result.envelope.error.as_ref().unwrap().code,
-            "runtime_endpoint_not_local"
+            runtime.get("endpoint").and_then(Value::as_str),
+            Some("http://example.invalid:4317")
         );
+        assert_eq!(
+            runtime
+                .pointer("/policy/error_code")
+                .and_then(Value::as_str),
+            Some("runtime_endpoint_not_local")
+        );
+        assert_eq!(
+            runtime
+                .pointer("/policy/blocked_by/0")
+                .and_then(Value::as_str),
+            Some("local_runtime_only")
+        );
+        assert!(runtime.pointer("/policy/reachable").is_none(), "{runtime}");
     }
 
     #[test]

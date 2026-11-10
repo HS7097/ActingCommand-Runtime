@@ -21,7 +21,11 @@
 //   consumer goldens pin it against main's code, `tests/consumer_goldens.rs`).
 // - `status_and_run_show_take_their_core_rows`: the two words reach the CLI module's core rows on
 //   the command line, actinglab's old implementations are gone, and the command line answers what
-//   `serve --stdio` answers, `status` with its `watchdog` block.
+//   `serve --stdio` answers, `status` with its `watchdog` block. Fix 2 (the two cases of the old
+//   `status` tests): with no Runtime running `status` exits 0 with its `daemon` block offline,
+//   class `runtime`, `runtime_unavailable`, no connection opened; `--runtime-endpoint` with an
+//   untrusted remote endpoint is refused before anything is sent, exit 1, after the words by the
+//   core row (`actingctl_usage_invalid`) and before them by actinglab's own dispatch.
 // - `own_results_never_name_outcome`: no own command's line carries a top-level `outcome` other
 //   than its own; `resource verify` and `run summary` carry their documents whole under `report`
 //   and `summary`; a result that names `outcome` without a declared member is refused, never
@@ -954,6 +958,70 @@ fn status_and_run_show_take_their_core_rows() {
         "{line}"
     );
     assert!(line.get("watchdog").is_some(), "{line}");
+    // Fix 2, `actinglab status` with no Runtime running (the case of actinglab's old
+    // `status_without_runtime_is_exit_five`): the row's Runtime is optional, so the line succeeds
+    // with exit 0 and its `daemon` block names the missing Runtime: offline, the client's class
+    // `runtime` and `runtime_unavailable`, caused by `runtime_info_unavailable`. The client found
+    // no runtime-info.json under the state root and opened no connection.
+    assert_eq!(status.code, 0, "{line}");
+    assert_eq!(line["outcome"]["category"], "success", "{line}");
+    let daemon = &line["daemon"];
+    assert_eq!(daemon["online"], false, "{line}");
+    assert_eq!(daemon["error"]["class"], "runtime", "{line}");
+    assert_eq!(
+        daemon["error"]["outcome"]["code"], "runtime_unavailable",
+        "{line}"
+    );
+    assert!(
+        daemon["error"]["outcome"]
+            .to_string()
+            .contains("\"runtime_info_unavailable\""),
+        "{line}"
+    );
+    // Fix 2, `--runtime-endpoint` with an untrusted remote endpoint (the case of actinglab's old
+    // `status_blocks_untrusted_remote_runtime_endpoint`). After the words the line is the core
+    // row's, which takes no endpoint: the option is refused by name while the words are read,
+    // before `core_ops::answer`, the one place the row connects (`actingctl_usage_invalid`, exit
+    // 1, no overview read). Before the words the line is no core row's: actinglab's own dispatch
+    // refuses it as a usage error before anything runs, exit 1. The row reaches a Runtime only
+    // through the state root's runtime-info.json, whose host must be loopback.
+    let untrusted = "http://example.invalid:4317";
+    for line in [
+        &["status", "--runtime-endpoint", untrusted][..],
+        &["--json", "status", "--runtime-endpoint", untrusted][..],
+    ] {
+        let line = words_of(line);
+        match entry(line.clone(), false) {
+            Err(module) => assert_eq!(module, line),
+            Ok(own) => panic!("{line:?} is the CLI module's core row, not {own:?}"),
+        }
+        let (_, words) = cli_module::front_end(line.clone());
+        assert!(cli_module::words::parse(table, &words).is_err(), "{line:?}");
+        let refused = cli_module::run_line(&words);
+        assert_eq!(refused.code, 1, "{line:?}");
+        let refusal = one_line(&cli_module::stdout_text(&refused, true).expect("the refusal"));
+        assert_eq!(
+            refusal["outcome"]["code"], "actingctl_usage_invalid",
+            "{refusal}"
+        );
+        assert_eq!(
+            refusal["outcome"]["values"],
+            json!({"argument": "--runtime-endpoint", "argument_problem": "unknown"}),
+            "{refusal}"
+        );
+        assert!(refusal.get("daemon").is_none(), "{refusal}");
+    }
+    let (exit, text) = printed_own(&words_of(&[
+        "--json",
+        "--runtime-endpoint",
+        untrusted,
+        "status",
+    ]));
+    assert_eq!(exit.code, 1, "{text}");
+    let refusal = one_line(&text);
+    assert_eq!(refusal["outcome"]["category"], "error", "{refusal}");
+    assert_eq!(refusal["outcome"]["code"], "validation_failed", "{refusal}");
+    assert!(refusal.get("daemon").is_none(), "{refusal}");
     let shown = cli_module::run_line(&words_of(&["run", "show", REQUEST]));
     assert_eq!(
         cli_module::stdout_text(&shown, true).expect("the run show line"),
