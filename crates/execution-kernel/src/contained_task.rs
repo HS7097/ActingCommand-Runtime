@@ -88,6 +88,8 @@ mod designated_effects;
 // #412 Lab B-3 S1: one declared operation run as the kernel runs it.
 mod declared_operation;
 mod linear;
+// Workflow #428 S168-4: a list read from a page, written whole as a record-list fact.
+mod list_reading;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.
@@ -312,6 +314,7 @@ use actingcommand_selection_policy::SelectionPolicy;
 pub use capture_cadence::CaptureCadence;
 pub use declared_operation::{DeclaredOperation, DeclaredOperationOutcome};
 pub use linear::linear_main_interface;
+pub use list_reading::{ListReadingDeclaration, ListReadingMiss, ListReadingRows};
 pub use loading::{LoadingEvent, LoadingMode, LoadingRecord};
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
@@ -2246,6 +2249,22 @@ pub enum ContainedTaskTrace {
         captured_at: SystemTime,
         adjustments: Vec<ResourceAdjustmentResult>,
     },
+    /// Workflow #428 S168-4: a `read_list` step's end check passed on the frame the run captured
+    /// last; `captured_at` is that frame's device capture time. The list, when it holds, is
+    /// observed on it. In memory only.
+    ListReadingFrame {
+        captured_at: SystemTime,
+    },
+    /// Workflow #428 S168-4: what one `read_list` step read, recorded once when its scan ended
+    /// without a failure: the list whole (`Ok`), observed on the frame of its
+    /// `ListReadingFrame` (`captured_at`), which the run publishes at its successful end; or its
+    /// miss (`Err`) on the step's last viewport, the frame captured last (`captured_at`), which
+    /// is the warning `contained_task_resource_reading_unresolved` at once. In memory only.
+    ListReading {
+        declaration: ListReadingDeclaration,
+        captured_at: SystemTime,
+        list: Result<ListReadingRows, ListReadingMiss>,
+    },
     Finalizing {
         outcome: TaskOutcome,
     },
@@ -3241,6 +3260,8 @@ impl PreparedContainedTask {
         // STORE-FG-1: the store steps, their listing proof and the way back.
         program.validate_store_operations(&control, &detector, &evaluator)?;
         selection::prepare_select_steps(&mut program, &control, &bundle, &evaluator)?;
+        // Workflow #428 S168-4: every `read_list` step's references and scan.
+        list_reading::prepare_list_readings(&mut program, &control, &evaluator)?;
         let admission_limit = control
             .step_timeout()
             .milliseconds
@@ -3435,9 +3456,12 @@ impl PreparedContainedTask {
             Some(STORE_UPDATE)
         } else if self.has_resource_readings() {
             Some("resource_readings")
+        } else if self.has_resource_adjustments() {
+            Some("resource_adjustments")
         } else {
-            self.has_resource_adjustments()
-                .then_some("resource_adjustments")
+            // Workflow #428 S168-4: a list reading is refused as readings are.
+            self.has_list_readings()
+                .then_some(list_reading::READ_LIST_MEMBER)
         }
     }
 
@@ -3747,6 +3771,9 @@ impl PreparedContainedTask {
             Some("resource_readings")
         } else if self.program.resource_adjustments.is_some() {
             Some("resource_adjustments")
+        } else if self.program.declares_list_readings() {
+            // Workflow #428 S168-4: a list reading is refused as readings are.
+            Some(list_reading::READ_LIST_MEMBER)
         } else if self
             .program
             .operations
@@ -5209,6 +5236,40 @@ impl PreparedContainedTask {
                                 phase: machine.phase_evidence(None),
                             })
                             .map_err(ContainedTaskRunError::Boundary)?;
+                        // Workflow #428 S168-4: a list reading scans its page from the step's
+                        // frame and records what it read; no tap and no effect record. Its moves
+                        // are inputs, so it is never retried. It finishes on its page as
+                        // recognized on its last viewport, completing no stage, and the run goes
+                        // on there; the page's operations are chosen without it from now on.
+                        if let Some(prepared) = operation.prepared_list.as_deref() {
+                            let observed = observation.as_ref().ok_or_else(|| {
+                                ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code())
+                            })?;
+                            let last = self.read_list_step(
+                                runtime,
+                                operation,
+                                prepared,
+                                observed,
+                                (step_index, step_timing),
+                            )?;
+                            runtime
+                                .record(ContainedTaskTrace::StepFinished {
+                                    step_index,
+                                    operation_label: operation_id.clone(),
+                                    page_label: last.page_label.clone(),
+                                    phase: machine.phase_evidence(None),
+                                })
+                                .map_err(ContainedTaskRunError::Boundary)?;
+                            machine
+                                .operation_succeeded(&operation_id, Some(last.page_label.clone()))
+                                .map_err(|_| {
+                                    ContainedTaskError::new(
+                                        SharedCode::ContainedTaskStateInvalid.code(),
+                                    )
+                                })?;
+                            observation = Some(last);
+                            break;
+                        }
                         // #411 B36/B19 (A35-S3): a wait step makes no input: no guard, no
                         // effect intent, no input and no effect record. It waits on its own page
                         // for one of its destinations in the confirmation's wait.
@@ -9087,6 +9148,9 @@ impl TaskProgram {
             validate_page_references(&control.game, &terminal_pages, detector)?;
             validate_page_set_overlap(&control.game, &terminal_pages, &self.error_pages, detector)?;
         }
+        // Workflow #428 S168-4: the members of every `read_list` step, before the common
+        // operation checks; its references with the recognition pack (`prepare_list_readings`).
+        self.validate_list_reading_members()?;
         // #411 B36/B19 (A35-S3): wait steps and wait pages, before the common operation checks;
         // Workflow #407 LOAD-2: then each confirmation's `loading`.
         self.validate_wait_steps(control, detector, bundle.operation_path())?;
@@ -11026,6 +11090,14 @@ struct TaskOperation {
     /// page for one of its destinations; task schema `0.9`, page-graph tasks only.
     #[serde(default)]
     wait: Option<wait_step::TaskWait>,
+    /// Workflow #428 S168-4: a list reading, as the package writes it; admission reads it into
+    /// `prepared_list` and refuses it with `contained_task_resource_reading_invalid`.
+    #[serde(default)]
+    read_list: Option<serde_json::Value>,
+    /// The admitted list reading, set by contained task admission and never read from the
+    /// package.
+    #[serde(skip)]
+    prepared_list: Option<Box<list_reading::PreparedListReading>>,
 }
 
 impl TaskOperation {
@@ -11043,6 +11115,12 @@ impl TaskOperation {
             .as_ref()
             .and_then(selection::TaskSelect::scan)
             .map(|scan| scan.max_ms())
+            // Workflow #428 S168-4: so is an admitted list reading's.
+            .or_else(|| {
+                self.prepared_list
+                    .as_deref()
+                    .map(list_reading::PreparedListReading::max_ms)
+            })
     }
 
     fn effective_timing(&self, control: &TaskControl) -> EffectiveOperationTiming {
@@ -11164,6 +11242,21 @@ impl TaskOperation {
                     && !self.unguarded_trusted_coordinate =>
             {
                 Ok(())
+            }
+            // Workflow #428 S168-4: a list reading declares any guard a select step takes and is
+            // never a trusted coordinate; its members were admitted first
+            // (`TaskProgram::validate_list_reading_members`).
+            (None, None, None)
+                if self.read_list.is_some()
+                    && self.wait.is_none()
+                    && !self.unguarded_trusted_coordinate =>
+            {
+                match &self.guard {
+                    Some(guard) => guard.validate(self, control),
+                    None => Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskGuardMissing.code(),
+                    )),
+                }
             }
             _ => Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskOperationInvalid.code(),

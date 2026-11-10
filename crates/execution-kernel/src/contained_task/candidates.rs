@@ -153,8 +153,15 @@ impl TaskOperation {
         }
     }
 
-    /// #411 B16 part 1: the operation's per-run cap as the static checks see it.
+    /// #411 B16 part 1: the operation's per-run cap as the static checks see it. Workflow #428
+    /// S168-4: a `read_list` step runs at most once per run and is then passed over.
     pub(super) fn phase_run_cap(&self) -> Option<actingcommand_contract::TaskPhaseRunCap<'_>> {
+        if self.declares_read_list() {
+            return Some(actingcommand_contract::TaskPhaseRunCap {
+                limit: 1,
+                outcome_key: None,
+            });
+        }
         self.max_runs
             .map(|limit| actingcommand_contract::TaskPhaseRunCap {
                 limit,
@@ -180,11 +187,22 @@ impl TaskOperation {
     /// #411 B16 part 1: the operation may be capped and passed over to the page's next operation
     /// (`on_max_runs: next_candidate`).
     pub(super) fn may_be_run_capped(&self) -> bool {
-        self.max_runs.is_some() && matches!(self.on_max_runs, Some(TaskOnMaxRuns::NextCandidate(_)))
+        (self.max_runs.is_some()
+            && matches!(self.on_max_runs, Some(TaskOnMaxRuns::NextCandidate(_))))
+            || self.declares_read_list()
     }
 
-    /// #411 B16 part 1: the per-run cap the run holds the operation to.
+    /// #411 B16 part 1: the per-run cap the run holds the operation to. Workflow #428 S168-4
+    /// (`contracts/resource-readings.md`, "Once per run"): a `read_list` step's own rule, one
+    /// dispatch and then `next_candidate`.
     pub(super) fn run_cap(&self) -> Option<OperationRunCap> {
+        if self.declares_read_list() {
+            return Some(OperationRunCap {
+                operation_id: self.id.clone(),
+                max_runs: 1,
+                on_max_runs: RunMaxRunsEnd::NextCandidate,
+            });
+        }
         let max_runs = self.max_runs?;
         let on_max_runs = match self.on_max_runs.as_ref()? {
             TaskOnMaxRuns::NextCandidate(_) => RunMaxRunsEnd::NextCandidate,

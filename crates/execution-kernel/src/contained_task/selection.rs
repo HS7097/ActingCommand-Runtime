@@ -411,7 +411,7 @@ pub(super) fn prepare_select_steps(
             Some(scan) => {
                 if let Some(detail) = scan.admission_refusal(
                     layout,
-                    &policy,
+                    Some(&policy),
                     evaluator,
                     (control.resolution.width, control.resolution.height),
                     control.task_timeout().milliseconds,

@@ -738,6 +738,12 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         checks: &[Check::G5],
         reason: "standing: the configuration manifest's subsystem names are vocabulary tokens, not codes or locations (model section 2.1); the subsystem runtime_fact_snapshot equals the runtime client's location of that spelling",
     },
+    AllowEntry {
+        path: "crates/pack-containment/src/source/declarations.rs",
+        item: Some("read_list_member"),
+        checks: &[Check::G5],
+        reason: "standing: the task schema member read_list shares its spelling with the kernel's stage location read_list (Workflow #428 S168-4, register section 1.291 S168C-3); pack-containment, which the kernel depends on, spells the member in this one function",
+    },
     // A2d bridges: channels of the execution and recognition group that stay strings until the
     // slice the reason names removes the entry (brief-a2bcd.md).
     bridge(

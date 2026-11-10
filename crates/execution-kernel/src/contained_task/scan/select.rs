@@ -398,6 +398,17 @@ impl ScanSession<'_> {
             }
             ScanEnd::Covered => (self.decide()?, ScanCoverageState::Complete),
             ScanEnd::EarlyStopped => (self.decide()?, ScanCoverageState::EarlyStopped),
+            // Workflow #428 S168-4: only a list reading's session has a row limit.
+            ScanEnd::RowsExceeded => {
+                return Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::SelectionEvaluationFailed.code(),
+                    format!(
+                        "layout={} a select step's scan has no row limit",
+                        self.layout_id
+                    ),
+                )
+                .into());
+            }
         };
         let unknown = self.unknown_positions();
         let unknown_instances = u32_of(unknown.len());
@@ -527,8 +538,9 @@ impl ScanSession<'_> {
         if unknown.is_empty() {
             return Ok(None);
         }
+        let policy = self.policy()?;
         let (field_domains, domain) =
-            bound_inputs(self.layout, self.policy, Some(&self.scan.identity_feature)).map_err(
+            bound_inputs(self.layout, policy, Some(&self.scan.identity_feature)).map_err(
                 |detail| {
                     ContainedTaskError::with_detail(
                         ExecutionKernelCode::ContainedTaskSelectInvalid.code(),
@@ -543,7 +555,7 @@ impl ScanSession<'_> {
                 .as_ref()
                 .map_or_else(|| domain.clone(), |identity| vec![identity.clone()]);
             let bound = upper_bound_with_tables(
-                self.policy,
+                policy,
                 self.tables,
                 self.facts,
                 self.now_unix_ms,

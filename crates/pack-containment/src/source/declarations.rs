@@ -33,6 +33,56 @@ const SCAN_MEMBERS: &[&str] = &[
 /// Workflow #406 T3 (plan Q17): the click kind of the path drag the kernel generates in a box.
 const PATH_DRAG_KIND: &str = "single_touch_path_drag_v1";
 
+/// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings"): the operation member
+/// that declares a list reading. Its spelling is the kernel's stage location `read_list` (register
+/// §1.291 S168C-3), so pack-containment spells it here only.
+pub(crate) fn read_list_member() -> &'static str {
+    "read_list"
+}
+
+/// Workflow #428 S168-4: the members of a `read_list` object, every one required.
+const READ_LIST_MEMBERS: &[&str] = &[
+    "layout_id",
+    "key_feature",
+    "key_column",
+    "columns",
+    "fact_key",
+    "valid_for_ms",
+    "scan",
+];
+
+/// Workflow #428 S168-4 ("Members of a `read_list` step"): the operation members a `read_list`
+/// step refuses with `UnknownField` (a retry, a recovery, a trusted coordinate, a confirmation
+/// after its moves, a cap of its own, and the `linear_steps` members).
+const READ_LIST_REFUSED_MEMBERS: &[&str] = &[
+    "max_attempts",
+    "retry_interval_ms",
+    "on_error",
+    "unguarded_trusted_coordinate",
+    "verify_template",
+    "expect_after",
+    "post_delay_ms",
+    "input_recheck",
+    "observation_window",
+    "on_guard_refused",
+    "max_runs",
+    "on_max_runs",
+    "transition",
+    "optional",
+];
+
+/// Workflow #428 S168-4: the effects a `read_list` step never declares beside it.
+const READ_LIST_OTHER_EFFECTS: &[&str] = &["click", "application", "select", "wait"];
+
+/// Workflow #428 S168-4: the `value` of the feature `name` of a task's candidate layout, when
+/// the layout declares it.
+fn layout_feature_value<'v>(layout: &'v Value, name: &str) -> Option<&'v str> {
+    super::array_field(layout, "features")
+        .iter()
+        .find(|feature| feature.get("name").and_then(Value::as_str) == Some(name))
+        .and_then(|feature| feature.get("value").and_then(Value::as_str))
+}
+
 /// Members of one `checks` entry (`contracts/selection-graph.md`, section Checks).
 const CHECK_MEMBERS: std::ops::RangeInclusive<usize> = 2..=8;
 /// Workflow #390 EXEC-2: an operation's `observation_window`, by its `until`, with its required
@@ -515,6 +565,7 @@ impl Declaration<'_> {
                 "max_runs",
                 "on_max_runs",
                 "wait",
+                read_list_member(),
             ],
         )?;
         if object.get("verify_template").is_none_or(Value::is_null) {
@@ -555,6 +606,14 @@ impl Declaration<'_> {
         if let Some(wait) = wait {
             self.wait(wait, &child(pointer, "wait"))?;
         }
+        // Workflow #428 S168-4: or a list reading (task schema `0.9`), the step's only effect;
+        // the task-level rules and its references are `list_readings`'.
+        let read_list = object
+            .get(read_list_member())
+            .filter(|value| !value.is_null());
+        if let Some(read_list) = read_list {
+            self.read_list_step(object, read_list, pointer)?;
+        }
         match (
             object.get("click").filter(|value| !value.is_null()),
             object.get("application").filter(|value| !value.is_null()),
@@ -577,7 +636,7 @@ impl Declaration<'_> {
                     ResourceDeclarationReason::InvalidValue,
                 ));
             }
-            (None, None, None) if wait.is_some() => {}
+            (None, None, None) if wait.is_some() || read_list.is_some() => {}
             (None, None, None) => {
                 let click = self.required(object, pointer, "click")?;
                 self.click(click, &child(pointer, "click"), canonical)?;
@@ -1114,6 +1173,286 @@ impl Declaration<'_> {
         // select over a `repeated_anchor` layout.
         if let Some(track_px) = select.get("track_px").filter(|value| !value.is_null()) {
             self.unsigned(track_px, &child(&select_pointer, "track_px"))?;
+        }
+        Ok(())
+    }
+
+    /// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings", "Declaration"): a
+    /// `read_list` step's structure, on task schema `0.9` only (`UnconsumedField` before it), as
+    /// the step's only effect (`InvalidValue` at `read_list` beside another). The step stays on
+    /// its page (`to` its `from`), declares its `guard`, is never retried and takes none of
+    /// [`READ_LIST_REFUSED_MEMBERS`]. Its `read_list` holds exactly [`READ_LIST_MEMBERS`]: a
+    /// candidate layout id, a key feature, a key column and 0..=63 distinct columns that are
+    /// tokens, a `fact_key` under `inventory.list.`, a `valid_for_ms` of a fact's lifetime and a
+    /// scan with every member but `early_stop`, which is refused. The task-level rules and the
+    /// references are [`Self::list_readings`]'; Runtime admission reads the scan's values.
+    fn read_list_step(
+        &self,
+        operation: &Map<String, Value>,
+        value: &Value,
+        pointer: &str,
+    ) -> CliOutcome<()> {
+        let read_pointer = child(pointer, read_list_member());
+        if self.schema_before(TaskSchema::V0_9) {
+            return Err(self.error(&read_pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let declared = |member: &str| operation.get(member).is_some_and(|value| !value.is_null());
+        if READ_LIST_OTHER_EFFECTS.iter().copied().any(declared) {
+            return Err(self.error(&read_pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        if let Some(member) = READ_LIST_REFUSED_MEMBERS
+            .iter()
+            .copied()
+            .find(|&member| declared(member))
+        {
+            return Err(self.error(
+                &child(pointer, member),
+                ResourceDeclarationReason::UnknownField,
+            ));
+        }
+        if operation.get("retryable") == Some(&Value::Bool(true)) {
+            return Err(self.error(
+                &child(pointer, "retryable"),
+                ResourceDeclarationReason::InvalidValue,
+            ));
+        }
+        if !declared("guard") {
+            return Err(self.error(
+                &child(pointer, "guard"),
+                ResourceDeclarationReason::MissingField,
+            ));
+        }
+        // The step stays on its page: `to` names its `from` page, as a string or a set of one.
+        let to = operation
+            .get("to")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| {
+                self.error(
+                    &child(pointer, "to"),
+                    ResourceDeclarationReason::MissingField,
+                )
+            })?;
+        let to_page = match to {
+            Value::String(page) => Some(page.as_str()),
+            Value::Array(pages) => match pages.as_slice() {
+                [page] => page.as_str(),
+                _ => None,
+            },
+            _ => None,
+        };
+        if to_page.is_none() || to_page != operation.get("from").and_then(Value::as_str) {
+            return Err(self.error(
+                &child(pointer, "to"),
+                ResourceDeclarationReason::InvalidValue,
+            ));
+        }
+        let read = self.object(value, &read_pointer, READ_LIST_MEMBERS)?;
+        for member in READ_LIST_MEMBERS {
+            self.required(read, &read_pointer, member)?;
+        }
+        let member_pointer = |member: &str| child(&read_pointer, member);
+        let layout_id = &read["layout_id"];
+        self.string(layout_id, &member_pointer("layout_id"))?;
+        if validate_candidate_layout_id(layout_id.as_str().unwrap_or_default()).is_err() {
+            return Err(self.error(
+                &member_pointer("layout_id"),
+                ResourceDeclarationReason::InvalidValue,
+            ));
+        }
+        self.string(&read["key_feature"], &member_pointer("key_feature"))?;
+        let key_column = &read["key_column"];
+        self.string(key_column, &member_pointer("key_column"))?;
+        let key_column = key_column.as_str().unwrap_or_default();
+        if !actingcommand_contract::list_reading_column_valid(key_column) {
+            return Err(self.error(
+                &member_pointer("key_column"),
+                ResourceDeclarationReason::InvalidValue,
+            ));
+        }
+        let columns_pointer = member_pointer("columns");
+        let columns = self.array(&read["columns"], &columns_pointer)?;
+        if columns.len() > actingcommand_contract::MAX_LIST_READING_COLUMNS {
+            return Err(self.error(&columns_pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        let mut names = BTreeSet::from([key_column]);
+        for (index, column) in columns.iter().enumerate() {
+            let column_pointer = child(&columns_pointer, &index.to_string());
+            let column = self.object(column, &column_pointer, &["column", "feature"])?;
+            let name = self.required(column, &column_pointer, "column")?;
+            let name_pointer = child(&column_pointer, "column");
+            self.string(name, &name_pointer)?;
+            let name = name.as_str().unwrap_or_default();
+            if !actingcommand_contract::list_reading_column_valid(name) || !names.insert(name) {
+                return Err(self.error(&name_pointer, ResourceDeclarationReason::InvalidValue));
+            }
+            self.string(
+                self.required(column, &column_pointer, "feature")?,
+                &child(&column_pointer, "feature"),
+            )?;
+        }
+        let fact_key = &read["fact_key"];
+        self.string(fact_key, &member_pointer("fact_key"))?;
+        if !actingcommand_contract::list_reading_fact_key_valid(
+            fact_key.as_str().unwrap_or_default(),
+        ) {
+            return Err(self.error(
+                &member_pointer("fact_key"),
+                ResourceDeclarationReason::InvalidValue,
+            ));
+        }
+        let valid_for_ms = &read["valid_for_ms"];
+        self.unsigned(valid_for_ms, &member_pointer("valid_for_ms"))?;
+        if !valid_for_ms.as_u64().is_some_and(|valid_for_ms| {
+            (actingcommand_contract::MIN_FACT_TTL_MS..=actingcommand_contract::MAX_FACT_TTL_MS)
+                .contains(&valid_for_ms)
+        }) {
+            return Err(self.error(
+                &member_pointer("valid_for_ms"),
+                ResourceDeclarationReason::InvalidValue,
+            ));
+        }
+        // Every position is read: the scan declares every member of a select step's but
+        // `early_stop`; Runtime admission reads their values and runs a select step's static
+        // checks.
+        let scan_pointer = member_pointer("scan");
+        let scan = &read["scan"];
+        if scan
+            .get("early_stop")
+            .is_some_and(|early_stop| !early_stop.is_null())
+        {
+            return Err(self.error(
+                &child(&scan_pointer, "early_stop"),
+                ResourceDeclarationReason::UnknownField,
+            ));
+        }
+        let scan = self.object(scan, &scan_pointer, SCAN_MEMBERS)?;
+        for member in SCAN_MEMBERS
+            .iter()
+            .filter(|member| **member != "early_stop")
+        {
+            self.required(scan, &scan_pointer, member)?;
+        }
+        Ok(())
+    }
+
+    /// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings", "Declaration"):
+    /// the task-level rules of its `read_list` steps, once each step's structure passed: at most
+    /// 16 of them (`InvalidValue` at `/operations` for the 17th), a task that declares
+    /// `scheduling_outcome`, each `fact_key` unique among every key the task writes (each mark's
+    /// keys and each other list), and the references in the task's own `candidate_layouts`: a
+    /// `repeated_anchor` layout on the step's `from` page whose `unknown_identity` is `reject`, a
+    /// key feature that is one of its `identity` features and the scan's `identity_feature`, and
+    /// columns that read other features of it, each at most once, of value `passed`,
+    /// `ocr_integer` or `identity`.
+    fn list_readings(&self, task: &Map<String, Value>) -> CliOutcome<()> {
+        let steps = task
+            .get("operations")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(index, operation)| {
+                operation
+                    .get(read_list_member())
+                    .filter(|read| !read.is_null())
+                    .map(|read| (index, operation, read))
+            })
+            .collect::<Vec<_>>();
+        if steps.is_empty() {
+            return Ok(());
+        }
+        if steps.len() > actingcommand_contract::MAX_LIST_READINGS {
+            return Err(self.error("/operations", ResourceDeclarationReason::InvalidValue));
+        }
+        if task.get("scheduling_outcome").is_none_or(Value::is_null) {
+            return Err(self.error(
+                "/scheduling_outcome",
+                ResourceDeclarationReason::MissingField,
+            ));
+        }
+        let game = task.get("game").and_then(Value::as_str).unwrap_or_default();
+        let layouts = task
+            .get("candidate_layouts")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let mut written = task
+            .get("resource_readings")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .flat_map(|mark| {
+                ["fact_key", "capacity_fact_key"]
+                    .into_iter()
+                    .filter_map(move |member| mark.get(member).and_then(Value::as_str))
+            })
+            .collect::<BTreeSet<_>>();
+        for (index, operation, read) in steps {
+            let read_pointer = format!("/operations/{index}/{}", read_list_member());
+            let refuse = |member: &str| {
+                self.error(
+                    &child(&read_pointer, member),
+                    ResourceDeclarationReason::InvalidValue,
+                )
+            };
+            let text = |value: &Value, member: &str| {
+                value
+                    .get(member)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            let layout_id = text(read, "layout_id");
+            let from = operation
+                .get("from")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let layout = layouts
+                .iter()
+                .find(|layout| {
+                    layout.get("id").and_then(Value::as_str) == Some(layout_id.as_str())
+                        && layout
+                            .get("page_id")
+                            .and_then(Value::as_str)
+                            .is_some_and(|page| {
+                                super::normalize_page_rule_id(game, page)
+                                    == super::normalize_page_rule_id(game, from)
+                            })
+                        && layout.get("kind").and_then(Value::as_str) == Some("repeated_anchor")
+                        && layout
+                            .get("unknown_identity")
+                            .and_then(Value::as_str)
+                            .is_none_or(|handling| handling == "reject")
+                })
+                .ok_or_else(|| refuse("layout_id"))?;
+            let feature_value = |name: &str| layout_feature_value(layout, name);
+            let key_feature = text(read, "key_feature");
+            let scan_identity = read
+                .pointer("/scan/identity_feature")
+                .and_then(Value::as_str);
+            if feature_value(&key_feature) != Some("identity")
+                || scan_identity != Some(key_feature.as_str())
+            {
+                return Err(refuse("key_feature"));
+            }
+            let mut read_features = BTreeSet::from([key_feature]);
+            for (column_index, column) in super::array_field(read, "columns").iter().enumerate() {
+                let feature = text(column, "feature");
+                let readable = matches!(
+                    feature_value(&feature),
+                    Some("passed" | "ocr_integer" | "identity")
+                );
+                if !readable || !read_features.insert(feature) {
+                    return Err(refuse(&format!("columns/{column_index}/feature")));
+                }
+            }
+            if !written.insert(
+                read.get("fact_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ) {
+                return Err(refuse("fact_key"));
+            }
         }
         Ok(())
     }
@@ -4394,6 +4733,8 @@ impl Declaration<'_> {
             }
         }
         self.array(self.required(object, "", "operations")?, "/operations")?;
+        // Workflow #428 S168-4: the task-level rules of its list readings and their references.
+        self.list_readings(object)?;
         Ok(())
     }
 

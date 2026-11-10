@@ -181,6 +181,9 @@ pub(super) enum FactPublicationPurpose {
     /// UPD-1 (design-upd1 §3.3): the Runtime's own write of one instance's
     /// `health.application.update_required`, the key's only entry.
     ApplicationUpdate,
+    /// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings"): the Runtime's own
+    /// write of one list reading's `record_list` under `inventory.list.`, the prefix's only entry.
+    ListReading,
 }
 
 /// Where one publication landed: the event that holds its records, the sequence of the
@@ -384,11 +387,28 @@ impl HostShared {
                     )
                     .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
                 }
+                // Workflow #428 S168-4: only a list reading writes under `inventory.list.`; every
+                // other publication of such a key, from every origin, is refused before the gate.
+                if purpose != FactPublicationPurpose::ListReading
+                    && let Some(record) = observation
+                        .records
+                        .iter()
+                        .find(|record| actingcommand_contract::is_list_reading_key(&record.key))
+                {
+                    let fact_key = record.key.clone();
+                    return Err(RuntimeHostError::request(
+                        HostCode::ListReadingKeyReserved,
+                        ContractLocation::PublishFacts,
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                    .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
+                }
                 // Workflow #308 RT-S1a: the resource target policy key has one formal entry.
                 match purpose {
                     FactPublicationPurpose::Ordinary
                     | FactPublicationPurpose::RunDuration
                     | FactPublicationPurpose::ApplicationUpdate
+                    | FactPublicationPurpose::ListReading
                     | FactPublicationPurpose::ResourceAdjustment { .. } => {
                         if observation
                             .records

@@ -594,6 +594,13 @@ pub(super) trait ScanSource {
         )
         .into())
     }
+
+    /// Workflow #428 S168-4: the end check passed on the latest frame, a coverage viewport (the
+    /// start or a forward one); a list reading's evidence names that frame. A source that keeps
+    /// no evidence of it does nothing.
+    fn end_passed(&mut self) -> Result<(), ContainedTaskRunError<Self::Error>> {
+        Ok(())
+    }
 }
 
 /// How a scan session ended without a failure.
@@ -612,6 +619,9 @@ pub(super) enum ScanEnd {
     /// position not yet seen could outrank the best member. Every position before that
     /// viewport's band was read, and the spacing checks passed on the rows before it.
     EarlyStopped,
+    /// Workflow #428 S168-4: a list reading read one position more than its list may hold
+    /// (`MAX_LIST_READING_ROWS`); the scan stopped at that viewport and nothing is cut to fit.
+    RowsExceeded,
 }
 
 /// An upper bound (S0 §3.3) as an ordered value: `None` (no eligible identity, or nothing to
@@ -983,6 +993,14 @@ fn u32_of(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
+/// Workflow #428 S168-4: the facts of a list reading's session, which evaluates no policy and so
+/// reads none.
+static NO_FACTS: SelectionFactSnapshot = SelectionFactSnapshot {
+    snapshot_id: String::new(),
+    snapshot_at_unix_ms: 0,
+    facts: BTreeMap::new(),
+};
+
 /// One scan session over one source (S0 §2.2 from `Pin` to `Decide`'s coverage checks).
 pub(super) struct ScanSession<'a> {
     scan: &'a ScanDeclaration,
@@ -995,7 +1013,12 @@ pub(super) struct ScanSession<'a> {
     layout: &'a CandidateLayout,
     /// The dispatched frame's size.
     frame: (u32, u32),
-    policy: &'a SelectionPolicy,
+    /// The select step's sealed policy; `None` for a list reading (Workflow #428 S168-4), which
+    /// evaluates nothing.
+    policy: Option<&'a SelectionPolicy>,
+    /// Workflow #428 S168-4: the most positions a list reading may read; reading one more ends
+    /// the scan with [`ScanEnd::RowsExceeded`]. `None` for a select step.
+    row_limit: Option<usize>,
     /// Workflow #357 DB-2: the shared tables `policy` declares, fixed for the attempt.
     tables: &'a SelectionTables,
     facts: &'a SelectionFactSnapshot,
@@ -1114,6 +1137,90 @@ impl<'a> ScanSession<'a> {
         frame: (u32, u32),
         task_remaining: Duration,
     ) -> Result<Self, ContainedTaskError> {
+        let read_fields = policy
+            .fields
+            .iter()
+            .map(|field| field.name.clone())
+            .collect();
+        Self::build(
+            scan,
+            layout,
+            (Some(policy), read_fields),
+            (tables, facts, now_unix_ms),
+            frame,
+            task_remaining,
+        )
+    }
+
+    /// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings", step 1): the
+    /// session of a list reading over `layout`, with no policy: nothing is evaluated, so nothing
+    /// stops it before the end check, and a position's reading is complete once its identity and
+    /// every feature of `columns` read Known. Reading a position beyond the
+    /// `MAX_LIST_READING_ROWS` a list holds ends the scan ([`ScanEnd::RowsExceeded`]).
+    pub(super) fn for_list(
+        scan: &'a ScanDeclaration,
+        layout: &'a CandidateLayout,
+        columns: Vec<String>,
+        frame: (u32, u32),
+        task_remaining: Duration,
+    ) -> Result<Self, ContainedTaskError> {
+        if scan.early_stop.is_some() {
+            return Err(ContainedTaskError::with_detail(
+                SELECT_INVALID.code(),
+                format!("layout={} scan early_stop=declared", layout.id),
+            ));
+        }
+        let mut session = Self::build(
+            scan,
+            layout,
+            (None, columns),
+            (SelectionTables::none(), &NO_FACTS, 0),
+            frame,
+            task_remaining,
+        )?;
+        session.row_limit = Some(actingcommand_contract::MAX_LIST_READING_ROWS);
+        session.consensus_features = Vec::new();
+        session.identity_features = Vec::new();
+        Ok(session)
+    }
+
+    /// Workflow #428 S168-4: every position read at least once, in first-seen order: the
+    /// features of its fixed reading, or `None` when it holds none (never complete, or
+    /// contradicted later).
+    pub(super) fn read_positions(&self) -> impl Iterator<Item = Option<&CandidateFeatureMap>> {
+        self.positions
+            .iter()
+            .filter(|position| position.first_read_viewport.is_some())
+            .map(|position| match &position.state {
+                PositionState::Fixed { features, .. } => Some(features),
+                _ => None,
+            })
+    }
+
+    /// The layout feature whose identity identifies a position.
+    pub(super) fn identity_feature(&self) -> &str {
+        &self.scan.identity_feature
+    }
+
+    /// The policy of a select step's session; a list reading's session has none and never
+    /// evaluates.
+    fn policy(&self) -> Result<&'a SelectionPolicy, ContainedTaskError> {
+        self.policy.ok_or_else(|| {
+            ContainedTaskError::with_detail(
+                ExecutionKernelCode::SelectionEvaluationFailed.code(),
+                format!("layout={} list reading evaluates no policy", self.layout_id),
+            )
+        })
+    }
+
+    fn build(
+        scan: &'a ScanDeclaration,
+        layout: &'a CandidateLayout,
+        (policy, read_fields): (Option<&'a SelectionPolicy>, Vec<String>),
+        (tables, facts, now_unix_ms): (&'a SelectionTables, &'a SelectionFactSnapshot, u64),
+        frame: (u32, u32),
+        task_remaining: Duration,
+    ) -> Result<Self, ContainedTaskError> {
         let invalid = |detail: &str| {
             ContainedTaskError::with_detail(
                 SELECT_INVALID.code(),
@@ -1164,8 +1271,8 @@ impl<'a> ScanSession<'a> {
         {
             return Err(invalid("scan identity_feature=undeclared"));
         }
-        let early_stop = match scan.early_stop {
-            Some(DeclaredEarlyStop::UpperBound) => Some(early_stop_inputs(
+        let early_stop = match (scan.early_stop, policy) {
+            (Some(DeclaredEarlyStop::UpperBound), Some(policy)) => Some(early_stop_inputs(
                 scan,
                 layout,
                 policy,
@@ -1173,7 +1280,10 @@ impl<'a> ScanSession<'a> {
                 facts,
                 now_unix_ms,
             )?),
-            None => None,
+            (Some(DeclaredEarlyStop::UpperBound), None) => {
+                return Err(invalid("scan early_stop=declared"));
+            }
+            (None, _) => None,
         };
         let moves = Moves::of(scan).map_err(|refused| invalid(refused.detail()))?;
         Ok(Self {
@@ -1184,14 +1294,11 @@ impl<'a> ScanSession<'a> {
             layout,
             frame,
             policy,
+            row_limit: None,
             tables,
             facts,
             now_unix_ms,
-            read_fields: policy
-                .fields
-                .iter()
-                .map(|field| field.name.clone())
-                .collect(),
+            read_fields,
             consensus_features: layout
                 .features
                 .iter()
@@ -1227,13 +1334,16 @@ impl<'a> ScanSession<'a> {
         source: &mut S,
     ) -> Result<ScanEnd, ContainedTaskRunError<S::Error>> {
         // Pin: the declared lists are read once, before any viewport; an unusable list is the
-        // decision `unknown` with no coverage (path P2).
-        let pinned = self.evaluate_candidates(&[])?;
-        if matches!(pinned.outcome, SelectionOutcome::Unknown { .. }) {
-            return Ok(ScanEnd::Aborted {
-                decision: Box::new(pinned),
-                coverage: ScanCoverageState::NotStarted,
-            });
+        // decision `unknown` with no coverage (path P2). Workflow #428 S168-4: a list reading
+        // evaluates no policy.
+        if self.policy.is_some() {
+            let pinned = self.evaluate_candidates(&[])?;
+            if matches!(pinned.outcome, SelectionOutcome::Unknown { .. }) {
+                return Ok(ScanEnd::Aborted {
+                    decision: Box::new(pinned),
+                    coverage: ScanCoverageState::NotStarted,
+                });
+            }
         }
         self.check_budget(source, ExecutionKernelLocation::SelectScanSettle)?;
         let dispatched = source.dispatched()?;
@@ -1284,6 +1394,9 @@ impl<'a> ScanSession<'a> {
         // The coverage viewport (start or forward) on which the end check passed, and its
         // offset; a corrective that follows it does not move the end.
         let mut end_viewport = reading.end_check.then_some((0_u32, 0_i64));
+        if reading.end_check {
+            source.end_passed()?;
+        }
         loop {
             // EndTest (S0 §2.2), in its order: the end check, the early stop, the repeats.
             let latest = u32_of(self.viewports.len().saturating_sub(1));
@@ -1334,6 +1447,7 @@ impl<'a> ScanSession<'a> {
             }
             if reading.end_check {
                 end_viewport = Some((index, offset));
+                source.end_passed()?;
             }
             // Pages placed by page-order evidence tile the list by declaration: no gap to close.
             if self.moves.page_order.is_none()
@@ -1806,25 +1920,42 @@ impl<'a> ScanSession<'a> {
         ));
         self.previous = current;
         self.previous_offset = offset;
+        // Workflow #428 S168-4: a list reading stops at the viewport that read one position more
+        // than its list may hold.
+        if let Some(limit) = self.row_limit
+            && self
+                .positions
+                .iter()
+                .filter(|position| position.first_read_viewport.is_some())
+                .count()
+                > limit
+        {
+            return Ok(Some(ScanEnd::RowsExceeded));
+        }
         self.check_rows(index)?;
-        if let Some(decision) = self.evaluate_fixed(&fixed)? {
+        if self.policy.is_some()
+            && let Some(decision) = self.evaluate_fixed(&fixed)?
+        {
             return Ok(Some(ScanEnd::Aborted {
                 decision: Box::new(decision),
                 coverage: ScanCoverageState::Incomplete,
             }));
         }
+        let list_reading = self.policy.is_none();
         let unknown = read
             .iter()
-            .filter(|&&position| {
-                !matches!(
-                    self.positions[position].state,
+            .filter(|&&position| match &self.positions[position].state {
+                // A list reading evaluates nothing: a read position is unknown until it is fixed.
+                PositionState::Fixed { .. } if list_reading => false,
+                state => !matches!(
+                    state,
                     PositionState::Fixed {
                         verdict: Some(
                             Verdict::Member { .. } | Verdict::GatedOut | Verdict::StaticTableDrop
                         ),
                         ..
                     }
-                )
+                ),
             })
             .count();
         if let Some(viewport) = self.viewports.last_mut() {
@@ -1980,7 +2111,7 @@ impl<'a> ScanSession<'a> {
         candidates: &[Candidate],
     ) -> Result<SelectionDecision, ContainedTaskError> {
         evaluate_with_tables(
-            self.policy,
+            self.policy()?,
             self.tables,
             candidates,
             self.facts,
@@ -2263,7 +2394,7 @@ impl<'a> ScanSession<'a> {
                 |identity| vec![identity.clone()],
             );
             let bound = upper_bound_with_tables(
-                self.policy,
+                self.policy()?,
                 self.tables,
                 self.facts,
                 self.now_unix_ms,
@@ -2285,7 +2416,7 @@ impl<'a> ScanSession<'a> {
     /// The session's account for a dry run (and, with SEL-L4b, for the record).
     pub(super) fn summary(&self, end: Option<&ScanEnd>) -> ScanDryRun {
         let coverage = match end {
-            None => ScanCoverageState::Incomplete,
+            None | Some(ScanEnd::RowsExceeded) => ScanCoverageState::Incomplete,
             Some(ScanEnd::Aborted { coverage, .. }) => *coverage,
             Some(ScanEnd::Covered) => ScanCoverageState::Complete,
             Some(ScanEnd::EarlyStopped) => ScanCoverageState::EarlyStopped,

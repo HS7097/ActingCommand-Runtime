@@ -631,6 +631,13 @@ impl TaskProgram {
             if operation.declares_wait() {
                 return Err(invalid("wait", Some(operation)));
             }
+            // Workflow #428 S168-4: a list reading is a page-graph step.
+            if operation.declares_read_list() {
+                return Err(invalid(
+                    super::list_reading::READ_LIST_MEMBER,
+                    Some(operation),
+                ));
+            }
             // ACT-4: final-state targets are judged by the page-graph confirmation.
             if operation.declares_expected_targets() {
                 return Err(invalid("expect_targets", Some(operation)));

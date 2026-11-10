@@ -3621,6 +3621,15 @@
         },
         "no_agreement": {
           "description": "The frames of the mark's agreement did not all read the same value (Workflow #411 B1); the mark writes no fact."
+        },
+        "list_position_unread": {
+          "description": "Workflow #428 S168-4: a position of a read_list step's list was readable at least once but holds no fixed Known reading of its identity or of a column's feature; the list writes nothing."
+        },
+        "list_duplicate_key": {
+          "description": "Workflow #428 S168-4: two positions of a read_list step's list read the same business ID; the list writes nothing."
+        },
+        "list_rows_exceeded": {
+          "description": "Workflow #428 S168-4: a read_list step's list showed a 257th position, more rows than one fact holds; the scan stopped there and the list writes nothing."
         }
       }
     },
