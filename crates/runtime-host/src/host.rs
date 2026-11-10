@@ -2308,7 +2308,7 @@ impl RuntimeHost {
                             &mut settlement,
                             &rerun_rule,
                         )?;
-                        // UNSET-2 (register §1.295): a dispatch an earlier start refused and this
+                        // UNSET-2 (register §1.296): a dispatch an earlier start refused and this
                         // start settled is recorded once, with who closed it and why.
                         shared.record_late_settlements(&settlement.settled_late)?;
                         // #670 final review (Fail Loud): a scheduled dispatch still open here is

@@ -1417,7 +1417,7 @@ impl<B: DurableStorage> EventStore<B> {
                     && event.links().run_id() == recovered_links.run_id()
             })
             .collect::<Vec<_>>();
-        // UNSET-2 (register §1.295; changes #670's rule R4 and its pin): a run with no terminal
+        // UNSET-2 (register §1.296; changes #670's rule R4 and its pin): a run with no terminal
         // whose one run-linked release is its own (the failure path's, effect `performed`) is
         // settled as interrupted from that release also when it has effect or input records, as
         // a run whose release the start recovered (`not_performed`) is; its effect and input

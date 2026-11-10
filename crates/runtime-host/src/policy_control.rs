@@ -1480,7 +1480,7 @@ impl PolicyControlState {
     /// (register P6): `budget_elapsed_ms` is the budget time the record carries, which its
     /// settlement compared; `None` for a record settled on its wall time.
     ///
-    /// UNSET-2 (register §1.295): `late` marks the interrupted settlement of a run an earlier
+    /// UNSET-2 (register §1.296): `late` marks the interrupted settlement of a run an earlier
     /// start refused to settle (`policy_settlement_dispatch_unsettled`), which a later start
     /// settles. In ledger order it comes after the later runs of its (task, instance) pair, if
     /// there are any, so it is checked like any record and then changes nothing of the decision

@@ -3337,9 +3337,9 @@ parallel slices.
 | LN4-3 | L6 `runtime.lifecycle_observed` phase `tagged_state_enabled` | first writer of a registered phase | LN-4 | LN-4 | written once by a start without the marker, after the value records it seeds; its report `ledger_tagged_state_seeded` `{count}` is the keys seeded. A root's first start (no `runtime.started` or `runtime.takeover` before it, the `lifecycle` row `last_start`) has no earlier epoch to seed and writes no marker; the root's next start seeds what that epoch recorded |
 | LN4-4 | `GlobalLedger::index_records(role, prefixes)` | Runtime-internal interface | LN-4 | — | one writer command: the rows of `state`, `open` or `lifecycle` with a key prefix, a point read of each row's record, the §11.5 step 3 checks; a store that keeps no index answers `ledger_selection_query_unsupported`; reads count as `Query` in the writer's peak |
 | LN4-5 | the agent dispatcher prunes an ended session | Runtime-internal behaviour | LN-4 | — | §11.2 "sessions are not kept": at a session's end its request records leave memory; a completed session's wake, trigger and session leave too, an escalated one keeps its status and wake for the person; a resent response of an ended session is answered from the ledger; the wake reconciliation reads only the previous epoch's planning signals and wakes |
-| LN4-6 | `refresh_dispatches` | Runtime-internal behaviour | LN-4 | — | rebuilds the decision memory from the latest value records and reads only the dispatch records after the records' position (each dispatch change writes its pair's record under its guard, so a dispatch with a later record is open or its pair's latest completed one, which the journal keeps); before the seeding wrote the records it replays as before |
-| LN4-7 | L7 `dispatches[]?` of `{intent_sequence, admitted_sequence?, completed_sequence?, failures?}` (≤ 128 entries, strictly increasing intents; `admitted` > `intent`; `completed` > `admitted` only with `failures`) | new optional member of a registered type (coordinator ruling 3, 10-26) | LN-4 | LN-4 | the smallest member that lets a start find a pair's latest completed dispatch by indexed reads: the sequences of the dispatches the journal keeps of the pair, which the start point-reads (the execution is read among the executions between the admission and the completion). It names the open dispatches, the latest completed one and, for a task of the remedy journal (one that declares a remedy or provides a capability), its latest runs (at most 64). `failures` is the pair's consecutive failed runs through that dispatch, the per-pair consecutive-failure count of ruling 2, kept at each completion. Empty while the pair has none; absent in earlier records (no old-version compatibility, Alice 10-11) |
-| LN4-8 | the policy host's dispatch journal | Runtime-internal behaviour (coordinator rulings 1 and 2, 10-26) | LN-4 | — | bounded, never by the event count: per (task, instance) the open dispatches, the latest intent and the latest 64 admitted dispatches (the latest completed one and the remedy journal's runs). A pair's settlement reads its latest executed run and the count its completion keeps, no fold over all runs. Decision pages, the task runtime projection at a position the journal does not answer, and a replayed admission of a decision it no longer holds read the dispatch history on demand, page by page (LN-5's SQLite reads under the read budget) |
+| LN4-6 | `refresh_dispatches` | Runtime-internal behaviour | LN-4 | — | rebuilds the decision memory from the latest value records and reads only the dispatch records after the records' position (each dispatch change writes its pair's record under its guard, so a dispatch with a later record is open or its pair's latest completed one, which the journal keeps; UNSET-2, §1.296: or a late settlement, which the journal keeps until a value record follows its completion); before the seeding wrote the records it replays as before |
+| LN4-7 | L7 `dispatches[]?` of `{intent_sequence, admitted_sequence?, completed_sequence?, failures?}` (≤ 128 entries, strictly increasing intents; `admitted` > `intent`; `completed` > `admitted` only with `failures`) | new optional member of a registered type (coordinator ruling 3, 10-26) | LN-4 | LN-4 | the smallest member that lets a start find a pair's latest completed dispatch by indexed reads: the sequences of the dispatches the journal keeps of the pair, which the start point-reads (the execution is read among the executions between the admission and the completion). It names the open dispatches, the latest completed one (the latest in admission order, UNSET-2, §1.296, so a late settlement never stands for a pair that ran after it) and, for a task of the remedy journal (one that declares a remedy or provides a capability), its latest runs (at most 64). `failures` is the pair's consecutive failed runs through that dispatch, the per-pair consecutive-failure count of ruling 2, kept at each completion. Empty while the pair has none; absent in earlier records (no old-version compatibility, Alice 10-11) |
+| LN4-8 | the policy host's dispatch journal | Runtime-internal behaviour (coordinator rulings 1 and 2, 10-26) | LN-4 | — | bounded, never by the event count: per (task, instance) the open dispatches, the latest intent and the latest 64 admitted dispatches (the latest completed one, in admission order, and the remedy journal's runs); UNSET-2 (§1.296): once the value records are loaded or seeded, also a dispatch completed after their position, until a value record follows it. A pair's settlement reads its latest executed run and the count its completion keeps, no fold over all runs. Decision pages, the task runtime projection at a position the journal does not answer, and a replayed admission of a decision it no longer holds read the dispatch history on demand, page by page (LN-5's SQLite reads under the read budget) |
 
 Deviations, as the coordinator ruled them (10-26 ruling 4): a session escalated to a person keeps
 its status and its wake until it completes (LN4-5), and the wake reconciliation looks back one
@@ -9518,14 +9518,16 @@ Removed with the runner it tested: `env_detection::lock::tests::windows_probe_ti
 (in no gate row). The other tests of the lock are unchanged; none pinned the PowerShell reader's
 text (the Windows fixture `sleeping_child` still starts `powershell.exe`, as a process to kill).
 
-### 1.295 Slice UNSET-2 (0.12.51): a scheduled run cut by a stop after it released its own lease is settled at the next start (#428; production: one scheduled dispatch of 10-26, cut by the 19:12 stop after its failure path wrote the run's own `lease.released` (effect `performed`) and inputs and before its terminal, open ever since and reported by every start, first as `policy_settlement_dispatch_unsettled`, from 0.12.28 as `policy_settlement_dispatch_left_open`, both with `failure_code` `scheduled_execution_recovery_interruption_conflict`; UNSET-1's row: "settling it is UNSET-2, which changes #670's rule"; the coordinator's ruling of 11-10, not Alice's words: the next start settles it, once, and records who closed it and why, with no new request kind and no protocol revision; read-only survey `rd-1110/leftopen-survey.md`; coordinator work order `rd-1110/brief-unset2.md`)
+### 1.296 Slice UNSET-2 (0.12.51): a scheduled run cut by a stop after it released its own lease is settled at the next start (#428; production: one scheduled dispatch of 10-26, cut by the 19:12 stop after its failure path wrote the run's own `lease.released` (effect `performed`) and inputs and before its terminal, open ever since and reported by every start, first as `policy_settlement_dispatch_unsettled`, from 0.12.28 as `policy_settlement_dispatch_left_open`, both with `failure_code` `scheduled_execution_recovery_interruption_conflict`; UNSET-1's row: "settling it is UNSET-2, which changes #670's rule"; the coordinator's ruling of 11-10, not Alice's words: the next start settles it, once, and records who closed it and why, with no new request kind and no protocol revision; read-only survey `rd-1110/leftopen-survey.md`; coordinator work order `rd-1110/brief-unset2.md`; fix round 1 after the review `rd-1110/review-1564-findings.md`, the coordinator's rulings L1 to L4 of 11-10, not Alice's words: `rd-1110/brief-unset2-fix1.md`)
 
-This section changes #670's rule R4 and its pin. [scheduling/README.md](scheduling/README.md)
-("Failures (#419)") and the catalog entries of `policy_settlement_dispatch_closed`,
-`policy_settlement_dispatch_unsettled`, `policy_settlement_dispatch_left_open` and
-`scheduled_execution_recovery_interruption_conflict` are the contract. 1.295 is the next free
-number on main `8d9b4f73`. No persisted ledger shape, wire shape, configuration key, location or
-vocabulary is new or changed; one outcome code is new.
+This section changes #670's rule R4 and its pin, and the order in which the host takes a pair's
+latest completed run. [scheduling/README.md](scheduling/README.md) ("Failures (#419)") and the
+catalog entries of `policy_settlement_dispatch_closed`, `policy_settlement_dispatch_unsettled`,
+`policy_settlement_dispatch_left_open` and `scheduled_execution_recovery_interruption_conflict`
+are the contract. 1.296 is the next free number: Runtime PR #1565 takes 1.295 (fix round 1
+renumbered this section, first written as 1.295 on main `8d9b4f73`). No persisted ledger shape,
+wire shape, configuration key, location or vocabulary is new or changed; one outcome code is new.
+LN4-6, LN4-7 and LN4-8 (§1.184) are corrected in place.
 
 **Why.** The ledger's guarded check of a recovered settlement (`append_recovered_policy_execution`)
 settled a run with no terminal as interrupted from its one run-linked release only when the run
@@ -9561,53 +9563,125 @@ settlement's write), the start then records one `runtime.failed`
 `reconcile_policy_outcomes` (the start's settlement) and `failure_code` the earlier refusal's code
 (when that record named an unregistered spelling, the earlier record's outcome is a `note` link
 instead). A later start finds the dispatch settled and writes no settlement, no Warning and no
-second record for it.
+second record for it. Two windows (fix round 1):
 
-**The late settlement does not punish the pair.** In ledger order it comes after the later runs
-of its (task, instance) pair, when there are any. Today's rule for an interruption is
-`interruption_lifted_by_restart`: the first interruption of a pair in a row is recorded as its
-failure (Severe, the task paused) and lifted by the restart that recorded it; a second one in a row
-keeps the pair paused until its package changes. Applied to a late settlement that would make the
-old run the pair's latest failure in both cases, would end a later run's backoff or failure streak
-and owed rerun when the pair has run since, and would pause the pair when its latest run before it
-was also an interruption. So an interrupted settlement of a run an earlier start refused leaves
-the decision memory as it was: no failure streak, pause, backoff or retry round, not the pair's
-latest failure, no owed rerun ended, its admission's counts as the admission took them. The
+- A stop that cuts the settling start between the execution record and the completion leaves the
+  completion to the next start (its pending completions, `reconcile_policy_dispatches`). That
+  start reads the run's earlier refusal by the completion's run links and records
+  `policy_settlement_dispatch_closed` itself, after the completion.
+- A stop that cuts a start between the completion and that record leaves the record unwritten, and
+  no later start writes it (none scans the ledger for it). The record can be missing after such a
+  cut; the settlement (`policy.execution_recorded`) and the completion
+  (`policy.dispatch_completed`) are the lasting records.
+
+**The late settlement is not a failure of its pair.** In ledger order it comes after the later
+runs of its (task, instance) pair, when there are any ("R" below; "N" when there are none). Today's
+rule for an interruption is `interruption_lifted_by_restart`: the first interruption of a pair in a
+row is recorded as its failure (Severe, the task paused) and lifted by the restart that recorded
+it; a second one in a row keeps the pair paused until its package changes. Applied to a late
+settlement that would make the old run the pair's latest failure in both cases, would end a later
+run's backoff or failure streak and owed rerun in R, and would pause the pair when its latest run
+before it was also an interruption. So an interrupted settlement of a run an earlier start refused
+leaves the decision memory as it was: no failure streak, pause, backoff or retry round, not the
+pair's latest failure, no owed rerun ended, its admission's counts as the admission took them. The
 record is checked against the settlement it must be as any record. The start decides it by the
 run's `policy_settlement_dispatch_unsettled` record before the settlement's write; every replay of
-the execution record (the decision memory's tail, a seeding start, the test replay) reads the same
-record before the execution's sequence, so the held and the replayed decision memory agree.
+the execution record (the decision memory's re-alignment, a load, a seeding start, a read on
+demand, the test replay) reads the same record before the execution's sequence, so the held and
+the replayed state agree. Fix round 1 (the review found that wherever the host took a pair's
+latest completed run by completion order, a late completion stood for the pair in R, and that
+then every start after the settling one failed with `runtime_fact_stale`; the coordinator's
+rulings):
+
+- **Admission order (L1).** Wherever the host takes a pair's latest completed dispatch or run, it
+  takes the latest in admission order, `(admitted_sequence, intent_sequence)`, the order
+  `fold_settlements_by` and the task snapshots already used: the latest completed dispatch a
+  pair's value record names (`journal_records_of`, LN4-7) and the previous completed dispatch a
+  completion counts its failures from (`failures_through`); the outcome-key snapshot and the runs
+  whose authoritative outcomes a start or the online reconciliation recovers
+  (`outcome_key_snapshot`, `latest_completed_policy_runs`, which the dispatch's projection checks
+  against each other); and `actingd suspended`, which orders a pair's executions by their dispatch
+  intents' sequences. A pair runs one dispatch at a time on its instance, so for every other
+  completion this is the order it completed in. The other readers of a pair's runs order by
+  admission already (the task snapshots, the settlement facts, the remedy journal, the dispatch
+  clocks) or hold one run per pair (`recover_authoritative_policy_outcomes`, whose sort by
+  completion sequence runs over pairs).
+- **Not a failure, anywhere (L2).** A late completion keeps the failure count of its pair's latest
+  other completed dispatch in admission order instead of adding one (`failures_through`; the
+  journal's flag `settled_late`, set where the execution is committed or replayed, from the same
+  record), and the task snapshot of an executed late run not yet completed adds none either
+  (`fold_settlements_by`). The task snapshot's `failure_streak` so agrees with the decision memory;
+  the snapshot's validation allows a failed latest run with an unchanged count. `actingd suspended`
+  leaves a late settlement out of its pair's executions (an interrupted execution whose run has a
+  `policy_settlement_dispatch_unsettled` record before it): the pair's failures in a row and its
+  latest failure are those without it.
+- **What stays visible (L3).** The run itself reads as interrupted. In N it is the pair's latest
+  run in admission order: its task snapshot shows it, failed, with the pair's failures in a row as
+  before, and the pair's outcome is missing, as after any interrupted latest run; its settlement
+  facts are recorded, newer than the pair's earlier ones. In R the later run stays the pair's
+  latest everywhere, and no settlement fact of the pair is recorded again.
+- **The journal keeps a late completion until a value record follows it.** A late settlement
+  after more than 64 later admitted runs of its pair completes outside the journal's bound (LN4-8),
+  while the decision memory's re-alignment still applies its records, which lie after the value
+  records' position (LN4-6). Once the value records are loaded or seeded, the journal keeps a
+  dispatch completed after their position until a value record follows it (`prune_journal`), so
+  the re-alignment finds it; the next pruning after that record drops it. `journal_answers_at`
+  answers as before: the late run completed after the earliest completion the bound keeps.
+
+**Starts after it (L4).** Every start after the settling one loads the pair's value record, which
+names the pair's latest completed run in admission order (in R the later run, with its own failure
+count), so the journal it loads, its task snapshots, the settlement facts it derives again
+(`record_policy_settlement_facts_on_start`) and its outcome-key snapshot read that run: it starts,
+records no settlement fact for the pair, and a rule on the task's outcome decides as before the
+settlement. A start of an earlier version (v0.12.50, v0.12.49) loads the same value records, which
+still mean what they meant (the named completed dispatch is the pair's latest run), so a rollback
+starts the same way, and no interface is raised. One edge stays: when a settling start of 0.12.51
+is cut after the settlement records and before its value records, a following start of v0.12.50
+commits the late execution under its older rule in its re-alignment, which makes the interruption
+the pair's latest failure there, without an error.
+
+**The online path.** The changed check also serves the online settlement of abandoned and inactive
+runs (`reconcile_scheduled_policy_outcomes_for` with no start, #427-A). A run with its own
+`performed` release and no terminal reaches it only through `inactive_policy_settlements`, and only
+when the run has no effect or input record and its release carries its dispatch intent's links;
+the ledger accepted that shape before this slice too, and the run is settled there as an ordinary,
+fresh interruption. With an effect or input record no online path takes it
+(`policy_run_effect_started`; the abandoned-lane path waits on a run-linked release that does not
+record `not_performed`), and the next start settles it as a fresh interruption. A run a start
+refused to settle stays quarantined, out of the pending settlements, for the life of that host, so
+the online path never meets a late settlement. Nothing changes there.
 
 **After it.** The dispatch is completed: the pair is no longer in flight, its eligibility age runs
 again and its clock-slot planning records are written again, and later starts record nothing for
 it. The other writer of `policy_settlement_dispatch_left_open` (a pending scheduled dispatch whose
 instance is no longer configured, or whose lease ended in more than one way) is unchanged, and a
-run the check still refuses is reported as before (UNSET-1). Not changed by this slice, and left
-to the coordinator: where a pair's latest completed run is chosen by completion order (the
-outcome-key snapshot and `latest_completed_policy_runs`, the dispatch journal's named latest
-completed dispatch, which a later start loads, and the failure count it carries, and
-`actingd suspended`'s latest execution), a late completion stands for its pair when the pair has
-run since, until the pair's next completion. The decision memory is not affected, and in the
-settling start's memory the task snapshots and settlement facts, which order by admission, still
-read the later run.
+run the check still refuses is reported as before (UNSET-1).
 
 **Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)), every range as
 main declares it: `ledger`: the check's rule is not a record shape, and a new code is not a shape
-change (its row: a new code "raises no revision"); `runtime-outcomes`: one new code in the catalog
-only; `runtime-client` and the protocol: no request kind, no member. No configuration key.
+change (its row: a new code "raises no revision"); the value records (register L7, LN4-7) keep
+their shape and their meaning, since the latest completed dispatch they name is the pair's latest
+run, as every other completion's is; `runtime-outcomes`: one new code in the catalog only;
+`runtime-client` and the protocol: no request kind, no member. No configuration key.
 
 **At deploy.** At the first start of 0.12.51 a dispatch left open by a run cut after its own
 release is settled once (`policy.execution_recorded`, `policy.dispatch_completed`) and recorded as
 closed (`policy_settlement_dispatch_closed`, with `failure_code`
 `scheduled_execution_recovery_interruption_conflict`); the Warning of every start stops.
-Production has one such dispatch, of 10-26. **Rollback** (below 0.12.51): the settlement stays;
-an older version finds the dispatch closed and reports nothing for it.
+Production has one such dispatch, of 10-26. Later starts, and a start after a **rollback** to
+v0.12.50, read the pair's latest run in admission order (the later run when the pair ran since)
+and start as before; the settlement stays, and the older version reports nothing for a closed
+dispatch. The one edge: a settling start of 0.12.51 cut between the settlement and its value
+records, followed by a start of v0.12.50, leaves the late interruption as the pair's latest failure
+on v0.12.50.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | UNSET2-1 | the ledger's check of a recovered interrupted settlement of a run with no terminal and its own run-linked release (`append_recovered_policy_execution`) | rule (no shape; changes #670 R4 and its pin) | UNSET-2 | ledger | `since` 0.12.51; effect and input records no longer read; a terminal and two releases still refused |
-| UNSET2-2 | `runtime.failed` with `policy_settlement_dispatch_closed` (info, `none`; `failure_code`, `operation`, `instance_id`, `task_id`, `lease_id`) | new code of an existing record (host gate row "#428 UNSET-2") | UNSET-2 | UNSET-2 | `since` 0.12.51; once, by the start that settles a run an earlier start refused, under the run's links |
-| UNSET2-3 | a late interrupted settlement leaves the decision memory as it was, at the start and at every replay (`late_settlement_refusal`) | rule (no shape) | UNSET-2 | — | decided by the run's earlier `policy_settlement_dispatch_unsettled` record |
+| UNSET2-2 | `runtime.failed` with `policy_settlement_dispatch_closed` (info, `none`; `failure_code`, `operation`, `instance_id`, `task_id`, `lease_id`) | new code of an existing record (host gate row "#428 UNSET-2") | UNSET-2 | UNSET-2 | `since` 0.12.51; once, by the start that completes the settlement of a run an earlier start refused (the settling start, or the next one after a cut before the completion), under the run's links; missing after a cut between the completion and it |
+| UNSET2-3 | a late interrupted settlement is not a failure of its pair: the decision memory as it was, its completion keeping the pair's failure count (`settled_late`), left out by `actingd suspended`, at the start and at every replay and load (`late_settlement_refusal`) | rule (no shape) | UNSET-2 | — | decided by the run's earlier `policy_settlement_dispatch_unsettled` record |
+| UNSET2-4 | a pair's latest completed dispatch or run is its latest in admission order (`journal_records_of`, `failures_through`, `outcome_key_snapshot`, `latest_completed_policy_runs`, `actingd suspended`) | rule (no shape; corrects LN4-7) | UNSET-2 fix 1 | — | the value records keep their shape and meaning |
+| UNSET2-5 | the dispatch journal keeps a dispatch completed after the value records' position until a value record follows it (`prune_journal`) | Runtime-internal behaviour (amends LN4-6, LN4-8) | UNSET-2 fix 1 | — | only a late settlement completes outside the bound |
 
 Tests (ledger gate row "#428 UNSET-2"):
 `unset2_own_release_with_inputs_settles_as_interrupted_and_a_terminal_still_refuses`, and
@@ -9615,9 +9689,20 @@ Tests (ledger gate row "#428 UNSET-2"):
 that pinned R4 (`interrupted_policy_execution_recovery_rejects_effects_and_duplicate_release`,
 in no gate row), adapted on purpose and renamed: its effect half now expects the run settled as
 interrupted from its own release; its duplicate-release half is unchanged. Host gate row
-"#428 UNSET-2": `policy_admission::unset2_the_next_start_settles_a_run_cut_after_its_own_release_once`
-(the pair has not run since) and
-`policy_admission::unset2_a_late_settlement_after_a_later_run_neither_pauses_nor_fails_the_pair`.
+"#428 UNSET-2", all in `policy_admission`:
+`unset2_the_next_start_settles_a_run_cut_after_its_own_release_once` (N: settled once, closed
+once, no Warning, the eligibility age runs again);
+`unset2_r_the_starts_after_a_late_settlement_start_and_read_the_later_run` (fix round 1 test 1,
+R with a later success, the settling start and two more);
+`unset2_r_a_rule_on_the_task_outcome_decides_after_the_settlement_as_before` (test 2, R with a
+referenced outcome key and a consumer of it);
+`unset2_r_a_later_failure_keeps_its_backoff_and_its_own_count` (test 3);
+`unset2_n_the_starts_after_a_late_settlement_keep_the_failure_state` (test 4, N, with and without
+an earlier interruption of the pair); and
+`unset2_r_actingd_suspended_reports_the_later_run_not_the_late_interruption` (test 5). Test 1
+replaces the first round's `unset2_a_late_settlement_after_a_later_run_neither_pauses_nor_fails_the_pair`,
+which checked the settling start only. Not tested: a late settlement after more than 64 later runs
+of its pair (UNSET2-5) and the closed record's first window.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

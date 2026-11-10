@@ -234,6 +234,9 @@ impl std::error::Error for SuspensionReportError {}
 /// One recorded `policy.execution_recorded` of a pair.
 struct Execution {
     sequence: u64,
+    /// UNSET-2 (register §1.296, ruling L1): the sequence of its dispatch's intent, by which a
+    /// pair's executions are ordered (admission order); 0 when the read holds no intent for it.
+    intent_sequence: u64,
     severity: EventSeverity,
     decision_id: String,
     observed_at_unix_ms: u64,
@@ -387,6 +390,37 @@ impl Snapshot<'_> {
         }
         self.held.set(self.held.get() + rows.len());
         Ok(Some(rows))
+    }
+
+    /// UNSET-2 (register §1.296, ruling L2): whether `execution`, of the run `run_id`, is a late
+    /// settlement: it settles its run as interrupted, and an earlier start refused to settle that
+    /// run (the run's `policy_settlement_dispatch_unsettled` record before the execution record).
+    fn settled_late(
+        &self,
+        run_id: Option<RunId>,
+        execution: &Execution,
+    ) -> Result<bool, SuspensionReportError> {
+        let Some(run_id) = run_id else {
+            return Ok(false);
+        };
+        if !crate::policy_host::settled_as_interrupted(&execution.outcome) {
+            return Ok(false);
+        }
+        Ok(self
+            .query(EventQuery {
+                event_type: Some(EventType::RuntimeFailed),
+                run_id: Some(run_id),
+                ..EventQuery::default()
+            })?
+            .iter()
+            .any(|event| {
+                event.sequence() < execution.sequence
+                    && matches!(
+                        event.payload(),
+                        EventPayload::Runtime(RuntimePayload::Failed(record))
+                            if record.outcome().is(HostCode::PolicySettlementDispatchUnsettled)
+                    )
+            }))
     }
 
     /// The rows of `run_id` read, `None` when the budget left them unread.
@@ -848,20 +882,39 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
         ..EventQuery::default()
     })? {
         if let EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) = event.payload() {
+            let execution = Execution {
+                sequence: event.sequence(),
+                intent_sequence: intent_sequences
+                    .get(payload.decision_id())
+                    .copied()
+                    .unwrap_or(0),
+                severity: event.severity(),
+                decision_id: payload.decision_id().to_owned(),
+                observed_at_unix_ms: payload.observed_at_unix_ms(),
+                outcome: payload.policy_result().clone(),
+            };
+            // UNSET-2 (register §1.296, ruling L2): a late settlement is not a failure of its
+            // pair: the pair's failures in a row and its latest failure are what they would be
+            // if its run did not exist.
+            if snapshot.settled_late(
+                intents.get(&execution.decision_id).copied().flatten(),
+                &execution,
+            )? {
+                continue;
+            }
             pairs
                 .entry((
                     payload.task_id().to_owned(),
                     payload.instance_id().to_owned(),
                 ))
                 .or_default()
-                .push(Execution {
-                    sequence: event.sequence(),
-                    severity: event.severity(),
-                    decision_id: payload.decision_id().to_owned(),
-                    observed_at_unix_ms: payload.observed_at_unix_ms(),
-                    outcome: payload.policy_result().clone(),
-                });
+                .push(execution);
         }
+    }
+    // UNSET-2 (register §1.296, ruling L1): a pair's executions in admission order, by their
+    // dispatch intents' sequences, so a run settled after the pair's later runs is not its latest.
+    for executions in pairs.values_mut() {
+        executions.sort_by_key(|execution| (execution.intent_sequence, execution.sequence));
     }
     // RL-1c fix 1 (#411 H1): the runs the report may show are those of each pair's last two
     // executions; a run's own rows lie after its dispatch intent and through its execution record.

@@ -1557,7 +1557,7 @@ fn recovered_policy_execution_requires_one_matching_release() {
     );
 }
 
-/// UNSET-2 (register §1.295) adapts this test's first half on purpose: it pinned #670's rule R4
+/// UNSET-2 (register §1.296) adapts this test's first half on purpose: it pinned #670's rule R4
 /// that a run with an effect record is never settled as interrupted. A run with its own release
 /// (the failure path's, effect `performed`), an effect record and no terminal is now settled as
 /// interrupted from that release. The second half is unchanged: two run-linked releases are
@@ -1604,7 +1604,7 @@ fn interrupted_policy_execution_recovery_accepts_effects_and_rejects_duplicate_r
     );
 }
 
-/// UNSET-2 (register §1.295): a run cut by a stop after it wrote its own release (the failure
+/// UNSET-2 (register §1.296): a run cut by a stop after it wrote its own release (the failure
 /// path's, effect `performed`) and its inputs, and before its terminal, is settled as
 /// interrupted from that release, once: the same settlement again is the recorded one and
 /// appends nothing. The same run with a terminal is still refused: a run that has a terminal is
