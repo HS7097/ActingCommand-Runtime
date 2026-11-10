@@ -635,7 +635,19 @@ fn run_direct(host: &RuntimeHost, temp: &TempDir, name: &str, pack: &Pack<'_>) -
     pack.write(&path);
     let task_request = ContainedTaskRequest::new(path.display().to_string()).expect("task request");
     let mut client = TestClient::connect(host);
-    client.set_receipt_read_timeout();
+    // #71 FLK-12: the receipt comes when the run ends, and the run's own bound is its response
+    // deadline (60 s unless the request says otherwise, counted from the Runtime's receipt of
+    // the request), at which the Runtime ends the run `contained_task_deadline_exceeded` at its
+    // next check and answers. The support's 10 s ran out on N5-8's run (17 locates and 16 hops,
+    // each hop a layer and a wait for its `to`) in CI run 42858675254 while the Runtime under
+    // test was healthy. The wait is that deadline and the support's 10 s for the terminal and
+    // the receipt after it; a Runtime that does not answer by then still fails here.
+    client
+        .stream
+        .set_read_timeout(Some(
+            Duration::from_millis(task_request.response_deadline_ms()) + Duration::from_secs(10),
+        ))
+        .expect("receipt timeout");
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(
