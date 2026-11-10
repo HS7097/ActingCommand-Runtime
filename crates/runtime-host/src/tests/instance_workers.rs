@@ -2403,13 +2403,30 @@ fn over_budget_policy_sources() -> CatalogSources {
     sources
 }
 
-/// Whether `run` has a persisted capture frame (an `artifact.verified` of a frame) among
-/// `events`.
+/// Whether `run` has a persisted capture frame among `events`: an `artifact.verified` of a frame
+/// and the `artifact.pin_recorded` of that frame's artifact. Board #71 (FLK-11): the frame's
+/// publication appends the pin as its own record after the verified one
+/// (`pin_published_frames`), and the frame retention view, like the cleaner's statement L, knows
+/// only a pinned frame (its retention identity is the pin's). A kill between the two records
+/// left the cut run with no frame in the view.
 fn run_has_persisted_frame(events: &[PersistedEvent], run: &RunId) -> bool {
+    let pinned = events
+        .iter()
+        .filter_map(|event| match event.payload().artifact_retention() {
+            Some(actingcommand_contract::ArtifactRetentionFact::PinRecorded(pin)) => {
+                Some(pin.identity.artifact.artifact_id)
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     events.iter().any(|event| {
         event.event_type() == EventType::ArtifactVerified
             && event.links().run_id() == Some(run)
             && event.links().frame_id().is_some()
+            && event.artifacts().iter().any(|artifact| {
+                artifact.kind() == actingcommand_contract::ArtifactKind::CaptureFrame
+                    && pinned.contains(artifact.artifact_id())
+            })
     })
 }
 
