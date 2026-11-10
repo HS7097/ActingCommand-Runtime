@@ -8763,7 +8763,7 @@ what was judged worth) stays in the instance fact store and the ledger.
 |---|---|---|---|---|---|
 | S168-4 | Runtime | L | the design's G-2: the `read_list` effect (declaration gate, parser, admission, the static walk's self-edge and once-per-run rule), the kernel's list read over the scan session with no policy, the three misses and their warning, the host's publication at the successful terminal (stage 2), the reserved prefix `inventory.list.` for clients and for marks; its report says that no package on the three resource repositories' `main` declares a mark under the prefix | S168-0 | `package` 8, with S168-5a |
 | S168-5a | Runtime | M | the design's G-4: the value source `table_max_over_list` in the selection-policy crate (validation, binding, one read per reference over the union of its lists, the reason, the input identity, upper bound, the scheduling refusal); its tests use fake snapshots | S168-0 | `package` 8, with S168-4; no `ledger` |
-| S168-5b | Runtime | L | the design's G-5: the `judge` effect with its two keys and the mapping member `judge_result` (declaration, admission, the kernel's judge path without an input port, the host's refusal of an input for it, the record with `judge_only`, the run's end on one of the two keys); the ledger reader's rules for `judge_only` | S168-4 merged | `package` 9 and `ledger` 8, in the Runtime release of LAB-6 and LAB-7 |
+| S168-5b | Runtime | L | the design's G-5: the `judge` effect with its two keys and the mapping member `judge_result` (declaration, admission, the kernel's judge path without an input port, the host's refusal of an input for it, the record with `judge_only`, the run's end on one of the two keys); the ledger reader's rules for `judge_only` | S168-4 and S168-5a merged: main declares `package` [3, 8] | `package` 9 and `ledger` 8, in the Runtime release of LAB-6 and LAB-7 |
 
 **Named tests**, 24 in all: 10 for S168-4, 8 for S168-5a and 6 for S168-5b (the coordinator's
 ruling R6 after the review). Logic tests with fakes and a fake clock, no sleep; the ids are made
@@ -8842,9 +8842,10 @@ S168-5a, 8 tests, on tables loaded with `LoadedTable::load` and fake snapshots:
   whose key the table lacks; that key is not looked up, is no miss and is not counted, and the
   read is the largest of the kept keys.
 
-S168-5b, 6 tests, on fake snapshots whose lists a document reads through `keyed_fact` (no list
-maximum, so they do not need S168-5a), tables loaded with `LoadedTable::load`, and a fake device
-whose input port fails the test on any call:
+S168-5b, 6 tests, on fake snapshots whose lists a document reads through `keyed_fact`, tables
+loaded with `LoadedTable::load`, and a fake device whose input port fails the test on any call.
+Reading the lists through `keyed_fact` concerns the tests' fixtures only, not the order: S168-5b
+still goes on main only after S168-4 and S168-5a merged ("Order" below).
 
 - `judge_known_ends_with_outcome_key`: a judge over three slots whose candidates are all known,
   two judged worth and one not, writes one `task.selection_evaluated` with `judge_only`, the
@@ -8881,11 +8882,13 @@ whose input port fails the test on any call:
 fake snapshots). They ship in one Runtime release, which may ship at any time; the second of the
 two to merge declares `package` [3, 8], and until then the first one's merge admits its own
 member by code ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #428
-168"). S168-5b goes on main after S168-4 merged (its judge tests read a published list through
-`keyed_fact`, not through a list maximum, so they do not need S168-5a) and ships in the Runtime
-release of LAB-6 and LAB-7. All three come before S168-6, the standard package's slice; the
-offline slices S168-1 to S168-3 go on beside them. S168-7, the console's view, needs a console
-whose `ledger` range holds 8, which is UI-L1's console.
+168"). S168-5b goes on main only after S168-4 and S168-5a merged, that is, after main declares
+`package` [3, 8]: its revision 9 is revision 8 plus the judge, and revision 8 holds S168-5a's
+value source, so S168-5b never declares [3, 9] on a main without `table_max_over_list`. That its
+tests read their lists through `keyed_fact` concerns their fixtures, not this order. It ships
+in the Runtime release of LAB-6 and LAB-7. All three come before S168-6, the standard package's
+slice; the offline slices S168-1 to S168-3 go on beside them. S168-7, the console's view, needs
+a console whose `ledger` range holds 8, which is UI-L1's console.
 
 **What each changes at deploy.**
 
@@ -8895,8 +8898,9 @@ whose `ledger` range holds 8, which is UI-L1's console.
   the three resource repositories' `main` declares one). A document without the new source
   behaves byte for byte as before. The ledger, the configuration and the capacity are unchanged;
   a rollback below `package` 8 stays open.
-- S168-5b, in the release of LAB-6 and LAB-7: `package` [3, 9] and `ledger` [3, 8], #434's
-  revision 8, shared. One way by the Rp.max rule: once the Runtime that declares `ledger` 8 has
+- S168-5b, in the release of LAB-6 and LAB-7, on main after S168-4 and S168-5a merged: `package`
+  [3, 9] and `ledger` [3, 8], #434's revision 8, shared. One way by the Rp.max rule: once the
+  Runtime that declares `ledger` 8 has
   run, going back below it is refused, whether or not a judge step ran; and the Runtime combines
   only with a console whose `ledger` range holds 8, so it is deployed with or after UI-L1's
   console. No configuration key. A package without a judge step and a mapping without
