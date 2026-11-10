@@ -9,6 +9,124 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.51
+
+本版是 v0.12.50 之后合并的 3 个 PR：#71 FLK-10（#1563）、#428 RD-BUDGET-1（#1565）和 #428 UNSET-2（#1564）。先说部署：接口声明都不变（`package` 仍是
+[3, 8]，账本仍是 [3, 7]），部署不用带 `--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；v0.12.50 的安装工具装本版照常；装上以后安装工具允许
+退回 v0.12.50，不用带标志，**但本版有一次启动在了结之后完整走完以前，不要退回**（见下面的退回）。没有新键，默认值文件没改。运行上要知道的是这几处：
+
+- **头一次启动把「运行自己释放了租约、还没写终态就被停机切断」留下的派单了结一次**（UNSET-2，登记 §1.296；`contracts/scheduling/README.md` 的
+  “Failures (#419)”）。以前账本不许把这种运行按被中断了结（它有输入或效果记录），派单就一直开着：每次启动都为它写一条 Warning
+  `policy_settlement_dispatch_left_open`（头一次碰到它的启动写的是 `policy_settlement_dispatch_unsettled`，并暂停了它的实例），这一对（任务、实例）一直算在飞，
+  资格年龄停在 0。生产上有一条，10-26 的。
+  - 账本的检查改了：没有终态、和运行相连的释放只有一条而且是它自己的（effect `performed`），有输入或效果记录也按被中断了结；有终态的、有两条释放的照旧拒
+    （`crates/ledger/src/global/storage.rs` 1420–1428）。
+  - **头一次启动写的记录**（按代码核过，和 #1564 的 “At deploy” 一致）：先是了结的两条，`policy.execution_recorded`（`policy_settlement_interrupted`，Severe，
+    运行时间 0，时刻取那条释放；`crates/runtime-host/src/host/policy_outcome.rs` 2849–2857）和 `policy.dispatch_completed`，由账本的同一个命令
+    `reconcile_scheduled_policy_settlement` 写（2935–2951）；接着在运行的链接下写一条 `runtime.failed`，码是新的 `policy_settlement_dispatch_closed`（Info），
+    `failure_code` 是之前那次拒绝的码 `scheduled_execution_recovery_interruption_conflict`，`operation` 是 `reconcile_policy_outcomes`，另有 `instance_id`、
+    `task_id`，派单只有一次租约授予时还有 `lease_id`（514–550、626–634；启动里排在了结之后、报告仍开着的派单之前，`crates/runtime-host/src/host.rs`
+    2303–2316）。这一对后来没再跑过的话，这次启动还记下被切断那次运行的了结事实（比这一对原有的新）。每次启动的那条 Warning 从此不再出现。了结那次启动要是
+    切在执行记录和完成之间，下一次启动补上完成并由它写这条记录；切在完成和这条记录之间，这条就不写了，了结和完成两条是持久的记录。
+  - **迟到的了结不算这一对的失败**：连续失败、暂停、退避、重试轮、最近一次失败都和了结前一样。这一对后来跑过的话，后来那次照旧是它最近一次；没跑过的话，
+    被切断那次就是最近一次，读成被中断，这一对的结果键为空（和任何被中断的最近一次一样）。`policy_settlement_dispatch_closed` 不解除当初
+    `policy_settlement_dispatch_unsettled` 在实例上留的暂停：还暂停着的，照旧先看一眼实例的屏幕再解。
+  - **之后的启动（本版）**：派单已经了结，不再写了结、Warning 或第二条 `policy_settlement_dispatch_closed`。这一对的最近一次完成一律按准入顺序取
+    （`crates/runtime-host/src/policy_host.rs` 575 的 `admission_order`；`failures_through` 1383、`journal_records_of` 1421、`outcome_key_snapshot` 4463、
+    `latest_completed_policy_runs` 4580），值记录、任务快照、结果键和启动时重算的了结事实（`crates/runtime-host/src/host/runtime_facts.rs` 830–843）读的是
+    同一次运行，照常起来；`actingd suspended` 不列迟到的那次中断。这一对不再算在飞，资格年龄重新累计，时段规划的记录照常写。
+  - 退回 v0.12.50 以后看到的，见下面的退回。
+- **`actinglab resource validate` 的全量扫描不再因为重复计数被拒**（RD-BUDGET-1，登记 §1.295；`contracts/resource-declarations.md`、
+  `contracts/package-reference.md`）。声明读取器把每个文件第一次读到的字节留到这次运行结束，同一路径再读直接用留下的字节，不读磁盘、不再计数
+  （`apps/actinglab/src/resource_declarations.rs` 423–465）。以前一个任务里的每个策略文件都要把整个任务再读一遍，计数随策略个数成平方涨，只因为重复计数越过
+  64 MiB 的扫描被拒成 `resource_declaration_invalid`（`declaration read budget exceeded`，459）；现在能过。上限 64 MiB、单文件上限、每项检查读哪些文件、检查的
+  顺序、拒绝的码和话都不变；回答里的 `read_bytes`（从磁盘读的字节数）只在同一文件读了不止一次的运行里变小。`resource verify` 的声明一步和 `operation`
+  用的是同一个读取器。Runtime 自己装包走另一个读取器，不受影响。
+- **Lab 的环境检测不再起 PowerShell**（FLK-10，登记 §1.294）。`actinglab detect` 的结果锁在 Windows 上读持有者身份的三样都直接问系统：进程启动时间
+  （`OpenProcess`、`GetExitCodeProcess`、`GetProcessTimes`；`crates/lab/src/env_detection/lock.rs` 1058–1071）、主机名（`GetComputerNameExW`，1134–1138）
+  和令牌的随机种子（`BCryptGenRandom`，1183–1188），调用都放在 `crates/host-metrics` 里。不再起 `powershell.exe` 和 `hostname.exe`，负载很重的机器上不再报
+  `owner identity unavailable: PowerShell process inspector … timed out`。锁文件和各成员的文字不变，两边写的锁互相认得；三处读取失败时的 Windows 错误文字
+  变了（比如 `process inspector could not read PID <pid>: process_query_refused; …`，1067–1069）；读不了的进程是错误、不当成已经不在，活着的持有者留着锁。
+- **LAB-3 的运维规矩到 LAB-7 前照旧：生产照旧用 `actingctl install` 部署**，不对生产根用 Lab 救急模块的 `deploy`、`rollback`、`place` 或
+  `config replace`。`crates/lab-rescue` 自 v0.12.50 没改。
+
+配置：接口修订都不变，按代码和 `contracts/component-interfaces.md` 核过。`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md`
+自 v0.12.50 都没改：`actingd-config` [5, 27]、`install-selection` [1, 1]、`install-control` [0, 1]、`ledger` [3, 7]、`runtime-client` [3, 6]、`package` [3, 8]、
+`runtime-outcomes` [1, 1]。
+
+- 不升 `ledger`：UNSET-2 改的是账本收一次恢复了结的规则，不是记录形状；新码不是形状变化（`component-interfaces.md` 136：读者对码只核拼写，不核是否登记）；
+  值记录（登记 L7、LN4-7）形状不变，只是它点名的最近一次按准入顺序取。SQLite 格式 2、`actingcommand.event.v3`、表、索引和视图都没变。较旧的 Runtime 照样
+  起来、照样调度（带补救声明的一种情形见下面的退回），按升级规则（`component-interfaces.md` 331–341）不升。
+- 不升 `runtime-client`：`crates/runtime-client` 和合同 crate 自 v0.12.50 没改，没有新的请求种类或成员。不升 `package`：包的格式没变，RD-BUDGET-1 只改
+  actinglab 的读取器。FLK-10 的结果锁不是登记的接口，`env-result-lock.v2` 不变，host-metrics 新加的函数只在 Runtime 内部用。
+- 配置键：没有新键，也没有去掉的键。`crates/runtime-config`、`apps/actingd`、`actingd.defaults.json` 和 `actingd.config.example.json` 自 v0.12.50 都没改。
+- 结果码：目录从 3899 个码变成 3900 个码，位置仍是 1748 个，仍是 29 个分片，没有退役的码。新码 1 个（待定稿，since 0.12.51）：
+  `policy_settlement_dispatch_closed`（runtime-host，info，ladder `none`）；没有新位置、新键或新词。只改说明的 3 个：`policy_settlement_dispatch_unsettled`、
+  `policy_settlement_dispatch_left_open`（runtime-host）和 `scheduled_execution_recovery_interruption_conflict`（ledger，原来的 `TBD` 换成了说明）。本版的发布
+  文件是空的：没有新定稿或退役的条目。
+- 程序文件：workspace 仍是 39 个成员，`Cargo.toml` 没改；`Cargo.lock` 只多一行（`crates/lab` 在 Windows 上依赖工作区里的 `actingcommand-host-metrics`），
+  host-metrics 多开 windows-sys 的一个功能 `Win32_Security_Cryptography`，没有新的第三方依赖。`.github/`、`ci/`、`tools/`、`ratchet/` 自 v0.12.50 都没改，
+  两个包的文件清单和 v0.12.50 一样。FLK-10 照旧在不稳定表里（`ci/flaky-tests.toml`）：`protocol_goldens_match_current_cli` 仍不在 `host-lab` 门禁里、在
+  不作门禁的 `flaky` 作业里跑，看稳了再拿掉。`apps/actingctl`、`apps/mcp-entry`、`crates/lab-ops` 自 v0.12.50 没改，MCP 工具仍是 41 个；actinglab 仍是
+  100 条命令、45 个顶层分派臂。
+
+升级与退回（安装工具的代码 `crates/lab-rescue/src/install/` 自 v0.12.50 没改，产品代码就是 v0.12.48 到 v0.12.50 说明核过的那份，下面的行号也是它的）：
+
+- **v0.12.50 的安装工具装本版，不用任何单向标志。** 两边的声明逐字相同：`ledger` [3, 7] 的 `previous_max_in_next` 和 `one_way`（7 不大于 7）都过
+  （`plan.rs` 288–301），计划里没有 `ledger_verify`（915）；`next_max_in_installer`、`installer_meets_previous`、`installer_meets_next`（302–331）、
+  `bundle_max_in_next`（332–355：目标仍是 [3, 8]，和装 v0.12.50 时一样；生产根的登记不记范围，每个游戏根只给 `pack_declaration_unknown` 警告）和
+  `installer_knows_keys`（359–376）都和装 v0.12.50 时一样；`next_check_config`（902–914）：本版的 check-config 和 v0.12.50 是同一份代码。
+- **退回 v0.12.50：安装工具允许，不用标志。** 接口边两边相同、都过（`package` 两边都是 [3, 8]，声明 8 的包也过）；退回时 `next_check_config` 不算接口边
+  （`plan.rs` 1030–1036）。部署的自动回退（`deploy.rs` 778）和 `install undo`（`undo.rs` 388）都是 `accept_ledger_one_way: false`，和 `rollback` 走同一组边
+  （`rollback_edges`，`plan.rs` 383–403）和同一个回退门（`update.rs` 383–505）：本版写的记录没有新形状，`policy_settlement_dispatch_closed` 是已有的
+  `runtime.failed` 记录里的一个新码，v0.12.50 的读者只核拼写；开启时间和配置两版的 actingd 和配置代码相同。注意：部署时新版的部署后检查不过的话，apply 会
+  自动退回它替换的版本，也就是 v0.12.50（`deploy.rs` 717–790）。
+- **退回以后 v0.12.50 在启动时读到的**（登记 §1.296 的 “A rollback”，第二次审查核过）：
+  - **了结那次启动完整走完以后**，v0.12.50 能起来、能调度，留着这次了结，对已关的派单什么都不报；值记录和事实的形状不变，`policy_settlement_dispatch_closed`
+    对它是一个不处理的码。这一对后来没再跑过的，或者任务不声明补救、不提供能力的，v0.12.50 读到的最近一次和本版相同（v0.12.50 的 `actingd suspended`
+    按记录顺序列，会把迟到的那次中断列成这一对最近一次失败）。
+  - **例外：任务声明了补救或提供了能力，而且这一对在被切断那次之后又跑过。** 这种任务的值记录也点名迟到的那次完成；v0.12.50 按完成顺序取一对的最近一次
+    （v0.12.50 的 `crates/runtime-host/src/policy_host.rs` 4344–4360 的 `outcome_key_snapshot`、4430–4449 的 `latest_completed_policy_runs`），就把迟到的了结
+    读成这一对最近一次：**这一对的结果键为空，直到它下一次完成**，引用这个结果的规则在那之前按最近一次被中断来判；失败计数照旧对（迟到的完成留的是后来那次的
+    计数）。
+  - **一条边：了结那次启动在「了结写了、值记录还没写」之间被切断，接着起的是 v0.12.50。** 那次能起来：它按旧规则把迟到的执行当成这一对最近一次失败，值记录
+    也点名它。这一对后来跑过的话，**再下一次启动，不论哪个版本，都以 `runtime_fact_stale` 失败（致命）**：它只加载迟到的那次，把那次的了结事实写在后来那次
+    更新的事实上面（`runtime_facts.rs` 811–821，`precheck_runtime_fact` 1446–1455）；只有这一对在中间又完成一次运行才避得开。这一对后来没跑过的，不会失败。
+    审查另记了一条：了结那次启动切在执行记录和完成之间、接着起 v0.12.50，派单又留成开着、每次启动报 Warning，不致命。
+  - **运维规矩（总览定，2026-11-11）：部署 0.12.51 以后，在 0.12.51 有一次启动在了结之后完整走完以前，不退回 v0.12.50；头一次启动被切断，就再起一次
+    0.12.51。**
+- 配对：
+  - **v0.12.50 的安装工具装本版**：照常，不带标志，见上面。部署本版跑的是 v0.12.50 的安装工具。
+  - **部署工具包的 `actingctl install` 命令行对本版的根答得一样**：工具包用的 `release stage`、`guards --for stop`、`update plan [--preview]`、
+    `update apply … --start --detach`、`status [--operation]`、`release-hold` 的代码自 v0.12.50 没改，`crates/lab-rescue/src/install/gate_434_lab3.rs` 416–692
+    照旧逐条钉住。工具包核新版 actinglab 用的 `--json standard-pack check` 的代码也没改，RD-BUDGET-1 的读取器不在这条路上。
+  - **控制台 UI**（最新发版 UI v0.12.15 的提交就是 main `bb0fd1c7`，它把 Runtime crate 钉在 `d06910c6`，即 v0.12.47，`Cargo.toml` 39–44；
+    `crates/acui-setup/component-interfaces.json` 声明 `actingd-config` [5, 27]、`ledger` [3, 7]、`runtime-client` [3, 5]、`runtime-outcomes` [1, 1]）：本版的
+    声明、线上请求和账本形状都和 v0.12.50 一样，控制台对本版照常。它跑的 actingctl 命令 `packs`、`watchdog status --root`
+    （`crates/acui-app/src/workbench/tools.rs` 383、415）和安装器的 `install-transition`、`status`、`request-shutdown`（`crates/acui-setup/src/lifecycle.rs`
+    81、207、220）都没变，这两份文件自 v0.12.50 说明核过的 UI v0.12.13 没改。账本里新写的 `policy_settlement_dispatch_closed` 不在它钉的 v0.12.47 码目录里：
+    它钉的账本 crate 只核拼写、读得了，控制台照原样显示码名、不配说明（`crates/acui-rows/src/outcome.rs` 160–176）。UI 仓的建模工具 acmodel 从 UI v0.12.15
+    起两种回答都读（`model/src/acmodel/export/validator.py` 67–78），v0.12.50 说明里它答 `export_validator_missing` 的那条已经不成立；它只读 `entries` 里那个
+    文件的 `status`，不读 `read_bytes`（102–112）。
+
+运行上的变化：
+
+- 部署本版的头一次启动了结那条开着的派单（两条了结记录加一条 `policy_settlement_dispatch_closed`），每次启动的 `policy_settlement_dispatch_left_open` 停掉；
+  这一对不再算在飞，资格年龄重新累计，失败状态不变。其余调度决定不变。
+- `actinglab resource validate` 只因重复计数被拒的全量扫描现在能过；`actinglab detect` 不再起 PowerShell。别的命令答法照旧。
+
+本版合并的 PR：
+
+- #1563 FLK-10（#71，登记 §1.294）：host-metrics 新加 `probe_process_creation`、`dns_host_name`、`fill_system_random`，`crates/lab` 的结果锁改用它们；起子进程
+  的执行器和 30 秒时限删掉。新门行 `#71 FLK-10` 的 1 个测试（`flk10_windows_holder_start_is_read_from_the_system_as_dotnet_ticks`）；删掉不在门行里的
+  `windows_probe_timeout_terminates_helper`（它测的执行器没了）。没有新码，不升任何接口修订。
+- #1565 RD-BUDGET-1（#428，登记 §1.295）：`DeclarationReader` 留下每个文件的字节，每个路径只在第一次读时计数。新门行 `#428 RD-BUDGET-1` 的 4 个测试
+  （`gate_428_rd_budget1`）。没有新码，不升任何接口修订。
+- #1564 UNSET-2（#428，登记 §1.296；`contracts/scheduling/README.md` 的 “Failures (#419)”；LN4-6、LN4-7、LN4-8 原地改正）：账本的检查（改 #670 的 R4）、
+  `policy_settlement_dispatch_closed`、迟到的了结不算失败、一对的最近一次按准入顺序取、派单日志的修剪留着迟到的完成。账本门行 `#428 UNSET-2` 的 2 个测试
+  （其中 `interrupted_policy_execution_recovery_accepts_effects_and_rejects_duplicate_release` 是钉旧规则的那个，有意改造并改名），主机门行 `#428 UNSET-2`
+  的 7 个测试（`policy_admission`）。新码 1 个，不升任何接口修订。
+
 ## v0.12.50
 
 本版是 v0.12.49 之后合并的 4 个 PR：#434 LAB-2b（#1556）、#428 S168-5a（#1558）、#428 TB-R1（#1561）和 #428 S168-4（#1560）。先说部署：`package` 从

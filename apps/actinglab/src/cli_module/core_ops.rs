@@ -27,7 +27,7 @@ use actingcommand_contract::{
 use actingcommand_lab_ops::cli_line::{self, Exit};
 use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_lab_ops::instance_selector::{self, SelectorMiss};
-use actingcommand_lab_ops::table::Operation;
+use actingcommand_lab_ops::table::{Operation, ParamForm};
 use actingcommand_lab_ops::wait::{Waited, wait_at_most};
 use actingcommand_lab_ops::{
     capability_gap, code_lookup, configure, devices, diagnose, emulators, events, evidence_read,
@@ -70,7 +70,7 @@ pub(super) fn answer(operation: &Operation, params: &Map<String, Value>) -> Exit
         }
         "gap" => {
             let mut argv = Argv::new(&[capability_gap::COMMAND]);
-            argv.more(operation, params);
+            argv.options_of(operation, params, &[]);
             return dispatched(capability_gap::dispatch(&argv.0));
         }
         "packs" => {
@@ -91,8 +91,9 @@ pub(super) fn answer(operation: &Operation, params: &Map<String, Value>) -> Exit
     if let Some(exit) = dispatched_with_state_root(operation, params, &located, &state_root) {
         return exit;
     }
-    // The operations called here take only the row's parameters: a further flag or word a row
-    // with `params_more` let through is refused by name, never ignored.
+    // The operations called here take only the row's parameters: a flag or word the row does not
+    // declare is refused by name, never ignored (Workflow #434 LAB-5A: the words refuse it first,
+    // since no core row has `params_more`).
     if let Some((further, _)) = super::words::further_flags(operation, params).first() {
         return usage(&flag_name(further), ArgumentProblem::Unknown);
     }
@@ -201,7 +202,7 @@ fn dispatched_with_state_root(
             if let Err(exit) = argv.since(params) {
                 return Some(exit);
             }
-            argv.more(operation, params);
+            argv.options_of(operation, params, &["since"]);
             run_list::dispatch(&argv.0)
         }
         "run evidence" => {
@@ -217,7 +218,7 @@ fn dispatched_with_state_root(
                 argv.flag(flag, id);
             }
             argv.flag_of(params, "detail", "--detail");
-            argv.more(operation, params);
+            argv.options_of(operation, params, &["detail"]);
             run_evidence::dispatch(&argv.0)
         }
         "diagnose" => {
@@ -279,14 +280,19 @@ fn dispatched_with_state_root(
             };
             let mut argv = Argv::new(&[devices::COMMAND, action]);
             argv.word_of(params, "instance");
-            argv.words_of(params);
+            // Workflow #434 LAB-5A: `devices bind`'s handle, a declared positional (a further word
+            // before).
+            argv.word_of(params, "handle");
             argv.state_root(state_root);
             if action != devices::UNBIND
                 && let Some(root) = root
             {
                 argv.flag("--root", root);
             }
-            argv.more_flags(operation, params);
+            // Workflow #434 LAB-5A fix 1: `devices bind`'s `--root` from the command line
+            // (`words::KEPT_FLAGS`), after the module's own, as its further flags went before:
+            // `devices` takes it only when the module located none.
+            argv.further(operation, params);
             devices::dispatch(&argv.0)
         }
         _ => return None,
@@ -1076,37 +1082,46 @@ impl Argv {
         Ok(())
     }
 
-    /// The source command's further words (`words`), in order.
-    fn words_of(&mut self, params: &Map<String, Value>) {
-        for word in list_of(params, super::words::MORE_WORDS).unwrap_or_default() {
-            self.word(word);
-        }
-    }
-
-    /// The source command's further flags: every parameter the row does not declare.
-    fn more_flags(&mut self, operation: &Operation, params: &Map<String, Value>) {
-        for (name, value) in super::words::further_flags(operation, params) {
-            let flag = flag_name(name);
-            match value {
-                Value::Bool(true) => self.word(flag.as_str()),
-                Value::Bool(false) => {}
-                Value::Array(items) => {
-                    for item in items {
-                        match item {
-                            Value::Bool(true) => self.word(flag.as_str()),
-                            other => self.flag(&flag, scalar(other)),
-                        }
-                    }
-                }
-                other => self.flag(&flag, scalar(other)),
+    /// Workflow #434 LAB-5A: the row's options and switches but those in `handled`, in the row's
+    /// order, each under the flag of its name (`--` and the name with `_` as `-`), as the command's
+    /// parser in `lab-ops` names them: a switch set as the flag alone, a list item by item,
+    /// another value as the flag and its value. Before LAB-5A they were the row's further flags,
+    /// handed on under the same names.
+    fn options_of(&mut self, operation: &Operation, params: &Map<String, Value>, handled: &[&str]) {
+        for param in &operation.params {
+            if param.form == ParamForm::Positional || handled.iter().any(|name| *name == param.name)
+            {
+                continue;
+            }
+            if let Some(value) = params.get(&param.name) {
+                self.written(&flag_name(&param.name), value);
             }
         }
     }
 
-    /// The source command's further words, then its further flags.
-    fn more(&mut self, operation: &Operation, params: &Map<String, Value>) {
-        self.words_of(params);
-        self.more_flags(operation, params);
+    /// Workflow #434 LAB-5A fix 1: the members the row does not declare, which only the command
+    /// line hands on (`words::KEPT_FLAGS`: `devices bind --root`), each under the flag of its
+    /// name, as the row's further flags went before LAB-5A.
+    fn further(&mut self, operation: &Operation, params: &Map<String, Value>) {
+        for (name, value) in super::words::further_flags(operation, params) {
+            self.written(&flag_name(name), value);
+        }
+    }
+
+    /// `flag` with `value`: `true` the flag alone, `false` nothing, a list item by item, another
+    /// value the flag and the value.
+    fn written(&mut self, flag: &str, value: &Value) {
+        let items = match value {
+            Value::Array(items) => items.as_slice(),
+            other => std::slice::from_ref(other),
+        };
+        for item in items {
+            match item {
+                Value::Bool(true) => self.word(flag),
+                Value::Bool(false) => {}
+                other => self.flag(flag, scalar(other)),
+            }
+        }
     }
 }
 
