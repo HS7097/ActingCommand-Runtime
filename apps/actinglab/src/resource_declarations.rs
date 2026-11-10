@@ -351,8 +351,16 @@ pub(crate) fn operation(repo: &Path, operation_dir: &Path) -> CliOutcome<Value> 
 
 struct DeclarationReader {
     root: PathBuf,
+    /// Workflow #428 RD-BUDGET-1: the bytes this run has read from disk, each file once, at its
+    /// first read; never more than `max_total_bytes`.
     read_bytes: u64,
+    /// Workflow #428 RD-BUDGET-1: the bound on `read_bytes`, `MAX_TOTAL_BYTES` for the program.
+    max_total_bytes: u64,
     read_files: BTreeSet<String>,
+    /// Workflow #428 RD-BUDGET-1: the bytes of every file this run has read, by its path as
+    /// `read_files` spells it, kept for the rest of the run: a later read of the path answers
+    /// them and reads nothing from disk.
+    kept: BTreeMap<String, Vec<u8>>,
     /// Workflow #396 TOOL-2: the repository's `declaration-exclusions.json`, read once, when a
     /// path without a mapped parser first needs it.
     exclusions: Option<DeclarationExclusions>,
@@ -368,6 +376,12 @@ struct DeclarationReader {
 
 impl DeclarationReader {
     fn new(root: &Path) -> CliOutcome<Self> {
+        Self::with_total(root, MAX_TOTAL_BYTES)
+    }
+
+    /// Workflow #428 RD-BUDGET-1: the reader of a run that may read `max_total_bytes` from disk.
+    /// The program's readers take `MAX_TOTAL_BYTES` through `new`; only a test takes another.
+    fn with_total(root: &Path, max_total_bytes: u64) -> CliOutcome<Self> {
         let metadata = fs::symlink_metadata(root)
             .map_err(|error| invalid(root, &format!("repository metadata: {error}")))?;
         if !metadata.is_dir() || is_link(&metadata) {
@@ -378,7 +392,9 @@ impl DeclarationReader {
         Ok(Self {
             root,
             read_bytes: 0,
+            max_total_bytes,
             read_files: BTreeSet::new(),
+            kept: BTreeMap::new(),
             exclusions: None,
             published_keys: None,
             checked_pools: BTreeSet::new(),
@@ -404,14 +420,29 @@ impl DeclarationReader {
         Ok(path)
     }
 
+    /// Workflow #428 RD-BUDGET-1: a path is read from disk and counted against the run's total
+    /// only at its first read, and its bytes are kept for the rest of the run. A later read of the
+    /// path answers the kept bytes and reads nothing from disk, under its own `limit` as before.
+    /// The first read of a file that takes the count past the total is refused, as before.
     fn read(&mut self, relative: &Path, limit: u64) -> CliOutcome<Vec<u8>> {
+        validate_relative_path(relative)?;
+        let limit = limit.min(MAX_DOCUMENT_BYTES);
+        let key = path_text(relative);
+        if let Some(bytes) = self.kept.get(&key) {
+            if bytes.len() as u64 > limit {
+                return Err(invalid(
+                    relative,
+                    "declaration is not a bounded regular file",
+                ));
+            }
+            return Ok(bytes.clone());
+        }
         let path = self.checked_path(relative)?;
         let mut file = File::open(&path)
             .map_err(|error| invalid(relative, &format!("open declaration: {error}")))?;
         let metadata = file
             .metadata()
             .map_err(|error| invalid(relative, &format!("open declaration metadata: {error}")))?;
-        let limit = limit.min(MAX_DOCUMENT_BYTES);
         if !metadata.is_file() || metadata.len() > limit {
             return Err(invalid(
                 relative,
@@ -423,11 +454,13 @@ impl DeclarationReader {
             .take(limit + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| invalid(relative, &format!("read declaration: {error}")))?;
-        if bytes.len() as u64 > limit || self.read_bytes + bytes.len() as u64 > MAX_TOTAL_BYTES {
+        if bytes.len() as u64 > limit || self.read_bytes + bytes.len() as u64 > self.max_total_bytes
+        {
             return Err(invalid(relative, "declaration read budget exceeded"));
         }
         self.read_bytes += bytes.len() as u64;
-        self.read_files.insert(path_text(relative));
+        self.read_files.insert(key.clone());
+        self.kept.insert(key, bytes.clone());
         Ok(bytes)
     }
 
@@ -1648,3 +1681,9 @@ fn is_link(metadata: &Metadata) -> bool {
         metadata.file_type().is_symlink()
     }
 }
+
+// Workflow #428 RD-BUDGET-1 (exec gate row "#428 RD-BUDGET-1"): the reader counts a file once per
+// run, against the run's total.
+#[cfg(test)]
+#[path = "tests/gate_428_rd_budget1.rs"]
+mod gate_428_rd_budget1;
