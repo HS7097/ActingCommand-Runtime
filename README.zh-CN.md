@@ -148,22 +148,22 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ## Workspace 成员
 
-工作区声明 38 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
+工作区声明 39 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
 
 ### apps（8）
 
 | 路径 | 包 | 产物 | 职责 |
 | --- | --- | --- | --- |
 | apps/actingcommand-entry | actingcommand-entry | lib | A/B 安装根固定入口的结果码（`contracts/stable-entry.md`）；两个入口程序加入之前只是放这些码的库 |
-| apps/actingctl | actingcommand-actingctl | bin `actingctl` | 面向 correlation 作用域运行时流程的精简生产命令行，以及 MCP 服务（`mcp-serve`、`mcp-config`）与看门狗的命令（`watchdog …`，取自 `crates/watchdog`） |
+| apps/actingctl | actingcommand-actingctl | bin `actingctl` | 面向 correlation 作用域运行时流程的精简生产命令行，MCP 服务（`mcp-serve`、`mcp-config`）、看门狗的命令（`watchdog …`，取自 `crates/watchdog`），以及安装工具 `install` 连同 `mcp-entry`、`start`、`restart`、`agent-channel`，原样由 `crates/lab-rescue` 回答（Workflow #434 LAB-3） |
 | apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | 常驻运行时的精简进程适配器 |
-| apps/actinglab | actingcommand-actinglab | bin `actinglab` | 创作与调试侧命令行，46 个顶层分派臂、102 条命令；它的 CLI 模块用操作表的短词回答从 actingctl 来的操作，`actinglab serve --stdio` 每行答一个 `{op, params}`（Workflow #434 LAB-2） |
+| apps/actinglab | actingcommand-actinglab | bin `actinglab` | 创作与调试侧命令行，46 个顶层分派臂、102 条命令；它的 CLI 模块用操作表的短词回答从 actingctl 来的操作，`actinglab serve --stdio` 每行答一个 `{op, params}`（Workflow #434 LAB-2）；两者还对程序所在的根提供 `crates/lab-rescue` 的 29 行救急操作（Workflow #434 LAB-3） |
 | apps/actingwatch | actingcommand-actingwatch | bin `actingwatch` | 看门狗计划任务从 `<root>\tools\` 运行的无窗口程序：用 `crates/watchdog` 自己跑看门狗的 tick（Workflow #434 LAB-4），并为它所在的根回答 `status`、`install`、`uninstall` |
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | 账本取证报告、重放与签名目录的只读前端 |
 | apps/mcp-entry | actingcommand-mcp-entry | bin `actingcommand-mcp-entry` | 所有客户端共用的稳定 MCP 入口（随 Tools 发布）：把 JSON-RPC 转给当前的 `actingctl mcp-serve`，并在两次调用之间切到已安装的版本 |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | 列出视觉模型文件夹及其内容身份，并从 Runtime 账本读取提供者启动事实；不加载任何模型 |
 
-### crates（27）
+### crates（28）
 
 | 路径 | 包 | 职责 |
 | --- | --- | --- |
@@ -176,6 +176,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 | crates/host-metrics | actingcommand-host-metrics | 平台性能计数器的安全边界（仅 cfg(windows) 依赖 windows-sys） |
 | crates/lab | actingcommand-lab | 可选的创作与调试适配层；排除后生产仍可构建可运行 |
 | crates/lab-ops | actingcommand-lab-ops | Lab 的操作层（Workflow #434 LAB-1、LAB-1b）：把操作表 `contracts/lab-operations.json` 读成带类型的行、发起者的词和默认位置，以及每个核心操作的代码（发请求、整理回答），actingctl、它的 MCP 服务和 actinglab 的 CLI 模块都从这里调用 |
+| crates/lab-rescue | actingcommand-lab-rescue | Lab 的救急与安装模块（Workflow #434 LAB-3；只在 Windows 上）：从 actingctl 原样搬来的安装工具（`install`、`mcp-entry`）、`start`、`restart` 和 `agent-channel`，LAB-7 之前 actingctl 从这里回答；以及 actinglab 在它们之上提供的救急行（日志记 `initiator`、没有确认参数、守卫只报不拦、只交还自己的暂停，组合操作 `deploy`、`config replace`、`place`、`alive`） |
 | crates/ledger | actingcommand-ledger | 全局运行时事件账本的可恢复单写者存储 |
 | crates/ledger-forensics | actingcommand-ledger-forensics | 基于 GlobalLedger 与已验证证据归档的只读取证 |
 | crates/onnx-provider-support | actingcommand-onnx-provider-support | 引擎侧 ORT 生命周期：幂等初始化、可取消看门狗 |
@@ -237,7 +238,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 **稳定入口（v0.12.18）。** 单一位置安装下，所有客户端（Claude Code、Codex、Antigravity、DSH）不再直接启动 `actingctl mcp-serve`，而是启动 `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <名字> -- mcp-serve --tier <档位>`。入口把 JSON-RPC 转给一个 `<root>\runtime\actingctl.exe` 子进程，`--` 之后的参数原样传过去；更新之后，它只在两次调用之间、只对核验完整的安装（`actingctl mcp-entry plan`）切到新的子进程，重放客户端的握手，并发出变更通知（旧协议发 `notifications/tools/list_changed`，2026-07-28 协议在 `subscriptions/listen` 流上发同一通知）。旧子进程还持有未读结果的任务或 Lab 句柄时，切换会一直等；子进程在请求进行中退出时，该请求得到 `mcp_entry_outcome_unknown`（用 `ac_get_run` 或 `ac_overview` 查看），绝不重发。客户端第一次改用入口需要重启一次，之后更新不再需要重启。Claude Code 会自己重新拉工具表；Codex 重新加载该服务，Antigravity 在 MCP 管理器里点 Refresh，DSH 通过插件生命周期重新加载、工具白名单保持不变。`actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> --tier <档位>` 打印各客户端的配置片段；`actingctl mcp-entry list --root <root>` 显示每个入口的状态（`<root>\mcp-entry\state\entry-<pid>.json`）。详见 [contracts/install-cli.md](contracts/install-cli.md) 的 “The MCP entry”。
 
-**档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。下表列的是 v0.12.47 的 41 个工具；标 † 的 19 个是 0.12 系列新增的。`ac_config_set` 属 observer 档，但调用里只要有实例的 `touch_backend` 或 `capture_backend`，就会切换那台设备，要 operator 档（v0.12.39）。工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
+**档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。下表列的是 v0.12.48 的 41 个工具；标 † 的 19 个是 0.12 系列新增的。`ac_config_set` 属 observer 档，但调用里只要有实例的 `touch_backend` 或 `capture_backend`，就会切换那台设备，要 operator 档（v0.12.39）。工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
 
 | 档位 | 工具 |
 | --- | --- |

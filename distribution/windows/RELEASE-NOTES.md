@@ -9,6 +9,149 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.48
+
+本版是 v0.12.47 之后合并的 1 个 PR：#434 LAB-3（#1553）。先说部署：接口声明都不变（账本仍是 [3, 7]），部署不用带 `--accept-ledger-one-way`，
+计划里也没有 `ledger_verify` 这一步；v0.12.47 的安装工具装本版照常（见下面的升级）；装上以后能退回 v0.12.47，不用带标志（Lab 救急模块写的安装日志
+v0.12.47 读不了，所以 LAB-7 之前生产不用它部署，见下面的退回）。没有新键，默认值文件没改。运行上要知道的是这几处：
+
+- **Lab 有了救急与安装模块**（LAB-3，登记 §1.287）。`actinglab` 的命令行和 `actinglab serve --stdio` 多了操作表 `rescue` 模块的 29 行
+  （`crates/lab-rescue/src/rescue.rs` 76–106）：`up`、`down`、`restart`、`alive [--wait]`、`deploy <tag|commit>`、`rollback`、`undo`、`op status|resume`、
+  `leftovers`、`guards`、`release-hold`、`release verify|stage`、`adopt`、`config replace|restore`、`place <bundle.zip>`、`unlock`、`check-config`、
+  `ledger verify`、`watchdog install|uninstall` 和 `agent …`。
+  - 它作用在 actinglab 所在的根上，不收 `--root`、`--state-root`：`<root>\tools\actinglab.exe deploy …` 部署的就是这个根，演练要用演练根自己的 actinglab。
+  - 组合操作一次调用做完：`deploy` 是 stage、plan、带暂停停机、apply、启动、等 `alive`、交还暂停；`config replace <file>` 先用现行构建的 check-config
+    核新文件，再停机、换文件（换下的留作 `actingd.config.json.prev-<ms>`，文件内容不打印）、启动、等 `alive`、交还，`config restore <prev>` 换回；
+    `place <bundle.zip>` 暂停绑定这个包的实例、等它们空闲、逐项放置（旧的留作 `.old-<ms>`）、检查、交还、读排程，代码里不写任何游戏；`alive` 是看门狗
+    对这个根的 status。
+  - **不问确认，记下谁发起的**：`--plan <id>`、`--accept-ledger-one-way`、`--known-pause`、`--ack-guard`、`--ui-confirmed`、`--via` 都答
+    `actingctl_usage_invalid`（`unknown`；`rescue.rs` 115–123），`--plan` 在这里只是“只出计划”的开关。模块写的每份安装日志在第一步之前记 `initiator`
+    （命令行默认 `Lab-CLI`，`ACTINGCOMMAND_INITIATOR` 可设 `Lab-救急`），撤销记录也记；单向的账本边不再要确认，记 `one_way: true`
+    （`crates/lab-rescue/src/install/journal.rs` 93–103、117–135）。`unlock` 把发起者当 actingd 的 `--actor`。
+  - **守卫只报不拦**：没过或没评估的守卫给警告 `install_caveat_noted`（`install_caveat` `guard_failed`，`install_guards` 列出），操作照常往下走，日志留着
+    这些行（`install/guards.rs` 359–384）；启动前照旧等内存。前置条件、写锁、未完成的操作、接口检查、回退门和输入检查照旧拒绝。
+  - 从 `<root>\tools\actinglab.exe` 跑的 `deploy`、`rollback` 按 pid 认出自己的映像，像 `actingctl.exe` 一样挪开继续跑（计划里的 `running.renamed_own`，
+    `install/plan.rs` 129–134、936–964）；根下别的 `actinglab.exe`（MCP 的子进程、另一个命令行）照旧拒绝 `running_image_blocks`，先关掉。
+- **救急模块只交还自己设的暂停，从不解别人的**（LAB-3 修复 1 至 3）。它的暂停原因是 `lab-<操作>-<毫秒>`（或 `down --reason` 给的）。`release-hold <reason>`
+  只认模块自己的日志在暂停那一步记下的原因，只恢复那一步暂停的实例，而且只在实例现在仍显示这个原因时恢复；按原因和别名认，不按修订号，所以 Runtime
+  重启过也认（`install/hold.rs` 712–786）。别的原因一律答 `hold_not_owned`（`hold_reason`），什么都不恢复；`down --reason` 给的原因若已在某台实例上，
+  也在暂停之前就答 `hold_not_owned`，从不接手已有的暂停（`hold.rs` 788–804）。生产五台实例现有的停调度暂停因此不会被它解开。全局暂停保留并列出，
+  停机照常；在动磁盘之前被拒，模块立即交还自己刚设的暂停（`hold.kept: false`）。读不出某个暂停归不归它时，答复的 `next` 里不放这条 `release-hold`，
+  并带说明 `hold_ownership_unconfirmed`。`actingctl install release-hold` 和 `install stop` 没变。
+- **LAB-7 之前的运维规矩：生产照旧用 `actingctl install` 部署**（总览的部署工具包），不对生产根用模块的 `deploy`、`rollback`、`place` 或 `config replace`。
+  模块写的日志带 `initiator`、`one_way`、暂停证据里的 `own_pauses`，种类还可能是 `config_replace`、`pack_place`，v0.12.47 及更早的安装工具都读不了
+  （#1553 的 “At deploy”，`contracts/install-cli.md` 的 “The Lab's rescue module” 末条）；生产根上有了这种日志，需要退回 v0.12.47 时它就看不见这些操作
+  （见下面的退回）。
+- **`actingctl install`、`start`、`restart`、`mcp-entry`、`agent-channel` 没变**：代码原样搬进 `crates/lab-rescue`，actingctl 从那里回答
+  （`apps/actingctl/src/main.rs` 88–95；`install` 用 `Face::Install`，`crates/lab-rescue/src/install/mod.rs` 105–138、236–247），选项、输出行、码、退出码和
+  写的日志都和以前一样（`install-cli` 修订 1 的面，留到 LAB-7）。部署工具包用的命令行由测试逐条钉住（见下面的配对）。
+- **actinglab 从 `<root>\tools\` 跑时认得出自己的根**：`crates/lab-ops` 的定位以前只认 `runtime\` 下的程序，现在 `tools\` 下的也认
+  （`crates/lab-ops/src/locate.rs` 113–119）。所以 LAB-2 的短命令从安装根的 `tools\actinglab.exe` 跑，不设 `ACTINGCOMMAND_RUNTIME_STATE_ROOT` 也找得到
+  根和状态根（v0.12.47 答 `install_root_unresolved`）。
+
+配置：接口修订都不变，按代码和 `contracts/component-interfaces.md` 核过：`actingd-config` 仍是 [5, 27]，`ledger` 仍是 [3, 7]，`runtime-client` 仍是 [3, 6]，
+`package` 仍是 [3, 7]，`install-selection` 仍是 [1, 1]，`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。`distribution/windows/component-interfaces.json`
+和架构测试 `tools/actinglab-architecture/tests/component_interfaces.rs` 自 v0.12.47 没改；`component-interfaces.md` 只在计划段写下 LAB-3 对 `install-root`
+的判定（287–292）。
+
+- 不升 `install-root`：`initiator`、`one_way` 和 `own_pauses` 是单一位置根的日志 `install-operation.v1` 的可选成员，只有救急模块写；`install-root` 管的是
+  A/B 根的私有文件（`component-interfaces.md` 158），不含单一位置根的日志。代价是 v0.12.47 及更早的安装工具读不了模块写的日志（总览的裁定，测试阶段不做
+  旧版兼容），所以有上面的运维规矩。
+- 不升 `install-cli`：`actingctl install` 的面没变；模块的种类 `config_replace`、`pack_place` 是修订 1 的 UI 从来不发起的操作（同上 291–292）。计划中的
+  `install-cli` 2 仍跟 LAB-7 走（272）。
+- 不升 `runtime-client`、`ledger`：LAB-6 之前模块经 CLI 通道发已有的请求，`crates/runtime-client`、合同 crate 和 `crates/ledger` 自 v0.12.47 都没改，没有
+  新记录形状。
+- 配置键：没有新键，也没有去掉的键。`crates/runtime-config`、`apps/actingd`、`actingd.defaults.json` 和 `actingd.config.example.json` 自 v0.12.47 都没改，
+  部署计划的默认值对比是空的；模块读的 `install.*` 键（如 `install.start.memory_wait_ms`、`install.start.ready_timeout_ms`）都是已有的。
+- 结果码：没有新码，也没有退役的码，目录仍是 3897 个码，位置从 1741 个变成 1747 个。新位置 6 个（actingctl 片，待定稿，since 0.12.48）：
+  `install_deploy`、`install_config_replace`、`install_alive`、`install_unlock`、`install_check_config`、`install_ledger_verify`。新词 6 个：`install_refusal`
+  的 `hold_not_owned`；`install_caveat` 的 `guard_failed`、`hold_ownership_unconfirmed`；`install_operation_kind` 的 `config_replace`、`pack_place`；
+  `install_step_kind` 的 `pack_item`。两个待定稿的码多了可选值（都是已有的键）：`install_caveat_noted` 多 `install_guards`、`hold_reason`，
+  `install_command_refused` 多 `hold_reason`；只改说明的：键 `hold_reason`、`install_refusal` 的 `instances_not_idle`。结果码目录头的片名多了 `lab-rescue`
+  （没有分片文件，不登记码）。本版的发布文件是空的：没有新定稿或退役的条目。
+- 账本：不升，没有新记录形状。
+- 程序文件：workspace 成员从 38 个变成 39 个（新库 `crates/lab-rescue`，只在 Windows 上编，CI 归 `host-lab` 作业）。它是库，链进 `actingctl.exe` 和
+  `actinglab.exe`；`windows-remote-build.yml` 和 `release.yml` 自 v0.12.47 没改，Runtime 包和 Tools 包的文件清单都和 v0.12.47 一样。`Cargo.lock` 只多了
+  这个 workspace 包，没有新的外部依赖。`apps/actingd`、`apps/actingwatch`、`apps/mcp-entry`、`crates/runtime-client`、`crates/ledger`、合同 crate 自
+  v0.12.47 没改；`crates/watchdog` 只加了给模块用的 `Asked`、`Answered`、`answer` 和两个操作种类，`actingwatch.exe` 的 tick 和 `actingctl watchdog …`
+  答法不变。MCP 工具仍是 41 个（`apps/actingctl/src/mcp` 没改）。
+
+升级时要知道的（按安装工具的代码核过；部署本版跑的是 v0.12.47 的安装工具，下面的行号是它的 `apps/actingctl/src/install/`）：
+
+- 不用 `--accept-ledger-one-way`：两边的 `ledger` 都是 [3, 7]，`previous_max_in_next`（7 在 [3, 7] 里）和 `one_way`（7 不大于 7）都过（`plan.rs` 281–294），
+  带上也不改判断；现行和目标的 `ledger` 相同，所以计划里没有 `ledger_verify`（908），apply 不读账本。
+- 其余的边都过：两边的声明逐字相同，v0.12.47 安装工具自己的声明 I 编在程序里（`host.rs` 23–24），和本版的声明一样；`next_max_in_installer`（295–307）、
+  `installer_meets_previous` 和 `installer_meets_next`（308–323）都过；`package` 两边都是 [3, 7]，`bundle_max_in_next` 在单一位置根上只有
+  `pack_declaration_unknown` 警告（325–348）；`installer_knows_keys`（353–369）不受影响，没有新键；`next_check_config`（895–907）：本版的 check-config 和
+  v0.12.47 是同一份代码，收现行配置，写了 DirectML 的也一样。
+- **v0.12.47 的安装工具没有新东西要发或要读**：两个包的文件清单没变，它照常把新的 `runtime\actingctl.exe` 和 `tools\actinglab.exe` 换上去；计划任务不用
+  重新注册。本版的 `actingctl install` 读 v0.12.47 写的日志和 `current.json`：新成员都可缺省（`#[serde(default)]`，`crates/lab-rescue/src/install/journal.rs`
+  93–103、117–135），种类和步骤都是旧的超集。
+- 部署的自动回退和 `install undo` 这次可以用：接口边都过，回退门的配置一项也过（见下面的退回）。
+
+退回 v0.12.47（按本版安装工具的代码核过，行号是 `crates/lab-rescue/src/install/` 的）：
+
+- 安装工具允许退回，不用 `--accept-ledger-one-way`。两边的声明相同：`ledger` [3, 7] 的 `previous_max_in_next` 和 `one_way` 都过（`plan.rs` 288–301），
+  其余接口两边都一样，没有失败的边；退回时 `next_check_config` 不算接口边（`plan.rs` 1019–1034）。部署的自动回退（`deploy.rs` 772–781，
+  `accept_ledger_one_way: false`）、`rollback plan|apply` 和起过本版 Runtime 以后的 `install undo`（`undo.rs` 177–191、327–360、376 起）走的是同一组边和
+  同一个回退门（`update.rs` 383–505）。回退门其余几项：本版不写新的记录形状，v0.12.47 的读者读部署之后的账本页（`ledger_readability`，400–437）；
+  开启时间（438–489）和配置（490–503）两版的 actingd 和配置代码相同。
+- **`actingctl install` 写的日志 v0.12.47 照读**：本版的 `actingctl install` 是 `Face::Install`（`mod.rs` 105–138），不写 `initiator`（`None` 不写）、
+  `one_way`（`false` 不写）和撤销记录的 `initiator`（`journal.rs` 93–103、117–135）；暂停步骤的证据只在救急面写 `own_pauses`（`deploy.rs` 219–264）；
+  计划里的 `running.renamed_own` 为空时不写（`plan.rs` 129–134），`actingctl install` 自己的映像是 `actingctl.exe`，走原来的 `renamed`（936–964）。种类和
+  步骤都是 v0.12.47 已有的，所以 v0.12.47 的 `Journal`（`deny_unknown_fields`）照读。测试断言 apply 写的日志没有 `initiator`、`one_way`
+  （`gate_434_lab3.rs` 600–606）。
+- **救急模块写的日志 v0.12.47 读不了（已知的缺口）**：v0.12.47 的 `Journal`、`UndoRecord` 拒收未知成员（v0.12.47 的
+  `apps/actingctl/src/install/journal.rs` 89–94、109–131），`StepKind` 没有 `pack_item`（26–47），`OperationKind` 没有 `config_replace`、`pack_place`
+  （v0.12.47 的 `crates/watchdog/src/install_state.rs` 17–29）。v0.12.47 遇到这种日志：
+  - 点名读它的命令拒绝：`install resume|undo --operation <id>` 答 `state_invalid`（v0.12.47 `journal.rs` 284–297），`install status --operation <id>` 答
+    用法错误（v0.12.47 `status.rs` 326–328）。
+  - 遍历所有日志的读者不报错、直接跳过它（旧行为，记作后续）：回退门推算各时段的现行构建（v0.12.47 `update.rs` 215–217）、`status` 的最近操作
+    （`status.rs` 229–233）、`leftovers` 的留底归属（`status.rs` 56–60）、`release-hold` 找暂停记下的延后工作（`deploy.rs` 834–870）、单独 `start` 找上次
+    停机（`deploy.rs` 1466–1472）。所以这些操作在 v0.12.47 里看不见，它的 `release-hold` 也交不回模块的暂停记下的延后工作。
+  - `install\current.json` 若还指着一个没做完的 `config_replace` 或 `pack_place`，v0.12.47 读不了它：`install status` 和每个要开新操作的命令都答
+    `state_invalid`（v0.12.47 `state.rs` 254–263、`status.rs` 220–227、`journal.rs` 171–183），看门狗当作有未完成的操作而不动（v0.12.47
+    `install_state.rs` 56–81）。
+  按 LAB-7 之前的规矩，生产根上不会有这种日志；安装工具不看它们，不会因此拦退回。
+- 落盘的东西除了救急模块的日志都不挡：没有新键、新文件、新记录形状。
+- 退回以后：actinglab 没有救急的 29 行，从 `tools\` 跑又找不到根（要设 `ACTINGCOMMAND_RUNTIME_STATE_ROOT`）；actingctl、MCP 和看门狗和本版一样。
+- 客户端和 Runtime 的配对：
+  - v0.12.47 的安装工具装本版：照常，不带标志，见上面的升级。
+  - **部署工具包的 `actingctl install` 命令行对本版的根答得一样**：它用的 `release stage --root --dir --facts --expect-tag --expect-commit`、
+    `guards --for stop --hold --known-pause`、`update plan [--preview]`、`update apply --plan --stop --hold --known-pause --start [--detach]`、`release-hold`、
+    `status [--operation]`，连同脚本读的成员（`guards[].id`、`result`；预览的 `plan_id`、`kind`、`plan` 的 `inputs`、`live` 和 `target` 的 `commit`、
+    `speaks`、`edges`、`ledger_verify`、`check_config`、`extra`、`config_sha256`、`files`；`status` 的 `live.commit`、`live.operation_id`、`builds[]`），由
+    `crates/lab-rescue/src/install/gate_434_lab3.rs` 415–691 逐条钉住：退出码、`--detach` 的命令行、带 `--known-pause` 的外来暂停原样保留、
+    `release-hold` 只放本次暂停的实例、写的日志没有 `initiator` 和 `one_way`、没点名的外来暂停照旧拒绝 `stop`、缺 `--plan` 照旧是用法错误。用法文本
+    （`mod.rs` 140）和参数分派与 v0.12.47 相同。部署本版时跑的是 v0.12.47 的安装工具，代码本来没变；下一次部署用本版的安装工具，命令行照旧。
+  - **控制台 UI**（UI 仓 main 仍是 `0e324e21`，最新发版仍是 UI v0.12.10 `c03d18ea`；`Cargo.toml` 39–44 仍把合同、账本、取证、`runtime-client`、配置和
+    内核 crate 钉在 `a322caa4`，即 v0.12.43；`crates/acui-setup/component-interfaces.json` 仍声明 `actingd-config` [5, 26]、`ledger` [3, 7]、
+    `runtime-client` [3, 5]、`runtime-outcomes` [1, 1]）：本版的声明、线上请求和账本都和 v0.12.47 一样，所以控制台对本版和对 v0.12.47 一样。它跑的
+    actingctl 命令是 `packs`（`crates/acui-app/src/workbench/tools.rs` 378–388）和 `watchdog status --root`（405–415），安装器跑 `install-transition`、
+    `status`、`request-shutdown`（`crates/acui-setup/src/lifecycle.rs` 81–85、207、220–221），都不是搬走的命令，答法不变；它不跑 `actingctl install`、
+    `start`、`restart`、`agent-channel`，也不跑 actinglab（只在核 Tools 文件清单时列出 `actinglab.exe`，`crates/acui-setup/src/verify.rs` 38）。本版
+    没有东西逼控制台换钉。
+  - MCP（actingctl 的 `mcp-serve`）和它跑的 actinglab 子进程（`--json --via mcp`）答法不变；救急行拒收 `--via`，MCP 没有调用它们的工具。
+
+运行上的变化：
+
+- 部署本身不改变调度的决定，actingctl 和 MCP 的命令答法照旧；actinglab 多了救急模块（LAB-7 之前不对生产根用它部署、回退、放置或换配置），从
+  `tools\` 跑时认得出自己的根。
+
+本版合并的 PR：
+
+- #1553 LAB-3（#434，登记 §1.287；契约 `lab-two-entries.md` §4.3、§5、§6、§7、§9.3 和未决第 1、4、5 条）：actingctl 的 `install`（连同 `mcp-entry`）、
+  `start`、`restart` 和 `agent-channel` 用 `git mv` 原样搬进新库 `crates/lab-rescue`，actingctl 从那里回答，面不变；actinglab 的 CLI 模块和
+  `serve --stdio` 提供 29 行救急操作和组合操作 `deploy`、`config replace|restore`、`place`、`alive`；日志记 `initiator`、`one_way`；没有确认参数；守卫
+  只报不拦（`guard_failed`）；只交还自己的暂停（修复 1：`hold_not_owned`；修复 2：按原因和别名、跨重启；修复 3：`hold_ownership_unconfirmed`）；从
+  `tools\actinglab.exe` 跑时挪开自己的映像；`crates/lab-ops` 的定位认 `tools\`；`crates/watchdog` 加 `Asked`、`Answered`、`answer` 和两个操作种类。不升
+  `install-root`、`install-cli`（总览的裁定）。新测试 11 个（`gate_434_lab3`：`rescue_without_actingd`、`irreversible_journal_initiator`、
+  `deploy_steps_in_order`、`actingctl_install_answers_the_deploy_kit_as_before`，修复补的 `rescue_hands_back_only_its_own_hold`、
+  `rescue_hands_back_its_own_hold_across_a_restart`、`rescue_refused_after_its_pause_hands_its_own_back`、`rescue_keeps_a_global_pause_and_goes_on`、
+  `rescue_renames_its_own_running_image`、`place_holds_only_the_bundles_idle_instances`、`rescue_notes_a_hold_whose_ownership_cannot_be_read`）；
+  33 个门测试随文件换了路径名（旧名进 `ci/retired-gates.toml`，带 `covered_by`）；改造 2 处（`cli_short_words_parse` 的未建示例改成 `clean`，
+  `c3b_client_device_authority_stays_behind_runtime` 多扫 `crates/lab-rescue`）；CI 的 `host-lab` 多跑 `-p actingcommand-lab-rescue`。
+
 ## v0.12.47
 
 本版是 v0.12.46 之后合并的 4 个 PR：#434 LAB-1b（#1548）、#434 LAB-4（#1549）、#434 LAB-2（#1550）和 #428 CW-1（#1551）。先说部署：接口声明都不变（账本
