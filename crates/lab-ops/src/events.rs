@@ -615,6 +615,10 @@ impl Page {
 /// caller's.
 pub type Binder<'a> = &'a dyn Fn(&RuntimeEventQueryCursor) -> Result<String, EventsError>;
 
+/// Workflow #434 LAB-5D: how [`list_within_budget`] renders a brief or summary page:
+/// `render(rows, kept)` answers the page with the first `kept` of `rows`, or the caller's failure.
+pub type Renderer<'a, E> = &'a dyn Fn(&[Value], usize) -> Result<Value, E>;
+
 /// Workflow #434 LAB-5D (moved unchanged from MCP's `ac_events`): a brief or summary page within
 /// `budget`. `render(rows, kept)` answers the page with the first `kept` of `rows`: with fewer
 /// than all, `truncated` and a cursor after the last row kept. Rows are cut from the end first;
@@ -624,7 +628,7 @@ pub type Binder<'a> = &'a dyn Fn(&RuntimeEventQueryCursor) -> Result<String, Eve
 pub fn list_within_budget<E>(
     mut rows: Vec<Value>,
     budget: Option<&Budget<'_>>,
-    render: &dyn Fn(&[Value], usize) -> Result<Value, E>,
+    render: Renderer<'_, E>,
 ) -> Result<Value, E> {
     let mut kept = rows.len();
     loop {
