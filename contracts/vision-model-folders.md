@@ -140,7 +140,12 @@ once per process. At most four models are loaded at once; the least recently
 used idle model is unloaded to make room and is read and hashed again on its
 next use. A model whose files changed while the daemon runs is retired until
 restart. Waiting for a model held by another request counts against the
-target's `timeout_ms`; the model's own load does not.
+target's `timeout_ms`; the model's own load does not. A target's `timeout_ms`
+bounds inference and not the one-time loading of a model: a session the engine
+builds on the first request that needs it (the detector, on a model's first
+request that detects) is built before that request's deadline starts, and no
+load is bounded by a target's `timeout_ms` (Workflow #428 VIS-LOAD-1, register
+§1.298).
 
 An OCR recognizer's output class count must be the dictionary size plus one
 (the CTC blank) or plus two (the blank and the space class); any other count
