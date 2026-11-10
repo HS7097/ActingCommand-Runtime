@@ -20,10 +20,13 @@
 //! program acts ([`Place`]), the developer text of a state root it could not locate, and the code
 //! of an answer whose only source was an MCP tool (`lab_operation_completed`, the catalog owner
 //! `actinglab`'s). The three helpers of actinglab's words this code reads moved with it
-//! ([`MORE_WORDS`], [`further_flags`], [`parse_duration`]).
+//! ([`MORE_WORDS`], [`further_flags`], [`parse_duration`]). The caller also says how the rows reach
+//! the Runtime ([`Caller::connection`]): a connection made for each call as a front connects, as
+//! actinglab does, or a connection it keeps.
 
 use crate::cli_line::{self, Exit};
 use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::front::{Connection, Reached};
 use crate::instance_selector::{self, SelectorMiss};
 use crate::table::{Operation, ParamForm};
 use crate::wait::{Waited, wait_at_most};
@@ -90,6 +93,11 @@ pub struct Caller<'a> {
     /// The code of an answer whose only source was an MCP tool: `lab_operation_completed`, a code
     /// of the catalog owner `actinglab`, which only actinglab's registry emits.
     pub completed: Code,
+    /// How the rows that reach the Runtime reach it: a connection made for the call as a front
+    /// connects (actinglab: [`Connection::per_call`]), or one the caller keeps. Every such row
+    /// takes it, each of the three ways: the words of a command of this crate (its `dispatch_on`),
+    /// and the parameters read here. `codes`, `gap`, `packs` and `devices` read no Runtime.
+    pub connection: Connection<'a>,
 }
 
 /// The operations of this module: the core rows and `run start`, `run stop`, `reset`, `drill`.
@@ -124,7 +132,9 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
         Ok(state_root) => state_root.clone(),
         Err(outcome) => return cli_line::failure(outcome, Some(caller.unlocated)),
     };
-    if let Some(exit) = dispatched_with_state_root(operation, params, &located, &state_root) {
+    if let Some(exit) =
+        dispatched_with_state_root(operation, params, &located, &state_root, caller.connection)
+    {
         return exit;
     }
     // The operations called here take only the row's parameters: a flag or word the row does not
@@ -136,7 +146,7 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
     if let Some(word) = list_of(params, MORE_WORDS).and_then(|words| words.first().cloned()) {
         return usage(&word, ArgumentProblem::Unknown);
     }
-    let client = match connect(&state_root) {
+    let client = match connect(&state_root, caller.connection) {
         Ok(client) => client,
         Err(exit) => return exit,
     };
@@ -151,10 +161,12 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
 }
 
 /// `shutdown [--wait]`: the receipt and, with a wait, the shutdown seen to complete. The client
-/// is given to the wait, which closes its connection first.
+/// is given to the wait, which closes its connection first (Workflow #434 LAB-5G1: a connection
+/// made for this call; a kept one is the caller's, and the wait drops only a clone of it, so the
+/// caller's connection stays open while the wait reads the shutdown).
 fn shutdown_line(
     params: &Map<String, Value>,
-    client: RuntimeClient,
+    client: Reached<'_>,
     state_root: &Path,
 ) -> Result<Exit, Exit> {
     let receipt = shutdown::request(&client).map_err(|error| client_failed(&error))?;
@@ -169,7 +181,7 @@ fn shutdown_line(
             &Outcome::new(ActingctlCode::RuntimeShutdownRequested),
         ));
     };
-    let shutdown = shutdown::wait(client, state_root, wait).map_err(|outcome| {
+    let shutdown = shutdown::wait(client.into_client(), state_root, wait).map_err(|outcome| {
         cli_line::refused(
             &outcome,
             Some("the accepted shutdown was not seen to complete"),
@@ -220,12 +232,14 @@ pub fn offline_words(
     Some(argv.0)
 }
 
-/// The operations LAB-1 moved with their parsing, given actingctl's words; `None` for another.
+/// The operations LAB-1 moved with their parsing, given actingctl's words, on `connection`;
+/// `None` for another.
 fn dispatched_with_state_root(
     operation: &Operation,
     params: &Map<String, Value>,
     place: &Place,
     state_root: &Path,
+    connection: Connection<'_>,
 ) -> Option<Exit> {
     let argv = match handed_words(operation, params, place.root.as_deref(), state_root)? {
         Ok(argv) => argv,
@@ -233,21 +247,22 @@ fn dispatched_with_state_root(
     };
     let detail = cli_line::detail().unwrap_or(Detail::Full);
     let exit = match operation.name.as_str() {
-        "status" => overview::dispatch(&argv),
-        "summary" => routine_summary::dispatch(&argv, detail),
-        "events" => events::dispatch(&argv),
-        "runs" => run_list::dispatch(&argv),
-        "run evidence" => run_evidence::dispatch(&argv),
-        "diagnose" => diagnose::dispatch(&argv),
+        "status" => overview::dispatch_on(&argv, connection),
+        "summary" => routine_summary::dispatch_on(&argv, detail, connection),
+        "events" => events::dispatch_on(&argv, connection),
+        "runs" => run_list::dispatch_on(&argv, connection),
+        "run evidence" => run_evidence::dispatch_on(&argv, connection),
+        "diagnose" => diagnose::dispatch_on(&argv, connection),
         // Workflow #434 LAB-5C: `remedy set`'s rows given inline go beside its words.
         "remedy set" => match params.get("rows") {
-            Some(rows) => remedy::dispatch_rows(&argv, rows, detail),
-            None => remedy::dispatch(&argv, detail),
+            Some(rows) => remedy::dispatch_rows_on(&argv, rows, detail, connection),
+            None => remedy::dispatch_on(&argv, detail, connection),
         },
-        "remedy" | "remedy lift" => remedy::dispatch(&argv, detail),
-        "frame" => observe_export::dispatch(&argv),
-        "preset" | "preset set" => perf_preset::dispatch(&argv, detail),
-        "evidence read" => evidence_read::dispatch(&argv, detail),
+        "remedy" | "remedy lift" => remedy::dispatch_on(&argv, detail, connection),
+        "frame" => observe_export::dispatch_on(&argv, connection),
+        "preset" | "preset set" => perf_preset::dispatch_on(&argv, detail, connection),
+        "evidence read" => evidence_read::dispatch_on(&argv, detail, connection),
+        // Reads no Runtime: the state root's binding file and adb.
         "devices" | "devices bind" | "devices unbind" => devices::dispatch(&argv),
         _ => return None,
     };
@@ -1134,14 +1149,15 @@ fn expired(
 // ---- the Runtime and the instance
 
 /// A connection to the Runtime of `state_root` on the Lab channel, in the detail
-/// `ACTINGCOMMAND_DETAIL` asks for.
-fn connect(state_root: &Path) -> Result<RuntimeClient, Exit> {
-    let config = crate::front::client_config(state_root);
-    let config = match cli_line::detail() {
-        Ok(Detail::Codes) => config.with_detail(Detail::Codes),
-        _ => config,
-    };
-    RuntimeClient::connect(config).map_err(|error| client_failed(&error))
+/// `ACTINGCOMMAND_DETAIL` asks for (Workflow #434 LAB-5G1: as `connection` says: one made for this
+/// call so, or the caller's kept one, whose detail is the caller's).
+fn connect<'a>(state_root: &Path, connection: Connection<'a>) -> Result<Reached<'a>, Exit> {
+    connection
+        .reach(state_root, |config| match cli_line::detail() {
+            Ok(Detail::Codes) => config.with_detail(Detail::Codes),
+            _ => config,
+        })
+        .map_err(|error| client_failed(&error))
 }
 
 /// The alias of the instance `selector` names (alias, `instance_id` or ADB port), after one

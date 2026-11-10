@@ -38,7 +38,8 @@
 // Workflow #434 LAB-5C: what a row hands `lab-ops` is read by the slice's test.
 // Workflow #434 LAB-5G1: the code that serves these rows moved to `lab_ops::core_ops`; this module
 // gives it what stays actinglab's (`Caller`): the program's place (`place`), the developer text of
-// a state root it could not locate, and actinglab's code `lab_operation_completed`.
+// a state root it could not locate, and actinglab's code `lab_operation_completed`; and, as before,
+// a connection made for each call as the program in force connects.
 pub(crate) mod core_ops {
     use super::place;
     use crate::codes::ActinglabCode;
@@ -49,20 +50,23 @@ pub(crate) mod core_ops {
     pub(crate) use actingcommand_lab_ops::core_ops::{
         MaterialRead, handed_words, material_read, offline_words,
     };
+    use actingcommand_lab_ops::front::Connection;
     use actingcommand_lab_ops::table::Operation;
     use serde_json::{Map, Value};
 
     /// The operation `operation` with `params`, as its line.
     pub(crate) fn answer(operation: &Operation, params: &Map<String, Value>) -> Exit {
-        serving::answer(
-            operation,
-            params,
-            &Caller {
-                place: &here,
-                unlocated: place::UNLOCATED,
-                completed: ActinglabCode::LabOperationCompleted.into(),
-            },
-        )
+        serving::answer(operation, params, &caller())
+    }
+
+    /// What this program gives the serving code (the slice's test serves with it too).
+    pub(crate) fn caller() -> Caller<'static> {
+        Caller {
+            place: &here,
+            unlocated: place::UNLOCATED,
+            completed: ActinglabCode::LabOperationCompleted.into(),
+            connection: Connection::per_call(),
+        }
     }
 
     /// This process's place.

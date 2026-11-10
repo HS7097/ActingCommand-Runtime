@@ -13,6 +13,7 @@
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem, MaterialLimit, MaterialState};
+use crate::front::Connection;
 use crate::instance_selector::{self, SelectorMiss};
 use crate::material_export::{self, MAX_EXPORT_BYTES, WriteFailure};
 use actingcommand_contract::outcome::Outcome;
@@ -25,6 +26,7 @@ use actingcommand_runtime_client::{
     RuntimeMaterialSelection,
 };
 use serde_json::{Value, json};
+use std::convert::identity;
 use std::ffi::{OsStr, OsString};
 use std::path::{self, PathBuf};
 use std::time::{Duration, Instant};
@@ -38,6 +40,11 @@ pub const READ_BUDGET: Duration = Duration::from_secs(60);
 /// Runs `observe` when it carries `--export`; `None` leaves every other command, and `observe`
 /// without `--export`, to `Invocation::parse`, unchanged.
 pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
+    dispatch_on(arguments, Connection::per_call())
+}
+
+/// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
+pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != "observe"
         || !arguments[1..]
             .iter()
@@ -45,7 +52,7 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     {
         return None;
     }
-    Some(match run(arguments) {
+    Some(match run(arguments, connection) {
         Ok(answer) => cli_line::success(
             cli_line::members(answer, "frame"),
             &Outcome::new(ActingctlCode::InstanceFrameExported),
@@ -169,13 +176,14 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Failure> {
     })
 }
 
-fn run(arguments: &[OsString]) -> Result<Value, Failure> {
+fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Value, Failure> {
     let Parsed {
         state_root,
         selector,
         directory,
     } = parse(arguments)?;
-    let client = RuntimeClient::connect(crate::front::client_config(state_root))
+    let client = connection
+        .reach(state_root, identity)
         .map_err(Failure::Runtime)?;
     let status = client.status().map_err(Failure::Runtime)?;
     let alias = instance_selector::select(status.instances(), &selector)
