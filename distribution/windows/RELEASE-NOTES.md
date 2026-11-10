@@ -9,6 +9,154 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.50
+
+本版是 v0.12.49 之后合并的 4 个 PR：#434 LAB-2b（#1556）、#428 S168-5a（#1558）、#428 TB-R1（#1561）和 #428 S168-4（#1560）。先说部署：`package` 从
+[3, 7] 升到 [3, 8]，其余接口声明都不变（账本仍是 [3, 7]），部署不用带 `--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；v0.12.49 的安装工具装
+本版照常；装上以后能退回 v0.12.49，不用带标志，只要还没有包声明 `package` 8（见下面的退回）。没有新键，默认值文件没改。**actinglab 自己的命令改印新的输出行，
+调 actinglab 的脚本要先改**；MCP 的 actinglab 子进程照旧。运行上要知道的是这几处：
+
+- **调 actinglab 的脚本要改什么**（LAB-2b，登记 §1.287；契约 `lab-two-entries.md` §9.3 和未决第 10 条）。actinglab 自己的命令行不带 `--via` 时，印的是 CLI
+  模块的行（`apps/actinglab/src/main.rs` 243–261，`apps/actinglab/src/cli_module/own_line.rs`）；除了 `status` 和 `run show`（下一条），命令的解析和结果本身没变：
+  - **带 `--json` 是一行 JSON，顶层有 `outcome` 对象的就是新行。** 旧信封的 `schema_version`、`cli_version`、`runtime_version`、`ok`、`command`、`data`、
+    `error` 都不再出现。
+  - **成功时命令的成员直接在顶层，不再放在 `data` 下**，旁边是 `outcome`（`lab_operation_completed`，category `success`），退出码 0（`own_line.rs` 114–135）。
+    结果不是 JSON 对象时放在 `result` 下；结果自带的 `warnings` 照旧是它自己的成员（`{code, values}`），不改变 category。顶层本来就有 `outcome` 的两个结果整份
+    套进一个成员：`resource verify` 的报告在 `report` 下，`run summary` 的文档在 `summary` 下（61–62）。
+  - **失败时读 `outcome.code`、`message` 和 `details`，退出码是 1**（以前按错误类是 2 到 6）。`outcome` 的 category 是 `error`，`values` 取 `details` 里同码
+    结论的值，否则取码目录给这个码登记的那些成员；`details` 整份原样，没有时不出现；旧的 `blocked_by` 没有了（`own_line.rs` 137–211）。**失败现在还往 stderr
+    写一行** `ERROR actinglab: <code> … <message>`，JSON 行照旧在 stdout（`apps/actinglab/src/cli_module.rs` 389–406）：把 stderr 并进 stdout 再解析的脚本要把
+    两者分开。退出码 2 只给 fatal 的结论，现在没有命令会这样。安装选择在命令运行前就拒绝时，stdout 印 `{outcome}`、stderr 写 `ERROR actinglab: <code>`、退出 1
+    （`own_line.rs` 88–100），以前是 stderr 写 `FATAL actinglab: …`、stdout 什么都不印。
+  - **不带 `--json` 一律印给人看的文字，进管道或文件也一样**；以前 stdout 不是终端时默认印信封。要读 JSON 的脚本必须带 `--json`。
+  - **带 `--via` 的行不变**：只有 MCP 的 actinglab 子进程发（`--json --via mcp …`），照旧印信封，逐字节相同，退出码 0 和 2 到 6，到 LAB-5 为止（`main.rs`
+    257–290）。
+  - 部署工具读的两条命令（成员按代码核过，`apps/actinglab/src/tests/gate_434_lab2b.rs` 376–479 逐个断言它们在顶层）：
+    - `actinglab --json standard-pack check --root <游戏根>`：成功行的顶层是 `status`（`checked`）、`root`、`game`、`root_files`、`pack_count`、`warnings`，
+      有 `schedule.json` 时还有 `benefit_coverage`，再加 `outcome`（`crates/resource-tooling/src/api.rs` 116–142）。
+    - `actinglab --json standard-pack compose --root <包根> --instance <别名>=<游戏>/<区服> … --out <新目录>`：顶层是 `status`（`composed`）、`out`、
+      `catalog_hash`、`rules_digest`、`tasks`、`pools`、`profiles`、`events`、`games`、`manifest`、`warnings`，再加 `outcome`
+      （`crates/resource-tooling/src/standard_pack_schedule.rs` 70–85）。
+    - 两条都把结果原样摊到顶层（`apps/actinglab/src/standard_pack_cli.rs` 49–52、93–98）。失败时读 `outcome.code`；带自己结论的拒绝把结论放在
+      `details.outcome` 里（`crates/resource-tooling/src/standard_pack_check.rs` 1034、1046、1074，`standard_pack_schedule.rs` 428），这个结论的值也在行的
+      `outcome.values` 里。
+  - 其余：`capabilities` 不带 `--via` 时报的 `exit_codes` 是 `ok`、`error`、`fatal`（0、1、2）；`serve --stdio` 里 actinglab 自己的命令也答新行；设了
+    `ACTINGCOMMAND_DETAIL=codes` 时新行的 `outcome` 不带 `values`，读值的脚本不要设它。Lab 救急模块的 `place` 跑 `--json standard-pack check` 只看退出码是不是
+    0，不受影响（`crates/lab-rescue/src/install/place.rs` 909–935）。
+  - 已知还读旧信封的：UI 仓的建模工具 acmodel 校验导出的表时跑 `--json resource validate`、不带 `--via`，读 `ok` 和 `data.entries`
+    （`model/src/acmodel/export/validator.py` 61–97）。它配置的 actinglab 换成本版以后，每次导出表都答 `export_validator_missing`（`answer_invalid`），要等它改读
+    新行。资源仓的 CI 和脚本在把 Tools 钉升到本版的那个 PR 里一起改读法（#1556 的 “At deploy”）。
+- **`actinglab status` 没有 Runtime 在跑时退出 0**（LAB-2b 修复 3，总览认的）：**判断 Runtime 在不在跑读 `daemon` 一栏，不看退出码。** `status` 和 `run show`
+  现在是 CLI 模块的核心行，actinglab 自己的旧实现删了（`main.rs` 326 起的自有命令表里没有它们）。没有 Runtime 时答 `runtime_overview_reported`，`daemon` 是
+  `{"online": false, "error": …}`（`runtime_unavailable`），退出 0；有 Runtime 时是 `{"online": true, "owner_epoch": …}`（`crates/lab-ops/src/overview.rs`
+  308–327、404–407）。以前是 `runtime_not_running`、退出 5。actinglab 的全局选项（比如 `--runtime-endpoint <端点>`）写在这两条命令的词前或词后，都按名拒绝
+  （`actingctl_usage_invalid`，退出 1），什么请求都不发（`cli_module.rs` 118–127、154–165）。
+- **`package` 8：包从本版起可以声明的两样**（S168-4、S168-5a，登记 §1.291；`contracts/component-interfaces.md` 152）：
+  - 任务步骤 `read_list`（任务 schema `0.9` 的页图任务）：一次扫描把一页上的整张清单读全，运行成功结束时发布成 `inventory.list.` 下的一条 `record_list`
+    事实，行按键排序，最多 256 行。只有整张读全、和结束检查通过的那一帧对上、运行成功，才发布；读漏、键重复、超过 256 行都不发布，记警告
+    `contained_task_resource_reading_unresolved`，运行照常；扫描失败则运行失败（位置 `read_list`），也不发布。一个锚点都没匹配到时是空清单，发布零行，
+    所以包的首尾检查要写得够具体（`contracts/resource-readings.md` 的 “List readings”）。
+  - 选择文档的值来源 `table_max_over_list`：一张标准包表某一列在 1 到 16 张记录清单的键的并集上、钉住的类别里的最大值，连同持有它的最小的键。清单不可用、
+    缺键或格子为空就是未知，从不当成 0 或 `empty`，按规则声明的办法处理（剔除候选或中止评估）；每个引用在任何候选之前只读一次，记一条审计理由
+    `selection_table_list_max`（`crates/selection-policy/src/list_max.rs`；`contracts/selection-policy.md` 的 “Table maximum over a list”）。调度的目录编译拒收它，
+    只能在 select 步里用。
+  - **已发布的包还没有一个声明它们**：四个资源仓的 main 里都没有 `read_list`、`table_max_over_list`，也没有落在 `inventory.list.` 下的键，所以部署本版没有运行
+    会变。用了其中一样的包，bundle 声明 `package` [8, 8]。
+  - **更早的 Runtime 遇到这样的包**：这个包的每次运行在准入时被拒，别的包照常。v0.12.49 的准入先跑声明门（v0.12.49 的
+    `crates/execution-kernel/src/contained_task.rs` 3195–3200），声明门的操作成员表里没有 `read_list`（v0.12.49 的
+    `crates/pack-containment/src/source/declarations.rs` 471–519、2566–2584），拒成 `resource_declaration_invalid`（`UnknownField`，`/operations/<i>/read_list`）；
+    读 `table_max_over_list` 的文档，v0.12.49 的值来源枚举里没有这一种（v0.12.49 的 `crates/selection-policy/src/schema.rs` 233–234），拒成
+    `contained_task_select_policy_invalid`。检查这样的包也要用本版或更新的 actinglab。
+- **`inventory.list.` 只归清单读数**（S168-4）：能发布事实的来源（Agent、Adapter 和 Runtime 自己的普通路径）发布这个前缀下的键，一律拒成
+  `list_reading_key_reserved`（`fact_key`，不致命），什么都不写（`crates/runtime-host/src/host/facts.rs` 390–405）；CLI、UI 自己的来源照旧在组请求时就拒
+  （`invalid_agent_dispatcher_origin`）。读数 mark 和调整的 `fact_key`、mark 的 `capacity_fact_key` 落在这个前缀下，在声明门和准入时被拒
+  （`crates/actingcommand-contract/src/taskflow.rs` 1894–1898）。**被拒的 mark 的准入细节从本版起是 `<id>:<reason>`**：
+  `contained_task_resource_reading_invalid` 按 mark 自己的规则拒绝时，细节前面多了 mark 的 id（`crates/execution-kernel/src/contained_task.rs` 8990–9011），
+  以前只有 `<reason>`；几个 mark 合起来的规则（个数、重复的 id 或键）照旧只有 `<reason>`。
+- **读表时跳过就地替换留在 `tables/` 里的名字**（TB-R1，登记 §1.293）：以 `.part` 结尾，或含 `.old-`、`.abandoned-`、`.rolledback-` 的名字不读、不出行、
+  不记启动记录、不占 64 张的名额（`crates/actingcommand-contract/src/package.rs` 223–228，`standard_pack_table.rs` 515–519）。启动、check-config、
+  `actingctl packs`、`ac_packs`、运行准备读单张表和 `actinglab resource validate` 都这样读。以前游戏根里留着旧表副本（比如替换时留下的
+  `<表>.json.old-<毫秒>`）时，每次启动都为它报 `standard_pack_table_invalid`；从本版起不再报。真表无效、别的名字（比如 `notes.txt`）照旧报；Runtime 不删不挪
+  任何文件。
+- **LAB-3 的运维规矩到 LAB-7 前照旧：生产照旧用 `actingctl install` 部署**，不对生产根用 Lab 救急模块的 `deploy`、`rollback`、`place` 或
+  `config replace`。`crates/lab-rescue` 自 v0.12.49 只改了一个测试文件（`install/gate_434_lab3.rs`，TB-R1 的放置断言）。
+
+配置：接口修订只升 `package` 一处，按代码和 `contracts/component-interfaces.md` 核过：`package` [3, 7] 改为 [3, 8]（S168-5a 先合，按代码收它的成员、声明不动；
+S168-4 后合，声明 [3, 8]；一次发版只升一次，登记 §1.291）。`distribution/windows/component-interfaces.json`、合同表 `package` 8 一行（152；计划段 300–305 写明
+这一行从 0.12.50 起生效，`package` 9 和 `ledger` 8 仍是计划）和架构测试 K27（`tools/actinglab-architecture/tests/component_interfaces.rs` 130）三处一致。其余都
+不变：`actingd-config` 仍是 [5, 27]，`ledger` 仍是 [3, 7]，`runtime-client` 仍是 [3, 6]，`install-selection` 仍是 [1, 1]，`install-control` 仍是 [0, 1]，
+`runtime-outcomes` 仍是 [1, 1]。
+
+- 不升 `ledger`：`crates/ledger` 和合同 crate 的事件部分自 v0.12.49 都没改。清单是已有的 `record_list` 值的 `fact.published`，清单最大值的记录是一条决策理由，
+  清单的读漏是已有警告行里 `reading_problem` 的新词和已有码的可选值 `count`，读者对码和键只核拼写（`component-interfaces.md` 311）；SQLite 格式 2、
+  `actingcommand.event.v3`、表、索引和视图都没变。
+- 不升 `runtime-client`：`crates/runtime-client` 自 v0.12.49 没改，请求和回执的形状没变；`list_reading_key_reserved` 是已有的发布请求多一种拒绝码。
+- actinglab 的输出行没有接口行（LAB-2b 核过 `component-interfaces.md`），MCP 子进程的信封不变，不升任何修订。
+- 配置键：没有新键，也没有去掉的键。`crates/runtime-config`、`apps/actingd`、`actingd.defaults.json` 和 `actingd.config.example.json` 自 v0.12.49 都没改。
+- 结果码：目录从 3897 个码、1747 个位置变成 3899 个码、1748 个位置，仍是 29 个分片，没有退役的码。新码 2 个（都待定稿，since 0.12.50）：
+  `selection_table_list_max`（selection-policy，info）和 `list_reading_key_reserved`（runtime-host，error）。新位置 1 个：`read_list`（execution-kernel）。新键
+  3 个：`fact_keys`（`list<token>`）、`maximum`（`integer`）、`maximum_identity`（`id`）。词表 `reading_problem` 多 3 个词：`list_position_unread`、
+  `list_duplicate_key`、`list_rows_exceeded`。`contained_task_resource_reading_unresolved` 多可选值 `count`（已有的键）；只改说明的：`lab_operation_completed`、
+  `lab_operation_check_failed`。结果码守卫的允许表多一条（G5：声明门的 `read_list_member` 和位置 `read_list` 同名）。本版的发布文件是空的：没有新定稿或退役的
+  条目。
+- 程序文件：workspace 仍是 39 个成员，`Cargo.toml`、`Cargo.lock`、`.github/` 自 v0.12.49 都没改，两个包的文件清单和 v0.12.49 一样。`apps/actingctl`、
+  `apps/mcp-entry`、`crates/lab-ops`、`crates/runtime-client` 自 v0.12.49 没改，MCP 工具仍是 41 个。actinglab 的命令从 102 条变成 100 条、顶层分派臂从 46 个
+  变成 45 个（`ratchet/actinglab_commands.json`）。
+
+升级与退回（安装工具的代码 `crates/lab-rescue/src/install/` 自 v0.12.49 只改了测试文件 `gate_434_lab3.rs`，产品代码就是 v0.12.48、v0.12.49 说明核过的那份，
+下面的行号也是它的）：
+
+- **v0.12.49 的安装工具装本版，不用任何单向标志。** `ledger` 两边都是 [3, 7]，`previous_max_in_next` 和 `one_way`（7 不大于 7）都过（`plan.rs` 288–301），
+  计划里没有 `ledger_verify`（915）；`next_max_in_installer`、`installer_meets_previous`、`installer_meets_next`（302–331）和 `installer_knows_keys`（359–376）
+  和装 v0.12.49 时一样，没有新键；`next_check_config`（902–914）：本版的 check-config 收现行配置，读表只多跳过遗留副本。
+- **`package` 的边**：`bundle_max_in_next` 拿包登记里每个游戏根声明的范围的上限，看它在不在目标的 `package` 里（334–355）。生产根是单一位置根，包登记由
+  `adopt` 写，不记声明的范围（`adopt.rs` 129–135），所以每个游戏根都只给 `pack_declaration_unknown` 警告（338–344），v0.12.49 的部署预览就是这样；登记里记着
+  范围的，今天的包最多声明 7，在 [3, 8] 里，过（345）。没有一条边不过。
+- **退回 v0.12.49：允许，不用标志，只要还没有包声明 `package` 8。** 退回时目标的 `package` 是 [3, 7]：登记不记范围的游戏根照旧只给警告，记着的最多 7，过；
+  其余的边两边相同；退回时 `next_check_config` 不算接口边（1030–1036）。部署的自动回退（`deploy.rs` 778）和 `install undo`（`undo.rs` 388）都是
+  `accept_ledger_one_way: false`，和 `rollback` 走同一组边（`rollback_edges`，`plan.rs` 383–403）和同一个回退门（`update.rs` 383–505）。落盘的东西没有
+  v0.12.49 读不了的：没有新键、新文件、新记录形状，没有包声明清单时也没有清单事实。退回以后 `tables/` 里的遗留副本又会在每次启动报无效，actinglab 回到旧信封。
+- **有包声明 `package` 8 以后**：登记里记着这个包 [8, 8] 的，`bundle_max_in_next`（8 不在 [3, 7] 里）不过，`rollback`、自动回退和 `install undo` 都以
+  `interface_edge` 拒绝（1037–1041）。生产根的登记不记范围，安装工具只给警告、照样退回，v0.12.49 随后在准入时拒绝这个包的每次运行（见上面的 `package` 8）；
+  已经发布的清单是 `record_list` 值，v0.12.49 读得了。所以退回之前，先把声明 8 的包换回最多声明 7 的版本。
+- 配对：
+  - **v0.12.49 的安装工具装本版**：照常，不带标志，见上面。部署本版跑的是 v0.12.49 的安装工具。
+  - **部署工具包的 `actingctl install` 命令行对本版的根答得一样**：`release stage`、`guards --for stop`、`update plan [--preview]`、
+    `update apply … --start --detach`、`status [--operation]`、`release-hold` 的代码没变，`crates/lab-rescue/src/install/gate_434_lab3.rs` 416–692 照旧逐条钉住
+    （TB-R1 只在文件头的注释里加了一行，这个测试没动）。工具包不调 actinglab。
+  - **MCP 和它的 actinglab 子进程**：MCP 跑的每个 actinglab 子进程都由 `crates/lab-ops/src/lab_child.rs` 70–78 组命令行，参数一律以 `--json --via <计数方>` 开头；
+    MCP 构造它的唯一一处给的是 `mcp`（`apps/actingctl/src/mcp/lab.rs` 66、771–778；`ac_app` 也走它，1214）。所以 MCP 发的每一行都带 `--via`，信封和退出码
+    不变；`apps/actingctl`、`crates/lab-ops` 自 v0.12.49 没改，MCP 工具的答法照旧。
+  - **控制台 UI**（main `2f4a0cd7` 和最新发版 UI v0.12.12 `a56640c2` 都把 Runtime crate 钉在 `d06910c6`，即 v0.12.47，`Cargo.toml` 39–44；
+    `crates/acui-setup/component-interfaces.json` 声明 `actingd-config` [5, 27]、`ledger` [3, 7]、`runtime-client` [3, 5]、`runtime-outcomes` [1, 1]，`package`
+    [1, 2] 不是控制台的边）：本版这几项和 v0.12.49 一样，线上请求和账本形状也一样，控制台对本版照常；控制台不准入包。控制台本身不跑 actinglab：它跑的
+    actingctl 命令 `packs`、`watchdog status --root`（`crates/acui-app/src/workbench/tools.rs` 383、415）和安装器的 `install-transition`、`status`、
+    `request-shutdown`（`crates/acui-setup/src/lifecycle.rs` 81、207、220）都没变，只在核 Tools 文件清单时列出 `actinglab.exe`（`crates/acui-setup/src/verify.rs`
+    38）。同一个仓里的建模工具 acmodel 跑 actinglab 不带 `--via`、读旧信封，见上面。
+
+运行上的变化：
+
+- 部署本身不改变调度的决定，现有的包运行结果不变（还没有包声明 `package` 8）；游戏根 `tables/` 里的遗留副本不再在每次启动报无效。
+- actinglab 自己的命令改印新行（`--json` 的成员在顶层、失败退出 1 并往 stderr 写一行、不带 `--json` 进管道也是文字），`status` 没有 Runtime 也退出 0；MCP 和
+  actingctl 的答法照旧。
+
+本版合并的 PR：
+
+- #1556 LAB-2b（#434，登记 §1.287；契约 `lab-two-entries.md` §8.2、§9.3 和未决第 10 条）：actinglab 自己的命令印 CLI 模块的行（新文件
+  `apps/actinglab/src/cli_module/own_line.rs`），带 `--via` 的行保留信封到 LAB-5；`status`、`run show` 交给核心行，旧实现删掉，命令从 102 条变成 100 条；
+  `resource verify`、`run summary` 的结果整份放在 `report`、`summary` 下；没有新码。新门行 `#434 LAB-2b` 的 6 个测试（`own_commands_print_the_cli_line`、
+  `own_commands_print_for_people_into_a_pipe`、`mcp_child_lines_keep_the_envelope`、`status_and_run_show_take_their_core_rows`、
+  `own_results_never_name_outcome`、`do_check_failure_exits_one`）；金样 `expected.json` 的 30 例和 `consumers.json` 的 13 例照新行重写（MCP 的 2 例一个字节没变），
+  改造的测试改读新行。不升任何接口修订。
+- #1558 S168-5a（#428，登记 §1.291）：值来源 `table_max_over_list`（新文件 `crates/selection-policy/src/list_max.rs`），审计理由 `selection_table_list_max`，
+  新键 `fact_keys`、`maximum`、`maximum_identity`；新门行 `#428 S168-5a` 的 9 个测试（`gate_428_s168_5a`）。`package` 8 的两片之一，先合，声明保持 [3, 7]。
+- #1561 TB-R1（#428，登记 §1.293）：合同 crate 的 `replacement_leftover_name`，读 `tables/` 的三处跳过遗留名字；新测试
+  `gate_357_db1::table_listing_skips_replacement_leftovers`（门行 `#428 TB-R1`），改造 `gate_434_lab3::place_holds_only_the_bundles_idle_instances`（放置和
+  `undo` 之后都只列出那一张表）。不升任何接口修订。
+- #1560 S168-4（#428，登记 §1.291）：任务步骤 `read_list`（新文件 `crates/execution-kernel/src/contained_task/list_reading.rs`），声明门、准入、内核读和宿主
+  发布；保留前缀 `inventory.list.`、新码 `list_reading_key_reserved`、位置 `read_list` 和 `reading_problem` 的三个词；被拒 mark 的细节 `<id>:<reason>`；
+  `package` [3, 8]。新门行 `#428 S168-4` 的 10 个测试（内核、声明门和宿主三处）；改造 K27（`package` [3, 8]）。
+
 ## v0.12.49
 
 本版是 v0.12.48 之后合并的 2 个 PR：#422 QP-1（#1557）和 #428 S168-0（#1554，只有契约）。先说部署：接口声明都不变（账本仍是 [3, 7]），部署不用带
