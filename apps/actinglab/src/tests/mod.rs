@@ -84,6 +84,9 @@ mod gate_434_lab2;
 // Workflow #434 LAB-2b: actinglab's own commands print the CLI module's line.
 #[path = "gate_434_lab2b.rs"]
 mod gate_434_lab2b;
+// Workflow #434 LAB-5A: every offered row declares its parameters; no command line changes.
+#[path = "gate_434_lab5a.rs"]
+mod gate_434_lab5a;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

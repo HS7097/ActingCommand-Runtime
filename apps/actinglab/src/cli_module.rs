@@ -35,7 +35,8 @@
 //!   `Lab-MCP` when MCP's actinglab child (`--via mcp`) adds them.
 
 mod core_ops;
-mod engine;
+// Workflow #434 LAB-5A: its command table is read by the slice's test.
+pub(crate) mod engine;
 // Workflow #434 LAB-2b: the line actinglab's own commands print.
 pub(crate) mod own_line;
 mod place;

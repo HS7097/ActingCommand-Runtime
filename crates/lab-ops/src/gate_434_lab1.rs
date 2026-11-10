@@ -11,7 +11,8 @@ use crate::codes::ActingctlCode;
 use crate::locate::locate_from;
 use crate::packs::ROOT_CONFIG_FILE;
 use crate::table::{
-    Entry, OperationModule, OperationStatus, TABLE_PATH, read_operation_table, request_kind_name,
+    Entry, ModuleRole, OperationModule, OperationStatus, OperationTable, TABLE_PATH,
+    read_operation_table, request_kind_name,
 };
 use actingcommand_contract::RuntimeOperationKind;
 use serde_json::json;
@@ -32,12 +33,32 @@ fn table_file() -> PathBuf {
 // irreversible, runtime, entries, requests, source or new, slice and status; every kind of
 // `RuntimeOperationKind::ALL` is in some operation's requests or once in `not_exposed`, and every
 // kind the file names exists; `entries` follows its rule; a `reserved` row has `opens_with`.
+// Workflow #434 LAB-5A: every parameter's type is one of §9.1's; only a row of the rescue module
+// whose source command is not built may carry `params_more`, so that no row of the core,
+// debugging or authoring module does (actinglab's `gate_434_lab5a` checks that no row it offers
+// does: which rescue rows are served the rescue module knows); every `required_in` names front
+// ends, on a parameter the row does not require; a `disruptive` row writes and is not
+// irreversible.
 #[test]
 fn lab_ops_table_complete() {
     // Reading the file into typed rows refuses a row without one of the members §9.1 lists (or
-    // with another), and a kind the file names that `RuntimeOperationKind` does not have.
+    // with another), a kind the file names that `RuntimeOperationKind` does not have, and a
+    // parameter type §9.1 does not list.
     let table = read_operation_table(&table_file())
         .unwrap_or_else(|outcome| panic!("the operation table reads: {outcome}"));
+    let text = fs::read_to_string(table_file()).expect("the table's text");
+    assert!(
+        text.contains(r#""type": "instance""#),
+        "the table declares an instance"
+    );
+    assert!(
+        OperationTable::parse(
+            text.replacen(r#""type": "instance""#, r#""type": "number""#, 1)
+                .as_bytes()
+        )
+        .is_err(),
+        "a parameter type §9.1 does not list is refused"
+    );
     let mut violations = Vec::new();
 
     let mut names = BTreeSet::new();
@@ -64,6 +85,46 @@ fn lab_ops_table_complete() {
         }
         if operation.status == OperationStatus::Reserved && operation.opens_with.is_none() {
             violations.push(format!("{} is reserved without opens_with", operation.name));
+        }
+        // Workflow #434 LAB-5A.
+        if operation.params_more.is_some()
+            && (operation.module != OperationModule::Rescue
+                || operation.status != OperationStatus::Planned)
+        {
+            violations.push(format!(
+                "{} carries params_more: only a planned rescue row whose source command is not \
+                 built may",
+                operation.name
+            ));
+        }
+        if operation.disruptive && (!operation.writes || operation.irreversible) {
+            violations.push(format!(
+                "{} is disruptive but does not write or is irreversible",
+                operation.name
+            ));
+        }
+        for param in &operation.params {
+            let Some(front_ends) = &param.required_in else {
+                continue;
+            };
+            if front_ends.is_empty() || param.required {
+                violations.push(format!(
+                    "{}'s {} has required_in but is required everywhere or names no front end",
+                    operation.name, param.name
+                ));
+            }
+            for front_end in front_ends {
+                let known = table
+                    .modules
+                    .iter()
+                    .any(|module| module.role == ModuleRole::FrontEnd && module.id == *front_end);
+                if !known {
+                    violations.push(format!(
+                        "{}'s {} is required in {front_end}, which is no front end",
+                        operation.name, param.name
+                    ));
+                }
+            }
         }
     }
 

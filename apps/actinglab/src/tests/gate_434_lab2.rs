@@ -7,7 +7,8 @@
 // gets; the module's output is that of the operations it serves itself, those from actingctl.
 // - `cli_short_words_parse`: the short words of the operation table name the operation and its
 //   parameters: the longest name, the instance and the other positionals in order, options and
-//   switches, a source command's further flags and words; words and flags the row does not take,
+//   switches (Workflow #434 LAB-5A: a row's declared flags handed on as written, for a row
+//   actinglab's own command serves); words and flags the row does not take,
 //   a reserved row, a row not served (the rescue module's `clean`, LAB-3) and actinglab's old
 //   `config get` are refused with `actingctl_usage_invalid` naming the word. `main`'s route: the
 //   module's operations and `serve` go to the module, the short words of a row actinglab's own
@@ -141,7 +142,9 @@ fn cli_short_words_parse() {
             json!({"instance": "node.a", "type": ["a.b", "c.d"], "limit": 5})
         )
     );
-    // A row with `params_more` carries its source command's further flags and words over.
+    // A row actinglab's own command serves hands its declared flags and actinglab's global options
+    // on as written (Workflow #434 LAB-5A: before it, its source command's further flags); a
+    // further word is a declared positional.
     assert_eq!(
         parsed(&["record", "start", "--task-id", "daily", "--dry-run"]),
         (
@@ -153,12 +156,14 @@ fn cli_short_words_parse() {
         parsed(&["devices", "bind", "neutral.a", "TESTSERIAL0001"]),
         (
             "devices bind".to_owned(),
-            json!({"instance": "neutral.a", "words": ["TESTSERIAL0001"]})
+            json!({"instance": "neutral.a", "handle": "TESTSERIAL0001"})
         )
     );
     assert_eq!(
         parsed(&[
             "regression",
+            "--state-root",
+            "state",
             "--evidence",
             "page.json",
             "--package",
@@ -166,7 +171,7 @@ fn cli_short_words_parse() {
         ]),
         (
             "regression".to_owned(),
-            json!({"evidence": "page.json", "package": "pack.zip"})
+            json!({"state_root": "state", "evidence": "page.json", "package": "pack.zip"})
         )
     );
     // Open point 7: actinglab's own user configuration is `user-config`.
@@ -209,8 +214,8 @@ fn cli_short_words_parse() {
             unknown.clone()
         )
     );
-    // A flag a row without `params_more` does not take; a required parameter missing; a value of
-    // the wrong type; an option given twice; an option without its value.
+    // A flag a row does not take; a required parameter missing; a value of the wrong type; an
+    // option given twice; an option without its value.
     assert_eq!(
         refused(&["pause", "--state-root", "x"]),
         (

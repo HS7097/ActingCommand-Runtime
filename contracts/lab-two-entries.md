@@ -251,7 +251,7 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 - **The rule:** record the initiator (section 4.3), nothing more. No parameter, no second
   confirmation, no plan id carried back by the caller. A plan id is still computed and journalled,
   and an operation still applies only the plan it computed under the writer lock. MCP marks these
-  tools `destructiveHint`.
+  tools `destructiveHint`, and the table's `disruptive` rows too (section 9.1, LAB-5A).
 - **Gone from the rescue module** (LAB-3; `actingctl install` keeps its revision-1 face unchanged
   until LAB-7 deletes it, so the console of today keeps working):
   - `--plan <id>` for apply: `deploy`, `rollback`, `config file commit`, `pack remove` and
@@ -397,11 +397,12 @@ LAB-5 the MCP tools, and LAB-1's test `lab_ops_table_complete` reads the file it
 |---|---|
 | `name` | the CLI words, unique; the MCP tool is `ac_` and the name with spaces and `-` as `_`, also unique |
 | `module` | `core`, `debugging`, `authoring` or `rescue` |
-| `params` | each `{name, form, type, required, repeat?, default?, note?}`; `form` is `positional`, `option` or `switch`; an option's CLI flag is `--` and the name with `_` as `-`, its MCP argument the name; positionals keep their order |
-| `params_more` | when present: the source command whose further flags carry over unchanged under the same naming rule; the list above names those the design fixes |
+| `params` | each `{name, form, type, required, repeat?, default?, required_in?, note?}`; `form` is `positional`, `option` or `switch`; an option's CLI flag is `--` and the name with `_` as `-`, its MCP argument the name; positionals keep their order; `required_in` (LAB-5A) lists the front ends (the ids of the `modules` rows of role `front_end`) in which the parameter is required although the row does not require it (today only `mcp`, on `resume`'s `expect` and `pause`'s `reason`; nothing reads it yet, and the CLI and `serve` do not change); what the schema cannot state (a one-of rule, a value given as a positional or as a flag, a joint or exclusive group, flag sets that depend on a path or a kind) is in the parameter's `note`, and the code enforces it |
+| `params_more` | when present: the source command whose further flags carry over unchanged under the same naming rule. Since LAB-5A only a row no program offers yet has it (a rescue row whose source command is not built); every offered row declares all of its parameters (section 9.2) |
 | `output` | what the operation answers; the CLI's `--json` line, the MCP result and the serve answer are the same JSON |
 | `writes` | whether it changes anything; MCP's `readOnlyHint` is its negation |
-| `irreversible` | section 5; MCP's `destructiveHint` |
+| `irreversible` | section 5; MCP's `destructiveHint` is `irreversible` or `disruptive` |
+| `disruptive` | optional (LAB-5A), absent is false: the operation stops or restarts something a person may be using, without being irreversible in the sense of section 5 (`emu stop`, `emu restart`, `app stop`, `app restart`, `drill`, `devices unbind`) |
 | `runtime` | `required` (refused while actingd is stopped), `optional` (works while it is stopped, does more while it runs) or `offline` (never needs it) |
 | `entries` | `["lab"]`, or `["lab", "ui"]` for a `core` operation whose every request kind is on the UI list (not counting the transitional one) |
 | `requests` | the request kinds it sends, as read from its source; the slice that moves it corrects the row from the code it moves and says so |
@@ -413,9 +414,14 @@ LAB-5 the MCP tools, and LAB-1's test `lab_ops_table_complete` reads the file it
 | `notes` | anything else the row must say |
 
 Parameter types: `instance` (an alias, an `instance_id` or an ADB port), `string`, `integer`,
-`boolean`, `duration` (a number with `ms`, `s`, `m` or `h`), `path`, `file`, `dir`, `json`, `key`,
-`key_value` (`KEY=VALUE`), `list<string>`, `enum:<a|b>`, `request_id`, `operation_id` (`op-<ms>`),
-`material_ref`, `code`, `scope` (an instance or a game), `tag_or_commit`, `sha256`.
+`unsigned` (LAB-5A: a whole number from 0 to 2^64 − 1), `decimal` (LAB-5A: a decimal number; the
+CLI hands the command its text, `serve` takes a JSON number or that text), `boolean`, `duration`
+(a number with `ms`, `s`, `m` or `h`), `path`, `file`, `dir`, `json`, `key`, `key_value`
+(`KEY=VALUE`), `list<string>`, `enum:<a|b>`, `request_id`, `run_ref` (LAB-5A: a request id or a
+run id), `operation_id` (`op-<ms>`), `material_ref`, `code`, `scope` (an instance or a game),
+`tag_or_commit`, `sha256`. A millisecond count is an `integer`, not a `duration` (the commands take
+a bare number); a comma list given in one flag is a `string` and JSON given as text a `string`
+(the CLI hands both on as written); a flag given more than once is `repeat`.
 
 ### 9.2 What `lab_ops_table_complete` checks (LAB-1)
 
@@ -423,13 +429,23 @@ Names and MCP tool names are unique; every operation has `params`, `output`, `wr
 `irreversible`, `runtime`, `entries`, `requests`, `source` or `new`, `slice` and `status`; every
 kind of `RuntimeOperationKind::ALL` is in some operation's `requests` or once in `not_exposed`, and
 every kind the file names exists; `entries` follows its rule; a `reserved` row has `opens_with`.
+Since LAB-5A also: every parameter's type is one of section 9.1's (reading the file refuses
+another); no offered row carries `params_more` (only a planned rescue row may, while its source
+command is not built: the test checks that in `crates/lab-ops`, and actinglab's `gate_434_lab5a`,
+which knows which rows actinglab offers, that no offered row has it); every `required_in` names
+front ends, on a parameter the row does not require; a `disruptive` row writes and is not
+irreversible.
 
 ### 9.3 Defaults and output (LAB-1, LAB-2)
 
 - The instance is a positional (`<inst>`): an alias, an `instance_id` or an ADB port.
 - The root is located from the program's own place (a slot's `…\runtime\actinglab.exe`, or a fixed
-  entry); the state root comes from the selected configuration. There is no `--root` and no
-  `--state-root` (`new` names its new root).
+  entry); the state root comes from the selected configuration. No operation takes the
+  installation's root or its state root as `--root` or `--state-root` (`new` names its new root).
+  Four offline authoring rows take options of those names that name something else, as their
+  consumers pass them (LAB-5A): `standard-pack check` and `standard-pack compose` take `--root`, a
+  game's package root, and `resource restore` and `regression` take `--state-root`, a Runtime state
+  root the offline command reads.
 - Output for people by default: one line with the result code and its short phrase from the
   outcome catalog, and a small table where needed. `--json` prints the one line `cli_line` prints
   today. Exit codes stay 0, 1 and 2.
@@ -474,10 +490,13 @@ every kind the file names exists; `entries` follows its rule; a `reserved` row h
   - Its consumers changed with it (open point 10): acmodel's validator, the four resource
     repositories' CI and scripts and the coordinator's hotplace kit read both shapes before a
     Runtime with LAB-2b is deployed, and raise their Tools pin to it only with that change.
-- **MCP's actinglab child keeps the envelope until LAB-5.** A command line with `--via` (only
+- **MCP's actinglab child keeps the envelope until LAB-7.** A command line with `--via` (only
   `lab_ops::lab_child`'s `--json --via mcp …` sends one) prints the envelope with `ok`, `data` and
   `error` (also without `--json` when stdout is no terminal) byte for byte as before LAB-2b, and
-  its exit codes 0 and 2 to 6; MCP's Lab tools answer as before. LAB-5 replaces that child.
+  its exit codes 0 and 2 to 6; MCP's Lab tools answer as before. LAB-5 adds the new server
+  (`actinglab-mcp.exe`) beside it and replaces nothing: `actingctl mcp-serve`, with its `--via`
+  child, stays as it is until LAB-7 (section 11: LAB-1 to LAB-5 only add; the coordinator's ruling
+  of 2026-11-10, board #434, recorded with LAB-5A).
   - **The one exception** to "byte for byte" (the coordinator's ruling of 2026-11-10, LAB-2 fix
     2, a consequence of open point 6): the answers of `record mark` (which MCP's `ac_record_mark`
     passes on) and `session record step` carry the new `initiator` of each mark or step they
@@ -542,7 +561,7 @@ every kind the file names exists; `entries` follows its rule; a `reserved` row h
   the operation again. Since LAB-2b (open point 10) actinglab's `do` exits 1 with it on the command
   line, like every error, its `req_id`, `receipt_state` and `client_code` the outcome's values and
   its details nested whole, so the effect is the lasting signal; MCP's actinglab child (`--via
-  mcp`) still gets the envelope with exit 5 until LAB-5. MCP answers it in
+  mcp`) still gets the envelope with exit 5 until LAB-7 (LAB-5 adds its server beside it). MCP answers it in
   class `runtime` with its `req_id`, actinglab's details and its message (LAB-5 keeps that). A
   failure the Runtime itself reports in the receipt keeps its own code
   ([contained-lab-operation.md](contained-lab-operation.md)).
@@ -568,7 +587,7 @@ not move, and the MCP entry's `entry_protocol` becomes 2 (LAB-5). LAB-0 changes 
 
 | Text | Replaced by | From |
 |---|---|---|
-| runtime-interface.md: the three counters, `via`, the Lab options' gate, "The gate's decision (from U-6)", "Before U-6", "Without the Lab, or with one option", the origin gates, the clean mapping's actingctl and MCP counters | sections 2 and 3 | LAB-6 (the mapping: LAB-2, LAB-5) |
+| runtime-interface.md: the three counters, `via`, the Lab options' gate, "The gate's decision (from U-6)", "Before U-6", "Without the Lab, or with one option", the origin gates, the clean mapping's actingctl and MCP counters | sections 2 and 3 | LAB-6 (the mapping: LAB-2 for actingctl's; for MCP's LAB-7, since LAB-5 adds its server beside `actingctl mcp-serve`, whose actinglab child with `--via` stays until LAB-7) |
 | runtime-interface.md: the plans U-3 to U-6 and the upgrade state | this contract; they are not built | now (no code follows them) |
 | component-interfaces.md: "Planned: `install-control` 2" | `install-control` retires | now |
 | install-cli.md: "no MCP tool drives it" (also in MCP's instructions) | MCP covers what the CLI covers, rescue included (Alice: 「Lab不设权限管理」) | LAB-5 |
@@ -635,7 +654,8 @@ After LAB-6 the host emits neither `lab_module_not_installed` nor `lab_module_op
    which do what they did; tests and `external-tools/NOTICE.md` use them, so they stay.
 8. **The two host codes** `lab_module_not_installed` and `lab_module_option_disabled` lose their
    emitter at LAB-6; whether the catalog retires them is LAB-6's.
-9. **The MCP tool count.** The table has one operation per CLI form (168 in v1), so MCP would list
+9. **The MCP tool count.** The table has one operation per CLI form (168 in LAB-0's v1; 170 since
+   LAB-2 added the two `user-config` rows), so MCP would list
    that many tools. LAB-5 may present a family (`record`, `package`, `emu`) as one tool with an
    `action` argument; the table stays one row per form either way.
 10. **actinglab's own commands take the new output.** Done (LAB-2b, 0.12.50; the coordinator's
@@ -651,4 +671,5 @@ After LAB-6 the host emits neither `lab_module_not_installed` nor `lab_module_op
     `scripts/validate-local.ps1`, `scripts/regression.ps1`) and the coordinator's hotplace kit
     (`hotplace.ps1`, `tools/composer_check_r10.py`) read both shapes before the deploy and raise
     their pins with that change (the slice's pull request, "At deploy"). MCP's actinglab child
-    (`--via`) keeps the envelope and moves with LAB-5.
+    (`--via`) keeps the envelope until LAB-7: LAB-5 adds its server beside `actingctl mcp-serve`
+    and replaces neither (section 11; corrected with LAB-5A).

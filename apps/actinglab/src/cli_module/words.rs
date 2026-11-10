@@ -9,10 +9,20 @@
 //!   the operations this program offers ([`offered`]); then the row's positionals in order (the
 //!   instance among them: an alias, an `instance_id` or an ADB port), its options
 //!   `--name value` (`_` written `-`) and its switches `--name`.
-//! - A row with `params_more` takes the further flags of its source command as they are given
-//!   (`--flag value`, or `--flag` alone when no value follows), and further words, which
-//!   [`MORE_WORDS`] holds; any other word or flag is refused by name.
-//! - Types: `integer` a JSON number, `boolean` true or false, `json` the JSON value,
+//! - Workflow #434 LAB-5A: a row passes on only what it declares; no offered row has
+//!   `params_more` (§9.2). Three things stay as the command line had them before, each named in
+//!   one place:
+//!   - a row actinglab's own command serves, whose command line took that command's further flags
+//!     before LAB-5A ([`super::engine::as_written`]), hands its declared flags on as written
+//!     (`--flag value`, or `--flag` alone when no value follows; the command reads and checks
+//!     them, as it did), and actinglab's global options with them ([`GLOBAL_OPTIONS`]);
+//!   - the rows of [`LENIENT_ON_COMMAND_LINE`] hand every further flag and word on, as their
+//!     command ignores what it does not read (a debt);
+//!   - `runs` takes its instance as `--instance <x>` too ([`POSITIONAL_FLAGS`]).
+//!
+//!   `serve --stdio` refuses every member a row does not declare.
+//! - Types: `integer` a JSON number, `unsigned` a JSON number from 0 to 2^64 − 1, `decimal` a
+//!   decimal number kept as written, `boolean` true or false, `json` the JSON value,
 //!   `list<string>` comma-separated words, `duration` a number with `ms`, `s`, `m` or `h`, kept as
 //!   written; a repeated parameter is a list. Everything else is a string.
 //!
@@ -47,8 +57,44 @@ pub(crate) fn rescue_served(name: &str) -> bool {
     }
 }
 
-/// The member that holds the further words of a row with `params_more`.
+/// The member that holds the further words of a row of [`LENIENT_ON_COMMAND_LINE`] on the command
+/// line.
 pub(crate) const MORE_WORDS: &str = "words";
+
+/// Workflow #434 LAB-5A: the rows whose command line hands every further flag and word on to
+/// their command, which ignores a flag it does not read, as before LAB-5A. A debt: a later slice
+/// makes these commands strict and this list goes. Only the command line: `serve --stdio` refuses
+/// what the row does not declare.
+pub(crate) const LENIENT_ON_COMMAND_LINE: [&str; 3] =
+    ["recover", "debug-package", "export-evidence"];
+
+/// Workflow #434 LAB-5A: actinglab's global options (`crate::cli_parse::parse_invocation` takes
+/// them anywhere on its command line), which the command line of a row whose flags go on as
+/// written ([`super::engine::as_written`]) hands on, as it did when such a row took its command's
+/// further flags. `--json` is the front end's, taken out before the words are read.
+pub(crate) const GLOBAL_OPTIONS: [&str; 17] = [
+    "--run-root",
+    "--instance",
+    "--instances",
+    "--profile",
+    "--resource-root",
+    "--via",
+    "--dry-run",
+    "--verbose",
+    "--quiet",
+    "--game",
+    "--server",
+    "--runtime-endpoint",
+    "--capture-backend",
+    "--backend",
+    "--touch-backend",
+    "--require-session",
+    "--version",
+];
+
+/// Workflow #434 LAB-5A: a positional a row's command line also takes as a flag, as it did when
+/// the row took its source command's further flags (operation, parameter). Its note says so.
+pub(crate) const POSITIONAL_FLAGS: [(&str, &str); 1] = [("runs", "instance")];
 
 /// One operation and its parameters.
 #[derive(Debug, Clone, PartialEq)]
@@ -100,7 +146,10 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
         .filter(|param| param.form == ParamForm::Positional)
         .collect::<Vec<_>>();
     let mut next = 0;
-    let more = operation.params_more.is_some();
+    // Workflow #434 LAB-5A: the flags of a row whose command reads them again go on as written,
+    // and the further flags and words of a lenient row's command too.
+    let as_written = super::engine::as_written(operation);
+    let lenient = as_written && LENIENT_ON_COMMAND_LINE.contains(&operation.name.as_str());
     let mut index = 0;
     while index < rest.len() {
         let word = rest[index].as_str();
@@ -110,7 +159,21 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
                 .params
                 .iter()
                 .find(|param| param.form != ParamForm::Positional && param.name == name);
-            match declared {
+            let handed_on = declared.is_some() || lenient || GLOBAL_OPTIONS.contains(&word);
+            if as_written && handed_on && name != MORE_WORDS && !name.is_empty() {
+                match rest.get(index + 1).filter(|next| !next.starts_with("--")) {
+                    Some(value) => {
+                        push(&mut params, &name, Value::String(value.clone()));
+                        index += 2;
+                    }
+                    None => {
+                        push(&mut params, &name, Value::Bool(true));
+                        index += 1;
+                    }
+                }
+                continue;
+            }
+            match declared.or_else(|| positional_flag(operation, &name)) {
                 Some(param) if param.form == ParamForm::Switch => {
                     put(&mut params, param, Value::Bool(true), word)?;
                     index += 1;
@@ -121,18 +184,6 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
                         .ok_or_else(|| usage(Some(word), ArgumentProblem::ValueMissing))?;
                     put(&mut params, param, typed(param, value, word)?, word)?;
                     index += 2;
-                }
-                None if more && name != MORE_WORDS && !name.is_empty() => {
-                    match rest.get(index + 1).filter(|next| !next.starts_with("--")) {
-                        Some(value) => {
-                            push(&mut params, &name, Value::String(value.clone()));
-                            index += 2;
-                        }
-                        None => {
-                            push(&mut params, &name, Value::Bool(true));
-                            index += 1;
-                        }
-                    }
                 }
                 None => return Err(usage(Some(word), ArgumentProblem::Unknown)),
             }
@@ -145,7 +196,7 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
                     put(&mut params, param, typed(param, word, word)?, word)?;
                     next += 1;
                 }
-                None if more => append(&mut params, MORE_WORDS, Value::String(word.to_owned())),
+                None if lenient => append(&mut params, MORE_WORDS, Value::String(word.to_owned())),
                 None => return Err(usage(Some(word), ArgumentProblem::Unknown)),
             }
             index += 1;
@@ -188,10 +239,10 @@ pub(crate) fn from_json(table: &OperationTable, line: &str) -> Result<Call, Outc
         Some(Value::Object(params)) => params.clone(),
         Some(_) => return Err(usage(Some("params"), ArgumentProblem::WrongType)),
     };
+    // Workflow #434 LAB-5A: a member the row does not declare is refused, for every row.
     for (member, value) in &params {
         match operation.params.iter().find(|param| &param.name == member) {
             Some(param) => checked(param, value, member)?,
-            None if operation.params_more.is_some() => further(member, value)?,
             None => return Err(usage(Some(member.as_str()), ArgumentProblem::Unknown)),
         }
     }
@@ -202,8 +253,8 @@ pub(crate) fn from_json(table: &OperationTable, line: &str) -> Result<Call, Outc
     })
 }
 
-/// The members of `params` the row does not declare: the further flags of its source command
-/// (never [`MORE_WORDS`]), in name order.
+/// The members of `params` the row does not declare: on the command line, the global options and
+/// a lenient row's further flags handed on (never [`MORE_WORDS`]), in name order.
 pub(crate) fn further_flags<'a>(
     operation: &Operation,
     params: &'a Map<String, Value>,
@@ -231,6 +282,26 @@ pub(crate) fn parse_duration(text: &str) -> Option<Duration> {
         "h" => number.checked_mul(3600).map(Duration::from_secs),
         _ => None,
     }
+}
+
+/// The positional `name` of a row of [`POSITIONAL_FLAGS`], written as a flag; `None` for any
+/// other row or name.
+fn positional_flag<'a>(operation: &'a Operation, name: &str) -> Option<&'a Param> {
+    if !POSITIONAL_FLAGS
+        .iter()
+        .any(|(row, param)| *row == operation.name && *param == name)
+    {
+        return None;
+    }
+    operation
+        .params
+        .iter()
+        .find(|param| param.form == ParamForm::Positional && param.name == name)
+}
+
+/// A decimal number as written: finite, as Rust reads an `f64`.
+fn decimal(text: &str) -> Option<f64> {
+    text.parse::<f64>().ok().filter(|number| number.is_finite())
 }
 
 /// The name a refusal gives a parameter: `<name>` for a positional, `--name` for another.
@@ -302,6 +373,11 @@ fn typed(param: &Param, text: &str, word: &str) -> Result<Value, Outcome> {
     let wrong = || usage(Some(word), ArgumentProblem::WrongType);
     Ok(match &param.value_type {
         ParamType::Integer => Value::from(text.parse::<i64>().map_err(|_| wrong())?),
+        ParamType::Unsigned => Value::from(text.parse::<u64>().map_err(|_| wrong())?),
+        ParamType::Decimal => {
+            decimal(text).ok_or_else(wrong)?;
+            Value::String(text.to_owned())
+        }
         ParamType::Boolean => match text {
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
@@ -333,6 +409,12 @@ fn checked(param: &Param, value: &Value, member: &str) -> Result<(), Outcome> {
     let one = |value: &Value| -> Result<(), Outcome> {
         let fits = match &param.value_type {
             ParamType::Integer => value.is_i64() || value.is_u64(),
+            ParamType::Unsigned => value.is_u64(),
+            // A JSON number, or the decimal text the CLI's words give.
+            ParamType::Decimal => {
+                value.as_f64().is_some_and(f64::is_finite)
+                    || value.as_str().and_then(decimal).is_some()
+            }
             ParamType::Boolean => value.is_boolean(),
             ParamType::Json => true,
             ParamType::ListOfStrings => value
@@ -357,27 +439,6 @@ fn checked(param: &Param, value: &Value, member: &str) -> Result<(), Outcome> {
             }
         }
         (false, value) => one(value),
-    }
-}
-
-/// A further flag (`true`, a string, a number, or a list of them) or the further words (a list of
-/// strings) of a serve call.
-fn further(member: &str, value: &Value) -> Result<(), Outcome> {
-    let scalar = |value: &Value| value.is_string() || value.is_boolean() || value.is_number();
-    let fits = if member == MORE_WORDS {
-        value
-            .as_array()
-            .is_some_and(|items| items.iter().all(Value::is_string))
-    } else {
-        scalar(value)
-            || value
-                .as_array()
-                .is_some_and(|items| !items.is_empty() && items.iter().all(scalar))
-    };
-    if fits {
-        Ok(())
-    } else {
-        Err(usage(Some(member), ArgumentProblem::WrongType))
     }
 }
 

@@ -256,22 +256,14 @@ fn switch(params: &Map<String, Value>, name: &str) -> bool {
     params.get(name).and_then(Value::as_bool).unwrap_or(false)
 }
 
-/// The further flags and words of a row with `params_more`, as the source command takes them:
-/// `--name value` (or `--name` for a switch) for every member the row does not declare, the
-/// further words last.
-fn further(params: &Map<String, Value>, declared: &[&str]) -> Vec<String> {
-    let mut words = further_flags(params, declared);
-    if let Some(Value::Array(items)) = params.get("words") {
-        words.extend(items.iter().filter_map(Value::as_str).map(str::to_owned));
-    }
-    words
-}
-
-/// The further flags of a row with `params_more` ([`further`] without the further words).
+/// The row's parameters but those in `declared` (which the caller maps itself), as the source
+/// command takes them: `--name value`, or `--name` for a switch that is set. Workflow #434
+/// LAB-5A: the row declares them all (before it, they were the further flags of a row with
+/// `params_more`); a switch given `false`, which only `serve --stdio` can give, is not written.
 fn further_flags(params: &Map<String, Value>, declared: &[&str]) -> Vec<String> {
     let mut words = Vec::new();
     for (name, value) in params {
-        if declared.contains(&name.as_str()) || name == "words" {
+        if declared.contains(&name.as_str()) {
             continue;
         }
         let flag = format!("--{}", name.replace('_', "-"));
@@ -280,11 +272,17 @@ fn further_flags(params: &Map<String, Value>, declared: &[&str]) -> Vec<String> 
             other => vec![other.clone()],
         };
         for value in values {
-            words.push(flag.clone());
             match value {
-                Value::Bool(true) => {}
-                Value::String(text) => words.push(text),
-                other => words.push(other.to_string()),
+                Value::Bool(true) => words.push(flag.clone()),
+                Value::Bool(false) => {}
+                Value::String(text) => {
+                    words.push(flag.clone());
+                    words.push(text);
+                }
+                other => {
+                    words.push(flag.clone());
+                    words.push(other.to_string());
+                }
             }
         }
     }
@@ -292,8 +290,8 @@ fn further_flags(params: &Map<String, Value>, declared: &[&str]) -> Vec<String> 
 }
 
 /// An installer command: `verb`, `--root <root>` (unless the command takes none), the row's
-/// parameters as the flags `named` maps them to, and the further flags of a row with
-/// `params_more`.
+/// parameters as the flags `named` maps them to, and its other parameters under their own flags
+/// ([`further_flags`]).
 fn installer(
     context: &Context<'_>,
     verb: &[&str],
@@ -316,7 +314,7 @@ fn installer(
         }
     }
     let declared = named.iter().map(|(param, _)| *param).collect::<Vec<_>>();
-    words.extend(further(params, &declared));
+    words.extend(further_flags(params, &declared));
     line(context, context.install(&words))
 }
 
@@ -1598,21 +1596,35 @@ fn watchdog(context: &Context<'_>, asked: crate::watchdog::Asked) -> Exit {
     cli_line::finish(Some(members), &answered.outcome, false, None)
 }
 
-/// `agent <sub>`: `agent-channel <sub>` with the root's state root (`--state-root`), its further
-/// words and flags; its answer as the command gives it (a hook prints nothing, the notice its
-/// text).
+/// `agent <sub>`: `agent-channel <sub>` with `claude-hook`'s action word, the root's state root
+/// (`--state-root`) and the row's other parameters as flags; its answer as the command gives it
+/// (a hook prints nothing, the notice its text). Workflow #434 LAB-5A: the action is the row's
+/// positional `action` (a further word before).
 fn agent(context: &Context<'_>, sub: &str, params: &Map<String, Value>) -> Answered {
+    agent_channel::run(&agent_words(sub, params, &context.location.state_root))
+}
+
+/// The words after `agent-channel` of the row `agent <sub>` with `params`, for the state root
+/// `state_root`.
+fn agent_words(sub: &str, params: &Map<String, Value>, state_root: &Path) -> Vec<OsString> {
     let mut words = vec![OsString::from(sub)];
-    if let Some(Value::Array(items)) = params.get("words") {
-        words.extend(items.iter().filter_map(Value::as_str).map(OsString::from));
+    if let Some(action) = text(params, AGENT_ACTION) {
+        words.push(OsString::from(action));
     }
     if sub != "notice" {
         words.push(OsString::from("--state-root"));
-        words.push(context.location.state_root.clone().into_os_string());
+        words.push(state_root.as_os_str().to_owned());
     }
-    words.extend(further_flags(params, &[]).into_iter().map(OsString::from));
-    agent_channel::run(&words)
+    words.extend(
+        further_flags(params, &[AGENT_ACTION])
+            .into_iter()
+            .map(OsString::from),
+    );
+    words
 }
+
+/// `agent claude-hook`'s positional: `start` or `end`.
+const AGENT_ACTION: &str = "action";
 
 /// The rescue module's answer of a row actinglab's parser gave, located from this process: the
 /// root of the running program ([`actingcommand_lab_ops::locate::locate`]).
@@ -1633,3 +1645,9 @@ pub(crate) fn location_of(root: &Path, config: &Path, state_root: &Path) -> Loca
         state_root: state_root.to_path_buf(),
     }
 }
+
+// Test-only: Workflow #434 LAB-5A, the rescue rows hand their declared parameters on as their
+// further flags went before.
+#[cfg(test)]
+#[path = "gate_434_lab5a.rs"]
+mod gate_434_lab5a;
