@@ -3371,3 +3371,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_rl1b::cw1_e_after_a_restart_the_fact_holds_the_active_generation_s_warnings_again",
 ]
 incident = ["#428 CW-1"]
+
+# #428 TB-R1 (0.12.50; register §1.293; brief rd-1110/brief-tbr1-table-listing-leftovers.md; contracts/package-reference.md, "Tables"): the names a replacement in place leaves in a game root's tables/ (an old copy <name>.old-<ms>, a part <name>.new-<ms>.part, and what undo sets aside, <name>.abandoned-<ms> and <name>.rolledback-<ms>) are skipped: beside one valid table, check-config and read_standard_pack_tables list the table alone; with 64 valid tables and leftovers whose names sort before, between and after them, all 64 are read, none is table_too_large, and read_standard_pack_table reads the 64th; a file notes.txt and an invalid table are still reported as standard_pack_table_invalid, and at startup only they add a standard_pack_read record
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_357_db1::table_listing_skips_replacement_leftovers",
+]
+incident = ["#428 TB-R1"]
