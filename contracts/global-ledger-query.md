@@ -255,6 +255,37 @@ cursor with or without them; a page the budget stops may reach further with
 them (the reads they save leave more of its budget), and a page whose Lab
 relations' read the budget would cut is answered.
 
+#422 QP-1 (since 0.12.49; [ledger-observer.md](ledger-observer.md) §15, the
+QP-1 note; [v012-register.md](v012-register.md) §1.292): a Runtime page reads
+its selection in segments of the sequence (#422 LN-WS), and each statement
+stays inside its segment whatever SQLite's planner chooses. No time bound
+drives a statement: `from_timestamp_unix_ms` and `to_timestamp_unix_ms` are
+written so that no index serves them, in every page statement, with a per-run
+link (#419 DIAG-RUN) or without; they filter the rows a sequence-bounded
+search reads. In a statement without a per-run link the window's
+`from_sequence` and `to_sequence` are written so too, and the segment's two
+bounds are the only sequence range an index can take: whichever index drives
+it (the sequence key, a view index on an equality, a link index), its search
+carries them. A page's first statement spans one sequence and runs whatever
+the read budget; it therefore reads that sequence's rows only. Answers of a
+page its read budget does not cut do not change: the rows, their order,
+cursors, read scope and continuation are those of the same query before; only
+plans may differ. Where the budget cuts a page, the place it stops depends on
+the work its statements' plans needed, so it may stop at another place than
+before, with the rows, cursor, read scope and continuation of that place.
+
+The Runtime does not limit the distance between `from_sequence` and
+`to_sequence`: a client's window width is the client's own rule, and a wide
+window costs more segments, each bounded and under the page's budget. Two
+reads of a page are not bounded by its window, and QP-1 leaves both as they
+are: its Lab relations (a reader-pool page past the end of its pool's relation
+index reads from that end through its snapshot, with the earlier link rows of a
+request or correlation first anchored there; without a built index, the Lab
+anchors of the whole history and the runs that name them), and its run
+recovery (each run among its rows read from sequence 0 through the snapshot
+through the run link's index, at most 1 025 records). Both run under the
+page's budget; ledger-observer.md says what bounds each.
+
 ### New record types in the views (Workflow #383, ledger revision 3)
 
 The ledger observer adds record types ([Ledger observer](ledger-observer.md),

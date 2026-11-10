@@ -9064,6 +9064,76 @@ package uses the source until S168-6, which comes after S168-4 and S168-5a.
 | S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5b | runtime-host | ends that run only |
 | S168C-10 | the optional `task.json` mapping member `judge_result`, a closed vocabulary of `judged` and `unknown` | package format, `package` 9 | S168-5b | resource repositories | maps a judge step's end with that result; two mappings overlap only with the same effect condition, page and `judge_result` (or none on both), so S168-5b changes `SchedulingOutcomeDeclaration::validate` (`mapping_overlap`); no persisted record carries it; [selection-graph.md](selection-graph.md), "Mapping the two keys" |
 
+### 1.292 Slice QP-1 (0.12.49): a ledger page stays inside its sequence bounds whatever the planner chooses (#422; the read-only investigation of 2026-11-10, `rd-1110/ledger-window-plan-findings.md`; the console's ledger window will send pages with `from_sequence`, `to_sequence`, a limit and a snapshot and no instance, which the coordinator ruled acceptable once this slice makes the bound independent of the planner; coordinator work order `rd-1110/brief-qp1-page-plan-bounds.md`)
+
+[ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer) (the QP-1
+note) and [global-ledger-query.md](global-ledger-query.md) (the QP-1 paragraphs) are the
+contract. 1.292 is the next free number on main `fa8adc67`, where #1554 added §1.291 (S168-0);
+this slice had taken 1.291, then the next free one on `7910349a`. No persisted ledger shape, wire
+shape, configuration key, outcome code, index or table is new or changed.
+
+**Why.** A view page reads its selection in segments of the sequence (LN-WS R2:
+`e.sequence>c AND e.sequence<=end`), its first of one sequence and run whatever the budget. A
+segment bounds a statement only when the index that drives it takes the segment's bounds. For a
+statement with a per-run link the link's index drives (DIAG-RUN). For one without, nothing in
+the text forced it: SQLite chose. Every view and link index is (column, sequence), so with an
+equality on its column the segment enters it as its second term; but the time bounds are a range
+on the time index's first column, where the segment cannot enter, and a statement the time
+index drove read every record of its time range, however far before the segment (the
+investigation measured about 6 500 SQLite steps for a page against about 18 million with the
+time index forced, on 400 000 records). With a window, the statement also carried the window's
+own sequence terms (`e.sequence>=from`, `e.sequence<=to`), a second range an index could take in
+place of the segment's.
+
+**What changed** (`history_statement`). Every time term is written `+e.timestamp_unix_ms`, in
+every statement, with a per-run link or without (a per-run statement had them so already), so
+no index serves a time bound; the window start's lookup (`TIME_START`, LN-WS R3) is its own
+statement and unchanged. A statement without a per-run link writes its window's sequence terms
+`+e.sequence>=?` and `+e.sequence<=?`: every caller's segment lies inside the window, so they
+select nothing more, and the segment's pair is the only sequence range an index can take. The
+link-set page of LN-8d still counts such a term as a sequence condition. A statement with a
+per-run link is unchanged: its time terms were already `+`. For a page its read budget does not
+cut, the rows, their order, cursors, read scope and continuation are the same; only plans may
+differ. Where the budget cuts a page, the place it stops depends on the work its statements'
+plans needed, so it may stop at another place than before.
+
+**The first statement** keeps its exemption from the budget: it spans one sequence and every
+search it makes stays inside it, so it reads that sequence's rows, and its work no longer grows
+with the history before the window.
+
+**Not bounded by the window, unchanged** (ledger-observer.md §15, the QP-1 note): the Lab
+relations a page reads (past the pool index's end through the snapshot, with the earlier link
+rows of a request or correlation first anchored there; the whole history's without a built
+index) and run recovery (each run of the page from sequence 0 through the snapshot through
+`ledger_links_run`, at most 1 025 records). The Runtime does not limit the distance between
+`from_sequence` and `to_sequence`.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): `ledger`
+stays [3, 7], since nothing persisted or written changes (SQLite format 2, the tables, the
+indexes and the views are the same); `runtime-client` stays [3, 6], since no request member and
+no answer changes; `actingd-config` gains no key.
+
+**What changes live.** Nothing in answers of a page its read budget does not cut; a page the
+budget cuts may stop at another place. A page with a time bound, and a page without a
+per-run link with a window, may take a different plan. The console may send time conditions
+online only against a Runtime with this slice.
+
+**Rollback** (to 0.12.48). Nothing persisted changes; 0.12.48 builds the statements as before,
+and a time bound may again drive a page's statement.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| QP1-1 | every time term of a history statement written `+e.timestamp_unix_ms` | Runtime-internal behaviour (statement text) | QP-1 | ledger | `since` 0.12.49; `time_bound_never_drives_a_page` |
+| QP1-2 | the window's sequence terms of a history statement without a per-run link written `+e.sequence` | Runtime-internal behaviour (statement text) | QP-1 | ledger | `page_statements_stay_inside_sequence_bounds`; the segment's pair is the only indexable sequence range; LN-8d's link-set page keeps its form with such a term: the same test asserts that a link-set statement with `to_sequence` (the resident retention's object load, its artifacts and its frames), built by `history_statement`, has the `e.sequence IN (SELECT sequence FROM (` form |
+| QP1-3 | the guarantee, the first statement's exemption, the window's width and the two reads a window does not bound | contract text agrees with the code | QP-1 | — | ledger-observer.md §15, global-ledger-query.md |
+
+Tests (ledger gate row "QP-1"): `gate_qp1::page_statements_stay_inside_sequence_bounds`,
+`gate_qp1::time_bound_never_drives_a_page` and `gate_qp1::page_results_unchanged_by_plan_bounds`.
+Adapted, as the requirement deliberately changes what it pinned:
+`gate_diag_run::diag_run_t1_a_per_run_read_is_driven_by_its_run_link_index` pinned that forms A
+and C of stop 1 (no per-run link) carry no `+` at all; their time terms now carry one, and no
+other term does.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
