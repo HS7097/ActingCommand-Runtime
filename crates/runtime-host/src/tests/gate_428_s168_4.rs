@@ -545,6 +545,89 @@ fn task_facts(host: &RuntimeHost, correlation_id: CorrelationId) -> Vec<TaskSema
         .collect()
 }
 
+// Every record of the run `correlation_id`, in ledger order.
+fn run_records(host: &RuntimeHost, correlation_id: CorrelationId) -> Vec<PersistedEvent> {
+    let mut events = host
+        .query_persisted_events_for_test(EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        })
+        .expect("the run's records");
+    events.sort_by_key(PersistedEvent::sequence);
+    events
+}
+
+// An identifier's canonical text, the one a `source_snapshot_id` names it by.
+fn id_text(id: &impl serde::Serialize) -> String {
+    serde_json::to_value(id)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .expect("an identifier's text")
+}
+
+// The run `correlation_id`, and the last frame it captured during its step `operation` (between
+// the step's `task.step_started` and `task.step_finished`).
+fn step_end_frame(
+    host: &RuntimeHost,
+    correlation_id: CorrelationId,
+    operation: &str,
+) -> (actingcommand_contract::RunId, actingcommand_contract::FrameId) {
+    let records = run_records(host, correlation_id);
+    let step = |finished: bool| {
+        records
+            .iter()
+            .position(|event| match event.payload() {
+                EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+                    TaskSemanticFact::StepStarted {
+                        operation_label, ..
+                    } => !finished && operation_label == operation,
+                    TaskSemanticFact::StepFinished {
+                        operation_label, ..
+                    } => finished && operation_label == operation,
+                    _ => false,
+                },
+                _ => false,
+            })
+            .expect("the step's record")
+    };
+    let frame = records[step(false)..step(true)]
+        .iter()
+        .rev()
+        .find(|event| event.event_type() == EventType::CaptureCompleted)
+        .and_then(|event| event.links().frame_id())
+        .copied()
+        .expect("a frame the step captured");
+    let run = records
+        .iter()
+        .find_map(|event| event.links().run_id())
+        .copied()
+        .expect("the run's id");
+    (run, frame)
+}
+
+// The times of the records `capture.requested` and `capture.completed` of `frame` in the run
+// `correlation_id`: the frame's device capture lies between them.
+fn capture_window(
+    host: &RuntimeHost,
+    correlation_id: CorrelationId,
+    frame: actingcommand_contract::FrameId,
+) -> (u64, u64) {
+    let records = run_records(host, correlation_id);
+    let at = |event_type: EventType| {
+        records
+            .iter()
+            .find(|event| {
+                event.event_type() == event_type && event.links().frame_id() == Some(&frame)
+            })
+            .map(PersistedEvent::timestamp_unix_ms)
+            .expect("the frame's capture record")
+    };
+    (
+        at(EventType::CaptureRequested),
+        at(EventType::CaptureCompleted),
+    )
+}
+
 // S168-4 test 1, the host: a run whose step reads the list of `member-00` to `member-05`
 // publishes, after its successful terminal, one `fact.published` of the list's key with one
 // `record_list` record: the run's instance's scope; the six rows in ascending byte order of the
@@ -603,8 +686,24 @@ fn list_reading_publishes_whole_list() {
     assert_eq!(record.source_detector, "list_reading:task/read_members");
     assert_eq!(record.schema_version, "fact.v1");
     assert!(record.invalidate_on.is_empty());
-    let (_, _, operation) = snapshot_parts(record);
-    assert_eq!(operation, "read_members");
+    // The frame the end check passed on: the last frame the step captured, its one viewport. The
+    // list is observed when that frame was captured, between the frame's `capture.requested` and
+    // `capture.completed`, and its snapshot names this run and that frame.
+    let (run_id, end_frame) = step_end_frame(&host, correlation_id, "read_members");
+    let (requested_at, completed_at) = capture_window(&host, correlation_id, end_frame);
+    assert!(
+        (requested_at..=completed_at).contains(&record.observed_at_unix_ms),
+        "observed at {}, the end frame captured within {requested_at}..={completed_at}",
+        record.observed_at_unix_ms
+    );
+    assert_eq!(
+        snapshot_parts(record),
+        (
+            format!("run:{}", id_text(&run_id)),
+            format!("frame:{}", id_text(&end_frame)),
+            "read_members".to_owned()
+        )
+    );
     assert_eq!(
         record,
         &self::record(&host, ALIAS, LIST_KEY).expect("the active record")
@@ -773,9 +872,15 @@ fn list_reading_failed_scan_fails_run() {
     host.close().expect("close the host");
 }
 
-// S168-4 test 6: a `PublishFacts` of `inventory.list.example_kind_a` from the agent, the CLI and
-// the UI is refused `list_reading_key_reserved` with the key, a denied request, and so is the
-// Runtime's own ordinary publication path, non-fatal; nothing is appended.
+// S168-4 test 6: a `PublishFacts` of `inventory.list.example_kind_a` from a client is refused
+// `list_reading_key_reserved` with the key, a denied request, and so is the Runtime's own
+// ordinary publication path, non-fatal; nothing is appended. A client publishes an ordinary fact
+// from the agent dispatcher's origin (Agent, Adapter), as every host test that publishes a fact
+// as a client does: the agent, and the CLI, whose `facts publish` sends that origin (lab-ops,
+// `fact_publish`). A person's own origin, the CLI's (Cli, Cli) or the UI's (User, Ui), publishes
+// only the families with the origin exception, so a request of the key from it cannot be formed:
+// the request contract refuses it for its origin (`invalid_agent_dispatcher_origin`) before any
+// Runtime reads it, and nothing is appended from there either.
 #[test]
 fn list_reading_key_reserved() {
     let root = TempDir::new().expect("tempdir");
@@ -800,36 +905,41 @@ fn list_reading_key_reserved() {
         Vec::new(),
     );
     let mut client = TestClient::connect(&host);
-    type Writer = fn(&TestClient, RuntimeOperation) -> RuntimeRequest;
-    let writers: [(&str, Writer); 3] = [
-        ("agent", TestClient::agent_request),
-        ("cli", TestClient::request),
-        ("ui", TestClient::governance_request),
-    ];
-    for (origin, writer) in writers {
-        let request = writer(
-            &client,
-            RuntimeOperation::PublishFacts {
-                observation: actingcommand_contract::FactObservation {
-                    records: vec![list.clone()],
-                },
-            },
+    let publication = || RuntimeOperation::PublishFacts {
+        observation: actingcommand_contract::FactObservation {
+            records: vec![list.clone()],
+        },
+    };
+    let request = client.agent_request(publication());
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied, "{receipt:?}");
+    assert_eq!(receipt.outcome().code().as_str(), RESERVED, "{receipt:?}");
+    assert_eq!(
+        receipt.outcome().value("fact_key"),
+        Some(&serde_json::json!(LIST_KEY)),
+        "{receipt:?}"
+    );
+    for (origin, actor, source) in [
+        ("cli", EventActor::Cli, EventSource::Cli),
+        ("ui", EventActor::User, EventSource::Ui),
+    ] {
+        let formed = RuntimeRequest::new(
+            client.ids.mint_request_id().expect("request id"),
+            client.ids.mint_correlation_id().expect("correlation id"),
+            None,
+            actor,
+            source,
+            unix_ms_now().expect("wall clock"),
+            publication(),
         );
-        let receipt = client.send(&request);
+        let refused = match formed {
+            Ok(_) => panic!("{origin}: a person's origin cannot publish the key"),
+            Err(refused) => refused,
+        };
         assert_eq!(
-            receipt.state(),
-            RuntimeReceiptState::Denied,
-            "{origin}: {receipt:?}"
-        );
-        assert_eq!(
-            receipt.outcome().code().as_str(),
-            RESERVED,
-            "{origin}: {receipt:?}"
-        );
-        assert_eq!(
-            receipt.outcome().value("fact_key"),
-            Some(&serde_json::json!(LIST_KEY)),
-            "{origin}: {receipt:?}"
+            refused.code().as_str(),
+            "invalid_agent_dispatcher_origin",
+            "{origin}"
         );
     }
     let error = host
@@ -845,7 +955,8 @@ fn list_reading_key_reserved() {
 
 // A select step's document over the card layout that keeps a card while the published list
 // lists it with `open` (`keyed_fact`; an unlisted card reads `absent`, false), within
-// `max_age_ms` of the list's read.
+// `max_age_ms` of the list's read. A gate that reads `keyed_fact` declares
+// `on_unknown: abort_evaluation` (selection-policy.md, "Fail-closed declaration").
 fn listed_open_policy(max_age_ms: u64) -> serde_json::Value {
     let identities = (0..=6).map(member).collect::<Vec<_>>();
     serde_json::json!({
@@ -869,7 +980,7 @@ fn listed_open_policy(max_age_ms: u64) -> serde_json::Value {
                                            "key_field": "member", "value_column": "open",
                                            "absent": {"type": "boolean", "value": false}},
                                  "expected": true},
-                   "on_unknown": {"kind": "drop_candidate"}}],
+                   "on_unknown": {"kind": "abort_evaluation"}}],
         "scoring": [],
         "selection": {"mode": "none_allowed", "required_count": 1},
         "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
