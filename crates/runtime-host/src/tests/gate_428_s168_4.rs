@@ -872,15 +872,15 @@ fn list_reading_failed_scan_fails_run() {
     host.close().expect("close the host");
 }
 
-// S168-4 test 6: a `PublishFacts` of `inventory.list.example_kind_a` from a client is refused
-// `list_reading_key_reserved` with the key, a denied request, and so is the Runtime's own
-// ordinary publication path, non-fatal; nothing is appended. A client publishes an ordinary fact
-// from the agent dispatcher's origin (Agent, Adapter), as every host test that publishes a fact
-// as a client does: the agent, and the CLI, whose `facts publish` sends that origin (lab-ops,
-// `fact_publish`). A person's own origin, the CLI's (Cli, Cli) or the UI's (User, Ui), publishes
-// only the families with the origin exception, so a request of the key from it cannot be formed:
-// the request contract refuses it for its origin (`invalid_agent_dispatcher_origin`) before any
-// Runtime reads it, and nothing is appended from there either.
+// S168-4 test 6: a `PublishFact` and a `PublishFacts` of `inventory.list.example_kind_a` from
+// every origin that may publish facts are refused `list_reading_key_reserved` with the key, a
+// denied request, and so is the Runtime's own ordinary publication path, non-fatal; nothing is
+// appended. A client publishes an ordinary fact from the agent dispatcher's origin (Agent,
+// Adapter), as every host test that publishes a fact as a client does: the agent, and the CLI,
+// whose `facts publish` sends that origin (lab-ops, `fact_publish`). A CLI or UI origin of its own,
+// (Cli, Cli) or (User, Ui), publishes only the families with the origin exception, so either
+// request of the key from it is refused earlier, when it is formed
+// (`invalid_agent_dispatcher_origin`), as for any publication, and nothing is appended either.
 #[test]
 fn list_reading_key_reserved() {
     let root = TempDir::new().expect("tempdir");
@@ -905,42 +905,61 @@ fn list_reading_key_reserved() {
         Vec::new(),
     );
     let mut client = TestClient::connect(&host);
-    let publication = || RuntimeOperation::PublishFacts {
-        observation: actingcommand_contract::FactObservation {
-            records: vec![list.clone()],
-        },
+    // `PublishFact` (`batch` false) or `PublishFacts` (`batch` true) of the list's record.
+    let publication = |batch: bool| {
+        if batch {
+            RuntimeOperation::PublishFacts {
+                observation: actingcommand_contract::FactObservation {
+                    records: vec![list.clone()],
+                },
+            }
+        } else {
+            RuntimeOperation::PublishFact {
+                record: list.clone(),
+            }
+        }
     };
-    let request = client.agent_request(publication());
-    let receipt = client.send(&request);
-    assert_eq!(receipt.state(), RuntimeReceiptState::Denied, "{receipt:?}");
-    assert_eq!(receipt.outcome().code().as_str(), RESERVED, "{receipt:?}");
-    assert_eq!(
-        receipt.outcome().value("fact_key"),
-        Some(&serde_json::json!(LIST_KEY)),
-        "{receipt:?}"
-    );
-    for (origin, actor, source) in [
-        ("cli", EventActor::Cli, EventSource::Cli),
-        ("ui", EventActor::User, EventSource::Ui),
-    ] {
-        let formed = RuntimeRequest::new(
-            client.ids.mint_request_id().expect("request id"),
-            client.ids.mint_correlation_id().expect("correlation id"),
-            None,
-            actor,
-            source,
-            unix_ms_now().expect("wall clock"),
-            publication(),
-        );
-        let refused = match formed {
-            Ok(_) => panic!("{origin}: a person's origin cannot publish the key"),
-            Err(refused) => refused,
-        };
+    for batch in [false, true] {
+        let request = client.agent_request(publication(batch));
+        let receipt = client.send(&request);
         assert_eq!(
-            refused.code().as_str(),
-            "invalid_agent_dispatcher_origin",
-            "{origin}"
+            receipt.state(),
+            RuntimeReceiptState::Denied,
+            "batch {batch}: {receipt:?}"
         );
+        assert_eq!(
+            receipt.outcome().code().as_str(),
+            RESERVED,
+            "batch {batch}: {receipt:?}"
+        );
+        assert_eq!(
+            receipt.outcome().value("fact_key"),
+            Some(&serde_json::json!(LIST_KEY)),
+            "batch {batch}: {receipt:?}"
+        );
+        for (origin, actor, source) in [
+            ("cli", EventActor::Cli, EventSource::Cli),
+            ("ui", EventActor::User, EventSource::Ui),
+        ] {
+            let formed = RuntimeRequest::new(
+                client.ids.mint_request_id().expect("request id"),
+                client.ids.mint_correlation_id().expect("correlation id"),
+                None,
+                actor,
+                source,
+                unix_ms_now().expect("wall clock"),
+                publication(batch),
+            );
+            let refused = match formed {
+                Ok(_) => panic!("{origin}, batch {batch}: a person's origin cannot publish it"),
+                Err(refused) => refused,
+            };
+            assert_eq!(
+                refused.code().as_str(),
+                "invalid_agent_dispatcher_origin",
+                "{origin}, batch {batch}"
+            );
+        }
     }
     let error = host
         .publish_fact(list)
@@ -1091,8 +1110,9 @@ fn list_reading_unchanged_rows_republished() {
 }
 
 // S168-4 test 9: on a store with no free fact identity, a run whose list is a new identity is
-// refused at its publication: the run fails `contained_task_resource_reading_rejected`, no active
-// fact is evicted, and a run of another instance goes on. Each instance reads once before the
+// refused at its publication: the run fails `contained_task_resource_reading_rejected`, native
+// detail `read_members:fact_store_capacity_exceeded`, no active fact is evicted, and a run of
+// another instance goes on. Each instance reads once before the
 // store is filled, so its display facts and its own list's identity exist; the store is then
 // filled with ordinary facts up to its bound (the first refusal is `fact_store_capacity_exceeded`).
 #[test]
@@ -1156,6 +1176,13 @@ fn list_reading_full_store_refused() {
         "contained_task_resource_reading_rejected",
         "{:?}",
         receipt.outcome()
+    );
+    // The reason is the run failure's native detail, `<operation id>:<fact store code>`, which
+    // the receipt does not carry; the host hands it to the test by the request.
+    assert_eq!(
+        host.failure_detail_for_test(receipt.request_id())
+            .expect("the failure's detail"),
+        Some("read_members:fact_store_capacity_exceeded".to_owned())
     );
     assert!(publications(&host, OTHER_KEY).is_empty());
     assert_eq!(records(&host, ALIAS), before, "no active fact is evicted");

@@ -196,6 +196,14 @@ impl HostShared {
                         crate::codes::test_spellings::TestLocation::RecordFailureDetailForTest,
                     )?
                     .insert(request.request_id(), failure.error.outcome());
+                    lock(
+                        &self.failure_details_for_test,
+                        crate::codes::test_spellings::TestLocation::RecordFailureDetailForTest,
+                    )?
+                    .insert(
+                        request.request_id(),
+                        failure.error.native_detail().map(str::to_owned),
+                    );
                 }
                 // #411 A54: `host_halted` is true only when the Runtime latched, not because the
                 // failure was severe for this request. A direct contained run's receipt keeps its

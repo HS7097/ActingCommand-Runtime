@@ -1971,6 +1971,8 @@ impl RuntimeHost {
             lease_expiry_test_checkpoints: Mutex::new(Vec::new()),
             #[cfg(test)]
             failure_outcomes_for_test: Mutex::new(BTreeMap::new()),
+            #[cfg(test)]
+            failure_details_for_test: Mutex::new(BTreeMap::new()),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             policy_dispatch_clocks: Mutex::new(BTreeMap::new()),
             policy_outcome_gate: Mutex::new(()),
@@ -3975,6 +3977,23 @@ impl RuntimeHost {
         .cloned())
     }
 
+    /// Workflow #428 S168-4: the native detail of a refused request, when it had one.
+    #[cfg(test)]
+    pub(crate) fn failure_detail_for_test(
+        &self,
+        request_id: RequestId,
+    ) -> RuntimeHostResult<Option<String>> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::ReadFailureDetailForTest)?;
+        Ok(lock(
+            &shared.failure_details_for_test,
+            crate::codes::test_spellings::TestLocation::ReadFailureDetailForTest,
+        )?
+        .get(&request_id)
+        .cloned()
+        .flatten())
+    }
+
     #[cfg(test)]
     pub(crate) fn pause_queue_operation_after_snapshot_for_test(
         &self,
@@ -5776,6 +5795,11 @@ struct HostShared {
     /// refusal's facts, which no receipt carries (ledger revision 3).
     #[cfg(test)]
     failure_outcomes_for_test: Mutex<BTreeMap<RequestId, actingcommand_contract::outcome::Outcome>>,
+    /// Workflow #428 S168-4: the native detail of each refused request, by request id, which
+    /// neither its receipt nor a direct run's records carry (a stage-2 refusal's
+    /// `<id>:<fact store code>`).
+    #[cfg(test)]
+    failure_details_for_test: Mutex<BTreeMap<RequestId, Option<String>>>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.
