@@ -465,9 +465,11 @@ calls the existing `publish_facts`.
 
 ## List reading facts (Workflow #428 S168-4)
 
-Written ahead of its code by S168-0 ([v012-register.md](v012-register.md) §1.291). A package's
-list readings ([resource-readings.md](resource-readings.md), "List readings") are written by the
-host, through `publish_facts`, after a run that succeeds: one observation per list with one
+Written ahead of its code by S168-0 and built by S168-4 (Runtime 0.12.50;
+[v012-register.md](v012-register.md) §1.291). A package's list readings
+([resource-readings.md](resource-readings.md), "List readings") are written by the host, through
+`publish_facts` with the publication purpose of a list reading, the prefix's one entry, after a
+run that succeeds: one observation per list with one
 instance-scoped record, its origin the Runtime's own (source and actor `runtime`, origin module
 `fact-store`), with system links. The observation time is the capture time of the viewport the
 list's end check passed on, the TTL the declared `valid_for_ms`, and `invalidate_on` is empty.
