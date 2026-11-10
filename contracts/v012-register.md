@@ -8728,6 +8728,55 @@ names `devices bind`'s kept `--root`. No row, type, member, code, key or interfa
 
 **LAB-5A rollback** (to the release before it). Nothing persisted: code and the table's text.
 
+#### Slice LAB-5D (0.12.52): the answer budget is the caller's, and the operation layer cuts or exports
+
+Coordinator work order `rd-1108/arch-013/brief-lab5d.md`; the read-only surveys
+`rd-1108/arch-013/lab5a-step0-survey.md` §5 and §6 and `rd-1108/arch-013/lab5-design-survey.md` §4
+(both on `76006500`); on main `76006500` (#1565). The contract is
+[lab-two-entries.md](lab-two-entries.md) §9.3, "The answer budget is the caller's". A move of code
+and one new parameter: `actingctl mcp-serve` answers every call byte for byte as before (the same
+cuts, `<block>_truncated` members, exports and warnings), and the CLI, the CLI module and
+`serve --stdio` print the whole answer as before. A generated MCP server (LAB-5) has no place for
+per-tool code, so the code that keeps an answer inside the budget now lives with the operations.
+The operation table, `words.rs`, the parameters, the jobs and the handles are untouched.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5D-1 | `lab_ops::budget`: `Budget {fits, export}` (`new`, `with_export`), `Writer`, `Fitted {result, exported}`, `fits`, `export_for`, `write_json`, `write_bytes`, `exported_header`, `exported` | new module | LAB-5D | MCP's eleven reads below | `fits` says whether an answer fits, in the caller's measure; `export`, when the caller has a place for whole answers, is its writer `(sha256, extension, bytes)` answering the reference `{path, sha256, size}` or the outcome of a failed write. No budget (`None`): the whole answer. `Fitted.exported` is `answer_exported` with its `path` when the answer was written whole. An answer that does not encode is `material_export_failed` (`actingctl_output_failed` for `packs`' document), caused by the encoder's failure, as MCP's were |
+| L5D-2 | the seven reads that cut: `overview::within_budget` and `overview::cut_to_fit` (with `CUT_BLOCKS`, `CUT_ROW_BLOCKS`, `CUT_LAST`), `diagnose::Diagnosis::within_budget` (its order `Kept::cut_one`), `events::Page::within_budget` with `events::list_within_budget`, `events::payload_within_budget` and `events::Binder`, `schedule::within_budget` and `schedule::cut_to_fit`, `run_list::RunsAnswer::within_budget`, `run_evidence::Evidence::within_budget`, `code_lookup::Page::within_budget` | moved code | LAB-5D | `ac_overview`, `ac_diagnose`, `ac_events`, `ac_schedule`, `ac_runs`, `ac_run_evidence`, `ac_outcome_code` | moved unchanged from `apps/actingctl/src/mcp`: `observer.rs` (`cut_to_fit`, `cut_next` and the order's constants), the loop of `runs.rs` `render_within_budget`, `events.rs` (`list_page`, `payload_page`), `schedule.rs` (`cut_to_fit`, `cut`) and the page loops of `run_list.rs`, `run_evidence.rs` and `code_lookup.rs`: the same order, markers and cursors. `EventsError` gains `Export`, a payload page the export could not take, which MCP answers in class `runtime` as before |
+| L5D-3 | the four reads that export: `facts::within_budget`, `remedy::within_budget` (the answer of `remedy`, MCP's `ac_remedy_get`) and `routine_summary::within_budget`, each `budget::exported` with its header (moved from MCP: five members, three, three); `packs::Answer::within_budget` (the whole document with its warnings, answered `{source, export}`, the note counting the warnings the file holds) | moved code | LAB-5D | `ac_facts`, `ac_remedy_get`, `ac_routine_summary`, `ac_packs` | one shared way (`budget::exported`, with `exported_header`, `write_json` and `write_bytes`, which `packs` and `events`' payload page use too); MCP passes its writer, `observer::export_writer`: `material_export::write` on its export directory `%TEMP%\actingcommand-mcp\materials`, as before |
+| L5D-4 | what stays in the MCP front | — | LAB-5D | — | what speaks of the MCP protocol: its measure, passed as `fits` (`tools::fits_success`, in `tools::answer_budget`; ac_overview's `tools::fits_sent`, the size as sent in the session's protocol version; ac_diagnose and ac_packs count the warnings beside the answer) and, for ac_overview, the warning `output_budget_exceeded` that gives the whole answer's size as sent (`fit_answer`); the cursors bound to its connection (`CursorBinding`, the session and the connection's generation), passed as `events`' binder and inside `diagnose`'s errors page; its export directory and writer. Left where it is: the generic `output_budget_exceeded` of an answer that does not fit even so (`tools.rs`), and the Lab tools' overflow rule (`lab.rs`, `finish` and `fits_as_job`), which sizes the job answer of the `--via` child as `ac_get_run` would return it, no operation's answer |
+| L5D-5 | the CLI | — | — | — | actingctl's CLI, the CLI module (`core_ops`) and `serve --stdio` pass no budget: their paths are unchanged and print the whole answer, which each `within_budget` gives without one |
+
+**Tests.** New: apps row "#434 LAB-5D" (`gate_434_lab5d` in `crates/lab-ops`, on small made-up
+answers; no Runtime, no device, no clock, no sleep): `lab_ops_no_budget_whole_answer` (each of
+the eleven reads answers, with no budget, the whole answer the CLI prints),
+`lab_ops_budget_cuts_keep_their_markers` (each of the seven, given a `fits` that refuses the whole
+answer, cuts it with MCP's markers) and `lab_ops_budget_exports_the_header` (each of the four, and
+`events`' payload page, writes the whole answer through the caller's writer and answers its header
+with the export reference and `answer_exported`; a caller with no export gets the whole answer).
+Test-only: `RunsAnswer::of_rows`. No existing test changed: MCP's tests read the same names
+(`observer::cut_to_fit` and `schedule::cut_to_fit`, now test-only re-exports of `lab-ops`',
+`fit_answer`, `render_within_budget`, `schedule::within_budget` and the tools' `within_budget`),
+and no gate name changed, so nothing is retired.
+
+**Interface.** None raised. No code, key, location or vocabulary token is added.
+
+**Where LAB-5D differs from its work order's letter.**
+
+- (a) Each read takes the budget in the step that shapes its answer, beside the read
+  (`within_budget`), not in the Runtime read the registry names (`served::SERVED` is unchanged):
+  ac_overview, ac_diagnose and ac_packs measure their answer with the warnings the front renders
+  from the read, so their measure exists only once the read has returned. The tests drive these
+  steps with made-up answers.
+- (b) ac_overview's warning `output_budget_exceeded` stays in the front: its `actual_bytes` is the
+  whole answer's size as sent in the session's protocol version, the front's own measure; the cut
+  it reports is `overview`'s.
+
+**What LAB-5D changes live.** Nothing a person, a client or the Runtime sees.
+
+**LAB-5D rollback** (to the release before it). Nothing persisted: code only.
+
 #### Slice LAB-5B2 (0.12.52): each strict command's flag list is one constant, held equal to its row
 
 Coordinator work order `rd-1108/arch-013/brief-lab5b2.md`, after the read-only survey

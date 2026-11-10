@@ -572,6 +572,19 @@ irreversible.
   and the shared rules written once in its instructions (#410 item 3); no tiers (`--tier` goes);
   the 24 KiB answer budget and `handle` with `wait_s` stay as runtime-interface.md,
   "MCP (counter `mcp`)", has them.
+- **The answer budget is the caller's** (Workflow #434 LAB-5D, 0.12.52; register §1.287, "Slice
+  LAB-5D"). The reads whose answer can outgrow a caller's budget (`status`, `diagnose`, `events`,
+  `schedule`, `runs`, `run evidence`, `codes`; `facts`, `packs`, `remedy`, `summary`) take, in
+  `crates/lab-ops`, the budget their caller passes (`lab_ops::budget::Budget`): whether an answer
+  fits, and where one that does not is written whole, when the caller has such a place. An
+  operation cuts its answer, in its own order and leaving a marker at every cut (never silently),
+  or writes it whole and answers its header with the export reference and `answer_exported`, only
+  when its caller passes a budget; a caller that passes none gets the whole answer. The CLI, the
+  CLI module and `serve --stdio` pass none. MCP passes its own: the size of an answer as sent in
+  the protocol version the session negotiated, and its export directory. The cursors it binds to
+  its connection, `output_budget_exceeded` for an answer that does not fit even so, and the Lab
+  tools' overflow rule stay MCP's. What MCP answers does not change: runtime-interface.md, "MCP
+  (counter `mcp`)", still says what it is.
 
 ### 9.4 Changing the table
 

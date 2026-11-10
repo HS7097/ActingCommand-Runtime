@@ -3,7 +3,8 @@
 //! ac_runs (Workflow #389 MCP-3; MCP-0 command table v1.1 §4.3): `actingctl runs` over MCP.
 //! Its arguments are the CLI's flags (R2) and its result is the CLI's stdout JSON
 //! (`crate::run_list`), cut from its last row to the output budget: `truncated`, with
-//! next_cursor after the last row kept (§2.2).
+//! next_cursor after the last row kept (§2.2; Workflow #434 LAB-5D: by
+//! `RunsAnswer::within_budget`, with this server's budget).
 
 use super::runtime::{Connected, client_error};
 use super::tools::{
@@ -68,15 +69,10 @@ pub(super) fn runs(context: &ToolContext<'_>, arguments: &Map<String, Value>) ->
         .iter()
         .map(tools::warning)
         .collect::<Vec<_>>();
-    let mut kept = answer.row_count();
-    loop {
-        let result = answer.render(kept);
-        // A result that does not fit even without rows answers output_budget_exceeded.
-        if kept == 0 || tools::fits_success(&result) {
-            return Ok(ToolSuccess { result, warnings });
-        }
-        kept -= 1;
-    }
+    // Workflow #434 LAB-5D: the cut is `run_list`'s. A result that does not fit even without
+    // rows answers output_budget_exceeded.
+    let result = answer.within_budget(Some(&tools::answer_budget()));
+    Ok(ToolSuccess { result, warnings })
 }
 
 /// The CLI's failure as a tool error: an argument is `arguments_invalid` here, with the CLI's

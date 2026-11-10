@@ -16,7 +16,7 @@ use super::tools::{
     self, Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
 use crate::codes::ArgumentProblem;
-use crate::run_evidence::{self, Evidence, EvidenceRequest, Failure, Omit, StepDetail};
+use crate::run_evidence::{self, Evidence, EvidenceRequest, Failure, StepDetail};
 use actingcommand_runtime_client::RunKey;
 use serde_json::{Map, Value, json};
 
@@ -66,27 +66,10 @@ pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
 /// The page with as many of its steps, from the first, as the output budget lets through.
 /// #411 A42: when the page's first step alone does not fit, it is answered with its frames left
 /// out and referenced, and then its targets too; a page that does not fit even so answers
-/// output_budget_exceeded.
+/// output_budget_exceeded. Workflow #434 LAB-5D: the cut is `Evidence::within_budget`'s, with
+/// this server's budget.
 fn within_budget(evidence: &Evidence) -> ToolSuccess {
-    let mut kept = evidence.page_len();
-    loop {
-        let result = evidence.render(kept);
-        if tools::fits_success(&result) || kept == 0 {
-            // A result that does not fit even without steps answers output_budget_exceeded.
-            return ToolSuccess::new(result);
-        }
-        if kept == 1 {
-            break;
-        }
-        kept -= 1;
-    }
-    // The page's first step alone is over the budget: its frames referenced, else its targets
-    // too.
-    let frames_referenced = evidence.render_referenced(Omit::Frames);
-    if tools::fits_success(&frames_referenced) {
-        return ToolSuccess::new(frames_referenced);
-    }
-    ToolSuccess::new(evidence.render_referenced(Omit::FramesAndTargets))
+    ToolSuccess::new(evidence.within_budget(Some(&tools::answer_budget())))
 }
 
 /// The CLI's failure as a tool error: an argument is `arguments_invalid` here, with the CLI's
