@@ -263,6 +263,43 @@ pub fn dispatch_exit(arguments: &[OsString], developer: DeveloperSink<'_>) -> Op
     Some(print(&report, detail, quiet, None, developer))
 }
 
+/// Workflow #434 LAB-3: what the Lab's rescue module asks of the watchdog for `root`, the root of
+/// the program that runs it (`contracts/lab-two-entries.md` §7: `alive`, `watchdog install` and
+/// `watchdog uninstall` use this crate).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asked {
+    /// `status`, read-only: the decision, whether the Runtime is alive among it.
+    Status,
+    /// `install`: registers or refreshes the task.
+    Install,
+    /// `uninstall`: removes the task.
+    Uninstall,
+}
+
+/// Workflow #434 LAB-3: one report for a program that prints it itself: the top outcome, the
+/// report line `actingctl watchdog <word>` prints (in `detail`; `None` when it does not encode)
+/// and the developer lines it writes before it, which the caller hands to its own sink.
+pub struct Answered {
+    pub outcome: Outcome,
+    pub line: Option<Value>,
+    pub developer_before: Vec<Outcome>,
+}
+
+/// Workflow #434 LAB-3: `asked` of the installation at `root`, as `actingctl watchdog` runs it,
+/// with nothing printed.
+pub fn answer(asked: Asked, root: &Path, detail: Detail) -> Answered {
+    let report = match asked {
+        Asked::Status => status(root),
+        Asked::Install => install(root),
+        Asked::Uninstall => uninstall(root),
+    };
+    Answered {
+        line: report.line(detail).ok(),
+        outcome: report.outcome,
+        developer_before: report.developer_before,
+    }
+}
+
 /// Hands the developer lines the subcommand wrote before its report to `developer`, prints the
 /// report's one stdout line, then, unless `quiet`, the developer line of a warning, error or
 /// fatal top (`text` is developer English, such as the usage); returns the exit code. A stdout

@@ -29,7 +29,7 @@ use super::manifest::{self, Half};
 use super::plan::{self, Action, Loaded, PlanInputs, PlanKind, Planned, Refused};
 use super::programs::{self, Deadline, PageRefused};
 use super::state::{self, KindLocation, LiveBuild, OperationKind, Paths};
-use super::{Answer, Flags};
+use super::{Answer, Face, Flags};
 use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal, RollbackGatePart};
 use actingcommand_contract::outcome::{CauseRelation, Outcome, OutcomeEnvelope};
 use serde::{Deserialize, Serialize};
@@ -73,11 +73,13 @@ fn kind_flag(kind: PlanKind) -> &'static str {
     }
 }
 
-/// `update plan` / `rollback plan`.
+/// `update plan` / `rollback plan`. Workflow #434 LAB-3: with the rescue module's face a one-way
+/// ledger edge passes without `--accept-ledger-one-way` (contracts/lab-two-entries.md §5).
 pub(crate) fn plan_command(
     words: &[&str],
     host: &dyn Host,
     kind: PlanKind,
+    face: Face,
 ) -> Result<Answer, Outcome> {
     let flags = Flags::parse(
         words,
@@ -88,7 +90,7 @@ pub(crate) fn plan_command(
     let inputs = PlanInputs {
         kind,
         commit: flags.required(kind_flag(kind))?.to_ascii_lowercase(),
-        accept_ledger_one_way: flags.switch("--accept-ledger-one-way"),
+        accept_ledger_one_way: face.rescue() || flags.switch("--accept-ledger-one-way"),
         preview: flags.switch("--preview"),
         operation: kind.location(false),
     };
@@ -278,10 +280,13 @@ pub(crate) fn live_changes(
                     changes.push((undone, previous.clone()));
                 }
             }
+            // Workflow #434 LAB-3: `config replace` and `place` change no build.
             OperationKind::ReleaseStage
             | OperationKind::Stop
             | OperationKind::Start
-            | OperationKind::ReleaseHold => {}
+            | OperationKind::ReleaseHold
+            | OperationKind::ConfigReplace
+            | OperationKind::PackPlace => {}
         }
     }
     changes.sort_by_key(|(since, _)| *since);
@@ -570,11 +575,14 @@ pub(crate) fn update_steps(planned: &Planned, ms: u64) -> Vec<PlannedStep> {
 /// `update apply` / `rollback apply`. Workflow #421 INST-2 adds the composite form `--stop --hold
 /// <reason> [--known-pause ALIAS=REASON]... [--start] [--ack-guard <id>]... [--detach]`
 /// (`super::deploy`): the plan is made while the Runtime runs, the Runtime is held and stopped
-/// first, and with `--start` started and checked after the update's steps.
+/// first, and with `--start` started and checked after the update's steps. Workflow #434 LAB-3:
+/// with the rescue module's face the journal records the initiator, a one-way ledger edge passes
+/// and is journalled `one_way`, and the guards report (`super::deploy`).
 pub(crate) fn apply_command(
     words: &[&str],
     host: &dyn Host,
     kind: PlanKind,
+    face: Face,
 ) -> Result<Answer, Outcome> {
     let operation = kind.location(true);
     let flags = Flags::parse_lists(
@@ -610,7 +618,7 @@ pub(crate) fn apply_command(
     let inputs = PlanInputs {
         kind,
         commit: flags.required(kind_flag(kind))?.to_ascii_lowercase(),
-        accept_ledger_one_way: flags.switch("--accept-ledger-one-way"),
+        accept_ledger_one_way: face.rescue() || flags.switch("--accept-ledger-one-way"),
         // INST-2: with `--stop` the plan is made while the Runtime runs; it stops first.
         preview: stop,
         operation,
@@ -655,7 +663,7 @@ pub(crate) fn apply_command(
     }
     let opened = match &hold {
         Some(hold) => match super::deploy::open_composite(
-            host, &paths, &loaded, &planned, hold, start, &acks,
+            host, &paths, &loaded, &planned, hold, start, &acks, face,
         )? {
             Ok(opened) => opened,
             Err(answer) => return Ok(answer),
@@ -680,13 +688,16 @@ pub(crate) fn apply_command(
                     PlanKind::Update => OperationKind::Update,
                     PlanKind::Rollback => OperationKind::Rollback,
                 },
+                initiator: face.initiator(),
+                one_way: face.rescue() && planned.one_way(),
                 inputs: json!({
                     "commit": planned.target.commit,
                     "accept_ledger_one_way": planned.inputs.accept_ledger_one_way,
                 }),
                 plan_id: Some(planned.id.clone()),
                 plan: Some(planned.document.clone()),
-                acknowledged: if planned.inputs.accept_ledger_one_way {
+                // Workflow #434 LAB-3: the rescue module takes no acknowledgment (§5).
+                acknowledged: if planned.inputs.accept_ledger_one_way && !face.rescue() {
                     vec!["accept_ledger_one_way".to_owned()]
                 } else {
                     Vec::new()
@@ -797,6 +808,7 @@ pub(crate) fn run(mut operation: Operation<'_>, loaded: &Loaded) -> Result<Answe
                 | StepKind::PostCheck
                 | StepKind::ReleaseHold
                 | StepKind::ReverseFiles
+                | StepKind::PackItem
         ) {
             let ended = super::deploy::step(&mut operation, n, loaded, &mut notes)
                 .map_err(|cause| operation.interrupted(cause))?;

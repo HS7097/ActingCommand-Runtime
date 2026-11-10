@@ -336,7 +336,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 35
     env:
-      CI_PACKAGES: -p actingcommand-runtime-host -p actingcommand-host-metrics -p actingcommand-agent-forward -p actingcommand-actinglab -p actingcommand-lab-ops -p actingcommand-watchdog
+      CI_PACKAGES: -p actingcommand-runtime-host -p actingcommand-host-metrics -p actingcommand-agent-forward -p actingcommand-actinglab -p actingcommand-lab-ops -p actingcommand-watchdog -p actingcommand-lab-rescue
       # actinglab's dev-dependency turns it on anyway; written out so the selection says it.
       CI_FEATURES: --features actingcommand-runtime-host/fixture-backends
       CI_SKIP: tests::facts::fact_snapshot_catches_up_with_critical_ledger_events

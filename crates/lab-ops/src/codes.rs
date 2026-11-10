@@ -476,6 +476,16 @@ actingcommand_contract::outcome_locations! {
         ConvertApply => "install_convert_apply",
         Clean => "install_clean",
         Restart => "install_restart",
+        // Workflow #434 LAB-3 (since 0.12.48; contracts/lab-two-entries.md §7): the operations of
+        // the Lab's rescue module that no `actingctl install` command has: the composites `deploy`
+        // and `config replace`, `alive`, and `unlock`, `check-config` and `ledger verify`, which run
+        // actingd's commands.
+        Deploy => "install_deploy",
+        ConfigReplace => "install_config_replace",
+        Alive => "install_alive",
+        Unlock => "install_unlock",
+        CheckConfig => "install_check_config",
+        LedgerVerify => "install_ledger_verify",
     }
 }
 
@@ -557,6 +567,11 @@ actingcommand_contract::outcome_vocabulary! {
         StateRootMismatch => "state_root_mismatch",
         StateRootPlaceholder => "state_root_placeholder",
         LayoutSingleConvertFirst => "layout_single_convert_first",
+        // Workflow #434 LAB-3 fix 1 (since 0.12.48; contracts/lab-two-entries.md §5): the Lab's
+        // rescue module hands back only its own hold; a reason no journal of the module recorded
+        // in its pause step, a `down` reason an instance shows already, or a pause that no longer
+        // shows the revision the module recorded is not its own (`hold_reason`, `aliases`).
+        HoldNotOwned => "hold_not_owned",
     }
 }
 
@@ -615,6 +630,15 @@ actingcommand_contract::outcome_vocabulary! {
         CleanupDeferred => "cleanup_deferred",
         PlayerHoldOfflineReadFailed => "player_hold_offline_read_failed",
         McpEntryGenerationStale => "mcp_entry_generation_stale",
+        // Workflow #434 LAB-3 (since 0.12.48; contracts/lab-two-entries.md §6): in the Lab's
+        // rescue module a guard that fails or is not evaluated is noted, never refused; the guards
+        // as `install_guards`.
+        GuardFailed => "guard_failed",
+        // Workflow #434 LAB-3 fix 3 (since 0.12.48; contracts/lab-two-entries.md §5): the rescue
+        // module could not read whether a hold is its own (the reason does not parse, the root or
+        // its operations folder cannot be read), so its `next` leaves the `release-hold` out and
+        // the answer says so (`hold_reason` when the reason parses, the failure as the cause).
+        HoldOwnershipUnconfirmed => "hold_ownership_unconfirmed",
     }
 }
 

@@ -44,7 +44,7 @@ use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_lab_ops::cli_line::{self, Exit};
 use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_lab_ops::initiator::{self, Initiator};
-use actingcommand_lab_ops::table::OperationTable;
+use actingcommand_lab_ops::table::{OperationModule, OperationTable};
 use actingcommand_runtime_client::ChannelVia;
 use serde_json::Value;
 use std::io::{self, Write};
@@ -94,6 +94,13 @@ pub(crate) fn route(arguments: Vec<String>) -> Route {
     let named = loaded.and_then(|table| words::named(table, &words));
     if let Some(operation) = named
         && core_ops::serves(operation)
+        && !crate::own_command(&name_words(&operation.name))
+    {
+        return Route::Module(arguments);
+    }
+    // Workflow #434 LAB-3: the rescue module's rows; none takes a word of actinglab's own commands.
+    if let Some(operation) = named
+        && operation.module == OperationModule::Rescue
         && !crate::own_command(&name_words(&operation.name))
     {
         return Route::Module(arguments);
@@ -214,7 +221,53 @@ pub(crate) fn main(arguments: Vec<String>) -> ExitCode {
     if words.first().map(String::as_str) == Some(SERVE) {
         return serve::main(&words[1..]);
     }
+    #[cfg(windows)]
+    if !json && let Some(exit) = agent_channel(&words) {
+        return exit;
+    }
     print(&run_line(&words), json)
+}
+
+/// Workflow #434 LAB-3: the rescue module's `agent …` rows on the command line without `--json`,
+/// printed as `actingctl agent-channel` prints them (`contracts/agent-forward.md`): a hook that
+/// did its work prints nothing (its stdout would enter the session's context), the notice its
+/// text, a registered session's failed hook only its developer line, exit 2; the other answers
+/// their line. `None` for every other command line.
+#[cfg(windows)]
+fn agent_channel(words: &[String]) -> Option<ExitCode> {
+    use actingcommand_lab_rescue::agent_channel::{Answer, HOOK_EXIT};
+    let table = table().ok()?;
+    let call = words::parse(table, words).ok()?;
+    if !call.name.starts_with("agent ") {
+        return None;
+    }
+    if let Err(exit) = admitted() {
+        return Some(print(&exit, false));
+    }
+    Some(match rescue::answer(&call) {
+        Answer::Line(exit) => print(&exit, false),
+        Answer::Text(text) => {
+            let written = {
+                let stdout = io::stdout();
+                let mut writer = stdout.lock();
+                writer
+                    .write_all(text.as_bytes())
+                    .and_then(|()| writer.flush())
+            };
+            match written {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => output_failed(&error.to_string()),
+            }
+        }
+        Answer::Silent => ExitCode::SUCCESS,
+        Answer::Hook { outcome, text } => {
+            eprintln!(
+                "{}",
+                cli_line::developer_text(PROGRAM, &outcome, Some(&text))
+            );
+            ExitCode::from(HOOK_EXIT)
+        }
+    })
 }
 
 /// The exit of one command line of the module (the front end's `--json` taken out).
@@ -255,7 +308,53 @@ pub(crate) fn answer(table: &OperationTable, call: &Call) -> Exit {
     if core_ops::serves(operation) {
         return core_ops::answer(operation, &call.params);
     }
+    // Workflow #434 LAB-3: the rescue module's rows (offered on Windows only, where it runs).
+    #[cfg(windows)]
+    if operation.module == OperationModule::Rescue {
+        return rescue::line(rescue::answer(call));
+    }
     engine::envelope(operation, &call.params)
+}
+
+/// Workflow #434 LAB-3: the rescue module's rows (`crates/lab-rescue`), for the root actinglab
+/// runs from and with this process's initiator.
+#[cfg(windows)]
+mod rescue {
+    use super::words::Call;
+    use actingcommand_contract::outcome::Outcome;
+    use actingcommand_lab_ops::cli_line::{self, Exit};
+    use actingcommand_lab_ops::codes::ActingctlCode;
+    use actingcommand_lab_rescue::agent_channel::Answer;
+    use serde_json::{Map, Value};
+
+    /// The rescue row `call` names, answered.
+    pub(super) fn answer(call: &Call) -> Answer {
+        match actingcommand_lab_ops::initiator::Initiator::of_this_lab_process() {
+            Ok(initiator) => {
+                actingcommand_lab_rescue::rescue::answer_here(&call.name, &call.params, initiator)
+            }
+            Err(outcome) => Answer::Line(cli_line::failure(&outcome, None)),
+        }
+    }
+
+    /// The one line of an answer, as `--json` and `serve --stdio` print it: a hook that did its
+    /// work and the notice, which the command line prints as they are (`super::main`), are the
+    /// line `agent_channel_reported` (with the notice's `text`); a failed hook its failure.
+    pub(super) fn line(answered: Answer) -> Exit {
+        match answered {
+            Answer::Line(exit) => exit,
+            Answer::Text(text) => {
+                let mut members = Map::new();
+                members.insert("text".to_owned(), Value::String(text.to_owned()));
+                cli_line::success(members, &Outcome::new(ActingctlCode::AgentChannelReported))
+            }
+            Answer::Silent => cli_line::success(
+                Map::new(),
+                &Outcome::new(ActingctlCode::AgentChannelReported),
+            ),
+            Answer::Hook { outcome, text } => cli_line::refused(&outcome, Some(&text)),
+        }
+    }
 }
 
 /// Prints `exit`: the JSON line with `json`, else the lines for people ([`people`]); then its

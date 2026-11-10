@@ -8,7 +8,7 @@
 // - `cli_short_words_parse`: the short words of the operation table name the operation and its
 //   parameters: the longest name, the instance and the other positionals in order, options and
 //   switches, a source command's further flags and words; words and flags the row does not take,
-//   a reserved row, a row of a slice not built (the rescue module) and actinglab's old
+//   a reserved row, a row not served (the rescue module's `clean`, LAB-3) and actinglab's old
 //   `config get` are refused with `actingctl_usage_invalid` naming the word. `main`'s route: the
 //   module's operations and `serve` go to the module, the short words of a row actinglab's own
 //   command serves go to that command in its words.
@@ -192,12 +192,13 @@ fn cli_short_words_parse() {
             unknown.clone()
         )
     );
-    // A reserved row (`batch`) and a row of a slice not built (the rescue module's `deploy`).
+    // A reserved row (`batch`) and a row of a source not built (the rescue module's `clean`;
+    // Workflow #434 LAB-3 serves `deploy`, which this line named before).
     assert_eq!(
         refused(&["batch", "neutral.a", "steps.json"]).1,
         json!("batch")
     );
-    assert_eq!(refused(&["deploy", "v0.12.47"]).1, json!("deploy"));
+    assert_eq!(refused(&["clean"]).1, json!("clean"));
     // The old `config get` is the table's `config` with a word it does not take.
     assert_eq!(
         refused(&["config", "get"]),

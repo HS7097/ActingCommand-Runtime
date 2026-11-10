@@ -805,8 +805,9 @@ fn stage_steps(commit: &str, ms: u64) -> Vec<PlannedStep> {
 }
 
 /// `install release stage --root <root> --dir <dir> [--facts …] [--expect-tag …]
-/// [--expect-commit …] [--local-build]`.
-pub(crate) fn stage(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
+/// [--expect-commit …] [--local-build]`. Workflow #434 LAB-3: the rescue module's `release stage`
+/// and `deploy` run it with their face, so its journal records the initiator.
+pub(crate) fn stage(words: &[&str], host: &dyn Host, face: super::Face) -> Result<Answer, Outcome> {
     let flags = Flags::parse(
         words,
         &[
@@ -836,7 +837,7 @@ pub(crate) fn stage(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> 
     }
     journal::refuse_unfinished(InstallLocation::ReleaseStage, &paths)?;
     if located.is_ui() {
-        return stage_ui(host, &paths, &located, &inputs);
+        return stage_ui(host, &paths, &located, &inputs, face);
     }
     let build = paths.build(&located.commit);
     if build.exists() {
@@ -875,6 +876,8 @@ pub(crate) fn stage(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> 
     })?;
     let opening = Opening {
         kind: OperationKind::ReleaseStage,
+        initiator: face.initiator(),
+        one_way: false,
         inputs: serde_json::to_value(&inputs).map_err(|error| files::json_failure(&error))?,
         plan_id: None,
         plan: None,
@@ -1073,6 +1076,7 @@ fn stage_ui(
     paths: &Paths,
     located: &Located,
     inputs: &ReleaseInputs,
+    face: super::Face,
 ) -> Result<Answer, Outcome> {
     let build = paths.ui_build(&located.commit);
     if build.exists() {
@@ -1098,6 +1102,8 @@ fn stage_ui(
     })?;
     let opening = Opening {
         kind: OperationKind::ReleaseStage,
+        initiator: face.initiator(),
+        one_way: false,
         inputs: serde_json::to_value(inputs).map_err(|error| files::json_failure(&error))?,
         plan_id: None,
         plan: None,

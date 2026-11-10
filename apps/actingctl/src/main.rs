@@ -51,14 +51,13 @@ mod cli_line;
 // - `fact_publish`: `agent-publish-facts`; `frames`: `stream`;
 // - `scheduling`: `pause`, `resume`, `task-offset` (MCP `ac_pause`, `ac_resume`);
 // - `shutdown`: `request-shutdown`, with the shutdown wait and `process_probe`, which the
-//   watchdog and `install` read from there too;
+//   watchdog and the Lab's rescue module (`install`, `start`, `restart`; Workflow #434 LAB-3)
+//   read from there too;
 // - `targets`: `agent-apply-resource-targets` (MCP `ac_resources_list`, `ac_targets_get`,
 //   `ac_targets_set`); `wake_test`: `agent-wake-test`;
 // - read by the MCP server only: `run_show` (`ac_get_run`), `material` (`ac_material`) and
 //   `apps` (`ac_app`), with `lab_child`, actinglab run as a child and its envelope read, which
 //   `ac_app` and the other Lab tools share.
-#[cfg(windows)]
-use actingcommand_lab_ops::process_probe;
 use actingcommand_lab_ops::scheduling::{self, OffsetFailure, pause_scope};
 use actingcommand_lab_ops::wait::{Waited, wait_at_most};
 use actingcommand_lab_ops::{
@@ -77,10 +76,6 @@ mod gate_381a;
 // `request-shutdown --wait` (G11), in-process.
 #[cfg(test)]
 mod gate_382_a1;
-// Test-only: Workflow #434 LAB-4, the WD-1 gate of `start` without `--config`, which stays with
-// actingctl's `start` when the watchdog's gates moved to `crates/watchdog`.
-#[cfg(all(test, windows))]
-mod gate_wd1_start;
 // Test-only: Workflow #381 A, the held Runtime start and the provider without instances, mounted
 // once for the whole binary (mcp::tests::gate_387_d1b; `crates/watchdog` mounts it for its own
 // gates since Workflow #434 LAB-4).
@@ -90,18 +85,20 @@ mod gate_wd1_start;
 mod held_runtime;
 #[cfg(feature = "mcp")]
 mod mcp;
-// Workflow #421 INST-1: `install`, the command-line installer of a single-location root.
+// Workflow #434 LAB-3 (contracts/lab-two-entries.md §7; register §1.287, "Slice LAB-3"): `install`
+// (Workflow #421 INST-1, the command-line installer of a single-location root, with `mcp-entry`),
+// `start` and `restart` (Workflow #389 MCP-10) and `agent-channel` (Workflow #432 AGT-T1) live in
+// `crates/lab-rescue`, the Lab's rescue module, unchanged; actingctl answers them from there with
+// the same words, lines, codes and exits (the `install-cli` revision-1 face) until LAB-7, and
+// prints what the crate builds.
 #[cfg(windows)]
-mod install;
-// Workflow #389 MCP-10: `start` and `restart`.
-#[cfg(windows)]
-mod runtime_start;
+use actingcommand_lab_rescue::{agent_channel, install, runtime_start};
 // Workflow #434 LAB-1b: the shutdown wait lives in `crates/lab-ops`; this gives its failure as
-// `ActingctlError::ShutdownWait` to `install-transition`, `start`, `restart` and `install`.
+// `ActingctlError::ShutdownWait` to `request-shutdown` and `install-transition`.
 mod shutdown_wait;
 // Workflow #434 LAB-4 (register §1.287, "Slice LAB-4"): the watchdog is `crates/watchdog`, which
 // actingwatch.exe runs too; `watchdog …` runs it from there with the same output, codes and
-// exits, and every `crate::watchdog` path of `install` and `runtime_start` names it unchanged.
+// exits.
 #[cfg(windows)]
 use actingcommand_watchdog as watchdog;
 
@@ -168,8 +165,8 @@ fn main() -> ExitCode {
     // or an installation. It leaves first: a session's hook must not depend on, or pin, a slot.
     #[cfg(windows)]
     {
-        if let Some(exit) = agent_channel(&arguments) {
-            return exit;
+        if let Some(answer) = agent_channel::dispatch(&arguments) {
+            return print_agent_channel(answer);
         }
     }
     if let Err(error) = actingcommand_contract::process_installation() {
@@ -211,11 +208,11 @@ fn main() -> ExitCode {
     #[cfg(windows)]
     {
         if let Some(exit) = install::dispatch(&arguments) {
-            return exit;
+            return cli_line::print(exit);
         }
         // Workflow #421 MCP-ENTRY: `mcp-entry plan|list`, asked by the MCP entry.
         if let Some(exit) = install::dispatch_mcp_entry(&arguments) {
-            return exit;
+            return cli_line::print(exit);
         }
     }
     // --- Workflow #389 MCP-1: `events`, the CLI of ac_events, parses its own flags. ---
@@ -232,7 +229,7 @@ fn main() -> ExitCode {
     #[cfg(windows)]
     {
         if let Some(exit) = runtime_start::dispatch(&arguments) {
-            return exit;
+            return cli_line::print(exit);
         }
     }
     // ---- Workflow #389 MCP-11 (begin): `packs` reads the selected configuration offline and
@@ -331,24 +328,17 @@ fn failed(outcome: &Outcome, text: Option<&str>) -> ExitCode {
 }
 
 /// Workflow #432 AGT-T1: `agent-channel` (`contracts/agent-forward.md`). The crate parses the words
-/// and does the work; this prints its answer. Two kinds of exit print no result line, as
-/// `mcp-serve` prints none: a hook's stdout would enter the session's context, and the notice is
-/// text for a person. A registered session's failed hook exits 2, the exit its client shows on that
-/// event, with its one stderr line.
+/// and does the work (Workflow #434 LAB-3: through `crates/lab-rescue`); this prints its answer.
+/// Two kinds of exit print no result line, as `mcp-serve` prints none: a hook's stdout would enter
+/// the session's context, and the notice is text for a person. A registered session's failed hook
+/// exits 2, the exit its client shows on that event, with its one stderr line.
 #[cfg(windows)]
-fn agent_channel(arguments: &[OsString]) -> Option<ExitCode> {
-    use actingcommand_agent_forward::cli::{self, CliAnswer, CliFailure, UsageProblem};
+fn print_agent_channel(answer: agent_channel::Answer) -> ExitCode {
     use std::io::Write;
 
-    let (command, words) = arguments.split_first()?;
-    if command.to_str() != Some(cli::COMMAND) {
-        return None;
-    }
-    Some(match cli::run(words) {
-        Ok(CliAnswer::Members(members)) => {
-            cli_line::success(members, &Outcome::new(ActingctlCode::AgentChannelReported))
-        }
-        Ok(CliAnswer::Text(text)) => match io::stdout().write_all(text.as_bytes()) {
+    match answer {
+        agent_channel::Answer::Line(exit) => cli_line::print(exit),
+        agent_channel::Answer::Text(text) => match io::stdout().write_all(text.as_bytes()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 cli_line::developer_line(
@@ -358,37 +348,12 @@ fn agent_channel(arguments: &[OsString]) -> Option<ExitCode> {
                 ExitCode::FAILURE
             }
         },
-        Ok(CliAnswer::Silent) => ExitCode::SUCCESS,
-        Err(CliFailure::Usage {
-            argument,
-            problem,
-            usage,
-        }) => {
-            let problem = match problem {
-                UsageProblem::Unknown => ArgumentProblem::Unknown,
-                UsageProblem::Required => ArgumentProblem::Required,
-                UsageProblem::Repeated => ArgumentProblem::Repeated,
-                UsageProblem::ValueMissing => ArgumentProblem::ValueMissing,
-                UsageProblem::NotUtf8 => ArgumentProblem::NotUtf8,
-                UsageProblem::NotRecognised => ArgumentProblem::NotRecognised,
-            };
-            cli_line::failure(
-                &cli_line::usage_invalid(argument.as_deref(), problem),
-                Some(usage),
-            )
+        agent_channel::Answer::Silent => ExitCode::SUCCESS,
+        agent_channel::Answer::Hook { outcome, text } => {
+            cli_line::developer_line(&outcome, Some(&text));
+            ExitCode::from(agent_channel::HOOK_EXIT)
         }
-        Err(CliFailure::Failed { text }) => cli_line::failure(
-            &Outcome::new(ActingctlCode::AgentChannelFailed),
-            Some(&text),
-        ),
-        Err(CliFailure::Hook { text }) => {
-            cli_line::developer_line(
-                &Outcome::new(ActingctlCode::AgentChannelFailed),
-                Some(&text),
-            );
-            ExitCode::from(2)
-        }
-    })
+    }
 }
 
 /// Workflow #381 A R1′, R2: how one `install-transition` run talks to the Runtime.

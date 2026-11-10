@@ -43,6 +43,11 @@ pub(crate) struct InstanceSeen {
     pub(crate) lease_active: bool,
     /// Lease requests waiting in the instance's queue.
     pub(crate) queued_requests: u32,
+    /// Workflow #434 LAB-3: the game the instance is bound to, as its status names it; the
+    /// rescue module's `place` holds the instances of the bundle's game. No answer of the
+    /// installer lists it.
+    #[serde(skip)]
+    pub(crate) game: Option<String>,
 }
 
 /// The answering Runtime as a status read shows it.
@@ -170,6 +175,10 @@ pub(crate) trait RuntimeLink {
     fn spawn(&self, target: &Target<'_>, log: &Path) -> Result<Box<dyn StartedProcess>, Outcome>;
     /// The readiness probe: the owner that holds the owner lock of `state_root` and answers.
     fn answering_owner(&self, state_root: &Path) -> Option<LiveOwner>;
+    /// Workflow #434 LAB-3: the catalog the Runtime's latest evaluation ran under
+    /// (`ScheduleExplanation`'s `catalog_hash`); `None` before its first evaluated cycle. The
+    /// rescue module's `place` waits for a new composition by it.
+    fn catalog_hash(&self, state_root: &Path) -> Result<Option<String>, Outcome>;
 }
 
 /// The machine's Runtime.
@@ -228,9 +237,18 @@ impl RuntimeLink for SystemRuntime {
                     }),
                     lease_active: instance.lease_active(),
                     queued_requests: instance.queued_request_count(),
+                    game: instance.game_id().map(str::to_owned),
                 })
                 .collect(),
         }))
+    }
+
+    fn catalog_hash(&self, state_root: &Path) -> Result<Option<String>, Outcome> {
+        let client = connect(state_root)?;
+        client
+            .schedule_explanation(None, false)
+            .map(|explanation| explanation.catalog_hash)
+            .map_err(|error| error.outcome())
     }
 
     fn config(&self, state_root: &Path) -> Result<ConfigSeen, Outcome> {
@@ -388,12 +406,11 @@ impl RuntimeLink for SystemRuntime {
         let target = client.runtime_info().shutdown_target();
         // Close the connection so the waiting installer leaves nothing for the Runtime to drain.
         drop(client);
-        let wait = crate::shutdown_wait::wait_for_shutdown(
+        let wait = actingcommand_lab_ops::shutdown_wait::wait_for_shutdown(
             state_root,
             &target,
             Duration::from_millis(wait_ms),
-        )
-        .map_err(|error| error.outcome())?;
+        )?;
         let mut directories = vec![root.to_path_buf(), root.join("watchdog")];
         directories.extend(observe::console_log_directory());
         let terminal = observe::terminal_after(&directories, since, Some(root))?;

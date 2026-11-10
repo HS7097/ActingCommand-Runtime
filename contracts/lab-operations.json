@@ -2154,10 +2154,11 @@
       "irreversible": false,
       "runtime": "offline",
       "entries": ["lab"],
-      "requests": ["StartReport"],
+      "requests": ["Status", "StartReport"],
       "source": ["actingctl start", "actingctl install start", "acui: launcher start, actingd --config (crates/acui-app/src/launcher.rs)"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: install start on a single-location root (journalled with the initiator, its post-start checks; the memory guard waits, then reports), actingctl start on an A/B root"
     },
     {
       "name": "restart",
@@ -2168,10 +2169,11 @@
       "irreversible": false,
       "runtime": "offline",
       "entries": ["lab"],
-      "requests": ["Status", "RequestShutdown", "StartReport"],
+      "requests": ["Status", "RequestShutdown"],
       "source": ["actingctl restart", "actingctl install restart"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: actingctl restart for the root (its configuration on a single-location root); install restart (R-15d) is not built"
     },
     {
       "name": "down",
@@ -2184,10 +2186,11 @@
       "irreversible": false,
       "runtime": "optional",
       "entries": ["lab"],
-      "requests": ["Status", "PauseScheduling", "RequestShutdown", "ScheduleExplanation"],
+      "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "RequestShutdown", "ScheduleExplanation"],
       "source": ["actingctl install stop"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: install stop; the hold's reason is lab-down-<ms> unless --reason names one; every pause found is kept and listed. LAB-3 fix 1: a --reason an instance shows already refuses hold_not_owned before anything is paused (no existing pause is ever adopted); a global pause is kept and listed"
     },
     {
       "name": "alive",
@@ -2204,7 +2207,7 @@
       "source": ["actingctl watchdog status", "script rd-1108/dml_switch.ps1 (its wait for watchdog_alive)", "acui: settings page watchdog status, through an actingctl child (crates/acui-app/src/workbench/tools.rs)"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "links crates/watchdog from LAB-4"
+      "notes": "links crates/watchdog from LAB-4. LAB-3: crates/watchdog's status of the root; --wait reads it again every 500 ms and refuses runtime_not_running when the Runtime is not alive at its end"
     },
     {
       "name": "deploy",
@@ -2212,7 +2215,6 @@
       "params": [
         {"name": "target", "form": "positional", "type": "tag_or_commit", "required": true},
         {"name": "dir", "form": "option", "type": "dir", "required": false, "note": "the downloaded release zips"},
-        {"name": "reason", "form": "option", "type": "string", "required": false, "note": "the hold's reason"},
         {"name": "plan", "form": "switch", "type": "boolean", "required": false, "note": "only the plan, read only (install update plan --preview)"},
         {"name": "detach", "form": "switch", "type": "boolean", "required": false, "note": "answer the operation id at once"}
       ],
@@ -2221,11 +2223,11 @@
       "irreversible": true,
       "runtime": "optional",
       "entries": ["lab"],
-      "requests": ["Status", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
+      "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
       "source": ["actingctl install release stage", "actingctl install update plan", "actingctl install update apply", "actingctl install release-hold", "script rd-1031/deploy-v01244/deploy.ps1"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "always detached through MCP (it replaces the programs MCP runs)"
+      "notes": "always detached through MCP (it replaces the programs MCP runs). LAB-3: --dir's release-facts.json is passed when present; without --dir the target names a kept build (a commit prefix of 8 hex digits or more, or a recorded tag); without a running Runtime only stage, plan and the files; the hold's reason is lab-deploy-<ms> (LAB-3 fix 1: no --reason, as section 7's form; the release hands back only what its own pause step paused)"
     },
     {
       "name": "rollback",
@@ -2240,11 +2242,11 @@
       "irreversible": true,
       "runtime": "optional",
       "entries": ["lab"],
-      "requests": ["Status", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
+      "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
       "source": ["actingctl install rollback plan", "actingctl install rollback apply"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "always detached through MCP"
+      "notes": "always detached through MCP. LAB-3: without --to the build the live one replaced; without a running Runtime only the plan and the files"
     },
     {
       "name": "convert",
@@ -2263,7 +2265,7 @@
       "source": ["actingctl install convert"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "always detached through MCP"
+      "notes": "always detached through MCP. LAB-3: not served yet: its source, actingctl install convert (R-15e), is not built; the slice that builds it opens the row"
     },
     {
       "name": "clean",
@@ -2278,7 +2280,8 @@
       "requests": [],
       "source": ["actingctl install clean"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: not served yet: its source, actingctl install clean (R-15d), is not built; the slice that builds it opens the row"
     },
     {
       "name": "undo",
@@ -2294,7 +2297,8 @@
       "requests": [],
       "source": ["actingctl install undo"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: install undo; the journal's undo record carries the initiator"
     },
     {
       "name": "op status",
@@ -2311,7 +2315,8 @@
       "requests": [],
       "source": ["actingctl install status"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: install status"
     },
     {
       "name": "op resume",
@@ -2327,7 +2332,8 @@
       "requests": [],
       "source": ["actingctl install resume"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: install resume; a resumed operation keeps the rules of the face it began with (its journal's initiator)"
     },
     {
       "name": "leftovers",
@@ -2341,7 +2347,8 @@
       "requests": [],
       "source": ["actingctl install leftovers"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: install leftovers"
     },
     {
       "name": "guards",
@@ -2357,23 +2364,25 @@
       "requests": ["Status", "ScheduleExplanation"],
       "source": ["actingctl install guards"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: install guards; every pause found on an instance is known; count is how many rows the operation would note (none refuses)"
     },
     {
       "name": "release-hold",
       "module": "rescue",
       "params": [
-        {"name": "reason", "form": "positional", "type": "string", "required": false}
+        {"name": "reason", "form": "positional", "type": "string", "required": true, "note": "a hold of the rescue module (lab-<operation>-<ms>, or down's --reason)"}
       ],
       "output": "the pauses handed back: only the operation's own hold",
       "writes": true,
       "irreversible": false,
       "runtime": "optional",
       "entries": ["lab"],
-      "requests": ["Status", "ResumeScheduling"],
+      "requests": ["Status", "ResumeScheduling", "ScheduleExplanation"],
       "source": ["actingctl install release-hold"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: install release-hold. LAB-3 fix 1 and 2: only a hold a rescue operation's journal in this root recorded in its pause step, and of it only the instances that step paused, each while its pause shows that reason, in any owner epoch (the Runtime's restore numbers the pauses anew); any other reason refuses hold_not_owned and nothing is resumed; a hold that stays answers kept: true with the ways out in next"
     },
     {
       "name": "new",
@@ -2392,7 +2401,8 @@
       "requests": [],
       "source": ["actingctl install new", "acsetup: first-install wizard"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: not served yet: its source, actingctl install new (INST-6, R-15e), is not built; the slice that builds it opens the row"
     },
     {
       "name": "release verify",
@@ -2409,7 +2419,8 @@
       "requests": [],
       "source": ["actingctl install release verify"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: install release verify"
     },
     {
       "name": "release stage",
@@ -2426,7 +2437,8 @@
       "requests": [],
       "source": ["actingctl install release stage"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: install release stage; its journal carries the initiator"
     },
     {
       "name": "adopt",
@@ -2440,7 +2452,8 @@
       "requests": [],
       "source": ["actingctl install adopt"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: install adopt; its journal carries the initiator"
     },
     {
       "name": "prepare",
@@ -2455,7 +2468,8 @@
       "requests": [],
       "source": ["actingctl install prepare"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: not served yet: its source, actingctl install prepare (R-15c), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config replace",
@@ -2469,11 +2483,11 @@
       "irreversible": true,
       "runtime": "optional",
       "entries": ["lab"],
-      "requests": ["Status", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
+      "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
       "source": ["script rd-1108/dml_switch.ps1"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "guards, stop with hold, backup kept, swap, check-config, start, alive, release"
+      "notes": "guards, stop with hold, backup kept, swap, check-config, start, alive, release. LAB-3: check-config of the file before anything changes, the replaced file kept as actingd.config.json.prev-<ms>; journal kind config_replace; without a running Runtime only the swap"
     },
     {
       "name": "config restore",
@@ -2486,10 +2500,11 @@
       "irreversible": true,
       "runtime": "optional",
       "entries": ["lab"],
-      "requests": ["Status", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
+      "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
       "source": ["script rd-1108/dml_switch.ps1 restore", "actingctl install config restore"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: config replace with the kept file (operation install_config_restore); actingctl install config restore (INST-3) is not built"
     },
     {
       "name": "config file show",
@@ -2505,7 +2520,7 @@
       "source": ["actingctl install config show"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set)"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config show (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file diff",
@@ -2521,7 +2536,7 @@
       "source": ["actingctl install config diff"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set)"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config diff (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file set",
@@ -2537,7 +2552,7 @@
       "source": ["actingctl install config set"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set)"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config set (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file bind",
@@ -2553,7 +2568,7 @@
       "source": ["actingctl install config bind"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set)"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config bind (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file policy",
@@ -2569,7 +2584,7 @@
       "source": ["actingctl install config policy"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set)"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config policy (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file lab-options",
@@ -2587,7 +2602,7 @@
       "source": ["actingctl install config lab-options"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set)"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config lab-options (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file commit",
@@ -2606,7 +2621,7 @@
       "source": ["actingctl install config commit"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set)"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config commit (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file discard",
@@ -2622,7 +2637,7 @@
       "source": ["actingctl install config discard"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set)"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config discard (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "instance add",
@@ -2637,7 +2652,8 @@
       "requests": [],
       "source": ["actingctl install instance add"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: not served yet: its source, actingctl install instance add (INST-5), is not built; the slice that builds it opens the row"
     },
     {
       "name": "instance remove",
@@ -2652,7 +2668,8 @@
       "requests": [],
       "source": ["actingctl install instance remove"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: not served yet: its source, actingctl install instance remove (INST-5), is not built; the slice that builds it opens the row"
     },
     {
       "name": "place",
@@ -2668,11 +2685,11 @@
       "irreversible": true,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["Status", "PauseScheduling", "ResumeScheduling", "ScheduleExplanation"],
+      "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "ResumeScheduling", "ScheduleExplanation"],
       "source": ["script rd-1027/hotplace-r10/hotplace.ps1 (steps S4 to S8b)", "actingctl install pack plan", "actingctl install pack place"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the games come from the bundle; no game is named in code"
+      "notes": "the games come from the bundle; no game is named in code. LAB-3: journal kind pack_place with a pack_item step per item; the instances bound to the bundle's game are held; idle within install.hot.idle_wait_ms; the composition waited for within standard_packs.check_interval_ms plus install.hot.idle_wait_ms; actingctl install pack plan|place (INST-4) is not built. LAB-3 fix 1: an instance of the game already paused by another party is kept, not held; not idle in time hands the operation's own pauses back at once; the release resumes only what its pause step paused"
     },
     {
       "name": "pack remove",
@@ -2690,7 +2707,8 @@
       "requests": ["Status", "PauseScheduling", "ResumeScheduling"],
       "source": ["actingctl install pack remove"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: not served yet: its source, actingctl install pack remove (INST-4), is not built; the slice that builds it opens the row"
     },
     {
       "name": "pack restore",
@@ -2706,7 +2724,8 @@
       "requests": [],
       "source": ["actingctl install pack restore"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: not served yet: its source, actingctl install pack restore (INST-4), is not built; the slice that builds it opens the row"
     },
     {
       "name": "unlock",
@@ -2721,7 +2740,7 @@
       "source": ["actingd unlock-owner", "acui: launcher unlock, actingd unlock-owner (crates/acui-app/src/launcher.rs)"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the caller passes no confirmation; the initiator is recorded (lab-two-entries.md section 5)"
+      "notes": "the caller passes no confirmation; the initiator is recorded (lab-two-entries.md section 5). LAB-3: the live build's actingd unlock-owner with the initiator as --actor and actingd's --confirm-resources-released, which goes with LAB-7"
     },
     {
       "name": "check-config",
@@ -2737,7 +2756,8 @@
       "requests": [],
       "source": ["actingd check-config", "acsetup: check-config child"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: the live build's check-config with --install-root <root>"
     },
     {
       "name": "ledger verify",
@@ -2751,7 +2771,8 @@
       "requests": [],
       "source": ["actingd ledger-maintenance verify", "acsetup: ledger-maintenance verify child"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: the live build's ledger-maintenance verify of the root's configuration"
     },
     {
       "name": "watchdog install",
@@ -2766,7 +2787,7 @@
       "source": ["actingctl watchdog install"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the Lab's own command, with its rescue module (coordinator's ruling, #434 6743701251); it links crates/watchdog (LAB-4) and registers the task as actingctl watchdog install does; tools\\actingwatch.exe install answers the same since LAB-4"
+      "notes": "the Lab's own command, with its rescue module (coordinator's ruling, #434 6743701251); it links crates/watchdog (LAB-4) and registers the task as actingctl watchdog install does; tools\\actingwatch.exe install answers the same since LAB-4. LAB-3: built (crates/lab-rescue, from crates/watchdog)"
     },
     {
       "name": "watchdog uninstall",
@@ -2781,7 +2802,7 @@
       "source": ["actingctl watchdog uninstall"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the Lab's own command, with its rescue module (coordinator's ruling, #434 6743701251); it links crates/watchdog (LAB-4) and removes the task as actingctl watchdog uninstall does; tools\\actingwatch.exe uninstall answers the same since LAB-4"
+      "notes": "the Lab's own command, with its rescue module (coordinator's ruling, #434 6743701251); it links crates/watchdog (LAB-4) and removes the task as actingctl watchdog uninstall does; tools\\actingwatch.exe uninstall answers the same since LAB-4. LAB-3: built (crates/lab-rescue, from crates/watchdog)"
     },
     {
       "name": "agent add",
@@ -2796,7 +2817,8 @@
       "requests": [],
       "source": ["actingctl agent-channel add"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: agent-channel add with the located state root"
     },
     {
       "name": "agent remove",
@@ -2811,7 +2833,8 @@
       "requests": [],
       "source": ["actingctl agent-channel remove"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: agent-channel remove with the located state root"
     },
     {
       "name": "agent list",
@@ -2826,7 +2849,8 @@
       "requests": [],
       "source": ["actingctl agent-channel list"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: agent-channel list with the located state root"
     },
     {
       "name": "agent claude-hook",
@@ -2841,7 +2865,8 @@
       "requests": [],
       "source": ["actingctl agent-channel claude-hook"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: agent-channel claude-hook with the located state root; on the command line without --json it prints as the command does (nothing, or its one stderr line and exit 2)"
     },
     {
       "name": "agent claude-register",
@@ -2856,7 +2881,8 @@
       "requests": [],
       "source": ["actingctl agent-channel claude-register"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: agent-channel claude-register with the located state root"
     },
     {
       "name": "agent notice",
@@ -2871,7 +2897,8 @@
       "requests": [],
       "source": ["actingctl agent-channel notice"],
       "slice": "LAB-3",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-3: agent-channel notice; its text as it is on the command line without --json"
     },
     {
       "name": "mcp config",

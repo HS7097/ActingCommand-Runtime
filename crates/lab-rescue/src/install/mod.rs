@@ -15,29 +15,40 @@
 //! `operation` the command; a step that fails after a change on disk is
 //! `install_operation_interrupted`. Nothing here deletes anything: replaced and abandoned files
 //! are renamed aside and kept.
+//!
+//! Workflow #434 LAB-3 (`contracts/lab-two-entries.md` §5 to §7): this module moved from
+//! `apps/actingctl` unchanged; [`dispatch`] answers `actingctl install` with the `install-cli`
+//! revision-1 face ([`Face::Install`]) until LAB-7, and builds the line that actingctl prints. The
+//! Lab's rescue module runs the same commands with [`Face::Rescue`] (`crate::rescue`).
 
-mod adopt;
+// Workflow #434 LAB-3: the modules are the crate's, so that the rescue module (`crate::rescue`)
+// runs their commands and steps; nothing outside the crate reads them.
+pub(crate) mod adopt;
+// Workflow #434 LAB-3: the rescue module's `config replace` and `config restore`.
+pub(crate) mod config_swap;
 // Workflow #421 INST-2: the stop, the start, the hold's release and the composite update.
-mod deploy;
+pub(crate) mod deploy;
 pub(crate) mod files;
-mod guards;
-mod hold;
-mod host;
-mod journal;
-mod launch;
-mod lock;
-mod manifest;
+pub(crate) mod guards;
+pub(crate) mod hold;
+pub(crate) mod host;
+pub(crate) mod journal;
+pub(crate) mod launch;
+pub(crate) mod lock;
+pub(crate) mod manifest;
 // Workflow #421 MCP-ENTRY: `mcp-entry plan|list`.
-mod mcp_entry;
-mod plan;
-mod postcheck;
-mod programs;
-mod release;
-mod runtime;
-mod state;
-mod status;
-mod undo;
-mod update;
+pub(crate) mod mcp_entry;
+// Workflow #434 LAB-3: the rescue module's `place`.
+pub(crate) mod place;
+pub(crate) mod plan;
+pub(crate) mod postcheck;
+pub(crate) mod programs;
+pub(crate) mod release;
+pub(crate) mod runtime;
+pub(crate) mod state;
+pub(crate) mod status;
+pub(crate) mod undo;
+pub(crate) mod update;
 
 // Test-only: Workflow #421 INST-1, test rows IT-1 to IT-4 (frozen model INST-M §12), and the
 // neutral release fixture they share.
@@ -67,16 +78,21 @@ mod gate_429_r0b_pairing;
 mod gate_r15b_registry;
 #[cfg(test)]
 mod gate_r15b_release;
+// Test-only: Workflow #434 LAB-3, the register's named tests of the rescue module and the
+// unchanged `actingctl install` face.
+#[cfg(test)]
+mod gate_434_lab3;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
 pub(crate) use state::unfinished_operation;
 
-use crate::cli_line;
+use crate::cli_line::{self, Exit};
 use crate::codes::{
     ActingctlCode, ArgumentProblem, InstallCaveat, InstallLocation, InstallRefusal,
 };
 use actingcommand_contract::outcome::{Category, CauseRelation, Outcome};
+use actingcommand_lab_ops::initiator::Initiator;
 use journal::Operation;
 use plan::PlanKind;
 use serde::Serialize;
@@ -85,13 +101,47 @@ use state::{CurrentState, OperationKind, Paths};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::Path;
-use std::process::ExitCode;
+
+/// Workflow #434 LAB-3: which face a command answers with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Face {
+    /// `actingctl install`: the `install-cli` revision-1 face, unchanged until LAB-7 deletes it
+    /// (contracts/lab-two-entries.md §5, §11).
+    Install,
+    /// The Lab's rescue module (§4.3, §5, §6): every journal records the initiator; a one-way
+    /// ledger edge needs no acknowledgment and is journalled `one_way`; every pause found on an
+    /// instance is a known pause, kept and listed; a guard that fails or is not evaluated is
+    /// noted (`install_caveat_noted`, `guard_failed`) and never refuses; a start waits for memory
+    /// as long as `install.start.memory_wait_ms` and then goes on.
+    Rescue(Initiator),
+}
+
+impl Face {
+    /// The initiator a journal records: the rescue module's word, none for `actingctl install`.
+    pub(crate) const fn initiator(self) -> Option<Initiator> {
+        match self {
+            Self::Install => None,
+            Self::Rescue(initiator) => Some(initiator),
+        }
+    }
+
+    /// Whether the guards report and never refuse, and the confirmations are gone.
+    pub(crate) const fn rescue(self) -> bool {
+        matches!(self, Self::Rescue(_))
+    }
+
+    /// The face of an operation, by its journal: one the rescue module began records its
+    /// initiator, so a resumed or undone operation keeps the rules it began with.
+    pub(crate) fn of(journal: &journal::Journal) -> Self {
+        journal.initiator.map_or(Self::Install, Self::Rescue)
+    }
+}
 
 const USAGE: &str = "usage: actingctl install release verify --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>]\nusage: actingctl install release stage --root <root> --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>] [--local-build]\nusage: actingctl install adopt --root <root>\nusage: actingctl install update plan --root <root> --build <commit> [--preview] [--accept-ledger-one-way]\nusage: actingctl install update apply --root <root> --build <commit> --plan <id> [--accept-ledger-one-way] [--stop --hold <reason> [--known-pause ALIAS=REASON]... [--start] [--ack-guard <id>]... [--detach]]\nusage: actingctl install rollback plan|apply --root <root> --to <commit> [--plan <id>] [--accept-ledger-one-way] [--stop --hold <reason> [--known-pause ALIAS=REASON]... [--start] [--ack-guard <id>]... [--detach]]\nusage: actingctl install undo|resume --root <root> --operation <id>\nusage: actingctl install status --root <root> [--operation <id>] [--check-rollback]\nusage: actingctl install leftovers --root <root>\nusage: actingctl install stop --root <root> --hold <reason> [--known-pause ALIAS=REASON]... [--ack-guard <id>]...\nusage: actingctl install start --root <root> [--ack-guard <id>]...\nusage: actingctl install release-hold --root <root> --reason <reason>\nusage: actingctl install guards --root <root> --for stop|start [--hold <reason>] [--known-pause ALIAS=REASON]...";
 
-/// Runs `install` when the first argument names it; `None` leaves every other command to the
-/// CLI, unchanged.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+/// Runs `install` when the first argument names it, with the revision-1 face; `None` leaves every
+/// other command to the CLI, unchanged. The caller (actingctl) prints the exit.
+pub fn dispatch(arguments: &[OsString]) -> Option<Exit> {
     if arguments.first()?.to_str()? != "install" {
         return None;
     }
@@ -104,8 +154,8 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
 const MCP_ENTRY_USAGE: &str = "usage: actingctl mcp-entry plan --root <root> --entry-protocol 1 [--current-build <commit>] [-- <child arguments>]\nusage: actingctl mcp-entry list --root <root> [--all]";
 
 /// Runs `mcp-entry` (Workflow #421 MCP-ENTRY) when the first argument names it; `None` leaves
-/// every other command to the CLI, unchanged.
-pub(crate) fn dispatch_mcp_entry(arguments: &[OsString]) -> Option<ExitCode> {
+/// every other command to the CLI, unchanged. The caller (actingctl) prints the exit.
+pub fn dispatch_mcp_entry(arguments: &[OsString]) -> Option<Exit> {
     if arguments.first()?.to_str()? != "mcp-entry" {
         return None;
     }
@@ -144,7 +194,7 @@ pub(crate) fn dispatch_mcp_entry(arguments: &[OsString]) -> Option<ExitCode> {
 }
 
 /// One command's answer: the result members and the top outcome.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Answer {
     pub(crate) members: Map<String, Value>,
     pub(crate) outcome: Outcome,
@@ -173,7 +223,9 @@ impl Answer {
     }
 }
 
-fn print(answer: Answer) -> ExitCode {
+/// The line of `answer`, which the caller prints: `{…result, "outcome"}`, or `{outcome}` with
+/// the developer text for a failure without members.
+pub(crate) fn print(answer: Answer) -> Exit {
     if answer.members.is_empty() && answer.outcome.category() > Category::Info {
         cli_line::failure(&answer.outcome, answer.text)
     } else {
@@ -181,7 +233,8 @@ fn print(answer: Answer) -> ExitCode {
     }
 }
 
-/// Runs one `install` command (the words after `install`) against `host`.
+/// Runs one `install` command (the words after `install`) against `host`, with the revision-1
+/// face of `actingctl install`.
 pub(crate) fn execute(arguments: &[OsString], host: &dyn Host) -> Answer {
     let Some(words) = arguments
         .iter()
@@ -190,24 +243,34 @@ pub(crate) fn execute(arguments: &[OsString], host: &dyn Host) -> Answer {
     else {
         return usage(cli_line::usage_invalid(None, ArgumentProblem::NotUtf8));
     };
-    let result = match words.as_slice() {
+    execute_as(&words, host, Face::Install)
+}
+
+/// Runs one `install` command (the words after `install`) against `host` with `face` (Workflow
+/// #434 LAB-3: the rescue module runs the same commands with [`Face::Rescue`]).
+pub(crate) fn execute_as(words: &[&str], host: &dyn Host, face: Face) -> Answer {
+    let result = match words {
         ["release", "verify", rest @ ..] => release::verify(rest, host),
-        ["release", "stage", rest @ ..] => release::stage(rest, host),
-        ["adopt", rest @ ..] => adopt::adopt(rest, host),
-        ["update", "plan", rest @ ..] => update::plan_command(rest, host, PlanKind::Update),
-        ["update", "apply", rest @ ..] => update::apply_command(rest, host, PlanKind::Update),
-        ["rollback", "plan", rest @ ..] => update::plan_command(rest, host, PlanKind::Rollback),
-        ["rollback", "apply", rest @ ..] => update::apply_command(rest, host, PlanKind::Rollback),
-        ["undo", rest @ ..] => undo::undo(rest, host),
+        ["release", "stage", rest @ ..] => release::stage(rest, host, face),
+        ["adopt", rest @ ..] => adopt::adopt(rest, host, face),
+        ["update", "plan", rest @ ..] => update::plan_command(rest, host, PlanKind::Update, face),
+        ["update", "apply", rest @ ..] => update::apply_command(rest, host, PlanKind::Update, face),
+        ["rollback", "plan", rest @ ..] => {
+            update::plan_command(rest, host, PlanKind::Rollback, face)
+        }
+        ["rollback", "apply", rest @ ..] => {
+            update::apply_command(rest, host, PlanKind::Rollback, face)
+        }
+        ["undo", rest @ ..] => undo::undo(rest, host, face),
         ["resume", rest @ ..] => resume(rest, host),
         ["status", rest @ ..] => status::status(rest, host),
         ["leftovers", rest @ ..] => status::leftovers(rest, host),
         // Workflow #421 INST-2: the formal stop, the installer's start, the release of a hold and
         // the guards report.
-        ["stop", rest @ ..] => deploy::stop_command(rest, host),
-        ["start", rest @ ..] => deploy::start_command(rest, host),
-        ["release-hold", rest @ ..] => deploy::release_hold_command(rest, host),
-        ["guards", rest @ ..] => deploy::guards_command(rest, host),
+        ["stop", rest @ ..] => deploy::stop_command(rest, host, face),
+        ["start", rest @ ..] => deploy::start_command(rest, host, face),
+        ["release-hold", rest @ ..] => deploy::release_hold_command(rest, host, face),
+        ["guards", rest @ ..] => deploy::guards_command(rest, host, face),
         [word, ..] => Err(cli_line::usage_invalid(
             Some(*word),
             ArgumentProblem::Unknown,
@@ -391,7 +454,9 @@ fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
         | OperationKind::Rollback
         | OperationKind::Stop
         | OperationKind::Start
-        | OperationKind::ReleaseHold => update::resume(operation)?,
+        | OperationKind::ReleaseHold
+        | OperationKind::ConfigReplace
+        | OperationKind::PackPlace => update::resume(operation)?,
     };
     Ok(resumed(operation_id, answer))
 }

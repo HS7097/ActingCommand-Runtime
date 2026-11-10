@@ -22,12 +22,11 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 name = "actingcommand-actingctl"
 version = "0.1.0"
 dependencies = [
- "actingcommand-agent-forward",
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
- "actingcommand-host-metrics",
  "actingcommand-lab-ops",
+ "actingcommand-lab-rescue",
  "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-policy",
@@ -79,6 +78,7 @@ dependencies = [
  "actingcommand-device",
  "actingcommand-lab",
  "actingcommand-lab-ops",
+ "actingcommand-lab-rescue",
  "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-page-detector",
@@ -251,6 +251,24 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "actingcommand-lab-rescue"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-agent-forward",
+ "actingcommand-contract",
+ "actingcommand-host-metrics",
+ "actingcommand-lab-ops",
+ "actingcommand-runtime-client",
+ "actingcommand-runtime-config",
+ "actingcommand-watchdog",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "zip",
 ]
 
 [[package]]

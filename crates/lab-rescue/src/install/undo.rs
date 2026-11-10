@@ -43,7 +43,7 @@ struct Moved {
 }
 
 /// `<path>` renamed `<path-without-.new-<ms>.part>.<marker>-<ms2>`, when it exists.
-fn set_aside(path: &Path, marker: &str, ms: u64) -> Result<Option<String>, Outcome> {
+pub(crate) fn set_aside(path: &Path, marker: &str, ms: u64) -> Result<Option<String>, Outcome> {
     if !path.exists() {
         return Ok(None);
     }
@@ -113,8 +113,9 @@ fn started_inside(journal: &journal::Journal) -> bool {
         })
 }
 
-/// `install undo`.
-pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
+/// `install undo`. Workflow #434 LAB-3: the rescue module's `undo` runs it with its face, and the
+/// journal's undo record carries its initiator.
+pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result<Answer, Outcome> {
     let flags = Flags::parse(words, &["--root", "--operation"], &[])?;
     let paths = super::resolve_root(&flags)?;
     let operation_id = flags.required("--operation")?;
@@ -199,7 +200,7 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     } else {
         None
     };
-    let ms2 = operation.begin_undo()?;
+    let ms2 = operation.begin_undo(face.initiator())?;
     let mut kept = Vec::new();
     let steps = operation.journal().steps.clone();
     let previous = operation.journal().previous.clone();
@@ -303,6 +304,8 @@ pub(crate) fn reverse_step(
             }
             Vec::new()
         }
+        // Workflow #434 LAB-3: an item of the rescue module's `place`, reversed as a swap.
+        StepKind::PackItem => super::place::reverse_item(operation, step, ms2)?,
         // Workflow #421 INST-2: the hold, the close, the start, the checks, the release and
         // a rollback's reversal change no file; a pause stays until `release-hold`.
         StepKind::VerifyTree

@@ -2265,7 +2265,7 @@
     },
     "hold_reason": {
       "type": "name",
-      "description": "The deployment pause reason a form was computed for (install-cli.md, \"Forms\"; design 3.1, v4.1)."
+      "description": "The deployment pause reason a form was computed for (install-cli.md, \"Forms\"; design 3.1, v4.1), or (Workflow #434 LAB-3 fix 1) the hold's reason a refusal hold_not_owned names."
     },
     "s0_from": {
       "type": "id",
@@ -7512,7 +7512,7 @@
           "description": "A server's maintenance role moves to another package while an instance binds the old one (package_id; INST-4)."
         },
         "instances_not_idle": {
-          "description": "A hot placement found the affected instances not idle in time (aliases); they stay paused (INST-4)."
+          "description": "A hot placement found the affected instances not idle in time (aliases); they stay paused (INST-4). The Lab's rescue module's place hands its own pauses back at once, since nothing changed on disk yet (Workflow #434 LAB-3 fix 1, since 0.12.48)."
         },
         "instance_invalid": {
           "description": "An instance add or remove was refused (alias; INST-5)."
@@ -7612,6 +7612,9 @@
         },
         "layout_single_convert_first": {
           "description": "Design 5.8 step 6: after the single-location update and rollback code is removed, a single-location root answers this: convert it first. (R-15b, since 0.12.35)"
+        },
+        "hold_not_owned": {
+          "description": "The Lab's rescue module hands back only its own hold (contracts/lab-two-entries.md section 5): release-hold of a reason no journal of the module recorded in its pause step, down with a reason an instance already shows (aliases), or a release that found the reason on an instance at another revision or owner epoch than the module recorded (aliases, left as they are). hold_reason names the reason. Nothing is paused or resumed by the refusal; another party's pause is never touched. (Workflow #434 LAB-3 fix 1, since 0.12.48)"
         }
       }
     },
@@ -7719,6 +7722,12 @@
         },
         "mcp_entry_generation_stale": {
           "description": "Design 5.3: the MCP entry g1 follows a conversion once and no later switch; clients move to g2. (R-15b, since 0.12.35)"
+        },
+        "guard_failed": {
+          "description": "In the Lab's rescue module a guard failed or was not evaluated and the operation went on (contracts/lab-two-entries.md section 6: guards report, never refuse); install_guards names the guards, and the answer and the journal keep their rows. actingctl install refuses the same rows with install_refusal guard_failed instead. (Workflow #434 LAB-3, since 0.12.48)"
+        },
+        "hold_ownership_unconfirmed": {
+          "description": "The Lab's rescue module could not read whether a hold is its own (contracts/lab-two-entries.md section 5): the reason does not parse, or the root or its operations folder cannot be read. The answer's next leaves that release-hold out, as for a hold the module does not own, and this note says why; operation is install_release_hold, hold_reason names the reason when it parses, and the read failure is the caused_by link. Nothing is paused or resumed. (Workflow #434 LAB-3 fix 3, since 0.12.48)"
         }
       }
     },
@@ -8295,6 +8304,12 @@
         },
         "restart": {
           "description": "restart."
+        },
+        "config_replace": {
+          "description": "The Lab's rescue module's config replace and config restore: the configuration file swapped, the replaced one kept. (Workflow #434 LAB-3, since 0.12.48)"
+        },
+        "pack_place": {
+          "description": "The Lab's rescue module's place: one game's bundle placed into the standard-pack root. (Workflow #434 LAB-3, since 0.12.48)"
         }
       }
     },
@@ -8397,6 +8412,9 @@
         },
         "record_cleanup": {
           "description": "Phase 7."
+        },
+        "pack_item": {
+          "description": "One item of a single-location root's placement (the rescue module's place): a pack, a table or a root file placed, or a root file set aside. (Workflow #434 LAB-3, since 0.12.48)"
         }
       }
     },
@@ -11925,6 +11943,7 @@
     "mcp-entry": "apps/mcp-entry",
     "actingcommand-entry": "apps/actingcommand-entry",
     "watchdog": "crates/watchdog",
-    "actingwatch": "apps/actingwatch"
+    "actingwatch": "apps/actingwatch",
+    "lab-rescue": "crates/lab-rescue"
   }
 }
