@@ -394,8 +394,14 @@ remaining projection metadata retains its pack/pages/navigation inputs; a MAA
 pair is present together or absent together. Removal results state this local
 reference scope. Unmapped removals fail explicitly.
 
-The adapter bounds each selection to 4096 paths, each document to 16 MiB, total
-reads to 64 MiB, and the Git path list to 1 MiB. Relative normal paths are required;
+The adapter bounds each selection to 4096 paths, each document to 16 MiB, the distinct
+files a run reads to 64 MiB in total, and the Git path list to 1 MiB. A file counts against
+the total once, at its first read: the reader keeps its bytes for the rest of the run and
+answers a later read of the same path from them, reading nothing from disk, under that read's
+own bound (Workflow #428 RD-BUDGET-1). The answer's `read_bytes` is that count, the bytes read
+from disk. The first read of a file that takes the count past 64 MiB fails with
+`resource_declaration_invalid`, "declaration read budget exceeded", naming that file.
+Relative normal paths are required;
 links, reparse points, paths outside the root, unreadable files and exceeded
 bounds fail. The task owner's smaller dependency bounds remain effective.
 
