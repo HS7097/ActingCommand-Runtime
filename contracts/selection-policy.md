@@ -479,8 +479,10 @@ is in the file and of type `integer`, else `table_mismatch` (`column_absent`, `c
 `list<token>` type, at most 16 items, so never cut), `count` (the number of distinct keys of the
 union) and either `maximum` with `maximum_identity` (the value and the smallest key, in byte
 order, that holds it; neither for `empty`) or `unknown_reason`. The reasons count against the
-decision chain's 128 reasons and the record's 64 KiB ([selection-graph.md](selection-graph.md),
-"Validation and bounds"). With the record's `policy_sha256` and `input_sha256`, the
+decision chain's 128 reasons and the record's 64 KiB of compact JSON. A record over 64 KiB is
+`selection_record_too_large`: the producer checks it before any input, so the run fails with that
+code and nothing is truncated ([selection-graph.md](selection-graph.md), "Validation and
+bounds"). With the record's `policy_sha256` and `input_sha256`, the
 `standard_pack_table_read` digest of the table ([selection-graph.md](selection-graph.md),
 "Tables") and the lists' rows in the snapshot, a reviewer reads the value again. The values say
 what the instance holds: they are account data, and stay in the ledger.

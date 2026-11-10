@@ -8765,11 +8765,13 @@ what was judged worth) stays in the instance fact store and the ledger.
 | S168-5a | Runtime | M | the design's G-4: the value source `table_max_over_list` in the selection-policy crate (validation, binding, one read per reference over the union of its lists, the reason, the input identity, upper bound, the scheduling refusal); its tests use fake snapshots | S168-0 | `package` 8, with S168-4; no `ledger` |
 | S168-5b | Runtime | L | the design's G-5: the `judge` effect with its two keys and the mapping member `judge_result` (declaration, admission, the kernel's judge path without an input port, the host's refusal of an input for it, the record with `judge_only`, the run's end on one of the two keys); the ledger reader's rules for `judge_only` | S168-4 merged | `package` 9 and `ledger` 8, in the Runtime release of LAB-6 and LAB-7 |
 
-**Named tests.** Logic tests with fakes and a fake clock, no sleep; the ids are made up
-(`member.a` to `member.z`, `domain.x`, `domain.y`, the key `inventory.list.example_kind_a`, the
-table `example_values`, the serial `TESTSERIAL0001`).
+**Named tests**, 24 in all: 10 for S168-4, 8 for S168-5a and 6 for S168-5b (the coordinator's
+ruling R6 after the review). Logic tests with fakes and a fake clock, no sleep; the ids are made
+up (`member.a` to `member.z`, `domain.x`, `domain.y`, `state.a`, `state.b`, the keys
+`inventory.list.example_kind_a` and `inventory.list.example_kind_b`, the table `example_values`,
+the serials `TESTSERIAL0001` and `TESTSERIAL0002`).
 
-S168-4, on a fake provider's saved viewports and a fake device:
+S168-4, 10 tests, on a fake provider's saved viewports and a fake device:
 
 - `list_reading_publishes_whole_list`: a scan over three viewports reading `member.c`,
   `member.a`, `member.b` with a `rank` column publishes, after the successful terminal, one
@@ -8796,42 +8798,79 @@ S168-4, on a fake provider's saved viewports and a fake device:
 - `list_reading_read_by_keyed_fact`: a later run's select step reads the published list through
   `keyed_fact` (a listed key's column, an unlisted key's `absent`); the same list older than the
   document's `max_age_ms` ends the evaluation `unknown` with `fact_stale`.
+- `list_reading_unchanged_rows_republished`: a second complete read whose rows did not change
+  publishes a second observation, with a new `source_snapshot_id` and a strictly newer
+  observation time, and raises no `fact_source_snapshot_identity_conflict`; the record's age is
+  the second read's.
+- `list_reading_full_store_refused`: on a fake store with no free identity, the publication is
+  refused `fact_store_capacity_exceeded`, the run fails `contained_task_resource_reading_rejected`,
+  no active fact is evicted, and a run of another instance (`TESTSERIAL0002`) goes on.
+- `list_reading_mark_key_reserved`: a mark whose `fact_key`, and a `current_capacity` mark whose
+  `capacity_fact_key`, is under `inventory.list.` is refused by the gate (`InvalidValue`,
+  `resource_reading_fact_key_invalid` @ `…/fact_key`, `resource_reading_capacity_fact_key_invalid`
+  @ `…/capacity_fact_key`) and by admission (`contained_task_resource_reading_invalid`,
+  `<id>:<reason>`); a mark under `inventory.` outside the prefix is still admitted.
 
-S168-5, on tables loaded with `LoadedTable::load`, fake snapshots and a fake device whose input
-port fails the test on any call:
+S168-5a, 8 tests, on tables loaded with `LoadedTable::load` and fake snapshots:
 
 - `table_list_max_reads_largest_of_class`: rows (`member.a`, `domain.x`, 5), (`member.b`,
-  `domain.x`, 9), (`member.c`, `domain.y`, 7); the list {a, b, c} under the pin `domain.x` reads
-  9, and the reason `selection_table_list_max` holds `maximum` 9, `maximum_identity`
-  `member.b`, `count` 3.
-- `table_list_max_empty_and_out_of_class`: an empty list, and the list {`member.c`} under
-  `domain.x`, each read the document's `empty`.
+  `domain.x`, 9), (`member.c`, `domain.y`, 7); `lists` [`inventory.list.example_kind_a`] holding
+  {a, b, c}, under the pin `domain.x`, reads 9, and the reason `selection_table_list_max` holds
+  `fact_keys` [`inventory.list.example_kind_a`], `maximum` 9, `maximum_identity` `member.b`,
+  `count` 3.
+- `table_list_max_empty_and_out_of_class`: one empty list, two empty lists, and a list holding
+  {`member.c`} under `domain.x`, each read the document's `empty`.
 - `table_list_max_missing_key_is_unknown`: {`member.a`, `member.z`} with `member.z` unknown to
   the table, every key unknown, and a null cell of the class each read Unknown, `lookup_miss`;
   under `drop_candidate` the candidate is `unknown_dropped`, under `abort_evaluation` the
   evaluation is `unknown`; never 0.
 - `table_list_max_validation`: a `boolean` or `enum_string` `value_column`, an undeclared list or
-  table, a substitution, a tie-break key, a `fallback_column` and a 17th reference are validation
-  errors; `evaluate_collect` and the catalog compile refuse a document that uses the source.
-- `table_list_max_input_identity`: a changed cell of a contributing row, or a changed listed
-  row, moves `input_sha256`; a changed row of an unlisted key does not; a document without the
-  source keeps its `policy_sha256` and `input_sha256` byte for byte.
-- `judge_records_and_ends_with_its_key`: a judge over three slots whose candidates are judged
-  worth, not worth and unknown (out of the dictionary) writes one `task.selection_evaluated` with
-  `judge_only`, the three verdicts' kinds, `selected` the worth one and `unknown_check`
-  `blocking` `unknown_instances` with count 1; the run is Completed on the step's page with the
-  step's `outcome_key`.
-- `judge_unknown_ends_with_its_key`: with the declared list stale, the record holds `unknown`
-  with no verdict and the run is Completed with the same key, never `selection_not_selected`.
-- `judge_performs_no_input`: in both runs above the fake input port receives no call and the
-  ledger holds no `task.effect_intent`, input or `task.effect_completed` of the step's action; a
-  host handed an effect intent for a judge step's action ends that run
-  `contained_task_judge_input_refused` before the device, and another instance's run goes on; an
-  architecture guard finds no input type in the kernel's judge module.
-- `judge_declaration_refusals`: a `guard`, an `expect_after`, a `repeated_anchor` layout, a
-  `scan`, a mode other than `none_allowed`, a `required_count` below the slots, a mapping that
-  does not list the page with the key, and use as a prerequisite are each refused with the code
-  and detail of the declaration table.
+  table, empty `lists`, a 17th list, a repeated `fact_key`, a substitution, a tie-break key, a
+  `fallback_column` and a 33rd reference are validation errors; `evaluate_collect` and the
+  catalog compile refuse a document that uses the source.
+- `table_list_max_input_identity`: a changed cell of a contributing row, or a changed row of any
+  listed list, moves `input_sha256`; a changed row of an unlisted key does not; a document
+  without the source keeps its `policy_sha256` and `input_sha256` byte for byte.
+- `table_list_max_union_of_lists`: `inventory.list.example_kind_a` holding {`member.a`,
+  `member.b`} and `inventory.list.example_kind_b` holding {`member.b`, `member.d`} read the
+  largest of the union {a, b, d}; `member.b`, in both lists, is looked up once and counts once;
+  `count` is 3 and `fact_keys` names both lists in the order of `lists`.
+- `table_list_max_unusable_list_is_unknown`: with `inventory.list.example_kind_b` stale, the
+  reference reads Unknown `fact_stale` whatever `inventory.list.example_kind_a` holds; with both
+  lists unusable for different reasons, the reason is the first list's in the order of `lists`.
+- `table_list_max_where_skips_rows`: a `where` keeping `state.a` leaves out a row of `state.b`
+  whose key the table lacks; that key is not looked up, is no miss and is not counted, and the
+  read is the largest of the kept keys.
+
+S168-5b, 6 tests, on fake snapshots whose lists a document reads through `keyed_fact` (no list
+maximum, so they do not need S168-5a), tables loaded with `LoadedTable::load`, and a fake device
+whose input port fails the test on any call:
+
+- `judge_known_ends_with_outcome_key`: a judge over three slots whose candidates are all known,
+  two judged worth and one not, writes one `task.selection_evaluated` with `judge_only`, the
+  three verdicts' kinds, `selected` the two worth ones in rank order and `unknown_check`
+  `blocking` `none`; the run is Completed on the step's page with the step's `outcome_key`, on
+  the mapping with `judge_result` `judged`.
+- `judge_unknown_slot_ends_with_unknown_key`: the same judge with one slot out of the dictionary
+  writes the record with every verdict it has, `selected` the worth ones and `unknown_check`
+  `blocking` `unknown_instances` with count 1; the run is Completed with the step's
+  `unknown_outcome_key`, on the mapping with `judge_result` `unknown`.
+- `judge_stale_list_ends_with_unknown_key`: with the declared list older than the document's
+  `max_age_ms`, the record holds `unknown` with no verdict and reason `fact_stale`; the run is
+  Completed with the step's `unknown_outcome_key`, never `selection_not_selected`.
+- `judge_performs_no_input`: in the three runs above the fake input port receives no call and
+  the ledger holds no `task.effect_intent`, input or `task.effect_completed` of the step's
+  action; a host handed an effect intent for a judge step's action ends that run
+  `contained_task_judge_input_refused` before the device, and a run of another instance
+  (`TESTSERIAL0002`) goes on; an architecture guard finds no input type in the kernel's judge
+  module.
+- `judge_declaration_refusals`: a missing `unknown_outcome_key`, the two keys equal, a `guard`,
+  an `expect_after`, a `repeated_anchor` layout, a `scan`, a mode other than `none_allowed`, a
+  `required_count` below the slots, a missing mapping for either result, a mapping with the
+  wrong key, use as a prerequisite, and each `judge_result` rule (another string, an older
+  schema, a task without a judge step, a page that is no judge step's `from` page, together with
+  `busy`, a state reachable under both effect conditions) are each refused with the code and
+  detail of the declaration tables.
 - `judge_record_reader_rules`: the ledger reader takes `judge_only` with 0 or 2 selected and
   refuses it with `multi_select`, a v2 projection, no `unknown_check` or `outranked_possible`; a
   reader of `ledger` 7 refuses the record (`corrupt_ledger_record`).
