@@ -581,9 +581,10 @@ fn bytes(value: &Value) -> Vec<u8> {
 }
 
 // The package of `task` with `policy` as its judge's document; its recognition pack holds every
-// target and the task's candidate layouts.
+// target and the task's candidate layouts. A phased task's `phases` are copied into the control,
+// as admission requires (`contained_task_phases_invalid` when control and program differ).
 fn package(task: &Value, policy: &Value) -> Vec<u8> {
-    let control = json!({
+    let mut control = json!({
         "schema_version": "Lab-1y.control.v2",
         "package_id": "neutral.judge.task",
         "execution_mode": "navigable_route",
@@ -595,6 +596,9 @@ fn package(task: &Value, policy: &Value) -> Vec<u8> {
         "step_timeout_ms": 10_000,
         "timeout_ms": TASK_TIMEOUT_MS
     });
+    if let Some(phases) = task.get("phases") {
+        control["phases"] = phases.clone();
+    }
     let pack = json!({
         "schema_version": "0.7",
         "game": "neutral",
