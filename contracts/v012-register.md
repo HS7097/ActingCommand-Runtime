@@ -8728,6 +8728,92 @@ names `devices bind`'s kept `--root`. No row, type, member, code, key or interfa
 
 **LAB-5A rollback** (to the release before it). Nothing persisted: code and the table's text.
 
+#### Slice LAB-5C (0.12.52): the command line gains the parameters only MCP took
+
+Coordinator work order `rd-1108/arch-013/brief-lab5c.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` (§1, §4) and its table of all 170 arguments of today's 41
+MCP tools, `scratch-lab5a-step0/lab5a-mcp-args.csv`, read against main `af7e2557` (LAB-5A merged),
+the base of this slice; where they differ, main won. The contract is
+[lab-two-entries.md](lab-two-entries.md) §9.1; the table is [lab-operations.json](lab-operations.json).
+The rule of the slice: it only adds. Every command line that worked before works the same and
+prints the same; a command line gains options; no default changes; today's MCP server
+(`apps/actingctl/src/mcp`) is not touched.
+
+**The coordinator's rulings** (2026-11-10 and 2026-11-11, board #434, in the work order): no
+regression: every argument one of today's 41 MCP tools takes ends as a parameter of its row (which
+the command line then takes too), as a member the MCP front keeps for itself, or on the list of
+retired arguments. **Members the MCP front keeps** (not parameters of a row): the three cursors
+(`ac_events`, `ac_runs`, `ac_outcome_code`), bound to the MCP server's own session and connection;
+`ac_get_run`'s `handle` (a job handle of the MCP process; a request id handle is `run show`'s
+`id`) and `wait_s`; `ac_stop_run`'s `wait_s`. **Retired**: `action` of `ac_emulator`, `ac_app`
+and `ac_perf_preset` (the row's name carries it; `force-stop` is `app stop`); `ac_remedy_set`'s
+`lift` (the row `remedy lift`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5C-1 | `events` gains `view` (`enum:events\|observation\|changes\|errors\|health\|lab`), `since_unix_ms`, `until_unix_ms`, `through_sequence` (`unsigned`), `event_type`, `fact_key`, `origin_module`, `task_id`, `correlation_id` (`string`), `exclude_event_types` (`list<string>`), `min_severity`, `max_severity` (`enum:debug\|success\|info\|warning\|error\|fatal`), `detail` (`enum:brief\|summary\|payload`, default `brief`) and `wait_s` (`integer`, default 0, 0 to 20) | contract table, behaviour | LAB-5C | — | `core_ops` hands each to `lab-ops`' `events` under the flag of its name, after the words the row gave before, the excluded types as one comma list as `type` goes; `lab-ops` checks them as it checks MCP's (`events::parse`). `since_unix_ms` stands beside `since` (a duration back from now): with both, the two name the window's start (`--since-unix-ms`), and the operation layer refuses the second as `repeated`, as `runs` does; the notes say so. `unsigned` for the times and the sequence, as `runs`' on main, so that a value `lab-ops` refuses is refused with its own range |
+| L5C-2 | `diagnose` gains `since_unix_ms` (`unsigned`) | contract table, behaviour | LAB-5C | — | beside `since`, as L5C-1: both refused by the operation layer as `repeated`; at most 7 days back (`since_out_of_range`), absent 24 hours back |
+| L5C-3 | `codes` gains `prefix`, `owner` (`string`) and `limit` (`integer`, default 20, 1 to 100), the survey's difference 8 | contract table, behaviour | LAB-5C | — | handed on after the code under their flags; with a code `lab-ops` refuses them as `conflicting`, as before on actingctl's line |
+| L5C-4 | `packs` gains `role` (`enum:procedure\|startup\|resource_package`) | contract table, behaviour | LAB-5C | — | the code's `packs::Role` (MCP's schema lists `Role::ALL`); the survey's `Observer\|Operator\|Author` was wrong, main won |
+| L5C-5 | `remedy set` gains `rows` (`json`), the rows inline; `file` is no longer required by the row | contract table, behaviour | LAB-5C | — | exactly one of `file` and `rows` (`words::ONE_OF`, on the command line and in `serve --stdio`): neither is refused as before (`<file>` `required`), both as `--rows` `conflicting`. `rows` goes beside the words to `lab-ops`' new `remedy::dispatch_rows`, which reads it as a rows file's content (another shape `--rows` `wrong_type`) and runs `set` as `dispatch` does, with the CLI's detector; `file` alone goes on as before |
+| L5C-6 | `material` gains `out` (`dir`), in place of MCP's `mode: export` | contract table, behaviour | LAB-5C | — | with `out` the whole material is read (`material::read_whole`, within `observe_export::READ_BUDGET`, as `frame --out` reads its frame) and written into that directory by the writer `frame --out` and MCP share (`material_export::write`), the line naming the file `{path, sha256, size}` with `lab_operation_completed`; `offset` and `max_bytes` beside it are `conflicting`, as MCP refuses them with `mode: export`; without `out`, as before (`core_ops::material_read`) |
+| L5C-7 | `app launch`, `app restart` and `app stop` gain `record` (switch), the survey's difference 7 | contract table, behaviour | LAB-5C | — | handed to actinglab's `session app` as `--record`: the action becomes an application step of the instance's active Lab recording, as `session app <action> --record` did on its own words |
+| L5C-8 | `lab-ops` additions | behaviour | LAB-5C | — | `events::cli_request` (the read the words ask for, before any connection; `run_cli` reads through it) and `events::Request::filters`; `remedy::dispatch_rows`; `observe_export::READ_BUDGET` made public. actingctl's lines are unchanged |
+
+**Not parameters** (the rulings above; not added): the cursors of `events` and `codes`, `run
+show`'s `handle` and `wait_s`, `run stop`'s `wait_s`, the retired `action`s and `lift`. `runs`
+keeps the `cursor` LAB-5A declared, since its command line took `--cursor` before LAB-5A (the rule
+of this slice: only adds); the MCP front keeps its own cursor binding for `ac_runs`. Nothing else of
+the survey's table marked `add` was missing from a row on main.
+
+**`required_in`.** Unchanged: no parameter this slice adds is required in today's MCP tool
+(`ac_material`'s required `mode` is replaced by the optional `out`).
+
+**Defaults and names that differ between today's MCP and the rows** (for the server's slice; none
+changes here; from the survey's `difference` column, checked against main):
+
+- `pause`: drain `drain_timeout_s` integer seconds 1 to 600, default 60 (MCP) against `drain`
+  duration, default 300 s (row); reason default `mcp.pause` against `operator`.
+- `run start`: `deadline_s` integer seconds 60 to 1800, default 1800, against `deadline` duration
+  (1800 s when absent); `recovery_package` against `recovery`.
+- `events`: `limit` 1 to 100 (MCP) against 1 to 256 (the command line), default 20 on both;
+  `detail` default `brief` on both; `wait_s` up to 20 on both (MCP's schema says 25);
+  `after_sequence` against `after`, `event_types` against `type`, `run_id` against `run`,
+  `request_id` against `request`; `since_unix_ms` beside the row's `since`.
+- `run evidence`: `detail` default `full` on both; `limit` default 20, 100 with `summary`, on
+  both; `handle` and `run_id` against one `id`. `run show`: `run_id` against `id`.
+- `codes` and `runs`: `limit` default 20, 1 to 100, on both.
+- `diagnose`: `task_id` against `task`; `since_unix_ms` beside the row's `since`.
+- `observe`, `do`: `sample_scenes` and `scene` folded into one repeated `scene`, oldest first.
+- `record mark`: `request` an object against `request_json` text.
+- `facts`: `key_prefix` against `prefix`; `scope` against the switches `program` and `config` (and
+  the row `config`). `summary`: `granularity` against the switches `hour` and `day`.
+- `resume`: `expected_owner_epoch` and `expected_revision`, two required members, against one
+  `expect` object `{owner_epoch, revision}` (`required_in: ["mcp"]`).
+- `material`: `mode` (`text` or `export` into MCP's export directory) against `out`; `ac_observe`
+  always exports its frame, `frame` only with `out`.
+- `config set`: `changes` objects `{key, value?}` (null clears) against `KEY=VALUE` words and the
+  row `config clear`.
+- `preset set`: `preset` against `name`. `devices bind|unbind`: `alias` against `instance` (an
+  alias only, as noted). `resource catalog`: `server` against `catalog_server`. `evidence read`:
+  `artifact_id` and `run_id` against `artifact` and `run`. `run stop`: `handle` against `id`.
+- `app`: `instance` an alias against the row's instance (alias, `instance_id` or ADB port).
+
+**Tests.** New: apps row "#434 LAB-5C": `gate_434_lab5c::lab5c_new_parameters_reach_their_function`,
+`gate_434_lab5c::remedy_set_takes_a_rows_file_or_rows_inline` and
+`gate_434_lab5c::material_out_writes_the_whole_material` (actinglab's binary tests; a state root in
+a temporary folder on which no Runtime runs; no device, no clock, no sleep). Unchanged and passing:
+`lab_ops_table_complete`, `gate_434_lab5a`.
+
+**Interface.** None raised: no code, key, location, record or interface revision is added; the
+table's schema string stays (members and types are the ones §9.1 has).
+
+**What LAB-5C changes live.** The command line and `serve --stdio` take the new options; a line
+without them answers as before. `remedy set` with neither `file` nor `rows`, and with both, is
+refused before anything is sent.
+
+**LAB-5C rollback** (to the release before it). Nothing persisted: code and the table's text.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

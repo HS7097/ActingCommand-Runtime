@@ -87,6 +87,10 @@ mod gate_434_lab2b;
 // Workflow #434 LAB-5A: every offered row declares its parameters; no command line changes.
 #[path = "gate_434_lab5a.rs"]
 mod gate_434_lab5a;
+// Workflow #434 LAB-5C: the arguments only MCP took are parameters of their rows; no command line
+// changes.
+#[path = "gate_434_lab5c.rs"]
+mod gate_434_lab5c;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

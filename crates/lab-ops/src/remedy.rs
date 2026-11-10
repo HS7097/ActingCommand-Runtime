@@ -318,11 +318,43 @@ pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
-    let parsed = match parse(arguments) {
+    let parsed = match parse(arguments, false) {
         Ok(parsed) => parsed,
         Err(outcome) => return Some(cli_line::failure(&outcome, Some(USAGE))),
     };
-    Some(match run(&parsed, detail) {
+    Some(line(run(&parsed, None, detail)))
+}
+
+/// Workflow #434 LAB-5C: `remedy set` with the scope's whole list given inline, the JSON `rows`
+/// MCP `ac_remedy_set` takes, in place of `--rows <file>`: `arguments` is the command line without
+/// `--rows` (with it, `--rows` is `conflicting`; another action than `set` refuses `--rows` as
+/// `unknown`, as its command line does). The rows are read as a rows file's content is
+/// ([`rows_from_json`]; another shape is `actingctl_usage_invalid`, `--rows`, `wrong_type`), then
+/// `set` runs as [`dispatch`] runs it. `None` when the first word is no `remedy`.
+pub fn dispatch_rows(
+    arguments: &[OsString],
+    rows: &Value,
+    detail: Detail,
+) -> Option<cli_line::Exit> {
+    if arguments.first()?.to_str()? != COMMAND {
+        return None;
+    }
+    let parsed = match parse(arguments, true) {
+        Ok(parsed) => parsed,
+        Err(outcome) => return Some(cli_line::failure(&outcome, Some(USAGE))),
+    };
+    let Some(rows) = rows_from_json(rows) else {
+        return Some(cli_line::failure(
+            &cli_line::usage_invalid(Some("--rows"), ArgumentProblem::WrongType),
+            Some(USAGE),
+        ));
+    };
+    Some(line(run(&parsed, Some(rows), detail)))
+}
+
+/// The line of one run of the command: its answer beside its outcome, or why it ended.
+fn line(ran: Result<(Value, Outcome), Ended>) -> cli_line::Exit {
+    match ran {
         Ok((answer, outcome)) => cli_line::success(cli_line::members(answer, COMMAND), &outcome),
         Err(Ended::Usage(outcome)) => cli_line::failure(&outcome, Some(USAGE)),
         // A refused request prints the Runtime's receipt beside its outcome and exits non-zero.
@@ -338,7 +370,7 @@ pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit
             None => cli_line::refused(&error.outcome(), Some(&error.to_string())),
         },
         Err(Ended::Failure(failure)) => cli_line::refused(&failure.outcome(), None),
-    })
+    }
 }
 
 /// Why the CLI ended without an answer.
@@ -350,8 +382,9 @@ enum Ended {
 /// `remedy <set|get|lift>` and the flags `flags_of` names for the action, each once with a
 /// value; for `set`, exactly one target form (`--instance` or `--game`) and `--rows`; for `get`
 /// and `lift`, `--instance`; `--state-root` always. Any other word, `--server` included, is
-/// `unknown`.
-fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
+/// `unknown`. Workflow #434 LAB-5C: with the rows `inline`, `set` takes no `--rows`
+/// (`conflicting`), and `get` and `lift` refuse the rows as `--rows` `unknown`.
+fn parse(arguments: &[OsString], inline: bool) -> Result<Parsed, Outcome> {
     let action = match arguments.get(1).and_then(|word| word.to_str()) {
         Some(SET) => SET,
         Some(GET) => GET,
@@ -416,20 +449,32 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
             Some("--game"),
             ArgumentProblem::Conflicting,
         )),
-        (SET, _, _, None) => Err(cli_line::usage_invalid(
+        (SET, _, _, None) if !inline => Err(cli_line::usage_invalid(
             Some("--rows"),
             ArgumentProblem::Required,
+        )),
+        (SET, _, _, Some(_)) if inline => Err(cli_line::usage_invalid(
+            Some("--rows"),
+            ArgumentProblem::Conflicting,
+        )),
+        (GET | LIFT, _, _, _) if inline => Err(cli_line::usage_invalid(
+            Some("--rows"),
+            ArgumentProblem::Unknown,
         )),
         _ => Ok(parsed),
     }
 }
 
 /// Connects with the CLI's (Cli, Cli) origin and runs the action: its answer and the line's
-/// outcome.
-fn run(parsed: &Parsed, detail: Detail) -> Result<(Value, Outcome), Ended> {
+/// outcome. Workflow #434 LAB-5C: `set`'s rows are its rows file's, or the rows given `inline`.
+fn run(
+    parsed: &Parsed,
+    inline: Option<Vec<BTreeMap<String, FactScalar>>>,
+    detail: Detail,
+) -> Result<(Value, Outcome), Ended> {
     let rows = match &parsed.rows {
         Some(path) => Some(read_rows(path).map_err(Ended::Usage)?),
-        None => None,
+        None => inline,
     };
     let config = crate::front::client_config(&parsed.state_root);
     let config = match detail {
