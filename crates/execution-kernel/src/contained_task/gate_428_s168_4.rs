@@ -938,7 +938,7 @@ fn list_reading_declaration_refusals() {
         (
             "another effect",
             with_read(|step| step["click"] = json!({"kind": "point", "x": 1, "y": 1})),
-            "read_members:click",
+            "read_members:read_list",
         ),
         (
             "a retry count",

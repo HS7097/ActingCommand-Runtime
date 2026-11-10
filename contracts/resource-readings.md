@@ -661,10 +661,13 @@ structure in the operation's own check (`Declaration::read_list_step`) and the r
 task with its references in the task's own `candidate_layouts` (`Declaration::list_readings`);
 admission's own checks run before the common operation checks (`validate_list_reading_members`)
 and with the recognition pack (`prepare_list_readings`), and `<reason>` is the member the gate
-refuses at, below the operation (`read_list`, `to`, `guard`, `retryable`, a refused member,
-`read_list/layout_id`, `read_list/columns/<j>/feature`, …), `scheduling_outcome` or `operations`
-for a rule of the whole task, and `read_list/scan <key>=<value>` for a select step's static check
-of the scan. Admission runs the declaration gate on the sealed task before its own checks, so a
+refuses at, below the operation (`read_list`, also for another effect beside it, `to`, `guard`,
+`retryable`, a refused member, `read_list/layout_id`, `read_list/columns/<j>/feature`, …),
+`scheduling_outcome` or `operations` for a rule of the whole task, and
+`read_list/scan <key>=<value>` for a select step's static check of the scan. One case differs: a
+`read_list` whose members do not make up a declaration (one missing, `scan` for example, or one of
+the wrong type) is refused at `read_list`, where the gate names the member (`read_list/scan`).
+Admission runs the declaration gate on the sealed task before its own checks, so a
 sealed task that breaks a rule the gate checks is refused there first, with
 `resource_declaration_invalid` at the pointer; in a run, admission's own refusal is the one of a
 rule only it checks (the scan's values against a select step's static checks, the references
@@ -722,6 +725,10 @@ guard, the geometry, the budget, a projection) ends the run with its code, with 
 the run does not recover within itself. A run that fails or is cancelled publishes no list.
 
 Zero positions, with both checks passed, is an empty list: a reading that holds, with no row.
+At this step a layout whose anchor template matches nothing on the page cannot be told from a
+list that is really empty: both read zero positions and, when both checks pass, publish an empty
+list. A package must therefore make its start and end checks specific to the list page, so that
+they do not both pass where the list does not show.
 
 ### Publication
 

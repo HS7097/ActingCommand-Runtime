@@ -158,13 +158,17 @@ impl TaskOperation {
     /// The first member, as its JSON pointer below the operation, that a `read_list` step never
     /// takes (`contracts/resource-readings.md`, "Members of a `read_list` step"): another effect,
     /// a retry, a recovery, a trusted coordinate, a confirmation after its moves, a cap of its
-    /// own, or a `linear_steps` member.
+    /// own, or a `linear_steps` member. Another effect is named `read_list`, the member the
+    /// declaration gate refuses beside it.
     fn refused_read_list_member(&self) -> Option<&'static str> {
         [
-            ("click", self.click.is_some()),
-            ("application", self.application.is_some()),
-            ("select", self.select.is_some()),
-            ("wait", self.wait.is_some()),
+            (
+                READ_LIST_MEMBER,
+                self.click.is_some()
+                    || self.application.is_some()
+                    || self.select.is_some()
+                    || self.wait.is_some(),
+            ),
             ("max_attempts", self.max_attempts.is_some()),
             ("retry_interval_ms", self.retry_interval_ms.is_some()),
             ("on_error", self.on_error.is_some()),
