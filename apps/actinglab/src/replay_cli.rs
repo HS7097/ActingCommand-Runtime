@@ -49,6 +49,17 @@ const REPLAY_INSTANCE: &str = "offline.replay";
 const MAX_FACTS_BYTES: u64 = 4 * 1024 * 1024;
 /// A scan declaration is a few hundred bytes; a saved one stays well inside this bound.
 const MAX_SCAN_BYTES: u64 = 1024 * 1024;
+/// Workflow #434 LAB-5B2: the flags `replay` takes.
+pub(crate) const REPLAY_FLAGS: [&str; 8] = [
+    "--package",
+    "--frames",
+    "--facts",
+    "--select",
+    "--scan",
+    "--parameter",
+    "--seed",
+    crate::lab_tables::STANDARD_PACK_ROOT_FLAG,
+];
 
 pub(super) fn run_replay(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     let args = ReplayArgs::parse(global, flags)?;
@@ -176,19 +187,11 @@ impl ReplayArgs {
                 &[],
             ));
         }
-        if let Some(name) = flags.flags.keys().find(|name| {
-            !matches!(
-                name.as_str(),
-                "--package"
-                    | "--frames"
-                    | "--facts"
-                    | "--select"
-                    | "--scan"
-                    | "--parameter"
-                    | "--seed"
-                    | crate::lab_tables::STANDARD_PACK_ROOT_FLAG
-            )
-        }) {
+        if let Some(name) = flags
+            .flags
+            .keys()
+            .find(|name| !REPLAY_FLAGS.contains(&name.as_str()))
+        {
             return Err(CliError::usage(format!("replay does not accept {name}")));
         }
         let select = match (

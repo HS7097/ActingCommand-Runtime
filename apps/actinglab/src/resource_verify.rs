@@ -31,7 +31,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 /// The report's schema, also the `report_schema` of the capability entry.
 pub(crate) const REPORT_SCHEMA: &str = "actinglab.resource-verify.v1";
 /// The six flags `resource verify` reads; every other flag is refused.
-const FLAGS: [&str; 6] = [
+pub(crate) const FLAGS: [&str; 6] = [
     "--repo",
     "--source-repository",
     "--work",

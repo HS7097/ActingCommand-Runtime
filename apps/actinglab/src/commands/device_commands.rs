@@ -482,9 +482,13 @@ pub(crate) enum DirectTouchCommand {
     },
 }
 
+/// Workflow #434 LAB-5B2: the flags `tap`, `swipe` and `long-tap` take: none, they take positional
+/// arguments only.
+pub(crate) const DIRECT_TOUCH_FLAGS: [&str; 0] = [];
+
 impl DirectTouchCommand {
     pub(crate) fn parse(command: &str, flags: &FlagArgs) -> CliOutcome<Self> {
-        flags.reject_flags(command)?;
+        flags.reject_flags(command, &DIRECT_TOUCH_FLAGS)?;
         match command {
             "tap" => {
                 flags.expect_positionals(command, 2)?;
@@ -751,9 +755,13 @@ pub(crate) enum DirectInputCommand {
     Text(String),
 }
 
+/// Workflow #434 LAB-5B2: the flags `key` and `text` take: none, they take positional arguments
+/// only.
+pub(crate) const DIRECT_INPUT_FLAGS: [&str; 0] = [];
+
 impl DirectInputCommand {
     pub(crate) fn parse(command: &str, flags: &FlagArgs) -> CliOutcome<Self> {
-        flags.reject_flags(command)?;
+        flags.reject_flags(command, &DIRECT_INPUT_FLAGS)?;
         match command {
             "key" => {
                 flags.expect_positionals("key", 1)?;

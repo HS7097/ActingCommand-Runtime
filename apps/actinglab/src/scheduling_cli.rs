@@ -7,6 +7,29 @@ use actingcommand_lab::{
 };
 use serde_json::Value;
 
+/// Workflow #434 LAB-5B2: the flags `scheduling compile` takes.
+pub(crate) const COMPILE_FLAGS: [&str; 5] = [
+    "--tasks",
+    "--pools",
+    "--activity",
+    "--timeline",
+    "--selection",
+];
+/// Workflow #434 LAB-5B2: the flags `scheduling timeline` takes.
+pub(crate) const TIMELINE_FLAGS: [&str; 11] = [
+    "--tasks",
+    "--pools",
+    "--activity",
+    "--timeline",
+    "--selection",
+    "--event-id",
+    "--unix-ms",
+    "--monotonic-ms",
+    "--instance-id",
+    "--server-id",
+    "--game-id",
+];
+
 pub(crate) fn run_scheduling(
     sub: &str,
     global: &GlobalOptions,
@@ -38,26 +61,8 @@ pub(crate) fn run_scheduling(
     let flags = FlagArgs::parse_values(args)?;
     flags.expect_positionals("scheduling", 0)?;
     let allowed = match sub {
-        "compile" => &[
-            "--tasks",
-            "--pools",
-            "--activity",
-            "--timeline",
-            "--selection",
-        ][..],
-        "timeline" => &[
-            "--tasks",
-            "--pools",
-            "--activity",
-            "--timeline",
-            "--selection",
-            "--event-id",
-            "--unix-ms",
-            "--monotonic-ms",
-            "--instance-id",
-            "--server-id",
-            "--game-id",
-        ][..],
+        "compile" => &COMPILE_FLAGS[..],
+        "timeline" => &TIMELINE_FLAGS[..],
         _ => {
             return Err(CliError::usage(format!(
                 "unknown scheduling command: {sub}"

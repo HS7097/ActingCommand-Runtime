@@ -1329,3 +1329,12 @@ tests = [
     "actingcommand-lab-rescue::lib::rescue::gate_434_lab5a::rescue_rows_hand_their_declared_parameters_on",
 ]
 incident = ["#434 LAB-5A"]
+
+# Workflow #434 LAB-5B2 (0.12.52; register §1.287, "Slice LAB-5B2"; brief rd-1108/arch-013/brief-lab5b2.md; contracts/lab-two-entries.md §9.1): the 31 strict rows of the debugging and authoring modules (tap, swipe, long-tap, key, text, observe, do, ensure, wait, watch, the three signatures rows, unpin, record mark, record stop, package check, preflight, loading, fmt and edit, resource catalog, validate, verify and restore, standard-pack check and compose, scheduling compile and timeline, regression, replay), whose own command checks its flags against lists in code, each list one named constant its check uses, declare what their command accepts, in both directions: every option and switch a row declares, but actinglab's global options, is an option or a switch of its command, every flag of the command is declared by the row in the same form (a global option in any form, do's --target as its positional), and the row's positionals, the instance not among them, fit the count the command checks (tap 2, swipe 5, long-tap 3, key 1, text at least 1, none for the others that check one); every planned row of the two modules is in exactly one of the kinds strict, lenient, table-driven and no command, each kind lists only such rows, once, and the register of strict rows answers for exactly those
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5b2::strict_rows_match_their_commands",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5b2::every_debugging_and_authoring_row_has_one_kind",
+]
+incident = ["#434 LAB-5B2"]

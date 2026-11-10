@@ -19,6 +19,12 @@ use actingcommand_resource_tooling::{
 };
 use serde_json::Value;
 
+/// Workflow #434 LAB-5B2: the flags `standard-pack check` takes.
+pub(crate) const CHECK_FLAGS: [&str; 1] = ["--root"];
+/// Workflow #434 LAB-5B2: the flags `standard-pack compose` takes (its own `--instance`, given
+/// after the command's words, `cli_parse::COMMAND_OPTIONS`).
+pub(crate) const COMPOSE_FLAGS: [&str; 3] = ["--root", "--instance", "--out"];
+
 pub(crate) fn options() -> [&'static str; 1] {
     ["--root <installed game root: <standard_packs.root>/<game>>"]
 }
@@ -40,7 +46,11 @@ pub(crate) fn run_standard_pack(
     match sub {
         "check" => {
             let flags = FlagArgs::parse_values(args)?;
-            if let Some(flag) = flags.flags.keys().find(|flag| flag.as_str() != "--root") {
+            if let Some(flag) = flags
+                .flags
+                .keys()
+                .find(|flag| !CHECK_FLAGS.contains(&flag.as_str()))
+            {
                 return Err(CliError::usage(format!(
                     "standard-pack check does not accept {flag}"
                 )));
@@ -58,7 +68,7 @@ pub(crate) fn run_standard_pack(
             if let Some(flag) = flags
                 .flags
                 .keys()
-                .find(|flag| !["--root", "--instance", "--out"].contains(&flag.as_str()))
+                .find(|flag| !COMPOSE_FLAGS.contains(&flag.as_str()))
             {
                 return Err(CliError::usage(format!(
                     "standard-pack compose does not accept {flag}"

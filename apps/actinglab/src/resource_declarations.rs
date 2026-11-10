@@ -54,12 +54,12 @@ pub(crate) fn options() -> [&'static str; 3] {
     ]
 }
 
+/// Workflow #434 LAB-5B2: the flags `resource validate` takes.
+pub(crate) const VALIDATE_FLAGS: [&str; 3] = ["--repo", "--changed-path", "--changed-paths-file"];
+
 pub(crate) fn run_resource_validation(repo: &Path, flags: &FlagArgs) -> CliOutcome<Value> {
     for flag in flags.flags.keys() {
-        if !matches!(
-            flag.as_str(),
-            "--repo" | "--changed-path" | "--changed-paths-file"
-        ) {
+        if !VALIDATE_FLAGS.contains(&flag.as_str()) {
             return Err(CliError::usage(format!(
                 "resource validate does not accept {flag}"
             )));

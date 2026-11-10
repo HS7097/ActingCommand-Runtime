@@ -18,6 +18,10 @@ const CHECK_BUDGET: Duration = Duration::from_secs(60);
 /// The instance label the check admits a package under: admission depends only on the package
 /// and the kernel, not on an instance.
 const CHECK_LABEL: &str = "package-check";
+/// Workflow #434 LAB-5B2: the flags `package check` takes.
+pub(crate) const CHECK_FLAGS: [&str; 1] = ["--package"];
+/// Workflow #434 LAB-5B2: the flags `package preflight` takes: the package by its path.
+pub(crate) const PREFLIGHT_FLAGS: [&str; 2] = ["--package", "--zip"];
 
 /// Workflow #411 A5 (M-PKG §3.2, S5-T4): the answer of `package check`, a package the Runtime's
 /// structural admission admitted, named by what its control declares.
@@ -42,7 +46,11 @@ struct PackageCheckResponse {
 /// capability, so the verdict never depends on a local OCR install. A refusal is
 /// `package_invalid` with `details.code`, the admission's own code. It only reads.
 pub(super) fn run_check(flags: &FlagArgs) -> CliOutcome<Value> {
-    if let Some(flag) = flags.flags.keys().find(|flag| flag.as_str() != "--package") {
+    if let Some(flag) = flags
+        .flags
+        .keys()
+        .find(|flag| !CHECK_FLAGS.contains(&flag.as_str()))
+    {
         return Err(CliError::usage(format!(
             "package check does not accept {flag}"
         )));
@@ -137,7 +145,7 @@ pub(super) fn is_offline_command(args: &[String]) -> bool {
 /// the answer names it by its `package_id`, never a digest.
 pub(super) fn run_preflight(flags: &FlagArgs) -> CliOutcome<Value> {
     for name in flags.flags.keys() {
-        if !matches!(name.as_str(), "--package" | "--zip") {
+        if !PREFLIGHT_FLAGS.contains(&name.as_str()) {
             return Err(CliError::usage(format!(
                 "package preflight does not accept {name}"
             )));
