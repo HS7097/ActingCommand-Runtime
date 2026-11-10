@@ -9438,6 +9438,86 @@ Adapted, as the requirement deliberately extends what it pins:
 fixture had no table: its bundle now also carries one table that the placement replaces, and
 after the placement and after `undo` the table reader lists that table alone, read.
 
+### 1.294 Slice FLK-10 (0.12.51): the Lab's environment-detection lock reads its holder's identity from the operating system, no helper program started (Workflow #71 FLK-10; on 11-10 a loaded CI runner did not get an answer from PowerShell within 30 s, and `detect` answered `validation_failed`, "owner identity unavailable: PowerShell process inspector for PID … timed out after 30000ms", CI run 42793213181, registered as flaky FLK-10 in #71 comment 6764779352; the coordinator's ruling, not Alice's words: read the process start from the system directly; coordinator work order `rd-1110/brief-flk10-native-process-inspector.md`)
+
+This section and the comments of `crates/lab/src/env_detection/lock.rs` are the contract: no
+contract and no README described the result lock before. 1.294 is the next free number on main
+`126d3f68`. No persisted ledger shape, wire shape, configuration key, outcome code, location or
+vocabulary is new or changed.
+
+**The lock.** A writer of an environment-detection result holds `<result>.json.lock` (schema
+`env-result-lock.v2`) while it writes. The record names its holder by `host_identity`, `pid`,
+`process_start_token` and a 64-hex `owner_token`. A contender takes a lock over only when the host
+is the same and the holder process is gone (`owner_pid_absent`) or the pid now belongs to a process
+with another start (`owner_pid_reused_with_different_start_time`); a holder whose liveness cannot be
+proven keeps the lock. The record's shape and the text of every member are unchanged.
+
+**Why.** On Windows the lock learned these facts by starting programs, each under a 30 s deadline
+(`WINDOWS_PROBE_TIMEOUT`): `powershell.exe` with `Get-Process` for a process's start,
+`hostname.exe` for the host, and `powershell.exe` with `RandomNumberGenerator` for the 32 bytes
+that seed the owner token. Every Lab process that takes the lock started all three, and on a host
+under load PowerShell alone can take longer than the deadline to start.
+
+**What changed (Windows only).** The three reads go to the operating system directly, through
+`actingcommand-host-metrics`, the workspace's safe Win32 boundary (`crates/lab` forbids unsafe
+code, as lab-ops, lab-rescue and runtime-host do, which already read processes there); no program
+is started and nothing waits on one:
+
+- **A process's start:** `probe_process_creation`, the query of the existing `probe_process`
+  (`OpenProcess` with `PROCESS_QUERY_LIMITED_INFORMATION`, `GetExitCodeProcess`,
+  `GetProcessTimes`), which answers the creation `FILETIME` (100 ns since 1601-01-01T00:00:00Z).
+  The start token stays the text PowerShell printed, `$p.StartTime.ToUniversalTime().Ticks` in the
+  invariant culture: .NET ticks (100 ns since 0001-01-01T00:00:00Z) in decimal digits. .NET's
+  `StartTime` is `DateTime.FromFileTime` of the same `FILETIME`, so the token is the `FILETIME` plus
+  504 911 232 000 000 000 (584 388 days of 864 000 000 000 ticks, .NET's
+  `DateTime.FileTimeOffset`); a time past .NET's last tick is an error, as PowerShell printed no
+  ticks for it. A lock written by an earlier build is therefore judged as before, and the other
+  way round.
+- **Gone or unreadable:** no process with the id (`OpenProcess` fails with
+  `ERROR_INVALID_PARAMETER`), or one that has exited, is `Missing`, as the script's exit 3 was. A
+  process the system refuses to open (`process_query_refused`), cannot open
+  (`process_open_failed`), or whose exit code, times or creation time cannot be read
+  (`process_exit_code_unavailable`, `process_times_unavailable`, `process_creation_time_invalid`)
+  is an error naming that code, never `Missing`, so its lock is kept ("owner liveness could not be
+  proven"). Pid 0 is `process_id_reserved`.
+- **The host:** `dns_host_name`, `GetComputerNameExW` with `ComputerNameDnsHostname`: the host-name
+  part of the computer's full DNS name, which `hostname.exe` prints. It is trimmed and lowercased
+  as before, so `host_identity` keeps its text.
+- **The owner token's seed:** `fill_system_random`, `BCryptGenRandom` with the system-preferred
+  generator (windows-sys feature `Win32_Security_Cryptography` for host-metrics), 32 bytes as
+  before; the owner token is still the SHA-256 of seed, pid, sequence and time, 64 hex digits. The
+  seed is not a fact of the system, but it started PowerShell under the same deadline, so leaving
+  it would have left the same timeout.
+
+The probe runner and its constants (`WINDOWS_PROBE_TIMEOUT` among them) are gone: no probe is left
+for them. `probe_process` keeps its answers; it now converts the creation probe's. Linux and the
+other Unix systems are unchanged (`/proc`, `ps`, `hostname`, `/dev/urandom`).
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): the result lock
+is no listed interface, its file and every member's text are unchanged, and the new host-metrics
+functions are Runtime-internal. `runtime-outcomes`: the codes the process read can name are
+host-metrics' existing ones.
+
+**At deploy.** Environment detection no longer starts PowerShell or `hostname.exe` to read the lock
+holder's identity, and no longer fails with "process inspector … timed out" on a loaded machine.
+Locks written by an earlier build are read as before. The Windows error texts of the three reads
+change (for example "process inspector could not read PID <pid>: process_query_refused; …").
+**Rollback** (below 0.12.51): the PowerShell readers return with their deadline; the lock file and
+its tokens are the same either way.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| FLK10-1 | `actingcommand_host_metrics::probe_process_creation`, `ProcessCreationProbe` (`Running { created_at_windows_100ns }`, `NotRunning`, `Unknown(Code)`) | Runtime-internal interface | FLK-10 | — | `since` 0.12.51; `probe_process`'s query and codes; `process_probe_unsupported` off Windows |
+| FLK10-2 | `actingcommand_host_metrics::dns_host_name` | Runtime-internal interface | FLK-10 | — | `GetComputerNameExW`, `ComputerNameDnsHostname`; the operating system's error; `Unsupported` off Windows |
+| FLK10-3 | `actingcommand_host_metrics::fill_system_random` | Runtime-internal interface | FLK-10 | — | `BCryptGenRandom`, `BCRYPT_USE_SYSTEM_PREFERRED_RNG`; a failure names its NTSTATUS; `Unsupported` off Windows |
+| FLK10-4 | the environment-detection lock's holder identity on Windows (`crates/lab/src/env_detection/lock.rs`) | Runtime-internal behaviour | FLK-10 | lab | `env-result-lock.v2` and the text of `host_identity`, `process_start_token` and `owner_token` unchanged; `crates/lab` gains the Windows-only workspace dependency `actingcommand-host-metrics`, no new third-party crate |
+
+Tests (exec gate row "#71 FLK-10"):
+`env_detection::lock::tests::flk10_windows_holder_start_is_read_from_the_system_as_dotnet_ticks`.
+Removed with the runner it tested: `env_detection::lock::tests::windows_probe_timeout_terminates_helper`
+(in no gate row). The other tests of the lock are unchanged; none pinned the PowerShell reader's
+text (the Windows fixture `sleeping_child` still starts `powershell.exe`, as a process to kill).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

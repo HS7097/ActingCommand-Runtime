@@ -220,6 +220,7 @@ dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-execution-kernel",
+ "actingcommand-host-metrics",
  "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-page-detector",

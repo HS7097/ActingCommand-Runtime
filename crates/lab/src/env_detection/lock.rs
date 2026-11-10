@@ -2,8 +2,10 @@
 
 //! Stale recovery holds a per-owner claim and re-reads ownership before rename so delayed
 //! contenders cannot replace a newly acquired result lock. Host identity must match before
-//! process liveness can prove staleness; timestamps never prove staleness. Windows process
-//! proofs have an executable deadline, independent from bounded lock and claim attempts.
+//! process liveness can prove staleness; timestamps never prove staleness. On Windows the
+//! holder's identity (the host name, the process's start, the owner token's random seed) is read
+//! from the operating system itself through `actingcommand-host-metrics`, and no program is
+//! started for it (Workflow #71 FLK-10), so a loaded host cannot make the proof time out.
 
 use actingcommand_contract::{LabError, LabResult};
 use serde::{Deserialize, Serialize};
@@ -11,17 +13,14 @@ use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::fs::File;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
+#[cfg(unix)]
+use std::io::Read;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+#[cfg(any(all(unix, not(target_os = "linux")), test))]
 use std::process::Command;
-#[cfg(target_os = "windows")]
-use std::process::{ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(target_os = "windows")]
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const LOCK_SCHEMA_VERSION: &str = "env-result-lock.v2";
@@ -29,14 +28,16 @@ const MAX_LOCK_ACQUIRE_ATTEMPTS: usize = 4;
 const MAX_RECLAIM_CLAIM_ATTEMPTS: usize = 4;
 const RECORD_READ_TIMEOUT: Duration = Duration::from_secs(1);
 const RECORD_READ_DELAY: Duration = Duration::from_millis(5);
+/// .NET ticks (100 ns intervals since 0001-01-01T00:00:00Z) of 1601-01-01T00:00:00Z, where a
+/// Windows `FILETIME` counts its 100 ns intervals from: the 1 600 years before it hold
+/// 1 600 × 365 + 388 leap days = 584 388 days of 864 000 000 000 ticks, that is
+/// 504 911 232 000 000 000 ticks (.NET's `DateTime.FileTimeOffset`).
 #[cfg(target_os = "windows")]
-const WINDOWS_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+const FILETIME_ORIGIN_DOTNET_TICKS: u64 = 504_911_232_000_000_000;
+/// The ticks of .NET's `DateTime.MaxValue`, 9999-12-31T23:59:59.9999999Z: a later time has no
+/// .NET ticks, so the PowerShell reader before FLK-10 printed none for it.
 #[cfg(target_os = "windows")]
-const WINDOWS_PROBE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
-#[cfg(target_os = "windows")]
-const WINDOWS_PROBE_POLL_DELAY: Duration = Duration::from_millis(10);
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const DOTNET_MAX_TICKS: u64 = 3_155_378_975_999_999_999;
 static TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static RANDOM_SEED: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
 static CURRENT_PROCESS_START: OnceLock<Result<String, String>> = OnceLock::new();
@@ -396,7 +397,8 @@ impl ReclaimClaim {
         environment: &impl LockEnvironment,
     ) -> LockResult<Self> {
         let path = reclaim_claim_path(lock_path, observed);
-        // Owner proofs are independently deadline-bound; claim arbitration is bounded by attempts.
+        // Owner proofs read the operating system and wait on no helper program on Windows or
+        // Linux; claim arbitration is bounded by attempts.
         for claim_attempt in 1..=MAX_RECLAIM_CLAIM_ATTEMPTS {
             match create_lock_file(&path, proposed, result_path) {
                 Ok(()) => {
@@ -1021,204 +1023,51 @@ fn reclaim_exhausted(result_path: &Path, attempts: usize, reason: &str) -> LabEr
     ))
 }
 
+/// Workflow #71 FLK-10: the start token of a Windows process, the text the PowerShell reader
+/// before FLK-10 printed for it (`$p.StartTime.ToUniversalTime().Ticks` in the invariant
+/// culture): the .NET ticks of the process's UTC creation time in decimal digits. .NET's
+/// `StartTime` is `DateTime.FromFileTime` of the `FILETIME` read here, so the ticks are that
+/// `FILETIME` plus [`FILETIME_ORIGIN_DOTNET_TICKS`], and a lock either build wrote names its holder
+/// by the same text for the other. Worked by hand (the values of the FLK-10 test):
+/// - `FILETIME` 116 444 736 000 000 000 (1970-01-01T00:00:00Z) gives
+///   116 444 736 000 000 000 + 504 911 232 000 000 000 = 621 355 968 000 000 000, .NET's ticks of
+///   the Unix epoch;
+/// - `FILETIME` 134 387 424 001 234 567 (2026-11-10T00:00:00.1234567Z, 1 794 268 800 s after the
+///   Unix epoch: 116 444 736 000 000 000 + 17 942 688 000 000 000 + 1 234 567) gives
+///   134 387 424 001 234 567 + 504 911 232 000 000 000 = 639 298 656 001 234 567.
 #[cfg(target_os = "windows")]
-#[derive(Debug)]
-struct WindowsProbeOutput {
-    status: ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
+fn windows_start_token(created_at_windows_100ns: u64) -> Result<String, String> {
+    created_at_windows_100ns
+        .checked_add(FILETIME_ORIGIN_DOTNET_TICKS)
+        .filter(|ticks| *ticks <= DOTNET_MAX_TICKS)
+        .map(|ticks| ticks.to_string())
+        .ok_or_else(|| {
+            format!(
+                "process creation time {created_at_windows_100ns} (FILETIME) lies past the last .NET tick"
+            )
+        })
 }
 
-#[cfg(target_os = "windows")]
-fn run_windows_probe(
-    program: &str,
-    args: &[&str],
-    timeout: Duration,
-    purpose: &str,
-) -> Result<WindowsProbeOutput, String> {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW);
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("failed to start {purpose}: {error}"))?;
-    let Some(stdout) = child.stdout.take() else {
-        let cleanup = stop_windows_probe(&mut child, WINDOWS_PROBE_SHUTDOWN_TIMEOUT);
-        return Err(format!(
-            "failed to open {purpose} stdout; cleanup={cleanup:?}"
-        ));
-    };
-    let Some(stderr) = child.stderr.take() else {
-        let cleanup = stop_windows_probe(&mut child, WINDOWS_PROBE_SHUTDOWN_TIMEOUT);
-        return Err(format!(
-            "failed to open {purpose} stderr; cleanup={cleanup:?}"
-        ));
-    };
-    let stdout_reader = spawn_windows_probe_reader(stdout);
-    let stderr_reader = spawn_windows_probe_reader(stderr);
-    let started = Instant::now();
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                return collect_windows_probe_output(status, stdout_reader, stderr_reader, purpose);
-            }
-            Ok(None) if started.elapsed() < timeout => {
-                let remaining = timeout.saturating_sub(started.elapsed());
-                std::thread::sleep(WINDOWS_PROBE_POLL_DELAY.min(remaining));
-            }
-            Ok(None) => {
-                let status = stop_windows_probe(&mut child, WINDOWS_PROBE_SHUTDOWN_TIMEOUT)
-                    .map_err(|cleanup_error| {
-                        format!(
-                            "{purpose} timed out after {}ms; probe cleanup failed: {cleanup_error}",
-                            timeout.as_millis()
-                        )
-                    })?;
-                let output = collect_windows_probe_output(
-                    status,
-                    stdout_reader,
-                    stderr_reader,
-                    purpose,
-                )
-                .map_err(|output_error| {
-                    format!(
-                        "{purpose} timed out after {}ms and was terminated; output collection failed: {output_error}",
-                        timeout.as_millis()
-                    )
-                })?;
-                return Err(format!(
-                    "{purpose} timed out after {}ms and was terminated; status={}; stdout_bytes={}; stderr={}",
-                    timeout.as_millis(),
-                    output.status,
-                    output.stdout.len(),
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
-            }
-            Err(error) => {
-                let cleanup = stop_windows_probe(&mut child, WINDOWS_PROBE_SHUTDOWN_TIMEOUT);
-                return Err(format!(
-                    "failed to poll {purpose}: {error}; cleanup={cleanup:?}"
-                ));
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn spawn_windows_probe_reader(
-    mut reader: impl Read + Send + 'static,
-) -> JoinHandle<io::Result<Vec<u8>>> {
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes)?;
-        Ok(bytes)
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn collect_windows_probe_output(
-    status: ExitStatus,
-    stdout_reader: JoinHandle<io::Result<Vec<u8>>>,
-    stderr_reader: JoinHandle<io::Result<Vec<u8>>>,
-    purpose: &str,
-) -> Result<WindowsProbeOutput, String> {
-    Ok(WindowsProbeOutput {
-        status,
-        stdout: join_windows_probe_reader(stdout_reader, purpose, "stdout")?,
-        stderr: join_windows_probe_reader(stderr_reader, purpose, "stderr")?,
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn join_windows_probe_reader(
-    reader: JoinHandle<io::Result<Vec<u8>>>,
-    purpose: &str,
-    stream: &str,
-) -> Result<Vec<u8>, String> {
-    reader
-        .join()
-        .map_err(|_| format!("{purpose} {stream} reader panicked"))?
-        .map_err(|error| format!("failed to read {purpose} {stream}: {error}"))
-}
-
-#[cfg(target_os = "windows")]
-fn stop_windows_probe(
-    child: &mut std::process::Child,
-    timeout: Duration,
-) -> Result<ExitStatus, String> {
-    if let Some(status) = child
-        .try_wait()
-        .map_err(|error| format!("failed to poll probe before termination: {error}"))?
-    {
-        return Ok(status);
-    }
-    if let Err(error) = child.kill() {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|poll_error| format!("{error}; follow-up poll failed: {poll_error}"))?
-        {
-            return Ok(status);
-        }
-        return Err(format!("failed to terminate probe: {error}"));
-    }
-    let started = Instant::now();
-    loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("failed to poll terminated probe: {error}"))?
-        {
-            return Ok(status);
-        }
-        let remaining = timeout.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            return Err(format!(
-                "probe did not exit within {}ms after termination",
-                timeout.as_millis()
-            ));
-        }
-        std::thread::sleep(WINDOWS_PROBE_POLL_DELAY.min(remaining));
-    }
-}
-
+/// Workflow #71 FLK-10: the operating system's own answer through the workspace's safe Win32
+/// boundary (`OpenProcess` with limited query rights, `GetExitCodeProcess`, `GetProcessTimes`);
+/// no program is started, so a loaded host cannot make the proof time out. No process with the
+/// id, or one that has exited, is `Missing`, as the PowerShell reader's exit 3 was. A process the
+/// system does not open or query for this reader is an error that names the reason, never
+/// `Missing`: a live holder that cannot be read keeps its lock.
 #[cfg(target_os = "windows")]
 fn inspect_system_process(pid: u32) -> Result<ProcessStatus, String> {
-    let script = format!(
-        "$p=Get-Process -Id {pid} -ErrorAction SilentlyContinue; if ($null -eq $p) {{ exit 3 }}; try {{ [Console]::Out.Write($p.StartTime.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture)); exit 0 }} catch {{ [Console]::Error.Write($_.Exception.Message); exit 4 }}"
-    );
-    let output = run_windows_probe(
-        "powershell.exe",
-        &[
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            &script,
-        ],
-        WINDOWS_PROBE_TIMEOUT,
-        &format!("PowerShell process inspector for PID {pid}"),
-    )?;
-    if output.status.success() {
-        let start_token = String::from_utf8(output.stdout)
-            .map_err(|error| format!("process inspector returned non-UTF-8 output: {error}"))?;
-        let start_token = start_token.trim().to_string();
-        if start_token.is_empty() {
-            return Err("process inspector returned an empty start time".to_string());
-        }
-        return Ok(ProcessStatus::Alive { start_token });
+    use actingcommand_host_metrics::{ProcessCreationProbe, probe_process_creation};
+    match probe_process_creation(pid) {
+        ProcessCreationProbe::Running {
+            created_at_windows_100ns,
+        } => Ok(ProcessStatus::Alive {
+            start_token: windows_start_token(created_at_windows_100ns)?,
+        }),
+        ProcessCreationProbe::NotRunning => Ok(ProcessStatus::Missing),
+        ProcessCreationProbe::Unknown(reason) => Err(format!(
+            "process inspector could not read PID {pid}: {reason}; a process the system does not answer for is not taken as gone"
+        )),
     }
-    if output.status.code() == Some(3) {
-        return Ok(ProcessStatus::Missing);
-    }
-    Err(format!(
-        "process inspector failed for PID {pid}: status={} stderr={}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr).trim()
-    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -1278,21 +1127,14 @@ fn inspect_system_process(_pid: u32) -> Result<ProcessStatus, String> {
     Err("process identity inspection is unsupported on this platform".to_string())
 }
 
+/// Workflow #71 FLK-10: the DNS host name from the operating system (`GetComputerNameExW` with
+/// `ComputerNameDnsHostname`), the name `hostname.exe` printed, read without starting it and
+/// normalized as before.
 #[cfg(target_os = "windows")]
 fn system_host_identity() -> Result<String, String> {
-    let output = run_windows_probe("hostname.exe", &[], WINDOWS_PROBE_TIMEOUT, "host inspector")?;
-    if !output.status.success() {
-        return Err(format!(
-            "host inspector failed: status={} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    normalize_host_identity(
-        String::from_utf8(output.stdout)
-            .map_err(|error| format!("host inspector returned non-UTF-8 output: {error}"))?
-            .as_str(),
-    )
+    let name = actingcommand_host_metrics::dns_host_name()
+        .map_err(|error| format!("host inspector failed: {error}"))?;
+    normalize_host_identity(&name)
 }
 
 #[cfg(target_os = "linux")]
@@ -1334,33 +1176,15 @@ fn normalize_host_identity(value: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
+/// Workflow #71 FLK-10: the 32 seed bytes straight from the operating system's random number
+/// generator (`BCryptGenRandom`, the system-preferred generator), which PowerShell's
+/// `RandomNumberGenerator` printed as hexadecimal before; no program is started.
 #[cfg(target_os = "windows")]
 fn system_random_seed() -> Result<[u8; 32], String> {
-    let script = "$bytes=New-Object byte[] 32; $rng=[Security.Cryptography.RandomNumberGenerator]::Create(); try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }; [Console]::Out.Write((($bytes | ForEach-Object { $_.ToString('x2') }) -join ''))";
-    let output = run_windows_probe(
-        "powershell.exe",
-        &[
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            script,
-        ],
-        WINDOWS_PROBE_TIMEOUT,
-        "PowerShell random source",
-    )?;
-    if !output.status.success() {
-        return Err(format!(
-            "PowerShell random source failed: status={} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    parse_seed_hex(
-        String::from_utf8(output.stdout)
-            .map_err(|error| format!("random source returned non-UTF-8 output: {error}"))?
-            .trim(),
-    )
+    let mut seed = [0u8; 32];
+    actingcommand_host_metrics::fill_system_random(&mut seed)
+        .map_err(|error| format!("failed to read the system random source: {error}"))?;
+    Ok(seed)
 }
 
 #[cfg(unix)]
@@ -1375,19 +1199,6 @@ fn system_random_seed() -> Result<[u8; 32], String> {
 #[cfg(not(any(windows, unix)))]
 fn system_random_seed() -> Result<[u8; 32], String> {
     Err("secure random source is unsupported on this platform".to_string())
-}
-
-#[cfg(target_os = "windows")]
-fn parse_seed_hex(value: &str) -> Result<[u8; 32], String> {
-    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("random source did not return 32 hexadecimal bytes".to_string());
-    }
-    let mut seed = [0u8; 32];
-    for (index, byte) in seed.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-            .map_err(|error| format!("failed to parse random byte: {error}"))?;
-    }
-    Ok(seed)
 }
 
 #[cfg(test)]
@@ -1526,28 +1337,41 @@ mod tests {
         }
     }
 
+    /// Workflow #71 FLK-10: on Windows the holder's start is read from the operating system,
+    /// no helper program started, as the text the PowerShell reader printed: the .NET ticks of
+    /// the UTC creation time.
     #[cfg(target_os = "windows")]
     #[test]
-    fn windows_probe_timeout_terminates_helper() {
-        let started = Instant::now();
-        let error = run_windows_probe(
-            "powershell.exe",
-            &[
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Start-Sleep -Seconds 60",
-            ],
-            Duration::from_millis(100),
-            "timeout test probe",
-        )
-        .expect_err("probe must be terminated at its deadline");
-        assert!(error.contains("timed out after 100ms"), "{error}");
+    fn flk10_windows_holder_start_is_read_from_the_system_as_dotnet_ticks() {
+        let pid = std::process::id();
+        let status = inspect_system_process(pid)
+            .unwrap_or_else(|error| panic!("the current process is not readable: {error}"));
+        let ProcessStatus::Alive { start_token } = status else {
+            panic!("the current process must read as alive");
+        };
         assert!(
-            started.elapsed() < Duration::from_secs(3),
-            "bounded probe cleanup exceeded three seconds"
+            start_token.parse::<i64>().is_ok(),
+            "start token {start_token} is no integer"
         );
+        assert_eq!(
+            inspect_system_process(pid),
+            Ok(ProcessStatus::Alive { start_token })
+        );
+        // A multiple of four far above any process id Windows hands out.
+        assert_eq!(
+            inspect_system_process(u32::MAX - 3),
+            Ok(ProcessStatus::Missing)
+        );
+        // The two values worked by hand in `windows_start_token`'s comment.
+        assert_eq!(
+            windows_start_token(116_444_736_000_000_000).as_deref(),
+            Ok("621355968000000000")
+        );
+        assert_eq!(
+            windows_start_token(134_387_424_001_234_567).as_deref(),
+            Ok("639298656001234567")
+        );
+        assert!(windows_start_token(u64::MAX).is_err());
     }
 
     #[test]

@@ -14,13 +14,17 @@ use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, FILETIME,
-    GetLastError, HANDLE, INVALID_HANDLE_VALUE, NO_ERROR, RECT, STILL_ACTIVE, WIN32_ERROR,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_MORE_DATA,
+    ERROR_NO_MORE_FILES, FILETIME, GetLastError, HANDLE, INVALID_HANDLE_VALUE, NO_ERROR, RECT,
+    STILL_ACTIVE, WIN32_ERROR,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
 use windows_sys::Win32::Networking::WinSock as winsock;
+use windows_sys::Win32::Security::Cryptography::{
+    BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -36,7 +40,9 @@ use windows_sys::Win32::System::Performance::{
 use windows_sys::Win32::System::ProcessStatus::{
     K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
 };
-use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+use windows_sys::Win32::System::SystemInformation::{
+    ComputerNameDnsHostname, GetComputerNameExW, GlobalMemoryStatusEx, MEMORYSTATUSEX,
+};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, GetProcessInformation, GetProcessIoCounters,
     GetProcessTimes, GetSystemTimes, IO_COUNTERS, OpenProcess,
@@ -561,30 +567,49 @@ const UNIX_EPOCH_WINDOWS_100NS: u64 = 116_444_736_000_000_000;
 /// Only `ERROR_INVALID_PARAMETER` from the limited open means no process has the id; any
 /// other refusal, protected processes included, leaves the answer unknown.
 pub(super) fn probe_process(pid: u32) -> super::ProcessProbe {
-    use super::ProcessProbe;
+    use super::{ProcessCreationProbe, ProcessProbe};
+    match probe_process_creation(pid) {
+        // `Running` holds a creation time after the Unix epoch only.
+        ProcessCreationProbe::Running {
+            created_at_windows_100ns,
+        } => ProcessProbe::Running {
+            created_at_unix_ms: created_at_windows_100ns.saturating_sub(UNIX_EPOCH_WINDOWS_100NS)
+                / 10_000,
+        },
+        ProcessCreationProbe::NotRunning => ProcessProbe::NotRunning,
+        ProcessCreationProbe::Unknown(code) => ProcessProbe::Unknown(code),
+    }
+}
+
+/// Workflow #71 FLK-10: [`probe_process`]'s query, which answers the creation time as the
+/// `FILETIME` the operating system keeps. Only `ERROR_INVALID_PARAMETER` from the limited open
+/// means no process has the id; any other refusal, protected processes included, leaves the
+/// answer unknown.
+pub(super) fn probe_process_creation(pid: u32) -> super::ProcessCreationProbe {
+    use super::ProcessCreationProbe;
     if pid == 0 {
-        return ProcessProbe::Unknown(HostMetricsCode::ProcessIdReserved.code());
+        return ProcessCreationProbe::Unknown(HostMetricsCode::ProcessIdReserved.code());
     }
     // SAFETY: OpenProcess takes no pointers; a non-null handle is closed by OwnedHandle.
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if handle.is_null() {
         return match unsafe { GetLastError() } {
-            ERROR_INVALID_PARAMETER => ProcessProbe::NotRunning,
+            ERROR_INVALID_PARAMETER => ProcessCreationProbe::NotRunning,
             ERROR_ACCESS_DENIED => {
-                ProcessProbe::Unknown(HostMetricsCode::ProcessQueryRefused.code())
+                ProcessCreationProbe::Unknown(HostMetricsCode::ProcessQueryRefused.code())
             }
-            _ => ProcessProbe::Unknown(HostMetricsCode::ProcessOpenFailed.code()),
+            _ => ProcessCreationProbe::Unknown(HostMetricsCode::ProcessOpenFailed.code()),
         };
     }
     let handle = OwnedHandle(handle);
     let mut exit_code = 0u32;
     // SAFETY: the handle is live and the out pointer is valid for the call.
     if unsafe { GetExitCodeProcess(handle.0, &mut exit_code) } == 0 {
-        return ProcessProbe::Unknown(HostMetricsCode::ProcessExitCodeUnavailable.code());
+        return ProcessCreationProbe::Unknown(HostMetricsCode::ProcessExitCodeUnavailable.code());
     }
     // An exited process whose object another handle still holds is not running.
     if exit_code != STILL_ACTIVE as u32 {
-        return ProcessProbe::NotRunning;
+        return ProcessCreationProbe::NotRunning;
     }
     let mut creation: FILETIME = unsafe { zeroed() };
     let mut exit: FILETIME = unsafe { zeroed() };
@@ -592,14 +617,73 @@ pub(super) fn probe_process(pid: u32) -> super::ProcessProbe {
     let mut user: FILETIME = unsafe { zeroed() };
     // SAFETY: the handle is live and all FILETIME out pointers are valid for the call.
     if unsafe { GetProcessTimes(handle.0, &mut creation, &mut exit, &mut kernel, &mut user) } == 0 {
-        return ProcessProbe::Unknown(HostMetricsCode::ProcessTimesUnavailable.code());
+        return ProcessCreationProbe::Unknown(HostMetricsCode::ProcessTimesUnavailable.code());
     }
-    match filetime(creation).checked_sub(UNIX_EPOCH_WINDOWS_100NS) {
-        Some(since_epoch) if since_epoch > 0 => ProcessProbe::Running {
-            created_at_unix_ms: since_epoch / 10_000,
+    match filetime(creation) {
+        created if created > UNIX_EPOCH_WINDOWS_100NS => ProcessCreationProbe::Running {
+            created_at_windows_100ns: created,
         },
-        _ => ProcessProbe::Unknown(HostMetricsCode::ProcessCreationTimeInvalid.code()),
+        _ => ProcessCreationProbe::Unknown(HostMetricsCode::ProcessCreationTimeInvalid.code()),
     }
+}
+
+/// Workflow #71 FLK-10: `GetComputerNameExW` with `ComputerNameDnsHostname`, asked once for the
+/// length the name needs and once for the name.
+pub(super) fn dns_host_name() -> std::io::Result<String> {
+    let mut length = 0u32;
+    // SAFETY: a null buffer of length zero only asks for the length the name needs, its
+    // terminating NUL included.
+    if unsafe { GetComputerNameExW(ComputerNameDnsHostname, null_mut(), &mut length) } != 0 {
+        // Nothing was too long for no buffer: the name is empty.
+        return Ok(String::new());
+    }
+    // The thread's last error must be read immediately after the call reports failure.
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() != Some(ERROR_MORE_DATA as i32) {
+        return Err(error);
+    }
+    let mut buffer = vec![0u16; length as usize];
+    let mut written = length;
+    // SAFETY: the buffer is writable for `written` UTF-16 units, the length the first call
+    // asked for.
+    if unsafe { GetComputerNameExW(ComputerNameDnsHostname, buffer.as_mut_ptr(), &mut written) }
+        == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    // On success `written` is the name's length without its terminating NUL.
+    buffer.truncate(written as usize);
+    String::from_utf16(&buffer)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+/// Workflow #71 FLK-10: `BCryptGenRandom` with no algorithm handle and the system-preferred
+/// random number generator.
+pub(super) fn fill_system_random(buffer: &mut [u8]) -> std::io::Result<()> {
+    let length = u32::try_from(buffer.len()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "a random buffer is at most u32::MAX bytes",
+        )
+    })?;
+    // SAFETY: the buffer is writable for `length` bytes; a null algorithm handle is what
+    // BCRYPT_USE_SYSTEM_PREFERRED_RNG requires.
+    let status = unsafe {
+        BCryptGenRandom(
+            null_mut(),
+            buffer.as_mut_ptr(),
+            length,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    // A negative NTSTATUS is a failure.
+    if status < 0 {
+        return Err(std::io::Error::other(format!(
+            "BCryptGenRandom failed with NTSTATUS 0x{:08x}",
+            status as u32
+        )));
+    }
+    Ok(())
 }
 
 fn process_samples(
