@@ -1280,6 +1280,9 @@ impl<'a> ScanSession<'a> {
                 facts,
                 now_unix_ms,
             )?),
+            // Not reached: the one session without a policy is a list reading's, and `for_list`
+            // refuses a declared `early_stop` before it builds the session. The arm returns that
+            // same refusal rather than panic.
             (Some(DeclaredEarlyStop::UpperBound), None) => {
                 return Err(invalid("scan early_stop=declared"));
             }
