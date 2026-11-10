@@ -13,15 +13,15 @@
 //! selection again), and a selection that cannot be read answers the CLI's codes.
 
 use super::observer;
-use super::tools::{
-    self, Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
-};
+use super::tools::{self, Arguments, ToolContext, ToolError, ToolOutcome, invalid_argument};
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::packs::{self as reader, Answer, PacksError, Query, Role};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Outcome, RawSource};
-use serde::Serialize;
+use actingcommand_lab_ops::budget::Budget;
 use serde_json::{Map, Value, json};
+// The gate below reads the export's sha256 (Workflow #434 LAB-5D: the export is `packs`').
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 
 pub(super) const DESCRIPTION: &str = "The packages the selected configuration generation binds, as actingctl packs answers them: read from that actingd.config.json on disk (source.kind selected_config: the generation install\\active.json selects, which a running actingd may not have loaded yet); no Runtime request and no ledger record. instances: one row per configured instance {alias, instance_id, packs}, with role startup (startup_package; package_id from the package folder's control.json) and resource_package (path only). installation: role procedure (policy.procedure_manifest: package_id from procedure_ref package.<id>, procedure_ref, operation_id, scheduled when it has scheduled_execution, path its package_path; composer mode, a policy without catalog and procedure_manifest: one row per procedure the scheduler workbench composes from the schedule.json of the games of policy.facts.instances below standard_packs.root, with the same composer, path the package below its game root, operation_id operation.package.run, scheduled true; a game root that cannot be read adds package_binding_unreadable, a broken root or a refused schedule.json adds standard_pack_root_invalid and that game has no row); prerequisite and return-home packages are the installed standard packs' own, no configuration binding. Rows carry no package digest. Paths are absolute: a relative one resolves against the configuration's folder. readable (present with path) says whether the path can be opened; each unreadable one adds the warning package_binding_unreadable. instance (alias, instance_id or ADB port, as the configuration names them) narrows instances only; role narrows both lists. standard_packs (present when the configuration sets standard_packs.root): {root, games}, one entry {game, tables} per sound game root below it, its tables/ files in file name order as actingd check-config lists them: {table_id, path, row_count (when read), problem (standard_pack_table_invalid or standard_pack_table_unreadable, when refused), expired_columns (the columns whose valid_until_unix_s has passed)}; a broken game root is not listed (check-config and the Runtime's start report it), and neither instance nor role narrows standard_packs. Workflow #429 R-11: each game of standard_packs also carries ui, its ui.json (actingcommand.ui.v1) as written when it keeps its rules, and display, that file's display; each composed installation row also carries task_ids (the composed tasks that run its package, in id order), irreversible (true when an entry of the package's control.json provides declares irreversible true; absent, with package_binding_unreadable, when that file cannot be read) and, from its game's valid ui.json, ui (the file's entry for the package) and display. A game root without ui.json answers as before; a refused ui.json adds one standard_pack_root_invalid per violation (path the file, standard_pack_problem, json_pointer) and changes no row; without a ui entry a client shows the package_id. An answer larger than the output budget is written whole, its warnings included, to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {source, export {path, sha256, size}} with the warning answer_exported, whose count is the number of warnings the file holds; narrow it with role or instance. A configuration that cannot be read answers config_read_failed, one that does not decode config_decode_failed.";
@@ -47,8 +47,9 @@ pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
 /// The answer as it is when it fits the output budget; otherwise the whole document (the CLI's
 /// stdout without its `outcome`, warnings included) exported, answered as `{source, export}`
 /// with `answer_exported` naming the file (`path`) and counting the warnings it holds (`count`).
+/// Workflow #434 LAB-5D: the export and its header are `packs`' (`Answer::within_budget`); this
+/// server passes its budget, a page's size counted with the answer's warnings, and its export.
 fn within_budget(answer: &Answer) -> ToolOutcome {
-    let result = encode(answer.packs())?;
     let warnings = answer
         .warnings()
         .iter()
@@ -56,28 +57,14 @@ fn within_budget(answer: &Answer) -> ToolOutcome {
         .collect::<Vec<_>>();
     // The envelope is `{ok, result, warnings}`; this wrapper is a little larger, so an answer
     // it lets through always fits.
-    if tools::fits_success(&json!({"result": result, "warnings": warnings})) {
-        return Ok(ToolSuccess { result, warnings });
-    }
-    let document = answer.document(tools::warning).map_err(encode_failed)?;
-    let bytes = serde_json::to_vec(&Value::Object(document)).map_err(encode_failed)?;
-    let export = observer::export_bytes(
-        &format!("sha256:{:x}", Sha256::digest(&bytes)),
-        "json",
-        &bytes,
-    )?;
-    let mut note = Outcome::new(ActingctlCode::AnswerExported).count(warnings.len());
-    if let Some(path) = export["path"].as_str() {
-        note = note.path(path);
-    }
-    Ok(ToolSuccess {
-        result: json!({"source": encode(answer.packs().source())?, "export": export}),
-        warnings: vec![tools::warning(&note)],
-    })
-}
-
-fn encode<T: Serialize>(value: &T) -> Result<Value, ToolError> {
-    serde_json::to_value(value).map_err(encode_failed)
+    let fits =
+        |result: &Value| tools::fits_success(&json!({"result": result, "warnings": &warnings}));
+    let export = observer::export_writer;
+    let budget = Budget::new(&fits).with_export(&export);
+    let answered = answer
+        .within_budget(Some(&budget), &tools::warning)
+        .map_err(tools::export_failed)?;
+    Ok(tools::fitted(answered, warnings))
 }
 
 /// An answer that does not encode: `actingctl_output_failed`, caused by the encoder's failure.

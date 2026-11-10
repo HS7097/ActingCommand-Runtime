@@ -18,6 +18,7 @@
 //! outcome the completed receipt's code (`request_routine_summary_completed`), as `perf-preset`
 //! and `remedy` print theirs.
 
+use crate::budget::{self, Budget, Fitted};
 use crate::cli_line;
 use crate::codes::ArgumentProblem;
 use crate::instance_selector::{self, SelectorMiss};
@@ -39,6 +40,9 @@ pub const DAY: &str = "--day";
 pub const SINCE: &str = "--since";
 /// The two width flags, as a usage outcome names them when neither is given.
 const WIDTH: &str = "--hour|--day";
+/// The members an answer written whole to its caller's export keeps beside `export` (Workflow
+/// #434 LAB-5D: moved from MCP's `ac_routine_summary`).
+const EXPORTED_HEADER: [&str; 3] = ["owner_epoch", "granularity", "revision"];
 const USAGE: &str = "usage: actingctl routine-summary (--hour | --day) [--instance <alias|instance_id|ADB port>] [--since <revision>] --state-root <path>";
 
 /// Why a routine summary read answered nothing.
@@ -89,6 +93,14 @@ pub fn read(
     client
         .routine_summary(alias.as_deref(), granularity, since_revision)
         .map_err(Failure::Runtime)
+}
+
+/// Workflow #434 LAB-5D: the answer of `summary`, the page's JSON `answer`, within `budget`, the
+/// one way of the reads that export ([`budget::exported`]): whole without a budget, when it fits
+/// or for a caller with no export; otherwise written whole through the caller's export and
+/// answered as `{owner_epoch, granularity, revision, export}` with the warning `answer_exported`.
+pub fn within_budget(answer: Value, budget: Option<&Budget<'_>>) -> Result<Fitted, Outcome> {
+    budget::exported(answer, &EXPORTED_HEADER, budget)
 }
 
 // ---- the CLI

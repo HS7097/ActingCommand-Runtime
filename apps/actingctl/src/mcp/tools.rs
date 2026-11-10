@@ -15,6 +15,7 @@ use super::runs;
 use super::runtime::RuntimeAccess;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_contract::outcome::{Code, Detail, Outcome};
+use actingcommand_lab_ops::budget::{Budget, Fitted, Writer};
 use serde_json::{Map, Value, json};
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
@@ -1294,6 +1295,36 @@ pub(super) fn fits_sent(result: &Value, warnings: &[Value], era: Era) -> bool {
 /// text and as structuredContent: the size a tool that pages gives each page.
 pub(super) fn fits_success(result: &Value) -> bool {
     fits(&json!({"ok": true, "result": result}))
+}
+
+/// Workflow #434 LAB-5D: the answer budget this server passes a read whose answer it measures
+/// alone: a page's size (`fits_success`) and its export writer (`observer::export_writer`). The
+/// read cuts or exports its answer to it in `lab-ops`. ac_overview, ac_diagnose and ac_packs
+/// measure their answer with its warnings, and pass their own.
+pub(super) fn answer_budget() -> Budget<'static> {
+    const FITS: &dyn Fn(&Value) -> bool = &fits_success;
+    const EXPORT: Writer<'static> = &super::observer::export_writer;
+    Budget::new(FITS).with_export(EXPORT)
+}
+
+/// Workflow #434 LAB-5D: a read's answer within this server's budget as the tool's success: an
+/// answer written to the export carries `answer_exported` as its one warning (the file holds the
+/// rest); otherwise `warnings`, the read's own.
+pub(super) fn fitted(answer: Fitted, warnings: Vec<Value>) -> ToolSuccess {
+    let Fitted { result, exported } = answer;
+    match exported {
+        Some(note) => ToolSuccess {
+            result,
+            warnings: vec![warning(&note)],
+        },
+        None => ToolSuccess { result, warnings },
+    }
+}
+
+/// Workflow #434 LAB-5D: an answer a read could not write to the export, or encode for it, as
+/// the tool error: class `runtime`, with the read's outcome.
+pub(super) fn export_failed(outcome: Outcome) -> ToolError {
+    ToolError::outcome("runtime", outcome)
 }
 
 fn fits(structured: &Value) -> bool {

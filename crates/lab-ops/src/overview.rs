@@ -20,8 +20,9 @@
 //! (null without an install root).
 //!
 //! stdout is one line, the same JSON as the `ac_overview` result, with every block whole, and
-//! the warnings as a top-level `warnings` member (D3). Only MCP cuts blocks to its output budget
-//! (`<block>_truncated`, §2.2; the order is in `mcp::observer`).
+//! the warnings as a top-level `warnings` member (D3). Only a caller that passes a budget has
+//! blocks cut (`<block>_truncated`, §2.2; Workflow #434 LAB-5D: [`within_budget`], whose order is
+//! here, and MCP passes its output budget); the CLI passes none.
 //!
 //! Workflow #378 A5: the line also carries `outcome`: `runtime_overview_reported`, or the failure
 //! alone.
@@ -63,6 +64,7 @@
 //! messages to registered channels, the status member of the one Status read; absent with no
 //! `agent_wake` section, and MCP never cuts it. Rows are read with `facts`, key `host.agent_wake`.
 
+use crate::budget::Budget;
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::instance_selector::{self, SelectorMiss};
@@ -101,7 +103,7 @@ const NOT_RUNNING: &str = "not_running";
 
 /// The blocks `--sections` / `sections` names (command table §4.9). `daemon` and `incomplete`
 /// are always answered and are not among them; a slice that adds a block adds its name here and
-/// its place in the truncation order of `mcp::observer`.
+/// its place in the truncation order ([`cut_to_fit`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
     GlobalPause,
@@ -1171,6 +1173,120 @@ fn install_view(place: &Place<'_>, warnings: &mut Vec<Warning>) -> Value {
         }
     }
     Value::Object(install)
+}
+
+// Workflow #434 LAB-5D (register §1.287, "Slice LAB-5D"): the cut of an overview to its caller's
+// budget, moved unchanged from MCP's `ac_overview` (`mcp::observer`), with its order.
+
+/// MCP-0 command table §4.9: the top-level blocks an overview cuts first, in this order, when its
+/// answer does not fit its caller's budget. A slice that adds an overview block registers its
+/// place here in the same PR; a block the answer does not hold is passed over. Workflow #432
+/// AGT-1b: `agent_wake` is not here: it is a few members of the Status read and is never cut. #428
+/// CW-1: `catalog.compile_warnings.items` is cut just before `catalog`.
+const CUT_BLOCKS: [&str; 8] = [
+    "host",
+    "startup",
+    "tagged_state",
+    "ledger",
+    "performance",
+    "watchdog",
+    "catalog",
+    "config_generation",
+];
+/// Then each instance row's `run`, from the last row back, then each row's `monitor`, the same
+/// way, then each row's `foreground` (Workflow #389 MCP-5b registers it last of the row blocks: it
+/// is the smallest); then `install.build`.
+const CUT_ROW_BLOCKS: [&str; 3] = ["run", "monitor", "foreground"];
+/// #422 OV-24K: last of all, what the fact refresh waits for: its rows are the warnings an
+/// operator needs (`fact_refresh_unbound`, …), so it outlasts every less urgent block.
+const CUT_LAST: &str = "fact_refresh";
+/// #422 OV-24K: the member of a cut answer listing what was cut, in the order it was cut.
+const TRUNCATED: &str = "truncated";
+
+/// Workflow #434 LAB-5D: the answer of `status`, `result`, within `budget`: whole without one;
+/// with one, cut one block at a time until the budget takes it ([`cut_to_fit`]). A caller that
+/// passes a budget says beside the answer that the whole did not fit, in its own measure (MCP's
+/// warning `output_budget_exceeded` gives the whole answer's size as it sends it).
+pub fn within_budget(mut result: Value, budget: Option<&Budget<'_>>) -> Value {
+    if let Some(budget) = budget {
+        cut_to_fit(&mut result, budget.fits);
+    }
+    result
+}
+
+/// Cuts `result`, an overview answer, one block at a time in the order of the MCP-0 command table
+/// §4.9 until `fits` takes it: the top-level blocks of [`CUT_BLOCKS`], then each instance row's
+/// `run` from the last row back, then each row's `monitor` the same way, then each row's
+/// `foreground` (MCP-5b), then `install.build`, then `fact_refresh` (#422 OV-24K: its warnings
+/// outlast every less urgent block). Each cut block leaves `<block>_truncated: true` where it was,
+/// and `truncated` lists the JSON pointer of every cut block in the order it was cut (#422
+/// OV-24K). The daemon, the global pause, each row's identity, `emulator_state` (Workflow #390
+/// 九处-1), `backend_selfcheck` (#411 A7), `not_running` (Workflow #386 SR-6b, MCP-19b),
+/// `activity` (Workflow #429 R-0b2), `pause`, `lease_active` and `queued`, `incomplete` and each
+/// `<block>_incomplete` are never cut: an answer that still does not fit when nothing is left to
+/// cut is returned as it is, for the caller to refuse (MCP sends it with as many warnings in the
+/// summary text as fit, or answers `output_budget_exceeded`).
+pub fn cut_to_fit(result: &mut Value, fits: impl Fn(&Value) -> bool) {
+    let mut cut = Vec::new();
+    while !fits(result) {
+        let Some(pointer) = cut_next(result) else {
+            return;
+        };
+        cut.push(pointer);
+        if let Some(members) = result.as_object_mut() {
+            members.insert(TRUNCATED.to_owned(), json!(cut));
+        }
+    }
+}
+
+/// The next cut of [`cut_to_fit`]: the JSON pointer of the block it cut, `None` when nothing is
+/// left to cut.
+fn cut_next(result: &mut Value) -> Option<String> {
+    let members = result.as_object_mut()?;
+    for block in CUT_BLOCKS {
+        // #428 CW-1: the places of the catalog's compile warnings go just before the catalog
+        // block, so their count and codes outlast them.
+        if block == Section::Catalog.name()
+            && let Some(warnings) = members
+                .get_mut(block)
+                .and_then(|catalog| catalog.get_mut(CATALOG_COMPILE_WARNINGS))
+                .and_then(Value::as_object_mut)
+            && warnings.remove("items").is_some()
+        {
+            warnings.insert("items_truncated".to_owned(), json!(true));
+            return Some(format!("/{block}/{CATALOG_COMPILE_WARNINGS}/items"));
+        }
+        if members.remove(block).is_some() {
+            members.insert(format!("{block}_truncated"), json!(true));
+            return Some(format!("/{block}"));
+        }
+    }
+    let instances = Section::Instances.name();
+    for block in CUT_ROW_BLOCKS {
+        let Some(rows) = members.get_mut(instances).and_then(Value::as_array_mut) else {
+            break;
+        };
+        for (index, row) in rows.iter_mut().enumerate().rev() {
+            if let Some(row) = row.as_object_mut()
+                && row.remove(block).is_some()
+            {
+                row.insert(format!("{block}_truncated"), json!(true));
+                return Some(format!("/{instances}/{index}/{block}"));
+            }
+        }
+    }
+    let install = Section::Install.name();
+    if let Some(members) = members.get_mut(install).and_then(Value::as_object_mut)
+        && members.remove("build").is_some()
+    {
+        members.insert("build_truncated".to_owned(), json!(true));
+        return Some(format!("/{install}/build"));
+    }
+    if members.remove(CUT_LAST).is_some() {
+        members.insert(format!("{CUT_LAST}_truncated"), json!(true));
+        return Some(format!("/{CUT_LAST}"));
+    }
+    None
 }
 
 /// Reads a whole file of at most `limit` bytes: a failed open or read is `foreign_os_error`

@@ -3,19 +3,16 @@
 //! ac_events (Workflow #389 MCP-1; MCP-0 command table v1.1 §4.1): `actingctl events` over
 //! MCP. The parameters, the read and the rows are the CLI's (`crate::events`); this module adds
 //! only what §2.2 lets MCP differ in: at most 100 rows, a wait inside the call budget, a brief
-//! page cut to the output budget, and a payload page over it exported whole. An instance
-//! selector is resolved with one Status per Runtime connection (§2.5).
+//! page cut to the output budget, and a payload page over it exported whole (Workflow #434
+//! LAB-5D: both by `events`' `Page::within_budget`, with this server's budget and its cursor
+//! binding). An instance selector is resolved with one Status per Runtime connection (§2.5).
 
-use super::observer::{self, select_instance};
+use super::observer::select_instance;
 use super::runtime::Connected;
-use super::tools::{self, ToolContext, ToolError, ToolOutcome, ToolSuccess};
-use crate::codes::ActingctlCode;
-use crate::events::{self, CursorBinding, Detail, EventsError, Page};
-use actingcommand_contract::InstanceId;
-use actingcommand_contract::codes::ContractCode;
-use actingcommand_contract::outcome::{Outcome, RawSource};
+use super::tools::{self, ToolContext, ToolError, ToolOutcome};
+use crate::events::{self, CursorBinding, EventsError};
+use actingcommand_contract::{InstanceId, RuntimeEventQueryCursor};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -51,10 +48,17 @@ pub(super) fn events(context: &ToolContext<'_>, arguments: &Map<String, Value>) 
         EventsError::Runtime(error) => context.runtime.failure(&connected, &error),
         other => tool_error(other),
     })?;
-    match request.detail {
-        Detail::Brief | Detail::Summary => list_page(&page, binding, request.detail),
-        Detail::Payload => payload_page(&page, binding),
-    }
+    // Workflow #434 LAB-5D: the page's cut and its export are `events`'; this server passes its
+    // budget and binds each cursor to its own connection.
+    let bind = |cursor: &RuntimeEventQueryCursor| binding.encode(cursor);
+    page.within_budget(
+        request.detail,
+        &tools::envelope,
+        &bind,
+        Some(&tools::answer_budget()),
+    )
+    .map(|answer| tools::fitted(answer, Vec::new()))
+    .map_err(tool_error)
 }
 
 /// The instance_id of `selector`: from what this connection already resolved, or from one
@@ -78,105 +82,6 @@ fn resolve(
     Ok(instance_id)
 }
 
-/// A brief or summary page cut to the output budget: rows from the end first, then the one
-/// row's material list; `truncated` and a cursor after the last row kept.
-fn list_page(page: &Page, binding: CursorBinding, detail: Detail) -> ToolOutcome {
-    let mut rows = page
-        .events()
-        .iter()
-        .map(|event| events::row(event, detail, &tools::envelope))
-        .collect::<Vec<_>>();
-    let mut kept = rows.len();
-    loop {
-        let truncated = kept < rows.len();
-        let next = if truncated {
-            Some(page.cursor_after(page.events()[kept - 1].sequence))
-        } else {
-            page.next_cursor().transpose()
-        };
-        let next = next
-            .transpose()
-            .and_then(|next| next.map(|cursor| binding.encode(&cursor)).transpose())
-            .map_err(tool_error)?;
-        let result = page.result(&rows[..kept], next, truncated);
-        if tools::fits_success(&result) {
-            return Ok(ToolSuccess::new(result));
-        }
-        if kept > 1 {
-            kept -= 1;
-            continue;
-        }
-        // One row alone is over the budget: shorten its material list, and say so, rather
-        // than drop the row.
-        let Some(materials) = rows
-            .first_mut()
-            .and_then(|row| row.get_mut("materials"))
-            .and_then(Value::as_array_mut)
-            .filter(|materials| !materials.is_empty())
-        else {
-            // Nothing left to shorten: the result answers output_budget_exceeded.
-            return Ok(ToolSuccess::new(result));
-        };
-        materials.pop();
-        rows[0]["materials_truncated"] = json!(true);
-    }
-}
-
-/// The page whole; over the output budget, the page the CLI prints (without its `outcome`) is
-/// written whole to the export directory and answered as `{export, events_count, next_cursor?,
-/// last_sequence}` with the warning `answer_exported` naming the file (`path`).
-fn payload_page(page: &Page, binding: CursorBinding) -> ToolOutcome {
-    let rows = page
-        .events()
-        .iter()
-        .map(|event| events::row(event, Detail::Payload, &tools::envelope))
-        .collect::<Vec<_>>();
-    let next = page
-        .next_cursor()
-        .and_then(|next| next.map(|cursor| binding.encode(&cursor)).transpose())
-        .map_err(tool_error)?;
-    let result = page.result(&rows, next.clone(), false);
-    if tools::fits_success(&result) {
-        return Ok(ToolSuccess::new(result));
-    }
-    let export = export_json(&result)?;
-    let mut answer = Map::new();
-    answer.insert("export".to_owned(), export.clone());
-    answer.insert("events_count".to_owned(), json!(rows.len()));
-    if let Some(next) = next {
-        answer.insert("next_cursor".to_owned(), json!(next));
-    }
-    if let Some(last) = result.get("last_sequence") {
-        answer.insert("last_sequence".to_owned(), last.clone());
-    }
-    let mut warning = Outcome::new(ActingctlCode::AnswerExported);
-    if let Some(path) = export["path"].as_str() {
-        warning = warning.path(path);
-    }
-    Ok(ToolSuccess {
-        result: Value::Object(answer),
-        warnings: vec![tools::warning(&warning)],
-    })
-}
-
-/// The page as JSON, written by the export writer as `<sha256>.json`. A page that does not
-/// encode is `material_export_failed` caused by the encoder's failure. Workflow #389 MCP-4:
-/// `ac_facts` exports its answer the same way.
-pub(super) fn export_json(page: &Value) -> Result<Value, ToolError> {
-    let bytes = serde_json::to_vec(page).map_err(|error| {
-        ToolError::new("runtime", ActingctlCode::MaterialExportFailed).caused_by(
-            Outcome::new(ContractCode::ForeignDataError)
-                .raw_source(RawSource::Json)
-                .raw_text(error.to_string()),
-        )
-    })?;
-    observer::export_bytes(
-        &format!("sha256:{:x}", Sha256::digest(&bytes)),
-        "json",
-        &bytes,
-    )
-}
-
 /// A failure that is not the Runtime read's, as the tool answers it: an argument is
 /// `arguments_invalid` with the CLI's values; every other failure keeps the CLI's outcome.
 /// Workflow #411 B27: an event type argument that names no event type also names the value it
@@ -194,7 +99,11 @@ fn tool_error(error: EventsError) -> ToolError {
             (None, None) => tools::invalid_argument(&field, problem.token()),
         },
         EventsError::Runtime(error) => super::runtime::client_error(&error),
-        EventsError::CursorEncode(_) => ToolError::outcome("runtime", error.outcome()),
+        // Workflow #434 LAB-5D: a payload page the export could not take is the writer's
+        // `material_export_failed` (or the encoder's), class runtime, as before.
+        EventsError::CursorEncode(_) | EventsError::Export(_) => {
+            ToolError::outcome("runtime", error.outcome())
+        }
         EventsError::Selector { .. } | EventsError::Query(_) | EventsError::CursorInvalid => {
             ToolError::outcome("usage", error.outcome())
         }
