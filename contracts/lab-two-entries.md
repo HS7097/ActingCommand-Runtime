@@ -445,7 +445,10 @@ irreversible.
   Four offline authoring rows take options of those names that name something else, as their
   consumers pass them (LAB-5A): `standard-pack check` and `standard-pack compose` take `--root`, a
   game's package root, and `resource restore` and `regression` take `--state-root`, a Runtime state
-  root the offline command reads.
+  root the offline command reads. One command line keeps a `--root` that is no parameter of its
+  row (LAB-5A fix 1): `actinglab devices bind <alias> <handle> --root <r>` still hands it to the
+  command, as before LAB-5A, which takes it only when the program runs outside an installed root;
+  the row does not declare it, and `serve --stdio` refuses it.
 - Output for people by default: one line with the result code and its short phrase from the
   outcome catalog, and a small table where needed. `--json` prints the one line `cli_line` prints
   today. Exit codes stay 0, 1 and 2.

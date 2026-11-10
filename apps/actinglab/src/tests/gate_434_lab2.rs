@@ -901,7 +901,7 @@ fn consumer_command_lines_take_the_old_path_unchanged() {
     let scene = scene_path.to_str().unwrap();
 
     // Workflow #434 LAB-2b: only MCP's actinglab child (`lab_ops::lab_child`, `--json --via mcp
-    // …`) keeps the old path, the envelope, until LAB-5; every other consumer's line prints the
+    // …`) keeps the old path, the envelope, until LAB-7; every other consumer's line prints the
     // CLI module's line (`gate_434_lab2b`). Stdout redirected, and the same at a terminal.
     let lines: [(&[&str], bool); 8] = [
         (

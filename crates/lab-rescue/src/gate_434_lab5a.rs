@@ -6,7 +6,9 @@
 //! them now, and the module hands each to the command under the flag it went as before: an
 //! option as `--name value`, a switch that is set as `--name`, a switch given `false` (only
 //! `serve --stdio` can give one) not at all; `agent claude-hook`'s action is the row's
-//! positional, the word after `claude-hook` as before. Logic only: no root, no command is run.
+//! positional, the word after `claude-hook` as before. Fix 1: `op status --operation <op>`,
+//! which the command line still hands on undeclared, is written as before. Logic only: no root,
+//! no command is run.
 //! The members are written in name order, so that the map's order is the same with or without
 //! serde_json's `preserve_order`.
 
@@ -47,6 +49,12 @@ fn rescue_rows_hand_their_declared_parameters_on() {
     assert!(
         further_flags(&params(json!({"check_rollback": false})), &["op"]).is_empty(),
         "a switch given false is not written"
+    );
+    // LAB-5A fix 1: the installer's own `--operation`, which the command line still hands on
+    // undeclared, is written as before.
+    assert_eq!(
+        further_flags(&params(json!({"operation": "op-1"})), &["op"]),
+        words(&["--operation", "op-1"])
     );
     // `release verify` and `release stage`: the options and the switch under their own flags.
     assert_eq!(

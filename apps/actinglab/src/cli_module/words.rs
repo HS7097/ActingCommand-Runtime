@@ -10,15 +10,20 @@
 //!   instance among them: an alias, an `instance_id` or an ADB port), its options
 //!   `--name value` (`_` written `-`) and its switches `--name`.
 //! - Workflow #434 LAB-5A: a row passes on only what it declares; no offered row has
-//!   `params_more` (§9.2). Three things stay as the command line had them before, each named in
-//!   one place:
+//!   `params_more` (§9.2). What the command line of a row that had `params_more` took before stays
+//!   as it was, each named in one place:
 //!   - a row actinglab's own command serves, whose command line took that command's further flags
 //!     before LAB-5A ([`super::engine::as_written`]), hands its declared flags on as written
 //!     (`--flag value`, or `--flag` alone when no value follows; the command reads and checks
-//!     them, as it did), and actinglab's global options with them ([`GLOBAL_OPTIONS`]);
+//!     them, as it did), and actinglab's global options with them ([`GLOBAL_OPTIONS`], with `_`
+//!     or `-` in their words, as before);
 //!   - the rows of [`LENIENT_ON_COMMAND_LINE`] hand every further flag and word on, as their
 //!     command ignores what it does not read (a debt);
-//!   - `runs` takes its instance as `--instance <x>` too ([`POSITIONAL_FLAGS`]).
+//!   - the flags of [`KEPT_FLAGS`] go on as written too: a positional given as its flag (`runs
+//!     --instance <x>`, `run show --id <id>` and the like), and a flag of the source command the
+//!     row does not declare (`op status --operation <op>`, `devices bind --root <r>`);
+//!   - on a row of [`COMPLETED_ROWS`], an option LAB-5A declared takes no word that begins with
+//!     `--` as its value, as the further flag it was took none.
 //!
 //!   `serve --stdio` refuses every member a row does not declare.
 //! - Types: `integer` a JSON number, `unsigned` a JSON number from 0 to 2^64 − 1, `decimal` a
@@ -92,9 +97,48 @@ pub(crate) const GLOBAL_OPTIONS: [&str; 17] = [
     "--version",
 ];
 
-/// Workflow #434 LAB-5A: a positional a row's command line also takes as a flag, as it did when
-/// the row took its source command's further flags (operation, parameter). Its note says so.
-pub(crate) const POSITIONAL_FLAGS: [(&str, &str); 1] = [("runs", "instance")];
+/// Workflow #434 LAB-5A (and its fix 1): the flags a row's command line still hands on as written
+/// (operation, the flag's name with `_`), as it did when the row took its source command's
+/// further flags: `--flag value`, or `--flag` alone (`true`) when no value follows, as the member
+/// of the flag's name, given twice a list. A positional's own name fills that positional, as it
+/// did (its note says so); `operation` and `root` are the source command's own flags, which no
+/// row declares and the module writes as further flags, as before (the row's notes say so).
+/// Only the command line: `serve --stdio` takes the declared parameters only.
+pub(crate) const KEPT_FLAGS: [(&str, &str); 9] = [
+    ("runs", "instance"),
+    ("run show", "id"),
+    ("run evidence", "id"),
+    ("monitor set", "instance"),
+    ("devices bind", "root"),
+    ("op status", "op"),
+    ("op status", "operation"),
+    ("release verify", "dir"),
+    ("release stage", "dir"),
+];
+
+/// Workflow #434 LAB-5A fix 1: the rows LAB-5A completed whose command line the words type (the
+/// CLI module's and the rescue module's rows that took their source command's further flags),
+/// each with the options it declared before LAB-5A. An option LAB-5A declared on such a row takes
+/// no word that begins with `--` as its value (refused `value_missing`): before, the further flag
+/// it was took none, and its command refused the line; an option declared before takes the next
+/// word, as it did.
+pub(crate) const COMPLETED_ROWS: [(&str, &[&str]); 15] = [
+    ("runs", &["since"]),
+    ("run evidence", &["detail"]),
+    ("run show", &[]),
+    ("gap", &[]),
+    ("devices bind", &[]),
+    ("monitor set", &["interval", "expect", "recover"]),
+    ("op status", &[]),
+    ("release verify", &[]),
+    ("release stage", &[]),
+    ("agent add", &[]),
+    ("agent remove", &[]),
+    ("agent list", &[]),
+    ("agent claude-hook", &[]),
+    ("agent claude-register", &[]),
+    ("agent notice", &[]),
+];
 
 /// One operation and its parameters.
 #[derive(Debug, Clone, PartialEq)]
@@ -150,6 +194,11 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
     // and the further flags and words of a lenient row's command too.
     let as_written = super::engine::as_written(operation);
     let lenient = as_written && LENIENT_ON_COMMAND_LINE.contains(&operation.name.as_str());
+    // Workflow #434 LAB-5A fix 1: the options a row LAB-5A completed declared before it.
+    let completed = COMPLETED_ROWS
+        .iter()
+        .find(|(row, _)| *row == operation.name)
+        .map(|(_, before)| *before);
     let mut index = 0;
     while index < rest.len() {
         let word = rest[index].as_str();
@@ -159,8 +208,14 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
                 .params
                 .iter()
                 .find(|param| param.form != ParamForm::Positional && param.name == name);
-            let handed_on = declared.is_some() || lenient || GLOBAL_OPTIONS.contains(&word);
-            if as_written && handed_on && name != MORE_WORDS && !name.is_empty() {
+            // A global option in either spelling, as a further flag was written before (`_` as
+            // `-`; LAB-5A fix 1).
+            let global = GLOBAL_OPTIONS.contains(&format!("--{}", name.replace('_', "-")).as_str());
+            let handed_on = as_written && (declared.is_some() || lenient || global);
+            let kept = KEPT_FLAGS
+                .iter()
+                .any(|(row, flag_name)| *row == operation.name && *flag_name == name);
+            if (handed_on || kept) && name != MORE_WORDS && !name.is_empty() {
                 match rest.get(index + 1).filter(|next| !next.starts_with("--")) {
                     Some(value) => {
                         push(&mut params, &name, Value::String(value.clone()));
@@ -173,14 +228,19 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
                 }
                 continue;
             }
-            match declared.or_else(|| positional_flag(operation, &name)) {
+            match declared {
                 Some(param) if param.form == ParamForm::Switch => {
                     put(&mut params, param, Value::Bool(true), word)?;
                     index += 1;
                 }
                 Some(param) => {
+                    // LAB-5A fix 1: an option LAB-5A declared on a row it completed takes no
+                    // word that begins with `--` (`COMPLETED_ROWS`).
+                    let takes_any =
+                        completed.is_none_or(|before| before.contains(&param.name.as_str()));
                     let value = rest
                         .get(index + 1)
+                        .filter(|value| takes_any || !value.starts_with("--"))
                         .ok_or_else(|| usage(Some(word), ArgumentProblem::ValueMissing))?;
                     put(&mut params, param, typed(param, value, word)?, word)?;
                     index += 2;
@@ -253,8 +313,9 @@ pub(crate) fn from_json(table: &OperationTable, line: &str) -> Result<Call, Outc
     })
 }
 
-/// The members of `params` the row does not declare: on the command line, the global options and
-/// a lenient row's further flags handed on (never [`MORE_WORDS`]), in name order.
+/// The members of `params` the row does not declare: on the command line, the global options, a
+/// lenient row's further flags and the undeclared flags of [`KEPT_FLAGS`] handed on (never
+/// [`MORE_WORDS`]), in the map's order.
 pub(crate) fn further_flags<'a>(
     operation: &Operation,
     params: &'a Map<String, Value>,
@@ -282,21 +343,6 @@ pub(crate) fn parse_duration(text: &str) -> Option<Duration> {
         "h" => number.checked_mul(3600).map(Duration::from_secs),
         _ => None,
     }
-}
-
-/// The positional `name` of a row of [`POSITIONAL_FLAGS`], written as a flag; `None` for any
-/// other row or name.
-fn positional_flag<'a>(operation: &'a Operation, name: &str) -> Option<&'a Param> {
-    if !POSITIONAL_FLAGS
-        .iter()
-        .any(|(row, param)| *row == operation.name && *param == name)
-    {
-        return None;
-    }
-    operation
-        .params
-        .iter()
-        .find(|param| param.form == ParamForm::Positional && param.name == name)
 }
 
 /// A decimal number as written: finite, as Rust reads an `f64`.

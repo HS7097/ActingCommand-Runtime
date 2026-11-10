@@ -260,6 +260,8 @@ fn switch(params: &Map<String, Value>, name: &str) -> bool {
 /// command takes them: `--name value`, or `--name` for a switch that is set. Workflow #434
 /// LAB-5A: the row declares them all (before it, they were the further flags of a row with
 /// `params_more`); a switch given `false`, which only `serve --stdio` can give, is not written.
+/// LAB-5A fix 1: and the one flag the command line still hands on undeclared, `op status
+/// --operation <op>` (actinglab's `words::KEPT_FLAGS`), written as before.
 fn further_flags(params: &Map<String, Value>, declared: &[&str]) -> Vec<String> {
     let mut words = Vec::new();
     for (name, value) in params {

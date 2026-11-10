@@ -17,6 +17,16 @@
 //   reads, shown by its refusal of the value), and a command line with a flag the row does not
 //   declare is refused by name, but handed on for the three lenient rows, whose `serve --stdio`
 //   line is refused. Also `runs --instance <x>`, a `seed` above the signed range and a `decimal`.
+//   Fix 1 (rd-1108/arch-013/brief-lab5a-fix1.md, review-1569-findings.md): the other lines the
+//   further flags let through before stay accepted and go on as before (`words::KEPT_FLAGS`:
+//   `run show --id`, `run evidence --id`, `monitor set --instance`, `devices bind … --root`,
+//   `op status --op|--operation`, `release verify|stage --dir`; a global option written with
+//   `_`); an option LAB-5A declared on a row it completed takes no word beginning with `--` as
+//   its value, as before (`words::COMPLETED_ROWS`), while one declared before takes it; the two
+//   lines that became accepted, in their new order (`op status --check-rollback <op>`, `release
+//   stage --local-build <dir>`); a missing required parameter refused by the words, on a row of
+//   the module (`actingctl_usage_invalid`) and on a row actinglab's own command serves
+//   (`validation_failed`).
 // Fakes only: a state root in a temporary folder on which no Runtime runs; no device, no clock,
 // no sleep.
 
@@ -196,10 +206,15 @@ fn lab5a_rows_take_what_they_took() {
 
     // The rows actinglab's own command serves: the flag they passed through before is handed on
     // as before; an undeclared flag is refused by name.
-    let handed_on: [(&[&str], &[&str]); 10] = [
+    let handed_on: [(&[&str], &[&str]); 11] = [
         (
             &["watch", "--from-sequence", "5", "--verbose"],
             &["lab", "watch", "--from-sequence", "5", "--verbose"],
+        ),
+        // Fix 1: a global option written with `_`, written with `-` as before.
+        (
+            &["watch", "--run_root", "runs", "--after", "3"],
+            &["lab", "watch", "--after", "3", "--run-root", "runs"],
         ),
         (
             &["--json", "watch", "--after", "3"],
@@ -452,15 +467,66 @@ fn lab5a_rows_take_what_they_took() {
         parsed(&["runs", "--since-unix-ms", "18446744073709551615"]),
         json!({"since_unix_ms": 18_446_744_073_709_551_615_u64})
     );
-    // `runs --instance <x>` stays accepted, as the instance (words::POSITIONAL_FLAGS).
+    // `runs --instance <x>` stays accepted, as the instance (words::KEPT_FLAGS); the positional
+    // after it is refused as repeated, as before.
     module_route(&["runs", "--instance", "neutral.a"]);
     assert_eq!(
         parsed(&["runs", "--instance", "neutral.a"]),
         json!({"instance": "neutral.a"})
     );
     assert_eq!(
-        refused(&["runs", "neutral.a", "--instance", "neutral.b"]),
-        (json!("--instance"), json!("repeated"))
+        refused(&["runs", "--instance", "neutral.a", "neutral.b"]),
+        (json!("neutral.b"), json!("repeated"))
+    );
+    // Fix 1: the other lines the further flags let through before, as before: a positional
+    // given as its flag fills it, `devices bind`'s `--root` goes on undeclared.
+    let kept: [(&[&str], Value); 4] = [
+        (&["run", "show", "--id", RUN], json!({"id": RUN})),
+        (
+            &["run", "evidence", "--id", RUN, "--limit", "5"],
+            json!({"id": RUN, "limit": 5}),
+        ),
+        (
+            &[
+                "monitor",
+                "set",
+                "--instance",
+                "neutral.a",
+                "--interval",
+                "5m",
+            ],
+            json!({"instance": "neutral.a", "interval": "5m"}),
+        ),
+        (
+            &[
+                "devices",
+                "bind",
+                "neutral.a",
+                "TESTSERIAL0001",
+                "--root",
+                "root",
+            ],
+            json!({"instance": "neutral.a", "handle": "TESTSERIAL0001", "root": "root"}),
+        ),
+    ];
+    for (line, params) in kept {
+        module_route(line);
+        assert_eq!(parsed(line), params, "{line:?}");
+    }
+    // Fix 1: an option LAB-5A declared on a row it completed takes no word beginning with `--`
+    // as its value, as the further flag it was took none (`words::COMPLETED_ROWS`); an option
+    // the row declared before takes it, as it did, and its type refuses it.
+    assert_eq!(
+        refused(&["runs", "--task-prefix", "--cursor", "c"]),
+        (json!("--task-prefix"), json!("value_missing"))
+    );
+    assert_eq!(
+        refused(&["gap", "--capability", "--why", "y"]),
+        (json!("--capability"), json!("value_missing"))
+    );
+    assert_eq!(
+        refused(&["runs", "--since", "--cursor"]),
+        (json!("--since"), json!("wrong_type"))
     );
     assert_eq!(
         parsed(&["run", "evidence", RUN, "--from-step", "2", "--limit", "10"]),
@@ -520,14 +586,76 @@ fn lab5a_rows_take_what_they_took() {
         module_refusal(&["gap", "--capability", "x", "--why", "a\u{7}b"]),
         (json!("--why"), json!("not_recognised"))
     );
+    // Fix 1: `run evidence --id <id>` hands the id on as the positional did (`lab-ops` reads it
+    // and refuses the page's value, not a missing run), and `devices bind`'s `--root` reaches
+    // `devices`, which refuses one given twice.
+    assert_eq!(
+        module_refusal(&["run", "evidence", "--id", RUN, "--from-step", "4294967296"]),
+        (json!("--from-step"), json!("out_of_range"))
+    );
+    assert_eq!(
+        module_refusal(&[
+            "devices",
+            "bind",
+            "neutral.a",
+            "TESTSERIAL0001",
+            "--root",
+            "r1",
+            "--root",
+            "r2"
+        ]),
+        (json!("--root"), json!("repeated"))
+    );
+    // A missing required parameter is refused by the words: on a row of the CLI module with
+    // `actingctl_usage_invalid`, on a row actinglab's own command serves with actinglab's
+    // `validation_failed` and the same details.
+    assert_eq!(
+        module_refusal(&["gap", "--capability", "x"]),
+        (json!("--why"), json!("required"))
+    );
+    assert_eq!(
+        route_refused(&["unpin", "--artifact-id", "a1", "--pin-sequence", "2"]),
+        json!({"argument": "--pin-event-id", "argument_problem": "required"})
+    );
 
     // The rescue module's rows (offered on Windows, where it runs); the flags they pass on are
     // `crates/lab-rescue`'s `gate_434_lab5a`.
     if cfg!(windows) {
-        let rescue: [(&[&str], Value); 9] = [
+        let rescue: [(&[&str], Value); 15] = [
             (
                 &["op", "status", "--check-rollback"],
                 json!({"check_rollback": true}),
+            ),
+            // Fix 1: the positional as its flag, or the installer's own `--operation` (written
+            // by the module as before, `crates/lab-rescue`'s `gate_434_lab5a`).
+            (&["op", "status", "--op", "op-1"], json!({"op": "op-1"})),
+            (
+                &["op", "status", "--operation", "op-1"],
+                json!({"operation": "op-1"}),
+            ),
+            (
+                &["release", "verify", "--dir", "release"],
+                json!({"dir": "release"}),
+            ),
+            (
+                &[
+                    "release",
+                    "stage",
+                    "--dir",
+                    "release",
+                    "--facts",
+                    "facts.json",
+                ],
+                json!({"dir": "release", "facts": "facts.json"}),
+            ),
+            // The two lines refused before and accepted now, the switch before the word.
+            (
+                &["op", "status", "--check-rollback", "op-1"],
+                json!({"check_rollback": true, "op": "op-1"}),
+            ),
+            (
+                &["release", "stage", "--local-build", "release"],
+                json!({"local_build": true, "dir": "release"}),
             ),
             (
                 &["release", "verify", "release", "--facts", "facts.json"],
@@ -576,6 +704,23 @@ fn lab5a_rows_take_what_they_took() {
             refused(&["agent", "claude-hook", "begin"]),
             (json!("begin"), json!("not_recognised"))
         );
+        // Fix 1: an option LAB-5A declared takes no word beginning with `--` as its value.
+        assert_eq!(
+            refused(&["release", "verify", "--facts", "--expect-tag", "release"]),
+            (json!("--facts"), json!("value_missing"))
+        );
+        assert_eq!(
+            refused(&[
+                "agent",
+                "add",
+                "--name",
+                "--client",
+                "neutral",
+                "--native-id",
+                "id1"
+            ]),
+            (json!("--name"), json!("value_missing"))
+        );
     }
 
     // `serve --stdio` refuses a parameter the row does not declare, the lenient rows' too, and
@@ -587,6 +732,8 @@ fn lab5a_rows_take_what_they_took() {
         json!({"op": "debug-package", "params": {"package": "pack.zip", "frobnicate": true}}),
         json!({"op": "export-evidence", "params": {"out": "evidence.zip", "frobnicate": "1"}}),
         json!({"op": "recover", "params": {"instance": "neutral.a", "words": ["extra"]}}),
+        // Fix 1: a flag the command line hands on undeclared is no parameter.
+        json!({"op": "devices bind", "params": {"instance": "neutral.a", "root": "r"}}),
     ] {
         let answer = served(request.clone()).expect_err("an undeclared member is refused");
         assert_eq!(answer.1, unknown, "{request}");

@@ -96,9 +96,9 @@
       "name": "facts",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
-        {"name": "program", "form": "switch", "type": "boolean", "required": false, "note": "the program's facts"},
-        {"name": "config", "form": "switch", "type": "boolean", "required": false, "note": "the configuration facts"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "the instance whose facts are read; exactly one of instance, program and config (none is refused as <instance> required, two as --program conflicting)"},
+        {"name": "program", "form": "switch", "type": "boolean", "required": false, "note": "the program's facts; exactly one of instance, program and config"},
+        {"name": "config", "form": "switch", "type": "boolean", "required": false, "note": "the configuration facts; exactly one of instance, program and config"},
         {"name": "prefix", "form": "option", "type": "string", "required": false, "note": "only keys under this prefix; with instance or program"}
       ],
       "output": "a fact snapshot (one instance, the program or the configuration); the configuration's with config_version",
@@ -197,7 +197,7 @@
       "name": "run show",
       "module": "core",
       "params": [
-        {"name": "id", "form": "positional", "type": "run_ref", "required": true}
+        {"name": "id", "form": "positional", "type": "run_ref", "required": true, "note": "on the command line also --id <id>, in place of the positional"}
       ],
       "output": "one run: its receipt, state and steps",
       "writes": false,
@@ -214,7 +214,7 @@
       "name": "run evidence",
       "module": "core",
       "params": [
-        {"name": "id", "form": "positional", "type": "run_ref", "required": true},
+        {"name": "id", "form": "positional", "type": "run_ref", "required": true, "note": "on the command line also --id <id>, in place of the positional"},
         {"name": "detail", "form": "option", "type": "enum:full|summary", "required": false, "default": "full"},
         {"name": "from_step", "form": "option", "type": "integer", "required": false, "default": "0"},
         {"name": "limit", "form": "option", "type": "integer", "required": false, "note": "1 to 100; default 20, 100 with detail summary"}
@@ -288,8 +288,8 @@
       "module": "core",
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true},
-        {"name": "file", "form": "positional", "type": "file", "required": false, "note": "a whole targets document"},
-        {"name": "targets", "form": "option", "type": "json", "required": false, "note": "the targets inline, instead of a file"},
+        {"name": "file", "form": "positional", "type": "file", "required": false, "note": "a whole targets document; exactly one of file and targets (none is refused as <file> required, both as --targets conflicting)"},
+        {"name": "targets", "form": "option", "type": "json", "required": false, "note": "the targets inline, a JSON list, instead of a file; exactly one of file and targets"},
         {"name": "valid_days", "form": "option", "type": "integer", "required": false, "note": "with targets"}
       ],
       "output": "the applied table (ResourceTargetsApplied)",
@@ -551,7 +551,7 @@
       "name": "monitor set",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
         {"name": "interval", "form": "option", "type": "duration", "required": false},
         {"name": "expect", "form": "option", "type": "string", "required": false},
         {"name": "recover", "form": "option", "type": "boolean", "required": false}
@@ -844,7 +844,8 @@
       "requests": [],
       "source": ["actingctl devices bind", "MCP ac_device_bind"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-5A fix 1: on the command line a further --root <r> still goes on to the command, as before LAB-5A; the command takes it only when the program runs outside an installed root (inside one, the located --root makes it repeated). Not a parameter: serve --stdio refuses it"
     },
     {
       "name": "devices unbind",
@@ -2714,7 +2715,7 @@
       "name": "op status",
       "module": "rescue",
       "params": [
-        {"name": "op", "form": "positional", "type": "operation_id", "required": false, "note": "absent: the installation's state"},
+        {"name": "op", "form": "positional", "type": "operation_id", "required": false, "note": "absent: the installation's state; on the command line also --op <op>, in place of the positional, or the installer's own --operation <op>"},
         {"name": "check_rollback", "form": "switch", "type": "boolean", "required": false}
       ],
       "output": "the installation's state, or one operation's progress",
@@ -2818,7 +2819,7 @@
       "name": "release verify",
       "module": "rescue",
       "params": [
-        {"name": "dir", "form": "positional", "type": "dir", "required": true},
+        {"name": "dir", "form": "positional", "type": "dir", "required": true, "note": "on the command line also --dir <dir>, in place of the positional"},
         {"name": "facts", "form": "option", "type": "file", "required": false},
         {"name": "expect_tag", "form": "option", "type": "string", "required": false},
         {"name": "expect_commit", "form": "option", "type": "string", "required": false}
@@ -2838,7 +2839,7 @@
       "name": "release stage",
       "module": "rescue",
       "params": [
-        {"name": "dir", "form": "positional", "type": "dir", "required": true},
+        {"name": "dir", "form": "positional", "type": "dir", "required": true, "note": "on the command line also --dir <dir>, in place of the positional"},
         {"name": "facts", "form": "option", "type": "file", "required": false},
         {"name": "expect_tag", "form": "option", "type": "string", "required": false},
         {"name": "expect_commit", "form": "option", "type": "string", "required": false},

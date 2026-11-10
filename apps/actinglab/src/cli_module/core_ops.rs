@@ -289,6 +289,10 @@ fn dispatched_with_state_root(
             {
                 argv.flag("--root", root);
             }
+            // Workflow #434 LAB-5A fix 1: `devices bind`'s `--root` from the command line
+            // (`words::KEPT_FLAGS`), after the module's own, as its further flags went before:
+            // `devices` takes it only when the module located none.
+            argv.further(operation, params);
             devices::dispatch(&argv.0)
         }
         _ => return None,
@@ -1089,20 +1093,33 @@ impl Argv {
             {
                 continue;
             }
-            let Some(value) = params.get(&param.name) else {
-                continue;
-            };
-            let flag = flag_name(&param.name);
-            let items = match value {
-                Value::Array(items) => items.as_slice(),
-                other => std::slice::from_ref(other),
-            };
-            for item in items {
-                match item {
-                    Value::Bool(true) => self.word(flag.as_str()),
-                    Value::Bool(false) => {}
-                    other => self.flag(&flag, scalar(other)),
-                }
+            if let Some(value) = params.get(&param.name) {
+                self.written(&flag_name(&param.name), value);
+            }
+        }
+    }
+
+    /// Workflow #434 LAB-5A fix 1: the members the row does not declare, which only the command
+    /// line hands on (`words::KEPT_FLAGS`: `devices bind --root`), each under the flag of its
+    /// name, as the row's further flags went before LAB-5A.
+    fn further(&mut self, operation: &Operation, params: &Map<String, Value>) {
+        for (name, value) in super::words::further_flags(operation, params) {
+            self.written(&flag_name(name), value);
+        }
+    }
+
+    /// `flag` with `value`: `true` the flag alone, `false` nothing, a list item by item, another
+    /// value the flag and the value.
+    fn written(&mut self, flag: &str, value: &Value) {
+        let items = match value {
+            Value::Array(items) => items.as_slice(),
+            other => std::slice::from_ref(other),
+        };
+        for item in items {
+            match item {
+                Value::Bool(true) => self.word(flag),
+                Value::Bool(false) => {}
+                other => self.flag(flag, scalar(other)),
             }
         }
     }
