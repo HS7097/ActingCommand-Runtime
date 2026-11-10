@@ -690,6 +690,7 @@ fn exec1_admission_follows_every_candidate_that_may_run() {
             max_runs: None,
             on_guard_refused_key: None,
             on_timeout_key: None,
+            judge: None,
         };
         actingcommand_contract::validate_phased_route(
             "neutral",

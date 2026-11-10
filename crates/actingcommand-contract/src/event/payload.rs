@@ -4757,11 +4757,35 @@ pub struct SchedulingOutcomeMapping {
     /// serializes as before. Joins package revision 6.
     #[serde(default, skip_serializing_if = "is_false")]
     busy: bool,
+    /// Workflow #428 S168-5b (`contracts/selection-graph.md`, "Mapping the two keys"): the mapping
+    /// maps only a judge step's end with this result, on the pages it lists; a mapping without it
+    /// never maps a judge step's end. Never with `busy`. Absent, the mapping serializes as before.
+    /// Joins package revision 9; no persisted record carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    judge_result: Option<SchedulingJudgeResult>,
+}
+
+/// Workflow #428 S168-5b: the closed vocabulary of a mapping's `judge_result`, the two ends of a
+/// judge step (`contracts/selection-graph.md`, "Mapping the two keys").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulingJudgeResult {
+    /// The end with the step's `outcome_key`: a known evaluation, an unknown check that does
+    /// not block, and no candidate `unknown_dropped`.
+    Judged,
+    /// The end with the step's `unknown_outcome_key`: an `unknown` evaluation, unknown
+    /// instances, or a candidate `unknown_dropped`.
+    Unknown,
 }
 
 impl SchedulingOutcomeMapping {
     pub fn outcome_key(&self) -> &str {
         &self.outcome_key
+    }
+
+    /// Workflow #428 S168-5b: the judge result the mapping maps, if it declares one.
+    pub const fn judge_result(&self) -> Option<SchedulingJudgeResult> {
+        self.judge_result
     }
 
     pub const fn effect(&self) -> SchedulingEffectCondition {
@@ -4879,6 +4903,13 @@ impl SchedulingOutcomeDeclaration {
                     "busy",
                 ));
             }
+            // Workflow #428 S168-5b: a judge step's end is never a busy one.
+            if mapping.busy && mapping.judge_result.is_some() {
+                return Err(SanitizationError::new(
+                    SanitizationCode::InvalidSchedulingOutcomeDeclaration,
+                    "judge_result",
+                ));
+            }
             if mapping.terminal_pages.is_empty() || mapping.terminal_pages.len() > 64 {
                 return Err(SanitizationError::new(
                     SanitizationCode::InvalidSchedulingOutcomeDeclaration,
@@ -4894,7 +4925,9 @@ impl SchedulingOutcomeDeclaration {
                         "terminal_pages",
                     ));
                 }
-                if !conditions.insert((mapping.effect, page.as_str())) {
+                // Workflow #428 S168-5b: two mappings overlap only with the same effect
+                // condition, a page both list, and the same `judge_result` or none on both.
+                if !conditions.insert((mapping.effect, page.as_str(), mapping.judge_result)) {
                     return Err(SanitizationError::new(
                         SanitizationCode::InvalidSchedulingOutcomeDeclaration,
                         "mapping_overlap",

@@ -525,6 +525,9 @@ actingcommand_contract::outcome_codes! {
         // #411 B37 (A35-S4) end
         ContainedTaskIdentityMissing => "contained_task_identity_missing": error / none,
         ContainedTaskInputResultInvalid => "contained_task_input_result_invalid": error / none,
+        // Workflow #428 S168-5b: an effect intent for a judge step's action, which makes no
+        // input; that run ends before the input reaches the device.
+        ContainedTaskJudgeInputRefused => "contained_task_judge_input_refused": error / none,
         ContainedTaskLadderSourceStateInvalid => "contained_task_ladder_source_state_invalid": error / none,
         ContainedTaskLeaseDeadlineInvalid => "contained_task_lease_deadline_invalid": error / none,
         ContainedTaskLeaseTerminalStateInconsistent => "contained_task_lease_terminal_state_inconsistent": error / none,
@@ -2636,6 +2639,8 @@ pub(crate) mod test_spellings {
             InjectTestContainedTaskStabilityEventAppendFailure => "inject_test_contained_task_stability_event_append_failure",
             InjectTestContainedTaskStabilityPersistenceFailure => "inject_test_contained_task_stability_persistence_failure",
             InjectTestFenceFailure => "inject_test_fence_failure",
+            // Workflow #428 S168-5b: an effect intent handed to the host for a judge step's action.
+            InjectTestJudgeEffectIntent => "inject_test_judge_effect_intent",
             InjectTestPolicyOutcomeProjectionFailure => "inject_test_policy_outcome_projection_failure",
             InjectTestPolicyOutcomeProjectionPosition => "inject_test_policy_outcome_projection_position",
             InjectTestSchedulingTerminalAppendFailure => "inject_test_scheduling_terminal_append_failure",

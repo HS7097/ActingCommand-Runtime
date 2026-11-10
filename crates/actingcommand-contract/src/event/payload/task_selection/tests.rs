@@ -2401,3 +2401,125 @@ fn db3s_t15_an_unknown_member_in_a_multi_select_shape_is_not_read() {
         );
     }
 }
+
+// Workflow #428 S168-5b test 7, the contract's half (`ledger` revision 8; selection-graph.md,
+// "Validation and bounds"; the ledger's half is the ledger test of the same name): a judge step's
+// record over the two fixed slots, with the confirmation `judge_only`.
+fn judge_record(
+    selection_result: TaskSelectionOutcome,
+    unknown_check: Option<TaskSelectionUnknownCheck>,
+) -> TaskSelectionRecord {
+    let mut record = record(frame_projection(false), selection_result);
+    record.confirmation = TaskSelectionConfirmation::JudgeOnly;
+    record.unknown_check = unknown_check;
+    record
+}
+
+// The judge chose both slots, in rank order.
+fn judged_both() -> TaskSelectionRecord {
+    let mut record = judge_record(
+        TaskSelectionOutcome::Selected { count: 2 },
+        nothing_unknown(),
+    );
+    record.selected = vec![candidate_id(0), candidate_id(1)];
+    record.verdicts = vec![ranked(0, 0, 1), ranked(1, 0, 2)];
+    record
+}
+
+#[test]
+fn judge_record_reader_rules() {
+    // Taken: `judge_only` with 0 or 2 selected, and an `unknown` evaluation whose check counts
+    // two kept slots without blocking.
+    let mut nobody = judge_record(TaskSelectionOutcome::Empty, nothing_unknown());
+    nobody.verdicts = vec![TaskSelectionVerdict {
+        status: TaskSelectionCandidateStatus::GateRejected,
+        score_milli: None,
+        rank: None,
+        ..ranked(0, 0, 1)
+    }];
+    round_trip("0 selected", &nobody);
+    round_trip("2 selected", &judged_both());
+    let unknown = judge_record(
+        TaskSelectionOutcome::Unknown {
+            reason: TaskSelectionUnknownReason::FactStale,
+        },
+        check(
+            2,
+            TaskSelectionBlocking::None,
+            TaskSelectionUpperBound::Unbounded,
+        ),
+    );
+    round_trip("unknown with two kept slots", &unknown);
+    assert_eq!(
+        as_json(&judged_both())["confirmation"],
+        json!({"kind": "judge_only"})
+    );
+    // An unknown instance blocks a known decision.
+    let mut blocked = judged_both();
+    blocked.unknown_check = check(
+        1,
+        TaskSelectionBlocking::UnknownInstances,
+        TaskSelectionUpperBound::Unbounded,
+    );
+    round_trip("a known decision with an unknown instance", &blocked);
+
+    // Refused: with `multi_select`, a v2 projection, no `unknown_check`, `outranked_possible`, a
+    // known decision that does not block on an unknown instance, and a `selected` that is not
+    // exactly the ranked verdicts in rank order.
+    let mut multi = judged_both();
+    multi.multi_select = Some(TaskSelectionMultiSelect {
+        declared_count: 2,
+        required_count: 2,
+        free_slots: None,
+        order: TaskSelectionPickOrder::Rank,
+        mark_feature: "member".to_owned(),
+        pick_set_sha256: Some("a".repeat(64)),
+        picks: Vec::new(),
+    });
+    refused("with multi_select", &multi, "confirmation");
+    let mut scanned = record(
+        scan(
+            ScanCoverageState::Complete,
+            vec![member(0, 0, "member_a")],
+            Vec::new(),
+        ),
+        TaskSelectionOutcome::Empty,
+    );
+    scanned.confirmation = TaskSelectionConfirmation::JudgeOnly;
+    scanned.unknown_check = nothing_unknown();
+    refused("a v2 projection", &scanned, "confirmation");
+    let mut unchecked = judged_both();
+    unchecked.unknown_check = None;
+    refused("no unknown_check", &unchecked, "unknown_check");
+    let mut outranked = judged_both();
+    outranked.unknown_check = check(
+        1,
+        TaskSelectionBlocking::OutrankedPossible,
+        TaskSelectionUpperBound::Unbounded,
+    );
+    refused("outranked_possible", &outranked, "unknown_check");
+    for result in [
+        TaskSelectionOutcome::Selected { count: 2 },
+        TaskSelectionOutcome::Empty,
+    ] {
+        let mut unblocked = match result {
+            TaskSelectionOutcome::Empty => {
+                judge_record(TaskSelectionOutcome::Empty, nothing_unknown())
+            }
+            _ => judged_both(),
+        };
+        unblocked.unknown_check = check(
+            1,
+            TaskSelectionBlocking::None,
+            TaskSelectionUpperBound::Unbounded,
+        );
+        refused(
+            "a known decision that does not block",
+            &unblocked,
+            "unknown_check",
+        );
+    }
+    let mut reordered = judged_both();
+    reordered.selected.reverse();
+    refused("selected out of rank order", &reordered, "selected");
+}

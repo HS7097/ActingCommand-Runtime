@@ -492,7 +492,7 @@ fn track_refusal(select: &TaskSelect, layout: &CandidateLayout) -> Option<String
 
 /// The layout's one identity feature, when it declares exactly one (Workflow #308 SEL-L4b): the
 /// identity a single-frame select chooses.
-fn single_identity_feature(layout: &CandidateLayout) -> Option<String> {
+pub(super) fn single_identity_feature(layout: &CandidateLayout) -> Option<String> {
     let mut identities = layout
         .features
         .iter()
@@ -678,12 +678,20 @@ pub(super) fn sampling_budget_ms(
     evaluator: &RecognitionEvaluator,
     detector: &actingcommand_page_detector::PageDetector,
 ) -> Result<Option<u64>, ContainedTaskError> {
+    // Workflow #428 S168-5b: a judge step projects its layout as a select step does.
     let layout = operation
         .select
         .as_ref()
-        .map(|select| {
+        .map(|select| select.layout_id.as_str())
+        .or_else(|| {
+            operation
+                .judge
+                .as_ref()
+                .map(super::judge::TaskJudge::layout_id)
+        })
+        .map(|layout_id| {
             evaluator
-                .candidate_layout(&select.layout_id)
+                .candidate_layout(layout_id)
                 .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))
         })
         .transpose()?;
@@ -717,7 +725,7 @@ pub(super) fn sampling_budget_ms(
 
 /// The selection-policy crate's own reading: the byte limit, the typed decode, the canonical
 /// form (no floats, no unsafe integers, no duplicate keys) and the document validation.
-fn read_policy(bytes: &[u8]) -> Result<SelectionPolicy, String> {
+pub(super) fn read_policy(bytes: &[u8]) -> Result<SelectionPolicy, String> {
     if bytes.len() > MAX_DOCUMENT_BYTES {
         return Err(format!(
             "{} bytes exceed the {MAX_DOCUMENT_BYTES}-byte document limit",
@@ -739,6 +747,23 @@ fn read_policy(bytes: &[u8]) -> Result<SelectionPolicy, String> {
 /// #357 DB-2 (K3): so does a document that declares a shared table, and each `table` read keys
 /// its rows by the layout's identity field. Admission reads the document only, never a table.
 fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<(), String> {
+    check_policy_document(policy, layout)?;
+    if policy.selection.required_count != 1 {
+        return Err(format!(
+            "required_count={} where a select step chooses one candidate",
+            policy.selection.required_count
+        ));
+    }
+    Ok(())
+}
+
+/// [`check_policy`] without its count: every check of a select step's document against `layout`
+/// but the one candidate a select step chooses. Workflow #428 S168-5b: a judge step's document
+/// passes it, and admission checks its mode and count against the layout's slots instead.
+pub(super) fn check_policy_document(
+    policy: &SelectionPolicy,
+    layout: &CandidateLayout,
+) -> Result<(), String> {
     if policy.applies_to.candidate_layout_id != layout.id {
         return Err(format!(
             "applies_to={} differs from layout={}",
@@ -831,12 +856,6 @@ fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<()
             }
         }
     }
-    if policy.selection.required_count != 1 {
-        return Err(format!(
-            "required_count={} where a select step chooses one candidate",
-            policy.selection.required_count
-        ));
-    }
     Ok(())
 }
 
@@ -898,7 +917,7 @@ fn anchor_shift(
 
 /// The evaluator's decision over the actionable candidates of `projection`, each feature a
 /// field of its name: a boolean or an integer as the projection carries it.
-fn decide(
+pub(super) fn decide(
     policy: &SelectionPolicy,
     tables: &SelectionTables,
     layout: &CandidateLayout,
@@ -906,7 +925,21 @@ fn decide(
     facts: &SelectionFactSnapshot,
     now_unix_ms: u64,
 ) -> Result<SelectionDecision, ContainedTaskError> {
-    let candidates = projection
+    let candidates = evaluator_candidates(layout, projection);
+    evaluate_with_tables(policy, tables, &candidates, facts, now_unix_ms).map_err(|error| {
+        ContainedTaskError::with_detail(SELECTION_EVALUATION_FAILED, error.to_string())
+    })
+}
+
+/// The candidates [`decide`] hands the evaluator: the actionable candidates of `projection`
+/// whose consensus features resolved and, unless the layout keeps readable attributes, whose
+/// identity features read an identity. Every other actionable candidate is one the kernel keeps
+/// from the evaluator (Workflow #428 S168-5b: a judge step's unknown check counts it).
+pub(super) fn evaluator_candidates(
+    layout: &CandidateLayout,
+    projection: &CandidateProjection,
+) -> Vec<Candidate> {
+    projection
         .candidates()
         .iter()
         .filter(|candidate| candidate.actionable)
@@ -953,10 +986,7 @@ fn decide(
                 })
                 .collect(),
         })
-        .collect::<Vec<_>>();
-    evaluate_with_tables(policy, tables, &candidates, facts, now_unix_ms).map_err(|error| {
-        ContainedTaskError::with_detail(SELECTION_EVALUATION_FAILED, error.to_string())
-    })
+        .collect()
 }
 
 /// Workflow #357 DB-2 (TB7): the tables this select step's document declares, as its runtime
@@ -1039,7 +1069,7 @@ fn decision_hash(
 }
 
 /// The `kind` of a decision outcome, as its serde tag names it.
-fn outcome_kind(outcome: &SelectionOutcome) -> &'static str {
+pub(super) fn outcome_kind(outcome: &SelectionOutcome) -> &'static str {
     match outcome {
         SelectionOutcome::Selected { .. } => "selected",
         SelectionOutcome::Empty => "empty",
@@ -1064,7 +1094,9 @@ fn mirror<T: Serialize, U: DeserializeOwned>(value: &T) -> Result<U, ContainedTa
 
 /// The record's outcome of the decision (ledger revision 3): an unknown outcome keeps its
 /// reason, and the evaluator's `detail` text stays out of the record.
-fn record_outcome(outcome: &SelectionOutcome) -> Result<TaskSelectionOutcome, ContainedTaskError> {
+pub(super) fn record_outcome(
+    outcome: &SelectionOutcome,
+) -> Result<TaskSelectionOutcome, ContainedTaskError> {
     match outcome {
         SelectionOutcome::Unknown { reason, .. } => Ok(TaskSelectionOutcome::Unknown {
             reason: mirror(reason)?,
@@ -1075,7 +1107,7 @@ fn record_outcome(outcome: &SelectionOutcome) -> Result<TaskSelectionOutcome, Co
 
 /// The record's reason chain (ledger revision 3): each reason's outcome, its code with its
 /// values; the evaluator's English `detail` stays out of the record.
-fn record_reasons(reasons: &[DecisionReason]) -> Vec<PolicyReasonRecord> {
+pub(super) fn record_reasons(reasons: &[DecisionReason]) -> Vec<PolicyReasonRecord> {
     reasons
         .iter()
         .map(|reason| PolicyReasonRecord(reason.outcome.clone()))
@@ -1084,7 +1116,7 @@ fn record_reasons(reasons: &[DecisionReason]) -> Vec<PolicyReasonRecord> {
 
 /// The record's per-candidate breakdown: each gate's and term's result as its
 /// `selection_result` (ledger revision 3), each reason as [`record_reasons`] keeps it.
-fn record_verdicts(
+pub(super) fn record_verdicts(
     verdicts: &[CandidateVerdict],
 ) -> Result<Vec<TaskSelectionVerdict>, ContainedTaskError> {
     verdicts
@@ -1546,6 +1578,66 @@ impl PreparedContainedTask {
             // returned unchanged.
             _ => result,
         }
+    }
+
+    /// Workflow #428 S168-5b (`contracts/selection-graph.md`, "Execution of a judge step"): one
+    /// judge step on its dispatched frame F1, `observation`, recognized as its `from` page. F1 is
+    /// projected with the step's layout (candidate sampling and its budget as for a select step),
+    /// the runtime supplies the instance fact snapshot and the instant, the run's tables answer
+    /// for the document's, and the judge path ([`super::judge::judge`]) decides. The decision is
+    /// recorded once, with the confirmation `judge_only`, and the key the run ends with is
+    /// returned. A failure before the decision returns its code and writes no record. The step
+    /// samples no point and makes no input.
+    pub(super) fn judge_attempt<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        operation: &TaskOperation,
+        prepared: &super::judge::PreparedJudge,
+        observation: &PageObservation,
+        (step_index, timing): (u32, ContainedTaskTimingContext),
+    ) -> Result<String, ContainedTaskRunError<R::Error>> {
+        let layout = self
+            .evaluator
+            .candidate_layout(prepared.layout_id())
+            .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
+        let deadline = timing.deadline();
+        if let Some(required_ms) = sampling_budget_ms(operation, &self.evaluator, &self.detector)? {
+            // Workflow #386 SR-1 (§2.3), as for a select step: too little time left for the
+            // projection ends the run before any capture.
+            let remaining = deadline
+                .saturating_duration_since(super::budget_observation_now(runtime, timing.pace()));
+            if remaining.is_zero() || Duration::from_millis(required_ms) > remaining {
+                return Err(sample_budget_insufficient(
+                    ExecutionKernelCode::CandidateSampleBudgetInsufficient,
+                    required_ms,
+                    remaining,
+                )
+                .into());
+            }
+        }
+        let (projection, _) =
+            self.project_transaction(runtime, operation, observation, layout, timing, deadline)?;
+        let (snapshot, now_unix_ms) = self.pinned_state(runtime, operation, step_index)?;
+        let tables = step_tables(runtime, prepared.policy())?;
+        let judged = super::judge::judge(
+            prepared,
+            layout,
+            &projection,
+            (&snapshot, now_unix_ms),
+            &tables,
+        )?;
+        judged.record.validate_for_append().map_err(|error| {
+            ContainedTaskError::with_detail(error.code(), format!("field={}", error.field()))
+        })?;
+        runtime
+            .record(ContainedTaskTrace::SelectionEvaluated {
+                step_index,
+                operation_label: operation.id.clone(),
+                selection: Box::new(judged.record),
+                run_ending: false,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        Ok(judged.outcome_key)
     }
 
     /// The confirmation of `candidate_id` on a fresh frame, captured and recognized like any

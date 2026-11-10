@@ -74,6 +74,36 @@ const READ_LIST_REFUSED_MEMBERS: &[&str] = &[
 /// Workflow #428 S168-4: the effects a `read_list` step never declares beside it.
 const READ_LIST_OTHER_EFFECTS: &[&str] = &["click", "application", "select", "wait"];
 
+/// Workflow #428 S168-5b (`contracts/selection-graph.md`, "Judge step", "Declaration"): the members
+/// of a `judge` object, every one required.
+const JUDGE_MEMBERS: &[&str] = &["layout_id", "policy", "outcome_key", "unknown_outcome_key"];
+
+/// Workflow #428 S168-5b ("Members of a judge step"): the operation members a judge step refuses
+/// with `UnknownField`, in the table's order: a guard and its source form, a confirmation, a wait
+/// after an input, a recheck of an input, a window after a confirmation, a guard refusal; a retry
+/// and a recovery; a per-run cap; the timings around an input; the `linear_steps` members. A
+/// judge has no input to guard, confirm, retry or repeat.
+const JUDGE_REFUSED_MEMBERS: &[&str] = &[
+    "guard",
+    "unguarded_trusted_coordinate",
+    "verify_template",
+    "expect_after",
+    "post_delay_ms",
+    "input_recheck",
+    "observation_window",
+    "on_guard_refused",
+    "max_attempts",
+    "retry_interval_ms",
+    "on_error",
+    "max_runs",
+    "on_max_runs",
+    "pre_delay_ms",
+    "pre_wait_freezes_ms",
+    "post_wait_freezes_ms",
+    "transition",
+    "optional",
+];
+
 /// Workflow #428 S168-4: the `value` of the feature `name` of a task's candidate layout, when
 /// the layout declares it.
 fn layout_feature_value<'v>(layout: &'v Value, name: &str) -> Option<&'v str> {
@@ -566,6 +596,7 @@ impl Declaration<'_> {
                 "on_max_runs",
                 "wait",
                 read_list_member(),
+                "judge",
             ],
         )?;
         if object.get("verify_template").is_none_or(Value::is_null) {
@@ -614,6 +645,12 @@ impl Declaration<'_> {
         if let Some(read_list) = read_list {
             self.read_list_step(object, read_list, pointer)?;
         }
+        // Workflow #428 S168-5b: or a judge step (task schema `0.9`), the step's only effect,
+        // which makes no input; its rules with the task are Runtime admission's.
+        let judge = object.get("judge").filter(|value| !value.is_null());
+        if let Some(judge) = judge {
+            self.judge_step(object, judge, pointer)?;
+        }
         match (
             object.get("click").filter(|value| !value.is_null()),
             object.get("application").filter(|value| !value.is_null()),
@@ -636,7 +673,7 @@ impl Declaration<'_> {
                     ResourceDeclarationReason::InvalidValue,
                 ));
             }
-            (None, None, None) if wait.is_some() || read_list.is_some() => {}
+            (None, None, None) if wait.is_some() || read_list.is_some() || judge.is_some() => {}
             (None, None, None) => {
                 let click = self.required(object, pointer, "click")?;
                 self.click(click, &child(pointer, "click"), canonical)?;
@@ -1308,6 +1345,125 @@ impl Declaration<'_> {
             .filter(|member| **member != "early_stop")
         {
             self.required(scan, &scan_pointer, member)?;
+        }
+        Ok(())
+    }
+
+    /// Workflow #428 S168-5b (`contracts/selection-graph.md`, "Judge step", "Declaration" and
+    /// "Members of a judge step"): a judge step's structure, on task schema `0.9` only
+    /// (`UnconsumedField` before it), as the step's only effect (`InvalidValue` at `judge` beside
+    /// another), never retried (`InvalidValue` at `retryable: true`) and with none of
+    /// [`JUDGE_REFUSED_MEMBERS`] (`UnknownField` at the first one). Its `judge` holds exactly
+    /// [`JUDGE_MEMBERS`]: a candidate layout id, the object `{path}` with a safe task-local
+    /// `policies/<name>.json`, and two strings, its keys. Its rules with the task (`to`, the
+    /// layout, the document, the keys, the mappings) are Runtime admission's.
+    fn judge_step(
+        &self,
+        operation: &Map<String, Value>,
+        value: &Value,
+        pointer: &str,
+    ) -> CliOutcome<()> {
+        let judge_pointer = child(pointer, "judge");
+        if self.schema_before(TaskSchema::V0_9) {
+            return Err(self.error(&judge_pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let declared = |member: &str| operation.get(member).is_some_and(|value| !value.is_null());
+        if ["click", "application", "select", "wait"]
+            .into_iter()
+            .chain([read_list_member()])
+            .any(declared)
+        {
+            return Err(self.error(&judge_pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        if operation.get("retryable") == Some(&Value::Bool(true)) {
+            return Err(self.error(
+                &child(pointer, "retryable"),
+                ResourceDeclarationReason::InvalidValue,
+            ));
+        }
+        if let Some(member) = JUDGE_REFUSED_MEMBERS
+            .iter()
+            .copied()
+            .find(|&member| declared(member))
+        {
+            return Err(self.error(
+                &child(pointer, member),
+                ResourceDeclarationReason::UnknownField,
+            ));
+        }
+        let judge = self.object(value, &judge_pointer, JUDGE_MEMBERS)?;
+        for member in JUDGE_MEMBERS {
+            self.required(judge, &judge_pointer, member)?;
+        }
+        let layout_pointer = child(&judge_pointer, "layout_id");
+        self.string(&judge["layout_id"], &layout_pointer)?;
+        if validate_candidate_layout_id(judge["layout_id"].as_str().unwrap_or_default()).is_err() {
+            return Err(self.error(&layout_pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        let policy_pointer = child(&judge_pointer, "policy");
+        let policy = self.object(&judge["policy"], &policy_pointer, &["path"])?;
+        let path_pointer = child(&policy_pointer, "path");
+        self.string(
+            self.required(policy, &policy_pointer, "path")?,
+            &path_pointer,
+        )?;
+        if !policy["path"].as_str().is_some_and(|path| {
+            super::safe_task_local_resource_path(path)
+                && path.starts_with("policies/")
+                && path.ends_with(".json")
+        }) {
+            return Err(self.error(&path_pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        for member in ["outcome_key", "unknown_outcome_key"] {
+            self.string(&judge[member], &child(&judge_pointer, member))?;
+        }
+        Ok(())
+    }
+
+    /// Workflow #428 S168-5b (`contracts/selection-graph.md`, "Mapping the two keys"): a mapping
+    /// that declares `judge_result` belongs to a task with a judge step, and every page it lists
+    /// is a judge step's `from` page (`InvalidValue` at the declaration otherwise); that it is
+    /// never with `busy`, and that two mappings overlap only with the same `judge_result`, are the
+    /// declaration's own check ([`Self::scheduling`]).
+    fn judge_results(&self, task: &Map<String, Value>) -> CliOutcome<()> {
+        let Some(mappings) = task
+            .get("scheduling_outcome")
+            .and_then(|scheduling| scheduling.get("mappings"))
+            .and_then(Value::as_array)
+        else {
+            return Ok(());
+        };
+        let game = task.get("game").and_then(Value::as_str).unwrap_or_default();
+        let judge_pages = task
+            .get("operations")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|operation| operation.get("judge").is_some_and(|judge| !judge.is_null()))
+            .filter_map(|operation| operation.get("from").and_then(Value::as_str))
+            .map(|page| super::normalize_page_rule_id(game, page))
+            .collect::<BTreeSet<_>>();
+        for mapping in mappings {
+            if mapping.get("judge_result").is_none_or(Value::is_null) {
+                continue;
+            }
+            let pages = mapping
+                .get("terminal_pages")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            if judge_pages.is_empty()
+                || pages.iter().any(|page| {
+                    page.as_str().is_none_or(|page| {
+                        !judge_pages.contains(&super::normalize_page_rule_id(game, page))
+                    })
+                })
+            {
+                return Err(self.error(
+                    "/scheduling_outcome",
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
         }
         Ok(())
     }
@@ -3524,8 +3680,15 @@ fn select_policy(
         .iter()
         .enumerate()
     {
-        let Some(select) = operation.get("select").filter(|value| !value.is_null()) else {
-            continue;
+        // Workflow #428 S168-5b: a judge step's document passes every check of a select step's
+        // but the one candidate it chooses; its mode and count are Runtime admission's.
+        let (select, member) = match (
+            operation.get("select").filter(|value| !value.is_null()),
+            operation.get("judge").filter(|value| !value.is_null()),
+        ) {
+            (Some(select), _) => (select, "select"),
+            (None, Some(judge)) => (judge, "judge"),
+            (None, None) => continue,
         };
         if select
             .pointer("/policy/path")
@@ -3534,7 +3697,7 @@ fn select_policy(
         {
             continue;
         }
-        let pointer = format!("/operations/{index}/select");
+        let pointer = format!("/operations/{index}/{member}");
         let layout_id = select
             .get("layout_id")
             .and_then(Value::as_str)
@@ -3676,7 +3839,7 @@ fn select_policy(
                 }
             }
         }
-        if policy.selection.required_count != 1 {
+        if member == "select" && policy.selection.required_count != 1 {
             return Err(refuse(
                 "/selection/required_count",
                 "a select step chooses exactly one candidate".to_owned(),
@@ -3745,8 +3908,31 @@ impl Declaration<'_> {
             let mapping = self.object(
                 mapping,
                 &pointer,
-                &["outcome_key", "effect", "terminal_pages", "remedy", "busy"],
+                &[
+                    "outcome_key",
+                    "effect",
+                    "terminal_pages",
+                    "remedy",
+                    "busy",
+                    "judge_result",
+                ],
             )?;
+            // Workflow #428 S168-5b: `judged` or `unknown`, task schema `0.9` only; its rules
+            // with the task are `judge_results`', never with `busy` the declaration's check below.
+            if let Some(judge_result) = mapping.get("judge_result") {
+                let result_pointer = child(&pointer, "judge_result");
+                if self.schema_before(TaskSchema::V0_9) {
+                    return Err(
+                        self.error(&result_pointer, ResourceDeclarationReason::UnconsumedField)
+                    );
+                }
+                self.string(judge_result, &result_pointer)?;
+                if !matches!(judge_result.as_str(), Some("judged" | "unknown")) {
+                    return Err(
+                        self.error(&result_pointer, ResourceDeclarationReason::InvalidValue)
+                    );
+                }
+            }
             for field in ["outcome_key", "effect"] {
                 self.string(
                     self.required(mapping, &pointer, field)?,
@@ -4738,6 +4924,8 @@ impl Declaration<'_> {
         self.array(self.required(object, "", "operations")?, "/operations")?;
         // Workflow #428 S168-4: the task-level rules of its list readings and their references.
         self.list_readings(object)?;
+        // Workflow #428 S168-5b: a mapping's `judge_result` against the task's judge steps.
+        self.judge_results(object)?;
         Ok(())
     }
 
@@ -6806,5 +6994,197 @@ mod tests {
             task,
         )
         .expect("a mark under inventory. outside the prefix is declared");
+    }
+
+    /// Workflow #428 S168-5b: a judge step on the list page over `layout/slots`, its two keys.
+    fn judge_step() -> Value {
+        serde_json::json!({
+            "id": "judge_choices", "from": "list", "to": "list",
+            "judge": {"layout_id": "layout/slots", "policy": {"path": "policies/judge.json"},
+                      "outcome_key": "choices_judged", "unknown_outcome_key": "choices_unknown"}
+        })
+    }
+
+    /// Workflow #428 S168-5b: the two mappings of the judge's keys on the list page, `judged` with
+    /// `result` and `unknown`.
+    fn judge_mappings(result: Value) -> Value {
+        serde_json::json!({"mappings": [
+            {"outcome_key": "choices_judged", "effect": "no_designated_effect",
+             "terminal_pages": ["list"], "judge_result": result},
+            {"outcome_key": "choices_unknown", "effect": "no_designated_effect",
+             "terminal_pages": ["list"], "judge_result": "unknown"}
+        ]})
+    }
+
+    /// Workflow #428 S168-5b test 6, the declaration gate's half (admission's half is the
+    /// execution-kernel test of the same name; `contracts/selection-graph.md`, "Judge step",
+    /// "Declaration", "Members of a judge step" and "Mapping the two keys"): a judge step with
+    /// `when`, `retryable: false` and `purpose` is declared, and the pair `judged` and `unknown`
+    /// on one condition and page is admitted; the step's structure is refused at its pointer (an
+    /// older task schema, another effect, a missing key, a member of `judge` it does not hold, a
+    /// guard, a confirmation, a retry, a document outside `policies/`), and so is a mapping's
+    /// `judge_result` (another word or no string, an older schema, `busy` beside it, two mappings
+    /// that overlap, a task without a judge step, a page that is no judge step's `from` page).
+    #[test]
+    fn judge_declaration_refusals() {
+        let mut declared = judge_step();
+        declared["when"] = serde_json::json!({"present": "page/list"});
+        declared["retryable"] = serde_json::json!(false);
+        declared["purpose"] = serde_json::json!("judge the choices");
+        list_task_file("0.9")
+            .operation(&declared, "/operations/0", true)
+            .expect("task schema 0.9 declares a judge step");
+        let step = |patch: &dyn Fn(&mut Value)| {
+            let mut step = judge_step();
+            patch(&mut step);
+            step
+        };
+        let operation_cases = [
+            (
+                "0.8",
+                judge_step(),
+                "/operations/0/judge",
+                "unconsumed_field",
+            ),
+            (
+                "0.9",
+                step(&|step| {
+                    step["click"] = serde_json::json!({"kind": "point", "x": 1, "y": 0});
+                }),
+                "/operations/0/judge",
+                "invalid_value",
+            ),
+            (
+                "0.9",
+                step(&|step| {
+                    step["judge"]
+                        .as_object_mut()
+                        .expect("judge")
+                        .remove("unknown_outcome_key");
+                }),
+                "/operations/0/judge/unknown_outcome_key",
+                "missing_field",
+            ),
+            (
+                "0.9",
+                step(&|step| step["judge"]["scan"] = serde_json::json!({})),
+                "/operations/0/judge/scan",
+                "unknown_field",
+            ),
+            (
+                "0.9",
+                step(&|step| {
+                    step["guard"] = serde_json::json!({"page_id": "list",
+                                                       "target_id": "guard/list"});
+                }),
+                "/operations/0/guard",
+                "unknown_field",
+            ),
+            (
+                "0.9",
+                step(&|step| step["expect_after"] = serde_json::json!({"page_id": "list"})),
+                "/operations/0/expect_after",
+                "unknown_field",
+            ),
+            (
+                "0.9",
+                step(&|step| step["retryable"] = serde_json::json!(true)),
+                "/operations/0/retryable",
+                "invalid_value",
+            ),
+            (
+                "0.9",
+                step(&|step| {
+                    step["judge"]["policy"]["path"] = serde_json::json!("documents/judge.json");
+                }),
+                "/operations/0/judge/policy/path",
+                "invalid_value",
+            ),
+        ];
+        for (schema, operation, pointer, reason) in operation_cases {
+            assert_eq!(
+                refusal_at(list_task_file(schema).operation(&operation, "/operations/0", true)),
+                (pointer.to_owned(), reason.to_owned()),
+                "{operation}"
+            );
+        }
+
+        let gate = list_task_file("0.9");
+        gate.scheduling(
+            &judge_mappings(serde_json::json!("judged")),
+            "/scheduling_outcome",
+        )
+        .expect("the pair judged and unknown on one condition and page is declared");
+        let mut busy = judge_mappings(serde_json::json!("judged"));
+        busy["mappings"][0]["busy"] = serde_json::json!(true);
+        let scheduling_cases = [
+            (
+                "0.9",
+                judge_mappings(serde_json::json!("decided")),
+                "/scheduling_outcome/mappings/0/judge_result",
+                "invalid_value",
+            ),
+            (
+                "0.9",
+                judge_mappings(serde_json::json!(1)),
+                "/scheduling_outcome/mappings/0/judge_result",
+                "invalid_type",
+            ),
+            (
+                "0.8",
+                judge_mappings(serde_json::json!("judged")),
+                "/scheduling_outcome/mappings/0/judge_result",
+                "unconsumed_field",
+            ),
+            ("0.9", busy, "/scheduling_outcome", "invalid_value"),
+            (
+                "0.9",
+                judge_mappings(serde_json::json!("unknown")),
+                "/scheduling_outcome",
+                "invalid_value",
+            ),
+        ];
+        for (schema, scheduling, pointer, reason) in scheduling_cases {
+            assert_eq!(
+                refusal_at(list_task_file(schema).scheduling(&scheduling, "/scheduling_outcome")),
+                (pointer.to_owned(), reason.to_owned()),
+                "{scheduling}"
+            );
+        }
+
+        // The rules of the whole task: a judge step's `from` page for every page a mapping with
+        // `judge_result` lists.
+        let task = |operations: Value, scheduling: Value| {
+            serde_json::json!({"game": "neutral", "scheduling_outcome": scheduling,
+                               "operations": operations})
+        };
+        let judged = task(
+            serde_json::json!([judge_step()]),
+            judge_mappings(serde_json::json!("judged")),
+        );
+        gate.judge_results(judged.as_object().expect("task"))
+            .expect("the mappings list the judge step's page");
+        let mut other_page = judge_mappings(serde_json::json!("judged"));
+        other_page["mappings"][0]["terminal_pages"] = serde_json::json!(["list", "detail"]);
+        for (case, refused) in [
+            (
+                "a task without a judge step",
+                task(
+                    serde_json::json!([{"id": "leave", "from": "list", "to": "detail",
+                                        "click": {"kind": "point", "x": 1, "y": 0}}]),
+                    judge_mappings(serde_json::json!("judged")),
+                ),
+            ),
+            (
+                "a page that is no judge step's",
+                task(serde_json::json!([judge_step()]), other_page),
+            ),
+        ] {
+            assert_eq!(
+                refusal_at(gate.judge_results(refused.as_object().expect("task"))),
+                ("/scheduling_outcome".to_owned(), "invalid_value".to_owned()),
+                "{case}"
+            );
+        }
     }
 }

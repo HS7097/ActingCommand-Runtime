@@ -1119,8 +1119,14 @@ Workflow #428 S168-5b, written ahead of its code by S168-0 and corrected by its 
 ([v012-register.md](v012-register.md) §1.291). A judge step evaluates the candidates one frame
 shows with a selection policy, records the decision, and ends the run with one of two keys its
 package declares. It performs no input. Its decision is advice kept in the ledger: no Runtime
-component acts on it. **Status:** until S168-5b a package that declares one is refused
-(`UnknownField` at `/operations/<i>/judge`).
+component acts on it. **Status:** built by S168-5b (`package` revision 9, `ledger` revision 8; it
+ships in the release of LAB-6 and LAB-7, [v012-register.md](v012-register.md) §1.291, "Slice
+S168-5b"). A Runtime before it refuses a package that declares one (`UnknownField` at
+`/operations/<i>/judge`). The code is `crates/execution-kernel/src/contained_task/judge.rs` (the
+effect, its admission and the judge path), the declaration gate's `Declaration::judge_step` and
+`Declaration::judge_results`, the static walks of `crates/actingcommand-contract/src/taskflow.rs`
+(`judge_terminal_holds`) and the host's mapping and refusal in
+`crates/runtime-host/src/host/contained_task.rs`.
 
 ### Declaration
 
@@ -1191,7 +1197,8 @@ end is a judge step is refused `task_phases_unreachable` (no terminal); where th
 target or an end page of the stage, the destination would even count as the stage's advance or
 an end page. The page graph's coverage check, `validate_scheduling_outcome_coverage`
 (`crates/execution-kernel/src/contained_task.rs`), likewise takes it as an edge to its own page.
-S168-5b changes them:
+S168-5b changed them (the state rule is `judge_terminal_holds` in
+`crates/actingcommand-contract/src/taskflow.rs`, which both walks share):
 
 - `TaskPhaseOperation` carries the judge's two keys; its two builders fill them,
   `validate_phases_bundle` (`crates/pack-containment/src/source/mod.rs`) and
@@ -1312,7 +1319,7 @@ words. The names are neutral examples:
 - **Overlap.** Today's declaration check, `SchedulingOutcomeDeclaration::validate`
   (`crates/actingcommand-contract/src/event/payload.rs`), refuses two mappings with the same
   effect condition that list the same page (`invalid_scheduling_outcome_declaration`, field
-  `mapping_overlap`). S168-5b changes that check: two mappings overlap only when they have the
+  `mapping_overlap`). S168-5b changed that check: two mappings overlap only when they have the
   same effect condition, list the same page, and have the same `judge_result` or both have none.
   A mapping with `judge_result` and a mapping without it, on the same condition and page, do not
   overlap: the first maps the judge's ends, the second maps every other end at that page. Nor do
@@ -1435,7 +1442,7 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 | `page_changed` | The confirmation frame is not the step's page. |
 | `guard_failed` `{code}` | The step's guard failed on the confirmation frame. |
 | `capture_failed` `{code}` | The confirmation frame could not be captured. |
-| `judge_only` | A judge step's record, whatever its outcome (Workflow #428 S168-5b, section Judge step; planned `ledger` revision 8, [component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168"): no confirmation is attempted and no input follows. No member. |
+| `judge_only` | A judge step's record, whatever its outcome (Workflow #428 S168-5b, section Judge step; `ledger` revision 8, [component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168"): no confirmation is attempted and no input follows. No member. |
 
 A confirmation is attempted exactly when the outcome is `selected`, except in a judge step's
 record, whose confirmation is always `judge_only` and never attempted. Together with the
@@ -1559,7 +1566,7 @@ A record is checked when it is written and when it is read:
   whose projection is v1 of a `repeated_anchor` layout, carry two 64-hex hashes and, like the
   other confirmations, an optional embedded projection that seals the first; a `tracked`
   `shift_px` is at most 64; neither the decision hash nor the shift is recomputed;
-- `judge_only` (Workflow #428 S168-5b; planned `ledger` revision 8) belongs to a record without
+- `judge_only` (Workflow #428 S168-5b; `ledger` revision 8) belongs to a record without
   `multi_select` whose projection is v1 of a `fixed_slots` layout and which carries
   `unknown_check` with `blocking` `none` or `unknown_instances` (with a `selected` or `empty`
   outcome, `none` exactly when `unknown_instances` is 0; with an `unknown` outcome always `none`,

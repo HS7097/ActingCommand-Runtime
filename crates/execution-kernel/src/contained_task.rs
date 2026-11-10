@@ -93,6 +93,11 @@ mod list_reading;
 // Workflow #428 S168-4: the list reading's named tests, the kernel's halves.
 #[cfg(test)]
 mod gate_428_s168_4;
+// Workflow #428 S168-5b: a judge step, a selection evaluated and recorded without input.
+mod judge;
+// Workflow #428 S168-5b: the judge step's named tests, the kernel's halves.
+#[cfg(test)]
+mod gate_428_s168_5b;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.
@@ -3265,6 +3270,8 @@ impl PreparedContainedTask {
         selection::prepare_select_steps(&mut program, &control, &bundle, &evaluator)?;
         // Workflow #428 S168-4: every `read_list` step's references and scan.
         list_reading::prepare_list_readings(&mut program, &control, &evaluator)?;
+        // Workflow #428 S168-5b: every judge step's layout and document.
+        judge::prepare_judge_steps(&mut program, &control, &bundle, &evaluator)?;
         let admission_limit = control
             .step_timeout()
             .milliseconds
@@ -3468,6 +3475,18 @@ impl PreparedContainedTask {
         }
     }
 
+    /// Workflow #428 S168-5b (`contracts/selection-graph.md`, "No input, and how that is
+    /// enforced", layer 3): the ids of the package's judge steps, whose actions the host accepts
+    /// no effect intent for.
+    pub fn judge_operation_ids(&self) -> BTreeSet<String> {
+        self.program
+            .operations
+            .iter()
+            .filter(|operation| operation.declares_judge())
+            .map(|operation| operation.id.clone())
+            .collect()
+    }
+
     /// UPD-1 (design-upd1 §3.3): whether the package declares `store_update`; the host clears
     /// its instance's `health.application.update_required` before such a run's successful
     /// terminal.
@@ -3506,21 +3525,30 @@ impl PreparedContainedTask {
             .collect()
     }
 
-    /// Whether the task has a select step (Workflow #308).
+    /// Whether the task has a select step (Workflow #308) or (Workflow #428 S168-5b) a judge step,
+    /// which evaluates a selection with the instance's facts as a select step does.
     pub fn has_select_steps(&self) -> bool {
         self.program
             .operations
             .iter()
-            .any(|operation| operation.select.is_some())
+            .any(|operation| operation.select.is_some() || operation.judge.is_some())
     }
 
-    /// Workflow #357 DB-2: the sealed documents of the package's select steps.
+    /// Workflow #357 DB-2: the sealed documents of the package's select steps, and (Workflow #428
+    /// S168-5b) of its judge steps, whose tables the run binds as a select step's.
     pub fn selection_policies(&self) -> impl Iterator<Item = &SelectionPolicy> {
-        self.program
-            .operations
-            .iter()
-            .filter_map(|operation| operation.prepared_select.as_deref())
-            .map(selection::PreparedSelect::policy)
+        self.program.operations.iter().filter_map(|operation| {
+            operation
+                .prepared_select
+                .as_deref()
+                .map(selection::PreparedSelect::policy)
+                .or_else(|| {
+                    operation
+                        .prepared_judge
+                        .as_deref()
+                        .map(judge::PreparedJudge::policy)
+                })
+        })
     }
 
     /// Workflow #357 DB-2: whether a select step's document declares a shared table, so a run of
@@ -3786,6 +3814,16 @@ impl PreparedContainedTask {
             // Workflow #308 SEL-L4b (S0 §1.4 (g)): an early end on the step's own page would
             // leave the dependent package short of its entry page.
             Some("select_on_empty")
+        } else if self
+            .program
+            .operations
+            .iter()
+            .any(|operation| operation.judge.is_some())
+        {
+            // Workflow #428 S168-5b (`contracts/selection-graph.md`, "Judge step"): as for an
+            // `on_empty` step, the judge's end on its own page would leave the dependent package
+            // short of its entry page.
+            Some("judge_end")
         } else if self
             .program
             .phases
@@ -5275,6 +5313,34 @@ impl PreparedContainedTask {
                                 })?;
                             observation = Some(last);
                             break;
+                        }
+                        // Workflow #428 S168-5b (`contracts/selection-graph.md`, "Execution of a
+                        // judge step"): a judge step projects its frame F1, evaluates its
+                        // document, records the decision with `judge_only` and ends the run
+                        // Completed on F1's page with one of its two keys. No guard, no gap, no
+                        // point and no input: the judge path is handed neither the runtime's
+                        // device port nor the step's seed, and no later operation runs.
+                        if let Some(prepared) = operation.prepared_judge.as_deref() {
+                            let observed = observation.as_ref().ok_or_else(|| {
+                                ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code())
+                            })?;
+                            let outcome_key = self.judge_attempt(
+                                runtime,
+                                operation,
+                                prepared,
+                                observed,
+                                (step_index, step_timing),
+                            )?;
+                            let page_label = observed.page_label.clone();
+                            return self.finish_keyed_end(
+                                runtime,
+                                ocr_collector,
+                                &mut machine,
+                                (step_index, &operation_id),
+                                page_label,
+                                outcome_key,
+                                pace,
+                            );
                         }
                         // #411 B36/B19 (A35-S3): a wait step makes no input: no guard, no
                         // effect intent, no input and no effect record. It waits on its own page
@@ -9161,6 +9227,38 @@ impl TaskProgram {
                     ExecutionKernelCode::ContainedTaskOutcomeDeclarationInvalid.code(),
                 ));
             }
+            // Workflow #428 S168-5b (`contracts/selection-graph.md`, "Mapping the two keys"): a
+            // mapping's `judge_result` is a task schema `0.9` member, only in a task with a
+            // judge step, and every page it lists is a judge step's `from` page.
+            if let Some(mapping) = declaration
+                .mappings()
+                .iter()
+                .find(|mapping| mapping.judge_result().is_some())
+            {
+                let judge_pages = self
+                    .operations
+                    .iter()
+                    .filter(|operation| operation.declares_judge())
+                    .map(|operation| crate::canonical_page_anchor(&control.game, &operation.from))
+                    .collect::<BTreeSet<_>>();
+                let refused = !self.schema_at_least(TaskSchema::V0_9)
+                    || !self.declares_judge_steps()
+                    || declaration
+                        .mappings()
+                        .iter()
+                        .filter(|mapping| mapping.judge_result().is_some())
+                        .flat_map(|mapping| mapping.terminal_pages())
+                        .any(|page| {
+                            !judge_pages
+                                .contains(&crate::canonical_page_anchor(&control.game, page))
+                        });
+                if refused {
+                    return Err(ContainedTaskError::with_detail(
+                        ExecutionKernelCode::ContainedTaskOutcomeDeclarationInvalid.code(),
+                        format!("outcome_key={} judge_result", mapping.outcome_key()),
+                    ));
+                }
+            }
             let terminal_pages = declaration
                 .mappings()
                 .iter()
@@ -9174,6 +9272,9 @@ impl TaskProgram {
         // Workflow #428 S168-4: the members of every `read_list` step, before the common
         // operation checks; its references with the recognition pack (`prepare_list_readings`).
         self.validate_list_reading_members()?;
+        // Workflow #428 S168-5b: the members of every judge step, before the common operation
+        // checks; its layout and document with the recognition pack (`prepare_judge_steps`).
+        self.validate_judge_members()?;
         // #411 B36/B19 (A35-S3): wait steps and wait pages, before the common operation checks;
         // Workflow #407 LOAD-2: then each confirmation's `loading`.
         self.validate_wait_steps(control, detector, bundle.operation_path())?;
@@ -9369,13 +9470,20 @@ impl TaskProgram {
         fields: Option<&PreparedOcrFields>,
     ) -> Result<(), ContainedTaskError> {
         for operation in &self.operations {
-            if operation.on_empty_key().is_none() {
+            // Workflow #428 S168-5b (`contracts/selection-graph.md`, "Judge step",
+            // "Declaration"): the same two rules hold for a judge step, with `judge` in place of
+            // `on_empty`.
+            let end = if operation.on_empty_key().is_some() {
+                "on_empty"
+            } else if operation.declares_judge() {
+                "judge"
+            } else {
                 continue;
-            }
+            };
             let refuse = |detail: &str| {
                 ContainedTaskError::with_detail(
                     ExecutionKernelCode::ContainedTaskSelectInvalid.code(),
-                    format!("operation={} on_empty {detail}", operation.id),
+                    format!("operation={} {end} {detail}", operation.id),
                 )
             };
             if comparison {
@@ -9556,6 +9664,8 @@ impl TaskProgram {
                     max_runs: operation.phase_run_cap(),
                     on_guard_refused_key: operation.on_guard_refused_key(),
                     on_timeout_key: operation.wait_on_timeout_key(),
+                    // Workflow #428 S168-5b: a judge step's two keys; its state is a terminal.
+                    judge: operation.judge.as_ref().map(judge::TaskJudge::phase_judge),
                 })
             })
             .collect::<Result<Vec<_>, ContainedTaskError>>()
@@ -10605,6 +10715,32 @@ fn validate_scheduling_outcome_coverage(
                     (operation.id.as_str(), member, key),
                 )?;
             }
+            // Workflow #428 S168-5b (`contracts/selection-graph.md`, "The static walks"): a judge
+            // step's state is a terminal under the state rule, and the run ends there, so no
+            // destination of it is followed; a judge that declares `when` may be withdrawn, and
+            // the page's next candidate is followed too.
+            if let Some(judge) = &operation.judge {
+                let condition = DesignatedEffectReach::condition(completed);
+                if !actingcommand_contract::judge_terminal_holds(
+                    declaration,
+                    condition,
+                    judge.phase_judge(),
+                    &|mapped: &str| crate::page_anchor_matches(game, &page, mapped),
+                ) {
+                    return Err(ContainedTaskError::with_detail(
+                        ExecutionKernelCode::ContainedTaskOutcomeDeclarationIncomplete.code(),
+                        format!(
+                            "operation={} judge page={page} effect={condition:?}",
+                            operation.id
+                        ),
+                    ));
+                }
+                if !operation.may_be_passed_over() {
+                    break;
+                }
+                passed_over.push(operation.id.as_str());
+                continue;
+            }
             let next_completed = member.map_or(completed, |member| {
                 completed | DesignatedEffectReach::bit(member)
             });
@@ -10646,11 +10782,13 @@ fn validate_scheduling_outcome_coverage(
     }
 
     for (condition, terminal_page) in reachable_terminals {
+        // Workflow #428 S168-5b: counted among the mappings without `judge_result`.
         let mapping_count = declaration
             .mappings()
             .iter()
             .filter(|mapping| {
                 mapping.effect() == condition
+                    && mapping.judge_result().is_none()
                     && mapping.terminal_pages().iter().any(|mapped_page| {
                         crate::page_anchor_matches(game, &terminal_page, mapped_page)
                     })
@@ -11121,6 +11259,14 @@ struct TaskOperation {
     /// package.
     #[serde(skip)]
     prepared_list: Option<Box<list_reading::PreparedListReading>>,
+    /// Workflow #428 S168-5b: a judge step, which evaluates a selection over one frame, records
+    /// it and ends the run with one of its two keys, without input; task schema `0.9`,
+    /// page-graph tasks only.
+    #[serde(default)]
+    judge: Option<judge::TaskJudge>,
+    /// The admitted judge step, set by contained task admission and never read from the package.
+    #[serde(skip)]
+    prepared_judge: Option<Box<judge::PreparedJudge>>,
 }
 
 impl TaskOperation {
@@ -11280,6 +11426,18 @@ impl TaskOperation {
                         ExecutionKernelCode::ContainedTaskGuardMissing.code(),
                     )),
                 }
+            }
+            // Workflow #428 S168-5b: a judge step makes no input: nothing to guard, nothing to
+            // trust; the page-graph admission checked its members first
+            // (`TaskProgram::validate_judge_members`).
+            (None, None, None)
+                if self.judge.is_some()
+                    && self.wait.is_none()
+                    && self.read_list.is_none()
+                    && self.guard.is_none()
+                    && !self.unguarded_trusted_coordinate =>
+            {
+                Ok(())
             }
             _ => Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
@@ -16734,6 +16892,7 @@ mod retry_wiring_tests {
                 max_runs: None,
                 on_guard_refused_key: None,
                 on_timeout_key: None,
+                judge: None,
             })
             .collect::<Vec<_>>();
         actingcommand_contract::validate_phased_route(

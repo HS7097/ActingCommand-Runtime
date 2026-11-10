@@ -638,6 +638,10 @@ impl TaskProgram {
                     Some(operation),
                 ));
             }
+            // Workflow #428 S168-5b: so is a judge step (`reason=judge`).
+            if operation.declares_judge() {
+                return Err(invalid("judge", Some(operation)));
+            }
             // ACT-4: final-state targets are judged by the page-graph confirmation.
             if operation.declares_expected_targets() {
                 return Err(invalid("expect_targets", Some(operation)));

@@ -912,3 +912,11 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_w1_8::w1_8_l2_b_the_published_head_of_a_sealed_writer_is_ledger_write_failed",
 ]
 incident = ["#422 W1-8"]
+
+# Workflow #428 S168-5b (the release of LAB-6 and LAB-7; register §1.291, the slice's named test 7; contracts/selection-graph.md, "Records"; ledger revision 8), the ledger's half: a judge step's task.selection_evaluated with the confirmation judge_only (stored as the one word, no member) is appended to a formal root and read back exactly when it is opened again; a reader whose vocabulary of confirmation kinds lacks the stored kind does not open the root (corrupt_ledger_record at decode_sqlite_record), as a reader of ledger revision 7 does with judge_only
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_428_s168_5b::judge_record_reader_rules",
+]
+incident = ["#428 S168-5b"]

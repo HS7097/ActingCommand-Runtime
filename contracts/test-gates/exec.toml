@@ -2860,3 +2860,17 @@ tests = [
     "actingcommand-lab::lib::env_detection::lock::tests::flk10_windows_holder_start_is_read_from_the_system_as_dotnet_ticks",
 ]
 incident = ["#71 FLK-10"]
+
+# Workflow #428 S168-5b (the release of LAB-6 and LAB-7; register §1.291, the slice's named tests; brief rd-1110/brief-s168-5b.md; contracts/selection-graph.md, "Judge step" and "Records"; package revision 9, ledger revision 8), the kernel's and the declaration gate's halves, on a fake device whose input port fails the test on any call, fake snapshots and tables loaded with LoadedTable::load: a judge over three fixed slots records one task.selection_evaluated with judge_only and ends the run Completed on its page with its outcome_key when every slot is judged (two ranked, one gate-rejected, selected in rank order, nothing unknown), with its unknown_outcome_key when a slot reads out of the dictionary (the check blocks with one unknown instance), when the document's list is stale (unknown, fact_stale, no verdict) and when a table drops a candidate unknown_dropped (no row, a null cell; a static table drop the check does not count), while gates deciding on known values end with the outcome_key; the kernel makes no input and records no effect, and its judge module names no type of the device side; admission refuses every rule of the declaration tables with its code and detail token, and the gate each structure and each judge_result rule at its pointer
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_known_ends_with_outcome_key",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_unknown_slot_ends_with_unknown_key",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_stale_list_ends_with_unknown_key",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_unknown_dropped_candidate_ends_with_unknown_key",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_performs_no_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_s168_5b::judge_declaration_refusals",
+    "actingcommand-pack-containment::lib::source::declarations::tests::judge_declaration_refusals",
+]
+incident = ["#428 S168-5b"]

@@ -2907,6 +2907,10 @@ mod gate_pkg_s3;
 // Workflow #357 DB-3s: a multi select's record follows its tap intents and reads back.
 #[path = "tests/gate_357_db3s.rs"]
 mod gate_357_db3s;
+// Workflow #428 S168-5b: a judge step's record reads back, and a reader whose vocabulary lacks
+// its confirmation kind refuses it.
+#[path = "tests/gate_428_s168_5b.rs"]
+mod gate_428_s168_5b;
 // Workflow #411 BT-LR (ledger keys 54, 55): ledger revision 4's records read back on a formal
 // root, and the writer admits a run's refused effect and capped operation only in order.
 #[path = "tests/gate_411_bt_lr.rs"]

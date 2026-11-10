@@ -2083,6 +2083,8 @@ impl RuntimeHost {
             #[cfg(test)]
             contained_task_stability_persistence_failures: AtomicU64::new(0),
             #[cfg(test)]
+            judge_effect_intent_injections: AtomicU64::new(0),
+            #[cfg(test)]
             contained_task_ocr_failure_persistence_failures: AtomicU64::new(0),
             #[cfg(test)]
             policy_outcome_projection_failures: AtomicU64::new(0),
@@ -4933,6 +4935,17 @@ impl RuntimeHost {
             })
     }
 
+    /// Workflow #428 S168-5b (test `judge_performs_no_input`): the next judge step's record is
+    /// followed by an effect intent for its action, handed to the host as a faulty interpreter
+    /// would hand it.
+    #[cfg(test)]
+    pub(crate) fn inject_judge_effect_intent_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::InjectTestJudgeEffectIntent)?
+            .judge_effect_intent_injections
+            .store(1, Ordering::Release);
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn fail_next_scheduling_terminal_append_for_test(&self) -> RuntimeHostResult<()> {
         self.shared_ref(
@@ -5991,6 +6004,10 @@ struct HostShared {
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]
     contained_task_stability_persistence_failures: AtomicU64,
+    // Workflow #428 S168-5b, test only: the next judge step's record is followed by an effect
+    // intent for its action, as a faulty interpreter would hand one to the host.
+    #[cfg(test)]
+    judge_effect_intent_injections: AtomicU64,
     #[cfg(test)]
     contained_task_ocr_failure_persistence_failures: AtomicU64,
     #[cfg(test)]
