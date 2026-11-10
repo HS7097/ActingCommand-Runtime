@@ -1440,7 +1440,13 @@ impl Declaration<'_> {
                     Some("passed" | "ocr_integer" | "identity")
                 );
                 if !readable || !read_features.insert(feature) {
-                    return Err(refuse(&format!("columns/{column_index}/feature")));
+                    // The pointer's segments one by one: `columns`, the index, `feature`.
+                    let column_pointer =
+                        child(&child(&read_pointer, "columns"), &column_index.to_string());
+                    return Err(self.error(
+                        &child(&column_pointer, "feature"),
+                        ResourceDeclarationReason::InvalidValue,
+                    ));
                 }
             }
             if !written.insert(
