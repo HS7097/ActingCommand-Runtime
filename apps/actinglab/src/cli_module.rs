@@ -36,7 +36,61 @@
 //!   `Lab-MCP` when MCP's actinglab child (`--via mcp`) adds them.
 
 // Workflow #434 LAB-5C: what a row hands `lab-ops` is read by the slice's test.
-pub(crate) mod core_ops;
+// Workflow #434 LAB-5G1: the code that serves these rows moved to `lab_ops::core_ops`; this module
+// gives it what stays actinglab's (`Caller`): the program's place (`place`), the developer text of
+// a state root it could not locate, and actinglab's code `lab_operation_completed`.
+pub(crate) mod core_ops {
+    use super::place;
+    use crate::codes::ActinglabCode;
+    use actingcommand_lab_ops::cli_line::Exit;
+    pub(crate) use actingcommand_lab_ops::core_ops::serves;
+    use actingcommand_lab_ops::core_ops::{self as serving, Caller, Place};
+    #[cfg(test)]
+    pub(crate) use actingcommand_lab_ops::core_ops::{
+        MaterialRead, handed_words, material_read, offline_words,
+    };
+    use actingcommand_lab_ops::table::Operation;
+    use serde_json::{Map, Value};
+
+    /// The operation `operation` with `params`, as its line.
+    pub(crate) fn answer(operation: &Operation, params: &Map<String, Value>) -> Exit {
+        serving::answer(
+            operation,
+            params,
+            &Caller {
+                place: &here,
+                unlocated: place::UNLOCATED,
+                completed: ActinglabCode::LabOperationCompleted.into(),
+            },
+        )
+    }
+
+    /// This process's place.
+    fn here() -> Place {
+        let located = place::place();
+        Place {
+            state_root: located.state_root,
+            root: located.root,
+        }
+    }
+
+    /// Workflow #434 LAB-5C: `material --out`'s line for a material written into `out`.
+    #[cfg(test)]
+    pub(crate) fn material_written(
+        out: &std::path::Path,
+        sha256: &str,
+        extension: &str,
+        bytes: &[u8],
+    ) -> Exit {
+        serving::material_written(
+            out,
+            sha256,
+            extension,
+            bytes,
+            ActinglabCode::LabOperationCompleted.into(),
+        )
+    }
+}
 // Workflow #434 LAB-5A: its command table is read by the slice's test.
 pub(crate) mod engine;
 // Workflow #434 LAB-2b: the line actinglab's own commands print.

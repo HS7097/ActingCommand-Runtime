@@ -13,27 +13,32 @@
 //!
 //! The instance is the operation's positional, an alias, an `instance_id` or an ADB port; one
 //! status read resolves it where the request needs the alias.
+//!
+//! Workflow #434 LAB-5G1 (register §1.287, "Slice LAB-5G1"): moved here from actinglab's CLI
+//! module (`apps/actinglab/src/cli_module/core_ops.rs`), so that another program serves these rows
+//! with the same code. What stays the program's is given by its caller ([`Caller`]): where the
+//! program acts ([`Place`]), the developer text of a state root it could not locate, and the code
+//! of an answer whose only source was an MCP tool (`lab_operation_completed`, the catalog owner
+//! `actinglab`'s). The three helpers of actinglab's words this code reads moved with it
+//! ([`MORE_WORDS`], [`further_flags`], [`parse_duration`]).
 
-use super::place::{self, Place};
-use super::words::parse_duration;
-use crate::codes::ActinglabCode;
-use actingcommand_contract::codes::ContractLocation;
-use actingcommand_contract::outcome::{Detail, Outcome};
-use actingcommand_contract::{
-    ContainedTaskRecoveryBinding, ContainedTaskRequest, MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
-    MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS, RequestId, RuntimeReceiptState,
-    SchedulingPauseExpectation, SchedulingPauseReason,
-};
-use actingcommand_lab_ops::cli_line::{self, Exit};
-use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
-use actingcommand_lab_ops::instance_selector::{self, SelectorMiss};
-use actingcommand_lab_ops::table::{Operation, ParamForm};
-use actingcommand_lab_ops::wait::{Waited, wait_at_most};
-use actingcommand_lab_ops::{
+use crate::cli_line::{self, Exit};
+use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::instance_selector::{self, SelectorMiss};
+use crate::table::{Operation, ParamForm};
+use crate::wait::{Waited, wait_at_most};
+use crate::{
     capability_gap, code_lookup, configure, devices, diagnose, emulators, events, evidence_read,
     fact_publish, facts, frames, ladder_drill, material, material_export, observe_export, overview,
     packs, perf_preset, remedy, routine_summary, run_evidence, run_list, run_show, schedule,
     scheduling, shutdown, targets, wait, wake_test,
+};
+use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::{Code, Detail, Outcome};
+use actingcommand_contract::{
+    ContainedTaskRecoveryBinding, ContainedTaskRequest, MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
+    MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS, RequestId, RuntimeReceiptState,
+    SchedulingPauseExpectation, SchedulingPauseReason,
 };
 use actingcommand_runtime_client::{ContainedTaskResetOutcome, RuntimeClient, RuntimeClientError};
 use serde::Serialize;
@@ -65,23 +70,45 @@ const EVENTS_OPTIONS: [&str; 13] = [
     "wait_s",
 ];
 
+/// Workflow #434 LAB-5G1: where the program acts, as it finds it (actinglab's CLI module: from its
+/// own place, `apps/actinglab/src/cli_module/place.rs`).
+pub struct Place {
+    /// The state root, or why it is unknown.
+    pub state_root: Result<PathBuf, Outcome>,
+    /// The install root, when the program runs from one.
+    pub root: Option<PathBuf>,
+}
+
+/// Workflow #434 LAB-5G1: what the program that serves these rows gives them, which stays the
+/// program's.
+pub struct Caller<'a> {
+    /// The program's place, asked for when a row needs it, as before: `packs` its install root
+    /// first, then every row but `codes`, `gap` and `packs` its state root.
+    pub place: &'a dyn Fn() -> Place,
+    /// The developer text of a state root the program could not locate.
+    pub unlocated: &'a str,
+    /// The code of an answer whose only source was an MCP tool: `lab_operation_completed`, a code
+    /// of the catalog owner `actinglab`, which only actinglab's registry emits.
+    pub completed: Code,
+}
+
 /// The operations of this module: the core rows and `run start`, `run stop`, `reset`, `drill`.
-pub(super) fn serves(operation: &Operation) -> bool {
+pub fn serves(operation: &Operation) -> bool {
     let name = operation.name.as_str();
     if matches!(name, "run start" | "run stop" | "reset" | "drill") {
         return true;
     }
     // `app launch|restart|stop` are actinglab's own `session app` (the engine).
-    operation.module == actingcommand_lab_ops::table::OperationModule::Core
+    operation.module == crate::table::OperationModule::Core
         && !matches!(name, "app launch" | "app restart" | "app stop")
 }
 
-/// The operation `operation` with `params`, as its line.
-pub(super) fn answer(operation: &Operation, params: &Map<String, Value>) -> Exit {
+/// The operation `operation` with `params`, as its line, for `caller`.
+pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Caller<'_>) -> Exit {
     let name = operation.name.as_str();
     // Offline operations: no state root; only `packs` reads the install root.
     let root = if name == "packs" {
-        place::place().root
+        (caller.place)().root
     } else {
         None
     };
@@ -92,10 +119,10 @@ pub(super) fn answer(operation: &Operation, params: &Map<String, Value>) -> Exit
             _ => packs::dispatch(&argv),
         });
     }
-    let located = place::place();
+    let located = (caller.place)();
     let state_root = match &located.state_root {
         Ok(state_root) => state_root.clone(),
-        Err(outcome) => return cli_line::failure(outcome, Some(place::UNLOCATED)),
+        Err(outcome) => return cli_line::failure(outcome, Some(caller.unlocated)),
     };
     if let Some(exit) = dispatched_with_state_root(operation, params, &located, &state_root) {
         return exit;
@@ -103,12 +130,10 @@ pub(super) fn answer(operation: &Operation, params: &Map<String, Value>) -> Exit
     // The operations called here take only the row's parameters: a flag or word the row does not
     // declare is refused by name, never ignored (Workflow #434 LAB-5A: the words refuse it first,
     // since no core row has `params_more`).
-    if let Some((further, _)) = super::words::further_flags(operation, params).first() {
+    if let Some((further, _)) = further_flags(operation, params).first() {
         return usage(&flag_name(further), ArgumentProblem::Unknown);
     }
-    if let Some(word) =
-        list_of(params, super::words::MORE_WORDS).and_then(|words| words.first().cloned())
-    {
+    if let Some(word) = list_of(params, MORE_WORDS).and_then(|words| words.first().cloned()) {
         return usage(&word, ArgumentProblem::Unknown);
     }
     let client = match connect(&state_root) {
@@ -118,7 +143,7 @@ pub(super) fn answer(operation: &Operation, params: &Map<String, Value>) -> Exit
     let answered = if name == "shutdown" {
         shutdown_line(params, client, &state_root)
     } else {
-        served(name, params, &client)
+        served(name, params, &client, caller.completed)
     };
     match answered {
         Ok(exit) | Err(exit) => exit,
@@ -160,7 +185,7 @@ fn shutdown_line(
 /// Workflow #434 LAB-5C: the words of `codes`, `gap` and `packs`, the offline rows LAB-1 moved
 /// with their parsing, as their command in `lab-ops` is given them (`root`: the install root, which
 /// only `packs` reads); `None` for another row.
-pub(crate) fn offline_words(
+pub fn offline_words(
     operation: &Operation,
     params: &Map<String, Value>,
     root: Option<&Path>,
@@ -234,7 +259,7 @@ fn dispatched_with_state_root(
 /// reads what a row hands on; `root` is the install root, `state_root` the state root. `None` for
 /// a row served here with its parameters; a parameter refused while the words are built is its
 /// line. `remedy set`'s rows given inline are no word: they go beside the words.
-pub(crate) fn handed_words(
+pub fn handed_words(
     operation: &Operation,
     params: &Map<String, Value>,
     root: Option<&Path>,
@@ -392,8 +417,14 @@ pub(crate) fn handed_words(
     Some(Ok(argv.0))
 }
 
-/// The other operations, called with their parameters on `client`.
-fn served(name: &str, params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit, Exit> {
+/// The other operations, called with their parameters on `client`; `completed_code` is the code
+/// of an answer whose only source was an MCP tool.
+fn served(
+    name: &str,
+    params: &Map<String, Value>,
+    client: &RuntimeClient,
+    completed_code: Code,
+) -> Result<Exit, Exit> {
     Ok(match name {
         "facts" => {
             let prefix = text(params, "prefix").map(str::to_owned);
@@ -441,7 +472,7 @@ fn served(name: &str, params: &Map<String, Value>, client: &RuntimeClient) -> Re
                 .or_else(|| run_show::by_run_id(id))
                 .ok_or_else(|| usage("<id>", ArgumentProblem::NotRecognised))?;
             let status = run_show::read(client, key).map_err(|error| client_failed(&error))?;
-            completed(run_show::answer(&status))
+            completed(run_show::answer(&status), completed_code)
         }
         "material" => match material_read(params)? {
             MaterialRead::Text {
@@ -457,7 +488,7 @@ fn served(name: &str, params: &Map<String, Value>, client: &RuntimeClient) -> Re
                         material::read_text(client, &found, offset, max_bytes, &|_: &Value| true)
                     })
                     .map_err(material_failed)?;
-                completed(found)
+                completed(found, completed_code)
             }
             // Workflow #434 LAB-5C: the whole material, read within the CLI's read budget (as
             // `frame --out` reads its frame) and written into `out`.
@@ -475,13 +506,17 @@ fn served(name: &str, params: &Map<String, Value>, client: &RuntimeClient) -> Re
                     &found.artifact.sha256,
                     found.artifact.kind.extension(),
                     &bytes,
+                    completed_code,
                 )
             }
         },
         "targets" => {
             let alias = alias_of(client, required_text(params, "instance")?)?;
             let view = targets::view(client, &alias).map_err(|error| client_failed(&error))?;
-            completed(serde_json::to_value(&view).map_err(|error| output_failed(&error))?)
+            completed(
+                serde_json::to_value(&view).map_err(|error| output_failed(&error))?,
+                completed_code,
+            )
         }
         "targets set" => {
             let alias = alias_of(client, required_text(params, "instance")?)?;
@@ -741,7 +776,7 @@ fn served(name: &str, params: &Map<String, Value>, client: &RuntimeClient) -> Re
             reported(&queued, ActingctlCode::AgentWakeTestQueued)
         }
         "run start" => run_start(params, client)?,
-        "run stop" => run_stop(params, client)?,
+        "run stop" => run_stop(params, client, completed_code)?,
         "reset" => {
             let alias = alias_of(client, required_text(params, "instance")?)?;
             let reset = client
@@ -836,7 +871,11 @@ fn run_start(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit
 
 /// `run stop <id> [--cancel-only]` (MCP `ac_stop_run`): the run's cancellation, and without
 /// `--cancel-only` the reset of its instance after it, waited for up to the longest run deadline.
-fn run_stop(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit, Exit> {
+fn run_stop(
+    params: &Map<String, Value>,
+    client: &RuntimeClient,
+    completed_code: Code,
+) -> Result<Exit, Exit> {
     let id = required_text(params, "id")?;
     let request_id = serde_json::from_value::<RequestId>(Value::String(id.to_owned()))
         .map_err(|_| usage("<id>", ArgumentProblem::NotRecognised))?;
@@ -846,6 +885,7 @@ fn run_stop(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit,
             .map_err(|error| client_failed(&error))?;
         return Ok(completed(
             serde_json::to_value(&cancellation).map_err(|error| output_failed(&error))?,
+            completed_code,
         ));
     }
     let key =
@@ -896,7 +936,7 @@ fn run_stop(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit,
         }
         None => {}
     }
-    Ok(completed(Value::Object(answer)))
+    Ok(completed(Value::Object(answer), completed_code))
 }
 
 // ---- lines
@@ -922,11 +962,12 @@ fn reported(result: &impl Serialize, code: ActingctlCode) -> Exit {
     }
 }
 
-/// An answer of an operation whose only source was an MCP tool: `lab_operation_completed`.
-fn completed(answer: Value) -> Exit {
+/// An answer of an operation whose only source was an MCP tool: `lab_operation_completed`, the
+/// caller's `completed_code`.
+fn completed(answer: Value, completed_code: Code) -> Exit {
     cli_line::success(
         cli_line::members(answer, RESULT_MEMBER),
-        &Outcome::new(ActinglabCode::LabOperationCompleted),
+        &Outcome::new(completed_code),
     )
 }
 
@@ -997,7 +1038,7 @@ fn material_failed(failure: material::Failure) -> Exit {
 /// is made, as the base checked `--max-bytes`' range there (fix 1: so `offset` or `max_bytes`
 /// beside `out` is refused only once actingd answers the connection).
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum MaterialRead<'a> {
+pub enum MaterialRead<'a> {
     /// At most `max_bytes` of the material's text from `offset`: the row without `out`, as before.
     Text {
         reference: &'a str,
@@ -1013,7 +1054,7 @@ pub(crate) enum MaterialRead<'a> {
 /// With `out`, the whole material into that directory, made absolute; `offset` and `max_bytes`
 /// belong to the slice and are refused beside it (`conflicting`), as MCP refuses them with its
 /// mode export.
-pub(crate) fn material_read(params: &Map<String, Value>) -> Result<MaterialRead<'_>, Exit> {
+pub fn material_read(params: &Map<String, Value>) -> Result<MaterialRead<'_>, Exit> {
     let reference = required_text(params, "ref")?;
     let Some(out) = text(params, "out") else {
         let offset = unsigned(params, "offset")?.unwrap_or(0);
@@ -1045,10 +1086,17 @@ pub(crate) fn material_read(params: &Map<String, Value>) -> Result<MaterialRead<
 /// Workflow #434 LAB-5C: `material --out`: the whole material's `bytes`, whose `sha256` the read
 /// verified, written into `out` as `<hex>.<extension>` by the writer `frame --out` and MCP share
 /// (`material_export::write`); the line names the file, `{path, sha256, size}` beside
-/// `lab_operation_completed`. A failed write is the writer's `material_export_failed`.
-pub(crate) fn material_written(out: &Path, sha256: &str, extension: &str, bytes: &[u8]) -> Exit {
+/// `lab_operation_completed` (the caller's `completed_code`). A failed write is the writer's
+/// `material_export_failed`.
+pub fn material_written(
+    out: &Path,
+    sha256: &str,
+    extension: &str,
+    bytes: &[u8],
+    completed_code: Code,
+) -> Exit {
     match material_export::write(out, sha256, extension, bytes) {
-        Ok(written) => completed(written),
+        Ok(written) => completed(written, completed_code),
         Err(failure) => cli_line::refused(&failure.outcome(), None),
     }
 }
@@ -1088,7 +1136,7 @@ fn expired(
 /// A connection to the Runtime of `state_root` on the Lab channel, in the detail
 /// `ACTINGCOMMAND_DETAIL` asks for.
 fn connect(state_root: &Path) -> Result<RuntimeClient, Exit> {
-    let config = actingcommand_lab_ops::front::client_config(state_root);
+    let config = crate::front::client_config(state_root);
     let config = match cli_line::detail() {
         Ok(Detail::Codes) => config.with_detail(Detail::Codes),
         _ => config,
@@ -1268,7 +1316,7 @@ impl Argv {
     /// line hands on (`words::KEPT_FLAGS`: `devices bind --root`), each under the flag of its
     /// name, as the row's further flags went before LAB-5A.
     fn further(&mut self, operation: &Operation, params: &Map<String, Value>) {
-        for (name, value) in super::words::further_flags(operation, params) {
+        for (name, value) in further_flags(operation, params) {
             self.written(&flag_name(name), value);
         }
     }
@@ -1295,5 +1343,44 @@ fn scalar(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         other => other.to_string(),
+    }
+}
+
+// ---- moved with this module from actinglab's words (`apps/actinglab/src/cli_module/words.rs`),
+// which reads them from here
+
+/// The member that holds the further words of a row of actinglab's `LENIENT_ON_COMMAND_LINE` on
+/// the command line.
+pub const MORE_WORDS: &str = "words";
+
+/// The members of `params` the row does not declare: on the command line, the global options, a
+/// lenient row's further flags and the undeclared flags of actinglab's `KEPT_FLAGS` handed on
+/// (never [`MORE_WORDS`]), in the map's order.
+pub fn further_flags<'a>(
+    operation: &Operation,
+    params: &'a Map<String, Value>,
+) -> Vec<(&'a str, &'a Value)> {
+    params
+        .iter()
+        .filter(|(name, _)| {
+            name.as_str() != MORE_WORDS
+                && !operation.params.iter().any(|param| &param.name == *name)
+        })
+        .map(|(name, value)| (name.as_str(), value))
+        .collect()
+}
+
+/// A duration as the table writes it: a whole number with `ms`, `s`, `m` or `h`.
+pub fn parse_duration(text: &str) -> Option<Duration> {
+    let (number, unit) = text
+        .find(|character: char| !character.is_ascii_digit())
+        .map(|split| text.split_at(split))?;
+    let number = number.parse::<u64>().ok()?;
+    match unit {
+        "ms" => Some(Duration::from_millis(number)),
+        "s" => Some(Duration::from_secs(number)),
+        "m" => number.checked_mul(60).map(Duration::from_secs),
+        "h" => number.checked_mul(3600).map(Duration::from_secs),
+        _ => None,
     }
 }
