@@ -8761,7 +8761,7 @@ what was judged worth) stays in the instance fact store and the ledger.
 
 | Slice | Repository | Size | What | Depends on | Interfaces |
 |---|---|---|---|---|---|
-| S168-4 | Runtime | L | the design's G-2: the `read_list` effect (declaration gate, parser, admission, the static walk's self-edge and once-per-run rule), the kernel's list read over the scan session with no policy, the three misses and their warning, the host's publication at the successful terminal (stage 2), the reserved prefix `inventory.list.` for clients and for marks; its report says that no package on the three resource repositories' `main` declares a mark under the prefix | S168-0 | `package` 8, with S168-5a |
+| S168-4 | Runtime | L | the design's G-2: the `read_list` effect (declaration gate, parser, admission, the static walk's self-edge and once-per-run rule), the kernel's list read over the scan session with no policy, the three misses and their warning, the host's publication at the successful terminal (stage 2), the reserved prefix `inventory.list.` for clients and for marks; its report says that no package on the four resource repositories' `main` declares a mark under the prefix | S168-0 | `package` 8, with S168-5a |
 | S168-5a | Runtime | M | the design's G-4: the value source `table_max_over_list` in the selection-policy crate (validation, binding, one read per reference over the union of its lists, the reason, the input identity, upper bound, the scheduling refusal); its tests use fake snapshots | S168-0 | `package` 8, with S168-4; no `ledger` |
 | S168-5b | Runtime | L | the design's G-5: the `judge` effect with its two keys and the mapping member `judge_result` (declaration, admission, the kernel's judge path without an input port, the host's refusal of an input for it, the record with `judge_only`, the run's end on one of the two keys, `outcome_key` only when the evaluation is known, the unknown check does not block and no candidate is `unknown_dropped`); the ledger reader's rules for `judge_only` | S168-4 and S168-5a merged: main declares `package` [3, 8] | `package` 9 and `ledger` 8, in the Runtime release of LAB-6 and LAB-7 |
 
@@ -8919,7 +8919,7 @@ a console whose `ledger` range holds 8, which is UI-L1's console.
 - S168-4 and S168-5a, one release: the Runtime declares `package` [3, 8]. No pack declares a list
   or reads a list maximum yet, so no run changes. A client's publication under `inventory.list.`
   is refused from it, and so is a mark under that prefix (S168-4's report says that no package on
-  the three resource repositories' `main` declares one). A document without the new source
+  the four resource repositories' `main` declares one). A document without the new source
   behaves byte for byte as before. The ledger, the configuration and the capacity are unchanged;
   a rollback below `package` 8 stays open.
 - S168-5b, in the release of LAB-6 and LAB-7, on main after S168-4 and S168-5a merged: `package`
@@ -8997,6 +8997,98 @@ a console whose `ledger` range holds 8, which is UI-L1's console.
 | S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, `ledger` 8 (#434's, shared) | S168-5b | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
 | S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5b | runtime-host | ends that run only |
 | S168C-10 | the optional `task.json` mapping member `judge_result`, a closed vocabulary of `judged` and `unknown` | package format, `package` 9 | S168-5b | resource repositories | maps a judge step's end with that result; two mappings overlap only with the same effect condition, page and `judge_result` (or none on both), so S168-5b changes `SchedulingOutcomeDeclaration::validate` (`mapping_overlap`); no persisted record carries it; [selection-graph.md](selection-graph.md), "Mapping the two keys" |
+
+#### Slice S168-4 (0.12.50): `read_list`, a list read from a page and published whole
+
+Coordinator work orders `rd-1110/brief-s168-4.md` and `rd-1110/brief-s168-4-continue.md`: a
+second implementer took over the first one's interrupted draft, committed it as found
+(`eab8f1f7`), reviewed it against the contracts, kept most of it and finished it. The contracts
+are S168-0's, on main at `fa8adc67`: [resource-readings.md](resource-readings.md), "List
+readings" and "Capacity and reserved keys"; [instance-fact-store.md](instance-fact-store.md),
+"List reading facts"; the rows S168C-1 to S168C-4 above. The order is the coordinator's: S168-5a
+(#1558) merges first and keeps `package` [3, 7]; S168-4 merges second and declares [3, 8],
+whatever main holds when it is pushed. S168-4 was finished on `321161da` (QP-1 merged), which did
+not yet hold S168-5a. The versions are 0.12.50 (the coordinator's word: 0.12.49 is QP-1's
+release).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S4-1 | the operation effect `read_list` (S168C-1): the declaration gate's `Declaration::read_list_step` (the step's structure) and `Declaration::list_readings` (the rules of the whole task with its references, `to` the step's own page by the task's game, at most 16 steps); the parser keeps the member for the kernel | package format, `package` 8 | S168-4 | resource repositories | task schema `0.9` page-graph only; an older schema is `UnconsumedField` @ `/operations/<i>/read_list`; the key rules `list_reading_column_valid`, `list_reading_fact_key_valid`, `MAX_LIST_READINGS` 16, `MAX_LIST_READING_COLUMNS` 63 and `MAX_LIST_READING_ROWS` 256 live in `actingcommand-contract` |
+| S4-2 | admission: `validate_list_reading_members` before the common operation checks, `prepare_list_readings` with the recognition pack, `contained_task_resource_reading_invalid` `<operation id>:<member>`; a `linear_steps` task refuses the step `contained_task_linear_invalid` `reason=read_list` | behaviour | S168-4 | — | `<member>` is the member the gate refuses at (`read_list`, `to`, `guard`, `retryable`, `read_list/layout_id`, `read_list/columns/<j>/feature`, …), `scheduling_outcome` or `operations` for a rule of the whole task, `read_list/scan <key>=<value>` for a select step's static check of the scan; admission runs the gate on the sealed task first ((b) below) |
+| S4-3 | once per run: the step's own run cap (one dispatch, then `next_candidate`), the static walk's self-edge then the page's next operation | behaviour | S168-4 | — | `TaskOperation::run_cap`, `phase_run_cap`, `may_be_run_capped`; a page whose only operation is the list reading leaves the run no way on and is refused at admission |
+| S4-4 | the kernel's list read: `ScanSession::read_list` over the select scan's session with no policy and a 256-row bound (`ScanEnd::RowsExceeded`), `list_rows_of` (rows ordered by key, the lowest feature confidence, 1000 for an empty list) | behaviour | S168-4 | — | `RunStateMachine::operation_read_in_place`: the step completes no stage and no end page ends the run on it; the run goes on on the page its last viewport recognized; a scan failure carries the stage `read_list` (`at_read_list`) |
+| S4-5 | the misses `list_position_unread`, `list_duplicate_key`, `list_rows_exceeded`: the warning `contained_task_resource_reading_unresolved` with `count`, one task diagnostic row (`diagnostic_list_miss`) on the step's last viewport | behaviour; existing record | S168-4 | runtime-host | S168C-3; the run goes on; nothing is written for the list |
+| S4-6 | the traces `ContainedTaskTrace::ListReadingFrame { captured_at }` (the frame the end check passed on) and `ListReading { declaration, captured_at, list }` | Runtime-internal seam | S168-4 | the kernel | the host binds the frame for the list's evidence and publishes the list at the run's successful terminal (stage 2) |
+| S4-7 | the publication of `inventory.list.<name>` (S168C-2): one `fact.published` with one `record_list` record, `source_detector` `list_reading:<task>/<operation>`, `source_snapshot_id` `run:<run>/frame:<frame>/<operation>` (`list_reading_snapshot_id`), purpose `FactPublicationPurpose::ListReading` | existing record, new key prefix | S168-4 | runtime-host | observed at the end check's capture time, expiring `valid_for_ms` later; a refusal at the fact store (`fact_store_capacity_exceeded`) fails the run `contained_task_resource_reading_rejected`; `package dry-run` reports the task's post-admission reading `pending_real_execution` |
+| S4-8 | the reserved prefix (S168C-4): every publication of a key under `inventory.list.` but the list reading's own is refused `list_reading_key_reserved` (`fact_key`) before the fact write gate; a mark's `fact_key` or `capacity_fact_key`, and an adjustment's `fact_key`, under the prefix is refused by the marks' key rule | behaviour | S168-4 | runtime-host; resource repositories | `LIST_READING_KEY_PREFIX`, `is_list_reading_key`; from every client origin and from the Runtime's other publication paths; no package on the four resource repositories' `main` declares such a key ("Resource repositories" below) |
+| S4-9 | `package` [3, 8] in `distribution/windows/component-interfaces.json` | interface declaration | S168-4 | — | [component-interfaces.md](component-interfaces.md), `package` row 8 |
+
+**Tests.** The ten named tests (§1.291 above), each in one or two halves, all new:
+
+- execution-kernel, exec row "#428 S168-4", `contained_task::gate_428_s168_4` on a fake scan
+  source's saved viewports: tests 1 to 4 (the session over three viewports; the empty list; the
+  three misses, the 257th position over 27 advances; the misaligned viewport and the stage
+  `read_list`), and the admission halves of tests 5 and 10 (admission's own checks, the
+  once-per-run cap and the static walk, the static check of the scan through the whole
+  admission, the `linear_steps` refusal; the mark rules).
+- pack-containment, the same row, `source::declarations::tests`: the gate's halves of tests 5
+  and 10 (each rule of the declaration tables at its pointer, task schema `0.8`
+  `UnconsumedField`; a mark's two keys under the prefix, a mark under `inventory.` outside it
+  admitted).
+- runtime-host, host row "#428 S168-4", `tests::gate_428_s168_4` on a fake device's one-screen
+  list (the SEL-L4b host gate's neutral list): tests 1 to 4 and 6 to 9.
+
+Adapted: `tools/actinglab-architecture/tests/component_interfaces.rs` (the V0120 table's `package`
+range [3, 8]). No test retired.
+
+**Interface.** `package` 8 in force from 0.12.50: the Runtime declares [3, 8]
+([component-interfaces.md](component-interfaces.md), `package` row 8). No other raised:
+`ledger` 7, `runtime-client` 6, `actingd-config` 27, `runtime-outcomes` 1; no configuration key,
+no persisted structure.
+
+**Outcome codes.** One code: `list_reading_key_reserved` (runtime-host, error, ladder class
+`none`, pending, since 0.12.50; `fact_key` required). One location: `read_list` (execution-kernel,
+pending, since 0.12.50), the stage of a list reading's scan failure. Three tokens of the
+vocabulary `reading_problem` (`list_position_unread`, `list_duplicate_key`,
+`list_rows_exceeded`, three `ResourceReadingProblem` variants). The existing
+`contained_task_resource_reading_unresolved` takes the existing key `count` as an optional value.
+One allow-list entry of the outcome guard (G5, `read_list_member` of
+`crates/pack-containment/src/source/declarations.rs`): the task schema member `read_list` shares
+its spelling with the location, and pack-containment, which the kernel depends on, spells it in
+that one function.
+
+**Resource repositories.** Read on GitHub, read only, on each `main`: AzurLane `db49ece0` (82
+`task.json`, 62 marks), Arknights `e44ff68a` (148, 67), BlueArchive `1dd7acef` (88, 58),
+GirlsFrontline2 `501e9f82` (26, 45). No mark or adjustment key lies under `inventory.list.`, no
+task declares a `read_list` step, and no `task.json` names the prefix; a code search over the
+owner found the prefix only in the Runtime's contracts. S168-0's row read "three resource
+repositories"; there are four, and the row and "What each changes at deploy" now say so.
+
+**At deploy.** No pack declares a list yet, so no run changes. A client's publication under
+`inventory.list.` is refused (no client writes one today), and so are a mark and an adjustment
+under the prefix (no package on the four `main` branches declares one). A refused mark's admission
+detail is `<id>:<reason>` from this release, for each of a mark's own rules (the rules of the
+marks together keep the reason alone). The ledger, the configuration and the fact store's
+capacity are unchanged; a rollback below `package` 8 stays open while no package declares a
+list.
+
+**Where S168-4 differs from the contract's or its work order's letter.**
+
+- (a) Tests in halves. The named tests that span the kernel and the host are split by crate
+  ("Tests" above); the host's halves read a one-screen list, so test 1's three viewports and
+  test 3's 257th position are the kernel's. Test 7 reads the published list with the kernel's
+  `dry_run_select` on the instance's snapshot, as a later run's select step would: runtime-host
+  has no selection-policy dependency, and adding one would change `Cargo.lock`. Test 9 fills the
+  host's real store up to its bound with ordinary facts, not a fake store.
+- (b) Admission runs the declaration gate on the sealed task (`validate_contained_declarations`)
+  before its own checks, so a sealed task that breaks a rule the gate checks is refused there
+  first (`resource_declaration_invalid` at the pointer). Admission's own refusal is the one of a
+  rule only it checks (the scan against a select step's static checks, the references against
+  the recognition pack); tests 5 and 10 call its other checks directly. resource-readings.md
+  says so.
+- (c) `<id>:<reason>` for a mark's own rules applies to every mark rule, not only the new prefix
+  rule, as the contract reads; and the marks' key rule is the adjustments' too, so an adjustment
+  under the prefix is refused as well.
 
 ### 1.292 Slice QP-1 (0.12.49): a ledger page stays inside its sequence bounds whatever the planner chooses (#422; the read-only investigation of 2026-11-10, `rd-1110/ledger-window-plan-findings.md`; the console's ledger window will send pages with `from_sequence`, `to_sequence`, a limit and a snapshot and no instance, which the coordinator ruled acceptable once this slice makes the bound independent of the planner; coordinator work order `rd-1110/brief-qp1-page-plan-bounds.md`)
 
