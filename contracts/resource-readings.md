@@ -602,7 +602,7 @@ only; the numbers and names are neutral examples, not values:
 
 | Member | Rule | Refusal @ pointer |
 | --- | --- | --- |
-| the effect | exactly one of `click`, `application`, `select`, `wait`, `read_list` (and, from Workflow #428 S168-5, `judge`); task schema `0.9` only; a page-graph task (`navigable_route`, phased or not); the task declares `scheduling_outcome`; at most 16 `read_list` operations in a task | an older schema: `UnconsumedField` @ `/operations/<i>/read_list`; `linear_steps`: `contained_task_linear_invalid`, `reason=read_list`; no outcome: `MissingField` @ `/scheduling_outcome`; a 17th: `InvalidValue` @ `/operations` |
+| the effect | exactly one of `click`, `application`, `select`, `wait`, `read_list` (and, from Workflow #428 S168-5b, `judge`); task schema `0.9` only; a page-graph task (`navigable_route`, phased or not); the task declares `scheduling_outcome`; at most 16 `read_list` operations in a task | an older schema: `UnconsumedField` @ `/operations/<i>/read_list`; `linear_steps`: `contained_task_linear_invalid`, `reason=read_list`; no outcome: `MissingField` @ `/scheduling_outcome`; a 17th: `InvalidValue` @ `/operations` |
 | `to` | the `from` page: the step stays on its page | `InvalidValue` @ `/operations/<i>/to` |
 | `layout_id` | a `repeated_anchor` layout the task declares on the `from` page, whose `unknown_identity` is `reject` | `InvalidValue` @ `…/read_list/layout_id` |
 | `key_feature` | an `identity` feature of the layout; the scan's `identity_feature` | `…/read_list/key_feature` |

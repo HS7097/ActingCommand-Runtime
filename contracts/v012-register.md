@@ -8739,7 +8739,7 @@ cut: `items_truncated` and the pointer `/catalog/compile_warnings/items` in `tru
 `overview::tests::cw1_a_cut_fact_and_the_catalog_block_say_how_many_rows_are_missing` (fails
 before: the fact had no cut row). No test adapted.
 
-### 1.291 Workflow #428 S168-0 (contracts only): a list reading written as a fact, a table maximum over a list, and a judge-only step; slices S168-4 and S168-5 (Alice's answer to item 168 of 2026-11-08, board #428 6721302838; the 168 design of 2026-11-10, signed by the coordinator with its answers Q-1 to Q-11 on board #430 6755408718, among them Q-4, extend the Runtime with generic pieces, and Q-5, holdings split into several lists with the 256-row bound kept; read on main `d06910c6`; coordinator work order `rd-1110/brief-s168-contracts.md`)
+### 1.291 Workflow #428 S168-0 (contracts only): a list reading written as a fact, a table maximum over a list, and a judge-only step; slices S168-4, S168-5a and S168-5b (Alice's answer to item 168 of 2026-11-08, board #428 6721302838; the 168 design of 2026-11-10, signed by the coordinator with its answers Q-1 to Q-11 on board #430 6755408718, among them Q-4, extend the Runtime with generic pieces, and Q-5, holdings split into several lists with the 256-row bound kept; read on main `d06910c6`; coordinator work order `rd-1110/brief-s168-contracts.md`, corrected after an independent review by the coordinator's rulings R1 to R6, work orders `rd-1110/brief-s168-contracts-fix1.md` and `rd-1110/brief-s168-contracts-fix2.md`)
 
 The contracts are [resource-readings.md](resource-readings.md) ("List readings"),
 [instance-fact-store.md](instance-fact-store.md) ("List reading facts" and the capacity ledger),
@@ -8747,8 +8747,9 @@ The contracts are [resource-readings.md](resource-readings.md) ("List readings")
 "Table maximum over a list", "In-task consumer", "Limits") and
 [selection-graph.md](selection-graph.md) ("Select over a scan", "Ending empty", "Judge step",
 "Records"); the planned revisions are in [component-interfaces.md](component-interfaces.md),
-"Planned: Workflow #428 168". 1.291 was the next free number on `d06910c6`; S168-4 and S168-5 add
-their rows under this section.
+"Planned: Workflow #428 168". 1.291 was the next free number on `d06910c6` and still is on
+`7910349a`, where LAB-3 added its rows under §1.287; S168-4, S168-5a and S168-5b add their rows
+under this section.
 
 **S168-0 itself.** Contracts only: no code, no test, no gate row, no CI file, no configuration
 key, no code of the outcome catalog, and no live revision raised. The three pieces carry no game
@@ -8756,12 +8757,13 @@ word: a list of keyed rows read from a page, the largest integer of one table co
 keys, and a step that evaluates and records without input. Account data (what an instance holds,
 what was judged worth) stays in the instance fact store and the ledger.
 
-**The two slices.**
+**The three slices** (the coordinator's ruling R3 after the review).
 
 | Slice | Repository | Size | What | Depends on | Interfaces |
 |---|---|---|---|---|---|
-| S168-4 | Runtime | L | the design's G-2: the `read_list` effect (declaration gate, parser, admission, the static walk's self-edge and once-per-run rule), the kernel's list read over the scan session with no policy, the three misses and their warning, the host's publication at the successful terminal (stage 2), the reserved prefix `inventory.list.` for clients | S168-0 | `package` 8 |
-| S168-5 | Runtime | L | the design's G-4 and G-5: the value source `table_max_over_list` in the selection-policy crate (validation, binding, one read per reference, the reason, the input identity, upper bound, the scheduling refusal); the `judge` effect (declaration, admission, the kernel's judge path without an input port, the host's refusal of an input for it, the record with `judge_only`, the run's end); the ledger reader's rules for `judge_only` | S168-4 merged | `package` 8 (same release) or 9; `ledger` 8 or 9 |
+| S168-4 | Runtime | L | the design's G-2: the `read_list` effect (declaration gate, parser, admission, the static walk's self-edge and once-per-run rule), the kernel's list read over the scan session with no policy, the three misses and their warning, the host's publication at the successful terminal (stage 2), the reserved prefix `inventory.list.` for clients and for marks | S168-0 | `package` 8, with S168-5a |
+| S168-5a | Runtime | M | the design's G-4: the value source `table_max_over_list` in the selection-policy crate (validation, binding, one read per reference over the union of its lists, the reason, the input identity, upper bound, the scheduling refusal); its tests use fake snapshots | S168-0 | `package` 8, with S168-4; no `ledger` |
+| S168-5b | Runtime | L | the design's G-5: the `judge` effect with its two keys and the mapping member `judge_result` (declaration, admission, the kernel's judge path without an input port, the host's refusal of an input for it, the record with `judge_only`, the run's end on one of the two keys); the ledger reader's rules for `judge_only` | S168-4 merged | `package` 9 and `ledger` 8, in the Runtime release of LAB-6 and LAB-7 |
 
 **Named tests.** Logic tests with fakes and a fake clock, no sleep; the ids are made up
 (`member.a` to `member.z`, `domain.x`, `domain.y`, the key `inventory.list.example_kind_a`, the
@@ -8834,21 +8836,30 @@ port fails the test on any call:
   refuses it with `multi_select`, a v2 projection, no `unknown_check` or `outranked_possible`; a
   reader of `ledger` 7 refuses the record (`corrupt_ledger_record`).
 
-**Order.** S168-4 first; S168-5 on main after S168-4 merged (its judge tests read a published
-list; its table tests do not need one). Both before S168-6, the standard package's slice; the
+**Order.** S168-4 and S168-5a go side by side: S168-5a depends on S168-0 only (its tests use
+fake snapshots). They ship in one Runtime release, which may ship at any time; the second of the
+two to merge declares `package` [3, 8], and until then the first one's merge admits its own
+member by code ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #428
+168"). S168-5b goes on main after S168-4 merged (its judge tests read a published list through
+`keyed_fact`, not through a list maximum, so they do not need S168-5a) and ships in the Runtime
+release of LAB-6 and LAB-7. All three come before S168-6, the standard package's slice; the
 offline slices S168-1 to S168-3 go on beside them. S168-7, the console's view, needs a console
-whose `ledger` range holds S168-5's revision.
+whose `ledger` range holds 8, which is UI-L1's console.
 
 **What each changes at deploy.**
 
-- S168-4: the Runtime declares `package` [3, 8]. No pack declares a list yet, so no run changes.
-  A client's publication under `inventory.list.` is refused from it. The ledger, the
-  configuration and the capacity are unchanged; a rollback to 0.12.47 stays open.
-- S168-5: `package` 8 (in S168-4's release) or [3, 9], and the next `ledger` revision, one way:
-  once a judge step has run, going back to a Runtime that does not read `judge_only` is refused,
-  as for revision 7, and the Runtime combines only with a console whose `ledger` range holds it,
-  so it is deployed with or after that console. No configuration key. A document without the new
-  source and a package without a judge step behave byte for byte as before.
+- S168-4 and S168-5a, one release: the Runtime declares `package` [3, 8]. No pack declares a list
+  or reads a list maximum yet, so no run changes. A client's publication under `inventory.list.`
+  is refused from it, and so is a mark under that prefix (S168-4's report says that no package on
+  the three resource repositories' `main` declares one). A document without the new source
+  behaves byte for byte as before. The ledger, the configuration and the capacity are unchanged;
+  a rollback below `package` 8 stays open.
+- S168-5b, in the release of LAB-6 and LAB-7: `package` [3, 9] and `ledger` [3, 8], #434's
+  revision 8, shared. One way by the Rp.max rule: once the Runtime that declares `ledger` 8 has
+  run, going back below it is refused, whether or not a judge step ran; and the Runtime combines
+  only with a console whose `ledger` range holds 8, so it is deployed with or after UI-L1's
+  console. No configuration key. A package without a judge step and a mapping without
+  `judge_result` behave byte for byte as before.
 
 **Where S168-0 differs from the design or the work order.**
 
@@ -8874,8 +8885,11 @@ whose `ledger` range holds S168-5's revision.
 
 **Open points** for the coordinator.
 
-1. The `ledger` number: #434 plans 8 for LAB-6. S168-5 in an earlier release takes 8 and moves
-   #434's row (and UI-L1's range) to 9; the same release shares 8; after LAB-6, 9.
+1. The `ledger` number, **answered by R3** (the coordinator's ruling after the review): S168-5b
+   ships in the same Runtime release as LAB-6 and LAB-7 and shares #434's planned `ledger` 8; it
+   does not take 8 ahead of LAB-6 and does not move #434's row to 9. If the releases come in
+   another order, the coordinator renumbers at that release
+   ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168").
 2. Fail-closed costs for S168-6, **answered by R2** (the coordinator's ruling after the review):
    a position whose identity the package's dictionary lacks keeps the whole list unwritten, so
    the dictionary covers every identity the list can show (the design's G-3); and what S168-2's
@@ -8901,9 +8915,9 @@ whose `ledger` range holds S168-5's revision.
 | S168C-4 | `list_reading_key_reserved` (non-fatal request error, `fact_key`) | outcome code | S168-4 | runtime-host | from every origin |
 | S168C-5 | the value source `table_max_over_list` `{table_id, value_column, pins, lists, empty}`, `lists` 1 to 16 entries `{fact_key, where?}` with distinct `fact_key`s, read over the union of their keys | selection document, `package` 8 | S168-5a | resource repositories | at most 32 per document, at most 16 lists per reference |
 | S168C-6 | `selection_table_list_max` (info; `table_id`, `table_column`, `fact_keys`, `count`, `maximum`, `maximum_identity`, `unknown_reason`); new keys `fact_keys` (`list<token>`, the lists read in the order of `lists`, at most 16 items), `maximum`, `maximum_identity` | outcome code and keys | S168-5a | selection-policy | a decision reason, no record member; `count` is the number of distinct keys of the union |
-| S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key}` | package format, `package` 8 or 9 | S168-5 | resource repositories | a terminal; `fixed_slots` only |
-| S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, next `ledger` revision | S168-5 | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
-| S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5 | runtime-host | ends that run only |
+| S168C-7 | the operation effect `judge` `{layout_id, policy, outcome_key}` | package format, `package` 9 | S168-5b | resource repositories | a terminal; `fixed_slots` only |
+| S168C-8 | the confirmation `judge_only` of `task.selection_evaluated` | ledger shape, `ledger` 8 (#434's, shared) | S168-5b | runtime-host | reader rules in [selection-graph.md](selection-graph.md), "Records" |
+| S168C-9 | `contained_task_judge_input_refused` (error) | outcome code | S168-5b | runtime-host | ends that run only |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

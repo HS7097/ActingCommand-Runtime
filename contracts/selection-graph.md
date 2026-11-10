@@ -985,7 +985,7 @@ middle of a stage; an `empty` decision without `on_empty` still fails. The admis
 `on_empty`, including the route's terminal and the prerequisite and return-home refusal
 `select_on_empty`, is in section Declaration.
 
-A judge step (Workflow #428 S168-5, section Judge step) ends the run on its page the same way,
+A judge step (Workflow #428 S168-5b, section Judge step) ends the run on its page the same way,
 after its record and with no input, for every result it reaches: a decision with or without
 candidates judged worth, a decision with unknown instances, and an `unknown` evaluation. Its end
 key is the step's own `outcome_key`.
@@ -1109,11 +1109,12 @@ package that declares none) or a value that is not one of its declared options i
 
 ## Judge step
 
-Workflow #428 S168-5, written ahead of its code by S168-0 ([v012-register.md](v012-register.md)
-§1.291). A judge step evaluates the candidates one frame shows with a selection policy, records
-the decision, and ends the run with a key its package declares. It performs no input. Its decision
-is advice kept in the ledger: no Runtime component acts on it. **Status:** until S168-5 a package
-that declares one is refused (`UnknownField` at `/operations/<i>/judge`).
+Workflow #428 S168-5b, written ahead of its code by S168-0 and corrected by its fixes
+([v012-register.md](v012-register.md) §1.291). A judge step evaluates the candidates one frame
+shows with a selection policy, records the decision, and ends the run with one of two keys its
+package declares. It performs no input. Its decision is advice kept in the ledger: no Runtime
+component acts on it. **Status:** until S168-5b a package that declares one is refused
+(`UnknownField` at `/operations/<i>/judge`).
 
 ### Declaration
 
@@ -1233,7 +1234,7 @@ before any input and before any failure return (section Select step). A multi se
 Multi select below) appends it once, when its tap sequence ends, at its first failure or where
 it stops, before the step's `task.effect_completed`; a decision with nothing to tap is appended
 after the decision, as for a single select. The host appends it linked to the step's action and
-to the last frame the attempt read. A judge step (Workflow #428 S168-5, section Judge step)
+to the last frame the attempt read. A judge step (Workflow #428 S168-5b, section Judge step)
 appends exactly one as well, linked to its action and to F1, before its `StepFinished`. A
 package without a select or judge step never produces the event.
 
@@ -1268,7 +1269,7 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 | `page_changed` | The confirmation frame is not the step's page. |
 | `guard_failed` `{code}` | The step's guard failed on the confirmation frame. |
 | `capture_failed` `{code}` | The confirmation frame could not be captured. |
-| `judge_only` | A judge step's record, whatever its outcome (Workflow #428 S168-5, section Judge step; a planned `ledger` revision, [component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168"): no confirmation is attempted and no input follows. No member. |
+| `judge_only` | A judge step's record, whatever its outcome (Workflow #428 S168-5b, section Judge step; planned `ledger` revision 8, [component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168"): no confirmation is attempted and no input follows. No member. |
 
 A confirmation is attempted exactly when the outcome is `selected`, except in a judge step's
 record, whose confirmation is always `judge_only` and never attempted. Together with the
@@ -1342,7 +1343,7 @@ Rules M1–M8 (M-357b §5.2) hold beside the path rules; a violation is
 - M8 (`path_rule_1`): an early-stopped scan holds a full `selected` and no
   `selection_quota_unfilled` decision reason.
 - "A record with `unknown_check` chooses exactly one candidate" holds only without
-  `multi_select`, and (Workflow #428 S168-5) without the confirmation `judge_only`.
+  `multi_select`, and (Workflow #428 S168-5b) without the confirmation `judge_only`.
 
 Each tap is one `task.effect_intent` linked to its pick's confirmation frame, before the
 record; a scan's moves between picks never link to a confirmation frame; the step has one
@@ -1392,7 +1393,7 @@ A record is checked when it is written and when it is read:
   whose projection is v1 of a `repeated_anchor` layout, carry two 64-hex hashes and, like the
   other confirmations, an optional embedded projection that seals the first; a `tracked`
   `shift_px` is at most 64; neither the decision hash nor the shift is recomputed;
-- `judge_only` (Workflow #428 S168-5; planned `ledger` revision) belongs to a record without
+- `judge_only` (Workflow #428 S168-5b; planned `ledger` revision 8) belongs to a record without
   `multi_select` whose projection is v1 of a `fixed_slots` layout and which carries
   `unknown_check` with `blocking` `none` or `unknown_instances` (`none` exactly when
   `unknown_instances` is 0; never `outranked_possible`); its outcome is `selected`, `empty` or
@@ -1428,6 +1429,7 @@ once before its first tap (M-357b §5.3), so that bound too fails before any inp
   built before DB-3s rejects a ledger that holds one, so the UI build paired with v0.12.0
   pins a Runtime revision that includes DB-3s, and so does `actingledger`. They join ledger
   revision 3 because DB-3s merges before the v0.12.0 tag; 0.12.x adds no member to them.
-  The confirmation `judge_only` (Workflow #428 S168-5) joins the next `ledger` revision: a reader
-  built before it rejects a ledger that holds one, as for `tracked`, so the console and
-  `actingledger` move to a Runtime that knows it before such a ledger reaches them.
+  The confirmation `judge_only` (Workflow #428 S168-5b) joins `ledger` revision 8, shared with
+  Workflow #434's LAB-6 in one Runtime release: a reader built before it rejects a ledger that
+  holds one, as for `tracked`, so the console and `actingledger` move to a Runtime that knows it
+  before such a ledger reaches them.
