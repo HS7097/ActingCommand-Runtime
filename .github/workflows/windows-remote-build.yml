@@ -416,6 +416,13 @@ jobs:
           if (-not $?) {
             throw 'Windows artifact tooling tests failed'
           }
+          # Workflow #428 CI-OCR-1: Materialize-VisionRoot.ps1 against a made-up registry and
+          # local made-up files; no download.
+          & ./scripts/windows-tools/Test-MaterializeVisionRoot.ps1 `
+            -TestRoot (Join-Path $taskRoot 'vision-root-tests')
+          if (-not $?) {
+            throw 'vision root materializer tests failed'
+          }
 
       - name: Boot smoke
         id: boot_smoke
