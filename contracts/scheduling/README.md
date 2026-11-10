@@ -2012,7 +2012,32 @@ finishes and is settled there whatever the switch says afterwards.
   (`policy_settlement_interrupted`, which pauses the task on that instance as a run cut by a
   restart does); its registration is forgotten and the instance is free again. A lease that
   ended in more than one way leaves the run held, and the next start records it
-  (`policy_settlement_dispatch_left_open`).
+  (`policy_settlement_dispatch_left_open`). A run whose settlement a start refuses (the host's
+  recovery or the ledger) is recorded `policy_settlement_dispatch_unsettled` by the first start
+  that meets it, which holds its instance once, and `policy_settlement_dispatch_left_open` with
+  the refusal as `failure_code` by every later start (UNSET-1); its dispatch stays open, out of
+  the active workloads, until a version that can settle it starts. Nothing closes a dispatch by
+  time. UNSET-2 (0.12.51; [v012-register.md](../v012-register.md) §1.296): a run with no
+  terminal whose one run-linked release is its own (the failure path's, effect `performed`) is
+  settled as interrupted from that release whether or not it has effect or input records, as a
+  run whose release the start recovered is, so a run cut by a stop after it released its own
+  lease is settled by the next start, once. When an earlier start refused such a run, the start
+  that completes its settlement records `policy_settlement_dispatch_closed` (Info) under the
+  run's links, with its operation and the earlier refusal as `failure_code`: the settling start,
+  or the next one when a stop cut the settling start between its execution record and its
+  completion. A stop between the completion and that record leaves it unwritten; the settlement
+  and the completion are the lasting records. That late settlement completes after
+  the later runs of its (task, instance) pair, when there are any, so wherever the Runtime takes
+  a pair's latest completed run (its value record and the journal a later start loads, its
+  task snapshot, its outcome, `actingd suspended`) it takes the latest in admission order, and
+  the late settlement is not a failure of its pair: the pair's failure streak, pause, backoff and
+  retry round are what they were before the settlement (a retry round the run's own admission
+  opened stays, and offers an immediate rerun only to a retryable failure of the pair, as before
+  it), and its count of failures in a row and its latest failure are what they would be without
+  that run, at the settlement and at every replay and load. When the pair has run since,
+  its later run stays its latest; when it has not, the late run is its latest run and reads as
+  interrupted (its task snapshot shows it, failed, and the pair's outcome is missing, as after
+  any interrupted latest run).
 - **Re-evaluation (C1, not behind the switch).** An evaluation whose validation finds its
   sampled outcome keys changed (`policy_outcome_snapshot_changed`: another run settled between
   the sample and the validation) is sampled again, at most three times per round, with one

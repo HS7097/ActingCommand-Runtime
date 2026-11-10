@@ -7,15 +7,15 @@ use actingcommand_contract::{
     AuditInput, ClientPayloadDraft, CommandPayloadDraft, DiagnosticCode, EffectDisposition,
     EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventPayload,
     EventPayloadDraft, EventQuery, EventSeverity, EventSource, EventType, IdentifierIssuer,
-    InputAction, IssuedActionId, IssuedCausationId, IssuedCorrelationId, IssuedEventId,
-    IssuedFrameId, IssuedInstanceId, IssuedLeaseId, IssuedRecognitionId, IssuedRequestId,
-    IssuedRunId, IssuedTaskId, LeasePayloadDraft, OriginModule, PerformanceContext,
-    PolicyActivitySample, PolicyAdmissionRecord, PolicyBudgetReceipt, PolicyDispatchEventData,
-    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyFailureRecord, PolicyPayload, PolicyPayloadDraft, PolicyReasonRecord, ProjectionPayload,
-    ProjectionProfile, SchedulingDisposition, SchedulingEffectEvidence, SchedulingOutcomeIdentity,
-    SecretField, SecretFingerprinter, SubscriptionCursor, TaskOutcome, TaskPayloadDraft,
-    TaskSemanticFact, outcome::Outcome,
+    InputAction, InputPayloadDraft, IssuedActionId, IssuedCausationId, IssuedCorrelationId,
+    IssuedEventId, IssuedFrameId, IssuedInstanceId, IssuedLeaseId, IssuedRecognitionId,
+    IssuedRequestId, IssuedRunId, IssuedTaskId, LeasePayloadDraft, OriginModule,
+    PerformanceContext, PolicyActivitySample, PolicyAdmissionRecord, PolicyBudgetReceipt,
+    PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass,
+    PolicyFailureDisposition, PolicyFailureRecord, PolicyPayload, PolicyPayloadDraft,
+    PolicyReasonRecord, ProjectionPayload, ProjectionProfile, SchedulingDisposition,
+    SchedulingEffectEvidence, SchedulingOutcomeIdentity, SecretField, SecretFingerprinter,
+    SubscriptionCursor, TaskOutcome, TaskPayloadDraft, TaskSemanticFact, outcome::Outcome,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -314,6 +314,10 @@ struct ScheduledRecoveryDrafts {
     task_failed_legacy: actingcommand_contract::SanitizedEventDraft,
     task_failed_invalid: actingcommand_contract::SanitizedEventDraft,
     task_effect: actingcommand_contract::SanitizedEventDraft,
+    /// UNSET-2: the run's input records, an intent and its committed outcome, under the run's
+    /// task request.
+    task_input_intent: actingcommand_contract::SanitizedEventDraft,
+    task_input_committed: actingcommand_contract::SanitizedEventDraft,
     task_release: actingcommand_contract::SanitizedEventDraft,
     duplicate_task_release: actingcommand_contract::SanitizedEventDraft,
     wrong_chain_task_release: actingcommand_contract::SanitizedEventDraft,
@@ -373,6 +377,9 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
     let task_release_links = task_terminal_links
         .clone()
         .with_action_id(issuer.mint_action_id().expect("task release action"));
+    let task_input_links = task_terminal_links
+        .clone()
+        .with_action_id(issuer.mint_action_id().expect("task input action"));
     let interrupted_release_links = lease_links
         .clone()
         .with_action_id(issuer.mint_action_id().expect("interrupted release action"));
@@ -783,6 +790,33 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     operation_label: "fixture".to_owned(),
                     action: InputAction::Reset,
                 },
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        task_input_intent: sanitize(
+            1_752_147_200_330,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Device,
+                OriginModule::DeviceProxy,
+                EventActor::Runtime,
+            ),
+            task_input_links.clone(),
+            InputPayloadDraft::intent(EventAction::InputTap, AuditInput::new()).into(),
+        ),
+        task_input_committed: sanitize(
+            1_752_147_200_331,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Device,
+                OriginModule::DeviceProxy,
+                EventActor::Runtime,
+            ),
+            task_input_links,
+            InputPayloadDraft::committed(
+                EventAction::InputTap,
+                EffectDisposition::Performed,
                 AuditInput::new(),
             )
             .into(),
@@ -1523,8 +1557,13 @@ fn recovered_policy_execution_requires_one_matching_release() {
     );
 }
 
+/// UNSET-2 (register §1.296) adapts this test's first half on purpose: it pinned #670's rule R4
+/// that a run with an effect record is never settled as interrupted. A run with its own release
+/// (the failure path's, effect `performed`), an effect record and no terminal is now settled as
+/// interrupted from that release. The second half is unchanged: two run-linked releases are
+/// still refused.
 #[test]
-fn interrupted_policy_execution_recovery_rejects_effects_and_duplicate_release() {
+fn interrupted_policy_execution_recovery_accepts_effects_and_rejects_duplicate_release() {
     let effect_root = TempDir::new().expect("effect temp");
     let effect =
         GlobalLedger::open(config(&effect_root, "effect-recovery-writer")).expect("ledger");
@@ -1533,14 +1572,16 @@ fn interrupted_policy_execution_recovery_rejects_effects_and_duplicate_release()
     effect
         .append(effect_drafts.task_effect.clone())
         .expect("task effect");
-    effect
+    let release = effect
         .append(effect_drafts.interrupted_release.clone())
         .expect("failure release");
-    expect_recovered_execution_error(
-        effect,
-        effect_drafts.recovered_interrupted_execution,
-        "scheduled_execution_recovery_interruption_conflict",
-    );
+    reconcile_scheduled_settlement(&effect, &effect_drafts.recovered_interrupted_execution)
+        .expect("a run with an effect record and its own release is settled as interrupted");
+    let recovered =
+        recovered_execution_fact(&effect, &effect_drafts.recovered_interrupted_execution);
+    assert_recovered_execution_chain(&recovered, &effect_drafts);
+    assert_eq!(recovered.timestamp_unix_ms(), release.timestamp_unix_ms());
+    effect.close().expect("close effect ledger");
 
     let duplicate_root = TempDir::new().expect("duplicate interrupted release temp");
     let duplicate = GlobalLedger::open(config(
@@ -1560,6 +1601,76 @@ fn interrupted_policy_execution_recovery_rejects_effects_and_duplicate_release()
         duplicate,
         duplicate_drafts.recovered_interrupted_execution,
         "scheduled_execution_recovery_release_not_unique",
+    );
+}
+
+/// UNSET-2 (register §1.296): a run cut by a stop after it wrote its own release (the failure
+/// path's, effect `performed`) and its inputs, and before its terminal, is settled as
+/// interrupted from that release, once: the same settlement again is the recorded one and
+/// appends nothing. The same run with a terminal is still refused: a run that has a terminal is
+/// settled only from it (#670 R4), and an interrupted settlement is not its terminal's.
+#[test]
+fn unset2_own_release_with_inputs_settles_as_interrupted_and_a_terminal_still_refuses() {
+    let root = TempDir::new().expect("own release temp");
+    let ledger = GlobalLedger::open(config(&root, "own-release-recovery-writer")).expect("ledger");
+    let drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&ledger, &drafts);
+    ledger
+        .append(drafts.task_request.clone())
+        .expect("task request");
+    ledger
+        .append(drafts.task_input_intent.clone())
+        .expect("input intent");
+    ledger
+        .append(drafts.task_input_committed.clone())
+        .expect("input committed");
+    let release = ledger
+        .append(drafts.interrupted_release.clone())
+        .expect("the run's own release");
+    let completion =
+        reconcile_scheduled_settlement(&ledger, &drafts.recovered_interrupted_execution)
+            .expect("a run with inputs and its own release is settled as interrupted");
+    assert_eq!(completion.event_type(), EventType::PolicyDispatchCompleted);
+    let recovered = recovered_execution_fact(&ledger, &drafts.recovered_interrupted_execution);
+    assert_recovered_execution_chain(&recovered, &drafts);
+    assert_eq!(recovered.timestamp_unix_ms(), release.timestamp_unix_ms());
+    let head = ledger.latest_sequence().expect("head after the settlement");
+    let again = reconcile_scheduled_settlement(&ledger, &drafts.recovered_interrupted_execution)
+        .expect("the same settlement again is the recorded one");
+    assert_eq!(again.sequence(), completion.sequence());
+    assert_eq!(
+        ledger
+            .latest_sequence()
+            .expect("head after the second settlement"),
+        head,
+        "settled once"
+    );
+    ledger.close().expect("close own-release ledger");
+
+    let terminal_root = TempDir::new().expect("own release with terminal temp");
+    let terminal =
+        GlobalLedger::open(config(&terminal_root, "own-release-terminal-writer")).expect("ledger");
+    let terminal_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&terminal, &terminal_drafts);
+    terminal
+        .append(terminal_drafts.task_request.clone())
+        .expect("task request");
+    terminal
+        .append(terminal_drafts.task_input_intent.clone())
+        .expect("input intent");
+    terminal
+        .append(terminal_drafts.task_input_committed.clone())
+        .expect("input committed");
+    terminal
+        .append(terminal_drafts.interrupted_release.clone())
+        .expect("the run's own release");
+    terminal
+        .append(terminal_drafts.task_failed_warning.clone())
+        .expect("the run's terminal");
+    expect_recovered_execution_error(
+        terminal,
+        terminal_drafts.recovered_interrupted_execution,
+        "scheduled_execution_recovery_failure_conflict",
     );
 }
 

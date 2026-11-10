@@ -2292,6 +2292,7 @@ impl RuntimeHost {
                         )?;
                         let mut settlement = policy_outcome::StartSettlement {
                             unsettled: Vec::new(),
+                            settled_late: Vec::new(),
                             #[cfg(test)]
                             refuse_run_for_test: config.settlement_refusal_for_test,
                         };
@@ -2307,6 +2308,9 @@ impl RuntimeHost {
                             &mut settlement,
                             &rerun_rule,
                         )?;
+                        // UNSET-2 (register §1.296): a dispatch an earlier start refused and this
+                        // start settled is recorded once, with who closed it and why.
+                        shared.record_late_settlements(&settlement.settled_late)?;
                         // #670 final review (Fail Loud): a scheduled dispatch still open here is
                         // recorded, never left silently.
                         shared.record_open_scheduled_dispatches(&policy, &scheduled_procedures)?;
