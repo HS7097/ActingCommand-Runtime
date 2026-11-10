@@ -164,7 +164,10 @@ mod gate_411_a44;
 mod gate_308_l3b;
 // Workflow #308 SEL-L4b, gate key host 77: a scan select ends its run on_empty through the host.
 mod gate_308_l4b;
+// Workflow #428 S168-4: a list reading published whole through the host, the named tests' host
+// halves.
 mod gate_336_pkgs2;
+mod gate_428_s168_4;
 // Workflow #336 PKG-S3: bindings without a package digest, failure identity v2 and the lift of
 // a pause by a package's content hash.
 mod gate_336_pkgs3;

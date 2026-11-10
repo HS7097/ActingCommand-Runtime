@@ -103,7 +103,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   still read. Workflow #404 FS-1 and FS-2 (0.12.43, register §1.282, §1.283) raise it to 7: a
 ///   `repeated_anchor` anchor's `mask` and `scales` and the feature value `anchor_milli`; a pack
 ///   without them is read as before, so [3, 7]. FS-3 (same release, register §1.284) adds a
-///   select step's `confirm: "track"` and `track_px` to revision 7, no second raise.
+///   select step's `confirm: "track"` and `track_px` to revision 7, no second raise. Workflow #428
+///   S168-4 and S168-5a (0.12.50, register §1.291) raise it to 8: a task operation's effect
+///   `read_list` and a selection document's value source `table_max_over_list`; a pack without
+///   them keeps its revision and a document without the source its bytes, so [3, 8].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -124,7 +127,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 7]),
-    ("package", [3, 7]),
+    ("package", [3, 8]),
     ("runtime-client", [3, 6]),
     ("runtime-outcomes", [1, 1]),
 ];

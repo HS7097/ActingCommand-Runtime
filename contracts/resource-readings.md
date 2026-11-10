@@ -254,7 +254,10 @@ Before any input, the Runtime refuses a package whose reading target is not one 
 locates text, or is marked personal by the projection metadata, with
 `contained_task_resource_reading_invalid` and the detail `<id>:<reason>` (`target_not_ocr`,
 `target_locates_text`, `target_personal`). A program that violates the declaration rules is
-refused with the same code and the rule's reason as detail.
+refused with the same code and the rule's reason as detail; from Workflow #428 S168-4 (0.12.50) a
+mark's own rule (`ResourceReadingDeclaration::validate`) is `<id>:<reason>`, the mark's id before
+its reason, and the rules of the marks together (their count, a repeated id or key) keep the
+reason alone.
 
 For these three target qualification refusals, the kernel attaches the verified bundle's
 operation path and `/resource_readings/<index>/target_id` as a `ResourceDeclarationIssue`
@@ -574,13 +577,15 @@ facts (D2-S4). It is an ordinary task package that only navigates and reads.
 
 ## List readings
 
-Workflow #428 S168-4, written ahead of its code by S168-0 ([v012-register.md](v012-register.md)
-§1.291). A list reading reads a list a page shows, across as many viewports as it takes, and
-writes it as one instance fact of value `record_list`: one row per position, keyed by the
-position's business identity, with the values the package declares for it. It is the one way a
-package's reading becomes a record-list fact; an OCR field never becomes one
-([ocr-fields.md](ocr-fields.md)). **Status:** until S168-4 a package that declares one is
-refused (`UnknownField` at `/operations/<i>/read_list`).
+Workflow #428 S168-4 (Runtime 0.12.50), written ahead of its code by S168-0
+([v012-register.md](v012-register.md) §1.291, the S168-4 subsection there). A list reading reads
+a list a page shows, across as many viewports as it takes, and writes it as one instance fact of
+value `record_list`: one row per position, keyed by the position's business identity, with the
+values the package declares for it. It is the one way a package's reading becomes a record-list
+fact; an OCR field never becomes one ([ocr-fields.md](ocr-fields.md)). **Status:** built by
+S168-4, `package` revision 8 ([component-interfaces.md](component-interfaces.md)); a Runtime
+before 0.12.50 refuses a package that declares one (`UnknownField` at
+`/operations/<i>/read_list`).
 
 ### Declaration
 
@@ -651,7 +656,23 @@ The declaration gate (`resource validate` and every parse) checks the structure,
 the references, each refusal naming the task's `task.json` and the pointer of the offending field
 as for a select step. Runtime admission runs the same validation on the sealed task and refuses
 a program that breaks it, before any input, with `contained_task_resource_reading_invalid` and
-the detail `<operation id>:<reason>`. A startup, stuck-recovery return-home or prerequisite
+the detail `<operation id>:<reason>`. S168-4 built it so: the declaration gate checks the step's
+structure in the operation's own check (`Declaration::read_list_step`) and the rules of the whole
+task with its references in the task's own `candidate_layouts` (`Declaration::list_readings`);
+admission's own checks run before the common operation checks (`validate_list_reading_members`)
+and with the recognition pack (`prepare_list_readings`), and `<reason>` is the member the gate
+refuses at, below the operation (`read_list`, also for another effect beside it, `to`, `guard`,
+`retryable`, a refused member, `read_list/layout_id`, `read_list/columns/<j>/feature`, …),
+`scheduling_outcome` or `operations` for a rule of the whole task, and
+`read_list/scan <key>=<value>` for a select step's static check of the scan. One case differs: a
+`read_list` whose members do not make up a declaration (one missing, `scan` for example, or one of
+the wrong type) is refused at `read_list`, where the gate names the member (`read_list/scan`).
+Admission runs the declaration gate on the sealed task before its own checks, so a
+sealed task that breaks a rule the gate checks is refused there first, with
+`resource_declaration_invalid` at the pointer; in a run, admission's own refusal is the one of a
+rule only it checks (the scan's values against a select step's static checks, the references
+against the recognition pack), and its other checks stand behind the gate's. A startup,
+stuck-recovery return-home or prerequisite
 package that declares one is refused as for readings
 (`contained_task_resource_reading_run_kind_unsupported`); a bound recovery entry and
 `recognize_only` take none.
@@ -704,6 +725,10 @@ guard, the geometry, the budget, a projection) ends the run with its code, with 
 the run does not recover within itself. A run that fails or is cancelled publishes no list.
 
 Zero positions, with both checks passed, is an empty list: a reading that holds, with no row.
+At this step a layout whose anchor template matches nothing on the page cannot be told from a
+list that is really empty: both read zero positions and, when both checks pass, publish an empty
+list. A package must therefore make its start and end checks specific to the list page, so that
+they do not both pass where the list does not show.
 
 ### Publication
 
@@ -760,15 +785,23 @@ the run the same way.
   (`fact_store_capacity_exceeded`, the run fails `contained_task_resource_reading_rejected`);
   nothing is evicted.
 - A client never writes a list: a `PublishFact` or `PublishFacts` of a key under
-  `inventory.list.` is refused, from every origin, before the fact write gate, as the non-fatal
-  request error `list_reading_key_reserved` (`fact_key`), with nothing appended.
+  `inventory.list.` is refused before the fact write gate, as the non-fatal request error
+  `list_reading_key_reserved` (`fact_key`), with nothing appended, from every origin that may
+  publish facts: the agent dispatcher's (Agent, Adapter), which the agent and the CLI's
+  `facts publish` send, and the Runtime's own ordinary publication path. A CLI or UI origin of
+  its own (Cli, Cli or User, Ui) is refused earlier, when the request is formed
+  (`invalid_agent_dispatcher_origin`), as for any publication of a key outside the families with
+  the origin exception.
 - A mark never writes under `inventory.list.` either: from S168-4, a mark's `fact_key` or
   `capacity_fact_key` under that prefix is refused with the refusals of a mark's other key rules
   (`ResourceReadingDeclaration::validate`, "Declaration" above). The declaration gate refuses it
   as `InvalidValue` @ `…/fact_key` with reason `resource_reading_fact_key_invalid`, or @
   `…/capacity_fact_key` with `resource_reading_capacity_fact_key_invalid`; Runtime admission
   refuses the program before any input with `contained_task_resource_reading_invalid` and the
-  detail `<id>:<reason>`. So every record under the prefix is a list reading's `record_list`.
+  detail `<id>:<reason>`. So every record under the prefix is a list reading's `record_list`. The
+  key rule is the marks' and the adjustments' one rule, so an adjustment's `fact_key` under the
+  prefix is refused too. As for the step (section Declaration), admission runs the gate on the
+  sealed task first, which refuses such a mark at its pointer before admission's own check.
 
 ### Evidence
 

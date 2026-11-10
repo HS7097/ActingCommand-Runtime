@@ -325,6 +325,9 @@ actingcommand_contract::outcome_locations! {
         SelectReturn => "select_return",
         SelectConfirm => "select_confirm",
         SelectExpectIdentity => "select_expect_identity",
+        // Workflow #428 S168-4: a `read_list` step's scan (the `stage` of a scan failure that
+        // ends a list reading's run; contracts/resource-readings.md, "List readings").
+        ReadList => "read_list",
     }
 }
 

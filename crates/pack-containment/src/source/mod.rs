@@ -477,10 +477,14 @@ impl OperationParser {
                 .unwrap_or(false);
             // #411 B36/B19 (A35-S3): a wait step keeps its `wait`; no click is inferred.
             let wait_step = is_wait_step(operation);
+            // Workflow #428 S168-4: a list reading keeps its `read_list` and its declared guard;
+            // no click is inferred, and it is never a trusted coordinate, so the sealed task
+            // carries no such member for it.
+            let read_list_step = is_read_list_step(operation);
             let object = operation.as_object_mut().ok_or_else(|| {
                 CliError::package_invalid(format!("task '{task_id}' operation must be an object"))
             })?;
-            if !select.is_null() || wait_step {
+            if !select.is_null() || wait_step || read_list_step {
                 // A select step keeps its select and its declared guard; no click is inferred.
                 object.remove("click");
             } else if application.is_null() {
@@ -491,10 +495,12 @@ impl OperationParser {
                 object.insert("application".to_string(), application);
             }
             object.insert("guard".to_string(), guard);
-            object.insert(
-                "unguarded_trusted_coordinate".to_string(),
-                Value::Bool(trusted_coordinate),
-            );
+            if !read_list_step {
+                object.insert(
+                    "unguarded_trusted_coordinate".to_string(),
+                    Value::Bool(trusted_coordinate),
+                );
+            }
             if let Some(to) = normalized_to {
                 object.insert("to".to_string(), to);
             }
@@ -1281,11 +1287,14 @@ impl OperationParser {
                 };
                 // An application effect is not a tap, and a select step taps a candidate chosen
                 // at run time: neither becomes a navigation edge, so no route passes one. #411
-                // B36/B19 (A35-S3): nor does a wait step, which makes no input.
+                // B36/B19 (A35-S3): nor does a wait step, which makes no input. Workflow #428
+                // S168-4: nor does a list reading, whose moves a route never passes and whose
+                // `to` is its `from`.
                 if (to_pages.is_none() && !is_page_change(operation))
                     || is_application_effect(operation)
                     || is_select_effect(operation)
                     || is_wait_step(operation)
+                    || is_read_list_step(operation)
                 {
                     continue;
                 }
@@ -1377,6 +1386,7 @@ impl OperationParser {
                     || is_application_effect(operation)
                     || is_select_effect(operation)
                     || is_wait_step(operation)
+                    || is_read_list_step(operation)
                 {
                     continue;
                 }
@@ -1562,12 +1572,22 @@ impl OperationParser {
                     ),
                 ]);
                 // Click primitives keep their exact shape; only an application effect (slice
-                // #316-B3) or a select step (Workflow #308) adds its field.
+                // #316-B3), a select step (Workflow #308) or a list reading (Workflow #428
+                // S168-4) adds its field.
                 if !application.is_null() {
                     primitive.insert("application".to_string(), application);
                 }
                 if !select.is_null() {
                     primitive.insert("select".to_string(), select);
+                }
+                if let Some(read_list) = operation
+                    .get(declarations::read_list_member())
+                    .filter(|value| !value.is_null())
+                {
+                    primitive.insert(
+                        declarations::read_list_member().to_string(),
+                        read_list.clone(),
+                    );
                 }
                 primitives.push(Value::Object(primitive));
             }
@@ -1630,6 +1650,44 @@ impl OperationParser {
                 canonicalize_guard_page_id(&self.game, guard)?,
                 Value::Null,
                 select.clone(),
+            ));
+        }
+        // Workflow #428 S168-4 (`contracts/resource-readings.md`, "Derived documents"): a list
+        // reading carries no click and its declared guard, canonicalized as every guard; its
+        // `read_list` stays as declared. It declares no other effect and is never a trusted
+        // coordinate.
+        if is_read_list_step(operation) {
+            let operation_id = required_string(operation, "id")?;
+            if ["click", "application", "wait"]
+                .into_iter()
+                .any(|effect| operation.get(effect).is_some_and(|value| !value.is_null()))
+            {
+                return Err(CliError::package_invalid(format!(
+                    "operation '{operation_id}' carries a list reading and another effect"
+                )));
+            }
+            if operation
+                .get("unguarded_trusted_coordinate")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                return Err(CliError::package_invalid(format!(
+                    "operation '{operation_id}' list reading cannot be an unguarded trusted coordinate"
+                )));
+            }
+            let guard = operation
+                .get("guard")
+                .filter(|value| !value.is_null())
+                .ok_or_else(|| {
+                    CliError::package_invalid(format!(
+                        "operation '{operation_id}' list reading requires a declared guard"
+                    ))
+                })?;
+            return Ok((
+                Value::Null,
+                canonicalize_guard_page_id(&self.game, guard)?,
+                Value::Null,
+                Value::Null,
             ));
         }
         // #411 B36/B19 (A35-S3): a wait step makes no input: no click, no guard.
@@ -2079,6 +2137,15 @@ fn is_wait_step(operation: &Value) -> bool {
             .all(|effect| operation.get(effect).is_none_or(Value::is_null))
 }
 
+/// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings"): a list reading, an
+/// operation that declares `read_list`; its shape is the declaration gate's (it declares no other
+/// effect), its rules Runtime admission's.
+fn is_read_list_step(operation: &Value) -> bool {
+    operation
+        .get(declarations::read_list_member())
+        .is_some_and(|value| !value.is_null())
+}
+
 /// #411 B36/B19 (A35-S3): the page a confirmation's wait page names, which no other operation
 /// field names.
 fn operation_wait_page_id(operation: &Value) -> Option<&str> {
@@ -2101,8 +2168,9 @@ fn operation_loading_page_ids(operation: &Value) -> impl Iterator<Item = &str> {
 fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<String>) {
     let task_json_path = bundle.task_json_path();
     let path = task_json_path.as_path();
-    // #411 B36/B19 (A35-S3): a wait step has no click.
-    if is_wait_step(operation) {
+    // #411 B36/B19 (A35-S3): a wait step has no click; Workflow #428 S168-4: nor has a list
+    // reading, whose shape is the declaration gate's.
+    if is_wait_step(operation) || is_read_list_step(operation) {
         return;
     }
     // A select step's shape is the declaration gate's; it carries no other effect.

@@ -1728,9 +1728,8 @@ impl ResourceReadingDeclaration {
         if !identifier(&self.id) {
             return Err(TaskflowCode::ResourceReadingIdInvalid.code());
         }
-        if !(self.fact_key.starts_with("resource.") || self.fact_key.starts_with("inventory."))
-            || crate::fact::validate_fact_key(&self.fact_key).is_err()
-        {
+        // Workflow #428 S168-4: never under `inventory.list.`, which holds list readings only.
+        if !resource_fact_key(&self.fact_key) {
             return Err(TaskflowCode::ResourceReadingFactKeyInvalid.code());
         }
         // Workflow #390 READ-1: only a `current_capacity` mark has a capacity to write, under a
@@ -1894,7 +1893,33 @@ fn resource_identifier(value: &str) -> bool {
 /// The key rule of reading marks and adjustments: a realistic instance fact key.
 fn resource_fact_key(value: &str) -> bool {
     (value.starts_with("resource.") || value.starts_with("inventory."))
+        && !crate::fact::is_list_reading_key(value)
         && crate::fact::validate_fact_key(value).is_ok()
+}
+
+/// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings"): the most
+/// `read_list` operations one task may declare.
+pub const MAX_LIST_READINGS: usize = 16;
+/// Workflow #428 S168-4: the most columns a `read_list` declares besides its key column (a row
+/// holds at most 64 fields).
+pub const MAX_LIST_READING_COLUMNS: usize = 63;
+/// Workflow #428 S168-4: the most rows one list reading's `record_list` holds; a 257th position
+/// is the miss `list_rows_exceeded`.
+pub const MAX_LIST_READING_ROWS: usize = 256;
+
+/// Workflow #428 S168-4: a list reading's `key_column` or `column`, a row member's name:
+/// `^[a-z][a-z0-9_]{0,31}$`.
+pub fn list_reading_column_valid(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes.next().is_some_and(|first| first.is_ascii_lowercase())
+        && value.len() <= 32
+        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+/// Workflow #428 S168-4: a list reading's `fact_key`: under `inventory.list.` and a valid
+/// instance fact key.
+pub fn list_reading_fact_key_valid(value: &str) -> bool {
+    crate::fact::is_list_reading_key(value) && crate::fact::validate_fact_key(value).is_ok()
 }
 
 /// Adjustments one task may declare (Workflow #384 D2-S3), as many as reading marks.

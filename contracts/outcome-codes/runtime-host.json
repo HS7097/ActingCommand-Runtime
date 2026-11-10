@@ -9243,6 +9243,27 @@
       "common_causes": "The package was deleted or moved, or a replacement was in progress when the check read it.",
       "handling": "Put the package back at its configured path, or finish its replacement. The next check measures it again and lifts the pause when its content changed."
     },
+    "list_reading_key_reserved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.50",
+      "description": "Workflow #428 S168-4 (contracts/instance-fact-store.md, List reading facts): a publication named a key under inventory.list. (fact_key), the prefix that holds list readings only, which only the Runtime writes at a run's successful end. A client's PublishFact or PublishFacts, from every origin that may publish facts (the agent dispatcher's, Agent and Adapter), and any other publication path of the Runtime is refused before the fact write gate and nothing is appended; a CLI or UI origin of its own is refused earlier, when the request is formed (invalid_agent_dispatcher_origin). Not fatal.",
+      "common_causes": "A script that copies or restores an instance's facts, list readings included, or a client that tries to write a list by hand.",
+      "handling": "Leave the key out: a list under inventory.list. comes only from a package's read_list step, read whole on the device."
+    },
     "maintenance_arguments_invalid": {
       "category": "error",
       "ladder_class": "none",

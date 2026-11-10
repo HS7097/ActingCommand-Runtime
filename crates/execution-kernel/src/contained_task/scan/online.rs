@@ -39,7 +39,7 @@ use actingcommand_recognition_pack::{
     CandidateLayout, RecognitionPackCode, RecognitionPackLocation, TargetSearch,
 };
 use actingcommand_selection_policy::SelectionFactSnapshot;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const SELECT_INVALID: ExecutionKernelCode = ExecutionKernelCode::ContainedTaskSelectInvalid;
 
@@ -80,9 +80,26 @@ pub(in crate::contained_task) struct RuntimeScanSource<'s, R: ContainedTaskRunti
     /// into the seed.
     draw: PointDraw,
     replay: bool,
+    /// Workflow #428 S168-4: the session reads a list; the frame its end check passed on is
+    /// recorded as `ListReadingFrame` and kept in `end_captured_at`.
+    list_reading: bool,
+    end_captured_at: Option<SystemTime>,
 }
 
 impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
+    /// Workflow #428 S168-4: the source of a `read_list` step, which records the frame its end
+    /// check passed on.
+    pub(in crate::contained_task) fn reading_list(mut self) -> Self {
+        self.list_reading = true;
+        self
+    }
+
+    /// Workflow #428 S168-4: the device capture time of the frame a list reading's end check
+    /// passed on, once it passed.
+    pub(in crate::contained_task) const fn end_captured_at(&self) -> Option<SystemTime> {
+        self.end_captured_at
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(in crate::contained_task) fn new(
         task: &'s PreparedContainedTask,
@@ -111,6 +128,8 @@ impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
             guarded: false,
             draw,
             replay,
+            list_reading: false,
+            end_captured_at: None,
         }
     }
 
@@ -472,6 +491,20 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
             }
         }
         Ok(passed)
+    }
+
+    /// Workflow #428 S168-4: a list reading's end check passed on the frame captured last; the
+    /// host binds that frame for the list's evidence (`ListReadingFrame`).
+    fn end_passed(&mut self) -> Result<(), ContainedTaskRunError<R::Error>> {
+        if !self.list_reading {
+            return Ok(());
+        }
+        let captured_at = self.latest.as_ref().unwrap_or(self.first).captured_at;
+        self.runtime
+            .record(ContainedTaskTrace::ListReadingFrame { captured_at })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        self.end_captured_at = Some(captured_at);
+        Ok(())
     }
 }
 

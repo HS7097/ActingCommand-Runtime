@@ -24,8 +24,8 @@ use actingcommand_contract::{
 };
 use actingcommand_execution_kernel::{
     CaptureGeometrySessionRef, ContainedTaskGuardEvaluation, DesignatedEffectCap,
-    ExecutionKernelCode, FrameOwner, ResourceAdjustmentResult, ResourceReadingValue, Scene,
-    StepPacing,
+    ExecutionKernelCode, FrameOwner, ListReadingDeclaration, ListReadingRows,
+    ResourceAdjustmentResult, ResourceReadingValue, Scene, StepPacing,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -276,6 +276,8 @@ pub(super) struct ContainedTaskResourceReadings {
     pub(super) confirmation_frames: Vec<IssuedFrameId>,
     /// Workflow #384 D2-S3: the plan of the run's confirmed adjustments, when it confirmed any.
     pub(super) adjustments: Option<AdjustmentPlan>,
+    /// Workflow #428 S168-4: the lists the run read whole, in the order its steps read them.
+    pub(super) lists: Vec<JoinedListReading>,
 }
 
 /// Workflow #384 D2-S2: the readings that held on one frame handed to recognition.
@@ -286,6 +288,65 @@ pub(super) struct JoinedReadingFrame {
     pub(super) frame_id: IssuedFrameId,
     /// In mark order.
     pub(super) readings: Vec<ResourceReadingValue>,
+}
+
+/// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings", "Publication"): one
+/// list a `read_list` step read whole, kept in memory until the run's successful end publishes
+/// it: the frame its end check passed on (its device capture time and id), the step's
+/// declaration and the rows.
+#[derive(Clone)]
+pub(super) struct JoinedListReading {
+    pub(super) captured_at: SystemTime,
+    pub(super) frame_id: IssuedFrameId,
+    pub(super) declaration: ListReadingDeclaration,
+    pub(super) list: ListReadingRows,
+}
+
+/// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings", "Publication"): the
+/// instance fact of one list read whole: one inline `record_list` record under the list's
+/// `fact_key`, observed when the frame its end check passed on was captured, valid for its
+/// `valid_for_ms` from the detector contract, at the lowest confidence of its rows' features;
+/// its detector names the entry task and the operation, its snapshot the run, the frame and the
+/// operation. `None` for a lifetime the fact record cannot hold.
+fn list_reading_fact_record(
+    readings: &ContainedTaskResourceReadings,
+    joined: &JoinedListReading,
+    observed_at_unix_ms: u64,
+    run_text: &str,
+    frame_text: &str,
+) -> Option<FactRecord> {
+    let declaration = &joined.declaration;
+    Some(FactRecord {
+        scope: FactScope::Instance {
+            instance_id: readings.instance_alias.clone(),
+        },
+        key: declaration.fact_key.clone(),
+        content: FactContent::Inline {
+            value: ContractFactValue::RecordList(joined.list.rows.clone()),
+        },
+        observed_at_unix_ms,
+        expires_at_unix_ms: Some(observed_at_unix_ms.checked_add(declaration.valid_for_ms)?),
+        ttl_policy: Some(actingcommand_contract::FactTtlPolicy {
+            minimum_ms: declaration.valid_for_ms,
+            maximum_ms: declaration.valid_for_ms,
+            source: actingcommand_contract::FactTtlSource::DetectorContract,
+        }),
+        confidence_milli: joined.list.confidence_milli,
+        source_detector: format!(
+            "{}{}/{}",
+            actingcommand_contract::LIST_READING_DETECTOR_PREFIX,
+            readings.task_label,
+            declaration.operation_id
+        ),
+        source_snapshot_id: actingcommand_contract::list_reading_snapshot_id(
+            run_text,
+            frame_text,
+            &declaration.operation_id,
+        ),
+        schema_version: "fact.v1".to_owned(),
+        resource_bundle_hash: readings.resource_bundle_hash.clone(),
+        invalidate_on: Vec::new(),
+    })
 }
 
 /// Workflow #335 S5b: the instance fact of one reading. The scope is the run's instance, the
@@ -401,6 +462,15 @@ fn resource_adjustment_fact_record(
         resource_bundle_hash: readings.resource_bundle_hash.clone(),
         invalidate_on: Vec::new(),
     })
+}
+
+/// Workflow #428 S168-4: one step of a successful terminal's publication: the planned record at
+/// a position of the plan (a reading, or a Workflow #384 D2-S3 adjustment write), or a list read
+/// whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublicationStep {
+    Planned(usize),
+    List(usize),
 }
 
 /// Workflow #335 S5b: refuses a successful terminal whose record `id` (a reading, or a
@@ -1372,6 +1442,11 @@ pub(super) struct RuntimeContainedTask<'a> {
     /// The readings that held on the joined frames, accepted before `Finalizing` (Workflow #335
     /// S5b, #384 D2-S2).
     taken_resource_readings: Vec<JoinedReadingFrame>,
+    /// Workflow #428 S168-4: the frame a `read_list` step's end check passed on (its device
+    /// capture time and id), bound by `ListReadingFrame` until the step's `ListReading`.
+    list_end_frame: Option<(SystemTime, IssuedFrameId)>,
+    /// Workflow #428 S168-4: the lists the run's steps read whole, accepted before `Finalizing`.
+    taken_list_readings: Vec<JoinedListReading>,
     /// Workflow #384 D2-S3: the admitted package's entry task id.
     entry_task_label: String,
     /// Workflow #384 D2-S3: the operation and the ledger sequence of the `task.step_finished` of
@@ -5910,6 +5985,84 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 }
                 Ok(())
             }
+            // Workflow #428 S168-4: a `read_list` step's end check passed on the frame captured
+            // last, before Finalizing; the step's list, when it holds, is observed on it.
+            ContainedTaskTrace::ListReadingFrame { captured_at } => {
+                if self.finalizing.is_some() || self.list_end_frame.is_some() {
+                    return Err(resource_reading_poison(
+                        HostCode::ContainedTaskResourceReadingDuplicate,
+                    ));
+                }
+                let (Some(frame_id), Some(frame_captured_at)) =
+                    (self.last_frame_id, self.last_frame_captured_at)
+                else {
+                    return Err(resource_reading_poison(
+                        HostCode::ContainedTaskResourceReadingFrameMissing,
+                    ));
+                };
+                if frame_captured_at != captured_at {
+                    return Err(resource_reading_poison(
+                        HostCode::ContainedTaskResourceReadingFrameMismatch,
+                    ));
+                }
+                self.list_end_frame = Some((captured_at, frame_id));
+                Ok(())
+            }
+            // Workflow #428 S168-4: what one `read_list` step read, before Finalizing. A list read
+            // whole is kept for the terminal, observed on the frame its end check passed on; a
+            // miss is written at once as a warning row of the task diagnostic on the step's last
+            // viewport, the frame captured last, and nothing is kept for it.
+            ContainedTaskTrace::ListReading {
+                declaration,
+                captured_at,
+                list,
+            } => {
+                if self.finalizing.is_some() {
+                    return Err(resource_reading_poison(
+                        HostCode::ContainedTaskResourceReadingDuplicate,
+                    ));
+                }
+                let end_frame = self.list_end_frame.take();
+                match list {
+                    Ok(list) => {
+                        let Some((end_captured_at, frame_id)) = end_frame else {
+                            return Err(resource_reading_poison(
+                                HostCode::ContainedTaskResourceReadingFrameMissing,
+                            ));
+                        };
+                        if end_captured_at != captured_at {
+                            return Err(resource_reading_poison(
+                                HostCode::ContainedTaskResourceReadingFrameMismatch,
+                            ));
+                        }
+                        self.taken_list_readings.push(JoinedListReading {
+                            captured_at,
+                            frame_id,
+                            declaration,
+                            list,
+                        });
+                        Ok(())
+                    }
+                    Err(miss) => {
+                        let (Some(frame_id), Some(frame_captured_at)) =
+                            (self.last_frame_id, self.last_frame_captured_at)
+                        else {
+                            return Err(resource_reading_poison(
+                                HostCode::ContainedTaskResourceReadingFrameMissing,
+                            ));
+                        };
+                        if frame_captured_at != captured_at {
+                            return Err(resource_reading_poison(
+                                HostCode::ContainedTaskResourceReadingFrameMismatch,
+                            ));
+                        }
+                        let recorded =
+                            self.diagnostic_list_miss(frame_id, miss.outcome(&declaration));
+                        self.diagnostic_frame = None;
+                        recorded
+                    }
+                }
+            }
             ContainedTaskTrace::Finalizing { outcome } => {
                 let stability_finalization_invalid = match (
                     self.expected_stability_declaration.as_ref(),
@@ -5938,10 +6091,12 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 };
                 // Workflow #384 D2-S2: a successful run joins every frame it handed off; D2-S3:
                 // and every confirmation of adjustments.
+                // Workflow #428 S168-4: and its every list end frame with its list.
                 let readings_finalization_invalid = outcome == TaskOutcome::Success
                     && (self.joined_reading_frames != self.reading_frames.len()
                         || self.joined_adjustment_confirmations
-                            != self.adjustment_confirmations.len());
+                            != self.adjustment_confirmations.len()
+                        || self.list_end_frame.is_some());
                 if self.finalizing.replace(outcome).is_some()
                     || !self.step_actions.is_empty()
                     || stability_finalization_invalid
@@ -7811,6 +7966,8 @@ impl HostShared {
             reading_frames: Vec::new(),
             joined_reading_frames: 0,
             taken_resource_readings: Vec::new(),
+            list_end_frame: None,
+            taken_list_readings: Vec::new(),
             entry_task_label: prepared.task_label().to_owned(),
             last_step_finished: None,
             adjustment_confirmations: Vec::new(),
@@ -8153,6 +8310,8 @@ impl HostShared {
         let executed_steps = runtime.executed_steps;
         let own_executed_steps = runtime.own_executed_steps;
         let taken_resource_readings = std::mem::take(&mut runtime.taken_resource_readings);
+        // Workflow #428 S168-4: the lists the run read whole.
+        let taken_list_readings = std::mem::take(&mut runtime.taken_list_readings);
         // Workflow #384 D2-S3: the plan of the run's adjustments and their confirmation frames.
         let adjustment_plan = runtime.adjustment_plan.take();
         let confirmation_frames = runtime
@@ -8654,7 +8813,8 @@ impl HostShared {
                 capture_summary: Some(capture_summary),
                 task_timing: Some(task_timing),
                 resource_readings: (!taken_resource_readings.is_empty()
-                    || adjustment_plan.is_some())
+                    || adjustment_plan.is_some()
+                    || !taken_list_readings.is_empty())
                 .then(|| ContainedTaskResourceReadings {
                     instance_alias: instance_alias.to_owned(),
                     task_label: prepared.task_label().to_owned(),
@@ -8662,6 +8822,7 @@ impl HostShared {
                     frames: taken_resource_readings,
                     confirmation_frames,
                     adjustments: adjustment_plan,
+                    lists: taken_list_readings,
                 }),
                 // UPD-1 (design §3.3): a store update package's success clears the fact.
                 store_update_alias: prepared
@@ -10829,6 +10990,72 @@ impl HostShared {
                 }
             }
         }
+        // Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings", "Publication"):
+        // each list read whole is one record, which must fit a fact record (and its observation
+        // the observation bound) before anything is published.
+        let mut list_records = Vec::with_capacity(readings.lists.len());
+        for joined in &readings.lists {
+            let operation_id = joined.declaration.operation_id.as_str();
+            let frame_text = resource_reading_identifier_text(joined.frame_id.transport())?;
+            let observed_at_unix_ms = reading_unix_ms(joined.captured_at)?;
+            let record = list_reading_fact_record(
+                &readings,
+                joined,
+                observed_at_unix_ms,
+                &run_text,
+                &frame_text,
+            )
+            .filter(|record| {
+                actingcommand_contract::FactObservation {
+                    records: vec![record.clone()],
+                }
+                .validate()
+                .is_ok()
+            });
+            let Some(record) = record else {
+                return Ok(Some(refuse_resource_reading(
+                    draft,
+                    operation_id,
+                    HostCode::FactObservationInvalid.as_str(),
+                )));
+            };
+            list_records.push(Some((operation_id, observed_at_unix_ms, record)));
+        }
+        // The publication order: the planned records in their order, each list after every
+        // record observed no later than the frame its end check passed on (so after the readings
+        // of the same frame), the lists among themselves in the order of those frames.
+        let mut planned_times = Vec::with_capacity(publications.len());
+        for publication in &publications {
+            planned_times.push(match publication {
+                PlannedPublication::Reading { frame, .. } => {
+                    let joined = readings.frames.get(*frame).ok_or_else(|| {
+                        resource_reading_poison(HostCode::ContainedTaskResourceReadingFrameMissing)
+                    })?;
+                    reading_unix_ms(joined.captured_at)?
+                }
+                PlannedPublication::Adjustment(adjustment) => adjustment.observed_at_unix_ms,
+            });
+        }
+        let mut lists = (0..list_records.len()).collect::<Vec<_>>();
+        lists.sort_by_key(|list| {
+            list_records[*list]
+                .as_ref()
+                .map_or(0, |(_, observed_at_unix_ms, _)| *observed_at_unix_ms)
+        });
+        let list_time = |list: usize| {
+            list_records[list]
+                .as_ref()
+                .map_or(0, |(_, observed_at_unix_ms, _)| *observed_at_unix_ms)
+        };
+        let mut order = Vec::with_capacity(publications.len() + lists.len());
+        let mut pending_lists = lists.into_iter().peekable();
+        for (position, time) in planned_times.iter().enumerate() {
+            while let Some(list) = pending_lists.next_if(|list| list_time(*list) < *time) {
+                order.push(PublicationStep::List(list));
+            }
+            order.push(PublicationStep::Planned(position));
+        }
+        order.extend(pending_lists.map(PublicationStep::List));
         let fact_scope = FactScope::Instance {
             instance_id: readings.instance_alias.clone(),
         };
@@ -10861,8 +11088,49 @@ impl HostShared {
         // Workflow #384 D2-S2 (model §3.5): each reading is observed when its frame was captured;
         // D2-S3: an adjustment write when its operation was confirmed, adjusting the record it
         // names, which must still be the key's record.
+        // Workflow #428 S168-4: a list is its own single-record observation, the prefix's one
+        // entry (`FactPublicationPurpose::ListReading`); a refusal stops publishing as a
+        // reading's does.
         let mut published: Vec<Option<(u64, EventId)>> = Vec::with_capacity(publications.len());
-        for (publication, reading_record) in publications.iter().zip(reading_records) {
+        for step in order {
+            let position = match step {
+                PublicationStep::Planned(position) => position,
+                PublicationStep::List(list) => {
+                    let Some((operation_id, _, record)) = list_records[list].take() else {
+                        return Err(resource_reading_poison(
+                            HostCode::ContainedTaskResourceReadingFrameMissing,
+                        ));
+                    };
+                    match self.publish_facts(
+                        actingcommand_contract::FactObservation {
+                            records: vec![record],
+                        },
+                        None,
+                        FactPublicationPurpose::ListReading,
+                    ) {
+                        Ok(_) => {}
+                        Err(error) if error.is_fatal() => {
+                            return Err(RequestFailure::poison_without_terminal(error));
+                        }
+                        Err(error) => {
+                            return Ok(Some(refuse_resource_reading(
+                                draft,
+                                operation_id,
+                                error.code(),
+                            )));
+                        }
+                    }
+                    continue;
+                }
+            };
+            let (Some(publication), Some(reading_record)) = (
+                publications.get(position),
+                reading_records.get_mut(position).map(Option::take),
+            ) else {
+                return Err(resource_reading_poison(
+                    HostCode::ContainedTaskResourceReadingFrameMissing,
+                ));
+            };
             let (id, record, purpose) = match (publication, reading_record) {
                 (_, Some((id, record))) => (id, Some(record), FactPublicationPurpose::Ordinary),
                 (PlannedPublication::Adjustment(adjustment), None) => {

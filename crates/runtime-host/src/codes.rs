@@ -1249,6 +1249,9 @@ actingcommand_contract::outcome_codes! {
         ResourceTargetViewInvalid => "resource_target_view_invalid": error / none,
         ResourceTargetViewPolicyInconsistent => "resource_target_view_policy_inconsistent": error / none,
         ResourceTargetViewPolicyUnreadable => "resource_target_view_policy_unreadable": error / none,
+        // Workflow #428 S168-4: a publication of a key under `inventory.list.` other than the
+        // host's own list reading, refused before the fact write gate (key `fact_key`).
+        ListReadingKeyReserved => "list_reading_key_reserved": error / none,
         ResourceTargetsFormalEntryRequired => "resource_targets_formal_entry_required": error / none,
         ResourceTargetsKeyReserved => "resource_targets_key_reserved": error / none,
         ResourceTargetsRecordInvalid => "resource_targets_record_invalid": error / none,

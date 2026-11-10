@@ -48,6 +48,14 @@ actingcommand_contract::outcome_vocabulary! {
         /// Workflow #411 B1 (register §1.163): the frames of the mark's agreement did not all
         /// read the same value.
         NoAgreement => "no_agreement",
+        /// Workflow #428 S168-4: a position of a list was readable at least once but holds no
+        /// fixed Known reading of its identity or of a column's feature.
+        ListPositionUnread => "list_position_unread",
+        /// Workflow #428 S168-4: two positions of a list read the same business ID.
+        ListDuplicateKey => "list_duplicate_key",
+        /// Workflow #428 S168-4: a list showed more positions than one fact holds (256); its
+        /// scan stopped at the 257th.
+        ListRowsExceeded => "list_rows_exceeded",
     }
 }
 

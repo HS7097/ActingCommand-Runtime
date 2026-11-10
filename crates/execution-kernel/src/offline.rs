@@ -363,10 +363,12 @@ fn simulate(
             declared: post_admission_ocr_declared,
             executed: false,
             // Declared OCR fields, resource readings and resource adjustments (Workflow #384
-            // D2-S3) are all read only by a real run.
+            // D2-S3) are all read only by a real run; so are list readings (Workflow #428
+            // S168-4).
             pending_real_execution: post_admission_ocr_declared
                 || task.has_resource_readings()
-                || task.has_resource_adjustments(),
+                || task.has_resource_adjustments()
+                || task.has_list_readings(),
         },
         recognition: runtime.recognition,
         decision,

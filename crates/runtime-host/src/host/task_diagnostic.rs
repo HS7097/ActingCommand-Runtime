@@ -872,6 +872,32 @@ impl RuntimeContainedTask<'_> {
         .map(|_| ())
     }
 
+    /// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings", "Reading"): a
+    /// `read_list` step's list that gave no reading, written on the frame `frame_id` (the step's
+    /// last viewport) as a recognition error row of the post-admission phase, without a target,
+    /// whose outcome is the warning `contained_task_resource_reading_unresolved` (`outcome`).
+    pub(super) fn diagnostic_list_miss(
+        &mut self,
+        frame_id: IssuedFrameId,
+        outcome: Outcome,
+    ) -> Result<(), RequestFailure> {
+        self.diagnostic_frame = Some(frame_id);
+        self.diagnostic(
+            None,
+            Payload::Error(Box::new(TaskDiagnosticErrorData::Recognition {
+                phase: "post_admission".to_owned(),
+                target_id: None,
+                error: TaskDiagnosticRecognitionError {
+                    region: None,
+                    timing: None,
+                    sample: None,
+                    outcome,
+                },
+            })),
+        )
+        .map(|_| ())
+    }
+
     /// Workflow #384 D2-S3 (model §3.6): one outcome of a confirmed resource adjustment, written
     /// on the frame `frame_id` its operation was confirmed on as a recognition error row of the
     /// post-admission phase, as a mark's miss is: an amount that gave no reading

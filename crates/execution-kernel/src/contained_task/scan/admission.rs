@@ -42,13 +42,20 @@ impl ScanDeclaration {
         self.bounds.max_ms
     }
 
+    /// Workflow #428 S168-4: whether the scan declares `early_stop`, which a list reading refuses:
+    /// every position is read.
+    pub(in crate::contained_task) const fn declares_early_stop(&self) -> bool {
+        self.early_stop.is_some()
+    }
+
     /// The static checks of S0 §2.1 on the step's `layout`, `policy` and the evaluator's targets,
     /// in a frame of `frame` (the package's coordinate space) and a task of `task_timeout_ms`;
-    /// the first that fails, as its detail, or `None`.
+    /// the first that fails, as its detail, or `None`. Workflow #428 S168-4: a list reading has
+    /// no policy, so the policy's own check (its last tie-break key) is not made for it.
     pub(in crate::contained_task) fn admission_refusal(
         &self,
         layout: &CandidateLayout,
-        policy: &SelectionPolicy,
+        policy: Option<&SelectionPolicy>,
         evaluator: &RecognitionEvaluator,
         frame: (u32, u32),
         task_timeout_ms: u64,
@@ -82,12 +89,14 @@ impl ScanDeclaration {
             return refused("consensus=multi_frame");
         }
         // The policy's last tie-break key orders equal duplicate rows (S0 §2.1).
-        if !matches!(
-            policy.tie_break.last(),
-            Some(TieBreakKey::CandidateId {
-                direction: SortDirection::LowestFirst
-            })
-        ) {
+        if let Some(policy) = policy
+            && !matches!(
+                policy.tie_break.last(),
+                Some(TieBreakKey::CandidateId {
+                    direction: SortDirection::LowestFirst
+                })
+            )
+        {
             return refused("tie_break=last_not_candidate_id_lowest_first");
         }
         if let Err(refusal) = Moves::of(self) {

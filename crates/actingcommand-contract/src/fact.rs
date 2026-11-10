@@ -111,6 +111,27 @@ fn remedy_choices_digest(
 /// Workflow #375 R5c: the `source_detector` prefix of a resource reading the Runtime took.
 pub const RESOURCE_READING_DETECTOR_PREFIX: &str = "resource_reading:";
 
+/// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings"): the key prefix of a
+/// list reading's `record_list` fact. Only the host writes under it, and only a list reading: a
+/// client's publication of such a key and a reading mark's key under it are refused.
+pub const LIST_READING_KEY_PREFIX: &str = "inventory.list.";
+
+/// Workflow #428 S168-4: the `source_detector` prefix of a list reading the Runtime took,
+/// `list_reading:<entry task id>/<operation id>`.
+pub const LIST_READING_DETECTOR_PREFIX: &str = "list_reading:";
+
+/// Workflow #428 S168-4: whether `key` lies under the list readings' reserved prefix.
+pub fn is_list_reading_key(key: &str) -> bool {
+    key.starts_with(LIST_READING_KEY_PREFIX)
+}
+
+/// Workflow #428 S168-4: the `source_snapshot_id` of a list reading,
+/// `run:<run>/frame:<frame>/<operation id>`, the frame the list's end check passed on; the form
+/// of a mark's ([`resource_reading_snapshot_id`]), so every complete read is a new observation.
+pub fn list_reading_snapshot_id(run: &str, frame: &str, operation_id: &str) -> String {
+    resource_reading_snapshot_id(run, frame, operation_id)
+}
+
 /// Workflow #375 R5c: the `source_snapshot_id` of a resource reading taken on a run's terminal
 /// frame, `run:<run>/frame:<frame>/<reading id>`, where `run` and `frame` are the identifiers'
 /// canonical text. The frame retention view reads it back with

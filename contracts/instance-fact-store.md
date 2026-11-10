@@ -465,9 +465,11 @@ calls the existing `publish_facts`.
 
 ## List reading facts (Workflow #428 S168-4)
 
-Written ahead of its code by S168-0 ([v012-register.md](v012-register.md) §1.291). A package's
-list readings ([resource-readings.md](resource-readings.md), "List readings") are written by the
-host, through `publish_facts`, after a run that succeeds: one observation per list with one
+Written ahead of its code by S168-0 and built by S168-4 (Runtime 0.12.50;
+[v012-register.md](v012-register.md) §1.291). A package's list readings
+([resource-readings.md](resource-readings.md), "List readings") are written by the host, through
+`publish_facts` with the publication purpose of a list reading, the prefix's one entry, after a
+run that succeeds: one observation per list with one
 instance-scoped record, its origin the Runtime's own (source and actor `runtime`, origin module
 `fact-store`), with system links. The observation time is the capture time of the viewport the
 list's end check passed on, the TTL the declared `valid_for_ms`, and `invalidate_on` is empty.
@@ -486,9 +488,12 @@ The store accepts or refuses it like any other observation.
   floor is unknown, never an empty list ([selection-policy.md](selection-policy.md), "Facts and
   unknown", "Record lists"). An empty record is a list read whole that showed no position.
 - **Reserved prefix.** Only the host writes under `inventory.list.`, and only a list reading's
-  `record_list`. `PublishFact` and `PublishFacts` of such a key are refused from every origin as
+  `record_list`. `PublishFact` and `PublishFacts` of such a key are refused as
   `list_reading_key_reserved` (non-fatal, `fact_key`), before the fact write gate, with nothing
-  appended. A mark's `fact_key` or `capacity_fact_key` under the prefix is refused at the
+  appended, from every origin that may publish facts: the agent dispatcher's (Agent, Adapter),
+  which the agent and the CLI's `facts publish` send, and the Runtime's own ordinary publication
+  path. A CLI or UI origin of its own (Cli, Cli or User, Ui) is refused earlier, when the request
+  is formed (`invalid_agent_dispatcher_origin`), as for any publication. A mark's `fact_key` or `capacity_fact_key` under the prefix is refused at the
   declaration gate and at admission (`resource_reading_fact_key_invalid`,
   `resource_reading_capacity_fact_key_invalid`; [resource-readings.md](resource-readings.md),
   "Capacity and reserved keys"), so no reading writes an integer there.
