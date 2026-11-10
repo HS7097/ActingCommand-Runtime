@@ -298,7 +298,7 @@ Also planned by the same design (§5.2), outside the rows above:
 
 Planned rows, **not in force**: no build declares them. Runtime 0.12.47 declares `package`
 [3, 7] and `ledger` [3, 7], and main after LAB-3 still does. S168-0, which writes these rows, and
-its two fixes raise nothing.
+its fixes raise nothing.
 
 | Interface | Rev | Meaning | Anchor | Slice |
 |---|---|---|---|---|
