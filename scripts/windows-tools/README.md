@@ -124,6 +124,8 @@ on drive `D:`. Component selection is explicit:
   (`contracts/vision-model-folders.md`). The sizes and SHA-256 of `pinned_files`
   equal the runtime pin in `crates/vision-ffi/src/runtime_pin.rs` (a logic test
   holds them equal, and `Test-WindowsRemoteBuildTools.ps1` freezes both entries).
+  `onnxruntime-directml-1.24.4` also pins its two license files the same way
+  (`pinned_license_files`, Workflow #428 CI-OCR-1).
 - `mumu-nemu-installed` records metadata for one explicit installed root and
   `nx_device` version. Vendor files remain in place and are never copied or run.
 
@@ -170,19 +172,21 @@ It places, in the layout of [vision-model-folders.md](../../contracts/vision-mod
 | Under the vision root | From |
 |---|---|
 | `ort/onnxruntime.dll`, `ort/onnxruntime_providers_shared.dll` | the `pinned_files` of `onnxruntime-directml-1.24.4` at their `vision_root_path`, extracted from the package that entry pins |
-| `ort/licenses/onnxruntime/LICENSE`, `ort/licenses/onnxruntime/ThirdPartyNotices.txt` | the same package, as the entry's `placement_note` asks |
+| `ort/licenses/onnxruntime/LICENSE`, `ort/licenses/onnxruntime/ThirdPartyNotices.txt` | the `pinned_license_files` of the same entry at their `vision_root_path`, extracted from the same package, as the entry's `placement_note` asks; a registry without them is refused |
 | `models/PP-OCRv6_medium/det.onnx`, `rec.onnx`, `keys.txt` | the artifacts `PP-OCRv6_medium_det_onnx`, `PP-OCRv6_medium_rec_onnx` and `ppocrv6_dict` of `ppocrv6-medium-onnx`, in the flat layout (the folder name is the `model_ref`); the entry's `compatibility.state` must be `Ready` |
 
-Every address, size and SHA-256 comes from the registry; the script holds none. A file that
-exists with its pinned size and SHA-256 is kept (`verified`). Any other file is removed if present,
-fetched to a temporary name beside it, checked for size and SHA-256 and moved into place
-(`downloaded`); a fetched file that fails its check is removed. A fetch that fails (a network
-error, an HTTP status other than 200, a wrong length or SHA-256, no complete answer within five
-minutes) is tried again, 5 s, 10 s, … later, up to `-Attempts` times; then the run fails. The
-license files have no pin of their own: they are compared with the entries of the pinned package,
-so every run fetches that package (12.5 MB) once, also when everything else verifies. The package
-is fetched into the destination under a temporary name and removed before the script ends; nothing
-is written outside the destination.
+Every address, size and SHA-256 comes from the registry; the script holds none. Every file has a
+pin, the license files included. A file that exists with its pinned size and SHA-256 is kept
+(`verified`). Any other file is removed if present, fetched to a temporary name beside it, checked
+for size and SHA-256 and moved into place (`downloaded`); a fetched file that fails its check is
+removed. A fetch that fails (a network error, an HTTP status other than 200, a wrong length or
+SHA-256, no complete answer within five minutes) is tried again, 5 s, 10 s, … later, up to
+`-Attempts` times; then the run fails. The package (12.5 MB) is fetched only when a file it pins
+(a runtime or a license file) did not verify, and only those files are extracted from it; a
+package entry that differs from its pin fails the run and is not left in place. A run on a complete
+vision root (a restored cache) fetches nothing at all. The package is fetched into the destination
+under a temporary name and removed before the script ends; nothing is written outside the
+destination.
 
 It writes no configuration file and starts no program: the caller writes its configuration and
 runs its own self-check. On success it prints one JSON line on stdout and exits 0:

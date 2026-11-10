@@ -77,18 +77,33 @@ function New-Package {
     }
 }
 
+# The registry pins every file with the bytes of $script:PackageEntries and $script:ModelSources;
+# -Package names the package (below the test source) that its archive entry serves.
 function Write-Registry {
     param(
         [Parameter(Mandatory)][string] $Path,
         [string] $DropComponent,
-        [hashtable] $ModelSha256Override = @{}
+        [hashtable] $ModelSha256Override = @{},
+        [string] $Package = 'packages/runtime.nupkg'
     )
+    $packageFile = Join-Path $script:SourceRoot $Package
     $runtimePins = @(
         foreach ($name in @('onnxruntime.dll', 'onnxruntime_providers_shared.dll')) {
             $text = $script:PackageEntries["runtimes/win-x64/native/$name"]
             [ordered]@{
                 path = "runtimes/win-x64/native/$name"
                 vision_root_path = "ort/$name"
+                size = [Text.Encoding]::UTF8.GetByteCount($text)
+                sha256 = Get-TextSha256 -Text $text
+            }
+        }
+    )
+    $licensePins = @(
+        foreach ($name in @('LICENSE', 'ThirdPartyNotices.txt')) {
+            $text = $script:PackageEntries[$name]
+            [ordered]@{
+                path = $name
+                vision_root_path = "ort/licenses/onnxruntime/$name"
                 size = [Text.Encoding]::UTF8.GetByteCount($text)
                 sha256 = Get-TextSha256 -Text $text
             }
@@ -112,10 +127,10 @@ function Write-Registry {
             version = 'test'
             license = [ordered]@{ id = 'MIT'; url = 'https://example.invalid/license'; redistribution = 'task_local_cache_only' }
             archive = [ordered]@{
-                url = 'https://example.invalid/packages/runtime.nupkg'
+                url = "https://example.invalid/$Package"
                 relative_path = 'downloads/runtime.nupkg'
-                size = (Get-Item -LiteralPath $script:PackagePath).Length
-                sha256 = Get-Sha256 -Path $script:PackagePath
+                size = (Get-Item -LiteralPath $packageFile).Length
+                sha256 = Get-Sha256 -Path $packageFile
             }
             extract_relative_path = 'runtime'
             max_extract_bytes = 1048576
@@ -133,6 +148,7 @@ function Write-Registry {
                 'ThirdPartyNotices.txt'
             )
             pinned_files = $runtimePins
+            pinned_license_files = $licensePins
         }
         'directml-1.15.4' = [ordered]@{
             kind = 'download_zip'
@@ -214,6 +230,44 @@ function Get-RelativeFiles {
         Sort-Object)
 }
 
+# A successful run's report: exit 0, one JSON line on stdout, Count files.
+function Get-ReportedFiles {
+    param(
+        [Parameter(Mandatory)] $Run,
+        [Parameter(Mandatory)][int] $Count
+    )
+    Assert-True ($Run.ExitCode -eq 0) "exit code $($Run.ExitCode); stderr: $($Run.Stderr)"
+    $lines = @(Get-OutputLines -Text $Run.Stdout)
+    Assert-True ($lines.Count -eq 1) "stdout holds $($lines.Count) lines, expected one JSON line: $($Run.Stdout)"
+    $reported = @(($lines[0] | ConvertFrom-Json -Depth 20).files)
+    Assert-True ($reported.Count -eq $Count) "the report lists $($reported.Count) files, expected $Count"
+    $reported
+}
+
+function Get-WriteTimes {
+    param(
+        [Parameter(Mandatory)][string] $Root,
+        [Parameter(Mandatory)][string[]] $Paths
+    )
+    $times = @{}
+    foreach ($path in $Paths) {
+        $times[$path] = (Get-Item -LiteralPath (Join-Path $Root $path)).LastWriteTimeUtc
+    }
+    $times
+}
+
+function Assert-Unchanged {
+    param(
+        [Parameter(Mandatory)][string] $Root,
+        [Parameter(Mandatory)][hashtable] $Before,
+        [Parameter(Mandatory)][string[]] $Paths
+    )
+    foreach ($path in $Paths) {
+        $item = Get-Item -LiteralPath (Join-Path $Root $path)
+        Assert-True ($item.LastWriteTimeUtc -eq $Before[$path]) "$path was written again"
+    }
+}
+
 $testRootFull = [IO.Path]::GetFullPath($TestRoot).TrimEnd('\')
 if (Test-Path -LiteralPath $testRootFull) {
     throw "TestRoot $testRootFull must not exist"
@@ -240,6 +294,12 @@ try {
         'ppocrv6_dict' = @{ path = 'dict/ppocrv6_dict.txt'; text = "a`nb`nc`n"; target = 'models/PP-OCRv6_medium/keys.txt' }
     }
     New-Package -Path $script:PackagePath -Entries $script:PackageEntries
+    # A package whose LICENSE differs from its pin in content, not in length.
+    $otherLicensePackage = 'packages/runtime-other-license.nupkg'
+    $otherLicenseEntries = [ordered]@{}
+    foreach ($name in $script:PackageEntries.Keys) { $otherLicenseEntries[$name] = $script:PackageEntries[$name] }
+    $otherLicenseEntries['LICENSE'] = $script:PackageEntries['LICENSE'].ToUpperInvariant()
+    New-Package -Path (Join-Path $script:SourceRoot $otherLicensePackage) -Entries $otherLicenseEntries
     Write-ModelSources
     $registry = Join-Path $testRootFull 'registry/windows-tool-sources.v1.json'
     Write-Registry -Path $registry
@@ -283,27 +343,70 @@ try {
     Assert-True (($placed -join '|') -ceq ($expectedPaths -join '|')) "the vision root holds [$($placed -join ', ')]; no DirectML file, package, extra entry or temporary file may remain"
     Complete-Case
 
-    # A second run only verifies: nothing is replaced, and no model file is fetched (their sources
-    # are gone). The license files are checked against the package, which is still served.
-    $script:CurrentCase = 'second-run-only-verifies'
-    $before = @{}
-    foreach ($path in $expectedPaths) {
-        $before[$path] = (Get-Item -LiteralPath (Join-Path $vision $path)).LastWriteTimeUtc
-    }
-    Remove-Item -LiteralPath (Join-Path $script:SourceRoot 'models') -Recurse -Force
-    Remove-Item -LiteralPath (Join-Path $script:SourceRoot 'dict') -Recurse -Force
-    $run = Invoke-Materializer -Arguments (@('-Destination', $vision) + $baseArguments)
-    Assert-True ($run.ExitCode -eq 0) "exit code $($run.ExitCode); stderr: $($run.Stderr)"
-    $lines = @(Get-OutputLines -Text $run.Stdout)
-    Assert-True ($lines.Count -eq 1) "stdout holds $($lines.Count) lines, expected one JSON line"
-    $reported = @(($lines[0] | ConvertFrom-Json -Depth 20).files)
-    Assert-True ($reported.Count -eq $expectedPaths.Count) "the report lists $($reported.Count) files"
+    # A second run on the complete root fetches nothing at all. Its test source is an empty
+    # directory: any fetch, of the package or of a model file, finds no file there and fails the
+    # run, so exit 0 proves that nothing was fetched. Every file is verified and none is replaced.
+    $script:CurrentCase = 'second-run-fetches-nothing'
+    $emptySource = Join-Path $testRootFull 'source-empty'
+    New-Item -ItemType Directory -Path $emptySource | Out-Null
+    $before = Get-WriteTimes -Root $vision -Paths $expectedPaths
+    $run = Invoke-Materializer -Arguments @('-Destination', $vision, '-Registry', $registry, '-ExecutionProvider', 'cpu', '-Attempts', '1', '-TestSourceDirectory', $emptySource)
+    $reported = @(Get-ReportedFiles -Run $run -Count $expectedPaths.Count)
     foreach ($record in $reported) {
         Assert-True ($record.state -ceq 'verified') "$($record.path) is $($record.state), expected verified"
-        $item = Get-Item -LiteralPath (Join-Path $vision ([string]$record.path))
-        Assert-True ($item.LastWriteTimeUtc -eq $before[[string]$record.path]) "$($record.path) was written again"
     }
+    Assert-Unchanged -Root $vision -Before $before -Paths $expectedPaths
+    Assert-True ($run.Stderr.Contains('package of onnxruntime-directml-1.24.4: not fetched, every file it pins verified')) "the run does not say the package was not fetched: $($run.Stderr)"
+    Assert-True (-not ($run.Stderr -match ': fetched |: needed for |attempt \d+ of \d+ failed')) "the run fetched or tried to fetch: $($run.Stderr)"
     Assert-True ((@(Get-RelativeFiles -Root $vision) -join '|') -ceq ($expectedPaths -join '|')) 'the second run changed the set of files'
+    Complete-Case
+
+    # One license file missing, then one changed: the package is fetched and only that file is
+    # placed from it. The test source holds the package alone, so a fetch of any model file would
+    # fail the run; every other file stays verified and unwritten.
+    $script:CurrentCase = 'one-license-file-fetched'
+    $packageOnlySource = Join-Path $testRootFull 'source-package-only'
+    New-Item -ItemType Directory -Path (Join-Path $packageOnlySource 'packages') -Force | Out-Null
+    Copy-Item -LiteralPath $script:PackagePath -Destination (Join-Path $packageOnlySource 'packages/runtime.nupkg')
+    foreach ($change in @(
+            @{ path = 'ort/licenses/onnxruntime/LICENSE'; how = 'missing' },
+            @{ path = 'ort/licenses/onnxruntime/ThirdPartyNotices.txt'; how = 'changed' })) {
+        $licensePath = Join-Path $vision $change.path
+        if ($change.how -ceq 'missing') {
+            Remove-Item -LiteralPath $licensePath -Force
+        } else {
+            Write-Text -Path $licensePath -Text 'changed notices'
+        }
+        $others = @($expectedPaths | Where-Object { $_ -cne $change.path })
+        $before = Get-WriteTimes -Root $vision -Paths $others
+        $run = Invoke-Materializer -Arguments @('-Destination', $vision, '-Registry', $registry, '-ExecutionProvider', 'cpu', '-Attempts', '1', '-TestSourceDirectory', $packageOnlySource)
+        $reported = @(Get-ReportedFiles -Run $run -Count $expectedPaths.Count)
+        foreach ($record in $reported) {
+            $expectedState = if ([string]$record.path -ceq $change.path) { 'downloaded' } else { 'verified' }
+            Assert-True ($record.state -ceq $expectedState) "$($change.how) $($change.path): $($record.path) is $($record.state), expected $expectedState"
+        }
+        Assert-Unchanged -Root $vision -Before $before -Paths $others
+        Assert-True ((Get-Sha256 -Path $licensePath) -ceq (Get-TextSha256 -Text $expected[$change.path])) "$($change.path) does not hold its pinned bytes"
+        Assert-True ($run.Stderr -match "(?m)package of onnxruntime-directml-1\.24\.4: needed for $([regex]::Escape($change.path))\r?$") "the package was not needed for $($change.path) alone: $($run.Stderr)"
+        Assert-True ($run.Stderr.Contains('package of onnxruntime-directml-1.24.4: fetched https://example.invalid/packages/runtime.nupkg')) "the package was not fetched: $($run.Stderr)"
+        Assert-True ((@(Get-RelativeFiles -Root $vision) -join '|') -ceq ($expectedPaths -join '|')) "$($change.how) $($change.path): the set of files changed"
+    }
+    Complete-Case
+
+    # A license file in the package that differs from its pin (same length, other bytes): the run
+    # fails, names the file and both digests, and the file is not left in place.
+    $script:CurrentCase = 'license-differs-from-pin-fails'
+    $otherLicenseRegistry = Join-Path $testRootFull 'registry/other-license.json'
+    Write-Registry -Path $otherLicenseRegistry -Package $otherLicensePackage
+    $otherLicenseVision = Join-Path $testRootFull 'vision-other-license'
+    $run = Invoke-Materializer -Arguments @('-Destination', $otherLicenseVision, '-Registry', $otherLicenseRegistry, '-ExecutionProvider', 'cpu', '-TestSourceDirectory', $script:SourceRoot)
+    Assert-True ($run.ExitCode -ne 0) 'a license file that differs from its pin exited 0'
+    Assert-True (@(Get-OutputLines -Text $run.Stdout).Count -eq 0) "a failed run printed on stdout: $($run.Stdout)"
+    $licensePin = Get-TextSha256 -Text $script:PackageEntries['LICENSE']
+    Assert-True ($run.Stderr -match "FAILED: ort/licenses/onnxruntime/LICENSE: package entry LICENSE has SHA-256 [0-9a-f]{64}, the pin says $licensePin") "the failure does not name the license file and its pin: $($run.Stderr)"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $otherLicenseVision 'ort/licenses/onnxruntime/LICENSE'))) 'a license file that differs from its pin was left in place'
+    $leftovers = @(Get-RelativeFiles -Root $otherLicenseVision | Where-Object { $_ -match '\.download-|\.extract-|\.package-' })
+    Assert-True ($leftovers.Count -eq 0) "temporary files were left: $($leftovers -join ', ')"
     Complete-Case
 
     # A wrong hash: the detector's pin does not match what is served. An old detector already in

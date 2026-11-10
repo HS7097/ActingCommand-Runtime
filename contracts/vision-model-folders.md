@@ -32,11 +32,14 @@ fills or verifies one from the tool registry
 SHA-256 read from it: `ort\onnxruntime.dll` and
 `ort\onnxruntime_providers_shared.dll` (the `pinned_files` of
 `onnxruntime-directml-1.24.4`, the pin of "DirectML runtime" below), that
-package's license files in `ort\licenses\onnxruntime\`, and the OCR folder
-`models\PP-OCRv6_medium\` in the flat layout (`det.onnx`, `rec.onnx`,
-`keys.txt` of `ppocrv6-medium-onnx`). It is the one implementation a resource
-repository's CI calls, at its Tools pin's commit; it writes no configuration
-and loads no model. It places no `DirectML.dll`.
+package's license files in `ort\licenses\onnxruntime\` (the same entry's
+`pinned_license_files`), and the OCR folder `models\PP-OCRv6_medium\` in the
+flat layout (`det.onnx`, `rec.onnx`, `keys.txt` of `ppocrv6-medium-onnx`).
+Every file it places has a pin: a file with its pinned size and SHA-256 is
+kept, and the package is fetched only for a file of it that is not, so a
+complete vision root is verified without a fetch. It is the one implementation
+a resource repository's CI calls, at its Tools pin's commit; it writes no
+configuration and loads no model. It places no `DirectML.dll`.
 
 ## Folder layouts
 
@@ -195,7 +198,8 @@ setting. The Runtime package, the Tools package and the installer do not carry
 these files: whoever places them copies them, and each package's license files
 to `ort\licenses\onnxruntime\` and `ort\licenses\directml\`. For a CPU vision
 root, `Materialize-VisionRoot.ps1` places the two ONNX Runtime files and their
-license files this way ("Vision root" above). The ONNX Runtime
+license files this way, the license files by their own pins
+(`pinned_license_files`; "Vision root" above). The ONNX Runtime
 of a DirectML runtime must be the pinned one (`expected_onnxruntime_sha256` is
 the pin's); `onnxruntime_providers_shared.dll` is required beside it.
 

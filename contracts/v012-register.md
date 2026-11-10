@@ -9996,7 +9996,7 @@ simulation, whose resume the request path refuses. Not tested: a late settlement
 remedy-journal task after more than 64 later runs at host level (the journal's pruning is tested
 alone), the closed record's first window (see "Two windows"), a rollback and its edge.
 
-### 1.297 Slice CI-OCR-1 (0.12.52): a script fills or verifies a CPU vision root from the tool registry (#428; the coordinator's ruling of 2026-11-10 on board #428, not Alice's words: CI runs real OCR on the CPU, under six conditions, and its logic lives once, in the Runtime; coordinator work order `rd-1110/brief-ci-ocr-1.md`)
+### 1.297 Slice CI-OCR-1 (0.12.52): a script fills or verifies a CPU vision root from the tool registry (#428; the coordinator's ruling of 2026-11-10 on board #428, not Alice's words: CI runs real OCR on the CPU, under six conditions, and its logic lives once, in the Runtime; coordinator work order `rd-1110/brief-ci-ocr-1.md`; fix round 1, the license files get pins so that a complete root is verified without a fetch: `rd-1110/brief-ci-ocr-1-fix1.md`)
 
 [vision-model-folders.md](vision-model-folders.md) (section "Vision root") is the contract, and
 `scripts/windows-tools/README.md` (section "CPU vision root") describes the script. 1.297 is the
@@ -10034,13 +10034,15 @@ written) and `-Attempts` (per fetched file, default 3, at least 1). It places
 `ort/onnxruntime.dll` and `ort/onnxruntime_providers_shared.dll` (the `pinned_files` of
 `onnxruntime-directml-1.24.4` at their `vision_root_path`, extracted from the pinned package), that
 package's `LICENSE` and `ThirdPartyNotices.txt` in `ort/licenses/onnxruntime/` (its
-`placement_note`), and `models/PP-OCRv6_medium/det.onnx`, `rec.onnx` and `keys.txt` (the three
-artifacts of `ppocrv6-medium-onnx`, flat layout; the trial built the same folder). A file with its
-pinned size and SHA-256 is kept and reported `verified`; any other is removed if present, fetched to
-a temporary name beside it, checked and moved into place (`downloaded`); a file that fails its check
-is never left in place. The license files have no pin of their own and are compared with the
-package's entries, so every run fetches the package once. A failed fetch is tried again up to
-`-Attempts` times, then the run fails. The script holds no address, size or hash, writes nothing
+`placement_note`; the entry's `pinned_license_files` at their `vision_root_path`), and
+`models/PP-OCRv6_medium/det.onnx`, `rec.onnx` and `keys.txt` (the three artifacts of
+`ppocrv6-medium-onnx`, flat layout; the trial built the same folder). Every file has a pin. A file
+with its pinned size and SHA-256 is kept and reported `verified`; any other is removed if present,
+fetched to a temporary name beside it, checked and moved into place (`downloaded`); a file that
+fails its check is never left in place. The package is fetched only when a file it pins (runtime or
+license) did not verify, and only those files are extracted from it, so a run on a complete root
+fetches nothing; a registry without `pinned_license_files` is refused by name. A failed fetch is
+tried again up to `-Attempts` times, then the run fails. The script holds no address, size or hash, writes nothing
 outside the destination, writes no configuration file and starts no program. Its stdout is one JSON
 line, `{execution_provider, destination, registry {path, sha256}, files [{path, size, sha256, state,
 component}]}`; diagnostics go to stderr; it exits 0 only when every file is in place and verified,
@@ -10060,6 +10062,19 @@ own vocabulary. Of the registry's readers only the new script reads this state (
 `ppocrv6-medium-source`'s state; the Rust readers (`crates/vision-ffi`, `crates/device/build.rs`,
 actingd's adb pin) read other components.
 
+**License pins (fix round 1).** Without a pin of their own the license files were compared with the
+package, so every run fetched the package (12.5 MB), also on a restored cache where every pinned
+file verified, and failed when that one fetch failed. `onnxruntime-directml-1.24.4` now pins them
+in a new member `pinned_license_files`, in the shape of `pinned_files` (`path` in the package,
+`vision_root_path`, `size`, `sha256`, and a `hash_provenance`): `LICENSE` 1094 bytes, SHA-256
+`c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674`, and `ThirdPartyNotices.txt`
+331175 bytes, SHA-256 `fb0af774b4d7cffc5b9d046f2aaeade2f37df2f80abf8033c95dfffcc77a8866`, read
+from the pinned package by this script on a GitHub-hosted Windows runner on 2026-11-11 (two runs,
+identical). A member of its own keeps `pinned_files` the runtime pin of
+`crates/vision-ffi/src/runtime_pin.rs`: its logic test (`gate_407_gpu1a`) holds the three pinned
+runtime files equal to the `pinned_files` of the two components, both ways, and stays true
+unchanged; `Test-WindowsRemoteBuildTools.ps1`, which freezes two `pinned_files` of the entry, too.
+
 **Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): the registry is
 a tool source, the script's output line is no listed interface, and no Runtime program changes.
 
@@ -10070,14 +10085,25 @@ resource repository's CI that calls it fails.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| CIO-1 | `scripts/windows-tools/Materialize-VisionRoot.ps1` (`-Destination`, `-Registry`, `-ExecutionProvider cpu`, `-Attempts`) and its stdout line | tool script | CI-OCR-1 | — | `since` 0.12.52; the one implementation a resource repository's CI calls; seven files, each `verified` or `downloaded`; the package fetched once per run for the license files |
+| CIO-1 | `scripts/windows-tools/Materialize-VisionRoot.ps1` (`-Destination`, `-Registry`, `-ExecutionProvider cpu`, `-Attempts`) and its stdout line | tool script | CI-OCR-1 | — | `since` 0.12.52; the one implementation a resource repository's CI calls; seven files, each `verified` or `downloaded`, each with a pin; the package fetched only for a file of it that did not verify, so a complete root is verified without a fetch (fix round 1) |
 | CIO-2 | `windows-tool-sources.v1.json` `ppocrv6-medium-onnx` `compatibility` `{state: Ready, reason}` | tool source | CI-OCR-1 | — | was `PendingVerification`; `ppocrv6-medium-source` unchanged; `Materialize-TaskToolCache.ps1` unchanged and still pending for this component |
 | CIO-3 | `scripts/windows-tools/Test-MaterializeVisionRoot.ps1`, run by the step `Test Windows artifact tooling` of the Windows exact-SHA build | test | CI-OCR-1 | — | no network: a made-up registry on `example.invalid`, made-up files in a local directory, the script as a child process |
+| CIO-4 | `windows-tool-sources.v1.json` `onnxruntime-directml-1.24.4` `pinned_license_files[]` `{path, vision_root_path, size, sha256, hash_provenance}` | new member of a tool source | CI-OCR-1 (fix round 1) | — | `LICENSE` and `ThirdPartyNotices.txt` at `ort/licenses/onnxruntime/`; `Materialize-VisionRoot.ps1` requires it and refuses a registry without it by name; `pinned_files` and the runtime pin unchanged; no other reader |
 
 Tests (`Test-MaterializeVisionRoot.ps1`, not a Rust gate): `fresh-fill`,
-`second-run-only-verifies`, `wrong-hash-fails-after-attempts`, `missing-registry-entry`,
-`provider-other-than-cpu`. No existing test changed: `Test-WindowsRemoteBuildTools.ps1` pins only
-`ppocrv6-medium-source`'s state.
+`second-run-fetches-nothing` (fix round 1: its test source is an empty directory, so any fetch,
+of the package or of a model file, would fail the run; it exits 0 with every file `verified` and
+none written again, and says the package was not fetched), `one-license-file-fetched` (fix round
+1: `LICENSE` missing, then `ThirdPartyNotices.txt` changed; the package is fetched from a source
+that holds only the package and only that file is placed, `downloaded`, the others `verified` and
+unwritten), `license-differs-from-pin-fails` (fix round 1: a package whose `LICENSE` has the
+pinned length and other bytes fails the run, naming the file and its pin, and the file is not left
+in place), `wrong-hash-fails-after-attempts`, `missing-registry-entry`,
+`provider-other-than-cpu`. `second-run-fetches-nothing` replaces the first round's
+`second-run-only-verifies`, which still served the package to the license files' comparison. No
+test outside this slice changed: `Test-WindowsRemoteBuildTools.ps1` pins only
+`ppocrv6-medium-source`'s state and the entry's two `pinned_files`, and `gate_407_gpu1a` reads
+only `pinned_files`.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

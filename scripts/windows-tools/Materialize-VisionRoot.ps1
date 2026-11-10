@@ -15,16 +15,18 @@ contracts/vision-model-folders.md:
       the pinned_files of onnxruntime-directml-1.24.4 at their vision_root_path, extracted from the
       package that entry pins;
   ort/licenses/onnxruntime/LICENSE, ort/licenses/onnxruntime/ThirdPartyNotices.txt
-      the same package's license files, as the entry's placement_note asks;
+      the same package's license files, as the entry's placement_note asks: the
+      pinned_license_files of that entry at their vision_root_path, extracted from the package;
   models/PP-OCRv6_medium/det.onnx, rec.onnx, keys.txt
       the detector, recognizer and dictionary of ppocrv6-medium-onnx, in the flat layout.
 
-Every address, size and SHA-256 comes from the registry. A file that exists with its pinned size
-and SHA-256 is kept and reported "verified". Any other file is fetched to a temporary name beside
-it, checked for size and SHA-256 and moved into place ("downloaded"); a file that fails its check is
-removed, never left in place. Each fetch has -Attempts attempts. The license files have no pin of
-their own: they are checked against the entries of the pinned package, so every run fetches that
-package once.
+Every address, size and SHA-256 comes from the registry; every file has a pin, the license files
+included (a registry without pinned_license_files is refused). A file that exists with its pinned
+size and SHA-256 is kept and reported "verified". Any other file is fetched to a temporary name
+beside it, checked for size and SHA-256 and moved into place ("downloaded"); a file that fails its
+check is removed, never left in place. Each fetch has -Attempts attempts. The package is fetched
+only when a file it pins (runtime or license) did not verify, and only those files are extracted
+from it; a run on a complete vision root fetches nothing.
 
 It writes no configuration file and starts no program: the caller writes its configuration and runs
 its own self-check. On success it prints one JSON line on stdout (each file with its path, size,
@@ -69,7 +71,7 @@ $script:RegistrySchema = 'actingcommand.windows_tool_sources.v1'
 $script:RuntimeComponent = 'onnxruntime-directml-1.24.4'
 $script:ModelComponent = 'ppocrv6-medium-onnx'
 # contracts/vision-model-folders.md: ort\onnxruntime.dll is required; the package's license files
-# go to ort\licenses\onnxruntime\.
+# go to ort\licenses\onnxruntime\, each pinned in the entry's pinned_license_files.
 $script:RequiredRuntimeFile = 'ort/onnxruntime.dll'
 $script:LicenseDirectory = 'ort/licenses/onnxruntime'
 $script:LicenseFiles = @('LICENSE', 'ThirdPartyNotices.txt')
@@ -423,7 +425,7 @@ function Invoke-VisionRoot {
 
     $files = [Collections.Generic.List[object]]::new()
 
-    # ONNX Runtime: the pinned files at their vision_root_path and the package's license files.
+    # ONNX Runtime: the pinned files and the pinned license files, each at its vision_root_path.
     $runtime = Get-Component -Components $components -Id $script:RuntimeComponent -RegistryPath $registryPath
     $runtimeLabel = "component $($script:RuntimeComponent)"
     $kind = Get-TextField -Object $runtime -Name 'kind' -Label $runtimeLabel
@@ -456,7 +458,7 @@ function Invoke-VisionRoot {
         $files.Add([pscustomobject]@{
             Path = $visionPath
             Component = $script:RuntimeComponent
-            Source = 'package_pinned'
+            Source = 'package'
             Entry = $entryName
             Url = $null
             Size = Get-SizeField -Object $pin -Name 'size' -Label $pinLabel
@@ -467,18 +469,38 @@ function Invoke-VisionRoot {
     if (@($files | Where-Object { $_.Path -ceq $script:RequiredRuntimeFile }).Count -ne 1) {
         Stop-VisionRoot "${runtimeLabel}: pinned_files must place $($script:RequiredRuntimeFile) once"
     }
+    # The license files have pins of their own: a registry without them is refused.
+    $licensePins = @(Get-Field -Object $runtime -Name 'pinned_license_files' -Label $runtimeLabel)
+    if ($licensePins.Count -ne $script:LicenseFiles.Count) {
+        Stop-VisionRoot "${runtimeLabel}: pinned_license_files pins $($licensePins.Count) files, expected $($script:LicenseFiles -join ' and ')"
+    }
     foreach ($license in $script:LicenseFiles) {
+        $licenseLabel = "$runtimeLabel pinned license file $license"
+        $found = @($licensePins | Where-Object {
+            $_ -is [Management.Automation.PSCustomObject] -and
+            $null -ne $_.PSObject.Properties['path'] -and
+            $_.PSObject.Properties['path'].Name -ceq 'path' -and
+            $_.PSObject.Properties['path'].Value -ceq $license
+        })
+        if ($found.Count -ne 1) {
+            Stop-VisionRoot "${runtimeLabel}: pinned_license_files must pin the license file $license once"
+        }
+        $pin = $found[0]
+        $visionPath = Get-TextField -Object $pin -Name 'vision_root_path' -Label $licenseLabel
+        if ($visionPath -cne "$($script:LicenseDirectory)/$license") {
+            Stop-VisionRoot "${licenseLabel}: vision_root_path $visionPath is not $($script:LicenseDirectory)/$license"
+        }
         if ($allowlist -cnotcontains $license) {
-            Stop-VisionRoot "${runtimeLabel}: the license file $license is not in extract_allowlist"
+            Stop-VisionRoot "${licenseLabel}: the entry is not in extract_allowlist"
         }
         $files.Add([pscustomobject]@{
-            Path = "$($script:LicenseDirectory)/$license"
+            Path = $visionPath
             Component = $script:RuntimeComponent
-            Source = 'package_license'
+            Source = 'package'
             Entry = $license
             Url = $null
-            Size = $null
-            Sha256 = $null
+            Size = Get-SizeField -Object $pin -Name 'size' -Label $licenseLabel
+            Sha256 = Get-Sha256Field -Object $pin -Name 'sha256' -Label $licenseLabel
             State = $null
         })
     }
@@ -571,8 +593,8 @@ function Invoke-VisionRoot {
         Initialize-TargetFolder -Root $root -Target $file.Target -Label $file.Path
     }
 
-    # Files with a pin of their own: keep what verifies, remove what does not.
-    foreach ($file in $files | Where-Object { $_.Source -cne 'package_license' }) {
+    # Every file has a pin: keep what verifies, remove what does not.
+    foreach ($file in $files) {
         $state = Test-PlacedFile -Path $file.Target -Label $file.Path -Size $file.Size -Sha256 $file.Sha256
         if ($state -ceq 'verified') {
             $file.State = 'verified'
@@ -585,73 +607,61 @@ function Invoke-VisionRoot {
         }
     }
 
-    # The ONNX Runtime package: pinned files that did not verify, and the license files, which are
-    # checked against the package's entries.
-    $packagePath = Join-Path $root ('.package-' + [Guid]::NewGuid().ToString('N'))
-    $zip = $null
-    try {
-        Receive-File -Label "package of $($script:RuntimeComponent)" -Url $package.Url -Size $package.Size -Sha256 $package.Sha256 -Target $packagePath
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $zip = [IO.Compression.ZipFile]::OpenRead($packagePath)
-        [long] $extractedBytes = 0
-        [long] $extractedFiles = 0
-        foreach ($file in $files | Where-Object { $_.Source -like 'package_*' }) {
-            if ($file.State -ceq 'verified') { continue }
-            $entry = Get-PackageEntry -Zip $zip -Name $file.Entry -Label $file.Path
-            $entrySize = [long]$entry.Length
-            if ($file.Source -ceq 'package_pinned' -and $entrySize -ne $file.Size) {
-                Stop-VisionRoot "$($file.Path): package entry $($file.Entry) holds $entrySize bytes, the pin says $($file.Size)"
-            }
-            if ($entrySize -le 0) {
-                Stop-VisionRoot "$($file.Path): package entry $($file.Entry) is empty"
-            }
-            $extractedBytes += $entrySize
-            $extractedFiles++
-            if ($extractedBytes -gt $package.MaximumBytes -or $extractedFiles -gt $package.MaximumFiles) {
-                Stop-VisionRoot "$($file.Path): extracting it exceeds the registry's bound of $($package.MaximumFiles) files and $($package.MaximumBytes) bytes"
-            }
-            $partial = "$($file.Target).extract-$([Guid]::NewGuid().ToString('N'))"
-            try {
+    # The ONNX Runtime package, fetched only when a file it pins (runtime or license) did not
+    # verify; only those files are extracted from it.
+    $packageLabel = "package of $($script:RuntimeComponent)"
+    $fromPackage = @($files | Where-Object { $_.Source -ceq 'package' -and $_.State -cne 'verified' })
+    if ($fromPackage.Count -eq 0) {
+        Write-Diagnostic "${packageLabel}: not fetched, every file it pins verified"
+    } else {
+        Write-Diagnostic "${packageLabel}: needed for $(@($fromPackage | ForEach-Object { $_.Path }) -join ', ')"
+        $packagePath = Join-Path $root ('.package-' + [Guid]::NewGuid().ToString('N'))
+        $zip = $null
+        try {
+            Receive-File -Label $packageLabel -Url $package.Url -Size $package.Size -Sha256 $package.Sha256 -Target $packagePath
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $zip = [IO.Compression.ZipFile]::OpenRead($packagePath)
+            [long] $extractedBytes = 0
+            [long] $extractedFiles = 0
+            foreach ($file in $fromPackage) {
+                $entry = Get-PackageEntry -Zip $zip -Name $file.Entry -Label $file.Path
+                $entrySize = [long]$entry.Length
+                if ($entrySize -ne $file.Size) {
+                    Stop-VisionRoot "$($file.Path): package entry $($file.Entry) holds $entrySize bytes, the pin says $($file.Size)"
+                }
+                $extractedBytes += $entrySize
+                $extractedFiles++
+                if ($extractedBytes -gt $package.MaximumBytes -or $extractedFiles -gt $package.MaximumFiles) {
+                    Stop-VisionRoot "$($file.Path): extracting it exceeds the registry's bound of $($package.MaximumFiles) files and $($package.MaximumBytes) bytes"
+                }
+                $partial = "$($file.Target).extract-$([Guid]::NewGuid().ToString('N'))"
                 try {
-                    Expand-PackageEntry -Entry $entry -Path $partial -Size $entrySize
-                }
-                catch {
-                    Stop-VisionRoot "$($file.Path): package entry $($file.Entry) cannot be extracted: $(Get-FailureReason -ErrorRecord $_)"
-                }
-                $actual = Get-Sha256 -Path $partial
-                if ($file.Source -ceq 'package_pinned') {
+                    try {
+                        Expand-PackageEntry -Entry $entry -Path $partial -Size $entrySize
+                    }
+                    catch {
+                        Stop-VisionRoot "$($file.Path): package entry $($file.Entry) cannot be extracted: $(Get-FailureReason -ErrorRecord $_)"
+                    }
+                    $actual = Get-Sha256 -Path $partial
                     if ($actual -cne $file.Sha256) {
                         Stop-VisionRoot "$($file.Path): package entry $($file.Entry) has SHA-256 $actual, the pin says $($file.Sha256)"
                     }
-                } else {
-                    $file.Size = $entrySize
-                    $file.Sha256 = $actual
-                    $state = Test-PlacedFile -Path $file.Target -Label $file.Path -Size $file.Size -Sha256 $file.Sha256
-                    if ($state -ceq 'verified') {
-                        $file.State = 'verified'
-                        Write-Diagnostic "$($file.Path): verified against the package, $($file.Size) bytes"
-                        continue
-                    }
-                    if ($state -cne 'missing') {
-                        Write-Diagnostic "$($file.Path): differs from the package ($state); it is replaced"
-                        Remove-Item -LiteralPath $file.Target -Force
-                    }
+                    [IO.File]::Move($partial, $file.Target)
+                    $file.State = 'downloaded'
+                    Write-Diagnostic "$($file.Path): placed from the package, $entrySize bytes"
                 }
-                [IO.File]::Move($partial, $file.Target)
-                $file.State = 'downloaded'
-                Write-Diagnostic "$($file.Path): placed from the package, $entrySize bytes"
-            }
-            finally {
-                if (Test-Path -LiteralPath $partial) {
-                    Remove-Item -LiteralPath $partial -Force
+                finally {
+                    if (Test-Path -LiteralPath $partial) {
+                        Remove-Item -LiteralPath $partial -Force
+                    }
                 }
             }
         }
-    }
-    finally {
-        if ($null -ne $zip) { $zip.Dispose() }
-        if (Test-Path -LiteralPath $packagePath) {
-            Remove-Item -LiteralPath $packagePath -Force
+        finally {
+            if ($null -ne $zip) { $zip.Dispose() }
+            if (Test-Path -LiteralPath $packagePath) {
+                Remove-Item -LiteralPath $packagePath -Force
+            }
         }
     }
 
