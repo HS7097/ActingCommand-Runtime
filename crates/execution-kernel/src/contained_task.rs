@@ -5242,6 +5242,9 @@ impl PreparedContainedTask {
                         // recognized on its last viewport, completing no stage, and the run goes
                         // on there; the page's operations are chosen without it from now on.
                         if let Some(prepared) = operation.prepared_list.as_deref() {
+                            // ACT-1 (§1.6): the frame the last step arrived on is not judged by a
+                            // tap of this step, which settles its own first viewport.
+                            arrived_settled = None;
                             let observed = observation.as_ref().ok_or_else(|| {
                                 ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code())
                             })?;
@@ -5261,7 +5264,7 @@ impl PreparedContainedTask {
                                 })
                                 .map_err(ContainedTaskRunError::Boundary)?;
                             machine
-                                .operation_succeeded(&operation_id, Some(last.page_label.clone()))
+                                .operation_read_in_place(&operation_id, last.page_label.clone())
                                 .map_err(|_| {
                                     ContainedTaskError::new(
                                         SharedCode::ContainedTaskStateInvalid.code(),
@@ -8974,6 +8977,37 @@ impl TaskProgram {
         TaskSchema::at_least(self.schema_version.as_str(), minimum)
     }
 
+    /// The declaration rules of the reading marks (Workflow #335 S5b), refused with
+    /// `contained_task_resource_reading_invalid`: a task schema before `0.8`
+    /// (`schema_version_unsupported`), a task without `scheduling_outcome`
+    /// (`scheduling_outcome_missing`), then each mark's own rule with the detail `<id>:<reason>`
+    /// (Workflow #428 S168-4: a key under `inventory.list.` is
+    /// `resource_reading_fact_key_invalid` or `resource_reading_capacity_fact_key_invalid`), then
+    /// the rules of the marks together (their count, a repeated id or key).
+    fn validate_reading_marks(&self) -> Result<(), ContainedTaskError> {
+        let Some(readings) = &self.resource_readings else {
+            return Ok(());
+        };
+        let invalid = |detail: String| {
+            ContainedTaskError::with_detail(
+                ExecutionKernelCode::ContainedTaskResourceReadingInvalid.code(),
+                detail,
+            )
+        };
+        if !self.schema_at_least(TaskSchema::V0_8) {
+            return Err(invalid("schema_version_unsupported".to_owned()));
+        }
+        if self.scheduling_outcome.is_none() {
+            return Err(invalid("scheduling_outcome_missing".to_owned()));
+        }
+        for reading in readings {
+            reading
+                .validate()
+                .map_err(|code| invalid(format!("{}:{}", reading.id, code.as_str())))?;
+        }
+        validate_resource_readings(readings).map_err(|code| invalid(code.as_str().to_owned()))
+    }
+
     fn validate(
         &self,
         control: &TaskControl,
@@ -9017,21 +9051,7 @@ impl TaskProgram {
         }
         self.validate_task_timeout(control)?;
         self.validate_task_max_steps(control)?;
-        if let Some(readings) = &self.resource_readings {
-            let invalid = |reason: &str| {
-                ContainedTaskError::with_detail(
-                    ExecutionKernelCode::ContainedTaskResourceReadingInvalid.code(),
-                    reason,
-                )
-            };
-            if !self.schema_at_least(TaskSchema::V0_8) {
-                return Err(invalid("schema_version_unsupported"));
-            }
-            if self.scheduling_outcome.is_none() {
-                return Err(invalid("scheduling_outcome_missing"));
-            }
-            validate_resource_readings(readings).map_err(|code| invalid(code.as_str()))?;
-        }
+        self.validate_reading_marks()?;
         // Workflow #384 D2-S3: the adjustments follow the marks' declaration rules, each names
         // one of the task's operations, and one read after its operation has a mark of its key.
         if let Some(adjustments) = &self.resource_adjustments {

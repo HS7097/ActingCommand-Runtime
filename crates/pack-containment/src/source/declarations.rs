@@ -1179,9 +1179,10 @@ impl Declaration<'_> {
 
     /// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings", "Declaration"): a
     /// `read_list` step's structure, on task schema `0.9` only (`UnconsumedField` before it), as
-    /// the step's only effect (`InvalidValue` at `read_list` beside another). The step stays on
-    /// its page (`to` its `from`), declares its `guard`, is never retried and takes none of
-    /// [`READ_LIST_REFUSED_MEMBERS`]. Its `read_list` holds exactly [`READ_LIST_MEMBERS`]: a
+    /// the step's only effect (`InvalidValue` at `read_list` beside another). The step declares
+    /// its `guard`, is never retried and takes none of [`READ_LIST_REFUSED_MEMBERS`] (that it
+    /// stays on its page is [`Self::list_readings`]', which knows the task's game). Its
+    /// `read_list` holds exactly [`READ_LIST_MEMBERS`]: a
     /// candidate layout id, a key feature, a key column and 0..=63 distinct columns that are
     /// tokens, a `fact_key` under `inventory.list.`, a `valid_for_ms` of a fact's lifetime and a
     /// scan with every member but `early_stop`, which is refused. The task-level rules and the
@@ -1220,30 +1221,6 @@ impl Declaration<'_> {
             return Err(self.error(
                 &child(pointer, "guard"),
                 ResourceDeclarationReason::MissingField,
-            ));
-        }
-        // The step stays on its page: `to` names its `from` page, as a string or a set of one.
-        let to = operation
-            .get("to")
-            .filter(|value| !value.is_null())
-            .ok_or_else(|| {
-                self.error(
-                    &child(pointer, "to"),
-                    ResourceDeclarationReason::MissingField,
-                )
-            })?;
-        let to_page = match to {
-            Value::String(page) => Some(page.as_str()),
-            Value::Array(pages) => match pages.as_slice() {
-                [page] => page.as_str(),
-                _ => None,
-            },
-            _ => None,
-        };
-        if to_page.is_none() || to_page != operation.get("from").and_then(Value::as_str) {
-            return Err(self.error(
-                &child(pointer, "to"),
-                ResourceDeclarationReason::InvalidValue,
             ));
         }
         let read = self.object(value, &read_pointer, READ_LIST_MEMBERS)?;
@@ -1338,8 +1315,9 @@ impl Declaration<'_> {
     /// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings", "Declaration"):
     /// the task-level rules of its `read_list` steps, once each step's structure passed: at most
     /// 16 of them (`InvalidValue` at `/operations` for the 17th), a task that declares
-    /// `scheduling_outcome`, each `fact_key` unique among every key the task writes (each mark's
-    /// keys and each other list), and the references in the task's own `candidate_layouts`: a
+    /// `scheduling_outcome`, each step's `to` its `from` page (`InvalidValue` at `to`), each
+    /// `fact_key` unique among every key the task writes (each mark's keys and each other list),
+    /// and the references in the task's own `candidate_layouts`: a
     /// `repeated_anchor` layout on the step's `from` page whose `unknown_identity` is `reject`, a
     /// key feature that is one of its `identity` features and the scan's `identity_feature`, and
     /// columns that read other features of it, each at most once, of value `passed`,
@@ -1402,11 +1380,30 @@ impl Declaration<'_> {
                     .unwrap_or_default()
                     .to_owned()
             };
-            let layout_id = text(read, "layout_id");
             let from = operation
                 .get("from")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            // The step stays on its page: `to` names its `from` page, as a string or a set of
+            // one.
+            let to_page = match operation.get("to") {
+                Some(Value::String(page)) => Some(page.as_str()),
+                Some(Value::Array(pages)) => match pages.as_slice() {
+                    [page] => page.as_str(),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if to_page.is_none_or(|page| {
+                super::normalize_page_rule_id(game, page)
+                    != super::normalize_page_rule_id(game, from)
+            }) {
+                return Err(self.error(
+                    &format!("/operations/{index}/to"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+            let layout_id = text(read, "layout_id");
             let layout = layouts
                 .iter()
                 .find(|layout| {

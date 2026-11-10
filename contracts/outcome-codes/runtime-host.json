@@ -9259,7 +9259,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.12.49",
+      "since": "0.12.50",
       "description": "Workflow #428 S168-4 (contracts/instance-fact-store.md, List reading facts): a publication named a key under inventory.list. (fact_key), the prefix that holds list readings only, which only the Runtime writes at a run's successful end. A client's PublishFact or PublishFacts, from every origin, and any other publication path of the Runtime is refused before the fact write gate and nothing is appended. Not fatal.",
       "common_causes": "A script that copies or restores an instance's facts, list readings included, or a client that tries to write a list by hand.",
       "handling": "Leave the key out: a list under inventory.list. comes only from a package's read_list step, read whole on the device."

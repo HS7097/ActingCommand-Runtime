@@ -143,9 +143,10 @@ pub(super) enum ListRead {
     Missed(ListReadingMiss),
 }
 
-/// `contained_task_resource_reading_invalid` of the operation `operation_id` with `reason`.
-fn refusal(operation_id: &str, reason: &str) -> ContainedTaskError {
-    ContainedTaskError::with_detail(READING_INVALID.code(), format!("{operation_id}:{reason}"))
+/// `contained_task_resource_reading_invalid` of the operation `operation_id`, refused at `member`
+/// (the refused member below the operation, or the task member a rule of the whole task names).
+fn refusal(operation_id: &str, member: &str) -> ContainedTaskError {
+    ContainedTaskError::with_detail(READING_INVALID.code(), format!("{operation_id}:{member}"))
 }
 
 impl TaskOperation {
@@ -195,10 +196,12 @@ impl TaskProgram {
     }
 
     /// The page-graph admission of every `read_list` step's members, before the common
-    /// operation checks: task schema `0.9`, a task that declares `scheduling_outcome`, at most
-    /// 16 such steps, `to` its `from` page, a declared guard, no retry and none of the members
-    /// [`TaskOperation::refused_read_list_member`] names. Each refusal is
-    /// `contained_task_resource_reading_invalid`, `<operation id>:<reason>`.
+    /// operation checks (`contracts/resource-readings.md`, "List readings", "Declaration"):
+    /// task schema `0.9` (`read_list` refused before it), a task that declares
+    /// `scheduling_outcome`, at most 16 such steps (`operations` for the 17th), none of the
+    /// members [`TaskOperation::refused_read_list_member`] names, no retry, a declared guard and
+    /// `to` its `from` page. Each refusal is `contained_task_resource_reading_invalid`,
+    /// `<operation id>:<member>`, the member the declaration gate refuses at.
     pub(super) fn validate_list_reading_members(&self) -> Result<(), ContainedTaskError> {
         let mut count = 0_usize;
         for operation in self
@@ -206,10 +209,10 @@ impl TaskProgram {
             .iter()
             .filter(|operation| operation.declares_read_list())
         {
-            let refuse = |reason: &str| Err(refusal(&operation.id, reason));
+            let refuse = |member: &str| Err(refusal(&operation.id, member));
             count += 1;
             if !self.schema_at_least(TaskSchema::V0_9) {
-                return refuse("schema_version");
+                return refuse(READ_LIST_MEMBER);
             }
             if self.scheduling_outcome.is_none() {
                 return refuse("scheduling_outcome");
@@ -226,12 +229,19 @@ impl TaskProgram {
             if operation.guard.is_none() {
                 return refuse("guard");
             }
+            // The step stays on its page: `to` names exactly its `from` page.
             let to_from = operation
                 .to
                 .as_ref()
                 .and_then(|to| to.normalized().ok())
-                .is_some_and(|pages| pages == [operation.from.clone()]);
-            if !to_from || operation.from == super::linear::ANY_PAGE {
+                .is_some_and(|pages| match pages.as_slice() {
+                    [page] => {
+                        crate::canonical_page_anchor(&self.game, page)
+                            == crate::canonical_page_anchor(&self.game, &operation.from)
+                    }
+                    _ => false,
+                });
+            if !to_from {
                 return refuse("to");
             }
         }
@@ -267,8 +277,8 @@ pub(super) fn prepare_list_readings(
         };
         let id = operation.id.clone();
         let refuse = |reason: &str| refusal(&id, reason);
-        let read: TaskReadList = serde_json::from_value(declared.clone())
-            .map_err(|_| refuse(&format!("{READ_LIST_MEMBER}/declaration")))?;
+        let read: TaskReadList =
+            serde_json::from_value(declared.clone()).map_err(|_| refuse(READ_LIST_MEMBER))?;
         let member = |name: &str| format!("{READ_LIST_MEMBER}/{name}");
         let layout = evaluator
             .candidate_layout(&read.layout_id)
@@ -327,7 +337,9 @@ pub(super) fn prepare_list_readings(
             (control.resolution.width, control.resolution.height),
             control.task_timeout().milliseconds,
         ) {
-            return Err(refuse(&format!("{} {detail}", member("scan"))));
+            // The detail of a select step's static check, below the step's `read_list`:
+            // `read_list/scan <key>=<value>`.
+            return Err(refuse(&format!("{READ_LIST_MEMBER}/{detail}")));
         }
         operation.prepared_list = Some(Box::new(PreparedListReading {
             layout_id: read.layout_id,

@@ -6056,7 +6056,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 HostCode::ContainedTaskResourceReadingFrameMismatch,
                             ));
                         }
-                        let recorded = self.diagnostic_list_miss(frame_id, miss.outcome(&declaration));
+                        let recorded =
+                            self.diagnostic_list_miss(frame_id, miss.outcome(&declaration));
                         self.diagnostic_frame = None;
                         recorded
                     }

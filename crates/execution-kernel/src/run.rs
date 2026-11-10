@@ -784,6 +784,22 @@ impl RunStateMachine {
         })
     }
 
+    /// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings", "Reading"): the
+    /// dispatched operation read its own page and confirmed nothing. The run goes on there, on
+    /// `current_page` as recognized on the operation's last frame; no stage advances and no end
+    /// page ends the run, as the step completes no stage.
+    pub fn operation_read_in_place(
+        &mut self,
+        operation_id: &str,
+        current_page: String,
+    ) -> Result<(), RunDecisionError> {
+        self.require_executing(operation_id)?;
+        self.executing_operation = None;
+        self.current_page = Some(current_page);
+        self.passed_over.clear();
+        Ok(())
+    }
+
     /// #411 B5/B24/B20: whether `page` is one of the current stage's `end_pages`
     /// ([`TaskPhase::is_end_page`]); false without stages. The one end-page check of a run: a
     /// page an operation of the stage confirms ([`Self::operation_succeeded`]) and the run's

@@ -2257,7 +2257,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Workflow #384 D2-S2: a reading mark gave no reading on a frame the run handed to recognition (its text did not parse, its confidence was missing or below the mark's floor, its region or provider failed, or its recognition had not returned when the join timeout ended). The run goes on and settles as it would without the mark; the key's earlier record stays until its own expiry. Written as a recognition error row of the task diagnostic, on the frame. Workflow #428 S168-4 (since 0.12.49): a read_list step's list that could not be read whole (reading_problem list_position_unread, list_duplicate_key or list_rows_exceeded), with reading_id the operation's id and count the unread positions, the repeated keys or 257, written on the step's last viewport; nothing is written for the list.",
+      "description": "Workflow #384 D2-S2: a reading mark gave no reading on a frame the run handed to recognition (its text did not parse, its confidence was missing or below the mark's floor, its region or provider failed, or its recognition had not returned when the join timeout ended). The run goes on and settles as it would without the mark; the key's earlier record stays until its own expiry. Written as a recognition error row of the task diagnostic, on the frame. Workflow #428 S168-4 (since 0.12.50): a read_list step's list that could not be read whole (reading_problem list_position_unread, list_duplicate_key or list_rows_exceeded), with reading_id the operation's id and count the unread positions, the repeated keys or 257, written on the step's last viewport; nothing is written for the list.",
       "common_causes": "The marked page showed no readable value on that frame, or the OCR provider was slow or failed.",
       "handling": "Read the task diagnostic row and the OCR evaluation of the frame; adjust the mark's target or confidence floor in the package if the value was on screen."
     },
@@ -4312,7 +4312,7 @@
       "layer": "kernel",
       "review": "pending",
       "status": "active",
-      "since": "0.12.49",
+      "since": "0.12.50",
       "description": "Workflow #428 S168-4: a read_list step's scan; a scan failure that ends a list reading's run carries it as its stage."
     },
     "load_observation_resources": {
