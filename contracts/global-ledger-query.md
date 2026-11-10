@@ -267,9 +267,12 @@ search reads. In a statement without a per-run link the window's
 bounds are the only sequence range an index can take: whichever index drives
 it (the sequence key, a view index on an equality, a link index), its search
 carries them. A page's first statement spans one sequence and runs whatever
-the read budget; it therefore reads that sequence's rows only. Answers do not
-change: the rows, their order, cursors, read scope and continuation are those
-of the same query before; only plans may differ.
+the read budget; it therefore reads that sequence's rows only. Answers of a
+page its read budget does not cut do not change: the rows, their order,
+cursors, read scope and continuation are those of the same query before; only
+plans may differ. Where the budget cuts a page, the place it stops depends on
+the work its statements' plans needed, so it may stop at another place than
+before, with the rows, cursor, read scope and continuation of that place.
 
 The Runtime does not limit the distance between `from_sequence` and
 `to_sequence`: a client's window width is the client's own rule, and a wide

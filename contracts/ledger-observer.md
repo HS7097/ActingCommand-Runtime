@@ -1470,11 +1470,15 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
     (column, sequence), so whichever drives such a statement (the row id, a view index on an
     equality or `IN`, a link index through `l.sequence=e.sequence`), its search carries the
     segment's two bounds, and any later search reads the one row of a sequence it gave. The
-    ledger's gate row "QP-1" holds this on `EXPLAIN QUERY PLAN` (values bound) for every view,
-    every filter such a page carries and their pairs, on an empty database and a filled one,
-    each without statistics and after `ANALYZE`. A statement with a per-run link is driven by
-    that link's index as DIAG-RUN made it (P32 A-1 above), which reads only that run's records.
-    Rows, their order, cursors, read scope and continuation are unchanged; only plans may differ.
+    ledger's gate row "QP-1" holds this on `EXPLAIN QUERY PLAN` (values bound) for each filter
+    such a page carries, and for the severity bounds, module, excluded types, instance ids and
+    time bounds together, each with every view and with none, on an empty database and a filled
+    one, each without statistics and after `ANALYZE` (STAT4's). A statement with a per-run link
+    is driven by that link's index as DIAG-RUN made it (P32 A-1 above), which reads only that
+    run's records. For a page its read budget does not cut, rows, their order, cursors, read
+    scope and continuation are unchanged; only plans may differ. Where the budget cuts a page,
+    the place it stops depends on the work its statements' plans needed, so it may stop at
+    another place than before, with the rows, cursor, read scope and continuation of that place.
   - **The first statement.** A page's first statement spans one sequence and runs whatever the
     budget (LN-WS above). That is safe since QP-1: every search it makes stays inside its one
     sequence, so it reads that sequence's rows (with a per-run link, the run's rows the link's

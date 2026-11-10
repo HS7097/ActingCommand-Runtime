@@ -9026,8 +9026,10 @@ statement and unchanged. A statement without a per-run link writes its window's 
 `+e.sequence>=?` and `+e.sequence<=?`: every caller's segment lies inside the window, so they
 select nothing more, and the segment's pair is the only sequence range an index can take. The
 link-set page of LN-8d still counts such a term as a sequence condition. A statement with a
-per-run link is unchanged: its time terms were already `+`. The rows, their order, cursors,
-read scope and continuation are the same; only plans may differ.
+per-run link is unchanged: its time terms were already `+`. For a page its read budget does not
+cut, the rows, their order, cursors, read scope and continuation are the same; only plans may
+differ. Where the budget cuts a page, the place it stops depends on the work its statements'
+plans needed, so it may stop at another place than before.
 
 **The first statement** keeps its exemption from the budget: it spans one sequence and every
 search it makes stays inside it, so it reads that sequence's rows, and its work no longer grows
@@ -9045,7 +9047,8 @@ stays [3, 7], since nothing persisted or written changes (SQLite format 2, the t
 indexes and the views are the same); `runtime-client` stays [3, 6], since no request member and
 no answer changes; `actingd-config` gains no key.
 
-**What changes live.** Nothing in answers. A page with a time bound, and a page without a
+**What changes live.** Nothing in answers of a page its read budget does not cut; a page the
+budget cuts may stop at another place. A page with a time bound, and a page without a
 per-run link with a window, may take a different plan. The console may send time conditions
 online only against a Runtime with this slice.
 
@@ -9055,7 +9058,7 @@ and a time bound may again drive a page's statement.
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | QP1-1 | every time term of a history statement written `+e.timestamp_unix_ms` | Runtime-internal behaviour (statement text) | QP-1 | ledger | `since` 0.12.49; `time_bound_never_drives_a_page` |
-| QP1-2 | the window's sequence terms of a history statement without a per-run link written `+e.sequence` | Runtime-internal behaviour (statement text) | QP-1 | ledger | `page_statements_stay_inside_sequence_bounds`; the segment's pair is the only indexable sequence range; LN-8d's link-set page unchanged |
+| QP1-2 | the window's sequence terms of a history statement without a per-run link written `+e.sequence` | Runtime-internal behaviour (statement text) | QP-1 | ledger | `page_statements_stay_inside_sequence_bounds`; the segment's pair is the only indexable sequence range; LN-8d's link-set page keeps its form with such a term: the same test asserts that a link-set statement with `to_sequence` (the resident retention's object load, its artifacts and its frames), built by `history_statement`, has the `e.sequence IN (SELECT sequence FROM (` form |
 | QP1-3 | the guarantee, the first statement's exemption, the window's width and the two reads a window does not bound | contract text agrees with the code | QP-1 | — | ledger-observer.md §15, global-ledger-query.md |
 
 Tests (ledger gate row "QP-1"): `gate_qp1::page_statements_stay_inside_sequence_bounds`,

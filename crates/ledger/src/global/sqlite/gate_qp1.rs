@@ -15,20 +15,24 @@
 // runtime failures of each category, runtime facts and monitor records, on three instances and
 // on none, two records to a time, one record stamped before the whole history and one moved back
 // within it.
-// - `page_statements_stay_inside_sequence_bounds`: for every view and none, and every filter a
+// - `page_statements_stay_inside_sequence_bounds`: for every view and none, and each filter a
 //   page carries without a per-run link (severity bounds, module, excluded types, instance ids,
-//   one instance, an upper, a lower and both time bounds, an event type, event types, a source
-//   and all of them together), with and without a window, the statement of a page's first,
-//   second and widest segment, at the start and in the middle, takes its plan (`EXPLAIN QUERY
-//   PLAN` with its values bound) on an empty database and on the fixture's, each without
-//   statistics and after `ANALYZE`: the plan's first search of the events or links table is a
-//   range that carries the segment's two bounds (by the row id, or as an index's second term),
-//   and any later one such a range or a point read by the sequence the first gave; the text's
-//   only indexable sequence terms are the segment's, and no time term is indexable.
+//   one instance, an upper, a lower and both time bounds, an event type, event types, a source)
+//   and the severity bounds, module, excluded types, instance ids and both time bounds together,
+//   with and without a window, the statement of a page's first, second and widest segment, at
+//   the start and in the middle, takes its plan (`EXPLAIN QUERY PLAN` with its values bound) on
+//   an empty database and on the fixture's, each without statistics and after `ANALYZE` (STAT4's:
+//   the build has `ENABLE_STAT4` and `sqlite_stat4` has rows): the plan's first search of the
+//   events or links table is a range that carries the segment's two bounds (by the row id, or as
+//   an index's second term), any later one such a range or a point read by the sequence the
+//   first gave, and no other step names either table; the text's only indexable sequence terms
+//   are the segment's, and no time term is indexable. LN-8d's link-set statement with
+//   `to_sequence` (the resident retention's object load) keeps the link-set page's form.
 // - `time_bound_never_drives_a_page`: with a lower, an upper and both time bounds, without a
-//   per-run link and with each per-run link, for every view and none, with and without a window,
-//   no plan on those four databases uses the time index, and every time term is written with a
-//   `+`.
+//   per-run link and with each per-run link (run, request and task, correlation, lease, frame,
+//   one instance's run, causation, action, recognition), for every view and none, with and
+//   without a window, no plan on those four databases uses the time index, and every time term
+//   is written with a `+`.
 // - `page_results_unchanged_by_plan_bounds`: paging each filter of the first test, in every view
 //   and none, through windows at the start, in the middle and at the end of the fixture, on the
 //   Runtime writer's reader pool (segments of 128 sequences), gives page by page the rows,
@@ -388,9 +392,11 @@ impl Values {
         ]
     }
 
-    /// The per-run links of the last run, each as a query of its own.
+    /// Each per-run link as a query of its own: the last run's, and a causation, an action and a
+    /// recognition that no fixture record carries (the test reads plans, not rows).
     fn per_run_links(&self) -> Vec<(&'static str, EventQuery)> {
         let run = &self.run;
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
         vec![
             (
                 "a run",
@@ -433,6 +439,33 @@ impl Values {
                 EventQuery {
                     instance_id: Some(self.instances[0]),
                     run_id: Some(run.run),
+                    ..EventQuery::default()
+                },
+            ),
+            (
+                "a causation",
+                EventQuery {
+                    causation_id: Some(
+                        *ids.mint_causation_id().expect("a causation id").transport(),
+                    ),
+                    ..EventQuery::default()
+                },
+            ),
+            (
+                "an action",
+                EventQuery {
+                    action_id: Some(*ids.mint_action_id().expect("an action id").transport()),
+                    ..EventQuery::default()
+                },
+            ),
+            (
+                "a recognition",
+                EventQuery {
+                    recognition_id: Some(
+                        *ids.mint_recognition_id()
+                            .expect("a recognition id")
+                            .transport(),
+                    ),
                     ..EventQuery::default()
                 },
             ),
@@ -520,10 +553,10 @@ impl Fixture {
         let mut frame = None;
         for index in 0..RECORDS {
             let at = time(index);
-            if index % RUN_RECORDS == 0 {
+            if index.is_multiple_of(RUN_RECORDS) {
                 // Every third run names the latest Lab anchor's request and correlation, so its
                 // records are Lab-related through their run.
-                let named = anchor.filter(|_| (index / RUN_RECORDS) % 3 == 0);
+                let named = anchor.filter(|_| (index / RUN_RECORDS).is_multiple_of(3));
                 run = Run::mint(&ids, turn(&issued, index / RUN_RECORDS), named);
             }
             match index % KINDS {
@@ -770,23 +803,28 @@ fn plan(connection: &Connection, sql: &str, values: &[SqlValue]) -> Vec<String> 
 /// the segment's bounds: by the row id (`rowid>? AND rowid<?`), or as an index's second term after
 /// its column's (`col=? AND sequence>? AND sequence<?`, or a skip-scan's `ANY(col)` first); a
 /// later one may also read the one row of a sequence the outer loop gave (`rowid=?`, or an index's
-/// `col=? AND sequence=?`). A scan, an automatic index or any other step is outside. SQLite's plan
-/// writes `>` for `>=` and `<` for `<=`.
+/// `col=? AND sequence=?`). A scan, an automatic index or any other step that names the events or
+/// links table (a Bloom filter built over it, say) is outside; a step that names neither (a
+/// subquery, a sort, `json_each`) is not judged. SQLite's plan writes `>` for `>=` and `<` for
+/// `<=`.
 fn outside_segment(plan: &[String]) -> Vec<String> {
     let mut outside = Vec::new();
     let mut searched = false;
     for step in plan {
         let detail = step.trim_start();
         let words = detail.split(' ').collect::<Vec<_>>();
-        let (Some(&access), Some(&name)) = (words.first(), words.get(1)) else {
-            continue;
-        };
-        if !matches!(access, "SEARCH" | "SCAN") {
+        if !matches!(words.first(), Some(&("SEARCH" | "SCAN"))) {
+            // Any other step that names the events or links table reads it otherwise than by a
+            // search that carries the segment's bounds.
+            if words.iter().any(|word| PAGE_TABLES.contains(word)) {
+                outside.push(format!("other: {detail}"));
+            }
             continue;
         }
-        let table = match (words.get(2), words.get(3)) {
-            (Some(&"AS"), Some(&alias)) => alias,
-            _ => name,
+        let table = match (words.get(1), words.get(2), words.get(3)) {
+            (_, Some(&"AS"), Some(&alias)) => alias,
+            (Some(&name), _, _) => name,
+            (None, _, _) => "",
         };
         if !PAGE_TABLES.contains(&table) {
             continue;
@@ -848,7 +886,8 @@ fn indexable(sql: &str, term: &str) -> usize {
 }
 
 /// Calls `check` with an empty database and with the fixture's (its writer closed), each without
-/// statistics and after `ANALYZE`, and the Lab relations of its head.
+/// statistics and after `ANALYZE` (the fixture's STAT4 statistics, asserted), and the Lab
+/// relations of its head.
 fn on_each_database(
     database: &RuntimeDatabase,
     head: u64,
@@ -878,6 +917,25 @@ fn on_each_database(
         .query_row("SELECT COUNT(*) FROM sqlite_stat1", [], |row| row.get(0))
         .expect("the fixture's statistics rows");
     assert!(statistics > 0, "ANALYZE wrote the fixture's statistics");
+    // The statistics are STAT4's, as on the SQLite the Runtime builds: this build has
+    // `ENABLE_STAT4`, and `ANALYZE` wrote the fixture's samples.
+    let mut pragma = filled
+        .prepare("PRAGMA compile_options")
+        .expect("the compile options' statement");
+    let options = pragma
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("the compile options")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("read the compile options");
+    assert!(
+        options.iter().any(|option| option == "ENABLE_STAT4"),
+        "this SQLite build has no ENABLE_STAT4, so the plans after ANALYZE are not taken with \
+         STAT4 statistics: {options:?}"
+    );
+    let samples: i64 = filled
+        .query_row("SELECT COUNT(*) FROM sqlite_stat4", [], |row| row.get(0))
+        .expect("the fixture's STAT4 samples");
+    assert!(samples > 0, "ANALYZE wrote the fixture's STAT4 samples");
     check("the fixture after ANALYZE", &filled, &lab);
 }
 
@@ -927,6 +985,48 @@ fn page_statements_stay_inside_sequence_bounds() {
         values,
     } = Fixture::new();
     ledger.close().expect("close the writer");
+    // LN-8d's link-set page with a window: its window's sequence term is written with a `+`, and
+    // the statement keeps the form of the link-set page (each dimension's sequences picked in its
+    // own index, `linked_page_sequences`), not the join's. The resident retention's object load
+    // (`load_objects`) builds it so, with `to_sequence`, for its artifacts and then its frames.
+    let windowed_load = EventQuery {
+        to_sequence: Some(values.head),
+        ..EventQuery::default()
+    };
+    let artifact = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_artifact_id()
+        .expect("an artifact id")
+        .transport();
+    for (dimension, set) in [
+        (
+            "artifacts",
+            LinkSet {
+                artifacts: [artifact].into_iter().collect(),
+                ..LinkSet::default()
+            },
+        ),
+        (
+            "frames",
+            LinkSet {
+                frames: [values.frame].into_iter().collect(),
+                ..LinkSet::default()
+            },
+        ),
+    ] {
+        let (sql, _) = history_statement(
+            &HistorySelection::linked(&windowed_load, &set),
+            None,
+            (0, values.head),
+            STATEMENT_ROWS,
+        )
+        .expect("the link set's statement");
+        assert!(
+            sql.contains("+e.sequence<=?") && sql.contains("e.sequence IN (SELECT sequence FROM ("),
+            "{dimension}: a link-set statement with `to_sequence` has the link-set page's \
+             form\n{sql}"
+        );
+    }
     let whole = (values.first, values.head);
     let quarter = (values.head - values.first) / 4;
     let window = (values.first + quarter, values.head - quarter);
@@ -1045,8 +1145,9 @@ fn time_bound_never_drives_a_page() {
             }
         }
     });
-    // Four databases, seven links, three bounds, seven views, two windows and six segments.
-    assert_eq!(taken, 4 * 7 * 3 * 7 * 2 * 6, "the plans taken");
+    // Four databases, no per-run link and nine, three bounds, seven views, two windows and six
+    // segments.
+    assert_eq!(taken, 4 * 10 * 3 * 7 * 2 * 6, "the plans taken");
     assert!(
         driven.is_empty(),
         "{} statements a time bound may drive:\n{}",
