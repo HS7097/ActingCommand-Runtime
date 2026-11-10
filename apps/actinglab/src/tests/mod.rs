@@ -91,6 +91,10 @@ mod gate_434_lab5a;
 // changes.
 #[path = "gate_434_lab5c.rs"]
 mod gate_434_lab5c;
+// Workflow #434 LAB-5G1: the moved serving code answers on a kept connection what the CLI module
+// prints.
+#[path = "gate_434_lab5g1.rs"]
+mod gate_434_lab5g1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
