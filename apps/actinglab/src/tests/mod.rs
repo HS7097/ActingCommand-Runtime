@@ -110,6 +110,10 @@ mod gate_434_lab5e;
 // prints.
 #[path = "gate_434_lab5g1.rs"]
 mod gate_434_lab5g1;
+// Workflow #434 LAB-5F: the authoring rows are listed only where the option lists them, and
+// served everywhere (fix 2).
+#[path = "gate_434_lab5f.rs"]
+mod gate_434_lab5f;
 // Workflow #429 R-6: the core row `task stop` reaches `StopInstanceRun`.
 #[path = "gate_429_r6.rs"]
 mod gate_429_r6;
