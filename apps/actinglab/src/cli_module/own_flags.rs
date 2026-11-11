@@ -2,25 +2,30 @@
 
 //! Workflow #434 LAB-5B2 (register §1.287, "Slice LAB-5B2"): the four kinds of the planned rows of
 //! the debugging and authoring modules, and, for each strict row, what its own command accepts,
-//! read from the constants its check uses.
+//! read from the constants its check uses. Workflow #434 LAB-5B3 ("Slice LAB-5B3"): for each
+//! lenient row, what its own command reads, from its read list.
 //!
 //! - **Strict** ([`STRICT_ROWS`]): actinglab's own command checks the flags of its command line
 //!   against lists in code, each list one named constant beside the command that its check uses.
 //!   [`accepted`] gives the options, the switches and the positionals the code checks.
-//! - **Lenient** ([`LENIENT_ROWS`]): the own command ignores a flag it does not read.
+//! - **Lenient** ([`LENIENT_ROWS`]): the own command ignores a flag it does not read. Each declares
+//!   a read list where it starts (`flag_args::reads`, tests only); [`reads`] gives its options,
+//!   switches and refused flags and the positionals the code checks or reads.
 //! - **Table-driven** ([`TABLE_DRIVEN_ROWS`]): what reaches the code is the row's declared words.
 //! - **No command** ([`NO_COMMAND_ROWS`]): no command of actinglab serves the row yet.
 //!
 //! The test `gate_434_lab5b2` holds each strict row equal to what its command accepts, in both
-//! directions, and every planned row of the two modules in exactly one kind. Nothing else reads
-//! this register, so it is built for the tests only.
+//! directions, and every planned row of the two modules in exactly one kind; `gate_434_lab5b3`
+//! holds each lenient row equal to its command's read list, in both directions. Only the tests and
+//! the test-only recording of `flag_args` read this register, so it is built for the tests only.
 
-use crate::commands::{device_commands, session_record};
+use crate::commands::{device_commands, navigation_recovery, session_record};
+use crate::flag_args::reads::FlagReads;
 use crate::resource_runtime_support::resource_declarations;
 use crate::{
-    package_build, package_cli, package_tool, recognition_regression, replay_cli, resource_restore,
-    resource_runtime_support, resource_verify, runtime_debug, scheduling_cli, signature_cli,
-    standard_pack_cli,
+    drive_cli, lab_package_control, maa_task_graph, package_build, package_cli, package_tool,
+    readonly_cli, recognition_regression, replay_cli, resource_restore, resource_runtime_support,
+    resource_verify, runtime_debug, scheduling_cli, signature_cli, standard_pack_cli,
 };
 
 /// The strict rows: [`accepted`] answers for each of them and for no other row.
@@ -59,8 +64,9 @@ pub(crate) const STRICT_ROWS: [&str; 31] = [
 ];
 
 /// The lenient rows: actinglab's own command reads its flags by name and ignores a flag it does
-/// not read (`FlagArgs` takes any flag), so no list in code says what it accepts. Slice B3 gives
-/// each of these commands a read list, which a test then holds equal to its row.
+/// not read (`FlagArgs` takes any flag), so no list in code says what it accepts. Since slice B3
+/// each of these commands declares a read list where it starts, which its test builds hold its
+/// reads to and `gate_434_lab5b3` holds equal to its row ([`reads`]).
 pub(crate) const LENIENT_ROWS: [&str; 24] = [
     "touch-probe",
     "recover",
@@ -294,5 +300,92 @@ pub(crate) fn accepted(row: &str) -> Option<Accepted> {
         "regression" => from_lists(recognition_regression::REGRESSION_FLAGS, &[], none),
         "replay" => from_lists(replay_cli::REPLAY_FLAGS, &[], none),
         _ => return None,
+    })
+}
+
+/// Workflow #434 LAB-5B3: what the own command of a lenient row reads, from its read list.
+#[derive(Debug)]
+pub(crate) struct Reads {
+    /// The command's read list, which its test builds hold its reads to.
+    pub(crate) list: &'static FlagReads,
+    /// The flags it reads for their value, as the command line writes them.
+    pub(crate) options: Vec<&'static str>,
+    /// The flags it reads as switches.
+    pub(crate) switches: Vec<&'static str>,
+    /// The flags it reads only to refuse them.
+    pub(crate) refused: Vec<&'static str>,
+    /// The option whose value the command also takes as its first positional word, when the
+    /// option is not given (`tap-target <target>` for `--target`).
+    pub(crate) first_positional: Option<&'static str>,
+    /// The positional words the command checks it is given.
+    pub(crate) positionals: Positionals,
+}
+
+/// What the own command of the lenient row `row` reads, from its read list; `None` for every row
+/// that is not lenient. Beside the list, as the code checks or reads them: the count of positional
+/// words (exactly none for `touch-probe`, `debug-package` and `export-evidence`, no count for the
+/// others; `recover --stale-capture` checks exactly none on its own path only) and the option the
+/// first positional stands in for.
+pub(crate) fn reads(row: &str) -> Option<Reads> {
+    let none = Positionals::exactly(0);
+    let unchecked = Positionals::UNCHECKED;
+    let (list, first_positional, positionals): (&'static FlagReads, _, _) = match row {
+        "touch-probe" => (&device_commands::TOUCH_PROBE_READS, None, none),
+        "recover" => (&navigation_recovery::RECOVER_READS, None, unchecked),
+        "tap-target" => (&drive_cli::TAP_TARGET_READS, Some("--target"), unchecked),
+        "navigate" => (&drive_cli::NAVIGATE_READS, None, unchecked),
+        "debug-package" => (&runtime_debug::DEBUG_PACKAGE_READS, None, none),
+        "export-evidence" => (&runtime_debug::EXPORT_EVIDENCE_READS, None, none),
+        "recognize-artifact" => (&readonly_cli::RECOGNIZE_ARTIFACT_READS, None, unchecked),
+        "record start" => (&session_record::RECORD_START_READS, None, unchecked),
+        "record status" => (&session_record::RECORD_STATUS_READS, None, unchecked),
+        "record candidates" => (
+            &session_record::RECORD_CANDIDATES_READS,
+            Some("--step-id"),
+            unchecked,
+        ),
+        "record amend" => (
+            &session_record::RECORD_AMEND_READS,
+            Some("--step-id"),
+            unchecked,
+        ),
+        "record step" => (&session_record::RECORD_STEP_READS, None, unchecked),
+        "package validate" => (&package_cli::VALIDATE_READS, None, unchecked),
+        "package inspect" => (&lab_package_control::INSPECT_READS, None, unchecked),
+        "package bundle" => (&package_build::BUNDLE_READS, None, unchecked),
+        "resource compile-maa" => (&maa_task_graph::COMPILE_MAA_READS, None, unchecked),
+        "operation validate" => (
+            &lab_package_control::OPERATION_VALIDATE_READS,
+            None,
+            unchecked,
+        ),
+        "operation inspect" => (
+            &lab_package_control::OPERATION_INSPECT_READS,
+            None,
+            unchecked,
+        ),
+        "operation explain" => (
+            &lab_package_control::OPERATION_EXPLAIN_READS,
+            None,
+            unchecked,
+        ),
+        "recognize" => (&readonly_cli::RECOGNIZE_READS, None, unchecked),
+        "detect-page" => (&readonly_cli::DETECT_PAGE_READS, None, unchecked),
+        "current-page" => (&readonly_cli::CURRENT_PAGE_READS, None, unchecked),
+        "is-visible" => (&readonly_cli::IS_VISIBLE_READS, Some("--target"), unchecked),
+        "locate" => (
+            &navigation_recovery::LOCATE_READS,
+            Some("--template"),
+            unchecked,
+        ),
+        _ => return None,
+    };
+    Some(Reads {
+        list,
+        options: list.options(),
+        switches: list.switches(),
+        refused: list.refused(),
+        first_positional,
+        positionals,
     })
 }

@@ -319,6 +319,16 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
     .map_err(|error| CliError::package_invalid(error.to_string()))
 }
 
+/// Workflow #434 LAB-5B3 (tests only): the flags [`load`] and [`PackageInput::open`] read, the
+/// package by its path: a part of the read lists of the lenient commands that take a package.
+#[cfg(test)]
+pub(super) const PACKAGE_LOCATOR_READS: crate::flag_args::reads::ReadPart =
+    crate::flag_args::reads::ReadPart {
+        options: &["--package", "--zip"],
+        switches: &[],
+        refused: &[],
+    };
+
 /// Retains the existing publication pin for ZIP material throughout an RPC.
 /// Source directories are located here and verified exclusively by containment.
 /// Workflow #336 PKG-S4 (option 丙): the package by its path only. `--package <path>` is read as

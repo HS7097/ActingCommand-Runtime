@@ -28,6 +28,14 @@ pub(super) fn run_resource(
     args: &[String],
 ) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    // Workflow #434 LAB-5B3: in test builds, the lenient `compile-maa`'s reads are held to its
+    // read list from its first read on.
+    #[cfg(test)]
+    {
+        if sub == "compile-maa" {
+            flags.reading(&maa_task_graph::COMPILE_MAA_READS);
+        }
+    }
     let repo = flags.required_path("--repo")?;
     let resource_root = resolve_resource_root(&repo);
     match sub {
