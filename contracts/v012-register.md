@@ -12647,6 +12647,102 @@ a neutral standard-pack root); `idle2_auto_tests::idle2_auto_c1_the_word_and_the
 test changes. One existing test pins the revision step: `actinglab-architecture`'s
 `the_runtime_declares_each_v0120_interface_revision_once` now pins `actingd-config` [5, 28].
 
+### 1.305 Slice CLI-IN (0.12.55): `--instance <alias>` names the instance on every command (Workflow #434; the audit of 2026-11-11, which found that the module's rows take the instance only as a positional and actinglab's own commands only as the global `--instance`; the coordinator's five rulings of the same day, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §3, on main `a62434a4`; coordinator work order `rd-1111/brief-cli-instance-flag.md`)
+
+The number is the next free one on main `a62434a4`; the coordinator renumbers this section if
+another open slice takes it first.
+
+[lab-two-entries.md](lab-two-entries.md) §9.3 (its first rule, and the global options a core row
+refuses) is the contract; [lab-operations.json](lab-operations.json) records it in the instance
+parameter's `note` of every row it concerns.
+
+**What.**
+
+- **The rule** (`apps/actinglab/src/cli_module/words.rs`: `INSTANCE_FLAG`, `positional_instance`,
+  `instance_first`, `parse` and its reading `read`). On the command line of a row that declares a
+  positional of type `instance`, actinglab's global `--instance <x>` is that positional: after the
+  row's words (`pause --instance <x>`), before them (`--instance <x> pause`, also on `main`'s route,
+  `cli_module::route`, which finds the row behind the flag but on a line with `--via`), or between
+  them and the other positionals. The row's other positionals keep their order wherever the flag
+  stands (`devices bind <handle> --instance <alias>`, `task stop <request> --instance <x>`, `offset
+  <task> <ms> --instance <x>`). A line is read as before until the flag appears; then it is read
+  again with the instance's place left to the flag, so a line without `--instance` is read exactly
+  as before. The flag fills the parameter `instance` the positional filled: the same call, so the
+  same request (the words `lab-ops` is given, the stop, the own command's line).
+- **Both on one line** (ruling 3): the positional and the flag, the same instance or another, in
+  either order, are refused before anything is read or sent: `actingctl_usage_invalid` with
+  `argument_problem` `repeated` and `argument` the positional instance's word (the word in the
+  instance's place); the flag given twice names `--instance`; `--instance` without a value (or with
+  a word beginning `--`) is `value_missing`. On a row actinglab's own command serves under other
+  words the refusal is actinglab's `validation_failed` with the same details (`app launch:
+  repeated <x>`), as LAB-5B4's refusals are. No new code (#420 S4).
+- **The rows that read `--instance` already keep their reading** (`runs` and `monitor set`, whose
+  two `words::KEPT_FLAGS` entries the rule replaces with the same parameter, `KEPT_FLAGS` 9 → 7;
+  `recover`, which handed the global option on; `remedy set` and `wake-test`, which declare
+  `instance` as an option of their own).
+- **How the table records it** (ruling 4): §9.1 puts "a value given as a positional or as a flag"
+  in the parameter's `note`, so every row the rule concerns carries one text there, the text `runs`
+  and `monitor set` carried already: "on the command line also --instance <x>, in place of the
+  positional" (appended to a note the parameter had). The 20 rows actinglab's own command serves
+  under the row's own name carry "on the command line only --instance <x> (actinglab's own command
+  reads no positional instance)" (13 of them before "absent: actinglab's default instance (global
+  --instance)", now "absent: actinglab's default instance; " and that text). Help and completion,
+  which follow this slice, print `[<instance>]` or `--instance <instance>` for the first, and only
+  `--instance <instance>` for the second; the code knows the second as the rows of
+  `engine::COMMANDS` whose command words are the row's name. No new member: one would change the
+  table's schema.
+- **Usage strings.** `help`'s global option reads `--instance <id> (names the instance on every
+  command that acts on one; on an operation row it stands for the row's <instance>, never beside
+  it)` (`cli_information.rs`); the developer text of a refused module line says "a row's <instance>
+  may be written --instance <instance> instead" (`cli_module::USAGE`).
+
+The rows, by kind (offered rows; on Windows and elsewhere alike, since no rescue row takes an
+instance):
+
+| Kind | Rows | The command line after CLI-IN | Before |
+|---|---|---|---|
+| CLI module, instance required (16) | `targets set`, `remedy lift`, `frame`, `frames`, `monitor set`, `monitor clear`, `emu start`, `emu stop`, `emu restart`, `emu selfcheck`, `devices bind`, `devices unbind` (an alias), `task stop`, `run start`, `reset`, `drill` | `<x>` or `--instance <x>` (after, before or between the words), never both | `<x>` only; `monitor set` also `--instance <x>` |
+| CLI module, instance optional (13) | `status`, `facts`, `schedule`, `summary`, `events`, `runs`, `diagnose`, `targets`, `remedy`, `pause`, `resume`, `offset` (its third positional), `packs` | the same; absent: every instance (`facts`: one of the instance, `--program`, `--config`) | `<x>` only; `runs` also `--instance <x>` |
+| An own command under other words, instance required (4) | `app launch`, `app restart`, `app stop` (to `session app`), `recover` (to `session recover`) | the same, handed to the command as its `--instance <x>` | `<x>`; `recover` also `--instance <x>` after the words |
+| An own command under the row's name (20) | `tap`, `swipe`, `long-tap`, `key`, `text`, `touch-probe`, `record step` (instance required); `do`, `ensure`, `wait`, `tap-target`, `navigate`, `observe`, `record start`, `record mark`, `record status`, `record stop`, `record candidates`, `record amend`, `locate` (absent: actinglab's default instance) | `--instance <x>` before or after the words, as before; no positional instance (ruling 2) | unchanged |
+| The instance an option of the row (2) | `remedy set` (one of the instance and `--game`), `wake-test` | `--instance <x>` as the row's option, as before | unchanged |
+
+Left out: `standard-pack compose`, whose own `--instance <alias>=<game>/<server>` is a binding, not
+an instance (unchanged); the nine reserved rows with a positional instance (`targets edit`, `hold`,
+`unhold`, `task run`, `pack-schedule`, `pack load`, `pack unload`, `batch`, `a11y`), which no
+program offers yet: each takes the rule, by its type, when its slice opens it.
+
+**What a person sees.** `actinglab pause --instance neutral.a` and `actinglab --instance neutral.a
+pause` answer what `actinglab pause neutral.a` answers; `actinglab app launch --instance 16384`
+launches as `actinglab app launch 16384` does. `actinglab pause neutral.a --instance neutral.b`
+prints `actingctl_usage_invalid (argument=neutral.a, argument_problem=repeated)` and exits 1,
+sending nothing. Every line that worked before answers as before; `serve --stdio` and MCP (the
+`--via mcp` child and the operations' parameters) see no change.
+
+**Settled where the rulings left it open** (the coordinator's to confirm). (a) The refusal of both
+is `repeated`, as LAB-5A's `runs --instance <x> <y>` already was (`<y>` repeated, a pinned line
+that stays as it was), naming the word in the instance's place, so that `devices bind <alias>
+<handle> --instance <alias>` names `<alias>`, not the handle. (b) `--instance` also stands before the
+row's words, since the core rows refuse or take a global option before or after the words alike
+(LAB-2b fix 3); a line with `--via` that begins with it stays actinglab's own, as before. (c) With
+the flag, the other positionals keep their order wherever it stands, so `run start <package>
+--instance <x>` works. (d) `runs --instance` and `monitor set --instance` without a value, which
+handed `true` on as the instance (a line no Runtime took), are `value_missing` now.
+
+**Interface.** None moves: no table schema change, no new outcome code, no request, ledger or
+configuration shape. `ledger` 7, `runtime-client` 6, `actingd-config` 28, `package` 8 and
+`runtime-outcomes` 1 unchanged.
+
+**Rollback.** Nothing is persisted: a build before this one reads the command line as before
+(`--instance` refused on the module's rows, but `runs`, `monitor set` and `recover`).
+
+Tests (apps gate row "#434 CLI-IN"): `gate_434_cli_in::cli_in_the_flag_reaches_the_request_of_the_positional`,
+`cli_in_both_spellings_on_one_line_are_refused_before_anything_is_sent`,
+`cli_in_the_own_commands_and_the_own_options_read_as_before` and
+`cli_in_serve_and_the_mcp_lines_are_unchanged` (the table this build embeds, neutral aliases, no
+Runtime). No existing test changes: LAB-2's and LAB-5B2's to LAB-5B5's pin no `--instance` refusal
+on a module row, and LAB-5A's `runs --instance <x> <y>` keeps its refusal.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
