@@ -36,7 +36,11 @@
 //!   `Lab-MCP` when MCP's actinglab child (`--via mcp`) adds them, or (Workflow #434 LAB-5G4a) a
 //!   `serve --stdio --front mcp` process, an MCP server's child, whose rescue rows take `Lab-MCP`
 //!   too ([`serve::Front`]).
+//! - **The authoring option** (§8.3; Workflow #434 LAB-5F, [`authoring`]): it decides only
+//!   whether the authoring rows are listed by default; they are served everywhere (fix 2).
 
+// Workflow #434 LAB-5F: the authoring option.
+pub(crate) mod authoring;
 // Workflow #434 LAB-5C: what a row hands `lab-ops` is read by the slice's test.
 // Workflow #434 LAB-5G1: the code that serves these rows moved to `lab_ops::core_ops`; this module
 // gives it what stays actinglab's (`Caller`): the program's place (`place`), the developer text of

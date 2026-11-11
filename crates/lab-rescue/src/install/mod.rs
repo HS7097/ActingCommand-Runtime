@@ -32,6 +32,8 @@ pub(crate) mod files;
 pub(crate) mod guards;
 pub(crate) mod hold;
 pub(crate) mod host;
+// Workflow #421 INST-5 (first slice): the rescue module's `instance add`, its candidate.
+pub(crate) mod instance_add;
 pub(crate) mod journal;
 pub(crate) mod launch;
 pub(crate) mod lock;
@@ -82,6 +84,10 @@ mod gate_r15b_release;
 // unchanged `actingctl install` face.
 #[cfg(test)]
 mod gate_434_lab3;
+// Test-only: Workflow #421 INST-5, the register's named tests of the rescue module's
+// `instance add`.
+#[cfg(test)]
+mod gate_421_inst5;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.

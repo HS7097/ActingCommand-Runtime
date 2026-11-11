@@ -489,7 +489,9 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
     record_flag_gate(invocation)?;
     retired_digest_flag_gate(invocation)?;
     match invocation.command.as_slice() {
-        [cmd] if cmd == "help" => Ok(help_data()),
+        // Workflow #434 LAB-5F (fix 2): the help lists the authoring module's commands only where
+        // the authoring option lists them; they are served everywhere.
+        [cmd] if cmd == "help" => cli_module::authoring::listed_help(help_data()),
         [cmd] if cmd == "version" => Ok(version_data()),
         [cmd] if cmd == "paths" => run_paths(&invocation.global),
         [cmd] if cmd == "capabilities" => run_capabilities(&invocation.global),

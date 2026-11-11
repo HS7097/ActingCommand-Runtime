@@ -8990,6 +8990,15 @@ and `serve --stdio` answers as before.
 
 **LAB-5B2 rollback** (to the release before it). Nothing persisted: code only.
 
+**After LAB-5F fix 1** (the coordinator's ruling of 2026-11-11; "Slice LAB-5F" below):
+`standard-pack check` is a row of the core module. It left `STRICT_ROWS` (now 30) for a fifth list
+beside the four kinds, `CORE_STRICT_ROWS` (the core rows actinglab's own command serves that are
+held equal to their command as the strict rows are: `standard-pack check` alone; `app
+launch|restart|stop` are B1's), and `accepted` still answers for it from
+`standard_pack_cli::CHECK_FLAGS`. `strict_rows_match_their_commands` walks the strict rows, then
+that list; `every_debugging_and_authoring_row_has_one_kind` checks that its rows are planned core
+rows, each once, and that among the core rows the register answers for exactly these.
+
 #### Slice LAB-5B3 (0.12.52): each lenient command declares the flags it reads, held equal to its row
 
 Coordinator work order `rd-1108/arch-013/brief-lab5b3.md`, after the read-only survey
@@ -9349,6 +9358,125 @@ location or revision is added.
 **What LAB-5G1 changes live.** Nothing a person, a client or the Runtime sees.
 
 **LAB-5G1 rollback** (to the release before it). Nothing persisted: code only.
+
+#### Slice LAB-5F (0.12.52): the Lab reads the authoring option
+
+Coordinator work order `rd-1108/arch-013/brief-lab5f.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` §8 (on `76006500`), on main `5041d952`. The contract is
+[lab-two-entries.md](lab-two-entries.md) §8.3 and its new paragraph "Where the Lab runs", the
+coordinator's ruling of 2026-11-10 on #434 (comment 6769399787, point 15): inside an installation
+root the selected configuration's key decides; outside any root the authoring module counts as
+installed. Since fix 2 (the coordinator's ruling of 2026-11-11) the key decides only whether the
+authoring operations are listed by default: a build that has the authoring code serves them
+everywhere.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5F-1 | what decides "installed": `lab_ops::locate::authoring_module()` and `authoring_module_from(program, process)`, answering `AuthoringModule::{Unrooted, Configured {config, installed}}` or the failure | behaviour, operation layer | LAB-5F | actinglab | public in `crates/lab-ops`, so that the later MCP server (G), another program, calls the same function. The places are `locate`'s (a root's selection, a kept build, a single-location root's `runtime\` or `tools\`; `locate_from` now shares `installed_place` and `selected_config` with it, unchanged in what it answers). Outside them: `Unrooted`, installed. Inside: the selected configuration's `lab_module_authoring` (`AUTHORING_KEY`, the key of `runtime-config`'s `lab_module`), read at each call: `true` installed; absent, `null` (as actingd reads it) or `false` not installed. A selection that cannot be read is the contract's install code; a configuration that cannot be read (or, under a selection, whose bytes are not those the selection names) `config_read_failed`, one that is no JSON object or whose key is not a boolean `config_decode_failed`, each with `path`, the failure as cause: not installed, never read as installed |
+| L5F-2 | no refusal: a call of an authoring row reaches its command wherever the Lab runs, whatever the key says | behaviour | LAB-5F fix 2 | — | the coordinator's ruling of 2026-11-11 (after an outside audit): in a build that has the authoring code the authoring operations are always served; the key decides only whether they are listed by default, and not listed is not refused. Removed in fix 2: `cli_module::authoring::admit` (with `row_of` and the refusal's builder) and its call first in `crate::execute`, which refused a call of an authoring row with `lab_command_option_disabled` inside a root whose key was absent or `false` or could not be read. Why: every build has the authoring code (there is no cargo feature), and nothing can write the key (the rescue module's writers are not built; `config set` refuses a key read at assembly), so a person would have had to edit the configuration file by hand to use a command already in the program: a switch that refused with no way to turn it, and not what Alice's answer 2 on #434 asks. Every call of an authoring row now reaches its command: actinglab's own words, a row's short words, `serve --stdio` (`engine::line`) and MCP's `--via` child |
+| L5F-3 | where rows are not listed: `cli_module::authoring::listed_help` and `listed` | behaviour | LAB-5F | — | `help` (its `commands`, `command_options` and `compatibility_notes`), `list commands` and `capabilities`' `commands` leave out, where the module is not installed, every entry whose command words begin with an authoring row's own command, and a group one word shorter than one (`record`, `session record`). The other listings and `help_data()` itself are unchanged. `serve --stdio` lists nothing; actinglab has no other place that lists operations by module. `actingctl mcp-serve`'s `tools/list` lists by tier and is not changed (its author tools start actinglab, which serves them). Fix 2: where the place's option cannot be read (a selection or configuration that does not read, a key that is no boolean) the rows are left out and the command that lists writes one developer line, `WARN actinglab: <the failure with its path and its cause> …` (`authoring::unread_option_line`), as actinglab's other warnings beside an answer are written; it refuses nothing because of it |
+| L5F-4 | the rows listed by the key | — | LAB-5F | — | exactly the offered rows whose `module` is `authoring`: 34 since fix 1 (`observe`; `record start`, `mark`, `status`, `stop`, `candidates`, `amend`, `step`; `package check`, `preflight`, `validate`, `inspect`, `bundle`, `loading`, `fmt`, `edit`; `resource catalog`, `validate`, `verify`, `restore`, `compile-maa`; `standard-pack compose`; `scheduling compile`, `timeline`; `operation validate`, `inspect`, `explain`; `regression`; `replay`; `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`). `record draft` (LAB-5) and the four reserved rows are not offered. `standard-pack check` is a core row since fix 1 (L5F-7), listed everywhere |
+| L5F-5 | `lab_command_option_disabled` | outcome catalog | LAB-5F | — | not emitted: since fix 2 no code path emits it for the authoring option. Its catalog entry is main's again, text and all (the first round had rewritten its description, causes and handling for the refusal); its values stay `operation` and `lab_option` |
+| L5F-6 | contract text | contract | LAB-5F | — | §8.3, "Where the Lab runs"; fix 1: §8.3, "Which operations", and §9.3's four offline rows that take `--root` or `--state-root` (one core, three authoring); fix 2: §8.3's first two bullets, "Where the Lab runs" and the writers' bullet (they set what is listed), and, for the same meaning, §2.5's sentence on the key, §8.1's row of the authoring module and §12's line on the code |
+| L5F-7 | `standard-pack check`'s `module`: `core` (was `authoring`) | contract table | LAB-5F fix 1 | — | the coordinator's ruling of 2026-11-11: an operation the Lab core needs, since the rescue module's `place` runs it as its post-check; nothing else of the row changes. What follows from it in the code: `core_ops::serves` leaves it to actinglab's own command, as it leaves `app launch\|restart\|stop` (else `serve --stdio` would hand it to `lab-ops`); `engine::COMMANDS` keeps its entry (its description names it among the core rows); the listings (`authoring::own_commands`) no longer take it, as they follow the table; LAB-5B2's register moves it to `own_flags::CORE_STRICT_ROWS`. `lab_ops_table_complete` (its `entries` stay `["lab"]`: it sends no request) and `lab_ops_core_rows_served_by_lab_ops` (slice `LAB-2`, not `LAB-1` or `LAB-1b`) are unaffected. Its command line `standard-pack check --root <dir>` and its short words accept, refuse and print what they do on main |
+
+**What an operator sees after deploy** (since fix 2). The authoring operations are served
+everywhere, inside an installation root or outside any, whatever the key says: recording, package
+and resource checks and the other authoring operations run through the installed actinglab (also
+by today's MCP author tools, which start it). They are listed (`help`, `list commands`,
+`capabilities`) only with the key: outside any root, or inside one whose selected configuration
+says `lab_module_authoring: true`. Production's key is true, so nothing a person or a client sees
+changes there. On an installation without the key the authoring rows are not listed in `help` and
+still run; where its configuration cannot be read, a listing says so on its developer line.
+`standard-pack check`, a core row since fix 1, is listed and served everywhere. To list the
+module, the selected configuration gets `"lab_module_authoring": true` (the installer's Lab page;
+until the rescue module's writers exist, through the configuration replace the deploy uses); it is
+read at the next listing, no restart needed. An unpacked Tools package outside any root is
+unaffected.
+
+**`standard-pack check` is a row of the core module** (fix 1; the coordinator's ruling of
+2026-11-11). The rescue module's `place` (and `actingctl install pack place`, the same code,
+`crates/lab-rescue/src/install/place.rs`) runs `<root>\tools\actinglab.exe --json standard-pack
+check --root <game root>` as its post-check, and an installation without the authoring module must
+still place packages (§8.1: the authoring module is detachable, the rescue module part of the Lab
+core). So the row's `module` is `core` (L5F-7): it is always listed and served, whatever the key
+says, and 34 rows are listed by the key (L5F-4); `standard-pack compose` stays an authoring row.
+`place.rs`'s post-check needs no change: its command line is that row's, and since fix 2 nothing
+stands before any command (L5F-2), so the check reaches its command wherever the root's key
+stands.
+Nothing else of the rescue or core module starts actinglab with an authoring row: the rescue
+module's other children are actingd (`unlock`) and, for `--detach`, its own rescue row run again;
+`lab-ops`' `app launch|restart|stop` run actinglab's `session app`, a core row's command (MCP's
+author tools, in actingctl's MCP front, start actinglab with authoring rows, as "What an operator
+sees after deploy" says). The debugging
+and core lines that add to a recording (`do --capture --record`, `capture --record`, `session app
+--record`) are listed everywhere; they need a recording `record start` began.
+
+**Not in this slice** (main at the base): `lab_module_debugging` is still read by actingd and the
+key table, with no retirement (`actingd-config` stays 27; 28 is later); the rescue module's
+writers (`new --lab-authoring`, `config file lab-options`) are planned rows with `params_more`,
+not offered, and `actingctl install config lab-options` is documented with its codes registered
+but has no code; the installer's check box and the console are in the UI's repository (the key
+table lists both options at `advanced`); main has no cargo feature `authoring`.
+
+**Tests.** New: apps row "#434 LAB-5F", `gate_434_lab5f::lab5f_authoring_rows_follow_the_installed_module`
+and `gate_434_lab5f::lab5f_serve_answers_as_the_command_line` (actinglab's binary tests; made-up
+installation roots in a temporary folder, read through a test-only seam
+`cli_module::authoring::test_place`; no Runtime, no device, no clock, no sleep). No existing test
+changed, and none calls an authoring row inside a made-up root without the key: the in-crate
+tests and the integration tests run outside any root (`resource_production_retirement` names a
+root with a selection that does not read, and its lines are refused by the parser first). Fix 1
+adds to both: in every place, the key absent, `false` and a configuration that cannot be read
+included, `standard-pack check` is listed (`help`'s commands and options, `list commands`,
+`capabilities`) and its call reaches its command, on the command line and in `serve --stdio`
+(its own `standard_pack_root_invalid` for a game folder with no root file, the same line on
+both); `standard-pack compose` is listed only where the module is installed and refused, writing
+nothing, where it is not (the case of `help`'s options that named `standard-pack check` among the
+authoring commands names `standard-pack compose`). Adapted by fix 1, since the row's module
+changes on purpose: `gate_434_lab5a::lab5a_rows_take_what_they_took` (the core rows actinglab's
+own command serves are `app launch|restart|stop` and now `standard-pack check`) and the two tests
+of `gate_434_lab5b2` (the fifth list, "After LAB-5F fix 1" under LAB-5B2 above). Fix 2 changes
+the slice's two tests only, since the requirement they pin changes on purpose (the ruling, L5F-2):
+where they asserted a refusal (the key absent or `false`, a value that is no boolean, a
+configuration that is no JSON or missing) they assert that the same call reaches its command, with
+the exit and outcome code it has outside any root and never `lab_command_option_disabled`
+(`package fmt` writes, on the line and through MCP's `--via` child; `regression` by its short
+words, `standard-pack compose` and `observe --capture` answer their commands; `record start` makes
+its state directory; `serve --stdio` answers `package fmt --check` with the command line's line,
+its command's `package_fmt_check_failed`, and `standard-pack compose` with its command's code);
+the listings still leave the rows out there; where the option cannot be read, the developer line
+names the failure with the configuration's path (`authoring::unread_option_line`). The checks of
+what each place reads as (`authoring::module()`, so `lab_ops::locate::authoring_module_from`) stay.
+
+**Interface.** None raised: no request, key, schema or wire shape changes; no code, key, location
+or vocabulary token is added.
+
+**LAB-5F fix 1** (coordinator work order `rd-1108/arch-013/brief-lab5f-fix1.md`): main merged
+(LAB-5B2 #1574, LAB-5C #1573, VIS-LOAD-1 #1572), both sides kept in this register (main's
+subsections first), in `apps.toml`, in `tests/mod.rs` and in `cli_module.rs`; `standard-pack
+check` made a row of the core module (L5F-7), so 34 rows are gated (L5F-4); LAB-5B2's register
+given its fifth list; the texts corrected (§8.3, §9.3, this subsection, `apps.toml`'s rows of
+LAB-5B2 and LAB-5F). Fix 1 adds no row, code, key or interface, and no command line changes what
+it accepts, refuses or prints but by the gate, which no longer takes `standard-pack check`.
+
+**LAB-5F fix 2** (coordinator work order `rd-1108/arch-013/brief-lab5f-fix2.md`; the coordinator's
+ruling of 2026-11-11, L5F-2): main merged (LAB-5G4a and LAB-5E, #1580), both sides kept: in this
+register main's subsections LAB-5G4a and LAB-5E, then this one (the note "After LAB-5F fix 1"
+stays under LAB-5B2), `apps.toml`'s rows, `tests/mod.rs`'s `mod` lines and `cli_module.rs`'s
+description, main's first; `contracts/lab-operations.json` merged by itself, LAB-5E's `help` lines
+and `standard-pack check`'s `module` `core` both kept (this slice adds no row, so LAB-5E's test,
+which wants a `help` on every offered row, needs nothing more). The refusal removed (L5F-2):
+`cli_module::authoring` keeps only what the listing needs (`module`, the own commands of the
+authoring rows, `listed`, `listed_help`, the developer line of an option that cannot be read, the
+test seam). `lab_command_option_disabled`'s catalog entry and its declaration in
+`apps/actinglab/src/codes.rs` are main's again (L5F-5). The texts corrected (§8.3 and the
+sentences that restate it, L5F-6; L5F-2 to L5F-7 and this subsection; `apps.toml`'s row). Fix 2
+adds no row, code, key or interface; no command line changes what it accepts, refuses or prints
+but the authoring rows' calls, which reach their command where the first round refused them, and
+a listing whose option cannot be read, which writes its developer line.
+
+**LAB-5F rollback** (to the release before it). Nothing persisted: the build before it does not
+read the key and lists every row.
 
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
@@ -11417,6 +11545,110 @@ an overview near the budget starts cutting a little earlier, in the order it alr
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | R0B2-1 | `instances[].activity?` | `actingctl overview` / `ac_overview` answer | R-0b2 | R-0b2 | `since` 0.12.36; from the one Status read; never cut |
+
+### 1.300 Slice INST-5, first slice (0.12.52): the Lab's rescue module adds an emulator instance, committed as a configuration replacement (Workflow #421; the desktop program's "add account / device" button is disabled with the words "wait for the Runtime's support; edit the configuration file by hand for now", and adding an instance today means editing two places of the file and restarting; the read-only survey of 11-11 found that a first version fits today's interface revisions; the coordinator's ruling of 11-11, not Alice's words, that the new instance starts paused; coordinator work order `rd-1111/brief-inst5.md`, read on main `c0edc8b2`)
+
+[install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh root" ("Instances,
+the first slice") and "The Lab's rescue module", [lab-two-entries.md](lab-two-entries.md) §5 and
+§7, and the row `instance add` of [lab-operations.json](lab-operations.json) are the contract. The
+number is 1.300 and the section stands here, after §1.243, because open PR #1582 (SCHED-C1)
+holds 1.299 at the end of section 1; on `c0edc8b2` §1.298 is VIS-LOAD-1. No persisted ledger
+shape, wire shape, configuration key or shape, code, location or vocabulary is new.
+
+**What it does.** `actinglab instance add <alias> --game <g> --server <s> --mumu-index <n>
+--touch-backend <b> --capture-backend <b>` (the rescue module, entry `lab` only; the UI starts it
+as a child with the initiator `Lab-救急`), every parameter required, none with a default. It reads
+the selected configuration, refuses before writing anything an alias either place has, an
+emulator index an entry binds, a game no game root of `standard_packs.root` binds by a
+`bundle.json` the contract crate reads, a server none of that bundle's packs names, and a
+configuration without a policy row to take the host and the capabilities from (each
+`instance_invalid`), and with no Runtime running `runtime_not_running`. It then composes the
+candidate: the entry `{alias, instance_id, instance_index, touch_backend, capture_backend}` and the
+row `{instance_id: <alias>, server_id, game_id, host_id, available: true,
+capability_operation_ids, preferred_task_ids: []}` together (both places, until INST-R), the
+`instance_id` minted and checked against the live file's ids and those the root's journals
+recorded as added. The candidate is written beside the live file
+(`actingd.config.json.new-<ms>.part`) and committed by `config replace`'s path, not a second one:
+check-config (its refusal relayed whole as `config_refused_by_target`'s cause), the hold of every
+unpaused instance (`lab-instance-<ms>`), the close, the swap (the candidate is the swap's part;
+the replaced file kept as `actingd.config.json.prev-<ms>`), the start and its checks, all one
+`config_replace` journal with the initiator and the input `instance_add`. After the start and
+before `alive` and the release, the new instance is paused with its own reason `instance.added`
+(the reason's form: [scheduling-pause.md](scheduling-pause.md), `pause_reason`); the release hands
+back only the hold's pauses, so the new instance stays paused until a person resumes it, and every
+pause that existed before, of any holder, is there after the restart unchanged.
+
+**Why it starts paused** (the coordinator's ruling of 11-11): a new account must not start running
+tasks the moment it is added, and an installation whose other instances are paused must not gain
+an unpaused one by this command. **The window that remains**: between the new Runtime's readiness
+and the pause (the post-start checks and one status read) the new instance is not paused; a
+stopped Runtime takes no pause of an alias it never registered, and only a start that knows the
+instance (INST-R's Runtime half) can start it held. If the instance cannot be paused (the started
+Runtime did not register it, or refused the pause) the command ends `post_check_failed` (`alias`,
+`count` 1) with the hold kept and `next.pause_added`, the core pause as actingctl runs it.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): `install-cli`
+takes the instance commands into revision 1 without a raise (its row), the configuration's shape
+does not change (the entry and the row are existing members), and the journal stays
+`actingcommand.install-operation.v1` with one more input of an existing kind (the LAB-3 ruling of
+2026-11-10: no `install-root` raise for single-location journals). The outcome catalog:
+`install_command_refused` takes the existing keys `server` and `instance_index`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| INST5-1 | the rescue row `instance add` (six parameters, `help`, irreversible, Runtime required, the requests of `config replace`) | operation table row opened | INST-5 | `crates/lab-rescue` (`rescue::SERVED`) | `since` 0.12.52; no `params_more`; `instance remove` stays reserved |
+| INST5-2 | the configuration candidate `actingd.config.json.new-<ms>.part` beside the live file | installer file (a kept part when refused) | INST-5 | `install::instance_add::stage` | consumed by the swap on success |
+| INST5-3 | the journal input `instance_add {alias, instance_id, game, server, instance_index, touch_backend, capture_backend, capabilities_from, pause_reason}` of a `config_replace` journal | installer journal member | INST-5 | `install::config_swap::open` | read back to keep minted ids unique |
+| INST5-4 | the pause of the added instance, reason `instance.added` | behaviour (a `PauseScheduling` on the CLI channel) | INST-5 | `rescue::pause_added` | the Runtime records it as every pause (`host.scheduling_pause`); no ledger record of the installer's own |
+| INST5-5 | `install_command_refused` values `server`, `instance_index` | outcome catalog addition (existing keys) | INST-5 | `install::instance_add` | `instance_invalid` only |
+
+**At deploy.** The rescue module offers `instance add` (`actinglab instance add …` and `serve
+--stdio`); nothing else changes, no configuration key, no interface. Production keeps adding instances by hand until the coordinator says otherwise (the
+rescue module's composites are not used on the production root before LAB-7, install-cli.md,
+"Journals across versions").
+
+**What an operator sees after deploy.** On a root whose Runtime runs: one line, `install_command_done`
+(`install_instance_add`, the operation id, `alias`, `game`), with the steps `check_config`, `swap`,
+`pause_added`, `alive` and `release`, the `backup` (the kept `actingd.config.json.prev-<ms>`) and
+`added` (the alias, the minted `instance_id`, game, server, index, backends, the row the
+capabilities came from); the configuration names the instance in `instances` and
+`policy.facts.instances`; the status shows it paused with `instance.added` and every other instance
+as before the command. A refusal changes nothing of the installation: the file, the journals and
+the Runtime stay as they were (a candidate check-config refused stays beside the live file and
+`leftovers` lists it). To let the new account run: resume it from the console, or `actingctl resume
+--state-root <s> --instance <alias>`.
+
+**Rollback.** Of the instance: `config restore <backup>` puts the kept file back by the same path
+and restarts under a hold; its post-start checks judge the configuration and the pauses from before
+the restore, so the instance it removes fails `bindings` and `pauses`: it ends `post_check_failed`
+with the previous configuration running and its hold kept, and `release-hold <its reason>` hands
+the hold back (the Runtime drops the pause of the alias no longer registered). Of the release (to
+0.12.51): nothing persisted changes shape; a configuration that gained an instance stays valid
+(both places are written), the instance's pause stays restored at every start, and an installer
+of 0.12.51 reads the `config_replace` journal as before (its `inputs` are free JSON).
+
+Tests (apps gate row "#421 INST-5"), on the fake host and Runtime of `fixture.rs`, which gains
+`registers_at_start` (the aliases the next start registers; none by default, no existing test
+changes): `gate_421_inst5::inst5_the_added_instance_is_registered_and_paused_after_the_restart`,
+`inst5_a_duplicate_alias_or_index_is_refused_and_nothing_changes`,
+`inst5_a_candidate_check_config_refuses_changes_nothing`,
+`inst5_the_prev_file_is_kept_and_equals_the_old_file`,
+`inst5_a_pause_from_before_stays_with_its_reason_and_revision` and
+`inst5_the_journal_carries_the_initiator_and_what_was_added`. No existing test changed.
+`config replace` and `config restore` run the same code as before through the shared commit
+(`rescue::commit`), with no `instance_add` input and the same steps, members and outcomes.
+
+**Fix round 1** (coordinator brief `rd-1111/brief-inst5-fix1.md`; main `d70edfb9` merged in). The
+outcome guard's G3 refuses a `json!` key named `code`, `reason`, `category`, `operation`, `stage`
+or `boundary`, or ending `_code`, `_reason`, `_operation` or `_stage`; the result of the step
+`pause_added` (`reason`, six places) and `added` (`pause_reason`) were such keys. Both are now
+serde records whose reason is the name type `SchedulingPauseReason`, as the hold's records keep a
+reason (`install::hold`: `PauseRecord`, `HoldReport`, `ReleaseEvidence`): `rescue::PauseAddedResult`
+and `install::instance_add::AddedRecord`, made JSON by `install::hold::record_value` (now
+`pub(crate)`); `Added` carries the reason it records. Every member keeps its name, place and value
+(the step's `alias`, `reason`, `set`, `runtime`, `registered`, `already_paused`, `drained`;
+`added.pause_reason` and the journal input's), so no reader, test or text changes, and the guard's
+allow list is not touched.
 
 ### 5.1 Capacity of `config.parameters`
 
