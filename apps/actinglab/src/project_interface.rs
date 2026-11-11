@@ -362,7 +362,7 @@ mod tests {
         let config =
             assemble_runnable_config(&interface, &selection).expect("config should assemble");
 
-        assert_eq!(config.project_id, "ak");
+        assert_eq!(config.project_id, "fixture-game-a");
         assert_eq!(config.operation.id, "daily");
         assert_eq!(config.operation.task_path, "operations/daily/task.json");
         assert_eq!(config.options.get("server"), Some(&json!("jp")));
@@ -404,7 +404,7 @@ mod tests {
     fn project_interface_rejects_misspelled_default_key() {
         let json = r#"{
             "schema_version": "actinglab.project_interface.v0.1",
-            "project_id": "ak",
+            "project_id": "fixture-game-a",
             "options": {
                 "server": {
                     "defualt": "cn",
@@ -496,7 +496,7 @@ mod tests {
     fn sample_interface() -> ProjectInterface {
         ProjectInterface {
             schema_version: "actinglab.project_interface.v0.1".to_string(),
-            project_id: "ak".to_string(),
+            project_id: "fixture-game-a".to_string(),
             options: BTreeMap::from([(
                 "server".to_string(),
                 ProjectOption {
@@ -516,7 +516,7 @@ mod tests {
                 "daily".to_string(),
                 OperationSpec {
                     task_path: "operations/daily/task.json".to_string(),
-                    profile: Some("ak-b".to_string()),
+                    profile: Some("fixture-game-a-b".to_string()),
                 },
             )]),
             recognition: BTreeMap::from([
@@ -531,7 +531,7 @@ mod tests {
                     "pages".to_string(),
                     RecognitionSpec {
                         pack_path: None,
-                        page_set_path: Some("pages/ak.pages.json".to_string()),
+                        page_set_path: Some("pages/fixture-game-a.pages.json".to_string()),
                     },
                 ),
             ]),

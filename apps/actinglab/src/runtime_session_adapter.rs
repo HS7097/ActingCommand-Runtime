@@ -514,8 +514,16 @@ mod tests {
         let control = RuntimeControlPlaneStatus::new(
             owner_epoch,
             vec![
-                RuntimeInstanceStatus::new("ak.cn", instance_id, false, 2, false, false, false)
-                    .expect("status"),
+                RuntimeInstanceStatus::new(
+                    "fixture-game-a.s1",
+                    instance_id,
+                    false,
+                    2,
+                    false,
+                    false,
+                    false,
+                )
+                .expect("status"),
             ],
         )
         .expect("control");
@@ -524,7 +532,7 @@ mod tests {
             owner_epoch,
             vec![
                 RuntimeMonitorInstanceStatus::configured(
-                    "ak.cn",
+                    "fixture-game-a.s1",
                     policy,
                     RuntimeMonitorState::scheduled(10).expect("state"),
                 )

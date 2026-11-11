@@ -259,11 +259,11 @@ mod tests {
 
     impl ExecutionBackendProvider for SealedProvider {
         fn instance_aliases(&self) -> Vec<String> {
-            vec!["ak.cn".to_string()]
+            vec!["fixture-game-a.s1".to_string()]
         }
 
         fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-            (instance_alias == "ak.cn")
+            (instance_alias == "fixture-game-a.s1")
                 .then(|| ResolvedExecutionInstance::new(self.instance_id, "sealed-device"))
         }
 
@@ -291,7 +291,7 @@ mod tests {
             _memory: Option<&actingcommand_device::FrameMemoryBudget>,
         ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
             let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
-                if instance_alias != "ak.cn" {
+                if instance_alias != "fixture-game-a.s1" {
                     return Err(DeviceError::fatal("unexpected sealed instance"));
                 }
                 Ok(Box::new(SealedCapture))
@@ -371,7 +371,8 @@ mod tests {
             Arc::new(SealedProvider { instance_id }),
         )
         .expect("Runtime host");
-        let endpoint = RuntimeCaptureEndpoint::new("ak.cn".to_string(), root.path().to_path_buf());
+        let endpoint =
+            RuntimeCaptureEndpoint::new("fixture-game-a.s1".to_string(), root.path().to_path_buf());
         let report = CaptureBackendObservation::default();
         let mut backend = open_runtime_capture(
             endpoint,
@@ -408,7 +409,8 @@ mod tests {
             Arc::new(SealedProvider { instance_id }),
         )
         .expect("Runtime host");
-        let endpoint = RuntimeCaptureEndpoint::new("ak.cn".to_string(), root.path().to_path_buf());
+        let endpoint =
+            RuntimeCaptureEndpoint::new("fixture-game-a.s1".to_string(), root.path().to_path_buf());
 
         let frames = capture_runtime_sequence(&endpoint, 2, Duration::from_millis(1))
             .expect("Runtime-owned sequence");

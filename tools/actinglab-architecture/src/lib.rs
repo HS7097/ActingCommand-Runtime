@@ -465,7 +465,10 @@ fn is_forbidden_authoring_identity(value: &str) -> bool {
     )
 }
 
-fn identifier_words(value: &str) -> Vec<String> {
+/// The lowercase words of `value` as the C2 and R2-F guards split identifiers: at every
+/// character outside ASCII letters and digits and at each case boundary (`POLICY_X_MODE`,
+/// `policyXMode` and `x-mode` all hold the word `x`). Workflow #434 NEUT-2's guard uses it too.
+pub fn identifier_words(value: &str) -> Vec<String> {
     let characters = value.chars().collect::<Vec<_>>();
     let mut words = Vec::new();
     let mut current = String::new();
