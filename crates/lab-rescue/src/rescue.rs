@@ -35,6 +35,10 @@
 //!   release), `config replace` and `config restore` (guards, stop with hold, the file swapped with
 //!   the replaced one kept, check-config before anything changes, start, alive, release), `place`
 //!   (`crate::install::place`) and `alive`. The download stays outside the Lab.
+//! - **`instance add`** (Workflow #421 INST-5, first slice; register §1.300): an emulator
+//!   instance composed into a candidate (`crate::install::instance_add`) and committed by `config
+//!   replace`'s own path; after the start the new instance is paused with its own reason,
+//!   `instance.added`, before the hold is handed back, and stays paused until a person resumes it.
 //! - **Until LAB-6** a request the module sends to a running Runtime goes as `actingctl install`'s
 //!   do, on the CLI channel with the CLI envelope (`crate::install::runtime`): the Runtime refuses
 //!   a pause, a resume and a shutdown from a Lab envelope until LAB-6 deletes those origin gates
@@ -56,7 +60,7 @@ use crate::install::manifest::Half;
 use crate::install::plan::{self, Loaded};
 use crate::install::programs::{self, Deadline};
 use crate::install::state::{KindLocation, Paths};
-use crate::install::{self, Answer, Face, config_swap, place};
+use crate::install::{self, Answer, Face, config_swap, instance_add, place};
 use crate::runtime_start::{self, Mode};
 use actingcommand_contract::SchedulingPauseReason;
 use actingcommand_contract::outcome::{Category, CauseRelation, Outcome, OutcomeEnvelope};
@@ -72,8 +76,9 @@ const USAGE: &str = "usage: actinglab [--json] <rescue operation> [<positionals>
      [--<option> <value>] [--<switch>]; contracts/lab-operations.json lists the rows of module \
      rescue; no --root, no --state-root: the root is the one actinglab runs from";
 
-/// The rows of module `rescue` this slice serves, by the table's name.
-pub const SERVED: [&str; 29] = [
+/// The rows of module `rescue` this slice serves, by the table's name (Workflow #421 INST-5: and
+/// `instance add`).
+pub const SERVED: [&str; 30] = [
     "up",
     "restart",
     "down",
@@ -91,6 +96,7 @@ pub const SERVED: [&str; 29] = [
     "adopt",
     "config replace",
     "config restore",
+    "instance add",
     "place",
     "unlock",
     "check-config",
@@ -221,6 +227,7 @@ pub(crate) fn answer_with(
         "adopt" => installer(context, &["adopt"], params, &[], true),
         "config replace" => config_swap(context, params, false),
         "config restore" => config_swap(context, params, true),
+        "instance add" => instance_add(context, params),
         "place" => place(context, params),
         "unlock" => unlock(context),
         "check-config" => check_config(context, params),
@@ -1206,80 +1213,339 @@ fn config_swap(context: &Context<'_>, params: &Map<String, Value>, restore: bool
         let paths = context.paths(command)?;
         journal::refuse_unfinished(command, &paths)?;
         let loaded = plan::load(&paths, command)?;
-        let candidate = config_swap::candidate(context.host, &paths, &loaded, command, &file, sha)?;
-        let mut steps = vec![step(
-            "check_config",
-            &install::done(InstallLocation::CheckConfig),
-            json!({"file": files::plain(&candidate.path), "sha256": candidate.sha256}),
-        )];
-        if candidate.sha256 == candidate.live_sha256 {
-            let done = install::done(command).installation_changed(false);
-            let mut members = Map::new();
-            members.insert("unchanged".to_owned(), Value::Bool(true));
-            return Ok(composite_exit(context, steps, done, members));
-        }
-        let _lock = WriterLock::take(&paths, loaded.settings.lock_wait_ms, command)?;
-        journal::refuse_unfinished(command, &paths)?;
-        let live = running(context, &loaded, command)?;
-        let begun = if live {
-            let hold = HoldInputs {
-                reason: hold_reason(context, if restore { "restore" } else { "config" })?,
-                known: std::collections::BTreeMap::new(),
-                only: None,
-            };
-            match deploy::hold_start(
-                context.host,
-                &paths,
-                &loaded,
-                command,
-                &hold,
-                true,
-                &[],
-                context.face(),
-            )? {
-                Ok(begun) => Some(begun),
-                Err(answer) => return Ok(stopped(context, steps, answer)),
-            }
-        } else {
-            None
-        };
-        let operation = config_swap::open(
-            context.host,
+        commit(
+            context,
             &paths,
             &loaded,
-            &candidate,
-            begun.as_ref(),
-            Some(context.initiator),
-        )?;
-        let operation_id = operation.id().to_owned();
-        let swapped = crate::install::update::run(operation, &loaded)?;
-        if stops(&swapped) {
-            return Ok(stopped(context, steps, swapped));
-        }
-        steps.push(answer_step(context, "swap", &swapped));
-        if live {
-            steps = match alive_and_release(context, &loaded, command, &swapped, steps) {
-                Ok(steps) => steps,
-                Err(exit) => return Ok(exit),
-            };
-        }
-        let done = install::done(command)
-            .install_operation_id(operation_id)
-            .installation_changed(true)
-            .link(CauseRelation::Related, swapped.outcome.clone());
-        let mut members = Map::new();
-        members.insert(
-            "backup".to_owned(),
-            swapped
-                .members
-                .get("backup")
-                .cloned()
-                .unwrap_or(Value::Null),
-        );
-        members.insert("runtime_running".to_owned(), Value::Bool(live));
-        Ok(composite_exit(context, steps, done, members))
+            &Commit {
+                command,
+                file: &file,
+                sha,
+                word: if restore { "restore" } else { "config" },
+                adding: None,
+            },
+        )
     };
     run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
+}
+
+/// What a commit puts in place: the file (and its expected SHA-256), as the command `command`
+/// whose hold's reason is `lab-<word>-<ms>`; for `instance add` (Workflow #421 INST-5) also what
+/// it adds.
+struct Commit<'a> {
+    command: InstallLocation,
+    file: &'a Path,
+    sha: Option<&'a str>,
+    word: &'static str,
+    adding: Option<&'a Adding>,
+}
+
+/// Workflow #421 INST-5: what `instance add` commits beyond a file: its candidate is already the
+/// swap's part (`part`, a file name in the root), and what it added.
+struct Adding {
+    part: String,
+    added: instance_add::Added,
+}
+
+/// The commit of `config replace`, `config restore` and `instance add`: the file checked with the
+/// live build's check-config before anything changes; then, while a Runtime runs, the hold, the
+/// close, the swap with the replaced file kept, the start and its checks (one `config_replace`
+/// operation), `alive` and the release; without one the swap alone. `instance add` needs a
+/// Runtime (it is refused `runtime_not_running` before anything changes) and pauses the added
+/// instance after the start, before `alive` ([`pause_added`]).
+fn commit(
+    context: &Context<'_>,
+    paths: &Paths,
+    loaded: &Loaded,
+    commit: &Commit<'_>,
+) -> Result<Exit, Outcome> {
+    let command = commit.command;
+    let candidate = config_swap::candidate(
+        context.host,
+        paths,
+        loaded,
+        command,
+        commit.file,
+        commit.sha,
+    )?;
+    let mut steps = vec![step(
+        "check_config",
+        &install::done(InstallLocation::CheckConfig),
+        json!({"file": files::plain(&candidate.path), "sha256": candidate.sha256}),
+    )];
+    if candidate.sha256 == candidate.live_sha256 {
+        let done = install::done(command).installation_changed(false);
+        let mut members = Map::new();
+        members.insert("unchanged".to_owned(), Value::Bool(true));
+        return Ok(composite_exit(context, steps, done, members));
+    }
+    let _lock = WriterLock::take(paths, loaded.settings.lock_wait_ms, command)?;
+    journal::refuse_unfinished(command, paths)?;
+    let live = running(context, loaded, command)?;
+    // INST-5: the added instance is paused on the Runtime that starts with it; with none running
+    // nothing is committed (its next start would run the instance unpaused).
+    if commit.adding.is_some() && !live {
+        return Err(
+            install::refusal(command, InstallRefusal::RuntimeNotRunning).path(&loaded.state_root)
+        );
+    }
+    let begun = if live {
+        let hold = HoldInputs {
+            reason: hold_reason(context, commit.word)?,
+            known: std::collections::BTreeMap::new(),
+            only: None,
+        };
+        match deploy::hold_start(
+            context.host,
+            paths,
+            loaded,
+            command,
+            &hold,
+            true,
+            &[],
+            context.face(),
+        )? {
+            Ok(begun) => Some(begun),
+            Err(answer) => return Ok(stopped(context, steps, answer)),
+        }
+    } else {
+        None
+    };
+    let staged = commit.adding.map(|adding| config_swap::Staged {
+        part: adding.part.clone(),
+        added: adding.added.value(),
+    });
+    let operation = config_swap::open(
+        context.host,
+        paths,
+        loaded,
+        &candidate,
+        begun.as_ref(),
+        Some(context.initiator),
+        staged.as_ref(),
+    )?;
+    let operation_id = operation.id().to_owned();
+    let mut swapped = crate::install::update::run(operation, loaded)?;
+    if stops(&swapped) {
+        // INST-5: a stop after the swap may leave a Runtime running the added instance.
+        if let Some(adding) = commit.adding {
+            let swapped_in = files::sha256_file(&paths.config())
+                .is_ok_and(|(sha256, _)| sha256 == candidate.sha256);
+            if swapped_in {
+                let paused = pause_added(context, loaded, &adding.added.asked.alias);
+                steps.push(step("pause_added", &paused.outcome, paused.result));
+                if let Some(refusal) = paused.refusal {
+                    add_next(
+                        &mut swapped.members,
+                        "pause_added",
+                        pause_form(context, &adding.added.asked.alias),
+                    );
+                    swapped.outcome = plan::with_notes(swapped.outcome, &[refusal]);
+                }
+            }
+            swapped
+                .members
+                .insert("added".to_owned(), adding.added.value());
+        }
+        return Ok(stopped(context, steps, swapped));
+    }
+    steps.push(answer_step(context, "swap", &swapped));
+    if let Some(adding) = commit.adding {
+        let alias = &adding.added.asked.alias;
+        let paused = pause_added(context, loaded, alias);
+        steps.push(step("pause_added", &paused.outcome, paused.result));
+        if let Some(refusal) = paused.refusal {
+            // The added instance is not paused: the hold stays, and `next` says how to pause it.
+            let mut members = Map::new();
+            for member in ["hold", "next"] {
+                if let Some(value) = swapped.members.get(member) {
+                    members.insert(member.to_owned(), value.clone());
+                }
+            }
+            add_next(&mut members, "pause_added", pause_form(context, alias));
+            members.insert("added".to_owned(), adding.added.value());
+            return Ok(composite_exit(context, steps, refusal, members));
+        }
+    }
+    if live {
+        steps = match alive_and_release(context, loaded, command, &swapped, steps) {
+            Ok(steps) => steps,
+            Err(exit) => return Ok(exit),
+        };
+    }
+    let mut done = install::done(command)
+        .install_operation_id(operation_id)
+        .installation_changed(true);
+    if let Some(adding) = commit.adding {
+        done = done
+            .alias(adding.added.asked.alias.clone())
+            .game(adding.added.asked.game.clone());
+    }
+    let done = done.link(CauseRelation::Related, swapped.outcome.clone());
+    let mut members = Map::new();
+    members.insert(
+        "backup".to_owned(),
+        swapped
+            .members
+            .get("backup")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    members.insert("runtime_running".to_owned(), Value::Bool(live));
+    if let Some(adding) = commit.adding {
+        members.insert("added".to_owned(), adding.added.value());
+    }
+    Ok(composite_exit(context, steps, done, members))
+}
+
+/// `instance add <alias> --game <g> --server <s> --mumu-index <n> --touch-backend <b>
+/// --capture-backend <b>` (Workflow #421 INST-5, first slice): an emulator instance added to the
+/// root's configuration, both places of it (`crate::install::instance_add`), committed by
+/// [`commit`] with the Runtime restarted under a hold; the new instance is paused with its own
+/// reason after the start. Every refusal before the candidate is written leaves the root as it
+/// was; a Runtime must run.
+fn instance_add(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+    const ADD: InstallLocation = instance_add::ADD;
+    let run = || -> Result<Exit, Outcome> {
+        let asked = instance_add::Asked::of(params)?;
+        let paths = context.paths(ADD)?;
+        journal::refuse_unfinished(ADD, &paths)?;
+        let loaded = plan::load(&paths, ADD)?;
+        if !running(context, &loaded, ADD)? {
+            return Err(
+                install::refusal(ADD, InstallRefusal::RuntimeNotRunning).path(&loaded.state_root)
+            );
+        }
+        let composed = instance_add::compose(context.host, &paths, &loaded, &asked)?;
+        let part = instance_add::stage(context.host, &paths, &composed.bytes)?;
+        let file = paths.root.join(&part);
+        let adding = Adding {
+            part,
+            added: composed.added,
+        };
+        commit(
+            context,
+            &paths,
+            &loaded,
+            &Commit {
+                command: ADD,
+                file: &file,
+                sha: None,
+                word: "instance",
+                adding: Some(&adding),
+            },
+        )
+    };
+    run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
+}
+
+/// Workflow #421 INST-5: what the pause of the added instance did: its step's outcome and result,
+/// and the refusal that ends the command when the instance could not be paused.
+struct PausedAdded {
+    outcome: Outcome,
+    result: Value,
+    refusal: Option<Outcome>,
+}
+
+/// Workflow #421 INST-5 (the coordinator's ruling of 11-11): the added instance paused with its
+/// own reason (`instance.added`) on the Runtime that started with it, drained as every pause is,
+/// before the hold is handed back; one already paused (by anyone) is left as it is. Not
+/// registered by the running Runtime, no Runtime answering, or the pause refused: the refusal
+/// `post_check_failed` (`alias`, `count` 1), the failure as its cause.
+fn pause_added(context: &Context<'_>, loaded: &Loaded, alias: &str) -> PausedAdded {
+    const ADD: InstallLocation = instance_add::ADD;
+    let failed = |cause: Option<Outcome>, result: Value| {
+        let refusal = install::refusal(ADD, InstallRefusal::PostCheckFailed)
+            .alias(alias.to_owned())
+            .count(1_u32);
+        let refusal = match cause {
+            Some(cause) => refusal.joined(CauseRelation::CausedBy, cause),
+            None => refusal,
+        };
+        PausedAdded {
+            outcome: refusal.clone(),
+            result,
+            refusal: Some(refusal),
+        }
+    };
+    let reason = match instance_add::pause_reason() {
+        Ok(reason) => reason,
+        Err(cause) => {
+            return failed(Some(cause), json!({"alias": alias, "set": false}));
+        }
+    };
+    let runtime = context.host.runtime();
+    let seen = match runtime.status(&loaded.state_root) {
+        Ok(Some(seen)) => seen,
+        Ok(None) => {
+            return failed(
+                None,
+                json!({"alias": alias, "reason": reason, "set": false, "runtime": "not_running"}),
+            );
+        }
+        Err(cause) => {
+            return failed(
+                Some(cause),
+                json!({"alias": alias, "reason": reason, "set": false, "runtime": "status_unreadable"}),
+            );
+        }
+    };
+    let Some(instance) = seen.instance(alias) else {
+        return failed(
+            None,
+            json!({"alias": alias, "reason": reason, "set": false, "registered": false}),
+        );
+    };
+    if let Some(pause) = &instance.pause {
+        return PausedAdded {
+            outcome: install::done(ADD).alias(alias.to_owned()),
+            result: json!({"alias": alias, "reason": pause.reason, "set": false, "already_paused": true}),
+            refusal: None,
+        };
+    }
+    match runtime.pause(
+        &loaded.state_root,
+        alias,
+        &reason,
+        loaded.settings.stop_drain_timeout_ms,
+    ) {
+        Ok(drained) => PausedAdded {
+            outcome: install::done(ADD).alias(alias.to_owned()),
+            result: json!({"alias": alias, "reason": reason, "set": true,
+                "drained": {"finished": drained.finished, "cancelled": drained.cancelled}}),
+            refusal: None,
+        },
+        Err(cause) => failed(
+            Some(cause),
+            json!({"alias": alias, "reason": reason, "set": false}),
+        ),
+    }
+}
+
+/// Workflow #421 INST-5: the way to pause the added instance by hand that works today: the core
+/// `pause` as actingctl runs it, on the CLI channel (the Lab's own `pause` goes on the Lab channel,
+/// whose pause the Runtime refuses until LAB-6), with the instance's own reason.
+fn pause_form(context: &Context<'_>, alias: &str) -> Value {
+    json!([
+        "actingctl",
+        "pause",
+        "--state-root",
+        files::plain(&context.location.state_root),
+        "--instance",
+        alias,
+        "--reason",
+        instance_add::PAUSE_REASON
+    ])
+}
+
+/// One more `next` form of an answer's members.
+fn add_next(members: &mut Map<String, Value>, name: &str, form: Value) {
+    let next = members
+        .entry("next".to_owned())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Value::Object(next) = next {
+        next.insert(name.to_owned(), form);
+    }
 }
 
 /// `place <bundle.zip> [--sums <file>] [--facts <file>] [--plan]` (`crate::install::place`): the
