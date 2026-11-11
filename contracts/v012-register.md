@@ -11945,7 +11945,9 @@ of existing decision reasons the record reader only spells.
 
 **What SCHED-C1e changes live.** Nothing until a person or an agent sets an instance's lines: no
 configuration names the key. Every reason that carries a valued pool's lines gains `lines_source`
-(no production pool is valued today, ruling 116's stop holds). With a set, that instance's pool
+(since 2026-11-11 one production pool is valued, on the one instance whose stop under ruling 116
+was lifted for a trial that day, so its reasons carry `catalog` from the first evaluated cycle of
+this build). With a set, that instance's pool
 spends by its lines from the next evaluated cycle; the set survives restarts and generations
 until cleared.
 
