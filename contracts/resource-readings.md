@@ -707,10 +707,11 @@ The list holds only when every position was read. Otherwise it gives no reading:
 | `list_position_unread` | a position that was readable at least once holds no fixed Known reading of its identity or of a column's feature: never Known, contradicted later, or out of the dictionary, which counts as Unknown |
 | `list_duplicate_key` | two positions read the same business ID |
 | `list_rows_exceeded` | a 1025th position was read (S168-LB1a, not built yet; until it, a 257th): the list holds more rows than one fact can (1024, until S168-LB1a 256; section "Rows" below). The scan stops there; nothing is cut to fit |
+| `list_bytes_exceeded` (S168-LB1a, not built yet; a proposed word) | the list was read whole, within the row bound, and its record is larger than one observation can hold (512 KiB; section "Rows" below). Nothing is cut to fit. Until S168-LB1a such a list fails its run at publication instead |
 
 Each is the warning `contained_task_resource_reading_unresolved` (`reading_id` the operation's
-id, `fact_key`, `reading_problem`, and `count`: the unread positions, the repeated keys, or 1025
-(S168-LB1a, not built yet; until it 257);
+id, `fact_key`, `reading_problem`, and `count`: the unread positions, the repeated keys, 1025
+(S168-LB1a, not built yet; until it 257), or for `list_bytes_exceeded` the rows read;
 `count` is an optional value S168-4 adds to that code, [v012-register.md](v012-register.md)
 §1.291 S168C-3),
 written at once as one task diagnostic row of kind `error` (`TaskDiagnosticErrorData::Recognition`,
@@ -760,8 +761,12 @@ publishes nothing, so a selection that reads the list has nothing. From S168-LB1
   serialized record by the read-only survey of 11-11 (register §1.306): a row of the key and 3
   short columns takes about 170 bytes, of the key and 8 about 356 bytes, of the key and 63 about
   2.6 KB, so 512 KiB hold about 3,079, 1,470 and 203 such rows. 1024 rows fit up to about the key
-  and 8 short columns; a wider list meets the byte bound first and its run fails (section
-  Publication), as a list of the key and 63 columns does today near 200 rows.
+  and 8 short columns; a wider list meets the byte bound first. Today that fails its run at
+  publication (`contained_task_resource_reading_rejected`), as a list of the key and 63 columns
+  does near 200 rows. From S168-LB1a it is a miss of the list, as a list over the row bound is
+  (`list_bytes_exceeded` above; the coordinator's answer to question 4 of §1.306): the run settles
+  as without the list, the previous record stays, and the warning says so at every run. A list
+  that grows with its account must not start failing its run one day.
 - **One instance's whole read stays within one frame.** All of an instance's records together
   cross the 1 MiB frame of the instance fact read, which is refused past it
   ([instance-fact-store.md](instance-fact-store.md), "Reading the seeds"): about 6,000 rows of the

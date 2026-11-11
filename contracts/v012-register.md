@@ -12858,8 +12858,9 @@ coordinator:
   answer's `records_total`, both `runtime-client` 7 shapes.
 - (d) Ruling 1 keeps the byte bounds. With 1024 rows the observation's 512 KiB binds first for a
   list wider than about the key and 8 short columns, and that refusal fails the run
-  (`contained_task_resource_reading_rejected`) where a list over the row bound only warns: written
-  as the code forces, question 4 below.
+  (`contained_task_resource_reading_rejected`) where a list over the row bound only warns. The
+  coordinator ruled on question 4 that S168-LB1a turns it into a miss of the list
+  (`list_bytes_exceeded`), and the contract is written so.
 - (e) Ruling 1 keeps the scan's bounds too: with at most 128 viewports a list reaches 1024 rows
   only when each advance brings about 8 new positions.
 - (f) Ruling 2(a) asks what a schedule predicate that names a key under `inventory.list.` gets at
@@ -12880,7 +12881,8 @@ coordinator:
 | LB1-2 | `MAX_LIST_READING_ROWS` equal to LB1-1's constant, 1024: the 1025th position read stops the scan, `list_rows_exceeded` with `count` 1025 | behaviour (kernel); an outcome value | S168-LB1a | execution-kernel | the catalog's descriptions of `contained_task_resource_reading_unresolved` and of the word `list_rows_exceeded` say 1025th; no `package` raise (proposed) |
 | LB1-3 | the scheduler's fact projection leaves out every record under `inventory.list.` | behaviour (projection) | S168-LB1a | runtime-host, the policy facts' overlay | beside the three classes it leaves out; `facts`, `fact_snapshot_id` and an intent's instance view no longer hold lists; no decision changes |
 | LB1-4 | the catalog compile refuses a member that names a key under `inventory.list.` to read: `type_mismatch` at its `fact_key` | catalog compile refusal (proposed) | S168-LB1a | the catalog compiler | `fact` and `record_deadline` predicates, fact references, a pool's ledger key and fact references, SCHED-C1f1's consumption read from a fact (since 0.12.54), the selection document's `facts[]`; timeline prefixes are not refused; its report says whether a catalog on the resource repositories' `main` names one (question 1) |
-| LB1-5 | any other inline record list of more than 256 rows is left out of the projection for the instances its scope applies to; `policy_fact_rows_exceeded` (warning; `fact_key`, `count`) on each decision of such an instance | behaviour (projection); outcome code (proposed) | S168-LB1a | runtime-host | the evaluator's 256 and the schema's `maxItems` stay; the whole input is never refused for it (#419); a predicate that reads it is Unknown for those instances (`fact_missing`) |
+| LB1-5 | any other inline record list of more than 256 rows is left out of the projection for the instances its scope applies to; `policy_fact_rows_exceeded` (warning; `fact_key`, `count`) recorded once for each such record after a start, not on every decision (answer 3) | behaviour (projection); outcome code (proposed) | S168-LB1a | runtime-host | the evaluator's 256 and the schema's `maxItems` stay; the whole input is never refused for it (#419); a predicate that reads it is Unknown for those instances and the key raises no fact refresh demand; the code slice says which unknown reason and how |
+| LB1-5b | a list read whole whose record is over the observation's 512 KiB is a miss of the list: `reading_problem` `list_bytes_exceeded` with `count` the rows read (answer 4) | behaviour (kernel and host); an outcome word (proposed) | S168-LB1a | execution-kernel, runtime-host | the run settles as without the list and the previous record stays; until S168-LB1a the run fails at publication (`contained_task_resource_reading_rejected`) |
 | LB1-6 | `InstanceFactSnapshot`'s optional request member `key_prefix`, applied before the view is built and measured, and the answer's optional `records_total` | wire shapes, `runtime-client` 7 | S168-LB1a | runtime-host; actingctl `facts --key-prefix`, `ac_facts` | absent, a request serializes and is answered as before; the whole read keeps `instance_fact_snapshot_too_large_for_frame` |
 | LB1-7 | `table_max_over_list`'s optional member `lower_bound_column` | selection document format, `package` 9 | S168-LB1b | resource repositories | a declared `integer` column other than `value_column`; `dangling_reference`, `type_mismatch` and `table_mismatch` as for the other members; absent, the canonical bytes are unchanged |
 | LB1-8 | the opted-in read: exact M; at least L; Unknown only when nothing is known of the class | behaviour (selection-policy) | S168-LB1b | selection-policy, `list_max.rs` | a key with no row, or with neither a value nor a bound, makes it "at least"; `empty` stays exact |
@@ -12999,6 +13001,30 @@ evaluation of a ledger that holds a list record no longer carries that record in
 10. *Is a persisted `fact_snapshot_id` ever recomputed?* The contract assumes not: it is compared
     between an evaluation and its admission inside one running Runtime. S168-LB1a confirms it
     before it changes the projection.
+
+**The coordinator's answers (2026-11-11, on reading this contract; the coordinator's, not Alice's
+words).** The differences (a) to (i) above are accepted as written. On the questions:
+
+1. As proposed: the catalog is refused at compile. S168-LB1a first reads the four resource
+   repositories' `main` for a member that names a key under `inventory.list.` to read; if one
+   does, it stops and reports before changing the compiler.
+2. As proposed.
+3. **Not as proposed.** Not a warning on every decision: the host records the warning once for
+   each left-out record after a start, keeping what it has warned of in memory only (nothing on
+   disk; a restart warns once more). A predicate that reads the key is Unknown for that instance
+   and the key raises no fact refresh demand, since a reading cannot shorten a list; S168-LB1a
+   says which unknown reason it carries and how the demand is kept from rising. The contract
+   texts are written so.
+4. As proposed: a miss of the list, `list_bytes_exceeded`. The contract texts are written so
+   (row LB1-5b).
+5. As proposed. R-8 (the pack schedule's code, in flight) checks its rows by the pack schedule's
+   own bound of 256, whichever of the two slices merges first.
+6. As proposed: the ruling stays.
+7. As proposed: the ruling stays.
+8. As proposed.
+9. As proposed.
+10. As proposed; if a persisted `fact_snapshot_id` is recomputed anywhere, S168-LB1a stops and
+    reports before it changes the projection.
 
 **Rollback of this slice.** Nothing to roll back: text only.
 

@@ -2605,10 +2605,12 @@ long list must not stop the scheduler for every instance.
   names one. A timeline event's prefixes name keys to invalidate, not to read, and are not
   refused.
 - **Another long record list stays one instance's.** A record list of more than 256 rows, the
-  policy's own bound, is left out for the instances its scope applies to, with the warning
-  `policy_fact_rows_exceeded` (a proposed name) on each of their decisions; a predicate that reads
-  it is Unknown for those instances, with the reasons of any missing key ("Fact Refresh",
-  "Runtime Enforcement"), and every other instance and key evaluate as before. The evaluator's
+  policy's own bound, is left out for the instances its scope applies to. The host records the
+  warning `policy_fact_rows_exceeded` (a proposed name) once for each such record after a start,
+  not on every decision; a predicate that reads it is Unknown for those instances and the key
+  raises no fact refresh demand, since a reading cannot shorten a list
+  ([instance-fact-store.md](../instance-fact-store.md), "Left out of the projection"); every
+  other instance and key evaluate as before. The evaluator's
   bound and the schema's `maxItems` (`v2/common.schema.json`, a predicate's `record_list` value)
   stay 256.
 - **Identity.** A ledger with no record under `inventory.list.` and no record list over 256 rows

@@ -345,15 +345,15 @@ run-duration samples. It leaves out two more:
    such a record from S168-LB1a on (its row bound is 1024, "List reading facts", "Row bound").
    The projection leaves it out for every instance its scope applies to (an instance record for
    its instance, a server or game record for every instance of that server or game), so the
-   evaluation never refuses its whole input for it. Each decision made for such an instance
-   carries, after the evaluator's own reasons, one `DecisionReason` per left-out record whose
-   outcome is the warning `policy_fact_rows_exceeded` (a proposed name the code slice registers;
-   `fact_key`, and `count` the record's rows), as the reason `policy_instance_fact_missing` is
-   carried above; a selected decision's dispatch events carry it in their reason chain. A
-   predicate that reads the key finds no record and is Unknown for that instance (`fact_missing`),
-   with the reasons and the fact refresh of any missing key
-   ([scheduling/README.md](scheduling/README.md), "Fact Refresh"); every other instance and every
-   other key evaluate as before.
+   evaluation never refuses its whole input for it. The host records one warning
+   `policy_fact_rows_exceeded` (a proposed name the code slice registers; `fact_key`, and `count`
+   the record's rows) for each such record, the first time after a start that the projection
+   leaves it out, and no more in that start: the warning is not carried on every decision (the
+   coordinator's answer to question 3 of §1.306). A predicate that reads the key is Unknown for
+   that instance, and the key raises no fact refresh demand: a reading cannot shorten a list, so a
+   refresh would be asked for at every evaluation and never served. The code slice says which
+   unknown reason the predicate carries and how the demand is kept from rising; every other
+   instance and every other key evaluate as before.
 
 A ledger that holds no record under `inventory.list.` and no record list over 256 rows projects
 byte for byte as before.
