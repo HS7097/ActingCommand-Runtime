@@ -48,6 +48,8 @@ fn ss2c_t5_t6_the_check_counts_declared_rules_apart_and_warns_of_a_tier_mismatch
             maintenance_declared: 1,
             // SS-2d (register §1.235): no rule carries the realization mark.
             realization: 0,
+            // SCHED-C1a (register §1.299): no rule writes a fixed value.
+            fixed_value: 0,
         }
     );
     let found = report

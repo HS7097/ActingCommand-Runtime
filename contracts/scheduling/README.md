@@ -194,8 +194,8 @@ and the compiler checks the bounds above and nothing more
 valuation the resource side writes by hand is accepted, and every reader reads it as it reads any
 other: its weight is the `W` of the net benefit, its base weight weighs the pool's producers
 (SS-1), and its pool's lines take part ("Pool lines"). Who wrote it, a person in the pack or the
-model's export, is marked by the `schedule.json` pool member `valuation_origin` (SCHED-C1, not built
-yet), which the catalog never carries: a valuation decides the same whoever wrote it, and only the
+model's export, is marked by the `schedule.json` pool member `valuation_origin` (SCHED-C1a, since
+0.12.52), which the catalog never carries: a valuation decides the same whoever wrote it, and only the
 reports tell the two apart ([../standard-pack-schedule.md](../standard-pack-schedule.md),
 "Provenance").
 
@@ -889,7 +889,7 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   ("Capped spending order"), which also gives the head of its order its own `B` (below). Nothing
   here writes a pool weight (the one-way rule, SS-1).
 - **Unknown is never 0.** A judged candidate whose task declares no `produces` and no `consumes`
-  entry (SCHED-C1, not built yet: and no fixed value, "Fixed values written in the pack" below,
+  entry (SCHED-C1a, since 0.12.52: and no fixed value, "Fixed values written in the pack" below,
   which also leaves its `produces` unread), an entry whose `amount` is the pending marker, a pool it touches whose `valuation` is the
   pending marker or absent (for the instance), or a regenerating pool it consumes whose reading is
   unknown or expired (still read, as before, though its cost no longer depends on it) has an
@@ -1000,7 +1000,7 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
     tolerance decides, ranks and records byte for byte as before; `benefit_realization` absent, a
     catalog keeps its hash.
 
-## Fixed values written in the pack (SCHED-C1, not built yet)
+## Fixed values written in the pack (SCHED-C1a, since 0.12.52)
 
 Register §1.299. Alice, 11-09 15:47 (Workflow #428 comment 6734155178), splits the scoring into two
 kinds: 「这个已经有结论了，就直接用固定值」, and
@@ -2368,7 +2368,7 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Pool valuation name / unit | 128 / 32 UTF-8 bytes |
 | Pool valuation scale | 1..=9,007,199,254,740,991 |
 | Pool valuation base weight / gap weight | 0..=1,000,000 / 1..=1,000,000 milli |
-| A task's fixed value (SCHED-C1, not built yet) | 1..=9,007,199,254,740,991 milli |
+| A task's fixed value (SCHED-C1a, since 0.12.52) | 1..=9,007,199,254,740,991 milli |
 
 Loop budgets are mandatory in V1; in V2 each run-count bound is optional (SS-3, "Optional run-count bounds"). Arrays and strings that exceed their limit reject the entire catalog. Duplicate identifiers, duplicate object keys, and unbounded recursive input are invalid.
 

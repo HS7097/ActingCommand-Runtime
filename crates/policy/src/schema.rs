@@ -135,6 +135,9 @@ pub enum CatalogDiagnosticCode {
     /// SS-2h fix 1 (register §1.289; a warning): a pool writes `stop_line` and `hard_line` but no
     /// declared valuation, so its lines change nothing.
     PoolLinesUnvalued,
+    /// SCHED-C1a (register §1.299): a task's `benefit_fixed_value_milli` beside a `produces` entry
+    /// on a pool whose valuation is declared or pending, or beside `benefit_realization: true`.
+    FixedValueConflict,
 }
 
 impl CatalogDiagnosticCode {
@@ -169,6 +172,7 @@ impl CatalogDiagnosticCode {
             Self::RealizationCycle => PolicyCode::RealizationCycle.code(),
             Self::PoolLinesInvalid => PolicyCode::PoolLinesInvalid.code(),
             Self::PoolLinesUnvalued => PolicyCode::PoolLinesUnvalued.code(),
+            Self::FixedValueConflict => PolicyCode::FixedValueConflict.code(),
         }
     }
 }
@@ -393,6 +397,23 @@ pub struct TaskSpec {
     /// Absent, the member serializes as nothing at all, so a catalog without it keeps its hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub benefit_limited: Option<bool>,
+    /// SCHED-C1a (register §1.299, `actingcommand.scheduling.v2` only): `V`, the value of one run
+    /// of a judged task without the cost of the pools it consumes, in milli of the value unit its
+    /// instance's valuations weigh in (`contracts/scheduling/README.md`, "Fixed values written in
+    /// the pack"). With it the task's net benefit is `V` less the cost of what it consumes, and
+    /// its `produces` are not read by that benefit. The standard-pack composer writes it from the
+    /// `schedule.json` rule member `fixed_value_milli`; a V2 catalog may write it directly. The
+    /// compiler holds it to `1..=2^53−1` and `benefit_judged: true`, and refuses it beside a
+    /// priced product or `benefit_realization: true` (`fixed_value_conflict`). It is not
+    /// `value_milli`, the score stage's utility term. Absent, the member serializes as nothing at
+    /// all, so a catalog without it keeps its hash; an explicit `null` is refused
+    /// (`type_mismatch`).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "written_bound"
+    )]
+    pub benefit_fixed_value_milli: Option<i64>,
 }
 
 impl TaskSpec {
@@ -1033,6 +1054,13 @@ impl<'de> Deserialize<'de> for PoolCapacity {
 /// SS-2h (register §1.289): the configuration-manifest subsystem of a Runtime that reads a pool's
 /// `stop_line` and `hard_line`; a `schedule.json` whose pool writes them names it in `requires`.
 pub const POOL_LINES_SUBSYSTEM: &str = "pool_lines";
+
+/// SCHED-C1a (register §1.299): the configuration-manifest subsystem of a Runtime that reads a
+/// task's `benefit_fixed_value_milli`; a `schedule.json` whose rule writes `fixed_value_milli` or
+/// whose pool writes `valuation_origin` names it in `requires`. The contract names the subsystem
+/// after the decision reason it enables, so its spelling is that code's, taken from the registry
+/// (a literal outside the registry would repeat a registered name).
+pub const BENEFIT_FIXED_VALUE_SUBSYSTEM: &str = PolicyCode::BenefitFixedValue.as_str();
 
 /// One of a pool's two lines (SS-2h, register §1.289; Alice's ruling 138 and her answers of
 /// 11-09 17:37 and 17:42: a stop line above a hard line, given by the model, a person or an

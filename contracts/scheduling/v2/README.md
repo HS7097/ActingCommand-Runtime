@@ -302,6 +302,25 @@ Alice's ruling 138 and her answers of 11-09), V2 only:
 
 A catalog without these serializes, and hashes, exactly as before.
 
+SCHED-C1a (since 0.12.52; register §1.299; `../README.md`, "Fixed values written in the pack"), V2
+only: a task may carry `benefit_fixed_value_milli`, an integer, `V`: the value of one run of a
+judged task without the cost of the pools it consumes, in milli of the value unit its instance's
+valuations weigh in. Its net benefit is then `V` without a consumption and `V` less the cost of
+what it consumes otherwise; its `produces` are not read by that benefit (they keep their other
+readers), and a consumed pool still needs its valuation. It is not `value_milli`, which keeps its
+meaning and its reader, the score stage. The standard-pack composer writes it from the
+`schedule.json` rule member `fixed_value_milli` (which is no V2 task member), and refuses a rule
+that writes `benefit_fixed_value_milli` itself. Refused, each at its member:
+- in a V1 document, `unknown_field`; a value that is no integer (an explicit `null` included)
+  `type_mismatch`; one outside `1..=9007199254740991` `limit_exceeded` (a value of 0 is no value:
+  a rule that must not run is held or not written);
+- without `benefit_judged: true`, `missing_required_field` at `benefit_judged`;
+- `fixed_value_conflict` (error) at `benefit_fixed_value_milli`, beside a `produces` entry on a
+  pool whose `valuation` is a declared block or the pending marker, and beside
+  `benefit_realization: true`: the task would have two values, and neither may silently win.
+
+A task without the member serializes, hashes and decides exactly as before.
+
 SS-2g (since 0.12.34; register §1.232; `../README.md`, "Expected quantities (v2)"): a `consumes`
 entry may declare `expected_amount_milli` instead of `amount`, as a `produces` entry may: an
 integer in `0..=9007199254740991` thousandths of a unit per run, at most a constant capacity ×

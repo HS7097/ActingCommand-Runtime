@@ -2442,6 +2442,49 @@
       "description": "Catalog compile diagnostic, a warning (SS-2h fix 1; contracts/scheduling/README.md \"Pool lines\"): a pool writes stop_line and hard_line but no declared valuation (none, or the pending marker), at its stop_line. Only a valued pool's lines take part in the hard line and the capped spending order, so these are carried as written and change no decision. The catalog compiles; the warning is listed with the compiled catalog and in its dry-run report.",
       "common_causes": "The pool's thresholds were bound before its valuation, or its valuation is still the pending marker.",
       "handling": "Bind the pool's valuation, or remove the lines until it has one."
+    },
+    "benefit_fixed_value": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "benefit_milli": "required",
+        "fixed_value_milli": "required",
+        "expected_duration_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.52",
+      "description": "Scheduling decision reason (#428 SCHED-C1a, Alice's two kinds of scoring of 11-09; contracts/scheduling/README.md \"Fixed values written in the pack\"): a judged candidate's net benefit benefit_milli was computed from its task's fixed value fixed_value_milli (benefit_fixed_value_milli, written in its standard pack as the rule member fixed_value_milli), the value of one run without the cost of the pools it consumes: B is V without a consumption and V less that cost otherwise, the task's produces unread; for the head of a capped spending order B charges only the part of its consumption below the stop line. expected_duration_ms is the E it is ranked with by B ÷ E. The reason comes before the decision's other reasons, whether the candidate was dispatched, deferred (policy_benefit_nonpositive, benefit_within_tolerance), held by a pool's lines (pool_line_held) or spent by a capped order (capped_spend).",
+      "common_causes": "The resource side wrote the rule's value as settled in its schedule.json.",
+      "handling": "None. Change the rule's fixed_value_milli in schedule.json if the value is wrong; a consumed pool's cost is its valuation's."
+    },
+    "fixed_value_conflict": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.52",
+      "description": "Catalog compile diagnostic (#428 SCHED-C1a; contracts/scheduling/README.md \"Fixed values written in the pack\", contracts/scheduling/v2/README.md, benefit_fixed_value_milli): a task's fixed value stands beside a second value, at its benefit_fixed_value_milli (a standard pack's rule at its fixed_value_milli): a produces entry on a pool whose valuation is a declared block or the pending marker (its priced effects), or benefit_realization true (the zero tier reads a modelled value's rounding). Neither may silently win, so the catalog is refused.",
+      "common_causes": "A model export priced a rule's effects or marked it a realization and kept its fixed value, or a person wrote a fixed value on a rule whose product is priced.",
+      "handling": "Remove the fixed value, or the priced product or the realization mark, in the same change; a model export that prices a rule's effects removes its fixed value."
     }
   }
 }
