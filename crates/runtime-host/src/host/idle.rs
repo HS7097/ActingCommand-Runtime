@@ -1028,7 +1028,7 @@ impl HostShared {
         let links = self.idle_links(instance_id)?;
         self.record_idle(
             links.clone(),
-            idle_outcome(alias, action, IdleLocation::Wake, None, None),
+            idle_outcome(alias, action.as_str(), IdleLocation::Wake, None, None),
         )?;
         for item in work {
             match item {
