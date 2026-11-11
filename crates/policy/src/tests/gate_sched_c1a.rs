@@ -363,20 +363,15 @@ fn sched_c1a_t5_a_consumed_pool_without_a_valuation_stays_unknown() {
         ("task_unread", "reading_unknown", "pool.regen"),
     ] {
         let held = decision(&evaluation, task_id);
-        assert!(
-            last(held).outcome.is(PolicyCode::BenefitUnknown),
+        // Found by its code, not as the last reason: a reading no reader is bound for adds the
+        // warning `fact_refresh_unbound` after it.
+        let unknown = &reason(held, PolicyCode::BenefitUnknown).outcome;
+        assert_eq!(
+            unknown.value("benefit_gap"),
+            Some(&json!(gap)),
             "{task_id}: {held:#?}"
         );
-        assert_eq!(
-            last(held).outcome.value("benefit_gap"),
-            Some(&json!(gap)),
-            "{task_id}"
-        );
-        assert_eq!(
-            last(held).outcome.value("pool_id"),
-            Some(&json!(pool)),
-            "{task_id}"
-        );
+        assert_eq!(unknown.value("pool_id"), Some(&json!(pool)), "{task_id}");
         assert!(no_fixed_reason(held), "{task_id}: {held:#?}");
     }
 }
