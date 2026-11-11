@@ -396,6 +396,45 @@ fn gate_d2_t24_a_failed_reader_backs_off_then_rests_after_its_failures_in_a_row(
     );
 }
 
+// Workflow #429 R-6b2 (register §1.314 "What a stopped run leaves, per trigger", the fact refresh
+// row, §1.316): R_I's read was stopped after `max_consecutive_failures` failures in a row. The
+// Runtime projects the stopped run `cancelled`, keeping the failure streak of the failures before
+// it. A stop is no failure: R_I is not exhausted (`failure_pause` holds only after a failed run),
+// it takes no failure backoff and its pending reason names no failure, only its minimum interval
+// from the stopped dispatch; at that interval's end it reads again.
+#[test]
+fn r6b2_a_stopped_reader_is_no_failure_in_a_row() {
+    let failure = Code::relayed(NAVIGATION_FAILED).expect("a registered code");
+    let dispatched = NOW - 120_000;
+    let stopped_at = NOW - 100_000;
+    let streak = u16::try_from(MAX_FAILURES).expect("streak");
+    let stopped = || {
+        vec![refresh_state(
+            dispatched,
+            TaskTerminalState::Cancelled,
+            Some(stopped_at),
+            streak,
+        )]
+    };
+    let interval_end = dispatched + MIN_INTERVAL_MS;
+
+    let evaluation = evaluate_stock(&inputs(vec![reader(3, Some(failure))]), stopped(), NOW);
+    assert!(intents_on(&evaluation, A).is_empty());
+    let waiting = decision(&evaluation, ALPHA, A);
+    assert_eq!(refresh_codes(waiting), [PENDING], "not exhausted");
+    assert_values(
+        coded(waiting, PENDING)[0],
+        &pending(Some(COOLDOWN), None, Some(interval_end)),
+    );
+
+    let evaluation = evaluate_stock(
+        &inputs(vec![reader(3, Some(failure))]),
+        stopped(),
+        interval_end,
+    );
+    assert_eq!(refresh_intents_on(&evaluation, A), 1);
+}
+
 // T25 (D2M:605; §3.3, catalog predicates): task X's trigger reads realistic key K in A's own scope
 // and K is past its bound: X waits under `fact_refresh_pending` and R_I is dispatched. A trigger
 // that reads a missing `session.` manual request keeps only `trigger_unknown`: no demand, no

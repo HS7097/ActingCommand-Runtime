@@ -228,7 +228,11 @@ An optional `phases` array defines 1–32 linear stages, for example:
 Each stage selects only its listed existing protected operations, in the task's
 operation order. Its cursor advances only after a successful operation confirms
 a declared stage target; observing the same page at stage entry does not advance
-or finish the task. The final stage targets equal the task targets. A phased
+or finish the task. A run on a page that no operation of its stage leaves, and that
+is no target and no error page, ends with `contained_task_state_invalid` naming
+`state_problem` `no_move_from_page`, the page (`page_id`) and the stage (`phase_id`)
+(Workflow #428 DIAG-SI, since 0.12.55; [v012-register.md](v012-register.md) §1.320).
+The final stage targets equal the task targets. A phased
 task declares its entry page and scheduling outcome; it uses `navigable_route`
 with confirmation enabled and has no internal recovery or stability termination.
 Static reachability follows `(phase, page, designated effect)` through finite
@@ -369,7 +373,11 @@ matched; static reachability is checked from every such start. Workflow #428 NAV
 host runs for another package's entry (a prerequisite package, a navigation edge, a
 shared interrupt's handler, a return-home or entry recovery package, a step of a
 navigation recovery chain), when the first page it observes is a page of its set; a
-layer whose first page is no page of its set starts at the first stage. Which first
+layer whose first page is no page of its set starts at the first stage. Where that
+stage has no operation from the page, the layer ends with `contained_task_state_invalid`,
+`state_problem` `no_move_from_page`, `page_id` and `phase_id`, which its
+`entry_recovery_failed` record, its gate's fail-closed record and the run's terminal carry
+(Workflow #428 DIAG-SI, since 0.12.55). Which first
 page a layer accepts and how long it waits for it are unchanged. A single entry page
 still starts the first stage. Admission refuses a set with
 `contained_task_entry_pages_invalid` and its `entry_problem` (`empty`, `too_many`,

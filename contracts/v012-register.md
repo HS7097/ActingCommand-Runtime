@@ -14108,6 +14108,11 @@ nothing. A console of `runtime-client` 6 cannot read event pages that hold a sto
 
 **Rollback of this slice.** Nothing to roll back: text only.
 
+*Read with §1.316 (R-6b2):* the "no ladder" that (l) and the row R6B-2 say of a failed reset is
+said of the stopped run's own terminal and lease end, which start no ladder whatever
+`recovery_ladder.triggers` lists, while the fence a failed reset leaves is handed on by the lease
+sweep as every fence is (#403, #419), to a `resource_fence` ladder or to a person.
+
 ### 1.315 Slice R-6b1 (code): the `stopped` result of a scheduled run, its check and its readers (Workflow #429 R-6b, §1.314; the coordinator's split into R-6b1 and R-6b2 and its answers to the eight questions; coordinator work order `rd-1111/brief-r6b1-form-readers.md`; built on the contract head `92390b85`, stacked on its pull request)
 
 **What it builds.** The form of §1.314 and every reader of it, and nothing that writes it:
@@ -14167,6 +14172,113 @@ helpers that enumerate the kinds of the result name the third, which reads as no
 
 **Rollback.** A revert of the code. Nothing is written, so no state root, ledger record or
 configuration changes; the revisions are S168-LB1a's (and §1.314's rollback rule applies to them).
+
+### 1.316 Slice R-6b2 (code, 0.12.55): a scheduled run is stopped and settles as a stop (Workflow #429 R-6b, §1.314 with the coordinator's answers to its eight questions; R-6b1, §1.315, on its base; coordinator work order `rd-1111/brief-r6b2-stop-settle.md`; built on the 0.12.55 train head `fd8f693d`, stacked on its pull request)
+
+The number is the coordinator's. R-6b2 builds everything that writes the form R-6b1 built and
+read: the stop of a policy run, its reset, its live settlement and its settlement from its
+terminal at a start. No record type, table, index, SQLite format, `actingcommand.event.v3`,
+configuration key, outcome code, vocabulary token or request or answer shape is new or changed.
+After it a person's stop of a scheduled run works end to end.
+
+**Interfaces.** None raised. The base declares `ledger` [3, 8] and `runtime-client` [3, 7]
+(S168-LB1a, §1.311); R-6b joins both. The two rows of "Planned: Workflow #429 R-6b" are moved
+into the rows 8 of `ledger` and 7 of `runtime-client` of [component-interfaces.md](component-interfaces.md),
+whose planned section now says so ("Workflow #429 R-6b"); `distribution/windows/component-interfaces.json`
+and its architecture test are unchanged. `runtime-outcomes` stays 1: four descriptions change
+within it (below).
+
+| Row | What R-6b2 builds | Where |
+|---|---|---|
+| R6B-1 | `StopInstanceRun` stops a policy run, a fact refresh read included, as a direct run: asked `ClientRequested` at its next checkpoint, the same wait, `settled` and `reset`. Only a run the Runtime started for itself (a startup package, a ladder rung, an idle action's rest) stays refused, with `run_origin` `host`; the token `policy` stays registered and is no longer produced. The host mark is set before the run enters the run registry, so no stop ever sees a host run unmarked (it was set just after). `CancelContainedTask` (`ac_stop_run`, `run stop`) keeps refusing every scheduled run (`client_cancellable`), unchanged | `crates/runtime-host/src/host/contained_task.rs`, `ContainedRunControl::stop_refused_origin` (refuses `host` only) and `HostShared::begin_contained_run` (its new `host`, used by `prepare_package_run`); `crates/runtime-host/src/host/stop_instance_run.rs`, `stop_target` (unchanged code, its description) |
+| answer 8 | a policy run's control enters the run registry before its package's preparation, for either provenance (a physical run prepared its package first until now; a fixture-simulated one already registered first): a stop sent while the run prepares is asked, and the run ends at its first check (`contained_task_cancelled`, the reset done). The deadline the control holds is the one the preparation reads under (the earlier of the response deadline and the lease's bound, as before). A failed preparation ends as before: its refusal returns, no terminal, the run leaves the registry and its stop answers `reset: not_needed`, so the fallback (keeping `contained_task_cancellation_identity_missing`) was not taken | `HostShared::run_scheduled_contained_task`: `begin_contained_run` and the deadlines before `prepare_scheduled_package` and the second `validated_instance` |
+| R6B-2 | the cancel branch resets a stopped policy run as a direct run, with the run's own lease (the end phase's), before its terminal and its lease end (`InputReset`, linked to the run); a failed reset fences that instance only (#419), the stop answers `reset: failed` with the fence's failure (`instance_resources_fenced`) as its receipt's cause; the run's lease ends as every scheduled cancel's, a failed run's (`LeaseReleaseReason::BackendFailure`), and its committed `task.failed` is taken off its control, so its lease end finds no ladder trigger and the stopped run's terminal starts no ladder of its own, whatever `recovery_ladder.triggers` lists; the fence a failed reset leaves is handed on as every fence is, by the lease sweep (`hand_resource_fences_to_ladders`, #403), to a `resource_fence` ladder or to a person | `execute_contained_task_with_lease`, the cancel branch (`runtime_stop`, no longer gated on `!scheduled`; `ContainedRunControl::take_failed_terminal` before `cleanup_composite_failure_with_run_links`); `HostShared::reset_stopped_run` (unchanged code) |
+| R6B-4 | the live settlement: `PolicyExecutionInput::Stopped { outcome }`, read from the run's `task.failed` terminal with `contained_task_cancelled` (its outcome's top node), as every scheduled cancel writes it; no failure identity is computed; `decide_condition` answers `Ordinary` whatever `scheduling.rerun.condition_codes` lists; the record is built where its replay rebuilds it (`preview_stopped_settlement`), before any runtime-budget comparison, so it is never rewritten as `policy_runtime_budget_exceeded`, and a condition passed with it is refused `policy_execution_record_mismatch`; it is committed by `commit_paced_execution` (R-6b1); it records no settlement fact, also for a pair whose only run it is, where both the live and the replayed settlement refused `policy_settlement_missing` before; no run-duration sample (a success only); the authoritative outcome is cleared as for a failure. A run the stop found ending for its deadline or a pause's drain keeps that end, and one that ended on its own keeps its result; both answer `reset: not_needed` | `crates/runtime-host/src/host/policy_outcome.rs`, `scheduled_policy_failure_input`, `record_policy_dispatch_outcome_under_gate` and `settlement_of`; `crates/runtime-host/src/policy_control.rs`, `PolicyExecutionInput::Stopped`, `names_failure`, `preview_paced_settlement`; `crates/runtime-host/src/host/failure_settlement.rs`, `build_scheduled_failure_identity`, `recorded_failure_input`; `crates/runtime-host/src/policy_host.rs`, `execution_input_matches` |
+| R6B-7, the runtime-host half | the start's reconciliation and the reconciliation of a run its worker abandoned settle a run whose terminal is a `task.failed` with `contained_task_cancelled` as `stopped`, `runtime_ms` measured as a failure's, never re-judged as over its budget, through the ledger's recovery rule (R-6b1); a run with no terminal settles as interrupted, as before (answer 2). A stopped record already in the ledger whose dispatch has no completion is completed from it by the start's completion pass (`pending_dispatch_completions`; the ledger returns the existing record), never settled a second time: no change was needed there | `reconcile_scheduled_policy_outcomes_for` and `policy_recovery_outcome_matches` (`host/policy_outcome.rs`) |
+| R6B-9 | the texts: the row `StopInstanceRun` of [runtime-interface.md](runtime-interface.md) and the `ui` row of [lab-two-entries.md](lab-two-entries.md); the row `task stop` of [lab-operations.json](lab-operations.json), its `help` (159 bytes: "Stops one manual or scheduled run of an instance and resets its touches. It ends this run only; its task runs again after its cooldown unless closed or paused.") and its `notes`; every "(R-6b, not built yet)" and "(proposed)" of §1.314's contract texts ([policy-suspension.md](policy-suspension.md), [scheduling/README.md](scheduling/README.md), [runtime-fact-store.md](runtime-fact-store.md)) becomes "since 0.12.55"; the catalog's descriptions of `scheduled_contained_task_not_client_cancellable` and `request_stop_instance_run_completed` (`outcome-codes/contract.json`), of the key `run_origin` and of its vocabulary and tokens (`outcome-codes/catalog.json`, `RunOrigin`'s comments); the comments of `stop_instance_run.rs` and `contained_task.rs` | as named. §1.314 itself keeps its marks: it is the record of the contract slice |
+| R6B-10 | the declarations, as above | `contracts/component-interfaces.md` |
+
+**A stop ends this run only** (answer 5; said where a person reads it: the row `StopInstanceRun`
+and the `help` and `notes` of the row `task stop`). The cooldown counts from the dispatch: a task
+whose trigger still holds is dispatched again once its cooldown has passed, at the next evaluation
+when the stopped run outlasted it; a closing row of the pack schedule (`pack-schedule set`) or a
+pause keeps it from running. A clock slot's occurrence is served by the stopped dispatch; a
+`fact_time_reached` reading with `once_per_reading` is not (serving needs a success).
+
+**Settled by this slice** (each reported to the coordinator):
+
+- *The stop's mark is the terminal's code, live as at a start.* The live settlement reads the
+  run's `task.failed` terminal, not the control's memory of the stop: on a scheduled run only a
+  `StopInstanceRun` asks `ClientRequested` (difference (d)), so the live and the restarted
+  settlement read the same terminal the same way.
+- *The activity begins after the preparation.* Difference (g) and the activity row of
+  [runtime-interface.md](runtime-interface.md) ("`policy_run` ... from its package's preparation")
+  read the activity as shown from the preparation; the code begins it after the preparation, since
+  it names the prepared package's `package_id` (R-0b), and the run's request appears in no record
+  before its lifecycle, which also follows the preparation. A stop that names a run read from the
+  status or the records therefore always found its control registered; the registration now
+  precedes the preparation as answer 8 asks. This slice does not change the activity. The
+  coordinator's ruling on reading this (2026-11-11, not Alice's words): the code stands, and the
+  activity row of runtime-interface.md is corrected at the merge to say what the code does (the
+  activity begins once the package is prepared).
+- *A pause's drain during the preparation.* With the control registered, a scheduling pause's
+  drain sees a physical policy run during its preparation too (it saw a fixture-simulated one
+  already) and, at its drain timeout, asks it to stop; the run then ends at its first check
+  `contained_task_paused`, as any run in flight. Before, the drain saw the physical run only from
+  its registration after the preparation.
+- *Settlement facts.* A stopped record writes none of the four (rather than writing the pair's
+  previous settlement again).
+- *The policy driver's diagnostic.* As for every scheduled cancel, the driver records the run's
+  error as a `runtime.failed` warning (`record_scheduled_policy_failure`); it counts nothing and no
+  reader of a stop takes it as a failure. Unchanged.
+- *A test seam.* `ContainedTaskCheckpointPoint::ScheduledPreparation` (test builds only), after the
+  control's registration and before the package is read.
+
+**What an operator sees after deploy.** A scheduled run can be stopped from the console's "close
+this task" (R-8's second step now acts on it), from actinglab `task stop` and from an agent
+through the Lab's tool: it ends at its next check, or at its first one when the stop came while it
+prepared its package; the Runtime resets the device with the run's lease (one `InputReset` before
+the lease's release); the stop answers `settled` and `reset` as for a direct run. `actingctl runs`
+and `ac_runs` show the run `failed` with `contained_task_cancelled`; its `policy.execution_recorded`
+is `stopped`; nothing counts as a failure, retries, backs off or pauses, the run starts no ladder
+of its own (the fence a failed reset leaves is handed on as every fence is, to a `resource_fence`
+ladder or to a person), no rerun is owed and a rerun the dispatch served ends; the routine
+summary counts it under `interruptions`; the task snapshot shows `cancelled`. A host run, and
+every scheduled run through `ac_stop_run` and `run stop`, stay refused. A console of
+`runtime-client` 6 cannot read an event page that holds a stopped record, so the console of the
+release is deployed with it.
+
+**Tests** (gate rows `#429 R-6b2` in `contracts/test-gates/host.toml` and `policy.toml`; neutral
+ids, a manual clock, no sleep): through the host (`gate_429_r6b2`), a stopped policy run end to end
+(the reset on its lease before its release, its terminal, its `stopped` record, the later stop's
+`settled` and `reset: done`, no streak, failure state, retry round or owed rerun held and replayed
+alike, no ladder, the snapshot `cancelled`, an interruption in the routine summary); a sensitive
+task's stopped run not paused; the stop over `scheduling.rerun.condition_codes` and a
+`recovery_ladder.triggers` item naming `contained_task_cancelled`; the live settlement of a stopped
+owed rerun; the restart from the terminal (`stopped`) and with no terminal (interrupted); a failed
+reset fencing only its instance, the stop starting no ladder of its own (none of the stage `task`,
+of the trigger item or of the run; the fence's `resource_fence` ladder allowed, not required),
+while the other instance's run completes; a stop during the preparation; a stopped fact refresh
+read. In the decision memory (`policy_control`), the
+live input: an immediate rerun's round, an owed rerun and a remedy retry ended; never a condition,
+never over its budget, a condition refused. In the evaluator (`policy` crate): the clock
+occurrence served, a `once_per_reading` reading not served and the task dispatched after its
+cooldown from the dispatch (`gate_405_cf1`); a stopped fact refresh reader neither exhausted nor
+backed off (`gate_d2_s4`).
+Changed: `gate_429_r6::r6_a_host_run_and_a_policy_run_are_refused_with_their_origin_and_nothing_is_cancelled`,
+its policy half (a policy run is asked to stop), renamed
+`r6_a_host_run_is_refused_with_its_origin_and_a_policy_run_is_asked_to_stop` with its `[[retired]]`
+entry in `ci/retired-gates.toml`; `gate_429_r8::r8_closing_a_task_then_stopping_its_run`, its policy
+half (the second step asks the scheduled run to stop), name kept; the test helpers
+`begin_uncancellable_run_for_test` and `end_uncancellable_run_for_test` (renamed from
+`..._unstoppable_...`). No golden, schema or census reads the `help` of `task stop`; the tests that
+read it read the table at run time.
+
+**Rollback.** `ledger` 8 is one way (the Rp.max rule): once the Runtime of the release has run,
+going back below it is refused, whether or not a stop was recorded, and after the first stop a
+stopped record exists that no build before R-6b1 decodes. A revert of R-6b2's code alone returns to
+refusing a policy run's stop (the readers of R-6b1 stay and read nothing new). The configuration
+needs nothing.
 
 ### 1.317 Slice NEUT-2 (0.12.55): the core's tests and fixtures hold no game abbreviation (Workflow #434; Alice's hard constraint of 10-10 that the program itself is game-neutral, in code, contracts, configuration, code tables and tests, with game content only in the resource repositories; coordinator work order `rd-1111/brief-neut2.md`, read on main `385bb500`)
 
@@ -14541,6 +14653,188 @@ order, and end on the same page after as many steps); `nav_l1_t3_a_layer_off_the
 (on a page of the package outside the set the layer starts at the first stage, as before); and
 `nav_l1_t4_a_route_without_stages_and_a_single_entry_page_run_as_a_layer_as_before`. No existing
 test changed: main had no test that ran a phased route as a layer.
+
+### 1.320 Slice DIAG-SI (0.12.55): `contained_task_state_invalid` says what was invalid (Workflow #428; the production run of 11-11 that §1.319 tells ended with the bare code, its cause found only by reading the package's diff; the coordinator's rulings 1 to 6 of 11-11, not Alice's words: one code, with values; coordinator work order `rd-1111/brief-diag-si.md`, read on main `bb5f850d`)
+
+1.320 is the coordinator's number, appended after §1.319 on main `bb5f850d`; §1.316 and §1.318
+belong to slices open at the same time. The code stays `contained_task_state_invalid`, with its
+category (error), its ladder class (`none`) and every end: each run that ended with it still ends
+with it, at the same step and with the same receipt state. Its outcome gains the value
+`state_problem`, a closed vocabulary, and the values that locate it where the place that ends the
+run knows them: the page (`page_id`), the operation (`pack_operation_id`), the stage (`phase_id`,
+new) and, at the host, the package (`package_id`). Where `candidate_directive` already maps a
+refused decision to a more specific code (`contained_task_operation_candidates_exhausted`,
+`contained_task_error_page_reached`), nothing changes.
+
+**The kinds** (vocabulary `state_problem`, `crates/actingcommand-contract/src/outcome/vocabulary.rs`,
+`StateProblem`):
+
+| Token | What is wrong | Whose |
+|---|---|---|
+| `no_move_from_page` | no operation of the stage the run is in (of the package, for a route without stages) leaves the page the run observes, and the page is no target and no error page | the package author's |
+| `transition_refused` | the run's state machine refused a transition the kernel asked of it in its state | the Runtime's |
+| `runtime_invariant` | a value that cannot be absent was absent, an arithmetic that cannot fail failed, or an answer that is never given was given | the Runtime's |
+| `held_state_unusable` | a state the run's layers or a package registry hold is not one the host can use | the Runtime's |
+
+The state machine's error (`crates/execution-kernel/src/run.rs`, `RunDecisionError`) now carries
+its kind, `RunDecisionKind` (`Invalid`, `NoOperationFromPage`, `TransitionRefused`,
+`CandidatesExhausted`), beside the code it had (`run_decision_invalid`, `run_transition_invalid`,
+`contained_task_operation_candidates_exhausted`); the kernel names the token by that kind
+(`decision_problem`, `machine_refusal` in `contained_task.rs`), never by the message.
+
+**The survey** (every place on main `bb5f850d` that emits the code; "by kind": the token is the
+machine's kind; "page", "operation", "stage", "package": the values the place gives):
+
+| # | File | Function (place) | What is wrong there | Token | Values |
+|---|---|---|---|---|---|
+| 1 | kernel `contained_task.rs` | `paced_step` | the runtime's pacing answered a factor below 1000 | `runtime_invariant` | — |
+| 2 | kernel `contained_task.rs` | `run_with_collector` (`RunStateMachine::new`) | the run's configuration refused (no retry is above its maximum) | by kind: `runtime_invariant` | — |
+| 3 | kernel `contained_task.rs` | `run_with_collector` (`start_at_phase`) | the stage entry refused after a step or past the last stage | `transition_refused` | stage |
+| 4 | kernel `contained_task.rs` | `run_with_collector` (`observe_page`, the first page) | a page refused after the end or while an outcome is pending | `transition_refused` | page, stage |
+| 5 | kernel `contained_task.rs` | `run_with_collector` (`end_on_entry_page`) | the entry end refused after a step | `transition_refused` | page, stage |
+| 6 | kernel `contained_task.rs` | `run_with_collector` (`initial_application_directive`) | the application entry's dispatch refused | `transition_refused` | operation, stage |
+| 7 | kernel `contained_task.rs` | `run_with_collector` (`observe_page`, `AwaitPage`) | as 4 | `transition_refused` | page, stage |
+| 8 | kernel `contained_task.rs` | `run_with_collector` (`operation_read_in_place`) | a list reading's end refused | `transition_refused` | operation, page, stage |
+| 9 | kernel `contained_task.rs` | `run_with_collector` (`operation_effect_completed`) | an effect's completion refused | `transition_refused` | operation, page, stage |
+| 10 | kernel `contained_task.rs` | `run_with_collector` (`PostconditionResolution::Held`, first confirmation) | a confirmation held a step that is no wait step | `runtime_invariant` | operation |
+| 11 | kernel `contained_task.rs` | `run_with_collector` (`operation_needs_recovery`, retry on an error page) | a recovery request refused | `transition_refused` | operation, page, stage |
+| 12 | kernel `contained_task.rs` | `run_with_collector` (decision `Retry` on an error page) | a decision that never retries there retried | `runtime_invariant` | operation |
+| 13 | kernel `contained_task.rs` | `run_with_collector` (`PostconditionResolution::Held`, retry confirmation) | as 10 | `runtime_invariant` | operation |
+| 14 | kernel `contained_task.rs` | `run_with_collector` (`operation_needs_recovery`) | as 11 | `transition_refused` | operation, page, stage |
+| 15 | kernel `contained_task.rs` | `run_with_collector` (`RunDirective::Continue` as a next directive) | an answer given only to a confirmed step | `runtime_invariant` | page |
+| 16 | kernel `contained_task.rs` | `complete_successful_step` (stability sample) | a step's observation without its sample under a stability declaration | `runtime_invariant` | operation, page |
+| 17 | kernel `contained_task.rs` | `complete_successful_step` (`operation_succeeded`) | a confirmed step's outcome refused | `transition_refused` | operation, page, stage |
+| 18 | kernel `contained_task.rs` | `finish_keyed_end` (`operation_ended_keyed`) | a keyed end refused | `transition_refused` | operation, page, stage |
+| 19 | kernel `contained_task.rs` | `finish_success_with_key` | an empty end's key beside an OCR comparison's key, which admission keeps apart | `runtime_invariant` | page |
+| 20 | kernel `contained_task.rs` | `await_postcondition_after` | a handed-over instant before the clock's start | `runtime_invariant` | operation |
+| 21 | kernel `contained_task.rs` | `TaskOperation::failure_decision` (`RunFailureObservation::new`) | a failure observation refused | by kind: `runtime_invariant` | operation |
+| 22 | kernel `contained_task.rs` | `TaskOperation::failure_decision` (`decide_run_operation_failure`) | an attempt past its bound, or a recovery without its task | by kind: `runtime_invariant`, `transition_refused` | operation |
+| 23 | kernel `contained_task/candidates.rs` | `candidate_directive` (the last arm: the incident) | no operation of the stage leaves the page; or a page matching two targets; or an outcome pending | by kind: `no_move_from_page`, `runtime_invariant`, `transition_refused` | page, stage |
+| 24 | kernel `contained_task/candidates.rs` | `candidate_directive` (`operation_withdrawn`) | a `when` withdrawal refused | `transition_refused` | operation, page, stage |
+| 25 | kernel `contained_task/candidates.rs` | `pass_over` (`operation_passed_over`) | a pass-over refused | `transition_refused` | operation, page, stage |
+| 26 | kernel `contained_task/linear.rs` | `run_linear_steps` | an admitted plan without a first step | `runtime_invariant` | — |
+| 27 | kernel `contained_task/linear.rs` | `run_linear_steps` | no operation or step at the cursor | `runtime_invariant` | — |
+| 28 | kernel `contained_task/linear.rs` | `run_linear_steps` | the count of dispatched operations overflowed | `runtime_invariant` | — |
+| 29 | kernel `contained_task/linear.rs` | `run_linear_steps` | a reached page neither a member nor the skip target of its optional run | `runtime_invariant` | operation, page |
+| 30 | kernel `contained_task/linear.rs` | `run_linear_step` | a retry decision for a step from `any` | `runtime_invariant` | operation |
+| 31 | kernel `contained_task/linear.rs` | `linear_wait_set` | a wait set without its skip target | `runtime_invariant` | — |
+| 32 | kernel `contained_task/list_reading.rs` | `ScanSession::read_list` | a list scan aborted or stopped early | `runtime_invariant` | — (stage `read_list`, as before) |
+| 33 | kernel `contained_task/list_reading.rs` | `list_rows_of` | a fixed position without a declared feature | `runtime_invariant` | — |
+| 34 | kernel `contained_task/list_reading.rs` | `list_rows_of` | rows of which none carries a confidence | `runtime_invariant` | — |
+| 35 | kernel `contained_task/list_reading.rs` | `read_list_step` | no viewport captured | `runtime_invariant` | operation |
+| 36 | kernel `contained_task/list_reading.rs` | `read_list_step` | a whole list without its end frame | `runtime_invariant` | operation |
+| 37 | kernel `contained_task/observation_window.rs` | `refuse_before_input` (`operation_needs_recovery`) | a recovery request refused | `transition_refused` | operation, page, stage |
+| 38 | kernel `contained_task/observation_window.rs` | `refuse_before_input` (decision `Retry`) | a refusal before the input retried in place | `runtime_invariant` | operation |
+| 39 | kernel `contained_task/declared_operation.rs` | `declared_operation` | an admitted index without its operation | `runtime_invariant` | — |
+| 40 | kernel `contained_task/declared_operation.rs` | `declared_operation_entry` | as 39 | `runtime_invariant` | — |
+| 41 | kernel `contained_task/declared_operation.rs` | `step_end` | the one step ended without a current page | `runtime_invariant` | — |
+| 42 | kernel `contained_task/declared_operation.rs` | `step_end` | the one step ended in another state of the machine | `runtime_invariant` | — |
+| 43 | kernel `offline.rs` | `ReplayRuntime::record` (`step_not_started`, three traces) | a trace of a step that never started | `runtime_invariant` | — |
+| 44 | kernel `offline.rs` | `ReplayRuntime::record` (`ResourceReadings`) | readings without a handed-off frame | `runtime_invariant` | — |
+| 45 | host `navigation.rs` | `navigate_to_entry` | the run holds no navigation | `held_state_unusable` | — |
+| 46 | host `navigation.rs` | `navigate_to_entry` | the run's navigation has no listed entry | `held_state_unusable` | — |
+| 47 | host `prerequisite.rs` | `registry_return_home` | the registry names a return-home package it lists no directory for (fatal, as before) | `held_state_unusable` | package |
+| 48 | host `standard_pack.rs` | `check_shared_interrupt` | no feature package after its admission | `held_state_unusable` | package |
+| 49 | host `standard_pack.rs` | `navigation_features` | the run holds no interrupts | `held_state_unusable` | — |
+| 50 | host `standard_pack.rs` | `navigation_features` | no feature package after its admission | `held_state_unusable` | package |
+| 51 | host `standard_pack.rs` | `handle_navigation_interrupt` | the run holds no interrupts | `held_state_unusable` | — |
+| 52 | host `standard_pack.rs` | `admitted_layer` | the layer package admitted just before is not held | `held_state_unusable` | package |
+| 53 | host `standard_pack.rs` | `run_interrupt_layer` | the handler package is not admitted | `held_state_unusable` | package |
+| 54 | host `lab_operation.rs` | `effect_intent` (three uses) | an attempt count overflowed, no frame captured, a frame index too large | `runtime_invariant` | — |
+| 55 | host `lab_operation.rs` | `press` (two uses) | no attempt, no prepared record | `runtime_invariant` | — |
+| 56 | host `lab_operation.rs` | `record` (`StepStarted`) | the count of started attempts overflowed | `runtime_invariant` | — |
+
+Counts: `no_move_from_page` 1 place (23, by kind); `transition_refused` 14 places, and 2 by kind
+(22, 23); `runtime_invariant` 31 places (2 and 21 by a kind that is always `Invalid` there), and 2
+by kind (22, 23); `held_state_unusable` 9 places.
+
+**Where the values are read** (ruling 4). The run's terminal and receipt carry them as every
+kernel failure's values (`host/contained_task.rs`, the terminal's `has_values` branch, unchanged).
+A layer's failure: a prerequisite layer's gate (`host/prerequisite.rs`, `close_open`,
+`record_closed`, `fail_gate`) records the outcome of a `contained_task_state_invalid` with its
+values (`layer_failure_outcome`) in each `EntryRecoveryFailed` and in its fail-closed
+`EntryTargetDisposition`, and carries the code with its values out (`layer_task_failure`); every
+other code stays its code alone there, as before. The home entry's recovery layer
+(`host/contained_task.rs`, the task-failure arm after `run_entry_recovery` and a configured
+return-home package's run; the one edit there) does the same. Navigation layers, recovery chain
+steps and interrupt handlers already record and carry the layer's whole outcome
+(`run_navigation_layer`, `run_interrupt_layer`, `close_navigation`). The codes-only projection keeps
+`state_problem` (a `vocab` value); the ids are `id` values, which codes mode withholds
+([runtime-outcomes.md](runtime-outcomes.md), "Codes mode"). The offline replay adapter's error
+(`OfflineSimulationError::outcome`) carries the token; `actinglab replay` prints its code as before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DSI-1 | `state_problem` (`vocab:state_problem`), `phase_id` (`id`) | outcome keys, `runtime-outcomes` 1 | DIAG-SI | the kernel, the host | `since` 0.12.55 |
+| DSI-2 | `state_problem`: `no_move_from_page`, `transition_refused`, `runtime_invariant`, `held_state_unusable` | vocabulary, `runtime-outcomes` 1 | DIAG-SI | the kernel, the host | closed; kept in codes mode |
+| DSI-3 | `contained_task_state_invalid`: optional values `state_problem`, `page_id`, `pack_operation_id`, `phase_id`, `package_id`; description, causes and handling written | catalog entry (contract fragment) | DIAG-SI | — | category, ladder class and every end unchanged |
+| DSI-4 | `RunDecisionKind`, `RunDecisionError::kind` | kernel API | DIAG-SI | — | the code of each refusal unchanged |
+
+**Settled here** (the rulings left them open; each the slice's, the coordinator may change them):
+
+- The operation's key is the existing `pack_operation_id` (the catalog has no `operation_id`;
+  `operation` is a location key). The stage's key is `phase_id`, the stage's declared id (the key
+  `stage` is a location and the guard G3 refuses it, and a phased route's stages are its
+  `phases`, as the Lab's declared operation names its `phase_id`).
+- `state_problem` is optional in the code's values: a relayed spelling carries no value, and a
+  build before 0.12.55 wrote none.
+- A layer's failure keeps its values only for this code; widening that to every code would change
+  other codes' records, which no ruling asked.
+- The two places of the offline replay adapter (43, 44) end the replay as before
+  (`OfflineReplayError::Invariant`), now with an outcome that names the token.
+
+**What an operator and a package author see after deploy.** A run that ended
+`contained_task_state_invalid` still ends so, but its terminal, its receipt and, for a layer, its
+`task.entry_preflight` records say what was invalid. The incident's kind, a phased prerequisite
+package on a page outside its entry page set that its first stage has no operation from, reads in
+full detail:
+
+```json
+{"code":"contained_task_state_invalid","category":"error",
+ "values":{"operation":"run_contained_task","state_problem":"no_move_from_page",
+           "page_id":"neutral/busy","phase_id":"first"}}
+```
+
+and in codes mode `{"code":"contained_task_state_invalid","category":"error","values":
+{"operation":"run_contained_task","state_problem":"no_move_from_page"}}`. The package author
+gives the stage `phase_id` an operation from the page `page_id`, makes that page a target of the
+stage, or, for a layer, lists the page in the entry page set with the stage it starts. The three
+other tokens are the Runtime's own: report the run's records with the outcome.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)):
+`runtime-outcomes` stays 1, with two keys and one vocabulary added within it and the code's
+values widened; `ledger` does not move (the records gain values in an outcome they already
+carry, a map their reader takes as written); `package`, `runtime-client` and `actingd-config`
+are untouched.
+
+**Rollback** (below 0.12.55). Nothing is persisted that a build before needs undone: it emits the
+bare code again, and it reads the records this build wrote, whose new values it only spells.
+
+Tests (exec gate row "#428 DIAG-SI", `crates/execution-kernel/src/contained_task/gate_428_diag_si.rs`,
+synthetic packages on the kernel's scripted runtime; host gate row "#428 DIAG-SI",
+`crates/runtime-host/src/tests/gate_428_diag_si.rs`, a synthetic game root on the fake device):
+`diag_si_t1_a_stage_without_a_move_from_the_observed_page_names_the_page_and_the_stage` (a phased
+route run as each kind of layer on a page outside its entry page set and outside the first
+stage's moves ends before any step with the token, the page and the stage; an ordinary run of a
+route without stages, brought by its one operation to a page no operation leaves, ends after that
+step with the token and the page; category error, ladder class `none`);
+`diag_si_t2_the_state_machine_names_the_kind_of_a_refused_decision` (no operation from the page, a
+refused transition and a page matching two targets, each with its code of before and its token);
+`diag_si_t3_a_pacing_factor_below_the_minimum_is_a_runtime_invariant`;
+`diag_si_t4_the_codes_only_projection_keeps_the_token`; and the host's
+`diag_si_a_prerequisite_layer_without_a_move_names_the_page_and_the_stage_in_its_records` (the
+incident's shape through the prerequisite gate: receipt failed with the code, no input, and
+`EntryRecoveryFailed`, the fail-closed `EntryTargetDisposition` and the terminal with the token,
+the page and the stage). An ordinary phased run cannot be brought to such a page by its own
+operations: admission's static walk refuses that route (`task_phases_unreachable`), so T1's
+ordinary run is a route without stages. No test reaches `transition_refused` or
+`held_state_unusable` through a run: the kernel alone drives its machine (T2 pins the kind and the
+token), and each host place is guarded by the state it reads (`navigates()` before
+`navigate_to_entry`, an admission just before the lookup, the bundle check of a registry). No
+existing test changed: none compared an outcome of this code (the kernel's and the host's
+`gate_411_a45` name it only as absent, `gate_419_iso1` as an instance fault's code), and none
+pinned a run's end with it, so the end's step, category and receipt state are asserted beside the
+new values.
 
 ### 1.321 Slice CODES-IX (0.12.56): a generated index of the outcome code catalog, kept current by CI (Workflow #439; Alice, 11-12: 「错误码可以分批做，并且可以搞个索引」; the coordinator's eight rulings of 11-12, not Alice's words; coordinator work order `rd-1111/brief-codes-index.md`, read on main `2e3062ec`)
 

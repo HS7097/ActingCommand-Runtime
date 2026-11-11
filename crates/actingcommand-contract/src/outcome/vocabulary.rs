@@ -225,13 +225,38 @@ crate::outcome_vocabulary! {
 crate::outcome_vocabulary! {
     /// Who started a run that a client cannot stop (vocabulary `run_origin`; Workflow #429 R-6):
     /// `StopInstanceRun` refuses it with `scheduled_contained_task_not_client_cancellable`, naming
-    /// it, and a pause or a person's hold stops it instead.
+    /// it, and a pause or a person's hold stops it instead. Since 0.12.55 (R-6b2) only `host` is
+    /// produced: a policy run is stopped and settles as a stop.
     pub enum RunOrigin: "run_origin" {
-        /// A run the scheduler dispatched (a policy run). The first slice of R-6 refuses it until
-        /// the ledger's revision 8 can record its stop as an interruption.
+        /// A run the scheduler dispatched (a policy run). The first slice of R-6 (0.12.53) refused
+        /// it with this token; since 0.12.55 (R-6b2) `StopInstanceRun` stops it, and the token
+        /// stays registered.
         Policy => "policy",
-        /// A run the Runtime starts for itself: a startup package or a recovery ladder rung.
+        /// A run the Runtime starts for itself: a startup package, a recovery ladder rung or an
+        /// idle action's rest.
         Host => "host",
+    }
+}
+
+crate::outcome_vocabulary! {
+    /// Which kind of invalid state ended a contained task's run with the shared code
+    /// `contained_task_state_invalid` (vocabulary `state_problem`; Workflow #428 DIAG-SI, register
+    /// §1.320, since 0.12.55). The kernel and the host emit the code at many places; each place
+    /// gives its kind, and the page (`page_id`), the operation (`pack_operation_id`) and the stage
+    /// (`phase_id`) where it knows them.
+    pub enum StateProblem: "state_problem" {
+        /// No operation of the stage the run is in (of the package, for a route without stages)
+        /// leaves the page the run observes, and the page is no target and no error page of the
+        /// package: an authoring error of the package.
+        NoMoveFromPage => "no_move_from_page",
+        /// The run's state machine refused a transition the kernel asked of it in its state.
+        TransitionRefused => "transition_refused",
+        /// A Runtime-internal invariant broke: a value that cannot be absent was absent, an
+        /// arithmetic that cannot fail failed, or an answer that is never given was given.
+        RuntimeInvariant => "runtime_invariant",
+        /// A state the run's layers or a package registry hold is not one the host can use (the
+        /// run's navigation or interrupt state, an admitted layer package, a registry entry).
+        HeldStateUnusable => "held_state_unusable",
     }
 }
 

@@ -171,6 +171,9 @@ mod gate_428_s168_4;
 // Workflow #428 S168-LB1a: lists of up to 1024 rows, the scheduler's projection without lists and
 // long record lists, the instance fact read by key prefix, and the revisions.
 mod gate_428_s168_lb1a;
+// Workflow #428 DIAG-SI (register §1.320): a layer's `contained_task_state_invalid` names what was
+// invalid in its gate's records and the run's terminal.
+mod gate_428_diag_si;
 // Workflow #336 PKG-S3: bindings without a package digest, failure identity v2 and the lift of
 // a pause by a package's content hash.
 mod gate_336_pkgs3;
@@ -352,6 +355,8 @@ mod gate_429_r8;
 // Workflow #429 R-6b1: the readers of a stopped run's record (its projections, the remedy
 // journal and `actingd suspended`).
 mod gate_429_r6b1;
+// Workflow #429 R-6b2: a scheduled run is stopped as a direct run is and settles as a stop.
+mod gate_429_r6b2;
 // Workflow #429 R-7a: the player hold's two kinds answer `not_implemented` on every channel.
 mod gate_429_r7a;
 // Workflow #429 R-7a2: every dispatch site takes its code from the one order of the control gates.

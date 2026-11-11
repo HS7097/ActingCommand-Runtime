@@ -392,7 +392,10 @@ session still fences its instance (#411 A46 widened, ISO-M row C01).
   declared operation whose own state broke (`contained_task_effect_invalid`,
   `contained_task_state_invalid`, `contained_task_effect_frame_identity_mismatch`) fail their
   request or operation, non-fatal (`capture_failed`, resp. `backend_operation_failed`); the Lab
-  operation's record is written. Nothing is fenced (ISO-M rows E45, E48).
+  operation's record is written. Nothing is fenced (ISO-M rows E45, E48). Since 0.12.55
+  (Workflow #428 DIAG-SI) `contained_task_state_invalid` names its kind in `state_problem`
+  (`no_move_from_page`, `transition_refused`, `runtime_invariant`, `held_state_unusable`), a
+  token kept in codes mode; a Lab declared operation's own state is `runtime_invariant`.
 - **A Nemu input stopped by its check names why** (ISO-M row E08). The device's input check
   (`InputOperationCheck`) answers an input that the work admitting it ended with the stop
   (`DeviceError::input_check_stopped`: its deadline, its lease, its cancellation), not a device

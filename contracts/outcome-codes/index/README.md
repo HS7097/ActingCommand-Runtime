@@ -40,9 +40,9 @@ here.
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 624 |
+| `common_causes` and `handling` both written | 625 |
 | one of the two written, the other `TBD` or empty | 9 |
-| neither written (`TBD` or empty) | 3261 |
+| neither written (`TBD` or empty) | 3260 |
 | `settled` | 171 |
 | `pending` | 3723 |
 | all active codes | 3894 |
@@ -57,7 +57,7 @@ here.
 | [actinglab](actinglab.md) | 41 | 40 | 39 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 1 | 0 |
-| [contract](contract.md) | 915 | 911 | 148 | 39 |
+| [contract](contract.md) | 915 | 911 | 149 | 39 |
 | [device](device.md) | 33 | 33 | 27 | 23 |
 | [display-adapter](display-adapter.md) | 2 | 2 | 0 | 0 |
 | [execution-kernel](execution-kernel.md) | 203 | 200 | 18 | 0 |
@@ -80,4 +80,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 0 | 0 |
-| all | 3912 | 3894 | 624 | 171 |
+| all | 3912 | 3894 | 625 | 171 |

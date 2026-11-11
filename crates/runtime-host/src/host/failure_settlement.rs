@@ -290,6 +290,11 @@ impl HostShared {
         let (outcome, class) = match input {
             PolicyExecutionInput::Failed { outcome, class, .. } => (outcome, class),
             PolicyExecutionInput::Succeeded => return Ok(PolicyExecutionInput::Succeeded),
+            // Workflow #429 R-6b2 (register §1.314 R6B-4): a stop is no failure of its task: no
+            // failure identity is computed for it.
+            PolicyExecutionInput::Stopped { outcome } => {
+                return Ok(PolicyExecutionInput::Stopped { outcome });
+            }
         };
         let code = scheduled_failure_code_str(&outcome);
         // Workflow #373 NAV-5 (M-373 §8.5): the package a navigation package refusal names.
@@ -615,18 +620,22 @@ fn compare_frame_files(
 
 /// §12.6 point 4: the recorded execution's own input, after its failure is checked against the
 /// terminal's `outcome` (the same code, and an identity whose base segment is that code's); any
-/// other record is left to the replay, which refuses it.
+/// other record (a success, or Workflow #429 R-6b2's stop, whose own settlement computes no
+/// failure identity and never reaches here) is left to the replay, which refuses it.
 fn recorded_failure_input(
     recorded: PolicyExecutionEventData,
     outcome: Outcome,
     class: PolicyFailureClass,
 ) -> RuntimeHostResult<PolicyExecutionInput> {
-    let PolicyExecutionOutcome::Failed { failure } = recorded.outcome else {
-        return Ok(PolicyExecutionInput::Failed {
-            outcome,
-            failure_identity: None,
-            class,
-        });
+    let failure = match recorded.outcome {
+        PolicyExecutionOutcome::Failed { failure } => failure,
+        PolicyExecutionOutcome::Succeeded { .. } | PolicyExecutionOutcome::Stopped { .. } => {
+            return Ok(PolicyExecutionInput::Failed {
+                outcome,
+                failure_identity: None,
+                class,
+            });
+        }
     };
     if failure.reported_success {
         return Ok(PolicyExecutionInput::Failed {

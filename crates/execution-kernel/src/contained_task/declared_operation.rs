@@ -27,7 +27,8 @@
 
 use super::{
     ContainedTaskCode, ContainedTaskError, ContainedTaskRunError, ContainedTaskRunOptions,
-    ContainedTaskRuntime, DEFAULT_TASK_TIMEOUT_MS, PageObservation, PreparedContainedTask, linear,
+    ContainedTaskRuntime, DEFAULT_TASK_TIMEOUT_MS, PageObservation, PreparedContainedTask,
+    invariant_broken, linear,
 };
 use crate::codes::ExecutionKernelCode;
 use crate::{RunStateMachine, RunTerminal};
@@ -242,6 +243,8 @@ pub(super) fn step_end(
     }
 }
 
+/// Workflow #428 DIAG-SI: an index admission resolved and the machine's end of the one step are
+/// the kernel's own: a Runtime-internal invariant.
 fn state_invalid() -> ContainedTaskError {
-    ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
+    invariant_broken(|outcome| outcome)
 }

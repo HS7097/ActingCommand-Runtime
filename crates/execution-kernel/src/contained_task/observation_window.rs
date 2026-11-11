@@ -26,7 +26,8 @@ use super::{
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, ExtraRounds,
     FreshFrameObservation, PageCandidates, PageObservation, PostAdmissionOcrCollector,
     PostconditionResolution, PreparedContainedTask, SampleRetries, Scene, TaskControl,
-    TaskOperation, budget_now, budget_observation_now, sample_retry,
+    TaskOperation, budget_now, budget_observation_now, invariant_broken, machine_refusal,
+    sample_retry,
 };
 use crate::codes::ExecutionKernelCode;
 use crate::{RunFailureStage, RunOperationFailureDecision, RunOperationPolicy, RunStateMachine};
@@ -248,14 +249,20 @@ impl PreparedContainedTask {
             RunFailureStage::PreExecutionGuard,
         )? {
             RunOperationFailureDecision::RequestRecovery(trigger) => {
-                machine.operation_needs_recovery(trigger).map_err(|_| {
-                    ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
-                })?;
+                machine
+                    .operation_needs_recovery(trigger)
+                    .map_err(|refused| {
+                        machine_refusal(&refused, machine, Some(operation.id.as_str()))
+                    })?;
                 Ok(())
             }
             RunOperationFailureDecision::Fail(_) => Err(error.into()),
+            // Workflow #428 DIAG-SI: a refusal before the input is never retried in place.
             RunOperationFailureDecision::Retry { .. } => {
-                Err(ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()).into())
+                Err(
+                    invariant_broken(|outcome| outcome.pack_operation_id(operation.id.as_str()))
+                        .into(),
+                )
             }
         }
     }

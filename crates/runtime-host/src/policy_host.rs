@@ -6985,6 +6985,16 @@ fn execution_input_matches(outcome: &PolicyExecutionOutcome, input: &PolicyExecu
         (PolicyExecutionOutcome::Failed { failure }, PolicyExecutionInput::Failed { .. }) => {
             !failure.reported_success && input.names_failure(failure)
         }
+        // Workflow #429 R-6b2: a stopped record is the stop of the same terminal code.
+        (
+            PolicyExecutionOutcome::Stopped {
+                outcome: recorded, ..
+            },
+            PolicyExecutionInput::Stopped { outcome },
+        ) => {
+            actingcommand_contract::scheduled_failure_code_str(recorded)
+                == actingcommand_contract::scheduled_failure_code_str(outcome)
+        }
         _ => false,
     }
 }

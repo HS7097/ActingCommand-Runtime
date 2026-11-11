@@ -251,7 +251,108 @@ fn cf1_a_v1_catalog_naming_either_member_is_refused() {
     }
 }
 
+// Workflow #429 R-6b2 (register §1.314 "What a stopped run leaves, per trigger", answer 5,
+// §1.316): what the scheduler does after a run a `StopInstanceRun` stopped, whose snapshot the
+// Runtime projects `cancelled` with its dispatch as `last_dispatched_unix_ms`. A clock slot's
+// occurrence is served by the stopped dispatch: a task whose hourly clock is its trigger is not
+// dispatched again before the next hour (one stopped before the hour's start still is). A
+// `fact_time_reached` reading with `once_per_reading` is not served by a stop (serving needs a
+// success): the task is due again, held by its cooldown counted from the stopped dispatch, and
+// dispatched once the cooldown has passed, where a success would have served the reading.
+#[test]
+fn r6b2_a_stopped_run_serves_its_clock_occurrence_and_not_a_reading() {
+    let clock = neutral_catalog(json!([task(CLOCK_TASK, 100, hourly(), 1_000)]));
+    // NOW is one minute past the hour: a dispatch 30 s ago is in this hour, one 2 min ago before it.
+    let served = evaluate_at(
+        &clock,
+        Vec::new(),
+        vec![ran(CLOCK_TASK, NOW - 30_000, TaskTerminalState::Cancelled)],
+    );
+    assert!(
+        served.dispatch_intents.is_empty(),
+        "the stopped dispatch served the hour's occurrence: {:#?}",
+        served.dispatch_intents
+    );
+    let waiting = decision(&served, CLOCK_TASK);
+    assert_eq!(waiting.state, SchedulingDecisionState::Blocked);
+    assert_eq!(last_code(waiting), TRIGGER_FALSE);
+    let before = evaluate_at(
+        &clock,
+        Vec::new(),
+        vec![ran(CLOCK_TASK, NOW - 120_000, TaskTerminalState::Cancelled)],
+    );
+    assert_eq!(
+        dispatched(&before),
+        [CLOCK_TASK],
+        "the hour's occurrence is due"
+    );
+
+    let slot = slot_catalog_with_cooldown(STOPPED_SLOT_COOLDOWN_MS);
+    let reading = || vec![slot_ready_at(NOW - 1_700_000, NOW - 1_800_000)];
+    let stopped_at = NOW - 300_000;
+    let within = evaluate_at(
+        &slot,
+        reading(),
+        vec![ran(SLOT, stopped_at, TaskTerminalState::Cancelled)],
+    );
+    assert!(within.dispatch_intents.is_empty());
+    let held = decision(&within, SLOT);
+    assert_eq!(held.state, SchedulingDecisionState::Deferred);
+    assert_eq!(last_code(held), COOLDOWN);
+    assert!(
+        !codes(held).contains(&FACT_TIME_SERVED),
+        "a stop serves no reading"
+    );
+    assert_eq!(
+        held.next_wake_unix_ms,
+        Some(stopped_at + STOPPED_SLOT_COOLDOWN_MS),
+        "the cooldown counts from the stopped dispatch"
+    );
+    let stopped_earlier = NOW - 1_200_000;
+    let after = evaluate_at(
+        &slot,
+        reading(),
+        vec![ran(SLOT, stopped_earlier, TaskTerminalState::Cancelled)],
+    );
+    assert_eq!(
+        dispatched(&after),
+        [SLOT],
+        "past its cooldown: dispatched again"
+    );
+    let succeeded = evaluate_at(
+        &slot,
+        reading(),
+        vec![ran(SLOT, stopped_earlier, TaskTerminalState::Succeeded)],
+    );
+    assert!(
+        succeeded.dispatch_intents.is_empty(),
+        "a success would have served the reading"
+    );
+    assert_eq!(
+        codes(decision(&succeeded, SLOT)),
+        [FACT_TIME_SERVED, TRIGGER_FALSE]
+    );
+}
+
 // ---- Fixtures ----
+
+// R-6b2's task due by its hourly clock alone.
+const CLOCK_TASK: &str = "task.clock";
+// R-6b2's slot task's cooldown: ten minutes, past the activity's one-minute interval.
+const STOPPED_SLOT_COOLDOWN_MS: u64 = 600_000;
+
+// The slot task of `slot_catalog` with its cooldown `cooldown_ms`.
+fn slot_catalog_with_cooldown(cooldown_ms: u64) -> CompiledCatalog {
+    let trigger = json!({
+        "kind": "fact_time_reached",
+        "scope": {"kind": "instance", "instance_id": A},
+        "fact_key": SLOT_READY_AT,
+        "offset_ms": OFFSET_MS,
+        "max_age_ms": MAX_AGE_MS,
+        "once_per_reading": true
+    });
+    neutral_catalog(json!([task(SLOT, 100, trigger, cooldown_ms)]))
+}
 
 // The lead (hourly clock, two-hour cooldown) and its successor, due by the edge on its success.
 fn chain_catalog() -> CompiledCatalog {

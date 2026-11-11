@@ -74,7 +74,7 @@ column means. 915 codes.
 | `contained_task_prerequisite_incompatible` | error | declaration_error | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task prerequisite incompatible. |
 | `contained_task_prerequisite_step_limit` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task prerequisite step limit. |
 | `contained_task_recognition_failed` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task recognition failed. |
-| `contained_task_state_invalid` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task state invalid. |
+| `contained_task_state_invalid` | error | none | 0.12.0 | active | pending | written | A code several owners emit with one meaning (contract-owned, A2a D3): a contained task's run reached a state from which it cannot go on, and ended there. |
 | `current_page_unknown` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): current page unknown. |
 | `dangling_reference` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): dangling reference. |
 | `device_diagnostic_owner_mismatch` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: device diagnostic owner mismatch. |
@@ -772,7 +772,7 @@ column means. 915 codes.
 | `request_start_agent_session_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a StartAgentSession request: the Runtime did what the request asked. |
 | `request_start_report_completed` | success | none | 0.12.19 | active | pending | written | A completed receipt of a StartReport request: the Runtime did what the request asked. |
 | `request_status_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a Status request: the Runtime did what the request asked. |
-| `request_stop_instance_run_completed` | success | none | 0.12.53 | active | pending | written | A completed receipt of a StopInstanceRun request: the stop, settled with how the Runtime's own reset went or still stopping after wait_ms; a failed reset's… |
+| `request_stop_instance_run_completed` | success | none | 0.12.53 | active | pending | written | A completed receipt of a StopInstanceRun request: the stop of a client's direct run or, since 0.12.55 (Workflow #429 R-6b2), of a run the scheduler started,… |
 | `request_subscribe_events_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a SubscribeEvents request: the Runtime did what the request asked. |
 | `resource_adjustment_fact_key_duplicate` | error | declaration_error | 0.12.0 | active | pending | TBD | Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: two adjustments change one key on one operation. |
 | `resource_adjustment_fact_key_invalid` | error | declaration_error | 0.12.0 | active | pending | TBD | Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: an adjustment's fact_key is no resource.* or inventory.* instance fact key. |
