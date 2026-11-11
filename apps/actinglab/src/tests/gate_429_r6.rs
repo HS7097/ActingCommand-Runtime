@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #429 R-6, first slice (register §1.301; contracts/lab-operations.json, the row
+// Workflow #429 R-6, first slice (register §1.302; contracts/lab-operations.json, the row
 // `task stop`; coordinator work order rd-1111/brief-r6.md): the Lab's core row `task stop` reaches
 // `StopInstanceRun`, as the neighbouring core rows reach their requests (`gate_434_lab2`).
 // - `r6_task_stop_words_and_serve_line_reach_the_same_stop`: the row is offered with its one

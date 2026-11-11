@@ -5829,7 +5829,7 @@ struct HostShared {
     /// their directory (memory only). A leaf lock: nothing else is taken while it is held.
     display_safe_area: Mutex<crate::display_safe_area::SafeAreaDeclarations>,
     contained_runs: Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
-    // Workflow #429 R-6 (register §1.301): each instance's latest stopped run (memory only).
+    // Workflow #429 R-6 (register §1.302): each instance's latest stopped run (memory only).
     stopped_runs: stop_instance_run::StoppedRuns,
     // Workflow #429 R-0b (register §1.238): what each instance does now, as the status shows it
     // (memory only; never read from the ledger). A leaf lock.

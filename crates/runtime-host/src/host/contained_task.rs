@@ -615,7 +615,7 @@ pub(super) struct ContainedRunControl {
     /// #411 A64 (ruling C-43): whether a close of the instance's resources at a lease end in the
     /// run's end phase met the lapsed lease and closed nothing (`LAPSED_CLOSE_*`).
     lapsed_close: AtomicU8,
-    /// Workflow #429 R-6 (register §1.301): where a `StopInstanceRun` of this run stands
+    /// Workflow #429 R-6 (register §1.302): where a `StopInstanceRun` of this run stands
     /// (`STOP_*`).
     runtime_stop: AtomicU8,
     /// Workflow #429 R-6: how the stop's reset went, set once: by the Runtime's own reset, or
@@ -623,7 +623,7 @@ pub(super) struct ContainedRunControl {
     stop_reset: std::sync::OnceLock<StopReset>,
 }
 
-/// Workflow #429 R-6 (register §1.301): how the Runtime's own reset after a `StopInstanceRun`
+/// Workflow #429 R-6 (register §1.302): how the Runtime's own reset after a `StopInstanceRun`
 /// went, as the stop answers it: `done`, `failed` with the failure that fenced the run's instance
 /// (the receipt's cause), or `not_needed` for a run that ended without the stop's reset.
 #[derive(Debug, Clone)]
@@ -843,7 +843,7 @@ impl ContainedRunControl {
         }
     }
 
-    /// Workflow #429 R-6 (register §1.301): who started a run that `StopInstanceRun` refuses: the
+    /// Workflow #429 R-6 (register §1.302): who started a run that `StopInstanceRun` refuses: the
     /// Runtime itself (a startup package, a ladder rung) or the scheduler (a policy run, which the
     /// first slice refuses until `ledger` 8). `None` for a client's direct run, which it stops.
     pub(super) fn stop_refused_origin(&self) -> Option<RunOrigin> {
@@ -8483,7 +8483,7 @@ impl HostShared {
                                 RuntimeErrorCode::RuntimeHalted,
                             ))
                         })?;
-                    // Workflow #429 R-6 (register §1.301): a client's run that `StopInstanceRun`
+                    // Workflow #429 R-6 (register §1.302): a client's run that `StopInstanceRun`
                     // stopped is reset by the Runtime with the run's own lease, before its terminal
                     // and its lease end; its client owes no `SafeReset`. A reset that failed fenced
                     // the instance only, and the lease ends below as a failed one does.

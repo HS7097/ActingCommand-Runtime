@@ -6027,8 +6027,8 @@ impl RuntimeReceipt {
             RuntimeResult::InstanceRunStopped { stopped },
         )?;
         if let Some(failure) = reset_failure {
-            let outcome = receipt_state_outcome(request, RuntimeReceiptState::Completed)?
-                .caused_by(failure);
+            let outcome =
+                receipt_state_outcome(request, RuntimeReceiptState::Completed)?.caused_by(failure);
             receipt.outcome = receipt_envelope(&outcome, receipt.outcome.detail());
             receipt.validate()?;
         }

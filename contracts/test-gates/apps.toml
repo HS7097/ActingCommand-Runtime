@@ -1385,7 +1385,7 @@ tests = [
 ]
 incident = ["#434 LAB-5G1"]
 
-# Workflow #429 R-6, first slice (0.12.52; register §1.301; contracts/lab-operations.json, the row task stop): the core row task stop is offered with its help and names StopInstanceRun; its command line is the CLI module's; its words (task stop <inst> <request> --wait 2s) and the serve --stdio line with the same parameters give the same call, the run's request and a two-second wait, and without --wait the stop answers at once (a zero wait)
+# Workflow #429 R-6, first slice (0.12.52; register §1.302; contracts/lab-operations.json, the row task stop): the core row task stop is offered with its help and names StopInstanceRun; its command line is the CLI module's; its words (task stop <inst> <request> --wait 2s) and the serve --stdio line with the same parameters give the same call, the run's request and a two-second wait, and without --wait the stop answers at once (a zero wait)
 [[gate]]
 coverage = "Y"
 tests = [

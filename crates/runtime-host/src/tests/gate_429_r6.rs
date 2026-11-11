@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #429 R-6, first slice (register §1.301; contracts/runtime-interface.md, "Workbench
+// Workflow #429 R-6, first slice (register §1.302; contracts/runtime-interface.md, "Workbench
 // request kinds", the row `StopInstanceRun`; coordinator work order rd-1111/brief-r6.md, option C):
 // a client's direct run is stopped and the Runtime resets the device itself, with the run's own
 // lease; a host run and a policy run are refused with their origin. Through the host, on a fake
@@ -270,7 +270,9 @@ fn r6_the_reset_happens_after_the_requesting_client_disconnects() {
     let a = instance_id();
     let host = start_host(&root, vec![(ALIAS, a, Arc::clone(&state))]);
     let address = host.runtime_info().socket_addr().expect("runtime address");
-    let asked = host.notify_run_stops_for_test().expect("the stops' notices");
+    let asked = host
+        .notify_run_stops_for_test()
+        .expect("the stops' notices");
     let (run, receipt) = run_with(
         &host,
         ALIAS,

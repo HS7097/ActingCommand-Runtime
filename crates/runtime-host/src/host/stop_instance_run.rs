@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #429 R-6, first slice (register §1.301; `contracts/runtime-interface.md`, "Workbench
+//! Workflow #429 R-6, first slice (register §1.302; `contracts/runtime-interface.md`, "Workbench
 //! request kinds", the row `StopInstanceRun`): a person or an agent stops one run of one instance
 //! and the Runtime resets the device itself, with the run's own lease, so the reset never hangs
 //! on the requesting client's connection.
@@ -262,7 +262,9 @@ impl HostShared {
                 Some(fence) => fence,
                 None => return Err(RequestFailure::poison_without_terminal(error.into_fatal())),
             },
-            Contained::Latched(error) => return Err(RequestFailure::poison_without_terminal(error)),
+            Contained::Latched(error) => {
+                return Err(RequestFailure::poison_without_terminal(error));
+            }
         };
         control.note_stop_reset(StopReset {
             reset: InstanceRunReset::Failed,

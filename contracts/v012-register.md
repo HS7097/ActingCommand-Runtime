@@ -10836,13 +10836,12 @@ the capacity, data the pack or a person sets).
 SCHED-C1d: a valued pool's episode then survives a start, a generation and an unknown reading (no
 production pool is valued today).
 
-### 1.301 Slice R-6, first slice (0.12.52): `StopInstanceRun` stops a client's direct run and the Runtime resets the device itself (Workflow #429 A.2 contract point 2 and the slice row R-6, board #429 6535257381; the desktop program's "close this task" button is disabled because the Runtime answered `not_implemented`, and a run the scheduler started could not be stopped from the Lab or MCP at all; the coordinator's choice of 11-11, option C, not Alice's words: this slice stops direct runs only and refuses a policy run with `run_origin` until `ledger` 8; coordinator work order `rd-1111/brief-r6.md`, read on main `c0edc8b2`)
+### 1.302 Slice R-6, first slice (0.12.52): `StopInstanceRun` stops a client's direct run and the Runtime resets the device itself (Workflow #429 A.2 contract point 2 and the slice row R-6, board #429 6535257381; the desktop program's "close this task" button is disabled because the Runtime answered `not_implemented`, and a run the scheduler started could not be stopped from the Lab or MCP at all; the coordinator's choice of 11-11, option C, not Alice's words: this slice stops direct runs only and refuses a policy run with `run_origin` until `ledger` 8; coordinator work order `rd-1111/brief-r6.md`, read on main `c0edc8b2`)
 
 [runtime-interface.md](runtime-interface.md) ("Workbench request kinds", the row `StopInstanceRun`)
 is the contract; [lab-operations.json](lab-operations.json) (the row `task stop`) and
-[lab-two-entries.md](lab-two-entries.md) (the `ui` entry's list) follow it. The number 1.301 is the
-implementer's, after 1.299 and 1.300 of the open PRs of the same day; the coordinator renumbers it
-if needed. No wire shape, configuration key, ledger shape or interface revision is new: the
+[lab-two-entries.md](lab-two-entries.md) (the `ui` entry's list) follow it. The number 1.302 is the
+coordinator's: 1.300 is held for INST-5 and 1.301 for ISO-START-1, open the same day. No wire shape, configuration key, ledger shape or interface revision is new: the
 request and its answer are R-0's (§1.213) and the client's method R-0c's (§1.216); one success code
 and one outcome key with its vocabulary are (R6-2, R6-3).
 

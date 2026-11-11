@@ -7,7 +7,7 @@
 // nothing is appended to the ledger and no instance's status changes. Workflow #429 R-4 (register
 // §1.239, since 0.12.36) gives `ConfigureSettings.expected_version` its behaviour, so that case
 // left this test (`gate_387_d1b`, `r4_t*`); so does `RoutineSummary` with R-12 (register §1.264,
-// since 0.12.38; `gate_429_r12`), and `StopInstanceRun` with R-6 (register §1.301; `gate_429_r6`).
+// since 0.12.38; `gate_429_r12`), and `StopInstanceRun` with R-6 (register §1.302; `gate_429_r6`).
 
 use super::gate_383_ao4q::ledger_head;
 use super::*;
