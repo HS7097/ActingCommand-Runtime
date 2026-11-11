@@ -344,6 +344,8 @@ mod gate_429_r0b;
 mod gate_429_r12;
 // Workflow #429 R-6: `StopInstanceRun` stops a direct run and the Runtime resets the device.
 mod gate_429_r6;
+// Workflow #429 R-8: a task package switched on or off for one instance.
+mod gate_429_r8;
 // Workflow #429 R-7a: the player hold's two kinds answer `not_implemented` on every channel.
 mod gate_429_r7a;
 // Workflow #429 R-7a2: every dispatch site takes its code from the one order of the control gates.

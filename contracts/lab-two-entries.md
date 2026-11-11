@@ -153,7 +153,8 @@ No roles, users or tokens. It equals the table's `ui_kinds` (section 9), which L
 | `ApplicationLifecycle` | write | the console sends it today; the kind acts only on the instance's assigned application |
 | `ConfigureSettings` | write | the console sends it today; every key `daily` or `advanced` and settable (section 2.3) |
 | `StopInstanceRun` | write | built by #429 R-6's first slice (0.12.53): it stops a client's direct run and the Runtime resets the device itself; a policy run and a host run are refused with `run_origin` (runtime-interface.md, "Workbench request kinds") |
-| `RunInstanceTask`, `EditPackSchedule`, `EditResourceTarget`, `AcquirePlayerHold`, `ReleasePlayerHold` | write | on the list before they are built (#429 R-5, R-8, R-13c, R-7b); until then the Runtime answers them `not_implemented` |
+| `EditPackSchedule` | write | built by #429 R-8 (0.12.55), with the read `PackScheduleView`: it replaces one task package's rows in one scope's pack schedule list, a compare-and-swap with `expected_version`; a run in progress is not stopped (instance-fact-store.md, "Pack schedule facts") |
+| `RunInstanceTask`, `EditResourceTarget`, `AcquirePlayerHold`, `ReleasePlayerHold` | write | on the list before they are built (#429 R-5, R-13c, R-7b); until then the Runtime answers them `not_implemented` |
 | `RecordClientAction` | write | transitional: the console's button trace, until UI-L1 ships; LAB-7 takes it off the list, since the G14 record's initiator replaces it |
 
 - **Everything else is refused** on `ui`: a run by path, input and leases, stopping a run with the
@@ -474,7 +475,8 @@ Parameter types: `instance` (an alias, an `instance_id` or an ADB port), `string
 CLI hands the command its text, `serve` takes a JSON number or that text), `boolean`, `duration`
 (a number with `ms`, `s`, `m` or `h`), `path`, `file`, `dir`, `json`, `key`, `key_value`
 (`KEY=VALUE`), `list<string>`, `enum:<a|b>`, `request_id`, `run_ref` (LAB-5A: a request id or a
-run id), `operation_id` (`op-<ms>`), `material_ref`, `code`, `scope` (an instance or a game),
+run id), `operation_id` (`op-<ms>`), `material_ref`, `code`, `scope` (an instance, a server or a
+game, one word: `instance:<inst>`, `server:<id>` or `game:<id>`; #429 R-8's `pack-schedule set`),
 `tag_or_commit`, `sha256`. A millisecond count is a bare number, not a `duration` (the commands
 take a bare number): an `integer`, or `unsigned` where the command reads any whole number from 0
 (LAB-5A, LAB-5C: the `*_unix_ms` times of `runs`, `events` and `diagnose`). A comma list or JSON

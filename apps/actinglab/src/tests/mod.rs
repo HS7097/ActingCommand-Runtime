@@ -125,6 +125,9 @@ mod gate_434_lab5f;
 // Workflow #429 R-6: the core row `task stop` reaches `StopInstanceRun`.
 #[path = "gate_429_r6.rs"]
 mod gate_429_r6;
+// Workflow #429 R-8: the core rows `pack-schedule` and `pack-schedule set` reach their requests.
+#[path = "gate_429_r8.rs"]
+mod gate_429_r8;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

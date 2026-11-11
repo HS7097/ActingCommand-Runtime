@@ -631,47 +631,83 @@ Workflow #386 slice SR-11 (scheduling model v1.4.2 §6.1). A person or an agent 
 state and not as a one-off command, during which periods a task package may be scheduled on an
 instance. The state is stored in this store as one record of the `session.` family per scope.
 
-**Status.** Written ahead of its code (documentation slice SR-0); slice SR-11 implements it.
-Until then a `session.pack.schedule` record is an ordinary `session.` record that nothing reads.
+**Status.** Built by Workflow #429 R-8 (register §1.306, since 0.12.55), which implements
+SR-11 with #429 A.7.1: the key's family and origins, the rows' rule, the per-package layering,
+the deferral at position 5, `EditPackSchedule` and `PackScheduleView`. Left for later slices:
+the standard package's default layer (item 2 below; Workflow #429 R-9, until which that layer
+decides nothing and no `source` is `pack_default`) and a package's parameters (R-10). Before
+0.12.55 a `session.pack.schedule` record was an ordinary `session.` record that nothing read.
 
 | Key | Value | Scope |
 | --- | --- | --- |
-| `session.pack.schedule` | `record_list`, one row `{ "package_id": <string>, "from_unix_ms": <timestamp_ms>, "until_unix_ms": <timestamp_ms>, "schedulable": <boolean> }` per period | `instance` (that instance), or `server` / `game` (every instance of that server or game) |
+| `session.pack.schedule` | `record_list`, one row `{ "package_id": <string>, "from_unix_ms": <timestamp_ms>, "until_unix_ms"?: <timestamp_ms>, "schedulable": <boolean> }` per period; without `until_unix_ms` the row is open-ended | `instance` (that instance), or `server` / `game` (every instance of that server or game) |
 
 **Rows.** A row says "from `from_unix_ms` until `until_unix_ms` (half-open), the task package
-`package_id` is schedulable or not". `package_id` is the task package's id as the procedure
-manifest names it; the granularity is the task package, so every catalog task of one package
-opens and closes together, never one task and never a whole standard package. A row whose
-`until_unix_ms` is not after its `from_unix_ms`, rows of one `package_id` that overlap, or a
-value of another shape are refused as the non-fatal request error
-`session_pack_schedule_invalid` (`fact_key`, `field` pointing at the member). One scope holds at
-most the `record_list` bound of 256 rows, for all its packages together.
+`package_id` is schedulable or not"; a row without `until_unix_ms` is open-ended: it holds from
+`from_unix_ms` on (#429 A.7.1 point 2). `package_id` is the task package's id as its control
+declares it (the package the catalog task's procedure binding locates, read metadata-only as the
+remedy table reads it); the granularity is the task package, so every catalog task of one
+package opens and closes together, never one task and never a whole standard package. It is a
+text of 1 to 256 bytes without a control character. A row whose `until_unix_ms` is not after its
+`from_unix_ms`, rows of one `package_id` that overlap (an open-ended row overlaps every row of
+its package that starts after it), a row of another shape (a member it does not have, a member
+of another type, no `package_id`, `from_unix_ms` or `schedulable`) or a value that is not an
+inline `record_list` are refused as the non-fatal request error `session_pack_schedule_invalid`
+(`fact_key`, `field`), before the fact write gate, with nothing appended. `field` is a JSON
+pointer into the list: `/<row>/<member>` for a member (`/<row>/until_unix_ms` for a period that
+ends at or before it starts), `/<row>` for a row that overlaps an earlier row of its package
+(the later row), `""` for the list as a whole. One scope holds at most the `record_list` bound
+of 256 rows, for all its packages together (a published list beyond it is the request's own
+refusal; an edit beyond it is `/rows`).
 
-**Writing.** One observation writes a scope's whole list, atomically. The publisher chooses the
-lifetime: no `expires_at_unix_ms` never expires. Publishing an empty list withdraws every row of
-the scope; publishing the list without a package's rows withdraws only those. The writers are
-`actingctl pack-schedule set` and `pack-schedule get`, the MCP general tools
-`ac_pack_schedule_set` and `ac_pack_schedule_get` (no tier), and the UI console (slice UI-2);
-they write the same rows. Under Workflow #389 the key is in the general key family
-(`fact_key_family`, `contracts/runtime-interface.md`), so all three counters may write it, and
-an observation that mixes it with keys of another family is refused as `fact_origin_mixed`.
-Before #389's slice U-6 removes the origin exception, SR-11 accepts it like a priority offset:
-from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`. There is no offline writer: a write goes
-through a running actingd, like `actingctl task-offset`.
+**Writing.** One observation writes a scope's whole list, atomically: a `PublishFacts` of the
+key alone, or `EditPackSchedule {scope, package_id, rows, expected_version?}`, which replaces
+only `package_id`'s rows in the scope's list as a compare-and-swap ([runtime-interface.md](runtime-interface.md),
+"Workbench request kinds"; #429 A.7.1 point 3): under the fact write gate the host reads the
+scope's list, compares its version (the sequence of the `fact.published` that holds it, `0`
+without a record) with `expected_version` (absent compares nothing; another value is
+`fact_observation_version_conflict` with `fact_key` and `current_version`, nothing appended),
+replaces the package's rows (the other packages' rows kept in their order, the package's after
+them; an expired list keeps none), checks the whole list and publishes it as one
+`fact.published` without expiry that keeps the request's origin; `rows: []` withdraws the
+package's rows of the scope. An edit's refusal points into the request: `/package_id`, `/rows`
+(more rows than the bound, the package's or the list's), `/rows/<row>/until_unix_ms` and
+`/rows/<row>`. A run in progress is not stopped by either. The publisher of a whole list chooses
+the lifetime: no `expires_at_unix_ms` never expires; publishing an empty list withdraws every
+row of the scope; publishing the list without a package's rows withdraws only those. The writers
+(R-8) are the Lab's two core rows, `pack-schedule <inst>` (the view) and `pack-schedule set
+<scope> <package_id> --rows <json> [--expected-version <n>]` (the edit; the scope one word,
+`instance:<inst>`, `server:<id>` or `game:<id>`; `contracts/lab-operations.json`), an agent
+through MCP's tools of those rows, and the console; there is no `actingctl pack-schedule` and
+none is added. The key is a family of its own in the general key family (`fact_key_family`,
+`FactKeyFamily::PackSchedule`, `contracts/runtime-interface.md`), so all three counters may write
+it, and an observation that mixes it with keys of another family is refused as
+`fact_origin_mixed`. Until #389's slice U-6 removes the origin exception, R-8 accepts it like a
+priority offset: from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`. There is no offline
+writer: a write goes through a running actingd.
 
 **Which row applies.** For instance `I`, task package `P` and time `t`, each package is
 resolved on its own (Workflow #429 R-0c, the coordinator's decision of 2026-10-29 on #429 item
-4, register §1.216 R0C-5; R-8 implements it): instance over server over game over the pack's
-default row, per package, never per record. A layer that holds no row of `P` decides nothing for
-`P`, so an instance record that names only package `A` leaves every other package to the server,
-game and pack default layers, and `EditPackSchedule` replaces only `P`'s rows in its scope.
-The general read `PackScheduleView` answers, per package, the decision, the layer that made it
-and its row ([runtime-interface.md](runtime-interface.md), "Workbench request kinds"), and the
-layer below's decision `below` (Workflow #429 R-0d, register §1.217): the items below applied
-again to `P` without the deciding layer's rows of `P`, that is the decision `P` would have now,
-and the layer that would make it (`server`, `game`, `pack_default` or `none`), if those rows
-were withdrawn; absent when the pack default or item 3 decided. R-8 fills `below` with the rest
-of the view.
+4, register §1.216 R0C-5; built by R-8, register §1.306): instance over server over game over the
+pack's default row, per package, never per record. A layer that holds no row of `P` decides
+nothing for `P`, so an instance record that names only package `A` leaves every other package to
+the server, game and pack default layers, and `EditPackSchedule` replaces only `P`'s rows in its
+scope. A record that has expired holds no row; one the Runtime cannot read (only a record
+written before R-8 could be one) decides nothing for the instances it covers (#419), and an
+evaluation reports it (below). The general read `PackScheduleView` answers, per package, the
+decision, the layer that made it and its row ([runtime-interface.md](runtime-interface.md),
+"Workbench request kinds"), when the decision next changes (the deciding row's end, or the
+start of the deciding layer's next row of `P`; absent when no row bounds it), and the layer
+below's decision `below` (Workflow #429 R-0d, register §1.217): the items below applied again to
+`P` without the deciding layer's rows of `P`, that is the decision `P` would have now, and the
+layer that would make it (`server`, `game`, `pack_default` or `none`), if those rows were
+withdrawn; absent when the pack default or item 3 decided. It lists every task package that at
+least one task of the active catalog that covers the instance runs, in package id order, whether
+or not a row names it (the coordinator's decision of 2026-11-11, which the plan left to R-8); a
+package only a row names, and one no task runs (held, or a helper only chains and recovery run),
+are not listed. It names each scope that applies to the instance (instance, then its server and
+game when the policy inputs name the instance) with its list's version, `0` without a record. It
+reads memory only and records nothing; an alias no instance has is Denied `instance_unknown`.
 
 1. the instruction layer: of the `session.pack.schedule` records that apply to `I`, the most
    specific scope that has a row of `P` (instance over server over game); a row of `P` there
@@ -680,7 +716,9 @@ of the view.
    declares in a data file at its root, compiled when the catalog is activated. The Runtime
    only reads them and never stores them here; the file's name and format belong to the
    standard-package data-file model of Workflow #373 (NAV-M). A default row should not close a
-   recognition maintenance package;
+   recognition maintenance package. Workflow #429 R-9 adds this layer; until it, the layer
+   decides nothing (`crates/runtime-host/src/pack_schedule.rs`, `pack_default`, the one place
+   R-9 fills);
 3. otherwise `P` is schedulable.
 
 Schedulable does not mean that it runs: the task's own trigger, budgets, cooldown and blackouts
@@ -688,15 +726,25 @@ still decide, and a task that runs only on request still runs only on request.
 
 **Evaluation.** When `P` is not schedulable for `I` at the evaluation instant, every candidate of
 `P` on `I` is deferred with `pack_schedule_closed` (info; `package_id`, and
-`next_eligible_unix_ms` the end of the covering row). Its place in the order of deferrals is
-after an active blackout and after `pack_registry_not_loaded` of Workflow #389
-(`scheduling-blackout.md`, "Order of the deferrals"). A row of a package that #389 has unloaded
-stays stored and takes effect again when the package is loaded. A changed record wakes the
-evaluation (`FactsChanged`); a row boundary wakes it through the deferral's wake time.
+`next_eligible_unix_ms` the end of the covering row, absent for an open-ended row), its wake
+that end (none for an open-ended row). Its place in the order of deferrals is after an active
+blackout (and after UPD-1's position 4a) and after `pack_registry_not_loaded` of Workflow #389
+(`scheduling-blackout.md`, "Order of the deferrals", position 5), before the pacing of position
+6. The evaluation reads the records as its facts hold them (the projection overlays them as
+ordinary instance facts) and each catalog task's package from the remedy table that evaluation
+uses. A row of a package that #389 has unloaded stays stored and takes effect again when the
+package is loaded. A changed record wakes the evaluation (`FactsChanged`); a row boundary wakes
+it through the deferral's wake time. A client's run (a direct run, a Lab operation) is not held
+by it, and a run in progress is not stopped.
 
 **Unknown packages.** A row naming a package that no task of the active catalog uses is not an
 error: a cycle evaluated by `evaluate_policy_cycle` reports it once as
-`pack_schedule_unknown_package` (info; `package_id`) and the row has no effect.
+`pack_schedule_unknown_package` (info; `package_id`) and the row has no effect. As for a priority
+offset's unknown task, the report is one extra `TaskDecision`, here of the task id
+`session.pack.schedule` (the key; no task is named), with no instance, eligibility `unknown`,
+state `blocked`, no rank and that one reason; it selects nothing and reaches no dispatch intent
+or ledger event. A record the evaluation cannot read is reported the same way, once per cycle,
+with the reason `session_pack_schedule_invalid` (`fact_key`, `field`).
 
 **Identity.** As for priority offsets, `combined_policy_snapshot_id` hashes the records the
 projection consumed, so a record written after an evaluation and before its admission refuses
@@ -711,7 +759,10 @@ like every key of this store it is a tagged record that the start loads from the
 (Workflow #383).
 
 **Codes.** `pack_schedule_closed` and `pack_schedule_unknown_package` (policy),
-`session_pack_schedule_invalid` (runtime-host); none of them triggers the recovery ladder.
+`session_pack_schedule_invalid` (runtime-host); none of them triggers the recovery ladder. The
+two requests' success codes are `request_edit_pack_schedule_completed` and
+`request_pack_schedule_view_completed` (contract, since 0.12.55); an edit's version conflict is
+the shared `fact_observation_version_conflict`.
 
 ## Remedy choice facts
 
@@ -744,8 +795,8 @@ are refused as arguments they do not take). Only the instance and game scopes ex
 because the server scope is not game-qualified.
 
 **Which record applies.** The record that applies to an instance is the most specific one
-(instance over game) and applies as a whole, as for the pack schedule: an instance record
-replaces the game record entirely.
+(instance over game) and applies as a whole (unlike the pack schedule, which is resolved per
+package): an instance record replaces the game record entirely.
 
 **Write rule.** Refused as the non-fatal request error `session_remedy_choices_invalid`
 (`fact_key`, `field` pointing at the row and member, and `instance_id` for a meaning error), before

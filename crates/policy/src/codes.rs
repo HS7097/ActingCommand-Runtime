@@ -422,8 +422,10 @@ actingcommand_contract::outcome_vocabulary! {
 actingcommand_contract::outcome_codes! {
     /// Codes the scheduling rules (Workflow #386) register in the documentation slice SR-0,
     /// ahead of the slices that emit them (named on each entry). Contracts:
-    /// `contracts/scheduling/README.md`, `contracts/instance-fact-store.md`.
-    pub(crate) enum SchedulingRulePolicyCode {
+    /// `contracts/scheduling/README.md`, `contracts/instance-fact-store.md`. Workflow #429 R-8:
+    /// public, since the Runtime host emits the pack schedule's two codes, as it judges the pack
+    /// schedule where it judges the blackouts.
+    pub enum SchedulingRulePolicyCode {
         /// Info. A candidate is deferred because a `session.feature.*` record of its instance
         /// says a feature the task needs is locked (keys `fact_key`, and
         /// `next_eligible_unix_ms` when the record expires; SR-5a).

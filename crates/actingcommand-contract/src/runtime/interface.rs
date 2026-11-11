@@ -501,13 +501,14 @@ impl RuntimeOperationKind {
                 None
             }
             // Workflow #429 R-0: each gets its success code with its behaviour.
-            Self::RunInstanceTask | Self::EditPackSchedule | Self::EditResourceTarget => None,
+            Self::RunInstanceTask | Self::EditResourceTarget => None,
             // Workflow #429 R-12 (register §1.264).
             Self::RoutineSummary => Some(ReceiptCode::RoutineSummaryCompleted.code()),
             // Workflow #429 R-6 (register §1.302).
             Self::StopInstanceRun => Some(ReceiptCode::StopInstanceRunCompleted.code()),
-            // Workflow #429 R-0c: its success code comes with R-8.
-            Self::PackScheduleView => None,
+            // Workflow #429 R-8 (register §1.306).
+            Self::EditPackSchedule => Some(ReceiptCode::EditPackScheduleCompleted.code()),
+            Self::PackScheduleView => Some(ReceiptCode::PackScheduleViewCompleted.code()),
             // Workflow #429 R-7a: registered with the shapes; R-7b first answers completed.
             Self::AcquirePlayerHold => Some(ReceiptCode::AcquirePlayerHoldCompleted.code()),
             Self::ReleasePlayerHold => Some(ReceiptCode::ReleasePlayerHoldCompleted.code()),
@@ -522,9 +523,10 @@ impl FactKeyFamily {
     /// family is a general instruction, which the three counters send.
     pub const fn interface_class(self) -> InterfaceClassification {
         match self {
-            Self::PriorityOffset | Self::RemedyChoices | Self::InstanceInformation => {
-                GENERAL_INSTRUCTION
-            }
+            Self::PriorityOffset
+            | Self::RemedyChoices
+            | Self::PackSchedule
+            | Self::InstanceInformation => GENERAL_INSTRUCTION,
         }
     }
 }

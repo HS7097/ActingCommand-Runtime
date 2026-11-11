@@ -311,7 +311,10 @@ unselected. A candidate the closure is asked about is answered by positions 1 to
 above;
 
 5. the task package is not loaded (`pack_registry_not_loaded`, Workflow #389), then the pack
-   schedule closes it (`pack_schedule_closed`, `instance-fact-store.md`, "Pack schedule facts");
+   schedule closes it (`pack_schedule_closed`, `instance-fact-store.md`, "Pack schedule facts";
+   built by Workflow #429 R-8, since 0.12.55: every candidate of the closed package, an owed
+   rerun, an immediate rerun and a chain's successor included, with the covering row's end as
+   its wake, none for an open-ended row);
 6. performance pacing pauses the instance or its run interval has not passed
    (`perf_scheduling_paused`, `perf_pacing_gap`, Workflow #385), an owed rerun waits for the
    pacing stage (`policy_rerun_waiting`), or an entry-cost task waits for it

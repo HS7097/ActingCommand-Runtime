@@ -3035,13 +3035,11 @@ fn a4_each_request_kind_that_completes_has_its_own_success_code() {
         Kind::LoadPack,
         Kind::UnloadPack,
         // Workflow #429 R-0: refused `not_implemented` until their slices add the behaviour
-        // (`RoutineSummary` completes since R-12, register §1.264, and `StopInstanceRun` since
-        // R-6, register §1.302).
+        // (`RoutineSummary` completes since R-12, register §1.264, `StopInstanceRun` since R-6,
+        // register §1.302, and `EditPackSchedule` and R-0c's `PackScheduleView` since R-8,
+        // register §1.306).
         Kind::RunInstanceTask,
-        Kind::EditPackSchedule,
         Kind::EditResourceTarget,
-        // Workflow #429 R-0c: refused `not_implemented` until R-8.
-        Kind::PackScheduleView,
     ];
     let mut seen = std::collections::BTreeSet::new();
     for kind in RuntimeOperationKind::ALL {

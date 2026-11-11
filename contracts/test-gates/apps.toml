@@ -1470,3 +1470,11 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_429_r6::r6_task_stop_words_and_serve_line_reach_the_same_stop",
 ]
 incident = ["#429 R-6"]
+
+# Workflow #429 R-8 (0.12.55; register §1.306; contracts/lab-operations.json, the rows pack-schedule and pack-schedule set): both core rows are offered with their help and name PackScheduleView and EditPackSchedule; their command lines are the CLI module's; their words (pack-schedule <inst>; pack-schedule set instance:<inst> <package> --rows <json> --expected-version 7) and the serve --stdio lines with the same parameters give the same call; the rows read as the edit's rows, an open-ended one included, and a row of another shape is refused; the scope word instance:, server: or game: names its scope and another word is refused
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_429_r8::r8_pack_schedule_rows_reach_their_requests",
+]
+incident = ["#429 R-8"]

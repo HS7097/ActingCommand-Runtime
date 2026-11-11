@@ -1837,7 +1837,7 @@ actingcommand_contract::outcome_locations! {
         DeviceDiagnosticCountOverflow => "device_diagnostic_count_overflow",
         DrainPausedInstance => "drain_paused_instance",
         // Workflow #429 R-0 (register §1.213): the workbench's kinds, refused `not_implemented`
-        // until their slices (R-8, R-13c) add the behaviour.
+        // until their slices (R-8, R-13c) add the behaviour; R-8 (register §1.306) built the edit.
         EditPackSchedule => "edit_pack_schedule",
         EditResourceTarget => "edit_resource_target",
         EffectiveConfigurationLimitExceeded => "effective_configuration_limit_exceeded",
@@ -1986,7 +1986,7 @@ actingcommand_contract::outcome_locations! {
         OpenRecoveryLadderWindow => "open_recovery_ladder_window",
         OpenSuspensionLedger => "open_suspension_ledger",
         // Workflow #429 R-0c (register §1.216): the pack schedule's read view, refused
-        // `not_implemented` until R-8 adds the behaviour.
+        // `not_implemented` until R-8 (register §1.306) added the behaviour.
         PackScheduleView => "pack_schedule_view",
         PauseGlobalScheduling => "pause_global_scheduling",
         PauseInstanceScheduling => "pause_instance_scheduling",
