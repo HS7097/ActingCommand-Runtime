@@ -30,7 +30,8 @@
 //! adds `idle.action`, `.min_gap_ms`, `.close_app_wake_lead_ms` and `.stop_emulator_wake_lead_ms`,
 //! in the entry's `idle` member, each defaulting to the `idle` section's key of the same name,
 //! settable; checked whole per instance, and `stop_emulator` only on an instance whose emulator
-//! the Runtime starts (`start_emulator`). Workflow #392 DA-4b-D adds
+//! the Runtime starts (`start_emulator`); IDLE-2 adds `.return_home_min_gap_ms` and
+//! `.stop_emulator_min_gap_ms` the same way. Workflow #392 DA-4b-D adds
 //! `display_safe_area.model`, the device model the instance declares (the entry's
 //! `display_safe_area.model` member), default the `display_safe_area` section's key, settable.
 //! SS-4 (register §1.231) adds `scheduling.no_progress.enabled`, in the entry's `scheduling`
@@ -245,6 +246,9 @@ pub(crate) static ROWS: &[KeyRow] = &[
     idle::INSTANCE_ROWS[1],
     idle::INSTANCE_ROWS[2],
     idle::INSTANCE_ROWS[3],
+    // IDLE-2: the instance's own thresholds of `auto`'s tiers; the section's are their defaults.
+    idle::INSTANCE_ROWS[4],
+    idle::INSTANCE_ROWS[5],
     // Workflow #392 DA-4b-D: the device model the instance declares; the section's value in
     // effect is its default.
     display_safe_area::INSTANCE_ROW,
@@ -548,7 +552,8 @@ pub(crate) fn check_instance(
     }
     // IDLE-1: the instance's idle keys in effect, checked whole; an instance whose action in
     // effect is `stop_emulator` is one whose emulator the Runtime starts (`start_emulator`), since
-    // its wake starts the emulator through that configured start.
+    // its wake starts the emulator through that configured start. IDLE-2: `auto` needs no
+    // `start_emulator`; on an instance without it the tier stops short of `stop_emulator`.
     let idle_action_key = instance_key(instance, idle::ACTION);
     if value(&idle_action_key).is_some() {
         let config = idle::instance_idle(&read, instance)?;

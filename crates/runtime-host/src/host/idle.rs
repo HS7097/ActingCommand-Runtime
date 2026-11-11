@@ -109,6 +109,19 @@
 //!   evaluation (`HostShared::idle_closed_for_policy`); a reading of one waits for its next wake
 //!   unless a task that needs it is due, and the plan the check reads keeps the reading apart
 //!   from the tasks, so a reading alone never wakes a closed game.
+//! - **`auto`** (IDLE-2, 0.12.54; Alice's words of 11-11: 「根据任务间隔时间自动选择是关闭模拟器还是关闭应用还是
+//!   回到主页面」; the coordinator's rulings on Workflow #386, comment 6787682270): the planner takes one
+//!   tier by the gap to the instance's next work (`crate::idle_action`). `close_app` and
+//!   `stop_emulator` are the actions above; the record and `host.idle_state` name the tier taken,
+//!   never `auto`. A rest runs the return-home package the game's standard pack declares for the
+//!   instance's server (`bundle.json`'s maintenance entry whose `uses` holds `return_home`, the
+//!   registry read the ladder and the prerequisite chain use; the game and the server are the
+//!   instance's policy identity's, as `close_app`'s application is) as a host run of its own on the
+//!   idle action's claim (`carry_out_idle_rest`), once per idle stretch: its failure is the host
+//!   run's record, enters no ladder, owes no wake and is not tried again before work; a game that
+//!   declares none for the server rests nothing and is warned once per start and instance. A
+//!   start that cannot read what the action left restores an `auto` instance closed after the
+//!   highest tier it can take.
 
 use super::contained_task::StartAnchors;
 use super::emulator_watch::{SkippedStart, WatchSkipReason, start_skip_outcome};
@@ -117,11 +130,12 @@ use super::host_claims::{HostClaimWork, HostKey};
 use super::input::ApplicationKey;
 use super::lease::HostClaim;
 use super::resource_fence::UnconfirmedResources;
+use super::startup_package::{HostPackageRun, PendingStartupPackage};
 use super::*;
 use crate::codes::{HostCode, HostLocation, IdleCode, IdleLocation};
 use crate::idle_action::{
     IdleEnd, IdlePlan, IdlePlanner, IdleRequirement, IdleStep, IdleView, KeptIdle, KeptState,
-    WakeWork,
+    REST_DECLARATION_MEMBER, REST_IDLE_ACTION, WakeWork,
 };
 use actingcommand_contract::codes::SanitizationCode;
 use actingcommand_contract::outcome::Outcome;
@@ -156,11 +170,22 @@ const KEPT_WOKEN: &str = "woken";
 /// W2-B: the member of a `host.idle_state` row of a startup package queued behind a pause.
 const KEPT_STARTUP_QUEUED: &str = "startup_package_queued";
 
+/// What one idle claim carries out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdleWork {
+    /// `close_app` or `stop_emulator` (the tier `auto` took, or the action configured).
+    Act(IdleAction),
+    /// IDLE-2: a rest at home: the game's declared return-home package runs once, its response
+    /// deadline `within_ms` (`idle.return_home_min_gap_ms` in effect, at most a task's longest),
+    /// so it ends before the instance's next task is due.
+    Rest { within_ms: u64 },
+}
+
 /// One instance's idle action, run on its worker under its emulator-control claim.
 pub(super) struct PendingIdleAction {
     pub(super) instance_id: InstanceId,
     pub(super) instance_alias: String,
-    action: IdleAction,
+    work: IdleWork,
     next_due_unix_ms: Option<u64>,
     wake_at_unix_ms: Option<u64>,
     /// The game and the server the instance's policy identity names, when one does.
@@ -240,10 +265,11 @@ fn kept_idle(record: &RuntimeFactRecord) -> Option<(u64, KeptState)> {
     ))
 }
 
-/// `instance_idle_action` for `alias` and `action` at `operation`.
+/// `instance_idle_action` for `alias` and the tier `idle_action` (`close_app`, `stop_emulator`;
+/// IDLE-2: a rest's `return_home`) at `operation`.
 fn idle_outcome(
     alias: &str,
-    action: IdleAction,
+    idle_action: &'static str,
     operation: IdleLocation,
     next_due_unix_ms: Option<u64>,
     wake_at_unix_ms: Option<u64>,
@@ -251,7 +277,7 @@ fn idle_outcome(
     let outcome = Outcome::new(IdleCode::Taken)
         .operation(operation)
         .alias(alias)
-        .idle_action(action.as_str());
+        .idle_action(idle_action);
     let outcome = match next_due_unix_ms {
         Some(due) => outcome.next_occurrence_unix_ms(due),
         None => outcome,
@@ -283,15 +309,18 @@ impl HostShared {
     /// instance is contained to it and the next instance goes on; only a failure the Runtime does
     /// not survive is the error.
     pub(super) fn check_idle_instances(&self, from_sweep: bool) -> RuntimeHostResult<()> {
-        self.check_idle(from_sweep, None)
+        self.check_idle(from_sweep, None, None)
     }
 
     /// [`Self::check_idle_instances`]; `plans`, when given (tests), stand for the scheduler's
-    /// latest plan of the instances they name, and an instance they leave out has none.
+    /// latest plan of the instances they name, and an instance they leave out has none;
+    /// `identities`, when given (tests, IDLE-2), stand for the game and the server the policy
+    /// identities name, by alias.
     fn check_idle(
         &self,
         from_sweep: bool,
         plans: Option<&BTreeMap<String, IdlePlan>>,
+        identities: Option<&BTreeMap<String, (String, String)>>,
     ) -> RuntimeHostResult<()> {
         if self.fatal.is_shutdown_requested() || self.lifecycle_draining()? {
             return Ok(());
@@ -302,20 +331,23 @@ impl HostShared {
                 return Ok(());
             }
         }
-        let identities = lock(&self.policy_inputs, IdleLocation::Check)?
-            .as_ref()
-            .map(|inputs| {
-                inputs
-                    .instance_identities()
-                    .map(|identity| {
-                        (
-                            identity.instance_id.to_owned(),
-                            (identity.game_id.to_owned(), identity.server_id.to_owned()),
-                        )
-                    })
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
+        let identities = match identities {
+            Some(given) => given.clone(),
+            None => lock(&self.policy_inputs, IdleLocation::Check)?
+                .as_ref()
+                .map(|inputs| {
+                    inputs
+                        .instance_identities()
+                        .map(|identity| {
+                            (
+                                identity.instance_id.to_owned(),
+                                (identity.game_id.to_owned(), identity.server_id.to_owned()),
+                            )
+                        })
+                        .collect::<BTreeMap<_, _>>()
+                })
+                .unwrap_or_default(),
+        };
         let instances = lock(&self.registered_instances, IdleLocation::Check)?
             .values()
             .filter(|instance| instance.provenance() == ExecutionBackendProvenance::PhysicalDevice)
@@ -377,15 +409,14 @@ impl HostShared {
             let Some(step) = planner.check(&alias, &config, view, plan, now_unix_ms) else {
                 continue;
             };
-            let taken = match step {
-                IdleStep::Act {
-                    action,
-                    next_due_unix_ms,
-                    wake_at_unix_ms,
-                } => self.request_idle_action(PendingIdleAction {
+            let pending = |work: IdleWork,
+                           next_due_unix_ms: Option<u64>,
+                           wake_at_unix_ms: Option<u64>|
+             -> RuntimeHostResult<PendingIdleAction> {
+                Ok(PendingIdleAction {
                     instance_id,
                     instance_alias: alias.clone(),
-                    action,
+                    work,
                     next_due_unix_ms,
                     wake_at_unix_ms,
                     identity: identities.get(&alias).cloned(),
@@ -394,7 +425,27 @@ impl HostShared {
                         .issuer()
                         .mint_causation_id()
                         .map_err(|_| runtime_identifier_error())?,
-                }),
+                })
+            };
+            let taken = match step {
+                IdleStep::Act {
+                    action,
+                    next_due_unix_ms,
+                    wake_at_unix_ms,
+                } => self.request_idle_action(pending(
+                    IdleWork::Act(action),
+                    next_due_unix_ms,
+                    wake_at_unix_ms,
+                )?),
+                // IDLE-2: a rest takes the idle action's claim and runs on its key.
+                IdleStep::Rest {
+                    next_due_unix_ms,
+                    within_ms,
+                } => self.request_idle_action(pending(
+                    IdleWork::Rest { within_ms },
+                    next_due_unix_ms,
+                    None,
+                )?),
                 IdleStep::Wake { action, work } => {
                     self.queue_idle_wake(instance_id, &alias, action, work)
                 }
@@ -407,8 +458,9 @@ impl HostShared {
                 }
             };
             if let Err(error) = taken {
-                if matches!(step, IdleStep::Act { .. }) {
-                    // The action's claim was not queued: nothing was sent.
+                if matches!(step, IdleStep::Act { .. } | IdleStep::Rest { .. }) {
+                    // The action's claim was not queued: nothing was sent (IDLE-2: a rest so
+                    // failed is the stretch's rest, not tried again before work).
                     planner.finished(&alias, IdleEnd::NotPerformed);
                 }
                 self.contain_idle_failure(instance_id, error, self.idle_links(instance_id)?)?;
@@ -590,16 +642,30 @@ impl HostShared {
             .map(|(alias, _)| alias.clone())
             .collect::<BTreeSet<_>>();
         // Each instance the configuration names, with its action in effect and whether that
-        // action could have run on it.
+        // action could have run on it. IDLE-2: under `auto`, the highest tier the instance can
+        // take (`stop_emulator` with its emulator start, `close_app` otherwise), never `auto`.
         let mut configured = BTreeMap::new();
         for (alias, instance_id) in instances {
             if let Some(config) = self.idle_settings(instance_id)? {
+                let startup_package = startup_packages.contains_key(&instance_id);
                 // Workflow #429 R-3: its emulator start as `start_emulator` is in effect, the
                 // file's or a restored instruction's.
-                let wakeable = startup_packages.contains_key(&instance_id)
-                    && (config.action != IdleAction::StopEmulator
-                        || self.start_emulator_in_effect(instance_id)?);
-                configured.insert(alias, (config.action, wakeable));
+                let entry = match config.action {
+                    IdleAction::Auto(_) => {
+                        if startup_package && self.start_emulator_in_effect(instance_id)? {
+                            (IdleAction::StopEmulator, true)
+                        } else {
+                            (IdleAction::CloseApp, startup_package)
+                        }
+                    }
+                    action => {
+                        let wakeable = startup_package
+                            && (action != IdleAction::StopEmulator
+                                || self.start_emulator_in_effect(instance_id)?);
+                        (action, wakeable)
+                    }
+                };
+                configured.insert(alias, entry);
             }
         }
         let recorded = lock(&self.runtime_facts, IdleLocation::Restore)?
@@ -1035,16 +1101,20 @@ impl HostShared {
         pending: &PendingIdleAction,
         key: HostKey,
     ) -> RuntimeHostResult<()> {
+        let action = match pending.work {
+            IdleWork::Act(action) => action,
+            IdleWork::Rest { within_ms } => {
+                return self.carry_out_idle_rest(pending, within_ms, key);
+            }
+        };
         let alias = pending.instance_alias.as_str();
         let gate = self.routine_gate(pending.instance_id)?;
         let paused = gate.routine_held() || gate.blackout();
         let queued =
             lock(&self.scheduler, IdleLocation::Action)?.queued_count(pending.instance_id) > 0;
-        if paused
-            || queued
-            || pending.action == IdleAction::None
-            || self.fatal.is_shutdown_requested()
-        {
+        // IDLE-2: the planner asks only for a tier, never for `auto` itself.
+        let no_tier = matches!(action, IdleAction::None | IdleAction::Auto(_));
+        if paused || queued || no_tier || self.fatal.is_shutdown_requested() {
             let kept = self.end_idle_action(|planner| planner.abandoned(alias));
             let released = self.release_host_key(&key);
             return self
@@ -1066,7 +1136,7 @@ impl HostShared {
         // releases it only once the planner knows the action's end, so no check meanwhile takes
         // the free instance for one that was never acted on.
         let mut stop_sent = false;
-        let (ended, held) = match pending.action {
+        let (ended, held) = match action {
             IdleAction::StopEmulator => (
                 self.idle_stop_emulator(pending, &validated, links.clone(), key),
                 None,
@@ -1105,7 +1175,7 @@ impl HostShared {
         };
         let outcome = idle_outcome(
             alias,
-            pending.action,
+            action.as_str(),
             IdleLocation::Action,
             pending.next_due_unix_ms,
             pending.wake_at_unix_ms,
@@ -1115,6 +1185,164 @@ impl HostShared {
             None => outcome,
         };
         self.record_idle(links, outcome)
+    }
+
+    /// IDLE-2: a granted rest's claim on its instance's worker. On the key the instance is checked
+    /// once more as for an action (a pause, a blackout, a fence or a queued request that came
+    /// meanwhile leaves it alone, and it is active again). Then the return-home package its game's
+    /// standard pack declares for its server (`bundle.json`'s maintenance entry whose `uses`
+    /// holds `return_home`, read as the ladder and the prerequisite chain read it) runs once on
+    /// the claim's key as a host run of its own, its response deadline `within_ms`. Its end,
+    /// whatever it is, makes the instance rested for this idle stretch (no wake, no retry), and
+    /// only after the key's release, so no check meanwhile takes the instance for one that did
+    /// not rest. A run that completed is one `instance_idle_action` (`run_idle_action`,
+    /// `idle_action` `return_home`); a failed run is recorded as every host run's failure
+    /// (`runtime.failed` under the instance) and enters no ladder; a game that declares no such
+    /// package gets one `instance_idle_action_unsupported` per start and instance (`member`
+    /// `maintenance`) and no run. A failure is contained to the instance (#419); only one the
+    /// Runtime does not survive is the error.
+    fn carry_out_idle_rest(
+        &self,
+        pending: &PendingIdleAction,
+        within_ms: u64,
+        mut key: HostKey,
+    ) -> RuntimeHostResult<()> {
+        let alias = pending.instance_alias.as_str();
+        let gate = self.routine_gate(pending.instance_id)?;
+        let paused = gate.routine_held() || gate.blackout();
+        let queued =
+            lock(&self.scheduler, IdleLocation::Action)?.queued_count(pending.instance_id) > 0;
+        if paused || queued || self.fatal.is_shutdown_requested() {
+            let kept = self.end_idle_action(|planner| planner.abandoned(alias));
+            let released = self.release_host_key(&key);
+            return self
+                .contain_idle_ends(pending.instance_id, released, kept, None)
+                .unwrap_or(Ok(()));
+        }
+        let claim = key.request.clone();
+        let validated = claim.validate().map_err(|_| {
+            RuntimeHostError::fatal(
+                HostCode::HostKeyRequestInvalid,
+                IdleLocation::Action,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let links = self
+            .events
+            .request_links(&validated, Some(pending.instance_id), None, None);
+        // The registry is read now; a broken game root is recorded with its own outcome and no
+        // rest runs.
+        let found = match &pending.identity {
+            Some((game, server)) => self.ladder_return_home(game, server),
+            None => Ok(None),
+        };
+        let found = match found {
+            Ok(found) => found,
+            Err(error) => return self.end_unrun_rest(pending, &key, links, Some(error), false),
+        };
+        let Some(found) = found else {
+            return self.end_unrun_rest(pending, &key, links, None, true);
+        };
+        let request = ContainedTaskRequest::new(found.binding.package_path()).and_then(|request| {
+            request.with_response_deadline_ms(
+                within_ms.min(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS),
+            )
+        });
+        let request = match request {
+            Ok(request) => request,
+            Err(error) => {
+                let refused = RuntimeHostError::relayed_request(
+                    error.code().as_str(),
+                    IdleLocation::Action.as_str(),
+                    RuntimeErrorCode::InvalidRequest,
+                );
+                return self.end_unrun_rest(pending, &key, links, Some(refused), false);
+            }
+        };
+        let package = PendingStartupPackage {
+            instance_id: pending.instance_id,
+            instance_alias: pending.instance_alias.clone(),
+            request,
+            causation_id: pending.causation_id,
+            control_request_id: *self
+                .events
+                .issuer()
+                .mint_request_id()
+                .map_err(|_| runtime_identifier_error())?
+                .transport(),
+            run: HostPackageRun::IdleReturnHome,
+            recovery_rung: false,
+            configured_return_home: None,
+        };
+        // The run records its own failure (`runtime.failed`) and releases the key once.
+        let ran = self.run_package_on_key(&package, &mut key, None);
+        let released = self.release_host_key(&key);
+        let kept = self.end_idle_action(|planner| planner.finished(alias, IdleEnd::Done));
+        let ended = self.contain_idle_ends(pending.instance_id, released, kept, Some(&links));
+        match ran? {
+            Err(_recorded) => ended.unwrap_or(Ok(())),
+            Ok(_) => match ended {
+                Some(ended) => ended,
+                None => self.record_idle(
+                    links,
+                    idle_outcome(
+                        alias,
+                        REST_IDLE_ACTION,
+                        IdleLocation::Action,
+                        pending.next_due_unix_ms,
+                        None,
+                    ),
+                ),
+            },
+        }
+    }
+
+    /// IDLE-2: the end of a rest that ran no package: the key released, the instance rested for
+    /// this idle stretch, then `failure` (a refused request, or a failure of the registry's read
+    /// the Runtime may not survive) contained to the instance (#419), or, `undeclared`, the game
+    /// declaring no return-home package for the instance's server: one
+    /// `instance_idle_action_unsupported` (`idle_action` `return_home`, `member` `maintenance`)
+    /// the first time this start.
+    fn end_unrun_rest(
+        &self,
+        pending: &PendingIdleAction,
+        key: &HostKey,
+        links: EventLinksDraft,
+        failure: Option<RuntimeHostError>,
+        undeclared: bool,
+    ) -> RuntimeHostResult<()> {
+        let alias = pending.instance_alias.as_str();
+        let released = self.release_host_key(key);
+        let mut first = false;
+        let kept = self.end_idle_action(|planner| {
+            if undeclared {
+                first = planner.note_rest_undeclared(alias);
+            }
+            planner.finished(alias, IdleEnd::NotPerformed);
+        });
+        if let Some(ended) =
+            self.contain_idle_ends(pending.instance_id, released, kept, Some(&links))
+        {
+            return ended;
+        }
+        if let Some(failure) = failure {
+            return self.contain_idle_failure(pending.instance_id, failure, links);
+        }
+        if !first {
+            return Ok(());
+        }
+        let warned = self.record_idle(
+            self.idle_links(pending.instance_id)?,
+            Outcome::new(IdleCode::Unsupported)
+                .operation(IdleLocation::Action)
+                .alias(alias)
+                .idle_action(REST_IDLE_ACTION)
+                .member(REST_DECLARATION_MEMBER),
+        );
+        match warned {
+            Ok(()) => Ok(()),
+            Err(error) => self.contain_idle_failure(pending.instance_id, error, links),
+        }
     }
 
     /// The two ends of an idle action: the key's release (`released`; `Ok` when the action's own
@@ -1526,7 +1754,19 @@ impl RuntimeHost {
         plans: &BTreeMap<String, IdlePlan>,
     ) -> RuntimeHostResult<()> {
         self.shared_ref(IdleLocation::Check)?
-            .check_idle(false, Some(plans))
+            .check_idle(false, Some(plans), None)
+    }
+
+    /// IDLE-2, tests: [`Self::check_idle_instances_for_test`] with `identities` standing for the
+    /// game and the server the policy identities name, by alias (a rest reads its game's
+    /// return-home package by them).
+    pub(crate) fn check_idle_instances_with_identities_for_test(
+        &self,
+        plans: &BTreeMap<String, IdlePlan>,
+        identities: &BTreeMap<String, (String, String)>,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(IdleLocation::Check)?
+            .check_idle(false, Some(plans), Some(identities))
     }
 
     /// IDLE-1, tests: the number of idle actions whose worker ended, once it reaches `ended`,

@@ -67,12 +67,16 @@ pub(super) enum HostPackageRun {
     StartupPackage,
     /// A failed run's bound recovery package, run standalone by the stuck-recovery ladder.
     ReturnHome,
+    /// IDLE-2: the game's declared return-home package, run by the idle action's rest on its
+    /// claim's key (no ladder: its failure is recorded and climbs nothing).
+    IdleReturnHome,
 }
 
 impl HostPackageRun {
     pub(super) const fn adb_not_ready_code(self) -> HostCode {
         match self {
-            Self::StartupPackage => HostCode::StartupPackageAdbNotReady,
+            // IDLE-2: a rest is a host package run outside the ladder, as a startup package is.
+            Self::StartupPackage | Self::IdleReturnHome => HostCode::StartupPackageAdbNotReady,
             Self::ReturnHome => HostCode::RecoveryLadderAdbNotReady,
         }
     }
@@ -81,6 +85,8 @@ impl HostPackageRun {
         match self {
             Self::StartupPackage => "startup_package",
             Self::ReturnHome => "recovery_ladder",
+            // The registered host operation of the idle action, which runs the rest.
+            Self::IdleReturnHome => crate::codes::IdleLocation::Action.as_str(),
         }
     }
 }

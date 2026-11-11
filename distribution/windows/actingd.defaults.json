@@ -525,7 +525,9 @@
     "action": "close_app",
     "min_gap_ms": 1800000,
     "close_app_wake_lead_ms": 300000,
-    "stop_emulator_wake_lead_ms": 300000
+    "stop_emulator_wake_lead_ms": 300000,
+    "return_home_min_gap_ms": 600000,
+    "stop_emulator_min_gap_ms": 7200000
   },
   "display_safe_area": {
     "directory": "display-safe-area",
