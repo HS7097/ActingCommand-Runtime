@@ -1233,7 +1233,7 @@ tests = [
 ]
 incident = ["#407 GPU-1 D"]
 
-# Workflow #434 LAB-1 (0.12.x; register §1.287, "Slice LAB-1"; brief rd-1108/arch-013/brief-lab1.md; contracts/lab-two-entries.md §9.2 and §9.3): the operation table file contracts/lab-operations.json, read itself into typed rows, has unique names and MCP tool names, every row's members (params, output, writes, irreversible, runtime, entries, requests, source or new, slice, status), every request kind of RuntimeOperationKind::ALL sent by some operation or once in not_exposed and every kind it names existing, entries ["lab", "ui"] exactly for a core operation whose every request kind is on the UI list (the transitional kind not counted) and a reserved row's opens_with (Workflow #434 LAB-5A adds: every parameter type is one of §9.1's, a type it does not list refusing the file; only a planned rescue row carries params_more; every required_in names front ends of the table's modules, on a parameter the row does not require; a disruptive row writes and is not irreversible); on a fake single-location root, a program in its runtime folder and one in a kept build install\builds\<commit>\runtime find the root and the configuration's state root with neither given, and a program outside any installed root is refused install_root_unresolved
+# Workflow #434 LAB-1 (0.12.x; register §1.287, "Slice LAB-1"; brief rd-1108/arch-013/brief-lab1.md; contracts/lab-two-entries.md §9.2 and §9.3): the operation table file contracts/lab-operations.json, read itself into typed rows, has unique names and MCP tool names, every row's members (params, output, writes, irreversible, runtime, entries, requests, source or new, slice, status), every request kind of RuntimeOperationKind::ALL sent by some operation or once in not_exposed and every kind it names existing, entries ["lab", "ui"] exactly for a core operation whose every request kind is on the UI list (the transitional kind not counted) and a reserved row's opens_with (Workflow #434 LAB-5A adds: every parameter type is one of §9.1's, a type it does not list refusing the file; only a planned rescue row carries params_more; every required_in names front ends of the table's modules, on a parameter the row does not require; a disruptive row writes and is not irreversible; Workflow #434 LAB-5E adds: every help is ASCII, 1 to 160 bytes on one line, names no MCP tool (ac_), and no two rows share one); on a fake single-location root, a program in its runtime folder and one in a kept build install\builds\<commit>\runtime find the root and the configuration's state root with neither given, and a program outside any installed root is refused install_root_unresolved
 [[gate]]
 coverage = "Y"
 tests = [
@@ -1358,3 +1358,20 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5c::material_out_writes_the_whole_material",
 ]
 incident = ["#434 LAB-5C"]
+
+# Workflow #434 LAB-5G4a (0.12.52; register §1.287, "Slice LAB-5G4a"; brief rd-1108/arch-013/brief-lab5g4a.md; contracts/lab-two-entries.md §4.2, §4.3 and §8.2): serve --stdio takes --front mcp beside --stdio, in either order, and refuses another value, the option twice and the option without --stdio (actingctl_usage_invalid, the word, unknown) and the option with ACTINGCOMMAND_INITIATOR set to anything (actingctl_usage_invalid, variable), while without the option its words are checked as before; a recording step added through the loop under the option carries Lab-MCP and is answered with the loop's line, never the envelope, and without it Lab-CLI and the two words the variable may name; the client configuration under the option equals MCP's --via mcp child's (the Lab channel, via mcp) and without it has no via; serve refuses a string value beginning with --, alone and inside a list, on a row actinglab's own command serves and on a row the CLI module serves (actingctl_usage_invalid, the parameter, not_recognised) and answers the next line, and takes a string beginning with one dash and a negative number as the command line does
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g4a::serve_front_mcp_records_lab_mcp",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g4a::serve_refuses_values_that_begin_with_two_dashes",
+]
+incident = ["#434 LAB-5G4a"]
+
+# Workflow #434 LAB-5E (0.12.52; register §1.287, "Slice LAB-5E"; brief rd-1108/arch-013/brief-lab5e.md; contracts/lab-two-entries.md §9.1 and §9.2): every row of the operation table actinglab offers (the rescue module's on Windows) and every planned row of slice LAB-5, which LAB-5's MCP server offers itself (record draft, mcp config, mcp entries), has a help that is not blank; its form (ASCII, 1 to 160 bytes on one line, no MCP tool name, no two rows alike) is lab_ops_table_complete's (LAB-1 row above)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5e::lab5e_offered_rows_have_help",
+]
+incident = ["#434 LAB-5E"]
