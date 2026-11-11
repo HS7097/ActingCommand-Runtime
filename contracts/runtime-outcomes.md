@@ -193,6 +193,24 @@ codes` answers with too); a usage error is `invalid_arguments` at `parse_argumen
 actingledger failure. `actingctl codes` and `ac_outcome_code` (#389 MCP-14) read the same
 catalog as pages for agents.
 
+### The index (Workflow #439 CODES-IX)
+
+[`contracts/outcome-codes/index/`](outcome-codes/index/README.md) shows a person who reads the
+repository what the catalog holds: its `README.md` counts the codes by status, the active codes by
+category, by text (`common_causes` and `handling` both written, or `TBD` or empty) and by review,
+and the same per owner, with a link to each owner's file; `<owner>.md`, one per owner fragment,
+lists the fragment's codes sorted by code, each with its category, ladder class, `since`, status
+(with `replaced_by` where a retired code names one), review, text (`written` or `TBD`) and its
+description's first sentence, cut at a space within 160 characters. `ci/outcome_codes_index.py`
+generates it from the header and the fragments, which it reads with `ci/outcome_release.py`'s
+`owner_fragments`; nobody edits it by hand, and it holds nothing that changes without the catalog
+(no time, no commit). Unlike the merged catalog it is committed: a pull request that changes a
+fragment regenerates it (`py -3 -I -B ci/outcome_codes_index.py` from the workspace root), and the
+`rust` check runs the script with `--check`, which fails naming the first file of the committed
+index that differs; two such pull requests meet in `README.md`, so the later one regenerates the
+index after it merges `main`. The index lists codes, not locations, and is no interface:
+`actingledger codes`, `actingctl codes` and `ac_outcome_code` stay the lookups of one code.
+
 ## Drift guard `tools/outcome-guard`
 
 A source scanner that links no workspace crate; its tests run in `cargo test --workspace`.
