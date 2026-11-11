@@ -277,6 +277,10 @@ fn a_held_read_outside_its_list_fails() {
     );
 }
 
+/// One command line of the next test: its row, the line, the exit code and error code it
+/// answers, and the reads it records first under the row.
+type Line<'a> = (&'a str, Vec<&'a str>, i32, &'a str, Vec<&'a str>);
+
 #[test]
 fn every_lenient_command_reads_through_its_list() {
     let _guard = env_lock();
@@ -313,7 +317,7 @@ fn every_lenient_command_reads_through_its_list() {
     let frame_input = legacy_and(&["--scene", "--capture", "--package", "--zip"]);
     // (row, command line, exit code, error code, the reads it records first under the row): the 24
     // lenient rows, then six strict ones.
-    let lines: [(&str, Vec<&str>, i32, &str, Vec<&str>); 30] = [
+    let lines: [Line<'_>; 30] = [
         (
             "touch-probe",
             vec!["--touch-backend", "auto", "touch-probe"],

@@ -270,7 +270,7 @@ pub(super) mod reads {
 
         /// Whether the list lets its command read `name` in `form`.
         fn lets(&self, name: &str, form: Form) -> Result<(), String> {
-            let has = |flags: &[&str]| flags.iter().any(|flag| *flag == name);
+            let has = |flags: &[&str]| flags.contains(&name);
             let (option, switch, refused) = (
                 has(&self.options()),
                 has(&self.switches()),
@@ -325,7 +325,7 @@ pub(super) mod reads {
         fn row(&self) -> &'static str {
             match self {
                 Self::List(list) => list.row,
-                Self::Forms { row, .. } => *row,
+                Self::Forms { row, .. } => row,
             }
         }
 
@@ -337,7 +337,7 @@ pub(super) mod reads {
                     options,
                     switches,
                 } => {
-                    let has = |flags: &[&str]| flags.iter().any(|flag| *flag == name);
+                    let has = |flags: &[&str]| flags.contains(&name);
                     match form {
                         Form::Switch if has(options) => Err(format!(
                             "Workflow #434 LAB-5B3: {row} reads {name} as a switch, the register \

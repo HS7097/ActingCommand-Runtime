@@ -9033,7 +9033,9 @@ option.
 
 **The test-only recording** (`flag_args.rs`, module `reads`). A command declares its list where it
 starts, right after it parses its flags (`FlagArgs::reading`; the dispatchers of `record`,
-`package`, `operation` and `resource` by subcommand, before their first read). From then on every
+`package`, `operation` and `resource` by subcommand, before their first read; `package` and
+`operation` through the test-only `hold_package_reads` and `hold_operation_reads` of
+`lab_package_control.rs`). From then on every
 read of those flags and of every copy of them (`bool`, `optional`, `values`, `count`, the new
 `given`, and the readers built on them) is recorded on the reading thread (`reads::take`), and a
 read of a name the list does not hold, or in the form the list does not give it (a switch read for
@@ -9042,6 +9044,13 @@ refused flag may be read in any form. Flags no command declared for (the global 
 `FlagArgs::default()`, the helpers' tests) are not held. `FlagArgs::from_parts` builds flags the
 code makes itself (the input relay's action, `resource verify`'s preflight); the struct literal is
 gone. In the product build `FlagArgs` has no such field and reads as before.
+
+**Fix round 1 (the command inventory guard).** `hold_package_reads` and `hold_operation_reads`
+are functions of their own, not a test-only match in the dispatcher: the guard
+`command_inventory_matches_checked_in_snapshot` takes the first match on the subcommand in a
+group's dispatcher for its dispatch, and such a match read `package` with 5 of its 10
+subcommands and `operation` with 3 of its 4 (94 commands, not 100). No command a person can type
+moved; `ratchet/actinglab_commands.json` is unchanged.
 
 **Work order point 4.** `FlagArgs::reading_forms(row)` holds a strict command to the forms the
 register gives its flags (`own_flags::accepted`): a flag the register lists as taking a value read
