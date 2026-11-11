@@ -439,6 +439,17 @@ tests = [
     "actingcommand-policy::lib::tests::gate_sched_c1c::sched_c1c_t4_a_pool_its_lines_cannot_spend_warns",
 ]
 incident = ["#428 SCHED-C1c"]
+# #428 SCHED-C1d (the coordinator's ruling 9 of 11-11 and its correction of 11-11 13:4x, not Alice's words: under iron rule 13 the episodes are the tagged program fact host.capped_episodes; rd-1111 brief-sched-c1d; contracts/scheduling/README.md, "Capped spending order" with "Episodes survive"; register §1.299 SC1-11; since 0.12.53): an episode in its second round (read at 240, A, B and C of 10 units frozen by V ÷ c and dispatched 240 → 210, round 2 from 210 passing A for a used-up daily count and dispatching B as rank 2) is kept as episode 1, round 2 from 210 begun at the round's start, consumers A, B, C, the order A (passed, policy_budget_exhausted), B, C, and builds the same memory again; after that restart the next cycle dispatches C as rank 3 of round 2 with A still passed and B waiting, the uninterrupted run's decisions byte for byte, while a restart that kept nothing begins a new episode and dispatches A; a new generation with other values and a pool of no consumer, or with B continued as task_b2, keeps the episode (B, or task_b2, rank 2 of round 1), and one that adds or removes a consumer, changes a consumption or marks a consumer limited ends it (nothing at 170); an unknown reading in the middle dispatches nothing, holds both consumers with capped_cap_unknown naming the reading's key and keeps round 1, the next known reading (170) dispatches B as rank 2 of the same round, and after a second gap a reading at the stop line (140) ends the episode; the restore refuses a pair twice, an episode number 0, no consumer, a member that is no consumer, a gate code on a member not passed and a round without a round number, and drops alone an episode of a pool the catalog does not have (or of any pool without a catalog); a memory without an episode keeps nothing
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_sched_c1d::sched_c1d_t1_a_restart_continues_the_round_from_the_kept_episodes",
+    "actingcommand-policy::lib::tests::gate_sched_c1d::sched_c1d_t2_a_generation_keeps_the_episode_while_its_consumers_are_the_same",
+    "actingcommand-policy::lib::tests::gate_sched_c1d::sched_c1d_t3_an_unknown_reading_waits_and_the_next_known_one_goes_on",
+    "actingcommand-policy::lib::tests::gate_sched_c1d::sched_c1d_t4_the_restore_refuses_broken_episodes_and_drops_an_unvalued_pool",
+    "actingcommand-policy::lib::tests::gate_sched_c1d::sched_c1d_t5_without_an_episode_nothing_is_kept",
+]
+incident = ["#428 SCHED-C1d"]
 
 # The intent pins freshness, limits, catalog hash and ledger position
 [[gate]]

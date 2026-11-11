@@ -320,6 +320,29 @@
       "common_causes": "With runtime_fact_stale: a start of an earlier version (v0.12.50) after a settling start of 0.12.51 was cut before its value records, so the start derives a pair's facts from an older run than the one whose facts the store holds (register 1.296, the edge of the rollback). With another refusal: a catalog task id longer than the fact key bound in a ledger written before catalog activation refused such ids, a full Runtime fact store, or a record written by a defect.",
       "handling": "With runtime_fact_stale nothing needs to be done: the pair's newer facts stand, and its next settlement writes the pair's facts again. With another refusal the instance is paused: report it with the instance, task_id, fact_key and failure_code, since the pair's settlement facts are missing and a rule that reads them decides without them; once the cause is fixed, lift the instance's scheduling pause. A later start that meets the same refusal records it again and pauses the instance again."
     },
+    "capped_state_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "required",
+        "fact_key": "required",
+        "instance_id": "optional",
+        "pool_id": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.53",
+      "description": "The capped spending order's episodes kept across a start (#428 SCHED-C1d; the tagged program fact host.capped_episodes, fact_key) were dropped or not recorded, and the Runtime went on. With operation load_capped_episodes, at a start: a value that does not read back as this build's shape or breaks its rules, a value another start recorded than the last one that completed its settlement (the start anchor rule of #405 N-2), or one episode whose instance is not registered or whose pool the active catalog does not give a declared valuation (instance_id the instance alias, pool_id), is dropped (the whole value, or that episode alone); the pool begins without an episode, as before SCHED-C1d. With operation store_capped_episodes: the Runtime's fact store refused a record of the fact (the refusal is the caused_by link); the episodes stay in memory and the next change records them again. One runtime.failed record at Warning under the system links, handed to the daemon's log too. A fatal fault of the store or the ledger is fatal as for every fact, never this warning.",
+      "common_causes": "At a start: a start of an earlier build ran in between (a rollback), so the last record names another start; an instance removed from the configuration or a pool removed or unvalued by a new catalog generation; a record written by a defect. At a record: a record list beyond the fact store's bounds (more episode, consumer and member rows than it holds).",
+      "handling": "Nothing to repair for a rollback or a removed instance or pool: the pool begins a new episode when its reading reaches its trigger line. For a refused record, read the caused_by link; the episodes stay in memory until the Runtime stops, so a start before the next successful record begins the pool without its episode."
+    },
     "proposal_report_unavailable": {
       "category": "error",
       "ladder_class": "none",
@@ -30487,6 +30510,22 @@
       "status": "active",
       "since": "0.12.22",
       "description": "A Runtime host operation (Workflow #427-A): a change of the in-flight policy runs: a hand-off's registration, and its end after the run's settlement (an unsettled run stays registered for the reconciliation)."
+    },
+    "load_capped_episodes": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.53",
+      "description": "A Runtime host operation (#428 SCHED-C1d): the start's read of the tagged program fact host.capped_episodes, the capped spending order's episodes kept across a start, before the first evaluation; it keeps the fact only when the start that recorded it is the last one that completed its settlement (the start anchor, #405 N-2)."
+    },
+    "store_capped_episodes": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.53",
+      "description": "A Runtime host operation (#428 SCHED-C1d): a record of the tagged program fact host.capped_episodes, after an evaluated cycle that changed a capped episode and once by a start that found the fact."
     }
   }
 }

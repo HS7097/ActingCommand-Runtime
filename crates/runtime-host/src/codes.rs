@@ -3236,3 +3236,33 @@ actingcommand_contract::outcome_codes! {
     }
 }
 // ---- UPD-1: end ----
+
+// ---- #428 SCHED-C1d (register §1.299 SC1-11): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's code of the capped episodes kept across a start (SCHED-C1d): the one warning a
+    /// dropped or refused `host.capped_episodes` is. No existing code fits:
+    /// `invalid_runtime_state_fact` is a request error of another kind of record, and a refused
+    /// record's own code is kept as the warning's `caused_by` link.
+    pub(crate) enum CappedStateCode {
+        /// Warning (since 0.12.53). The start dropped what it read of `host.capped_episodes`
+        /// (`operation` `load_capped_episodes`): a value that does not read back as this build's
+        /// shape or breaks its rules, one another start recorded after it (the anchor rule), or one
+        /// episode whose instance is not registered or whose pool the active catalog does not give
+        /// a declared valuation (`instance_id`, `pool_id`); the start goes on and that pool begins
+        /// without an episode. Or the fact store refused a record of it (`operation`
+        /// `store_capped_episodes`, the refusal as the `caused_by` link); the Runtime goes on with
+        /// the episodes in memory. Keys `fact_key` (`host.capped_episodes`).
+        Failed => "capped_state_failed": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_locations! {
+    /// The host's operations of the capped episodes kept across a start (SCHED-C1d).
+    pub(crate) enum CappedStateLocation {
+        /// The start's read of `host.capped_episodes` (`HostShared::restore_capped_episodes`).
+        Load => "load_capped_episodes",
+        /// A record of `host.capped_episodes` (`HostShared::keep_capped_episodes`).
+        Store => "store_capped_episodes",
+    }
+}
+// ---- #428 SCHED-C1d: end ----
