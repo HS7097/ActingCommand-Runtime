@@ -7447,7 +7447,9 @@ impl HostShared {
             startup_package::HostPackageRun::StartupPackage => {
                 startup_package_admission_failure(failure)
             }
-            startup_package::HostPackageRun::ReturnHome => failure,
+            // IDLE-2: a rest's package keeps its own refusal, as the ladder's return-home does.
+            startup_package::HostPackageRun::ReturnHome
+            | startup_package::HostPackageRun::IdleReturnHome => failure,
         })?;
         active_run.control.note_package_load(package_load);
         // Workflow #336 L2d: the registry's return-home package on the ladder's first rung

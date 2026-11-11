@@ -1134,10 +1134,12 @@ member; a file that names neither keeps its revision.
 
 | Key | Type | Default (`actingd.defaults.json`) | Settable |
 |---|---|---|---|
-| `idle.action` | one of `none` (nothing ever happens), `close_app` (the game's application is stopped inside the emulator), `stop_emulator` (the instance's sessions are closed and its emulator is stopped) | `close_app` | yes |
+| `idle.action` | one of `none` (nothing ever happens), `close_app` (the game's application is stopped inside the emulator), `stop_emulator` (the instance's sessions are closed and its emulator is stopped), and since 0.12.54 `auto` (IDLE-2: one tier by the gap to the next task, below) | `close_app` | yes |
 | `idle.min_gap_ms` | milliseconds `60000..=86400000`, the least time to the scheduler's next due task for the instance before the action runs | `1800000` | yes |
 | `idle.close_app_wake_lead_ms` | milliseconds `0..=3600000`, how long before the next due task an instance whose application was closed is brought back (the startup package); the default covers a game's cold start (80 to 141 s in production on 10-27; #405 IDLE-1P, it was `60000`) | `300000` | yes |
 | `idle.stop_emulator_wake_lead_ms` | milliseconds `0..=3600000`, how long before the next due task an instance whose emulator was stopped is brought back (the emulator's boot and the startup package) | `300000` | yes |
+| `idle.return_home_min_gap_ms` | IDLE-2, since 0.12.54: milliseconds `60000..=86400000`, under `auto` the least gap to the next task at which the instance rests at home; a starting value to be measured | `600000` | yes |
+| `idle.stop_emulator_min_gap_ms` | IDLE-2, since 0.12.54: milliseconds `60000..=86400000`, under `auto` the least gap to the next task at which the instance's emulator is stopped; a starting value to be measured | `7200000` | yes |
 
 A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
 `range_max` for the milliseconds) at start, in `check-config` and in `ConfigureSettings`; a value
@@ -1146,7 +1148,67 @@ effect: each wake lead is shorter than `idle.min_gap_ms` (`section_check` on the
 an instance whose action in effect is `stop_emulator` is one whose emulator the Runtime starts
 (`instance.<id>.start_emulator` true; `section_check` on `instance.<id>.idle.action`), since its
 wake starts the emulator through that configured start. The rows are those of
-`config.parameters.idle` and, per instance, `config.parameters.instance`.
+`config.parameters.idle` and, per instance, `config.parameters.instance`. IDLE-2 (since 0.12.54):
+while the action in effect is `auto` (the section's, or an instance's), the whole-section check also
+holds `idle.return_home_min_gap_ms` ≤ `idle.min_gap_ms` ≤ `idle.stop_emulator_min_gap_ms`
+(`section_check` on `return_home_min_gap_ms` when it is above the gap, on
+`stop_emulator_min_gap_ms` when it is below); another action's thresholds are range-checked only.
+`auto` needs no `start_emulator`: on an instance without it the tier stops at `close_app` (below),
+which is no error. Both thresholds' defaults are starting values, to be measured on an
+experimental instance; the wake leads' defaults and `idle.action`'s default (`close_app`) do not
+change. `actingd check-config` lists both keys with the others, and `config.parameters.idle` and
+`config.parameters.instance` carry their rows. `actingd-config` revision 28
+([component-interfaces.md](component-interfaces.md)) adds the value and the two keys: a build
+before IDLE-2 refuses a file that names any of them.
+
+`auto` (IDLE-2, since 0.12.54; Alice's words of 11-11: 「根据任务间隔时间自动选择是关闭模拟器还是关闭应用还是回到主页面」;
+the coordinator's rulings on Workflow #386, comment 6787682270). When the idle check finds an
+instance free on every condition below but the gap (no lease, no queued request, no keyless
+work, no pause, player hold, blackout or fence, its emulator running, a plan made after its last
+work with nothing due), it reads the gap `g` to the instance's next work in that plan (its next
+task's wake or its fact-refresh reading, the earlier, as `idle.min_gap_ms` reads it) and takes one
+tier, directly, a gap of exactly a threshold taking the tier that starts there:
+
+| Gap `g` | Tier |
+|---|---|
+| below `idle.return_home_min_gap_ms` | nothing |
+| from `idle.return_home_min_gap_ms`, below `idle.min_gap_ms` | a rest at home, once per idle stretch |
+| from `idle.min_gap_ms`, below `idle.stop_emulator_min_gap_ms` | `close_app`, exactly as above, with its wake |
+| from `idle.stop_emulator_min_gap_ms`, or no next work | `stop_emulator`, exactly as above, with its wake; `close_app` on an instance whose emulator the Runtime does not start (`start_emulator` off) |
+
+An instance without a startup package never closes or stops (one `instance_idle_action_unsupported`
+with `idle_action` `auto` and `member` `startup_package`, as for the other actions), but it may
+still rest: a rest needs no way back. A rest runs the return-home package the game's standard pack
+declares for the instance's server (`bundle.json`'s maintenance entry whose `uses` holds
+`return_home`, read as the stuck-recovery ladder and the prerequisite chain read it; no new
+declaration in any resource repository; the game and the server are the instance's policy
+identity's, as `close_app`'s application is) as a host run of its own on the idle action's
+emulator-control claim, its response deadline `idle.return_home_min_gap_ms` (at most a task's
+longest), so it ends before the next task is due. It is one `instance_idle_action` (`operation`
+`run_idle_action`, `idle_action` `return_home`, `next_occurrence_unix_ms` the next due time; no
+`at_unix_ms`, no wake follows). Whatever its end, the instance is rested for this idle stretch: it
+owes no wake, has no row in `host.idle_state`, and rests no more until work holds it (a lease, a
+queued request, keyless work), which ends the stretch as it ends an idle one; a later plan with a
+longer gap takes a higher tier from it as from a free instance. A rest's failure is recorded as any
+host run's failure (its task records, and its failure record under the instance and the rest's
+causation, category `run_idle_action`), enters no
+stuck-recovery ladder, owes no wake, is not tried again in the same stretch, and stops neither the
+instance nor the Runtime (#419). A game root that declares no return-home package for the server
+(or an instance whose policy identity names none): no rest runs, one
+`instance_idle_action_unsupported` (`idle_action` `return_home`, `member` `maintenance`, `operation`
+`run_idle_action`) per start and instance, and the higher tiers are unaffected. While a scheduling
+pause, a player hold, a blackout or a resource fence holds the instance, no rest runs, as no
+action does. `host.idle_state` holds the tier taken (`close_app` or `stop_emulator`), never `auto`;
+under `auto` "the action in effect changed", which wakes an idle instance at once, means that the
+tier it took is no longer one `auto` allows on it (`stop_emulator` once its emulator start is off,
+either tier once its startup package is gone), not that the configured word differs, so a restart
+that restores a closed application under `auto` does not wake it at once. A start that cannot read
+what the action left treats an `auto` instance as closed after the highest tier it can take. An
+instance whose application is closed is not raised to a stopped emulator by a later, longer gap
+(this release; its wake only moves earlier). What a person sees while an instance rests: in
+`actingctl status` and the overview, the instance's key held by the Runtime's claim and the
+return-home package's run, as for a startup package's run; then the instance free with its
+application open, no closed row and no wake.
 
 When (the Runtime host, `host/idle.rs`): at every policy cycle, right after its evaluation and
 before actingd admits its dispatches, and between cycles every second of the lease sweep, the idle

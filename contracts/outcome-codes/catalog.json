@@ -2305,7 +2305,7 @@
     },
     "idle_action": {
       "type": "name",
-      "description": "An instance's idle action (IDLE-1): close_app or stop_emulator, as idle.action spells it."
+      "description": "An instance's idle action (IDLE-1): close_app or stop_emulator, as idle.action spells it. IDLE-2: auto in an instance_idle_action_unsupported of the action in effect; return_home for a rest at home, the tier auto takes first (never a value of idle.action); every other record names the tier taken, never auto."
     },
     "display_problem": {
       "type": "vocab:display_problem",

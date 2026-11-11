@@ -514,6 +514,7 @@ is the console's.
 | recovery ladder | not admitted (`recovery_admission_denied`); a climbing ladder ends at its next step; the invariant `PlayerHeld` before `Paused` |
 | the emulator watch, the daemon start's start, IDLE-1's `stop_emulator` wake | the one place `automatic_start_hold` answers `player_held` (with the hold's revision) before the instance's pause; skips recorded once per reason and revision |
 | idle actions, IDLE-1's `close_app` wake | not done; not queued |
+| IDLE-2's rest at home (`idle.action` `auto`) | not done, as an idle action; the stretch's one rest is not spent |
 | the fence recheck, the monitor probe, the handset link's `Reconnect` and `Prepare`, the device state sample | skipped |
 | the start preparation | skips a restored hold |
 | the installation's idle check | entries the hold's gate holds count as not waiting |

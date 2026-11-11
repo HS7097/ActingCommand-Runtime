@@ -204,6 +204,11 @@ mod gate_idle1_host;
 mod gate_idle1p;
 // IDLE-WG (0.12.27): an idle instance is woken only for a task that could be dispatched now.
 mod gate_idle_wg;
+// IDLE-2 (0.12.54): `idle.action` `auto`, the tier by the gap, in the planner.
+mod gate_idle2_auto;
+// IDLE-2 (0.12.54): `auto` through the host: the rest, its failure, no declared package, a
+// restart.
+mod gate_idle2_auto_host;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;
