@@ -866,7 +866,9 @@ fn start_round(
 ) -> PolicyEvaluationResult<Option<Round>> {
     let overflow = || PolicyEvaluationError::overflow("a capped spending order overflowed");
     // Listed: its value without the pool's cost is above that value's rounding bound; from the
-    // second round, not limited. Never by its cost.
+    // second round, not limited. Never by its cost. SCHED-C1a (register §1.299): for a task with
+    // a fixed value `V` the benefit gate's `S` starts at `V`, so this value is `V` less the cost
+    // of the other pools it consumes, and its bound their terms alone.
     let mut listed = Vec::new();
     for (task_id, (_, known, term)) in candidates {
         if number > 1 && known.task.is_benefit_limited() {
@@ -1015,6 +1017,8 @@ impl RoundView<'_> {
                         KnownBenefit {
                             benefit_milli: saturating_milli(benefit.floor()),
                             expected_duration_ms: expected_duration_ms(known.candidate),
+                            // SCHED-C1a: the fixed value its `S` starts from, when it has one.
+                            fixed_value_milli: known.task.benefit_fixed_value_milli,
                         },
                         CappedSlot {
                             pool_id: pool_id.to_owned(),

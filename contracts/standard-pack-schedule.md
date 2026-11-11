@@ -32,10 +32,10 @@ package path and no approval:
 }
 ```
 
-SCHED-C1 (register §1.299, not built yet) adds to a rule an optional `"fixed_value_milli"` with an
+SCHED-C1a (register §1.299, since 0.12.52) adds to a rule an optional `"fixed_value_milli"` with an
 optional `"fixed_value_origin"` ("The fixed value" below), and to a pool an optional
-`"valuation_origin"` ("Provenance" below); a pool's V2 member `"trigger_line"` passes through as
-the other two lines do.
+`"valuation_origin"` ("Provenance" below). SCHED-C1 (register §1.299, not built yet): a pool's V2
+member `"trigger_line"` passes through as the other two lines do.
 
 Every member but `schema_version` may be absent, which means empty. The reader
 (`actingcommand_contract::parse_standard_pack_schedule`) refuses, each as
@@ -49,8 +49,8 @@ Every member but `schema_version` may be absent, which means empty. The reader
 | A rule has a string `package_id` (1–128 bytes, no control character), no `entrypoint` and no `procedure_ref`; its `instance_overrides` is absent or empty | `schedule_invalid` at the member |
 | A rule's `maintenance` (SS-2c, since 0.12.32; "Judged rules" below), when written, is `true` | `schedule_invalid` at `maintenance` |
 | A rule's `realization` (SS-2d, since 0.12.35; "The realization mark" below), when written, is `true`, and a rule that declares `"maintenance": true` does not write it | `schedule_invalid` at `realization` |
-| (SCHED-C1, not built yet; "The fixed value" below) a rule that declares `"maintenance": true` does not write `fixed_value_milli`; a rule's `fixed_value_origin`, when written, is `"model"`, beside a `fixed_value_milli` | `schedule_invalid` at the member |
-| (SCHED-C1, not built yet; "Provenance" below) a pool's `valuation_origin`, when written, is `"model"`, beside a `valuation` that is a block (not the pending marker) | `schedule_invalid` at `valuation_origin` |
+| (SCHED-C1a, since 0.12.52; "The fixed value" below) a rule that declares `"maintenance": true` does not write `fixed_value_milli`; a rule's `fixed_value_origin`, when written, is `"model"`, beside a `fixed_value_milli` | `schedule_invalid` at the member |
+| (SCHED-C1a, since 0.12.52; "Provenance" below) a pool's `valuation_origin`, when written, is `"model"`, beside a `valuation` that is a block (not the pending marker) | `schedule_invalid` at `valuation_origin` |
 | Every rule, pool, profile and event is an object with a string `id`, unique within its list | `schedule_invalid` at `id`; a repeated id is `rule_id_conflict` |
 | A pool, profile or event names its `server`, if at all, as a game-root identifier | `schedule_invalid` at `server` |
 | `requires` lists at most 32 distinct names of 1–64 bytes of `[a-z][a-z0-9_]*` | `schedule_invalid` at the entry |
@@ -104,12 +104,13 @@ composed pool as written (they name no id and no scope; a reference names a fact
 own scope, which the composer fills), and the catalog compiler checks them (`pool_lines_invalid`
 names the member). A reference form needs `pool_lines` only.
 
-SCHED-C1 (register §1.299, not built yet). A pool that writes `trigger_line` ([scheduling/README.md](scheduling/README.md),
-"Pool lines", "The trigger line") requires `pool_trigger_line` beside `pool_lines`, and a rule that
-writes `fixed_value_milli` or a pool that writes `valuation_origin` ("The fixed value",
-"Provenance" below) requires `benefit_fixed_value`, alike: the composer refuses a file that writes
-one while `requires` does not name its subsystem, `schedule_invalid` at the first such member in
-file order (rules, then pools; for example `/rules/0/fixed_value_milli`, `/pools/0/trigger_line`).
+SCHED-C1a (register §1.299, since 0.12.52). A rule that writes `fixed_value_milli` or a pool that
+writes `valuation_origin` ("The fixed value", "Provenance" below) requires `benefit_fixed_value`,
+and (SCHED-C1, not built yet) a pool that writes `trigger_line`
+([scheduling/README.md](scheduling/README.md), "Pool lines", "The trigger line") requires
+`pool_trigger_line` beside `pool_lines`, alike: the composer refuses a file that writes one while
+`requires` does not name its subsystem, `schedule_invalid` at the first such member in file order
+(rules, then pools; for example `/rules/0/fixed_value_milli`, `/pools/0/trigger_line`).
 
 A timeline event that writes `excludes_fact_prefixes`, with any value (Workflow #411 P19, since
 0.12.25; [scheduling/README.md](scheduling/README.md), "Reset exclusions and the task's own last
@@ -166,8 +167,8 @@ The composer marks every composed rule whose package is not maintenance-role (it
 `benefit_judged: true`: a business rule, ranked in the business tier and judged by its net
 benefit ([scheduling/README.md](scheduling/README.md), "Net benefit within a tier"). Its
 candidates are not dispatched while that benefit is unknown or not positive: until the rule
-declares its `produces` and `consumes` and every pool they touch its `valuation` (SCHED-C1, not
-built yet: or its fixed value, with a valuation on every pool it consumes, "The fixed value"
+declares its `produces` and `consumes` and every pool they touch its `valuation` (SCHED-C1a, since
+0.12.52: or its fixed value, with a valuation on every pool it consumes, "The fixed value"
 below), business dispatch waits (ruling 116: 「当业务有了数据之后直接写进任务包」). A maintenance-role package's rule is
 not marked and ranks as before. The mark is the composer's: a rule that writes `benefit_judged`
 itself is refused, `schedule_invalid` at `/rules/<i>/benefit_judged`. Where a value is not known
@@ -215,7 +216,7 @@ declare itself maintenance:
   that declare themselves maintenance, whatever their package's role; none of them is judged, so
   none counts as complete, pending or undeclared. SS-2d: *realization* counts the judged rules
   that carry the realization mark (below); each also counts as complete, pending or undeclared.
-  SCHED-C1 (not built yet): a rule that writes a fixed value ("The fixed value" below) is
+  SCHED-C1a (since 0.12.52): a rule that writes a fixed value ("The fixed value" below) is
   *complete* when every pool it consumes has a valuation (its `produces` are not read), *pending*
   when every value it lacks is the marker, and *undeclared* only for a consumed pool with neither;
   *fixed_value* counts these rules, each also counted in one of the three.
@@ -263,7 +264,7 @@ written as the realization mark is:
   `benefit_limited` itself is refused at `/rules/<i>/benefit_limited`: the task member is the
   composer's. A compiler diagnostic at the task's `benefit_limited` names the rule's `limited`.
 
-**The fixed value** (SCHED-C1, register §1.299, not built yet; the coordinator's rulings of 11-11,
+**The fixed value** (SCHED-C1a, register §1.299, since 0.12.52; the coordinator's rulings of 11-11,
 not Alice's words, after her two kinds of scoring of 11-09 15:47 and 15:50;
 [scheduling/README.md](scheduling/README.md), "Fixed values written in the pack"). A business rule
 whose value is settled is written with that value, in milli of its game's one value unit (the unit
@@ -293,7 +294,7 @@ its pools' valuations weigh in):
   `fixed_value_milli`. It decides nothing: only "Provenance" below reads it.
 - The rule requires `benefit_fixed_value` ("`requires`" above).
 
-**Provenance** (SCHED-C1, not built yet; the coordinator's point 6). So that a later model export
+**Provenance** (SCHED-C1a, since 0.12.52; the coordinator's point 6). So that a later model export
 can replace them one by one, the composer reports, per game, which judged rules run on a fixed
 value and which pools on a declared valuation block, each by who wrote it: `pack` (no origin
 member) or `model` (`fixed_value_origin` or `valuation_origin` `"model"`). Absent means the pack
@@ -306,7 +307,8 @@ replace.
   so the composed pool never carries it.
 - The tools answer `benefit_provenance` for each game ("Tools"): `{fixed_value: {pack: [rule ids],
   model: [rule ids]}, valuation: {pack: [pool ids], model: [pool ids]}}`, in file order.
-- The workbench holds the active generation's provenance, every game's, in the program fact
+- (SCHED-C1b, not built yet) The workbench holds the active generation's provenance, every
+  game's, in the program fact
   `config.catalog_provenance` (runtime scope, re-observed; [runtime-config.md](runtime-config.md),
   "Facts", its row with the code): one count row `{game, kind, origin, count}` per game, kind
   (`fixed_value`, `valuation`) and origin, then one row `{game, kind, origin, id}` per rule or
@@ -367,7 +369,7 @@ each game root that holds `schedule.json`, that file's bytes, the root as
    such a rule that carries `"realization": true` also gains `benefit_realization: true` ("The
    realization mark" above; the composed task does not carry `realization`); SS-2h: and one that
    carries `"limited": true` gains `benefit_limited: true` ("The limited mark" above; the composed
-   task does not carry `limited`); SCHED-C1 (not built yet): and one that carries
+   task does not carry `limited`); SCHED-C1a (since 0.12.52): and one that carries
    `fixed_value_milli` gains `benefit_fixed_value_milli` with its value ("The fixed value" above;
    the composed task carries neither `fixed_value_milli` nor `fixed_value_origin`, and a composed
    pool no `valuation_origin`).
@@ -463,9 +465,10 @@ warnings; `standard-pack compose` and the Runtime's workbench do not.
   realization mark, and a `realization` refused above is refused the same way.
   SS-4 (since 0.12.34): after those, `warnings` ends with one
   `standard_pack_escalation_threshold_high` per rule ("Failure escalation without a daily bound"
-  below). SCHED-C1 (register §1.299, not built yet): `benefit_coverage` also answers `fixed_value`,
-  both answer `benefit_provenance` ("Provenance" above), and `warnings` ends with one
-  `standard_pack_line_trigger_redundant` per rule ("A redundant trigger" below).
+  below). SCHED-C1a (register §1.299, since 0.12.52): `benefit_coverage` also answers
+  `fixed_value`, and both answer `benefit_provenance` ("Provenance" above). SCHED-C1 (not built
+  yet): `warnings` ends with one `standard_pack_line_trigger_redundant` per rule ("A redundant
+  trigger" below).
 - **A redundant trigger** (SCHED-C1, not built yet; the coordinator's point 12;
   [scheduling/README.md](scheduling/README.md), "Capped spending order", "Old triggers on a capped
   pool"). A judged rule that consumes a pool writing both lines and a declared valuation block,

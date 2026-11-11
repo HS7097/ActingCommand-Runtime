@@ -416,6 +416,19 @@ tests = [
     "actingcommand-policy::lib::tests::gate_ss2h::ss2h_t19_lines_without_a_valuation_compile_with_a_warning",
 ]
 incident = ["#428 SS-2h"]
+# #428 SCHED-C1a (Alice's two kinds of scoring of 2026-11-09 15:47 and 15:50, board #428 6734155178; the coordinator's rulings of 11-11; rd-1111 brief-sched-c1a; contracts/scheduling/README.md, "Fixed values written in the pack", "Net benefit within a tier", "Capped spending order"; register §1.299; since 0.12.52): a judged task's benefit_fixed_value_milli V without effects is its known B (12 000 dispatched, the same rule without the member benefit_unknown no_effects, a production of an unvalued pool unread); two collect rules of one instance order by B ÷ E exactly (10 001 at 60 000 before 5 000 at 30 000 though declared second; 5 000 at 30 000 and 10 000 at 60 000 tie and the one declared first runs); below the cap a consumer's B is V − W·c (40 000 − 30 000 runs; 20 000 − 30 000 policy_benefit_nonpositive; 30 000 − 30 000 within ε 15, the consumption's term alone; at 120 the hard line holds it, would_cross_hard_line); in a capped round it ranks by V ÷ c beside a modelled consumer (1200 before 800, the head's B 36 000, the next one rank 2 of the frozen round; at 600 it waits behind the modelled one with B 18 000); a consumed pool without a valuation is benefit_unknown valuation_missing, with the pending marker valuation_pending, a regenerating one without a reading reading_unknown; every decision whose B came from a fixed value opens with benefit_fixed_value {benefit_milli, fixed_value_milli, expected_duration_ms} and a judged winner's rank_breakdown detail ends with fixed_value_milli=<V>; the compiler refuses the member in V1 (unknown_field), of another type or null (type_mismatch), outside 1..=2^53−1 (limit_exceeded), without benefit_judged (missing_required_field) and beside a priced or pending product or benefit_realization (fixed_value_conflict), each at its pointer; a catalog without the member keeps the example's golden hashes and records no fixed value
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_sched_c1a::sched_c1a_t1_a_fixed_value_without_effects_is_its_known_benefit",
+    "actingcommand-policy::lib::tests::gate_sched_c1a::sched_c1a_t2_two_collect_rules_order_by_b_per_e_exactly",
+    "actingcommand-policy::lib::tests::gate_sched_c1a::sched_c1a_t3_below_the_cap_a_consumer_is_judged_by_v_less_its_cost",
+    "actingcommand-policy::lib::tests::gate_sched_c1a::sched_c1a_t4_in_a_capped_round_a_fixed_consumer_ranks_by_v_per_c",
+    "actingcommand-policy::lib::tests::gate_sched_c1a::sched_c1a_t5_a_consumed_pool_without_a_valuation_stays_unknown",
+    "actingcommand-policy::lib::tests::gate_sched_c1a::sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer",
+    "actingcommand-policy::lib::tests::gate_sched_c1a::sched_c1a_t8_without_the_member_nothing_changes",
+]
+incident = ["#428 SCHED-C1a"]
 
 # The intent pins freshness, limits, catalog hash and ledger position
 [[gate]]
@@ -1135,6 +1148,14 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_ss2c::ss2c_t5_t6_the_check_counts_declared_rules_apart_and_warns_of_a_tier_mismatch",
 ]
 incident = ["#386 SS-2c"]
+# #428 SCHED-C1a (rd-1111 brief-sched-c1a; contracts/standard-pack-schedule.md, "The file", "requires", "Judged rules", "The fixed value", "Provenance", "Composition" and "Tools"; register §1.299; since 0.12.52): the composer writes a rule's fixed_value_milli as the judged task's benefit_fixed_value_milli, and neither fixed_value_milli, fixed_value_origin nor a pool's valuation_origin reaches the composed catalog, so two files that differ only in the origins compose the same catalog hash and rules digest; it refuses, schedule_invalid at the member, a file that writes the member or a valuation_origin without benefit_fixed_value in requires (the first such member, a rule's before a pool's), the member on a declared maintenance rule (the reader) or a maintenance-role package (the composer), the task member written by a rule, an origin of another value or without a value, a valuation origin beside the pending marker, and the compiler's refusals of the task member mapped to fixed_value_milli; standard-pack check and package bundle --schedule count the rules with a fixed value in benefit_coverage.fixed_value (complete by the pools they consume alone) and answer benefit_provenance {fixed_value {pack, model}, valuation {pack, model}} in file order
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_sched_c1a::sched_c1a_t7_the_composer_writes_the_member_and_keeps_the_origins_out",
+    "actingcommand-resource-tooling::lib::gate_sched_c1a::sched_c1a_t9_the_check_answers_coverage_and_provenance",
+]
+incident = ["#428 SCHED-C1a"]
 # SS-4 (rd-1029 plan-state-driven, the notes on removing the counts; rd-1031 brief-ss4 test 6; contracts/standard-pack-schedule.md, "Tools", "Failure escalation without a daily bound"; register §1.231; since 0.12.34): a rule without a daily bound (loop_budget without daily_limit, or no loop_budget) whose escalation_threshold is above 10 is one standard_pack_escalation_threshold_high {game, task_id, count, limit_count 10} in file order, outside the composition's own warnings; a rule with a daily limit, or at the threshold 10, gives none; the file composes all the same
 [[gate]]
 coverage = "Y"
