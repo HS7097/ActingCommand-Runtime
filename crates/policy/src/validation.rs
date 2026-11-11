@@ -7,14 +7,14 @@ use actingcommand_contract::MAX_STRATEGIC_WEIGHT_MILLI;
 use crate::source::SourceMap;
 use crate::{
     ActivityProfile, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode, ClockSchedule,
-    ClockSource, Comparison, DiagnosticSeverity, EffectDirection, FactComparand, FactReference,
-    FactValue, LoadProfile, MAX_ACTIVITY_PROFILES, MAX_APPROVAL_REFS, MAX_BUDGET_COUNT,
-    MAX_CANONICAL_INTEGER, MAX_CLOCK_DRIFT_MS, MAX_CONTINUED_TASK_IDS, MAX_DEFER_AGING_CAP_MS,
-    MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS,
-    MAX_FACT_TIME_OFFSET_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK,
-    MAX_MISSED_GRACE_MS, MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES,
-    MAX_PRIORITY_PERCENTILE, MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES,
-    MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI,
+    ClockSource, Comparison, DiagnosticSeverity, EffectAmount, EffectDirection, FactComparand,
+    FactReference, FactValue, LoadProfile, MAX_ACTIVITY_PROFILES, MAX_APPROVAL_REFS,
+    MAX_BUDGET_COUNT, MAX_CANONICAL_INTEGER, MAX_CLOCK_DRIFT_MS, MAX_CONTINUED_TASK_IDS,
+    MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK,
+    MAX_FACT_MAX_AGE_MS, MAX_FACT_TIME_OFFSET_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES,
+    MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_MISSED_GRACE_MS, MAX_POOLS, MAX_PREDICATE_DEPTH,
+    MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE, MAX_REFERENCES_PER_TASK, MAX_TASKS,
+    MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI,
     MAX_VALUATION_GAP_WEIGHT_MILLI, MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES,
     MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES,
     MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS, MIN_UTC_OFFSET_MINUTES, MetricRef,
@@ -1111,6 +1111,9 @@ fn validate_effects(
             descriptor,
         ));
     }
+    // SCHED-C1f1 (register §1.303 SC1F-1, question 7): the pools of the entries that read their
+    // amount from a fact; a second such entry of one pool is refused.
+    let mut read_from_facts = HashSet::new();
     for (index, effect) in effects.iter().enumerate() {
         let effect_path = format!("{path}/{index}");
         if effect.direction != expected_direction {
@@ -1132,6 +1135,24 @@ fn validate_effects(
         // SS-2b (register §1.225): `amount` may be the pending marker in V2, in either direction,
         // as the effect's one quantity. It has no quantity to bound against the pool's capacity.
         let v2 = map.schema_version.as_deref() == Some(SCHEDULING_SCHEMA_VERSION_V2);
+        // SCHED-C1f1 (register §1.303 SC1F-1): an object `amount` is a consumption read from a
+        // fact, checked by its own rules.
+        if matches!(
+            effect.amount,
+            Some(EffectAmount::Fact(_) | EffectAmount::Malformed(_))
+        ) {
+            let first = read_from_facts.insert(effect.pool_id.as_str());
+            validate_consumption_fact(
+                effect,
+                (expected_direction, first),
+                &effect_path,
+                map,
+                pools,
+                descriptor,
+                diagnostics,
+            );
+            continue;
+        }
         if effect.is_pending() {
             if !v2 {
                 diagnostics.push(map.diagnostic(
@@ -1182,6 +1203,206 @@ fn validate_effects(
             ));
         }
     }
+}
+
+/// SCHED-C1f1 (register §1.303 SC1F-1; `contracts/scheduling/README.md`, "A run's consumption
+/// read from a fact", *Refused*): the entry at `effect_path` whose `amount` is an object, the
+/// form `{"type": "fact", "fact_key": B, "fallback": F}` or something written in its place. Each
+/// refusal at its pointer:
+/// - in a V1 document, `unknown_field` at `amount/type`, and nothing else is checked;
+/// - on a `produces` entry (`direction` the list's), `effect_incompatible` at `amount`, and
+///   nothing else is checked;
+/// - beside `expected_amount_milli`, or with a confidence above 1000, `limit_exceeded` at the
+///   entry, as two quantities are;
+/// - a `type` other than `fact`, a `fact_key` that is no identifier, a `fallback` that is no
+///   integer (`null` included), `type_mismatch` at the member;
+/// - a `fallback` outside `1..=2^53−1`, `limit_exceeded` at `amount/fallback`; one above a constant
+///   capacity, `effect_incompatible` at the entry, as a constant `amount` above it;
+/// - a member missing, `missing_required_field` at `amount` (the reason names it); any other
+///   member (`offset`, `scope` among them), `unknown_field` at it;
+/// - with `first` false (another entry of the task's list on the same pool writes the form
+///   before it), `effect_incompatible` at `amount`.
+fn validate_consumption_fact(
+    effect: &ResourceEffectSpec,
+    (direction, first): (EffectDirection, bool),
+    effect_path: &str,
+    map: &SourceMap,
+    pools: &[PoolSpec],
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let amount = format!("{effect_path}/amount");
+    let [kind, fact_key, fallback] = crate::schema::CONSUMPTION_FACT_MEMBERS;
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            format!("{amount}/{kind}"),
+            "a consumption read from a fact requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if direction != EffectDirection::Consume {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::EffectIncompatible,
+            amount,
+            "only a consumes entry reads its amount from a fact",
+            descriptor,
+        ));
+        return;
+    }
+    if effect.expected_amount_milli.is_some() || effect.confidence_milli > 1000 {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            effect_path,
+            "effect requires exactly one positive amount or bounded v2 expected_amount_milli; confidence must be in 0..=1000",
+            descriptor,
+        ));
+    }
+    if !first {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::EffectIncompatible,
+            &amount,
+            format!(
+                "a task reads one run's amount of pool `{}` from one fact: another of its entries \
+                 on the pool writes the form before this one",
+                effect.pool_id
+            ),
+            descriptor,
+        ));
+    }
+    let fallback_at = format!("{amount}/{fallback}");
+    match &effect.amount {
+        Some(EffectAmount::Fact(form)) => {
+            validate_identifier(
+                map,
+                &format!("{amount}/{fact_key}"),
+                &form.fact_key,
+                descriptor,
+                diagnostics,
+            );
+            validate_fallback(
+                i128::from(form.fallback),
+                (effect, effect_path, &fallback_at),
+                map,
+                pools,
+                descriptor,
+                diagnostics,
+            );
+        }
+        Some(EffectAmount::Malformed(members)) => {
+            for (name, value) in members {
+                let at = format!("{amount}/{}", pointer_token(name));
+                match name.as_str() {
+                    member if member == kind => {
+                        if value.as_str() != Some(crate::FACT_REFERENCE_TYPE) {
+                            diagnostics.push(map.diagnostic(
+                                CatalogDiagnosticCode::TypeMismatch,
+                                at,
+                                format!(
+                                    "a consumption read from a fact has the type `{}`",
+                                    crate::FACT_REFERENCE_TYPE
+                                ),
+                                descriptor,
+                            ));
+                        }
+                    }
+                    member if member == fact_key => match value.as_str() {
+                        Some(key) => validate_identifier(map, &at, key, descriptor, diagnostics),
+                        None => diagnostics.push(map.diagnostic(
+                            CatalogDiagnosticCode::TypeMismatch,
+                            at,
+                            "a consumption's fact_key is an identifier",
+                            descriptor,
+                        )),
+                    },
+                    member if member == fallback => {
+                        let integer = value
+                            .as_u64()
+                            .map(i128::from)
+                            .or_else(|| value.as_i64().map(i128::from));
+                        match integer {
+                            Some(integer) => validate_fallback(
+                                integer,
+                                (effect, effect_path, &fallback_at),
+                                map,
+                                pools,
+                                descriptor,
+                                diagnostics,
+                            ),
+                            None => diagnostics.push(map.diagnostic(
+                                CatalogDiagnosticCode::TypeMismatch,
+                                at,
+                                "a consumption's fallback is an integer",
+                                descriptor,
+                            )),
+                        }
+                    }
+                    _ => diagnostics.push(map.diagnostic(
+                        CatalogDiagnosticCode::UnknownField,
+                        at,
+                        format!(
+                            "a consumption read from a fact names `{name}`: it has only type, \
+                             fact_key and fallback, and reads the instance's own scope"
+                        ),
+                        descriptor,
+                    )),
+                }
+            }
+            for member in crate::schema::CONSUMPTION_FACT_MEMBERS {
+                if !members.contains_key(member) {
+                    diagnostics.push(map.diagnostic(
+                        CatalogDiagnosticCode::MissingRequiredField,
+                        &amount,
+                        format!("a consumption read from a fact requires its member `{member}`"),
+                        descriptor,
+                    ));
+                }
+            }
+        }
+        Some(EffectAmount::Units(_) | EffectAmount::Pending) | None => {}
+    }
+}
+
+/// SCHED-C1f1: a consumption's fallback `value` (an integer as written) of `effect` at
+/// `effect_path`, whose `fallback` member is at `fallback_at`: within `1..=2^53−1`
+/// (`limit_exceeded` at the member), then at most a constant capacity of its pool
+/// (`effect_incompatible` at the entry, as a constant `amount` above it).
+fn validate_fallback(
+    value: i128,
+    (effect, effect_path, fallback_at): (&ResourceEffectSpec, &str, &str),
+    map: &SourceMap,
+    pools: &[PoolSpec],
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    if !(1..=i128::from(MAX_CANONICAL_INTEGER)).contains(&value) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            fallback_at,
+            format!("a consumption's fallback must be within 1..={MAX_CANONICAL_INTEGER}"),
+            descriptor,
+        ));
+        return;
+    }
+    if let Some(capacity) = pools
+        .iter()
+        .find(|pool| pool.id == effect.pool_id)
+        .and_then(|pool| pool.capacity.constant())
+        && value > i128::from(capacity)
+    {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::EffectIncompatible,
+            effect_path,
+            format!("effect quantity exceeds pool capacity {capacity} real units"),
+            descriptor,
+        ));
+    }
+}
+
+/// One JSON Pointer reference token for the member `name` (RFC 6901: `~` as `~0`, `/` as `~1`).
+fn pointer_token(name: &str) -> String {
+    name.replace('~', "~0").replace('/', "~1")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2391,7 +2612,8 @@ fn validate_pool_lines(
 /// for a hard line that references the capacity's own fact (the capacity's offset less the
 /// line's), against every consumer's consumption: a judged task that is no manual request and
 /// declares a consumption of the pool, the evaluator's consumers, one of whose entries of the pool
-/// is pending leaving it untold. `None` otherwise, and for a pool without a consumer.
+/// is pending leaving it untold. SCHED-C1f1: a consumption read from a fact is read at its
+/// fallback. `None` otherwise, and for a pool without a consumer.
 fn unspendable_lines(pool: &PoolSpec, hard: &PoolLine, tasks: &[TaskSpec]) -> Option<(u64, u64)> {
     let room = match (&pool.capacity, hard) {
         (PoolCapacity::Constant(capacity), PoolLine::Constant(hard)) => {
@@ -2421,7 +2643,15 @@ fn unspendable_lines(pool: &PoolSpec, hard: &PoolLine, tasks: &[TaskSpec]) -> Op
         if entries.any(|effect| effect.is_pending()) {
             return None;
         }
-        let consumed = crate::resource_targets::declared_consumption(task, &pool.id).ok()?;
+        // SCHED-C1f1 (register §1.303, question 8): each consumer's declared consumption, a
+        // fact-driven amount at its fallback, the amount an evaluation reads while the fact gives
+        // no usable reading.
+        let consumed = crate::resource_targets::consumption(
+            task,
+            &pool.id,
+            crate::evaluator::Amounts::Declared,
+        )
+        .ok()?;
         if consumed > 0 {
             least = Some(least.map_or(consumed, |least| least.min(consumed)));
         }

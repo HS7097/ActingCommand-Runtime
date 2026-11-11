@@ -162,7 +162,7 @@ fn flat_resource_authored_catalog_is_normalized() {
         env_dir.join(ENV_DETECTION_CATALOG),
         r#"{
                 "schema_version": "env-detections.v1",
-                "game": "arknights",
+                "game": "fixture-game-a",
                 "detections": [{
                     "detector_id": "detect_ui_theme",
                     "detector_version": "1",
@@ -184,7 +184,7 @@ fn flat_resource_authored_catalog_is_normalized() {
 
     let catalog = load_env_catalog(&env_dir).unwrap();
     let detector = catalog.detector("detect_ui_theme").unwrap();
-    assert_eq!(detector.game_id.as_deref(), Some("arknights"));
+    assert_eq!(detector.game_id.as_deref(), Some("fixture-game-a"));
     assert_eq!(detector.version(), "1");
     assert_eq!(detector.keys.len(), 1);
     let key = &detector.keys[0];
@@ -311,8 +311,8 @@ fn dry_run_detection_steps_plan_without_device_work() {
             resource_root: temp.path().to_path_buf(),
             state_root: temp.path().to_path_buf(),
             instance: "fixture".to_string(),
-            game: "arknights".to_string(),
-            server: Some("cn".to_string()),
+            game: "fixture-game-a".to_string(),
+            server: Some("s1".to_string()),
         },
         task: detector.id.clone(),
         scene_path: None,
@@ -444,7 +444,7 @@ fn stale_reason_classifies_common_result_failures() {
             "instance_mismatch",
         ),
         (
-            "env detection result scope is stale: result arknights.cn command arknights.jp",
+            "env detection result scope is stale: result fixture-game-a.s1 command fixture-game-a.s2",
             "scope_mismatch",
         ),
         (
@@ -634,8 +634,8 @@ fn detector() -> EnvDetector {
     EnvDetector {
         id: "detect_ui_theme".to_string(),
         version: Some("1".to_string()),
-        game_id: Some("arknights".to_string()),
-        server_id: Some("cn".to_string()),
+        game_id: Some("fixture-game-a".to_string()),
+        server_id: Some("s1".to_string()),
         resource_pack_id: Some("test-pack".to_string()),
         match_metric: Some("ccorr_normed".to_string()),
         steps: Vec::new(),
@@ -654,7 +654,7 @@ fn resolution_detector() -> EnvDetector {
     EnvDetector {
         id: "detect_resolution".to_string(),
         version: Some("1".to_string()),
-        game_id: Some("arknights".to_string()),
+        game_id: Some("fixture-game-a".to_string()),
         server_id: None,
         resource_pack_id: Some("test-pack".to_string()),
         match_metric: None,
@@ -678,8 +678,8 @@ fn context(root: &Path, instance_id: &str) -> EnvCommandContext {
         resource_root: root.to_path_buf(),
         env_dir: root.join(ENV_DETECTION_DIR),
         instance_id: instance_id.to_string(),
-        game_id: "arknights".to_string(),
-        server_id: "cn".to_string(),
+        game_id: "fixture-game-a".to_string(),
+        server_id: "s1".to_string(),
     }
 }
 

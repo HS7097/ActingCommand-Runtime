@@ -324,7 +324,7 @@ states and outcomes, and every host. A change this contract describes for the
 intent's own instance, server or game still refuses it.
 
 **Left out of the projection (Workflow #428 S168-LB1a, not built yet;
-[v012-register.md](v012-register.md) §1.305; the coordinator's ruling 2 of 11-11, not Alice's
+[v012-register.md](v012-register.md) §1.306; the coordinator's ruling 2 of 11-11, not Alice's
 words; #419: one long list never stops the scheduler for every instance).** The projection of the
 evaluation's `facts`, authoritative and forward alike, already leaves out three classes, each
 consumed by a projection of its own: the policy instance keys, the priority offsets and the
@@ -518,7 +518,7 @@ The store accepts or refuses it like any other observation.
 
 - **Family.** The keys are of the `inventory.` family; no family is added. They are the only
   `record_list` records a package's reading writes.
-- **Row bound (S168-LB1a, not built yet; [v012-register.md](v012-register.md) §1.305).** The rows
+- **Row bound (S168-LB1a, not built yet; [v012-register.md](v012-register.md) §1.306).** The rows
   of any `record_list` record of this store are bounded by a constant of their own, 1024 (the
   proposed name `MAX_FACT_RECORD_LIST_ROWS`, in `crates/actingcommand-contract/src/fact.rs`), no
   longer by `MAX_FACT_RECORDS`. `MAX_FACT_RECORDS` stays 256 and keeps bounding what it bounds
@@ -635,10 +635,10 @@ one status read and print `{scope, read_at_unix_ms, snapshot, records_total, rec
 the records whose key starts with it.
 
 **The frame bound with long lists (Workflow #428 S168-LB1a, not built yet;
-[v012-register.md](v012-register.md) §1.305; the coordinator's ruling 3 of 11-11, not Alice's
+[v012-register.md](v012-register.md) §1.306; the coordinator's ruling 3 of 11-11, not Alice's
 words).** No paging: the read answers one instance whole in one frame, and keeps its explicit
 refusal past it (`instance_fact_snapshot_too_large_for_frame`). What fits, by the read-only
-survey's measurement of the serialized records (register §1.305): all of an instance's records
+survey's measurement of the serialized records (register §1.306): all of an instance's records
 together hold about 6,000 list rows of the key and 3 short columns (about 5 lists of 1024 rows) or
 about 2,900 of the key and 8 (about 2 such lists), less what its other records take; a row of the
 key and 63 columns takes about 2.6 KB, and one such list stops at the observation's 512 KiB near

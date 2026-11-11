@@ -52,6 +52,9 @@ mod turns;
 // SS-2h (register §1.289; Alice's ruling 138 and her answers 172 A and 173 of 11-09): a pool's two
 // lines and the capped spending order inside the scheduler.
 mod capped;
+// #428 SCHED-C1f1 (register §1.303): a run's consumption read from a fact, resolved once per
+// evaluation and instance, and read by every reader of a consumption.
+mod consumption;
 
 use benefit::KnownBenefit;
 pub(crate) use benefit::manual_request;
@@ -64,6 +67,9 @@ pub use capped::{
     KeptConsumer, KeptEpisode, KeptMember, KeptRound, instance_valued_pool_ids,
 };
 pub use chain_handover::{ChainEntryHolds, ChainHandoverInputs, RestingPage};
+pub(crate) use consumption::{
+    Amounts, ConsumptionAmounts, resolve as resolve_consumptions, with_values,
+};
 pub(crate) use expected_runtime::snapshot_expected_runtime;
 pub use expected_runtime::{
     ExpectedRuntime, ExpectedRuntimeSettings, ExpectedRuntimeSource, MAX_EXPECTED_RUNTIME_RUNS,
@@ -1552,6 +1558,10 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         .map(|pool| (pool.id.as_str(), pool))
         .collect();
     let pool_values = evaluation_pool_values(&pool_specs, resources, facts, time);
+    // #428 SCHED-C1f1 (register §1.303 SC1F-2): every consumption read from a fact, resolved once
+    // from the facts this evaluation pins, for each task and instance its scope covers; every
+    // reader of a consumption reads these amounts.
+    let amounts = consumption::resolve(&catalog_bundle.tasks.tasks, &pool_specs, facts, time)?;
     // Workflow #427-B: each host as the round starts. The round deducts nothing from it; the
     // heavy dispatches chosen in the round are counted beside it (`RoundSlots`).
     let host_resources: BTreeMap<&str, HostView> = resources
@@ -1613,6 +1623,10 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         } else {
             invalidation_wake.and_then(|boundary| boundary.checked_sub(1))
         };
+    // SCHED-C1f1 (ruling 1): a usable consumption record wakes the evaluation a millisecond after
+    // it lapses, as a pool's reading does, and the evaluation then reads the fallback; it bounds
+    // the freshness of the candidates that read it only (`ConsumptionAmounts::fresh_until`).
+    next_wake = min_wake(next_wake, amounts.next_wake()?);
     let mut preload_hint = None;
     // SS-2: each task by id with its position in the catalog (its declared order).
     let declared_tasks: BTreeMap<&str, (usize, &TaskSpec)> = catalog_bundle
@@ -1638,6 +1652,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         timeline_events: &timeline_events,
         turns: &turns,
         instance_lines,
+        amounts: &amounts,
     };
     let mut work = Vec::new();
     let mut candidates = Vec::new();
@@ -1673,6 +1688,11 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                 instance_id: instance.instance_id.clone(),
             };
             let mut task_work = TaskWork::new(task.id.clone(), instance.instance_id.clone());
+            // SCHED-C1f1 (SC1F-4): a consumption record that is present and current but not
+            // usable is the first reason of every decision of the task on the instance.
+            task_work
+                .reasons
+                .extend(amounts.warnings(&task.id, &instance.instance_id));
             let mut trigger = evaluate_predicate(
                 &task.trigger,
                 last_result,
@@ -1875,9 +1895,14 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                                 PolicyCode::TaskEligible,
                                 "trigger passed and feedback stop did not fire",
                             ));
+                            // SCHED-C1f1 (ruling 1): and by every usable consumption record of
+                            // the instance a reader of its decision reads.
                             let facts_fresh_until_unix_ms = min_wake(
-                                min_wake(trigger.fresh_until_unix_ms, stop.fresh_until_unix_ms),
-                                min_wake(timeline_fresh_until, pool_fresh_until),
+                                min_wake(
+                                    min_wake(trigger.fresh_until_unix_ms, stop.fresh_until_unix_ms),
+                                    min_wake(timeline_fresh_until, pool_fresh_until),
+                                ),
+                                amounts.fresh_until(task, &instance.instance_id),
                             );
                             let cooldown_until = state
                                 .filter(|_| {
@@ -2129,9 +2154,16 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                             task_work.next_wake_unix_ms =
                                 min_wake(task_work.next_wake_unix_ms, slot.wake_unix_ms);
                         }
-                        None => task_work
-                            .reasons
-                            .push(capped::not_head_reason(&slot.pool_id, head)),
+                        // SCHED-C1f1 (SC1F-4): with the candidate's consumption of the pool when it
+                        // is read from a fact.
+                        None => task_work.reasons.push(consumption::with_values(
+                            capped::not_head_reason(&slot.pool_id, head),
+                            amounts.values(
+                                &candidate.task_id,
+                                &candidate.instance_id,
+                                &slot.pool_id,
+                            ),
+                        )),
                     }
                     continue;
                 }
@@ -2913,7 +2945,13 @@ fn append_decision_records(
 /// lists it.
 fn settle_decisions_left_without_reason(work: &mut [TaskWork]) {
     for entry in work.iter_mut() {
-        if entry.state == SchedulingDecisionState::Selected || !entry.reasons.is_empty() {
+        // SCHED-C1f1 (SC1F-4): the warning `consumption_fact_unusable` opens a decision and never
+        // settles it, so a decision with no other reason is one left without a reason.
+        let settled = entry
+            .reasons
+            .iter()
+            .any(|reason| !reason.outcome.is(PolicyCode::ConsumptionFactUnusable));
+        if entry.state == SchedulingDecisionState::Selected || settled {
             continue;
         }
         // Only `TaskWork::blocked_without_instance` builds a decision without an instance, and
@@ -3376,6 +3414,9 @@ struct PlacementContext<'a> {
     /// gives its pools, read before the catalog's ([`capped`]); none outside the Runtime's
     /// cycle.
     instance_lines: &'a InstancePoolLines,
+    /// #428 SCHED-C1f1 (register §1.303 SC1F-2): the amounts in effect of the consumptions read
+    /// from a fact, resolved once for the evaluation ([`consumption::resolve`]).
+    amounts: &'a ConsumptionAmounts,
 }
 
 impl PlacementContext<'_> {
@@ -4448,6 +4489,8 @@ fn apply_priority_selection(
         let targets = instance_targets.get(candidate.instance_id.as_str());
         let spend = crate::resource_targets::spend_values(
             task,
+            // SCHED-C1f1: the views hold the candidate's consumption in effect on its instance,
+            // which `run_cap` reads as one run's amount.
             reserves.get(&candidate.work_index).map(Vec::as_slice),
             |pool_id| {
                 crate::resource_targets::pending_total(
@@ -4478,7 +4521,9 @@ fn reserve_views(
     let mut views = BTreeMap::new();
     for candidate in candidates {
         let task = catalog_task(catalog, &candidate.task_id)?;
-        let reserved = crate::resource_targets::reserve_views(task, |pool_id| {
+        // SCHED-C1f1: the candidate's consumption in effect on its instance.
+        let amounts = context.amounts.on(&candidate.instance_id);
+        let reserved = crate::resource_targets::reserve_views_with(task, amounts, |pool_id| {
             let spec = context.pool_specs.get(pool_id).ok_or_else(|| {
                 PolicyEvaluationError::invalid(format!(
                     "compiled catalog references missing pool '{pool_id}'"
@@ -4545,6 +4590,7 @@ fn reserve_unshown<'a>(
                 .get(pool_id)
                 .map(|reading| reading.snapshot.observed_at_unix_ms)
         },
+        context.amounts,
     )
 }
 
@@ -4592,6 +4638,7 @@ fn apply_reserves(
         .zip(crate::resource_targets::hold_reserves(
             &candidates,
             unshown,
+            context.amounts,
         )?)
         .filter_map(|(index, hold)| hold.map(|hold| (index, hold)))
         .collect::<BTreeMap<_, _>>();

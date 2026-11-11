@@ -124,7 +124,7 @@ mod tests {
                 ("module/manifest.json", br#"{"schema_version":"0.2"}"#),
                 ("module/operations/task/task.json", br#"{"id":"task"}"#),
                 (
-                    "module/recognition/arknights.cn.pack.json",
+                    "module/recognition/fixture-game-a.s1.pack.json",
                     br#"{
                         "schema_version":"0.5",
                         "targets":[{

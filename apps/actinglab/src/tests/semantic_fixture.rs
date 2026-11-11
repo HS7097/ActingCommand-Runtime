@@ -119,7 +119,7 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
     fs::create_dir(&recognition).unwrap();
     fs::create_dir(&navigation).unwrap();
     fs::write(
-        recognition.join("arknights.cn.pack.json"),
+        recognition.join("fixture-game-a.s1.pack.json"),
         r#"{
             "schema_version":"0.3",
             "coordinate_space":{"width":1,"height":1},
@@ -132,12 +132,12 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
     )
     .unwrap();
     fs::write(
-        recognition.join("arknights.cn.pages.json"),
+        recognition.join("fixture-game-a.s1.pages.json"),
         r#"{
             "schema_version":"0.3",
             "pages":[
-                {"id":"arknights/home","required":["home_anchor"]},
-                {"id":"arknights/target","required":["target_anchor"]}
+                {"id":"fixture-game-a/home","required":["home_anchor"]},
+                {"id":"fixture-game-a/target","required":["target_anchor"]}
             ]
         }"#,
     )
@@ -148,23 +148,23 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
         "[]"
     };
     fs::write(
-        navigation.join("arknights.cn.navigation.json"),
+        navigation.join("fixture-game-a.s1.navigation.json"),
         format!(
             r#"{{
                 "schema_version":"0.3",
-                "game":"arknights",
-                "server":"cn",
+                "game":"fixture-game-a",
+                "server":"s1",
                 "control_points":[{{"name":"wake","point":[3,4],"note":"test wake"}}],
                 "navigation":[{{
                     "id":"home_to_target",
-                    "from_page":"arknights/home",
-                    "to_page":"arknights/target",
+                    "from_page":"fixture-game-a/home",
+                    "to_page":"fixture-game-a/target",
                     "click":{{"kind":"rect","x":10,"y":20,"width":4,"height":6}}
                 }},
                 {{
                     "id":"target_to_home",
-                    "from_page":"arknights/target",
-                    "to_page":"arknights/home",
+                    "from_page":"fixture-game-a/target",
+                    "to_page":"fixture-game-a/home",
                     "click":{{"kind":"point","point":"2,3"}}
                 }}],
                 "destructive_actions":{destructive}
@@ -172,10 +172,10 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
         ),
     )
     .unwrap();
-    let pack = recognition.join("arknights.cn.pack.json");
-    let pages = recognition.join("arknights.cn.pages.json");
-    let graph = navigation.join("arknights.cn.navigation.json");
-    seal_semantic_fixture(temp, "arknights", "cn", &pack, &pages, Some(&graph))
+    let pack = recognition.join("fixture-game-a.s1.pack.json");
+    let pages = recognition.join("fixture-game-a.s1.pages.json");
+    let graph = navigation.join("fixture-game-a.s1.navigation.json");
+    seal_semantic_fixture(temp, "fixture-game-a", "s1", &pack, &pages, Some(&graph))
 }
 
 pub(super) fn template_drift_resource_root() -> SemanticFixture {
@@ -192,7 +192,7 @@ pub(super) fn template_drift_resource_root() -> SemanticFixture {
     // Workflow #396 REC-7: a one-pixel ccorr_normed template is flat (its flat-field score is
     // 1000 milli), so only a threshold of 0 is admitted; the best match still follows the pixel.
     fs::write(
-        recognition.join("arknights.cn.pack.json"),
+        recognition.join("fixture-game-a.s1.pack.json"),
         r#"{
             "schema_version":"0.3",
             "coordinate_space":{"width":3,"height":1},
@@ -210,28 +210,28 @@ pub(super) fn template_drift_resource_root() -> SemanticFixture {
     )
     .unwrap();
     fs::write(
-        recognition.join("arknights.cn.pages.json"),
+        recognition.join("fixture-game-a.s1.pages.json"),
         r#"{
             "schema_version":"0.3",
-            "pages":[{"id":"arknights/home","required":["home_button"]}]
+            "pages":[{"id":"fixture-game-a/home","required":["home_button"]}]
         }"#,
     )
     .unwrap();
     fs::write(
-        navigation.join("arknights.cn.navigation.json"),
+        navigation.join("fixture-game-a.s1.navigation.json"),
         r#"{
             "schema_version":"0.3",
-            "game":"arknights",
-            "server":"cn",
+            "game":"fixture-game-a",
+            "server":"s1",
             "navigation":[],
             "destructive_actions":[]
         }"#,
     )
     .unwrap();
-    let pack = recognition.join("arknights.cn.pack.json");
-    let pages = recognition.join("arknights.cn.pages.json");
-    let graph = navigation.join("arknights.cn.navigation.json");
-    seal_semantic_fixture(temp, "arknights", "cn", &pack, &pages, Some(&graph))
+    let pack = recognition.join("fixture-game-a.s1.pack.json");
+    let pages = recognition.join("fixture-game-a.s1.pages.json");
+    let graph = navigation.join("fixture-game-a.s1.navigation.json");
+    seal_semantic_fixture(temp, "fixture-game-a", "s1", &pack, &pages, Some(&graph))
 }
 
 pub(super) fn synthetic_game_resource_root() -> SemanticFixture {

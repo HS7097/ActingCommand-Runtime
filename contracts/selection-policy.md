@@ -534,7 +534,7 @@ source). In a package it belongs to `package` revision 8, with S168-4's `read_li
 
 ## Lower bound of a list maximum
 
-Workflow #428 S168-LB1b, not built yet ([v012-register.md](v012-register.md) §1.305; the
+Workflow #428 S168-LB1b, not built yet ([v012-register.md](v012-register.md) §1.306; the
 coordinator's rulings 5 to 10 of 11-11, not Alice's words). Under the read above, one key of the
 union without a value (no row in the table, or a null cell of the class) makes the whole read
 Unknown, whatever the other keys hold. Yet the largest value of a group can only grow when a
@@ -738,7 +738,7 @@ chooser:
 - A document that declares a record list is refused at catalog compile with
   `type_mismatch`: record lists stay unusable to the scheduler, and `keyed_fact`
   is for in-task documents only.
-- From S168-LB1a (not built yet; [v012-register.md](v012-register.md) §1.305) the instance's
+- From S168-LB1a (not built yet; [v012-register.md](v012-register.md) §1.306) the instance's
   projection holds no record under `inventory.list.`
   ([instance-fact-store.md](instance-fact-store.md), "Projection into the evaluation"), and a
   document that declares a fact under that prefix, of any type, is refused at catalog compile

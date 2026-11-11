@@ -270,7 +270,7 @@ the declaration-only parser checks wire types. Existing integer declarations ser
 identically when the new field is absent. A binary that does not understand the field
 rejects it, so a state lineage containing these declarations requires a compatible reader.
 
-## A run's consumption read from a fact (SCHED-C1f, not built yet)
+## A run's consumption read from a fact (SCHED-C1f1, since 0.12.54)
 
 Register §1.303. The rules of this section are the coordinator's work order of 11-11 and the
 coordinator's rulings of 11-11 14:5x on the nine questions of §1.303, not Alice's words: the member
@@ -284,7 +284,7 @@ consumption could only be the constant `consumes[].amount`. A fact a task's own 
 gate that task's first run (the coordinator's rule of 10-28, "Self-read fact probe"), so the form
 carries a fallback and the amount is never Unknown.
 
-- **The form** (SCHED-C1f, not built yet). In an `actingcommand.scheduling.v2` catalog the `amount`
+- **The form** (SCHED-C1f1, since 0.12.54). In an `actingcommand.scheduling.v2` catalog the `amount`
   of a `consumes` entry may be, instead of a positive integer, the object
   `{"type": "fact", "fact_key": B, "fallback": F}`:
 
@@ -2581,7 +2581,7 @@ the switch.
 
 ## Record lists and the projection
 
-Workflow #428 S168-LB1a, not built yet ([v012-register.md](../v012-register.md) §1.305; the
+Workflow #428 S168-LB1a, not built yet ([v012-register.md](../v012-register.md) §1.306; the
 coordinator's ruling 2 of 11-11, not Alice's words; #419). Until it, the store's facts enter the
 evaluation whatever their rows, and the evaluator refuses the whole input when one record list
 holds more than 256 rows: the evaluation is skipped for every instance (`policy_evaluation_skipped`
@@ -2596,8 +2596,9 @@ long list must not stop the scheduler for every instance.
   evaluation", "Left out of the projection"). The catalog compile refuses, with `type_mismatch` at
   the member's `fact_key`, a catalog member that names a key under that prefix to read: a `fact`
   or `record_deadline` predicate, a fact reference ("Fact references"), a pool's ledger key and a
-  pool fact reference ("Pool fact references"), a consumption read from a fact (SCHED-C1f, not
-  built yet) and a fact the selection document declares ([selection-policy.md](../selection-policy.md),
+  pool fact reference ("Pool fact references"), a consumption read from a fact (SCHED-C1f1,
+  "A run's consumption read from a fact") and a fact the selection document declares
+  ([selection-policy.md](../selection-policy.md),
   "Scheduling consumer"). So such a predicate never compiles and never reads Unknown at
   evaluation. Until S168-LB1a such a catalog compiles and its predicate reads the list record as
   any record list; S168-LB1a's report says whether a catalog on the resource repositories' `main`
@@ -2649,7 +2650,7 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Pool valuation scale | 1..=9,007,199,254,740,991 |
 | Pool valuation base weight / gap weight | 0..=1,000,000 / 1..=1,000,000 milli |
 | A task's fixed value (SCHED-C1a, since 0.12.52) | 1..=9,007,199,254,740,991 milli |
-| A consumption's fallback, and a usable amount read from a fact (SCHED-C1f, not built yet) | 1..=9,007,199,254,740,991, at most a constant capacity |
+| A consumption's fallback, and a usable amount read from a fact (SCHED-C1f1, since 0.12.54) | 1..=9,007,199,254,740,991, at most a constant capacity |
 | Rows of a record list in the evaluation's input, and of a predicate's `record_list` value | 256 (S168-LB1a, not built yet: the projection leaves a longer record out, "Record lists and the projection") |
 
 Loop budgets are mandatory in V1; in V2 each run-count bound is optional (SS-3, "Optional run-count bounds"). Arrays and strings that exceed their limit reject the entire catalog. Duplicate identifiers, duplicate object keys, and unbounded recursive input are invalid.

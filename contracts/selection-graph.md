@@ -928,7 +928,7 @@ policy, no early stop, no `Return`, no `Confirm` and no tap. Its scan failures e
 here, with the stage `read_list`; a position it could not read is a miss of the list, not a
 failure. It stops on the viewport that reads one position more than a list may hold, the miss
 `list_rows_exceeded`: the 1025th from S168-LB1a (not built yet; [v012-register.md](v012-register.md)
-§1.305), the 257th until it. The scan's own bounds above do not move, so with at most 128
+§1.306), the 257th until it. The scan's own bounds above do not move, so with at most 128
 viewports a list reaches 1024 rows only when each advance brings about 8 new positions
 ([resource-readings.md](resource-readings.md), "Rows").
 
@@ -1261,7 +1261,7 @@ gate's `absent`, a comparison whose operands are known) is a known decision, `ga
 does not count.
 
 **A list maximum read as a lower bound** (Workflow #428 S168-LB1b, not built yet, amending this
-planned text; [v012-register.md](v012-register.md) §1.305; the coordinator's ruling 8 of 11-11,
+planned text; [v012-register.md](v012-register.md) §1.306; the coordinator's ruling 8 of 11-11,
 not Alice's words; [selection-policy.md](selection-policy.md), "Lower bound of a list maximum"). A
 reference that opts in and reads "at least L" is no Unknown read. A comparison the bound settles
 is a known verdict, `ranked` or `gate_rejected`, and does not count against `outcome_key`: the

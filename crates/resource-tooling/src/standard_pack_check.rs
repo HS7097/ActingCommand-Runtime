@@ -329,6 +329,8 @@ pub fn check_standard_pack_root(
     let mut benefit_provenance = None;
     // #428 COV-1: and the chain followers, each with the rule it rides with.
     let mut benefit_followers = Vec::new();
+    // #428 SCHED-C1f1: and the consumptions read from a fact, each with its key and fallback.
+    let mut consumption_facts = None;
     if let Some(schedule) = bytes(STANDARD_PACK_SCHEDULE_FILE) {
         let maintenance = bytes(STANDARD_PACK_BUNDLE_FILE)
             .and_then(|bundle| serde_json::from_slice::<BundleIndex>(bundle).ok())
@@ -345,6 +347,7 @@ pub fn check_standard_pack_root(
         benefit_coverage = Some(report.benefit_coverage);
         benefit_provenance = Some(report.benefit_provenance);
         benefit_followers = report.benefit_followers;
+        consumption_facts = Some(report.consumption_facts);
         // UPD-1 fix round 1 (review L6): a store update rule needs a cooldown.
         store_update_cooldowns(
             &game,
@@ -375,6 +378,7 @@ pub fn check_standard_pack_root(
         benefit_coverage,
         benefit_provenance,
         benefit_followers,
+        consumption_facts,
     })
 }
 

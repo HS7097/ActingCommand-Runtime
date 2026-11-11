@@ -2553,9 +2553,9 @@
                 "--out",
                 out.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "fixture-game-a",
                 "--server",
-                "cn",
+                "s1",
                 "--locale",
                 "zh-CN",
             ],
@@ -2701,9 +2701,9 @@
                 "--out",
                 out.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "fixture-game-a",
                 "--server",
-                "cn",
+                "s1",
                 "--locale",
                 "zh-CN",
             ],
@@ -2748,9 +2748,9 @@
                 "--repo",
                 repo.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "fixture-game-a",
                 "--server",
-                "cn",
+                "s1",
                 "--locale",
                 "zh-CN",
             ],
@@ -2765,7 +2765,7 @@
         );
         assert!(!ours.join("operations/daily-check").exists());
         assert!(!ours.join("operations/resources.json").exists());
-        assert!(!ours.join("recognition/arknights.cn.pack.json").exists());
+        assert!(!ours.join("recognition/fixture-game-a.s1.pack.json").exists());
     }
 
     #[test]
@@ -2807,9 +2807,9 @@
                 "--repo",
                 repo.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "fixture-game-a",
                 "--server",
-                "cn",
+                "s1",
                 "--locale",
                 "zh-CN",
                 "--force",
@@ -2829,7 +2829,7 @@
             fs::read_to_string(broken_task.join("task.json")).unwrap(),
             "{not-json"
         );
-        assert!(!ours.join("recognition/arknights.cn.pack.json").exists());
+        assert!(!ours.join("recognition/fixture-game-a.s1.pack.json").exists());
         host.close().expect("close Runtime host");
     }
 
@@ -2893,9 +2893,9 @@
                 "--out",
                 out.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "fixture-game-a",
                 "--server",
-                "cn",
+                "s1",
                 "--locale",
                 "zh-CN",
                 "--resolution",
@@ -2996,9 +2996,9 @@
                 "--out",
                 out.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "fixture-game-a",
                 "--server",
-                "cn",
+                "s1",
                 "--locale",
                 "zh-CN",
             ],
@@ -3098,9 +3098,9 @@
                 "--out",
                 out.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "fixture-game-a",
                 "--server",
-                "cn",
+                "s1",
                 "--locale",
                 "zh-CN",
             ],
@@ -3873,8 +3873,8 @@
             &pack_path,
             &json!({
                 "schema_version": "0.3",
-                "game": "arknights",
-                "server": "cn",
+                "game": "fixture-game-a",
+                "server": "s1",
                 "locale": "zh-CN",
                 "coordinate_space": {"width": 1, "height": 1},
                 "defaults": {"template_threshold": 0.9, "color_max_distance": 20.0},
@@ -3890,7 +3890,7 @@
         .unwrap();
         write_json_file(&pages_path, &json!({"schema_version":"0.3","pages":[]})).unwrap();
         set_missing_config_env();
-        let temp = seal_semantic_fixture(temp, "arknights", "cn", &pack_path, &pages_path, None);
+        let temp = seal_semantic_fixture(temp, "fixture-game-a", "s1", &pack_path, &pages_path, None);
 
         let result = run_semantic_cli(
             &temp,

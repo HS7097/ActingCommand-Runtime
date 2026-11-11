@@ -12533,6 +12533,74 @@ name `consumption_fact`, so its composer refuses such a `schedule.json` (`schedu
 first replace the form by a constant `amount` and let this build activate a generation without it,
 as §1.289's rollback says for SS-2h's.
 
+#### Slice SCHED-C1f1 (0.12.54): a run's consumption read from a fact (coordinator work order `rd-1111/brief-sched-c1f1.md`; rows SC1F-1 to SC1F-7 and the rulings above)
+
+**What.**
+
+- **The form** (SC1F-1; `crates/policy/src/schema.rs`, `EffectAmount::Fact`, `ConsumptionFact`;
+  `crates/policy/src/validation.rs`, `validate_consumption_fact`). An object `amount` is read as
+  the form when it is exactly `{type: "fact", fact_key: <string>, fallback: <unsigned>}`, and is
+  kept as written otherwise (`EffectAmount::Malformed`) so that each refusal points at its member;
+  a compiled catalog holds none of the latter. Every refusal of SC1F-1 is at its pointer; a catalog
+  without the form serializes, hashes and decides as before.
+- **The one resolution** (SC1F-2; `crates/policy/src/evaluator/consumption.rs`, `resolve`). At
+  each evaluation, after the time-validity projection, each fact-driven entry of each task is read
+  once for each instance its scope covers, in exactly that instance's scope, by every fact's rule
+  (ruling 1): missing, past its own expiry or invalidated by a reset, the fallback with no warning;
+  at a confidence of 0, of another kind or an integer outside `1..=2^53−1` or above a constant
+  capacity, the fallback with `consumption_fact_unusable`; otherwise its value. The forward
+  projection resolves once at its start and holds the amounts (`forward.rs`, `held_amounts`).
+- **Every reader through it.** `resource_targets::consumption_milli` and `consumption` (the former
+  `declared_consumption_milli` and `declared_consumption`) take the amounts (`Amounts::InEffect`
+  of the evaluation and instance, or `Amounts::Declared`, the fallback): the net benefit's cost and
+  `ε` (`evaluator/benefit.rs`, `judge`); the pool's reading and the hard-line hold (`capped.rs`,
+  `lines`, `plan`); `pool_lines_unspendable` (`capped.rs`, `least_consumption`, in effect;
+  `validation.rs`, `unspendable_lines`, declared); the capped listing, order, plan, head's check,
+  block fit and fallbacks (`capped.rs`, `start_round`, `Round::plan`, `step`, `RoundView::decide`,
+  by `member_amounts`); who is a consumer and the consumers key (`capped.rs`, `consumers`,
+  `ConsumerKey::of`, declared); the reserve views and selection fields, the unshown consumption
+  and the reserve gate (`resource_targets.rs`, `reserve_views_with`, `unshown_consumption`,
+  `reserve_hold`); SS-6's allowance and `run_cap` (`spend_values`, `run_cap` reading the view's
+  consumption); the tie-break (`tie_break.rs`, `consumed`); the forward projection
+  (`forward.rs`, `apply_held_effects`).
+- **Episodes and rounds** (SC1F-3): the consumers key holds the declared consumption; a round
+  keeps its frozen order and `Member::consumed`, while its plan and checks read the amounts in
+  effect (`Member::in_effect`). `host.capped_episodes` keeps its rows.
+- **What a person sees** (SC1F-4): `consumption_fact_unusable` (warning / none; `task_id`,
+  `pool_id`, `fact_key`, `unknown_reason`, `consumption`) opens each decision of the task on the
+  instance, before `benefit_fixed_value`, and never settles one; `consumption` and
+  `consumption_source` (vocabulary `consumption_source`: `fact`, `fallback`) on `pool_line_held`,
+  `capped_spend`, `resource_reserve_insufficient` and `pool_lines_unspendable` when the reason's
+  task's consumption of the pool is fact-driven (`consumption::with_values`). New prefix
+  `consumption_` (policy).
+- **Freshness and wakes** (ruling 1): a usable record's expiry, as the projection leaves it, bounds
+  the freshness of each candidate of its instance whose task consumes or reserves its pool, and the
+  evaluation wakes a millisecond after it; the fallback bounds nothing.
+- **Composer and tools** (SC1F-5 to SC1F-7; `compose.rs`): the form passes through; `requires`
+  `consumption_fact` (`CONSUMPTION_FACT_SUBSYSTEM`), refused `schedule_invalid` at the first such
+  `amount`; `consumption_facts` (`ConsumptionFactRule`) per game of the rules not held, answered by
+  `standard-pack check` and `package bundle --schedule` (absent without `schedule.json`); the
+  coverage counts the form as a declared quantity. The always-on row `consumption_fact` of
+  `config.subsystems` (`apps/actingd/src/config/manifest.rs`).
+
+**Tests** (gate rows "#428 SCHED-C1f1" of `contracts/test-gates/policy.toml`):
+`gate_sched_c1f1::sched_c1f1_t1_the_form_is_refused_at_its_pointer_and_its_absence_changes_nothing`,
+`sched_c1f1_t2_one_evaluation_reads_a_usable_record_or_the_fallback`,
+`sched_c1f1_t3_every_reader_reads_the_amount_in_effect`,
+`sched_c1f1_t4_an_episode_keeps_its_consumers_key_and_its_round_its_order`,
+`sched_c1f1_t5_a_usable_records_expiry_bounds_freshness_and_wakes_the_evaluation`,
+`sched_c1f1_t6_the_composer_carries_the_form_and_requires_its_subsystem` (policy) and
+`sched_c1f1_t7_the_check_lists_the_consumptions_read_from_a_fact` (resource tooling). One existing
+test changes because a whole struct gained a member: `gate_cov1::cov1_t4_a_file_without_followers_answers_as_before`
+builds a `StandardPackCheckResponse`, which gained `consumption_facts`. No golden is re-recorded.
+
+**What changes live.** Nothing until a `schedule.json` writes the form beside `consumption_fact`
+in `requires`: a catalog without it keeps its hash and decides byte for byte as before;
+`config.subsystems` gains the always-on row `consumption_fact`. No configuration key, no ledger
+shape and no interface revision.
+
+**Rollback** as above (SCHED-C1f1 rollback).
+
 ### 1.304 Slice IDLE-2 (0.12.54): `idle.action` `auto` takes the idle action by the gap to the next task (Workflow #386; Alice's words of 11-11: 「原本我考虑的是在调度器上线后。根据任务间隔时间自动选择是关闭模拟器还是关闭应用还是回到主页面」; the coordinator's rulings on #386, comment 6787682270, not Alice's words; the read-only survey `rd-1111/idle2-step0-result.txt`; coordinator work order `rd-1111/brief-idle2.md`)
 
 [runtime-config.md](runtime-config.md) ("The `idle` section", the `auto` paragraph and its table)
@@ -12647,7 +12715,86 @@ a neutral standard-pack root); `idle2_auto_tests::idle2_auto_c1_the_word_and_the
 test changes. One existing test pins the revision step: `actinglab-architecture`'s
 `the_runtime_declares_each_v0120_interface_revision_once` now pins `actingd-config` [5, 28].
 
-### 1.305 Workflow #428 S168-LB1 (contracts only): a list longer than 256 rows can be read, and one entry without a value no longer empties its group (a customer-view audit of 11-11 found both defects in what the S168 slices built, and the coordinator confirmed them; the coordinator's rulings 1 to 10 of 11-11, not Alice's words; read on main `a62434a4`, with the read-only survey `rd-1111/survey-s168-lb1.md`; coordinator work order `rd-1111/brief-s168-lb1-contract.md`)
+### 1.305 Slice NEUT-1 (0.12.54): the core's tests and fixtures name no real game (Workflow #434; Alice's hard constraint of 10-10 that the program itself is game-neutral, in code, contracts, configuration, code tables and tests, with game content only in the resource repositories; coordinator work order `rd-1111/brief-neut1.md`, read on main `ae15bb5f`)
+
+The slice was written on `ae15bb5f` as §1.304; IDLE-2 took that number and merged first, so the
+coordinator renumbered this section to 1.305 on 2026-11-11. Tests, fixtures, one golden and one guard only: no product
+code, behaviour, assertion, contract text, wire shape, configuration key, ledger shape, outcome
+code or interface revision changes. No register precedent for a change across many tests was
+found, so the note is a section of its own.
+
+**What was renamed.** 240 lines of 16 files, all tests or test fixtures of the three authoring
+members, whose tests the C2 and R2-F guards do not read: `crates/resource-tooling`
+(`src/resource_convert/tests.rs`, the `#[cfg(test)]` module of `src/package_validate.rs`),
+`crates/lab` (`src/env_detection/tests.rs`, `src/lab_run/tests/fixtures.rs`,
+`guards_and_recovery.rs`, `bundle_and_actions.rs`) and `apps/actinglab` (`src/tests/mod.rs`,
+`semantic_fixture.rs`, `session_record.rs`, `contained_semantic.rs`, `cli_basics.rs`;
+`tests/golden_protocol.rs`, `tests/golden/expected.json`, `runtime_input_proxy.rs`,
+`readonly_page_conflict.rs`, `lab2_cli_contract.rs`). They used a real game's id, its server and
+channel names, a real application package and the game's page ids as fixture values, written
+before 10-10. No file was renamed: every game-named file name is built inside a test.
+
+**The mapping**, one table applied by the slice's script, in this order, to every file (exact
+bytes; the old values are listed in the pull request, which the guard below does not read):
+
+| Old value | New value |
+|---|---|
+| the real application package (its publisher, game and channel) | `com.example.fixture.a` |
+| the one server-and-channel name | `s3` |
+| `<game>.<server>` of the first game with its two servers (file names `<game>.<server>.pack.json` and the like, resource pack ids in messages) | `fixture-game-a.s1`, `fixture-game-a.s2` |
+| the three game ids, also as a page or target id's prefix (`<game>/home`) | `fixture-game-a`, `fixture-game-b`, `fixture-game-c` |
+| the two server names, as quoted values | `s1`, `s2` |
+
+The work order proposed `fixture-game-a` and `-b`, `s1` and `s2`; a third game (once, as the other
+game of a page-prefix mismatch and as a converter's game) and a server-and-channel name (two
+instance configurations) take `-c` and `s3`, so that the mapping stays one to one and no two
+values a test tells apart become equal. Each new value passes the reader of its kind:
+`canonical_environment_selector` and `canonical_resource_identifier` (`[a-z0-9._-]`, at most 128),
+`is_exact_mapping_page_id` (`<game>/<page>`), an application package's dotted segments. A test
+that passed `--game` as a game's abbreviation against a package of another game id keeps doing so.
+
+**Pins recomputed** (`apps/actinglab/tests/golden/expected.json`, test
+`protocol_goldens_match_current_cli`), each by a model of the product's own computation that first
+reproduces the old pin from the old values:
+
+- `resource_pack_hash` (`detect_success`, `env_status_success`, `env_status_failure` twice):
+  SHA-256 of `serde_json::to_vec` of the golden's `EnvDetector`
+  (`crates/lab/src/env_detection.rs`, `detector_resource_hash`, no template), now
+  `1d72a141423664282998b866f0efd69054e144d176b27f9ec2ddd95de7283a86`.
+- `observe_success`'s `observation.content_sha256`: SHA-256 of the projection's value without
+  `content_sha256`, in struct order (`page_projection.rs`, `PageProjection::refresh`; serde_json's
+  `preserve_order`), now `3acf5335520805ad2d7c48978eafaeb32ffdd0360c31462d588dce6090d5777e`. The
+  answer stays on the same path of Min's cuts: about 1140 bytes, over 1024 and far under 2048.
+- `lab_run_success`'s task-diagnostic `file_write` bytes (`task_diagnostic.rs`,
+  `write_diagnostic_record`, the record and its framing): recognition `successful_returned_bytes`
+  786 → 791 (record 1, the `page` row, carries the page id; record 2's 410 is unchanged),
+  finalization `returned_bytes` 256 → 261 and `successful_returned_bytes` 2482 → 2487 (record 6,
+  the `terminal` row, carries `final_page`).
+
+No pin is left for CI. rustfmt reflowed three lines that the longer names pushed past the width.
+
+**The guard.** `actingcommand-actinglab-architecture::workspace_guards::neut1_source_and_test_trees_name_no_real_game`,
+in the gate row A4 (project neutrality) of `test-gates/contract.toml`. It reads every file, of any
+kind, under `.github`, `apps`, `ci`, `contracts`, `crates`, `distribution`, `providers`,
+`ratchet`, `scripts`, `tests` and `tools`, and fails on each line that holds one of the work
+order's 13 words in any ASCII case, also inside a longer word (four games' ids in their joined,
+underscore and spaced forms, one game's subtitle, two publishers and an application channel),
+naming the file and line. Its allow list holds `tools/actinglab-architecture/src/lib.rs` (the C2
+and R2-F guards' own word lists and the counterexamples their unit tests feed them) and
+`tools/actinglab-architecture/tests/workspace_guards.rs` (this guard's list and counterexample);
+an entry whose file is gone or holds none of the words fails. It does not read the repository's
+root files or `docs`, `benchmarks` and `resources`, which hold third-party attributions, an
+upstream manifest and dated reports, not the program.
+
+**Not renamed.** The four game abbreviations that actinglab's tests use as instance names and game
+values (and the instance ids built from them) are outside the work order's word list. They are the
+short words of the C2 guard's own list, which forbids them in the Runtime domain only, this
+register included; so this note does not spell them. They are left for a later slice.
+
+**Interface.** None raised ([component-interfaces.md](component-interfaces.md)): nothing a reader
+or writer of any interface sees changes.
+
+### 1.306 Workflow #428 S168-LB1 (contracts only): a list longer than 256 rows can be read, and one entry without a value no longer empties its group (a customer-view audit of 11-11 found both defects in what the S168 slices built, and the coordinator confirmed them; the coordinator's rulings 1 to 10 of 11-11, not Alice's words; read on main `a62434a4`, with the read-only survey `rd-1111/survey-s168-lb1.md`; coordinator work order `rd-1111/brief-s168-lb1-contract.md`)
 
 [resource-readings.md](resource-readings.md) ("List readings": the miss table, the new "Rows",
 "Staleness"), [instance-fact-store.md](instance-fact-store.md) ("List reading facts" with the new
@@ -12658,10 +12805,11 @@ list", the new "Lower bound of a list maximum", "Scheduling consumer"),
 [selection-graph.md](selection-graph.md) ("Select over a scan"; "Judge step", "Which key"),
 [scheduling/README.md](scheduling/README.md) (the new "Record lists and the projection",
 "Bounds") and [component-interfaces.md](component-interfaces.md) (the new "Planned: Workflow #428
-S168-LB1" and the sentences under the planned rows of #434 and of 168) are the contract. 1.305 is
-the next free number on `a62434a4`, where §1.304 is IDLE-2; the coordinator renumbers it if
-another open slice takes it first (SCHED-C1f1 writes under §1.303, NEUT-1, open, is §1.305, and
-R-8 takes one too).
+S168-LB1" and the sentences under the planned rows of #434 and of 168) are the contract. The
+section was written on `a62434a4` as §1.305; NEUT-1 took that number and merged first, so with
+main `e5efe44e` merged in it is 1.306, the next free number there (SCHED-C1f1 merged its rows
+under §1.303); the coordinator renumbers it if another open slice takes it first (R-8 takes one
+too).
 
 **S168-LB1 itself.** Contracts only: no code, no test, no schema file, no gate row, no CI file, no
 configuration key, no code of the outcome catalog and no live revision raised. Every rule it adds
@@ -12731,7 +12879,7 @@ coordinator:
 | LB1-1 | the row bound of a `record_list` fact, a constant of its own, 1024 (proposed `MAX_FACT_RECORD_LIST_ROWS`), checked by `FactValue::validate`; `MAX_FACT_RECORDS` stays 256 for the records of an observation, of an `InstanceFactSnapshot` and of an `InstanceFactView` | format bound; ledger shape (`ledger` 8) and wire shape (`runtime-client` 7) | S168-LB1a | actingcommand-contract | each reader and the constant it checks: [instance-fact-store.md](instance-fact-store.md), "Row bound"; the byte bounds do not move; no configuration key |
 | LB1-2 | `MAX_LIST_READING_ROWS` equal to LB1-1's constant, 1024: the 1025th position read stops the scan, `list_rows_exceeded` with `count` 1025 | behaviour (kernel); an outcome value | S168-LB1a | execution-kernel | the catalog's descriptions of `contained_task_resource_reading_unresolved` and of the word `list_rows_exceeded` say 1025th; no `package` raise (proposed) |
 | LB1-3 | the scheduler's fact projection leaves out every record under `inventory.list.` | behaviour (projection) | S168-LB1a | runtime-host, the policy facts' overlay | beside the three classes it leaves out; `facts`, `fact_snapshot_id` and an intent's instance view no longer hold lists; no decision changes |
-| LB1-4 | the catalog compile refuses a member that names a key under `inventory.list.` to read: `type_mismatch` at its `fact_key` | catalog compile refusal (proposed) | S168-LB1a | the catalog compiler | `fact` and `record_deadline` predicates, fact references, a pool's ledger key and fact references, SCHED-C1f's consumption once built, the selection document's `facts[]`; timeline prefixes are not refused; its report says whether a catalog on the resource repositories' `main` names one (question 1) |
+| LB1-4 | the catalog compile refuses a member that names a key under `inventory.list.` to read: `type_mismatch` at its `fact_key` | catalog compile refusal (proposed) | S168-LB1a | the catalog compiler | `fact` and `record_deadline` predicates, fact references, a pool's ledger key and fact references, SCHED-C1f1's consumption read from a fact (since 0.12.54), the selection document's `facts[]`; timeline prefixes are not refused; its report says whether a catalog on the resource repositories' `main` names one (question 1) |
 | LB1-5 | any other inline record list of more than 256 rows is left out of the projection for the instances its scope applies to; `policy_fact_rows_exceeded` (warning; `fact_key`, `count`) on each decision of such an instance | behaviour (projection); outcome code (proposed) | S168-LB1a | runtime-host | the evaluator's 256 and the schema's `maxItems` stay; the whole input is never refused for it (#419); a predicate that reads it is Unknown for those instances (`fact_missing`) |
 | LB1-6 | `InstanceFactSnapshot`'s optional request member `key_prefix`, applied before the view is built and measured, and the answer's optional `records_total` | wire shapes, `runtime-client` 7 | S168-LB1a | runtime-host; actingctl `facts --key-prefix`, `ac_facts` | absent, a request serializes and is answered as before; the whole read keeps `instance_fact_snapshot_too_large_for_frame` |
 | LB1-7 | `table_max_over_list`'s optional member `lower_bound_column` | selection document format, `package` 9 | S168-LB1b | resource repositories | a declared `integer` column other than `value_column`; `dangling_reference`, `type_mismatch` and `table_mismatch` as for the other members; absent, the canonical bytes are unchanged |
@@ -12756,7 +12904,7 @@ computation.
 **Interfaces** ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #428
 S168-LB1"). S168-LB1a: `ledger` 8 and `runtime-client` 7 (ruling 4); no `package` raise, proposed
 (a pack's bytes do not change, and a build before it only warns on a long list);
-`actingd-config` unchanged. S168-LB1b: `package` 9, the next free number on `a62434a4`, where 8
+`actingd-config` unchanged. S168-LB1b: `package` 9, the next free number on `e5efe44e`, where 8
 is in force and S168-5b's 9 is planned; no `ledger` (its read reaches the ledger only as reasons,
 an unsettled comparison reads the existing `lookup_miss`, and the judge's record gains no member)
 and no `runtime-client`. `runtime-outcomes` stays 1: two codes, four keys and one vocabulary added
@@ -12935,7 +13083,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`, `device.screen_off_timeout_ms` (per instance, a bound handset only, with a lifetime; §1.59 RD5-2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-5b |
 | `session.remedy.choices` (one per scope: instance, server or game; §1.110 B15-6) | instance | yes | #411 B15 R6 |
 | `session.dispatch.parameter.<name>` (an overlay of a run's snapshots only, never stored; the prefix `session.dispatch.` is refused to publishers; §1.110 B15-7) | — (never stored) | — | #411 B15 R5 |
-| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 256 rows, 1024 from S168-LB1a, not built yet, §1.305; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
+| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 256 rows, 1024 from S168-LB1a, not built yet, §1.306; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).
