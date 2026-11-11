@@ -363,6 +363,14 @@ The members of `report`:
       ([scheduling/README.md](scheduling/README.md), "Pool lines", "Capped
       spending order"); a `schedule.json` whose pool writes them requires it,
       so it is composed only by a Runtime that names this row.
+    - `benefit_fixed_value` (#428 SCHED-C1a, since 0.12.52, register §1.299):
+      always on (`config_subsystem_always_on`). The Runtime reads a task's
+      `benefit_fixed_value_milli`, its fixed value, the known net benefit of a
+      judged rule less the cost of what it consumes
+      ([scheduling/README.md](scheduling/README.md), "Fixed values written in
+      the pack"); a `schedule.json` whose rule writes `fixed_value_milli` or
+      whose pool writes `valuation_origin` requires it, so it is composed only
+      by a Runtime that names this row.
     - `reset_exclusions` (Workflow #411 P19, since 0.12.25): always on
       (`config_subsystem_always_on`). The Runtime reads a timeline event's
       `excludes_fact_prefixes`, and its resets never clear a task's own last

@@ -11109,6 +11109,86 @@ the capacity, data the pack or a person sets).
 SCHED-C1d: a valued pool's episode then survives a start, a generation and an unknown reading (no
 production pool is valued today).
 
+#### Slice SCHED-C1a (0.12.52): a rule's fixed value written in its pack is its known benefit
+
+Coordinator work order `rd-1111/brief-sched-c1a.md`; on the contract branch
+`claude/428-sched-c1-contract` at `ad6b2d84` (Runtime PR #1582, on main `c0edc8b2`). The contract
+is [scheduling/README.md](scheduling/README.md) ("Fixed values written in the pack", "Pool
+Valuation" with "A valuation written in the pack", "Net benefit within a tier", "Bounds") and
+[standard-pack-schedule.md](standard-pack-schedule.md) ("The file", `requires`, "Judged rules",
+"The fixed value", "Provenance", "Composition", "Tools"), rows SC1-1 to SC1-6 above but
+`pool_trigger_line`. The text names no game, resource or value: the tests' ids are neutral.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| C1A-1 | `TaskSpec::benefit_fixed_value_milli` (`Option<i64>`, V2 only, `1..=2^53−1`) (SC1-1) | catalog format addition | SCHED-C1a | the composer; a raw V2 catalog | `crates/policy/src/schema.rs`; read as a written bound (an explicit `null` is `type_mismatch`); absent it serializes as nothing; `validate_fixed_value` in `validation.rs`: V1 `unknown_field`, out of range `limit_exceeded`, without `benefit_judged` `missing_required_field`, `fixed_value_conflict` beside a `produces` entry on a pool whose `valuation` is a block or the marker and beside `benefit_realization: true`, each at the member but the second |
+| C1A-2 | `ScheduleRule::fixed_value_milli` (as written) and `fixed_value_origin`, `ScheduleItem::valuation_origin` of a pool, `ScheduleValueOrigin` `{Pack, Model}` (SC1-2) | `schedule.json` format addition | SCHED-C1a | the resource side; `acmodel bindings apply` for `"model"` | `crates/actingcommand-contract/src/standard_pack_schedule.rs`; taken out of the rule or the pool, refused beside `"maintenance": true`, of another origin, an origin without a value, a valuation origin beside no block |
+| C1A-3 | `B` from a fixed value: `judge` starts `S` at `V`, reads no `produces`, adds nothing to `ε`; the capped round's value without the pool's cost is `S + cost`, so `V` less the other pools' cost (SC1-3) | behaviour (evaluation) | SCHED-C1a | the policy evaluator | `crates/policy/src/evaluator/benefit.rs` `judge`; `capped.rs` `start_round` reads it through `Known::sum` unchanged, `RoundView::decide` carries `V` on the member's `KnownBenefit` |
+| C1A-4 | `benefit_fixed_value` (info / none, pending, since 0.12.52; `benefit_milli`, `fixed_value_milli`, `expected_duration_ms`), `fixed_value_conflict` (error / none, pending, since 0.12.52), the key `fixed_value_milli` (`integer`), the prefix `fixed_value_` (policy); the winner's `rank_breakdown` detail ` fixed_value_milli=<V>` (SC1-4) | outcome catalog additions (policy) | SCHED-C1a | the policy evaluator and compiler | `benefit.rs` `note_fixed_value` inserts the reason first on every judged decision whose `B` is known and came from `V` (held, a capped member, within tolerance, not positive, positive); `evaluator.rs` `rank_breakdown_detail` |
+| C1A-5 | the always-on row `benefit_fixed_value` of `config.subsystems`; `BENEFIT_FIXED_VALUE_SUBSYSTEM` (SC1-5) | new row value of an existing fact | SCHED-C1a | actingd | `apps/actingd/src/config/manifest.rs`; the composer refuses a file that writes a rule's `fixed_value_milli` or a pool's `valuation_origin` without it in `requires`, at the first such member, rules then pools |
+| C1A-6 | `BenefitCoverage::fixed_value`; `BenefitProvenance {fixed_value, valuation}` of `ValueOrigins {pack, model}`, `StandardPackComposition::benefit_provenance` (SC1-6) | `actinglab standard-pack check` and `package bundle --schedule` answers | SCHED-C1a | actinglab (resource tooling) | `crates/policy/src/compose.rs`; `crates/resource-tooling` answers `benefit_provenance` beside `benefit_coverage`, absent without `schedule.json` |
+
+**Tests.** New: policy rows "#428 SCHED-C1a", `actingcommand-policy::lib::tests::gate_sched_c1a`
+tests 1 to 8 (`sched_c1a_t1_a_fixed_value_without_effects_is_its_known_benefit`,
+`sched_c1a_t2_two_collect_rules_order_by_b_per_e_exactly`,
+`sched_c1a_t3_below_the_cap_a_consumer_is_judged_by_v_less_its_cost`,
+`sched_c1a_t4_in_a_capped_round_a_fixed_consumer_ranks_by_v_per_c`,
+`sched_c1a_t5_a_consumed_pool_without_a_valuation_stays_unknown`,
+`sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer`,
+`sched_c1a_t7_the_composer_writes_the_member_and_keeps_the_origins_out`,
+`sched_c1a_t8_without_the_member_nothing_changes`) and
+`actingcommand-resource-tooling::lib::gate_sched_c1a::sched_c1a_t9_the_check_answers_coverage_and_provenance`,
+on fakes with a fixed clock, no sleep. Adapted, because the coverage answer gains a member the
+contract requires (`benefit_coverage.fixed_value`) and these tests pin the whole struct: the
+`BenefitCoverage` value of `gate_ss2b::ss2b_t9_the_composer_marks_the_judged_rules_and_counts_their_coverage`,
+`gate_ss2c::ss2c_t5_the_coverage_counts_a_declared_rule_as_not_judged` and
+`gate_ss2d::ss2d_t14_the_compiler_holds_the_mark_to_its_conditions` (policy) and of the resource
+tooling's `gate_ss2b::ss2b_t9_the_check_counts_the_judged_rules_and_warns_once_per_undeclared_rule`
+and `gate_ss2c::ss2c_t5_t6_the_check_counts_declared_rules_apart_and_warns_of_a_tier_mismatch`
+gains `fixed_value: 0`; nothing else of them changed. No golden re-recorded: the example
+catalog's golden hashes are asserted unchanged.
+
+**Interface.** None raised (`ledger`, `actingd-config`, `runtime-client`, `package`,
+`runtime-outcomes`): a catalog member and a `schedule.json` member gated by `requires`, a
+subsystem row of an existing fact, a decision reason the record reader only spells, a compile
+diagnostic and two members of the tools' answers (as §1.289).
+
+**Where SCHED-C1a reads the contract.**
+
+- (a) The member is read as a signed integer, so a negative one is `limit_exceeded` like 0 and
+  2^53 ("one outside `1..=9007199254740991`"); an integer beyond the signed 64-bit range is a
+  `type_mismatch`, as is an explicit `null`.
+- (b) `benefit_fixed_value`'s `benefit_milli` is the `B` the decision reads: a capped round's
+  member its own `B` (`V − W·(c − a)`), every other `⌊S⌋`.
+- (c) "Before its other reasons" is the decision's first reason, before the trigger's and the
+  score stage's reasons too; an unknown `B` carries none.
+- (d) Only the judged winner's `rank_breakdown` names `V`; a listed candidate's row
+  (`decision_candidate_not_selected`) is unchanged.
+- (e) Provenance lists the rules that are not held, as the coverage counts them, and every pool
+  whose `valuation` is a block, by their file ids; a held rule's value is in neither list.
+- (f) The subsystem's spelling equals the code's: the policy crate takes it from the registry
+  (`PolicyCode::BenefitFixedValue.as_str()`), since a string literal of a registered name is
+  refused outside the registry (outcome guard G5); actingd's manifest writes it as the other rows.
+- (g) The contract text: "(SCHED-C1, not built yet)" became "(SCHED-C1a, since 0.12.52)" where this
+  slice builds the sentence; a sentence that also names a later slice's member was split, the
+  later part keeping its mark, and the workbench's provenance bullet of "Provenance" is marked
+  "(SCHED-C1b, not built yet)". The `config.subsystems` row of
+  [runtime-config.md](runtime-config.md) names the new always-on row, as SS-2h's did.
+
+**What SCHED-C1a changes live.** Nothing until a `schedule.json` writes `fixed_value_milli` (with
+`benefit_fixed_value` in `requires`) or a raw V2 catalog writes the task member: a catalog without
+it keeps its hash, rules digest and decisions; `config.subsystems` gains the always-on row
+`benefit_fixed_value`. With the members, a judged rule runs on its value (ruling 116's stop still
+holds every production instance until it is lifted).
+
+**SCHED-C1a rollback** (to the release before it). The ledger and the configuration need nothing.
+Before a `schedule.json` writes the members: nothing to undo. After: a build without SCHED-C1a
+refuses a task that writes `benefit_fixed_value_milli` at its reader (`unknown_field`) and does not
+name `benefit_fixed_value`, so its composer refuses such a `schedule.json`
+(`schedule_requires_missing`); it compiles at its start every generation its dispatches and
+decision memories name (§1.225's rollback correction), so first remove the members and let this
+build activate a generation without them, as §1.289's rollback says for SS-2h's.
+
 ### 1.301 Slice ISO-START-1 (0.12.52): one pair's refused settlement fact no longer stops the start (#419; Alice's requirement on board #419 of 10-24: one emulator's fault must not bring down the whole Runtime; the debt the coordinator logged on 11-11, #421 6774483473 and #428 6770731970: isolate only that pair; the coordinator's ruling on the three cases, not Alice's words: coordinator work order `rd-1111/brief-iso-start-1.md`)
 
 [runtime-fact-store.md](runtime-fact-store.md) ("Settlement facts" and "Typed codes") and the

@@ -176,6 +176,12 @@
           "description": "SS-2h: true marks a judged task whose runs a limit counts (its own, or an income cap that counts it); the capped spending order lists it in an episode's first round only. The compiler requires benefit_judged true. The standard-pack composer writes it from the schedule.json rule member limited. false is as without the member.",
           "type": "boolean"
         },
+        "benefit_fixed_value_milli": {
+          "description": "SCHED-C1a: V, the value of one run of a judged task without the cost of the pools it consumes, in milli of the value unit its instance's valuations weigh in; its net benefit is V less the cost of what it consumes, its produces unread. The compiler requires benefit_judged true (missing_required_field at benefit_judged), refuses a value outside 1..=9007199254740991 (limit_exceeded) and refuses it beside a produces entry on a pool whose valuation is declared or pending, or beside benefit_realization true (fixed_value_conflict). The standard-pack composer writes it from the schedule.json rule member fixed_value_milli. It is not value_milli.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
         "reserves": {
           "type": "array",
           "minItems": 1,

@@ -623,6 +623,8 @@ fn ss2d_t14_the_compiler_holds_the_mark_to_its_conditions() {
                 undeclared: 0,
                 maintenance_declared: 0,
                 realization: 1,
+                // SCHED-C1a (register §1.299): no rule writes a fixed value.
+                fixed_value: 0,
             }
         )]
     );

@@ -68,6 +68,34 @@ pub const SCHEDULE_RULE_MAINTENANCE_MEMBER: &str = "maintenance";
 /// the reader takes it out of the rule ([`ScheduleRule::realization`]), and the composer writes
 /// the task member `benefit_realization: true` on the judged rule instead.
 pub const SCHEDULE_RULE_REALIZATION_MEMBER: &str = "realization";
+/// SCHED-C1a (register §1.299): the optional rule member `fixed_value_milli`, the value of one run
+/// of a business rule without the cost of the pools it consumes, which the pack writes when the
+/// value is settled. It is `schedule.json`'s, not a V2 task member: the reader takes it out of the
+/// rule ([`ScheduleRule::fixed_value_milli`]), and the composer writes the task member
+/// `benefit_fixed_value_milli` on the judged rule instead.
+pub const SCHEDULE_RULE_FIXED_VALUE_MEMBER: &str = "fixed_value_milli";
+/// SCHED-C1a (register §1.299): the optional rule member `fixed_value_origin`, `"model"` when the
+/// model's export wrote the rule's fixed value. Taken out of the rule by the reader
+/// ([`ScheduleRule::fixed_value_origin`]); it decides nothing.
+pub const SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER: &str = "fixed_value_origin";
+/// SCHED-C1a (register §1.299): the optional pool member `valuation_origin`, `"model"` when the
+/// model's export wrote the pool's valuation block. Taken out of the pool by the reader
+/// ([`ScheduleItem::valuation_origin`]), as `server` is; it decides nothing.
+pub const SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER: &str = "valuation_origin";
+/// SCHED-C1a: the one value of an origin member.
+pub const SCHEDULE_VALUE_ORIGIN_MODEL: &str = "model";
+
+/// SCHED-C1a (register §1.299; `contracts/standard-pack-schedule.md`, "Provenance"): who wrote a
+/// value of `schedule.json`, a rule's fixed value or a pool's valuation block. Only the reports
+/// read it: a value decides the same whoever wrote it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ScheduleValueOrigin {
+    /// No origin member: the pack's own hand wrote it (or the value is absent).
+    #[default]
+    Pack,
+    /// The origin member is `"model"`: the model's export wrote it.
+    Model,
+}
 
 /// The four lists of rules and items, by their member name in `schedule.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -104,8 +132,16 @@ pub struct ScheduleRule {
     /// SS-2d (register §1.235): the rule carries the model's realization mark (`"realization":
     /// true`, [`SCHEDULE_RULE_REALIZATION_MEMBER`]); `false` when it does not write the member.
     pub realization: bool,
-    /// Every other member as written, in file order (without `id`, `package_id`, `maintenance`
-    /// and `realization`).
+    /// SCHED-C1a (register §1.299): the rule's `fixed_value_milli` as written
+    /// ([`SCHEDULE_RULE_FIXED_VALUE_MEMBER`]); `None` when it writes none. The catalog compiler
+    /// checks it on the composed task.
+    pub fixed_value_milli: Option<Value>,
+    /// SCHED-C1a: who wrote the fixed value: [`ScheduleValueOrigin::Model`] for
+    /// `"fixed_value_origin": "model"` ([`SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER`]), else
+    /// [`ScheduleValueOrigin::Pack`].
+    pub fixed_value_origin: ScheduleValueOrigin,
+    /// Every other member as written, in file order (without `id`, `package_id`, `maintenance`,
+    /// `realization`, `fixed_value_milli` and `fixed_value_origin`).
     pub body: Map<String, Value>,
 }
 
@@ -115,7 +151,13 @@ pub struct ScheduleRule {
 pub struct ScheduleItem {
     pub id: String,
     pub server: Option<String>,
-    /// Every other member as written, in file order (without `id` and `server`).
+    /// SCHED-C1a (register §1.299): of a pool, who wrote its valuation block:
+    /// [`ScheduleValueOrigin::Model`] for `"valuation_origin": "model"`
+    /// ([`SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER`]), else [`ScheduleValueOrigin::Pack`]; always
+    /// `Pack` for a profile or an event, which keep such a member in `body`.
+    pub valuation_origin: ScheduleValueOrigin,
+    /// Every other member as written, in file order (without `id`, `server` and, of a pool,
+    /// `valuation_origin`).
     pub body: Map<String, Value>,
 }
 
@@ -204,6 +246,11 @@ fn segment(name: &str) -> String {
 /// - SS-2d: a rule's `realization`, if written, is `true` (every other value is refused, as
 ///   `maintenance`'s), and a rule that declares itself maintenance does not write it (a
 ///   maintenance rule is never judged, so it is refused at `realization`);
+/// - SCHED-C1a (register §1.299): a rule that declares itself maintenance writes no
+///   `fixed_value_milli` (it is never judged), and a rule's `fixed_value_origin`, if written, is
+///   `"model"`, beside a `fixed_value_milli`; a pool's `valuation_origin`, if written, is
+///   `"model"`, beside a `valuation` that is a block (not the pending marker); each refused at
+///   the member;
 /// - a pool, profile or event names its `server`, if at all, as a game-root identifier;
 /// - `requires` lists at most 32 distinct subsystem names of 1–64 bytes of `[a-z][a-z0-9_]*`;
 /// - `held` lists at most 4096 entries `{package_id, reason, reference?}` with distinct package
@@ -282,11 +329,38 @@ pub fn parse_standard_pack_schedule(
                 )));
             }
         };
+        // SCHED-C1a (register §1.299): the fixed value and its origin are taken out of the rule
+        // the same way; the composer writes `benefit_fixed_value_milli` from the value, and the
+        // compiler checks it there. A rule that declares itself maintenance is never judged, so
+        // it carries none; only `"model"` is an origin, and only beside a value.
+        let fixed_value_milli = match body.shift_remove(SCHEDULE_RULE_FIXED_VALUE_MEMBER) {
+            Some(_) if maintenance => {
+                return Err(invalid(format!(
+                    "{pointer}/{SCHEDULE_RULE_FIXED_VALUE_MEMBER}"
+                )));
+            }
+            value => value,
+        };
+        let fixed_value_origin = match body.shift_remove(SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER) {
+            None => ScheduleValueOrigin::Pack,
+            Some(Value::String(origin))
+                if origin == SCHEDULE_VALUE_ORIGIN_MODEL && fixed_value_milli.is_some() =>
+            {
+                ScheduleValueOrigin::Model
+            }
+            Some(_) => {
+                return Err(invalid(format!(
+                    "{pointer}/{SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER}"
+                )));
+            }
+        };
         rules.push(ScheduleRule {
             id,
             package_id,
             maintenance,
             realization,
+            fixed_value_milli,
+            fixed_value_origin,
             body,
         });
     }
@@ -308,7 +382,33 @@ pub fn parse_standard_pack_schedule(
                 }
                 Some(_) => return Err(invalid(format!("{pointer}/server"))),
             };
-            items.push(ScheduleItem { id, server, body });
+            // SCHED-C1a (register §1.299): a pool's valuation origin is taken out as `server`
+            // is; only `"model"` is one, and only beside a valuation block.
+            let valuation_origin = match member {
+                ScheduleMember::Pools => {
+                    match body.shift_remove(SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER) {
+                        None => ScheduleValueOrigin::Pack,
+                        Some(Value::String(origin))
+                            if origin == SCHEDULE_VALUE_ORIGIN_MODEL
+                                && matches!(body.get("valuation"), Some(Value::Object(_))) =>
+                        {
+                            ScheduleValueOrigin::Model
+                        }
+                        Some(_) => {
+                            return Err(invalid(format!(
+                                "{pointer}/{SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER}"
+                            )));
+                        }
+                    }
+                }
+                _ => ScheduleValueOrigin::Pack,
+            };
+            items.push(ScheduleItem {
+                id,
+                server,
+                valuation_origin,
+                body,
+            });
         }
         lists.insert(member, items);
     }
