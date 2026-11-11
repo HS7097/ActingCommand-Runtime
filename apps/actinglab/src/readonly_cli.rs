@@ -7,7 +7,6 @@ use super::{
     record_env_needs_detection, record_env_resolved, reject_legacy_session_routing,
     resolve_instance_id, semantic_ledger_context, target_argument,
 };
-#[cfg(test)]
 use crate::flag_args::reads::{FlagReads, ReadPart};
 use actingcommand_lab::{
     CurrentPageRequest, DetectPageOutput, DetectPageRequest, DetectPageResponse, IsVisibleRequest,
@@ -20,8 +19,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `recognize-artifact` reads.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `recognize-artifact` reads. Workflow #434 LAB-5B4: each list
+/// of this file parses its command's line (`FlagArgs::parse_reading`), with the positionals it
+/// names.
 pub(super) const RECOGNIZE_ARTIFACT_READS: FlagReads = FlagReads {
     row: "recognize-artifact",
     parts: &[&ReadPart {
@@ -29,11 +29,11 @@ pub(super) const RECOGNIZE_ARTIFACT_READS: FlagReads = FlagReads {
         switches: &[],
         refused: &[],
     }],
+    positionals: &[],
 };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `recognize` reads: the legacy routing it refuses,
-/// its target, and the frame input and package of the four readers.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `recognize` reads: the legacy routing it refuses, its target,
+/// and the frame input and package of the four readers.
 pub(super) const RECOGNIZE_READS: FlagReads = FlagReads {
     row: "recognize",
     parts: &[
@@ -46,10 +46,10 @@ pub(super) const RECOGNIZE_READS: FlagReads = FlagReads {
         &READONLY_INPUT_READS,
         &super::contained_resources::PACKAGE_LOCATOR_READS,
     ],
+    positionals: &[],
 };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `detect-page` reads.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `detect-page` reads.
 pub(super) const DETECT_PAGE_READS: FlagReads = FlagReads {
     row: "detect-page",
     parts: &[
@@ -62,10 +62,10 @@ pub(super) const DETECT_PAGE_READS: FlagReads = FlagReads {
         &READONLY_INPUT_READS,
         &super::contained_resources::PACKAGE_LOCATOR_READS,
     ],
+    positionals: &[],
 };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `current-page` reads.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `current-page` reads.
 pub(super) const CURRENT_PAGE_READS: FlagReads = FlagReads {
     row: "current-page",
     parts: &[
@@ -73,11 +73,11 @@ pub(super) const CURRENT_PAGE_READS: FlagReads = FlagReads {
         &READONLY_INPUT_READS,
         &super::contained_resources::PACKAGE_LOCATOR_READS,
     ],
+    positionals: &[],
 };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `is-visible` reads; its target is also its first
-/// positional (`target_argument`).
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `is-visible` reads; its target is also its first positional
+/// (`target_argument`).
 pub(super) const IS_VISIBLE_READS: FlagReads = FlagReads {
     row: "is-visible",
     parts: &[
@@ -90,14 +90,14 @@ pub(super) const IS_VISIBLE_READS: FlagReads = FlagReads {
         &READONLY_INPUT_READS,
         &super::contained_resources::PACKAGE_LOCATOR_READS,
     ],
+    positionals: &["<target>"],
 };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags the frame input of the readers reads
-/// ([`scene_paths`] and [`prepare_recognition_input_with_config`]), a part of the read lists of
-/// `recognize`, `detect-page`, `current-page`, `is-visible`, `tap-target` and `navigate`:
-/// `--capture` only to refuse it (the legacy semantic capture is retired), so `--fresh-delay-ms`,
-/// which only a capture would read, is never read.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags the frame input of the readers reads ([`scene_paths`] and
+/// [`prepare_recognition_input_with_config`]), a part of the read lists of `recognize`,
+/// `detect-page`, `current-page`, `is-visible`, `tap-target` and `navigate`: `--capture` only to
+/// refuse it (the legacy semantic capture is retired), so `--fresh-delay-ms`, which only a capture
+/// would read, is never read.
 pub(super) const READONLY_INPUT_READS: ReadPart = ReadPart {
     options: &["--scene"],
     switches: &["--require-fresh"],
@@ -108,9 +108,7 @@ pub(super) fn run_recognize_artifact(args: &[String]) -> CliOutcome<Value> {
     use actingcommand_contract::SavedArtifactOcrRequest;
     use actingcommand_runtime_client::RuntimeClient;
     use std::io::Read;
-    let flags = FlagArgs::parse(args)?;
-    #[cfg(test)]
-    flags.reading(&RECOGNIZE_ARTIFACT_READS);
+    let flags = FlagArgs::parse_reading(args, &RECOGNIZE_ARTIFACT_READS)?;
     let path = flags.required_path("--request")?;
     let file = std::fs::File::open(&path)
         .map_err(|error| CliError::usage(format!("cannot read recognition request: {error}")))?;
@@ -136,9 +134,7 @@ pub(super) fn run_recognize_artifact(args: &[String]) -> CliOutcome<Value> {
 }
 
 pub(super) fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    #[cfg(test)]
-    flags.reading(&RECOGNIZE_READS);
+    let flags = FlagArgs::parse_reading(args, &RECOGNIZE_READS)?;
     reject_legacy_session_routing(&flags)?;
     refuse_repeated_options(&flags, "recognize", &FRAME_SET_REPEATS)?;
     let target = flags.required("--target")?;
@@ -155,9 +151,7 @@ pub(super) fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutco
 }
 
 pub(super) fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    #[cfg(test)]
-    flags.reading(&DETECT_PAGE_READS);
+    let flags = FlagArgs::parse_reading(args, &DETECT_PAGE_READS)?;
     reject_legacy_session_routing(&flags)?;
     refuse_repeated_options(&flags, "detect-page", &FRAME_SET_REPEATS)?;
     let mut ledger = semantic_ledger_context("detect-page", global, args);
@@ -182,9 +176,7 @@ pub(super) fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOut
 }
 
 pub(super) fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    #[cfg(test)]
-    flags.reading(&CURRENT_PAGE_READS);
+    let flags = FlagArgs::parse_reading(args, &CURRENT_PAGE_READS)?;
     reject_legacy_session_routing(&flags)?;
     refuse_repeated_options(&flags, "current-page", &FRAME_SET_REPEATS)?;
     let prepared = prepare_frame_input(global, &flags, true)?;
@@ -199,9 +191,7 @@ pub(super) fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOu
 }
 
 pub(super) fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    #[cfg(test)]
-    flags.reading(&IS_VISIBLE_READS);
+    let flags = FlagArgs::parse_reading(args, &IS_VISIBLE_READS)?;
     reject_legacy_session_routing(&flags)?;
     refuse_repeated_options(&flags, "is-visible", &FRAME_SET_REPEATS)?;
     let prepared = prepare_frame_input(global, &flags, false)?;

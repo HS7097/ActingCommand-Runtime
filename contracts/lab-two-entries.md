@@ -571,6 +571,21 @@ sentence fails that test.
     `user-config [<key>]` for `user-config get`, `app launch|restart|stop` for `session app`, and
     the like) is given to that command in its words and answers as it does; refused short words
     are actinglab's own usage error (`validation_failed`).
+  - **actinglab's own commands refuse a word they do not read** (Workflow #434 LAB-5B4; register
+    §1.287, "Slice LAB-5B4"). Until that slice 24 own commands of the debugging and authoring
+    rows, and `run list`, `capture`, `lab receipt` and `lab evidence`, ignored a flag they did not
+    read, and a switch took the next word as its value. Now each parses its command line by its
+    read list: a flag off the list is refused before the command does anything
+    (`validation_failed`, its details `argument` the flag and `argument_problem` `unknown`, the
+    message `<command>: unknown <flag>`, as the module refuses a row's undeclared flag); an option
+    at the end of the line is refused `value_missing`; a positional beyond those the command reads
+    is refused `unknown`. On these command lines, and those of the strict commands that take
+    switches (`observe`, `do`, `ensure`, `wait`, `record mark`, `record stop`, `package fmt`,
+    `package loading`), a switch takes the next word as its value only when it is `true` or
+    `false`, and leaves any other word where it is; `observe`, `do`, `ensure`, `wait`, `package
+    preflight`, `resource catalog` and `resource validate` refuse a positional they do not read
+    too. No own command of the two modules ignores a flag. `serve --stdio` hands a row only its
+    declared parameters, as before.
   - **`serve --stdio`** answers each operation the line its `--json` answers: the CLI module's
     line, for actinglab's own commands too since LAB-2b.
   - **`status` and `run show`** (open point 10): the command line and `serve --stdio` answer them

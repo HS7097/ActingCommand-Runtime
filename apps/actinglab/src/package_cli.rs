@@ -22,6 +22,8 @@ const CHECK_LABEL: &str = "package-check";
 pub(crate) const CHECK_FLAGS: [&str; 1] = ["--package"];
 /// Workflow #434 LAB-5B2: the flags `package preflight` takes: the package by its path.
 pub(crate) const PREFLIGHT_FLAGS: [&str; 2] = ["--package", "--zip"];
+/// Workflow #434 LAB-5B4: the positionals `package preflight` reads: none.
+pub(crate) const PREFLIGHT_POSITIONALS: [&str; 0] = [];
 
 /// Workflow #411 A5 (M-PKG §3.2, S5-T4): the answer of `package check`, a package the Runtime's
 /// structural admission admitted, named by what its control declares.
@@ -151,6 +153,8 @@ pub(super) fn run_preflight(flags: &FlagArgs) -> CliOutcome<Value> {
             )));
         }
     }
+    // Workflow #434 LAB-5B4: it reads no positional; one is refused, not ignored.
+    flags.refuse_unread_positionals("package preflight", &PREFLIGHT_POSITIONALS)?;
     let prepared = preflight_admission(flags)?;
     Ok(json!({
         "schema_version":"actingcommand.package-preflight.v1", "status":"prepared", "executed":false,
@@ -185,8 +189,8 @@ pub(super) fn offline_capability() -> Value {
     offline::capability()
 }
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `package validate` reads.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `package validate` reads. Workflow #434 LAB-5B4: its command
+/// line is parsed by it (`FlagArgs::parse_reading`); no positional.
 pub(crate) const VALIDATE_READS: crate::flag_args::reads::FlagReads =
     crate::flag_args::reads::FlagReads {
         row: "package validate",
@@ -195,6 +199,7 @@ pub(crate) const VALIDATE_READS: crate::flag_args::reads::FlagReads =
             switches: &[],
             refused: &[],
         }],
+        positionals: &[],
     };
 
 /// Workflow #336 PKG-S4 (option 丙): the package by its path; no hash is taken or reported.

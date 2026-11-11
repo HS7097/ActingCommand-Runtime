@@ -236,6 +236,15 @@ fn name_words(name: &str) -> Vec<String> {
     name.split(' ').map(str::to_owned).collect()
 }
 
+/// Workflow #434 LAB-5B4 (register §1.287, "Slice LAB-5B4"): actinglab's usage error for a word
+/// the own command `command` does not read on its command line (a flag off its read list, a
+/// positional beyond it) or for an option at the end of it without its value: the refusal the
+/// module gives a row's short words ([`refused_words`]), `argument` the word and
+/// `argument_problem` `problem`.
+pub(crate) fn refused_word(command: &str, word: &str, problem: ArgumentProblem) -> CliError {
+    refused_words(command, &cli_line::usage_invalid(Some(word), problem))
+}
+
 /// actinglab's usage error for the refused short words of the row `name`: the refusal's
 /// `argument` and `argument_problem` in its details.
 fn refused_words(name: &str, refusal: &Outcome) -> CliError {

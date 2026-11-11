@@ -15,8 +15,9 @@
 //   passed through before is handed on as before (the command line its own command gets; the
 //   member the module reads, and for `runs`, `run evidence` and `gap` the flag `lab-ops`' parser
 //   reads, shown by its refusal of the value), and a command line with a flag the row does not
-//   declare is refused by name, but handed on for the three lenient rows, whose `serve --stdio`
-//   line is refused. Also `runs --instance <x>`, a `seed` above the signed range and a `decimal`.
+//   declare is refused by name (Workflow #434 LAB-5B4: on the three lenient rows too, and a
+//   further word with it; until that slice they handed both on), as their `serve --stdio` line
+//   is. Also `runs --instance <x>`, a `seed` above the signed range and a `decimal`.
 //   Fix 1 (rd-1108/arch-013/brief-lab5a-fix1.md, review-1569-findings.md): the other lines the
 //   further flags let through before stay accepted and go on as before (`words::KEPT_FLAGS`:
 //   `run show --id`, `run evidence --id`, `monitor set --instance`, `devices bind … --root`,
@@ -399,47 +400,37 @@ fn lab5a_rows_take_what_they_took() {
             "{line:?}"
         );
     }
-    // The three lenient rows still hand an undeclared flag and a further word on, on the command
-    // line (the debt of `words::LENIENT_ON_COMMAND_LINE`).
-    assert_eq!(
-        own_route(&["recover", "neutral.a", "--frobnicate", "x", "extra"]),
-        words_of(&[
-            "session",
-            "recover",
-            "extra",
-            "--instance",
-            "neutral.a",
+    // Workflow #434 LAB-5B4: the three rows that were lenient on the command line (the debt of
+    // `words::LENIENT_ON_COMMAND_LINE`, now gone) refuse an undeclared flag and a further word by
+    // name, as every other row does.
+    let paid: [(&[&str], &str); 4] = [
+        (
+            &["recover", "neutral.a", "--frobnicate", "x"],
             "--frobnicate",
-            "x"
-        ])
-    );
-    assert_eq!(
-        own_route(&["debug-package", "--package", "pack.zip", "--frobnicate"]),
-        words_of(&[
-            "lab",
-            "debug-package",
-            "--package",
-            "pack.zip",
-            "--frobnicate"
-        ])
-    );
-    assert_eq!(
-        own_route(&[
-            "export-evidence",
-            "--out",
-            "evidence.zip",
+        ),
+        (&["recover", "neutral.a", "extra"], "extra"),
+        (
+            &["debug-package", "--package", "pack.zip", "--frobnicate"],
             "--frobnicate",
-            "1"
-        ]),
-        words_of(&[
-            "lab",
-            "export-evidence",
-            "--out",
-            "evidence.zip",
+        ),
+        (
+            &[
+                "export-evidence",
+                "--out",
+                "evidence.zip",
+                "--frobnicate",
+                "1",
+            ],
             "--frobnicate",
-            "1"
-        ])
-    );
+        ),
+    ];
+    for (line, argument) in paid {
+        assert_eq!(
+            route_refused(line),
+            json!({"argument": argument, "argument_problem": "unknown"}),
+            "{line:?}"
+        );
+    }
 
     // The core rows: the member the module reads, under the name it had.
     let core: [&[&str]; 4] = [

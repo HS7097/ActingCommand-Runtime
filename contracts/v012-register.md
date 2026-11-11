@@ -8616,7 +8616,9 @@ that builds the source opens them.
 **The debt.** `words::LENIENT_ON_COMMAND_LINE`: on the command line `recover`, `debug-package` and
 `export-evidence` still hand every further flag and word to their command, which ignores what it
 does not read, as before; `serve --stdio` refuses them. A later slice makes the three commands
-strict and removes the list.
+strict and removes the list. (Paid by LAB-5B4: the list is gone, the three rows refuse an
+undeclared flag and a further word as every row does, and their commands refuse what they do not
+read; "Slice LAB-5B4" below.)
 
 **Tests.** New: apps row "#434 LAB-5A": `gate_434_lab5a::lab5a_rows_take_what_they_took`
 (actinglab's binary tests; a state root in a temporary folder on which no Runtime runs; no device,
@@ -8920,7 +8922,7 @@ draft`) is in exactly one:
 | Kind | Constant | Rows | Its own test |
 |---|---|---|---|
 | strict | `STRICT_ROWS` | 31: `tap`, `swipe`, `long-tap`, `key`, `text`, `observe`, `do`, `ensure`, `wait`, `watch`, `signatures register\|match\|retire`, `unpin`, `record mark`, `record stop`, `package check\|preflight\|loading\|fmt\|edit`, `resource catalog\|validate\|verify\|restore`, `standard-pack check\|compose`, `scheduling compile\|timeline`, `regression`, `replay`: the own command checks its flags against lists in code | this slice |
-| lenient | `LENIENT_ROWS` | 24: `touch-probe`, `recover`, `tap-target`, `navigate`, `debug-package`, `export-evidence`, `recognize-artifact`, `record start\|status\|candidates\|amend\|step`, `package validate\|inspect\|bundle`, `resource compile-maa`, `operation validate\|inspect\|explain`, `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`: the own command ignores a flag it does not read | B3 gives each a read list |
+| lenient | `LENIENT_ROWS` | 24: `touch-probe`, `recover`, `tap-target`, `navigate`, `debug-package`, `export-evidence`, `recognize-artifact`, `record start\|status\|candidates\|amend\|step`, `package validate\|inspect\|bundle`, `resource compile-maa`, `operation validate\|inspect\|explain`, `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`: the own command ignores a flag it does not read (a debt; LAB-5B4 makes them refuse it: `READ_LIST_ROWS`, "Slice LAB-5B4") | B3 gives each a read list |
 | table-driven | `TABLE_DRIVEN_ROWS` | 6: `run start`, `run stop`, `reset`, `drill` (the CLI module serves them itself), `user-config`, `user-config set` (their own command is given only the row's declared positionals, `engine::Line::Declared`) | B1 |
 | no command | `NO_COMMAND_ROWS` | `record draft` (MCP's `ac_binding_draft` until LAB-5 builds its command) | LAB-5 |
 
@@ -9122,13 +9124,211 @@ Every existing test now also fails on an undeclared read.
 parameters of L5B3-1 to L5B3-4.
 
 **Left to other slices.** Making the 24 commands refuse a flag their list does not hold (the
-coordinator's ruling: a later slice); B1, C, E, F, G as their work orders say.
+coordinator's ruling: a later slice; done by LAB-5B4); B1, C, E, F, G as their work orders say.
 
 **What LAB-5B3 changes live.** No command line accepts, refuses or prints anything new; `serve
 --stdio` takes the parameters L5B3-1 to L5B3-4 add and hands them to the command, which reads them
 as it reads them from the command line.
 
 **LAB-5B3 rollback** (to the release before it). Nothing persisted: code and the table only.
+
+#### Slice LAB-5B4 (0.12.52): a flag a command does not read is refused; a switch does not swallow the next word
+
+Coordinator work order `rd-1108/arch-013/brief-lab5b4.md`, on the coordinator's ruling of 11-11
+(board #434, 6784514298 point 3; not Alice's words), after the read-only check
+`rd-1111/audit-check/findings-rt-lab.md` §1 and §2. Built on LAB-5B3 (#1581) and merged with main
+after it. The rule of LAB-5's earlier slices, that no command line changes what it accepts or
+refuses, has one exception here, on purpose: this slice changes exactly three things, (1) a flag
+an own command does not read is refused, (2) a switch takes no value from the next word but `true`
+or `false`, (3) a positional a command does not read is refused; nothing else.
+
+**What changed.**
+
+- **The read lists are the product's** (`flag_args::reads::{FlagReads, ReadPart}`, no longer
+  test-only; one list per command, no copy for tests). Each gains `positionals`: the positional
+  words its command reads, in order, each of which may be absent (`<name>` any word, a bare name
+  that word itself). The 24 lists of LAB-5B3, and four new ones for the own commands outside the
+  table: `run_summary::RUN_LIST_READS` (`run list`), `commands/device_commands.rs` `CAPTURE_READS`
+  (`capture`, `session capture`), `lab2_cli.rs` `RECEIPT_READS` and `EVIDENCE_READS` (`lab
+  receipt`, `lab evidence`). A list's `row` is the command's name in its refusal (the row's name;
+  the four commands' own words).
+- **`FlagArgs::parse_reading(args, list)`** parses the command line of each of these 28 commands
+  where it starts, before it reads or writes anything (the record actions' before their session
+  directory is created; `package`'s, `operation`'s and `run`'s dispatchers through
+  `package_flags`, `operation_flags` and `run_flags`, functions of their own so that the command
+  inventory guard still reads each dispatcher's first match; `resource compile-maa` before
+  `--repo` is read): a flag off the list is refused `unknown`; a switch of the list takes the next
+  word only when it is `true` or `false`; an option takes the next word as before (none that
+  begins with `--`) and at the end of the line is refused `value_missing`; a flag the list reads
+  only to refuse it (`--via-daemon`, `--local`, `--state-dir`, `--touch-backend`, the readers'
+  `--capture`) is read as before, for the command's own refusal; a positional beyond the list's,
+  or other than the word it names, is refused `unknown`. In test builds the parse holds the flags
+  to the list (LAB-5B3's recording); the explicit `reading` calls are gone.
+- **The refusal** is the one the CLI module gives a row's short words (`cli_module::refused_word`,
+  through `refused_words`): `validation_failed`, the message `<command>: <argument_problem>
+  <word>`, the details `{argument, argument_problem}`; on actinglab's own line exit 1 and the
+  developer line `ERROR actinglab: … <message>`, as `watch --frobnicate` prints; on a `--via`
+  line the envelope's exit 2, as every `validation_failed`.
+- **The strict commands that take switches** parse with `FlagArgs::parse_switches(args,
+  switches)`: the switch rule only, their own refusals unchanged. Their switch lists are the code's
+  constants (`lab2_cli::LAB2_SWITCHES`, `session_record::RECORD_MARK_SWITCHES` and
+  `RECORD_STOP_SWITCHES`, `package_tool::FMT_SWITCHES`, `package_build::LOADING_SWITCHES`), which
+  the register reads (`own_flags`; LAB-5B2's hand-written copies are gone). `record mark` and
+  `record stop` keep reading their switches with `values` (`record_flag_switch`): `true` reads
+  true, any other value they took is refused "takes no value", as before; a word after a switch is
+  now a positional, which both refuse by their own check ("takes flags only"). Their refusal of an
+  unknown flag is their own lists' (`RECORD_MARK_SHORTCUT_FLAGS`, `RECORD_MARK_REQUEST_FLAGS`,
+  `RECORD_STOP_FLAGS`), unchanged; each switch of the two switch lists is on its command's flag
+  list (checked by the slice's test), and the two lists hold every flag `record_flag_switch` reads
+  (`--dry-run`, `--optional`, `--not-optional`, `--replace-click`, `--replace-transition`,
+  `--no-anchor`, `--close-step` for mark; `--dry-run` for stop; by reading every call).
+- **Positionals of the strict commands that counted none** (`FlagArgs::refuse_unread_positionals`,
+  the same refusal): `observe` none, `do` `<target>`, `ensure` and `wait` `<page>`
+  (`lab2_cli::*_POSITIONALS`), `package preflight`, `resource catalog`, `resource validate` none
+  (`PREFLIGHT_POSITIONALS`, `CATALOG_POSITIONALS`, `VALIDATE_POSITIONALS`), each checked after the
+  command's own flag refusal, so a line refused before keeps its refusal. Strict commands that
+  checked an exact count (`tap`, `swipe`, `long-tap`, `key`, the commands with
+  `expect_positionals(…, 0)`) keep their own refusal.
+- **The short words**: `words::LENIENT_ON_COMMAND_LINE` is gone (the debt of "Slice LAB-5A"):
+  `recover`, `debug-package` and `export-evidence` refuse an undeclared flag and a further word by
+  name, as every row does. `lab_ops::core_ops::MORE_WORDS` stays (no row declares it and nothing
+  writes it now; a call that carries it is refused); its doc says so.
+- **The register** (`cli_module::own_flags`, tests only): `LENIENT_ROWS` is gone; its 24 rows are
+  `READ_LIST_ROWS`, strict by their read list, and no kind is lenient. `reads(row)` gives their
+  positionals from the list; `UNROWED_READS` lists the four commands outside the table;
+  `accepted(row)` gives the positionals the verbs and the three strict commands now check and,
+  `Accepted::first_positional`, the `--page` that `ensure` and `wait` read as their first
+  positional.
+- **`record amend --from-drift-diagnostics`** (the coordinator's ruling, handed on by LAB-5B3):
+  `--holder`, `--lease-holder` and `--lease-id`, which its own pass list
+  (`reject_direct_drift_amend_flags`) let through and amend never reads, are refused as every flag
+  off amend's read list, and are gone from that pass list. No caller in this repository passes
+  them to `record amend` (searched: only `record start` and MCP's `ac_record_start` pass
+  `--holder` and `--lease-id`).
+- **Left as they are** (the coordinator's ruling): `main.rs`'s `record_flag_gate` and
+  `retired_digest_flag_gate`, which read the raw words of every command line, are on no list and
+  run before the command, as before.
+- **Contract**: `lab-two-entries.md` §9.3, a bullet "actinglab's own commands refuse a word they
+  do not read" (the contract had no sentence that let them ignore one).
+
+**Commands changed** (28 by point 1, all three rules): the 24 rows that were lenient and `run
+list`, `capture`, `lab receipt`, `lab evidence`. Beyond them, for rules 2 and 3 only: `observe`,
+`do`, `ensure`, `wait`, `record mark`, `record stop`, `package fmt`, `package loading`, `package
+preflight`, `resource catalog`, `resource validate`. Other own commands outside the debugging and
+authoring rows that read their flags by name (`run open`, `run export`, `control …`, `env …`,
+`lab run|status|arbitrator|replay-evidence`, `package dry-run|run`, `operation run`, `session …`,
+`report export` and the like) are not changed: the work order's count was the four the check found
+outside the table, and sweeping some forty more commands, each needing a read list built from its
+code, is the coordinator's to decide (listed in the slice's report).
+
+**The list of what is now refused** (work order point 5; the coordinator warns callers with it):
+
+| # | Command (its name in the refusal) | Options it reads | Switches it reads | Positionals it reads (each may be absent) | A line main accepts silently, refused now |
+|---|---|---|---|---|---|
+| 1 | `touch-probe` | none (`--touch-backend` is refused) | none | none | `touch-probe --instnace neutral.b` |
+| 2 | `recover` (`recover <inst>`, `session recover`) | `--seed`, `--fresh-delay-ms`, `--pack`, `--pack-root`, `--pages`, `--navigation`, `--env-task`, `--scene`, `--to`, `--max-actions`, `--step-timeout-ms`, `--poll-ms`, `--startup-max-rounds`, `--startup-interval-ms`, `--startup-login-file` | `--stale-capture`, `--startup-login`, `--capture`, `--diagnose`, `--require-fresh` | none | `session recover --capture --instnace neutral.b` |
+| 3 | `tap-target` | `--target`, `--seed`, `--scene`, `--package`, `--zip` | `--allow-destructive`, `--require-fresh` | `<target>` | `tap-target ui/ok --sede 7` |
+| 4 | `navigate` | `--to`, `--step-timeout-ms`, `--poll-ms`, `--seed`, `--scene`, `--package`, `--zip` | `--allow-destructive`, `--require-fresh` | none | `navigate --to home extra` |
+| 5 | `debug-package` (`lab debug-package`) | `--package`, `--zip` | none | none | `lab debug-package --package p --frobnicate` |
+| 6 | `export-evidence` (`lab export-evidence`) | `--package`, `--zip`, `--out`, `--outcome` | none | none | `lab export-evidence --package p --out e.zip --outcom failure` |
+| 7 | `recognize-artifact` | `--request` | none | none | `recognize-artifact --request r.json extra` |
+| 8 | `record start` | `--state-dir`, `--task-id`, `--locale`, `--template-threshold`, `--metric`, `--holder`, `--lease-holder`, `--record-id`, `--lease-id` | `--force` | none | `record start neutral.b --task-id t` (the word was ignored and the session started on the default instance) |
+| 9 | `record status` | `--state-dir` | none | none | `record status neutral.b` |
+| 10 | `record candidates` | `--state-dir`, `--step-id` | none | `<step-id>` | `record candidates s1 s2` |
+| 11 | `record amend` | `--state-dir`, `--from-drift-diagnostics`, `--step-id`, `--id`, `--candidate-index`, `--auto-candidate`, `--region`, `--threshold`, `--contrast-frame`, `--negative-frame`, `--metric`, `--from`, `--to`, `--click` | `--color-check`, `--no-color-check`, `--clear-threshold`, `--destructive`, `--non-destructive` | `<step-id>` | `record amend --from-drift-diagnostics d.json --holder h` |
+| 12 | `record step` | `--state-dir`, `--kind`, `--step-id`, `--id`, `--region`, `--threshold`, `--frame`, `--source-frame`, `--artifact-dir`, `--fresh-delay-ms`, `--contrast-frame`, `--negative-frame`, `--metric`, `--from`, `--to`, `--click`, `--swipe`, `--drag`, `--long-press`, `--long-tap`, `--duration-ms` | `--color-check`, `--capture`, `--current-frame`, `--require-fresh`, `--destructive` | none | `record step --kind anchor --id a --frame f.png --colour-check` |
+| 13 | `package validate` | `--zip` | none | none | `package validate --zip p.zip --strict` |
+| 14 | `package inspect` | `--zip` | none | none | `package inspect --zip p.zip --detail full` |
+| 15 | `package bundle` | `--applications`, `--packs-root`, `--out`, `--source-repository`, `--source-commit`, `--maintenance`, `--pages`, `--interrupts`, `--navigation`, `--schedule`, `--display-layout`, `--loading` | none | none | `package bundle --applications a.json --packs-root packs --out o --layout l.json` |
+| 16 | `resource compile-maa` | `--repo`, `--maa-tasks`, `--task` | `--facts` | none | `resource compile-maa --repo r --maa-tasks m --tasks t` |
+| 17 | `operation validate` | `--repo`, `--operation-dir` | none | none | `operation validate --repo r --operation-dir d extra` |
+| 18 | `operation inspect` | `--operation-dir` | none | none | `operation inspect --operation-dir d --out x` |
+| 19 | `operation explain` | `--operation-dir` | none | none | `operation explain --operation-dir d extra` |
+| 20 | `recognize` | `--target`, `--scene`, `--package`, `--zip` | `--require-fresh` | none | `recognize --target t --scene f.png --zip p.zip --threshold 0.9` |
+| 21 | `detect-page` | `--scene`, `--package`, `--zip` | `--check-pages`, `--require-fresh` | none | `detect-page --scene f.png --zip p.zip --all` |
+| 22 | `current-page` | `--scene`, `--package`, `--zip` | `--require-fresh` | none | `current-page --scene f.png --zip p.zip extra` |
+| 23 | `is-visible` | `--target`, `--scene`, `--package`, `--zip` | `--require-fresh` | `<target>` | `is-visible t1 t2 --scene f.png --zip p.zip` |
+| 24 | `locate` | `--template`, `--metric`, `--scene`, `--fresh-delay-ms` | `--capture`, `--require-fresh` | `<template>` | `locate t.png --scene f.png --region 0,0,9,9` |
+| 25 | `run list` | none | none | none | `run list --limit 5` |
+| 26 | `capture` (`session capture`) | `--out`, `--fresh-delay-ms` | `--diagnose`, `--record`, `--require-fresh` | the word `diagnose` | `capture diagnostics --out f.png` (any word but `diagnose` was ignored and a frame captured) |
+| 27 | `lab receipt` | `--req` | none | `<req_id>` | `lab receipt --req r1 --limit 5` |
+| 28 | `lab evidence` | `--id` | none | `<evidence_id>` | `lab evidence --id e1 --run r1` |
+
+Besides: actinglab's global options (`--instance`, `--game`, `--server`, `--dry-run`, `--verbose`, `--json` and the rest) are taken by its parser anywhere on the line, as before; the legacy routing flags `--via-daemon`, `--local` and `--state-dir` stay refused by name where they were (rows 2 to 4 and 20 to 26), and `--capture` by the readers (rows 3, 4, 20 to 23).
+
+The strict commands whose command line changes for the switch and positional rules only:
+
+| Command | What changes | A line main accepts silently, refused now |
+|---|---|---|
+| `observe` | its switches (`--capture`, `--preview`, `--record`, `--pretty`, ...) take no word but `true`/`false`; a positional is refused (it reads none) | `observe --capture neutral.b` (the traced line: `neutral.b` was the value of `--capture`, which was then false) |
+| `do` | the same switches; a second positional is refused (it reads `<target>`) | `do --capture el1 el2` |
+| `ensure`, `wait` | the same switches; a second positional is refused (each reads `<page>`) | `wait --capture --page home extra` |
+| `record mark`, `record stop` | their switches take no word but `true`/`false`; the word left is refused by their own positional check | (both refused before, now for the positional: `record mark --close-step word`) |
+| `package fmt` | `--check` takes no word but `true`/`false` | `package fmt --package d --check yes` (main wrote the files: `--check` was `yes`, so false) |
+| `package loading` | `--write`, `--check` likewise | (refused before as "takes no value", now for the positional) |
+| `package preflight`, `resource catalog`, `resource validate` | a positional is refused (they read none) | `resource validate --repo r extra` |
+
+Lines that change from refused to accepted: a switch followed by its command's positional, as `do --capture <target>`, `ensure --capture <page>`, `wait --capture <page>` and `tap-target --allow-destructive <target>` (main took the word as the switch's value and refused the line or ran another path).
+
+**Reads that rest on reading** (handed on by LAB-5B3): `recover`'s `--pack-root` and `--pages`
+(with `--pack`) are now reached by a test (a planned recovery that reads them before it reads the
+missing pack). The capture freshness of `recover`'s route and of `locate` (`--capture`,
+`--require-fresh`, `--fresh-delay-ms`) and `navigate`'s step timing (`--step-timeout-ms`,
+`--poll-ms`) are read only right before a capture or a press: after the route's resources and the
+user configuration's device (an adb found on the host) are loaded, or, for `navigate`, after a
+package and a frame are loaded and a live drive is built, so no command line of a test reaches
+those reads without a device or a Runtime. Their lists hold them, read again for this slice
+(`SCENE_READS`, `NAVIGATE_READS`), and the slice's test parses each list's line of them and reads
+them in their commands' forms under the recording. No list missed a flag its command reads.
+
+**Tests.** New: apps row "#434 LAB-5B4", `gate_434_lab5b4::every_own_command_refuses_a_flag_it_does_not_read`
+(the 28 commands, the register's `READ_LIST_ROWS` and `UNROWED_READS`: `--frobnicate` refused
+before anything runs, with the line, exit code and developer line of `watch --frobnicate` but for
+the name; no read, no Runtime, no session directory, no frame; `record amend
+--from-drift-diagnostics` refusing `--holder`, `--lease-holder`, `--lease-id`),
+`a_switch_takes_no_value_from_the_next_word` (a switch and a word, `true`, `false`, a flag; an
+option and `--`; a positional beyond the list; `observe`'s and `record mark`'s switches, mark's and
+stop's switches on their flag lists; the traced `observe --capture <alias>` refused for its
+positional and `observe --capture --instance <alias>` a capture on that instance; `tap-target`'s
+second word and `capture`'s word other than `diagnose`), `an_option_at_the_end_of_the_line_is_refused`
+(`value_missing`, nothing written), `the_reads_that_rested_on_reading_are_on_their_lists`,
+`lines_with_declared_flags_answer_as_before` (LAB-5B3's lines as the corpus,
+`gate_434_lab5b3::corpus`: each answers its exit and error code, none refused by the new parse)
+and `serve_hands_a_formerly_lenient_row_its_declared_parameters_as_before` (`recover` and `record
+status` through `serve --stdio` answer the line the command line gives for the same words: the
+command's own seed refusal, and the status). Changed, where this slice changes what they pin:
+`gate_434_lab5b2::every_debugging_and_authoring_row_has_one_kind` (the kind "lenient" is "strict
+by its read list", `READ_LIST_ROWS`) and `strict_rows_match_their_commands` (the positionals the
+verbs and the three strict commands now check, with the first positional of `ensure` and `wait`;
+new helper `with_first_positional`); `gate_434_lab5b3::lenient_rows_match_their_reads`
+(`READ_LIST_ROWS`; the positionals the lists name, with the first positional),
+`a_held_read_outside_its_list_fails` (its probe list's `positionals`) and
+`every_lenient_command_reads_through_its_list` (its lines moved into `corpus`, shared; `resource
+compile-maa`'s writes `--task --facts` for `--facts --task`, the same flags, since `--task` at the
+end is refused now); `gate_434_lab5a::lab5a_rows_take_what_they_took` (the three lenient rows'
+undeclared flag and further word are refused by name, where the test pinned them handed on).
+
+**`serve --stdio` and MCP.** Unchanged: `serve` hands a row only its declared parameters
+(`words::from_json`), every one of which its command's list holds (LAB-5B3's two-way test), a
+switch as the flag alone or nothing and an option with its value; the serve test above shows a
+formerly lenient row's answer is the command line's. MCP's actinglab child (`actingctl mcp-serve`,
+`--via mcp`) passes `record start` and `record status` only flags on their lists, and `observe`
+and `do` their switches alone; its lines answer as before.
+
+**Interface.** None raised. No outcome code, key, location or table row is added; the operation
+table is unchanged.
+
+**What an operator sees after deploy.** A command line that passes a flag its command does not
+read, or a word it does not read, is refused with `validation_failed` naming the word
+(`<command>: unknown <word>`, exit 1; exit 2 on a `--via` line), where it was ignored; an option
+left without a value at the end is refused `value_missing`. A switch followed by a word other than
+`true` or `false` leaves the word as a positional: `observe --capture <alias>` is refused for its
+positional (`--instance <alias>` names the instance), and `do --capture <target>`, `ensure
+--capture <page>`, `wait --capture <page>` now run the capture path with that target or page. A
+script that relied on an ignored flag fails loud; the table above lists an example per command.
+
+**LAB-5B4 rollback** (to the release before it). Nothing persisted: code, the register and the
+contract text only. Rolling back makes the 28 commands ignore an unknown flag again.
 
 #### Slice LAB-5G4a (0.12.52): `serve --stdio --front mcp` records `Lab-MCP`; `serve` refuses values that begin with `--`
 

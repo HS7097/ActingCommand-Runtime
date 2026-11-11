@@ -1369,13 +1369,15 @@ fn scalar(value: &Value) -> String {
 // ---- moved with this module from actinglab's words (`apps/actinglab/src/cli_module/words.rs`),
 // which reads them from here
 
-/// The member that holds the further words of a row of actinglab's `LENIENT_ON_COMMAND_LINE` on
-/// the command line.
+/// The member that held the further words of the rows whose command line handed them on to a
+/// command that ignored them (actinglab's `LENIENT_ON_COMMAND_LINE`, gone with Workflow #434
+/// LAB-5B4); no row declares it and no command line writes it now, and a call that carries it is
+/// refused by name (`serve --stdio` refuses it as undeclared).
 pub const MORE_WORDS: &str = "words";
 
-/// The members of `params` the row does not declare: on the command line, the global options, a
-/// lenient row's further flags and the undeclared flags of actinglab's `KEPT_FLAGS` handed on
-/// (never [`MORE_WORDS`]), in the map's order.
+/// The members of `params` the row does not declare: on the command line, the global options and
+/// the undeclared flags of actinglab's `KEPT_FLAGS` handed on (never [`MORE_WORDS`]), in the map's
+/// order.
 pub fn further_flags<'a>(
     operation: &Operation,
     params: &'a Map<String, Value>,

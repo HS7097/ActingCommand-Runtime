@@ -99,6 +99,10 @@ mod gate_434_lab5b2;
 // builds hold every read to it, and it is held equal to its row.
 #[path = "gate_434_lab5b3.rs"]
 mod gate_434_lab5b3;
+// Workflow #434 LAB-5B4: an own command refuses a flag or a positional it does not read, and a
+// switch takes no value from the next word but `true` or `false`.
+#[path = "gate_434_lab5b4.rs"]
+mod gate_434_lab5b4;
 // Workflow #434 LAB-5G4a: `serve --stdio --front mcp` records `Lab-MCP`; serve refuses a value
 // that begins with `--`.
 #[path = "gate_434_lab5g4a.rs"]

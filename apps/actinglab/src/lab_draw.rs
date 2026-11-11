@@ -23,9 +23,8 @@ pub(super) const SEED_FLAG: &str = "--seed";
 #[cfg(test)]
 pub(super) const TEST_TOUCH_CONFIG_ENV: &str = "ACTINGCOMMAND_TEST_TOUCH_CONFIG";
 
-/// Workflow #434 LAB-5B3 (tests only): the flag [`seed_flag`] reads, a part of the read lists of
-/// the lenient commands that take a seed.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flag [`seed_flag`] reads, a part of the read lists of the own
+/// commands that take a seed.
 pub(super) const SEED_READS: crate::flag_args::reads::ReadPart =
     crate::flag_args::reads::ReadPart {
         options: &[SEED_FLAG],
