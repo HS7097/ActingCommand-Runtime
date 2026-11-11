@@ -2871,3 +2871,12 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::resource_runtime_support::resource_declarations::gate_428_rd_budget1::rd_budget1_a_second_read_of_a_path_answers_the_bytes_of_the_first",
 ]
 incident = ["#428 RD-BUDGET-1"]
+
+# Workflow #428 VIS-LOAD-1 (0.12.52; register §1.298; brief rd-1110/brief-vis-load-1.md; contracts/vision-model-folders.md, "Startup and first use"): the OCR engine's request path over a fake whose detector load and inferences move the request's clock: the model's first request that detects loads the detector before its deadline is taken, so a load five times the request's timeout_ms leaves its inference the whole budget (the detection gets all of timeout_ms, the recognition what the detection left) and the request succeeds, and the next request loads nothing; a request whose detection takes the whole timeout_ms, after that load or with the detector already built, still fails with Timeout, "PPOCR recognizer could not start before the configured timeout"
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ppocr-onnx-json-provider::lib::gate_428_vis_load1::vis_load1_a_detector_load_longer_than_the_timeout_leaves_inference_its_whole_budget",
+    "actingcommand-ppocr-onnx-json-provider::lib::gate_428_vis_load1::vis_load1_inference_past_the_timeout_still_fails_with_its_timeout",
+]
+incident = ["#428 VIS-LOAD-1"]

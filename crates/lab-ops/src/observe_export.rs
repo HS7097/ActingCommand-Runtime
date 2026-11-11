@@ -31,8 +31,9 @@ use std::time::{Duration, Instant};
 
 const USAGE: &str = "usage: actingctl observe --state-root <path> --instance <alias|instance_id|ADB port> --export <directory>";
 /// How long the CLI reads the frame back; every exchange is also bounded by the client's own
-/// I/O timeout.
-const READ_BUDGET: Duration = Duration::from_secs(60);
+/// I/O timeout. Workflow #434 LAB-5C: actinglab's `material --out` reads a material back within
+/// it too.
+pub const READ_BUDGET: Duration = Duration::from_secs(60);
 
 /// Runs `observe` when it carries `--export`; `None` leaves every other command, and `observe`
 /// without `--export`, to `Invocation::parse`, unchanged.

@@ -2462,7 +2462,7 @@ fn record_start_lab_options(
     })
 }
 
-const RECORD_STOP_FLAGS: &[&str] = &[
+pub(crate) const RECORD_STOP_FLAGS: &[&str] = &[
     "--lab-dir",
     "--package-id",
     "--requires",
@@ -2593,7 +2593,7 @@ fn record_status_lab(state_dir: &Path, instance_id: &str) -> CliOutcome<Value> {
     Ok(lab)
 }
 
-const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
+pub(crate) const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     "--step",
     "--frame",
     "--sample",
@@ -2633,6 +2633,11 @@ const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     "--brake-corner",
 ];
 
+/// Workflow #434 LAB-5B2: the other flags `record mark` takes besides its shortcut flags: the
+/// request as a file or as text, the state directory and the dry run.
+pub(crate) const RECORD_MARK_REQUEST_FLAGS: [&str; 4] =
+    ["--request", "--request-json", "--state-dir", "--dry-run"];
+
 /// `record mark`: flags or a `actingcommand.lab-record-mark.v1` request, applied by the Lab
 /// recording core under the recording lock.
 fn run_record_mark(
@@ -2651,10 +2656,7 @@ fn run_record_mark(
         .keys()
         .filter(|name| {
             !RECORD_MARK_SHORTCUT_FLAGS.contains(&name.as_str())
-                && !matches!(
-                    name.as_str(),
-                    "--request" | "--request-json" | "--state-dir" | "--dry-run"
-                )
+                && !RECORD_MARK_REQUEST_FLAGS.contains(&name.as_str())
         })
         .cloned()
         .collect::<Vec<_>>();

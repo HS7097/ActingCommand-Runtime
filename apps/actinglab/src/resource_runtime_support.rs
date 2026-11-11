@@ -19,6 +19,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use zip::{ZipWriter, write::FileOptions};
 
+/// Workflow #434 LAB-5B2: the flags `resource catalog` takes.
+pub(crate) const CATALOG_FLAGS: [&str; 4] = ["--repo", "--catalog", "--catalog-server", "--field"];
+
 pub(super) fn run_resource(
     sub: &str,
     global: &GlobalOptions,
@@ -36,10 +39,7 @@ pub(super) fn run_resource(
         "compile-maa" => maa_task_graph::run_resource_maa_task_compile(&flags, &resource_root),
         "catalog" => {
             for name in flags.flags.keys() {
-                if !matches!(
-                    name.as_str(),
-                    "--repo" | "--catalog" | "--catalog-server" | "--field"
-                ) {
+                if !CATALOG_FLAGS.contains(&name.as_str()) {
                     return Err(CliError::usage(format!(
                         "resource catalog does not accept {name}"
                     )));

@@ -38,8 +38,8 @@ use std::time::{Duration, Instant};
 /// The label of the in-memory admission of an edited package.
 const ADMISSION_INSTANCE: &str = "lab.package.edit";
 const BYTE_ORDER_MARK: &[u8] = b"\xEF\xBB\xBF";
-const FMT_FLAGS: &[&str] = &["--package", "--check"];
-const EDIT_FLAGS: &[&str] = &[
+pub(crate) const FMT_FLAGS: &[&str] = &["--package", "--check"];
+pub(crate) const EDIT_FLAGS: &[&str] = &[
     "--package",
     "--patch",
     "--file",

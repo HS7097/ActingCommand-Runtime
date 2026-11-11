@@ -40,9 +40,14 @@
 
 // Workflow #434 LAB-5F: the authoring option.
 pub(crate) mod authoring;
-mod core_ops;
+// Workflow #434 LAB-5C: what a row hands `lab-ops` is read by the slice's test.
+pub(crate) mod core_ops;
 // Workflow #434 LAB-5A: its command table is read by the slice's test.
 pub(crate) mod engine;
+// Workflow #434 LAB-5B2: the kinds of the debugging and authoring rows and what each strict row's
+// own command accepts, read by the slice's test only.
+#[cfg(test)]
+pub(crate) mod own_flags;
 // Workflow #434 LAB-2b: the line actinglab's own commands print.
 pub(crate) mod own_line;
 mod place;

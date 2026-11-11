@@ -410,7 +410,7 @@ LAB-5 the MCP tools, and LAB-1's test `lab_ops_table_complete` reads the file it
 |---|---|
 | `name` | the CLI words, unique; the MCP tool is `ac_` and the name with spaces and `-` as `_`, also unique |
 | `module` | `core`, `debugging`, `authoring` or `rescue` |
-| `params` | each `{name, form, type, required, repeat?, default?, required_in?, note?}`; `form` is `positional`, `option` or `switch`; an option's CLI flag is `--` and the name with `_` as `-`, its MCP argument the name; positionals keep their order; `required_in` (LAB-5A) lists the front ends (the ids of the `modules` rows of role `front_end`) in which the parameter is required although the row does not require it (today only `mcp`, on `resume`'s `expect` and `pause`'s `reason`; nothing reads it yet, and the CLI and `serve` do not change); what the schema cannot state (a one-of rule, a value given as a positional or as a flag, a joint or exclusive group, flag sets that depend on a path or a kind) is in the parameter's `note`, and the code enforces it |
+| `params` | each `{name, form, type, required, repeat?, default?, required_in?, note?}`; `form` is `positional`, `option` or `switch`; an option's CLI flag is `--` and the name with `_` as `-`, its MCP argument the name; positionals keep their order; `required_in` (LAB-5A) lists the front ends (the ids of the `modules` rows of role `front_end`) in which the parameter is required although the row does not require it (today only `mcp`, on `resume`'s `expect`, `pause`'s `reason` and, since LAB-5C, `remedy set`'s `rows`; nothing reads it yet, and the CLI and `serve` do not change); what the schema cannot state (a one-of rule, a value given as a positional or as a flag, a joint or exclusive group, flag sets that depend on a path or a kind) is in the parameter's `note`, and the code enforces it |
 | `params_more` | when present: the source command whose further flags carry over unchanged under the same naming rule. Since LAB-5A only a row no program offers yet has it (a rescue row whose source command is not built); every offered row declares all of its parameters (section 9.2) |
 | `output` | what the operation answers; the CLI's `--json` line, the MCP result and the serve answer are the same JSON |
 | `writes` | whether it changes anything; MCP's `readOnlyHint` is its negation |
@@ -432,9 +432,14 @@ CLI hands the command its text, `serve` takes a JSON number or that text), `bool
 (a number with `ms`, `s`, `m` or `h`), `path`, `file`, `dir`, `json`, `key`, `key_value`
 (`KEY=VALUE`), `list<string>`, `enum:<a|b>`, `request_id`, `run_ref` (LAB-5A: a request id or a
 run id), `operation_id` (`op-<ms>`), `material_ref`, `code`, `scope` (an instance or a game),
-`tag_or_commit`, `sha256`. A millisecond count is an `integer`, not a `duration` (the commands take
-a bare number); a comma list given in one flag is a `string` and JSON given as text a `string`
-(the CLI hands both on as written); a flag given more than once is `repeat`.
+`tag_or_commit`, `sha256`. A millisecond count is a bare number, not a `duration` (the commands
+take a bare number): an `integer`, or `unsigned` where the command reads any whole number from 0
+(LAB-5A, LAB-5C: the `*_unix_ms` times of `runs`, `events` and `diagnose`). A comma list or JSON
+text the CLI hands on as written is a `string` (`record mark`'s `request_json`); a comma list the
+words split is a `list<string>` (`events`' `type`), and JSON the words read is a `json`: the CLI's
+words parse its text (text that is not JSON is `wrong_type`) and `serve` takes the JSON value
+(`resume`'s `expect`, `targets set`'s `targets`, `remedy set`'s `rows`). A flag given more than
+once is `repeat`.
 
 ### 9.2 What `lab_ops_table_complete` checks (LAB-1)
 

@@ -11,7 +11,7 @@ use actingcommand_contract::{
 use actingcommand_runtime_client::RuntimeClient;
 use serde_json::{Value, json};
 
-const WATCH_QUERY_FLAGS: [(&str, &str); 18] = [
+pub(crate) const WATCH_QUERY_FLAGS: [(&str, &str); 18] = [
     ("--from-sequence", "from_sequence"),
     ("--to-sequence", "to_sequence"),
     ("--event-type", "event_type"),
@@ -32,10 +32,16 @@ const WATCH_QUERY_FLAGS: [(&str, &str); 18] = [
     ("--recognition-id", "recognition_id"),
 ];
 
+/// Workflow #434 LAB-5B2: the cursor flags of `lab watch`, beside its query flags.
+pub(crate) const WATCH_CURSOR_FLAGS: [&str; 3] = ["--after", "--wait-ms", "--max-events"];
+
+/// Workflow #434 LAB-5B2: the flags `lab unpin` takes, each once.
+pub(crate) const UNPIN_FLAGS: [&str; 3] = ["--artifact-id", "--pin-sequence", "--pin-event-id"];
+
 pub(super) fn watch_options() -> Value {
     json!({
         "query_flags": WATCH_QUERY_FLAGS.iter().map(|(flag, _)| *flag).collect::<Vec<_>>(),
-        "cursor_flags": ["--after", "--wait-ms", "--max-events"],
+        "cursor_flags": WATCH_CURSOR_FLAGS,
         "req_alias": "correlation_id",
         "sequence_bounds": "inclusive; --after remains exclusive",
         "minimum_severity": "inclusive lower bound"
@@ -77,10 +83,11 @@ pub(super) fn capabilities() -> [Value; 10] {
 fn run_unpin(args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse_values(args)?;
     flags.expect_positionals("lab unpin", 0)?;
-    if flags.flags.iter().any(|(key, values)| {
-        !["--artifact-id", "--pin-sequence", "--pin-event-id"].contains(&key.as_str())
-            || values.len() != 1
-    }) {
+    if flags
+        .flags
+        .iter()
+        .any(|(key, values)| !UNPIN_FLAGS.contains(&key.as_str()) || values.len() != 1)
+    {
         return Err(CliError::usage(
             "lab unpin requires exactly one artifact and one pin reference",
         ));
@@ -300,7 +307,7 @@ fn watch_query(flags: &FlagArgs) -> CliOutcome<EventQuery> {
                 "duplicate lab watch option {flag}"
             )));
         }
-        if matches!(flag.as_str(), "--after" | "--wait-ms" | "--max-events") {
+        if WATCH_CURSOR_FLAGS.contains(&flag.as_str()) {
             continue;
         }
         let (_, field) = WATCH_QUERY_FLAGS

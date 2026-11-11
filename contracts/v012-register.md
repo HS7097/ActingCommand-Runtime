@@ -8777,6 +8777,219 @@ and no gate name changed, so nothing is retired.
 
 **LAB-5D rollback** (to the release before it). Nothing persisted: code only.
 
+#### Slice LAB-5C (0.12.52): the command line gains the parameters only MCP took
+
+Coordinator work order `rd-1108/arch-013/brief-lab5c.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` (§1, §4) and its table of all 170 arguments of today's 41
+MCP tools, `scratch-lab5a-step0/lab5a-mcp-args.csv`, read against main `af7e2557` (LAB-5A merged),
+the base of this slice; where they differ, main won. The contract is
+[lab-two-entries.md](lab-two-entries.md) §9.1; the table is [lab-operations.json](lab-operations.json).
+The rule of the slice: it only adds. Every command line that worked before works the same and
+prints the same; a command line gains options; no default changes; today's MCP server
+(`apps/actingctl/src/mcp`) is not touched.
+
+**The coordinator's rulings** (2026-11-10 and 2026-11-11, board #434, in the work order): no
+regression: every argument one of today's 41 MCP tools takes ends as a parameter of its row (which
+the command line then takes too), as a member the MCP front keeps for itself, or on the list of
+retired arguments. **Members the MCP front keeps** (not parameters of a row): the three cursors
+(`ac_events`, `ac_runs`, `ac_outcome_code`), bound to the MCP server's own session and connection;
+`ac_get_run`'s `handle` (a job handle of the MCP process; a request id handle is `run show`'s
+`id`) and `wait_s`; `ac_stop_run`'s `wait_s`. **Retired**: `action` of `ac_emulator`, `ac_app`
+and `ac_perf_preset` (the row's name carries it; `force-stop` is `app stop`); `ac_remedy_set`'s
+`lift` (the row `remedy lift`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5C-1 | `events` gains `view` (`enum:events\|observation\|changes\|errors\|health\|lab`), `since_unix_ms`, `until_unix_ms`, `through_sequence` (`unsigned`), `event_type`, `fact_key`, `origin_module`, `task_id`, `correlation_id` (`string`), `exclude_event_types` (`list<string>`), `min_severity`, `max_severity` (`enum:debug\|success\|info\|warning\|error\|fatal`), `detail` (`enum:brief\|summary\|payload`, default `brief`) and `wait_s` (`integer`, default 0, 0 to 20) | contract table, behaviour | LAB-5C | — | `core_ops` hands each to `lab-ops`' `events` under the flag of its name, after the words the row gave before, the excluded types as one comma list as `type` goes; `lab-ops` checks them as it checks MCP's (`events::parse`). `since_unix_ms` stands beside `since` (a duration back from now): with both, the two name the window's start (`--since-unix-ms`), and the operation layer refuses the second as `repeated`, as `runs` does; the notes say so. `unsigned` for the times and the sequence, as `runs`' on main, so that a value `lab-ops` refuses is refused with its own range |
+| L5C-2 | `diagnose` gains `since_unix_ms` (`unsigned`) | contract table, behaviour | LAB-5C | — | beside `since`, as L5C-1: both refused by the operation layer as `repeated`; at most 7 days back (`since_out_of_range`), absent 24 hours back |
+| L5C-3 | `codes` gains `prefix`, `owner` (`string`) and `limit` (`integer`, default 20, 1 to 100), the survey's difference 8 | contract table, behaviour | LAB-5C | — | handed on after the code under their flags; with a code `lab-ops` refuses them as `conflicting`, as before on actingctl's line |
+| L5C-4 | `packs` gains `role` (`enum:procedure\|startup\|resource_package`) | contract table, behaviour | LAB-5C | — | the code's `packs::Role` (MCP's schema lists `Role::ALL`); the survey's `Observer\|Operator\|Author` was wrong, main won |
+| L5C-5 | `remedy set` gains `rows` (`json`, `required_in: ["mcp"]`), the rows inline; `file` is no longer required by the row | contract table, behaviour | LAB-5C | — | exactly one of `file` and `rows` (`words::ONE_OF`, on the command line and in `serve --stdio`): neither is refused as before (`<file>` `required`), both as `--rows` `conflicting`. `rows` goes beside the words to `lab-ops`' new `remedy::dispatch_rows`, which bounds it as a rows file is bounded (fix 1: its JSON text, written compactly, above `MAX_ROWS_FILE_BYTES` is `--rows` `out_of_range` with `range_max` the bound, the refusal of a larger file, before anything is sent), reads it as a rows file's content (another shape `--rows` `wrong_type`) and runs `set` as `dispatch` does, with the CLI's detector; `file` alone goes on as before. Two differences from a rows file stay: inline text that is not JSON is refused by the words as `--rows` `wrong_type`, where a file whose content is not JSON is `--rows` `unusable`; and `--rows` takes the rows themselves while a rows file is the positional `file` (actingctl's `remedy set --rows <file>` names a file; actinglab's `remedy set … --rows rows.json` is `wrong_type`). The row's notes say so |
+| L5C-6 | `material` gains `out` (`dir`), in place of MCP's `mode: export` | contract table, behaviour | LAB-5C | — | with `out` the whole material is read (`material::read_whole`, within `observe_export::READ_BUDGET`, as `frame --out` reads its frame) and written into that directory by the writer `frame --out` and MCP share (`material_export::write`), the line naming the file `{path, sha256, size}` with `lab_operation_completed`; `offset` and `max_bytes` beside it are `conflicting`, as MCP refuses them with `mode: export`, but read after the connection is made, as the base checks `--max-bytes`' range (`core_ops::material_read`; MCP refuses them before it connects); without `out`, as before. For the server's slice: `out` lets a caller of `serve` write where it names, as `frame --out` does; the MCP front keeps `out` for itself and passes its own export directory |
+| L5C-7 | `app launch`, `app restart` and `app stop`: no `record` (fix 1) | — | LAB-5C | — | the coordinator's ruling of 2026-11-11 on the review's S5: a row of the core module does not reach the authoring module's recording, and today's MCP `ac_app` runs `session app` without `--record` on purpose. The three rows, their hand-over (`engine::arguments`) and their words are main's; the survey's difference 7 is not taken. `--record` stays the flag of actinglab's own command `session app <action> --instance <i> --record`, on the command line as before. A recorded application step through the table would be a row of the authoring module, in a later slice; not decided |
+| L5C-8 | `lab-ops` additions | behaviour | LAB-5C | — | `events::cli_request` (the read the words ask for, before any connection; `run_cli` reads through it) and `events::Request::filters`; `remedy::dispatch_rows` (with fix 1's bound, `remedy::inline_within_bound`, private); `observe_export::READ_BUDGET` made public. actingctl's lines are unchanged |
+
+**Not parameters** (the rulings above; not added): the cursors of `events` and `codes`, `run
+show`'s `handle` and `wait_s`, `run stop`'s `wait_s`, the retired `action`s and `lift`; and (fix 1,
+the ruling of 2026-11-11) `record` on the core rows `app launch|restart|stop` (L5C-7). `runs`
+keeps the `cursor` LAB-5A declared, since its command line took `--cursor` before LAB-5A (the rule
+of this slice: only adds); the MCP front keeps its own cursor binding for `ac_runs`. Nothing else of
+the survey's table marked `add` was missing from a row on main.
+
+**`required_in`.** `remedy set`'s `rows` carries `required_in: ["mcp"]` (fix 1, the review's S2):
+today's `ac_remedy_set` requires `rows` unless `lift`, and `lift` is retired to its own row `remedy
+lift`, so in today's MCP the rows are required, where the row takes `file` or `rows`. No other
+parameter this slice adds is required in today's MCP tool (`ac_material`'s required `mode` is
+replaced by the optional `out`). Nothing reads `required_in` yet; §9.1 of the contract names
+`rows` beside `resume`'s `expect` and `pause`'s `reason`.
+
+**Defaults and names that differ between today's MCP and the rows** (for the server's slice; none
+changes here; from the survey's `difference` column, checked against main):
+
+- `pause`: drain `drain_timeout_s` integer seconds 1 to 600, default 60 (MCP) against `drain`
+  duration, default 300 s (row); reason default `mcp.pause` against `operator`.
+- `run start`: `deadline_s` integer seconds 60 to 1800, default 1800, against `deadline` duration
+  (1800 s when absent); `recovery_package` against `recovery`. A job against a waiting line:
+  `ac_run_pack` answers `{handle, correlation_id, phase}` at once and submits in a job of its
+  process; the row's line waits for the run's receipt, at most `wait` when given
+  (`command_wait_expired`, naming the run).
+- `emu start|stop|restart`: `ac_emulator` answers `{controlled}` within its 25 s call budget,
+  otherwise `{handle, job_phase}` of a job of its process for `ac_get_run`; the row's line waits
+  for `{controlled}`, at most `wait` when given.
+- `run stop`: `ac_stop_run` sends only the stop through its live job when that MCP process
+  submitted the run (that job lifts the touches), and otherwise waits for the end in a job of its
+  process (`wait_s`, the front's); the row's line sends the stop and the reset and waits for them,
+  up to the longest run deadline (`cancel_only`: the stop alone).
+- `status`: `sections` an array of the block names (an `enum`) in MCP against a `list<string>`
+  on the row, a comma list on the command line.
+- `events`: `limit` 1 to 100 (MCP) against 1 to 256 (the command line), 20 when absent on both,
+  though the row declares no `default` for it; `detail` default `brief` on both; `wait_s` 0 to 20
+  on both (MCP's schema maximum is `events::MAX_WAIT_S`, 20); `after_sequence` against `after`,
+  `event_types` an array against `type`, a `list<string>` (a comma list on the command line),
+  `run_id` against `run`, `request_id` against `request`; `since_unix_ms` beside the row's
+  `since`.
+- `runs`: MCP's `since_unix_ms` (and `until_unix_ms`) are the row's too; the row's `since`, a
+  duration back from now, stands beside it, not with it.
+- `targets`: two MCP tools, `ac_resources_list` and `ac_targets_get`, against one row `targets`.
+- `targets set`: MCP requires `targets` (inline); the row takes `file` or `targets`, exactly one.
+- `run evidence`: `detail` default `full` on both; `limit` default 20, 100 with `summary`, on
+  both; `handle` and `run_id` against one `id`. `run show`: `run_id` against `id`.
+- `codes` and `runs`: `limit` default 20, 1 to 100, on both.
+- `diagnose`: `task_id` against `task`; `since_unix_ms` beside the row's `since`.
+- `observe`, `do`: `sample_scenes` and `scene` folded into one repeated `scene`, oldest first.
+- `record mark`: `request` an object against `request_json` text.
+- `facts`: `key_prefix` against `prefix`; `scope` against the switches `program` and `config` (and
+  the row `config`). `summary`: `granularity` against the switches `hour` and `day`.
+- `resume`: `expected_owner_epoch` and `expected_revision`, two required members, against one
+  `expect` object `{owner_epoch, revision}` (`required_in: ["mcp"]`).
+- `material`: `mode` (`text` or `export` into MCP's export directory) against `out`; `ac_observe`
+  always exports its frame, `frame` only with `out`. `out` lets a caller of `serve` write where it
+  names, as `frame --out` does; the MCP front keeps `out` for itself and passes its export
+  directory.
+- `config set`: `changes` objects `{key, value?}` (null clears) against `KEY=VALUE` words and the
+  row `config clear`.
+- `preset set`: `preset` against `name`. `devices bind|unbind`: `alias` against `instance` (an
+  alias only, as noted). `resource catalog`: `server` against `catalog_server`. `evidence read`:
+  `artifact_id` and `run_id` against `artifact` and `run`. `run stop`: `handle` against `id`.
+- `app`: `instance` an alias against the row's instance (alias, `instance_id` or ADB port).
+
+**Tests.** New: apps row "#434 LAB-5C": `gate_434_lab5c::lab5c_new_parameters_reach_their_function`,
+`gate_434_lab5c::remedy_set_takes_a_rows_file_or_rows_inline` and
+`gate_434_lab5c::material_out_writes_the_whole_material` (actinglab's binary tests; a state root in
+a temporary folder on which no Runtime runs; no device, no sleep). One case reads the system
+clock: `diagnose --since-unix-ms 1`, whose start `lab-ops` measures back from now; 1 ms after the
+epoch is more than seven days back from any clock later than seven days after the epoch, so the
+case is `since_out_of_range` whatever the clock reads. Fix 1 takes the cases that gave `record` to
+`app launch|restart|stop` out of the first test and adds to the second one case: rows inline above
+a rows file's bound are `--rows` `out_of_range` with `range_max` the bound. Unchanged and passing:
+`lab_ops_table_complete`, `gate_434_lab5a`.
+
+**Interface.** None raised: no code, key, location, record or interface revision is added; the
+table's schema string stays (members and types are the ones §9.1 has).
+
+**What LAB-5C changes live.** The command line and `serve --stdio` take the new options; a line
+without them answers as before. `remedy set` with neither `file` nor `rows`, and with both, is
+refused before anything is sent, and so are rows inline above a rows file's bound. `app
+launch|restart|stop` are as on main.
+
+**LAB-5C fix 1** (coordinator work order `rd-1108/arch-013/brief-lab5c-fix1.md`, after the
+independent review `rd-1108/arch-013/review-1573-findings.md` of PR #1573 at `e8df3339`): main
+merged (LAB-5D, CI-OCR-1), both slices kept in this register and in `apps.toml`; `record` taken off
+`app launch|restart|stop` (L5C-7, S5); `rows` given `required_in: ["mcp"]` (S2); rows inline
+bounded as a rows file is (L5C-5, S4); the texts corrected: `wait_s`' maximum 20 (S1), the list of
+defaults and names completed (S3), when `offset` and `max_bytes` beside `out` are refused (N1),
+`out` in `serve` (N2), §9.1's sentence on millisecond counts and JSON (N4), the clock the tests read
+(N5). Fix 1 adds no row, type, code, key or interface.
+
+**LAB-5C rollback** (to the release before it). Nothing persisted: code and the table's text.
+
+#### Slice LAB-5B2 (0.12.52): each strict command's flag list is one constant, held equal to its row
+
+Coordinator work order `rd-1108/arch-013/brief-lab5b2.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` (§1 "Who parses what today", §3 kind T3), read against
+main `af7e2557`, where LAB-5A had completed the rows. The contract is
+[lab-two-entries.md](lab-two-entries.md) §9.1; the table is [lab-operations.json](lab-operations.json).
+The rule of the slice: no command line changes what it accepts, refuses or prints. Since LAB-5A
+the table governs these rows only in `serve --stdio` (and LAB-5's MCP): on the command line their
+own command parses them; until this slice nothing tied the row to the list the command checks.
+
+**The four kinds** (`apps/actinglab/src/cli_module/own_flags.rs`, built for the tests only). Every
+planned row of the debugging and authoring modules (each row actinglab offers there, and `record
+draft`) is in exactly one:
+
+| Kind | Constant | Rows | Its own test |
+|---|---|---|---|
+| strict | `STRICT_ROWS` | 31: `tap`, `swipe`, `long-tap`, `key`, `text`, `observe`, `do`, `ensure`, `wait`, `watch`, `signatures register\|match\|retire`, `unpin`, `record mark`, `record stop`, `package check\|preflight\|loading\|fmt\|edit`, `resource catalog\|validate\|verify\|restore`, `standard-pack check\|compose`, `scheduling compile\|timeline`, `regression`, `replay`: the own command checks its flags against lists in code | this slice |
+| lenient | `LENIENT_ROWS` | 24: `touch-probe`, `recover`, `tap-target`, `navigate`, `debug-package`, `export-evidence`, `recognize-artifact`, `record start\|status\|candidates\|amend\|step`, `package validate\|inspect\|bundle`, `resource compile-maa`, `operation validate\|inspect\|explain`, `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`: the own command ignores a flag it does not read | B3 gives each a read list |
+| table-driven | `TABLE_DRIVEN_ROWS` | 6: `run start`, `run stop`, `reset`, `drill` (the CLI module serves them itself), `user-config`, `user-config set` (their own command is given only the row's declared positionals, `engine::Line::Declared`) | B1 |
+| no command | `NO_COMMAND_ROWS` | `record draft` (MCP's `ac_binding_draft` until LAB-5 builds its command) | LAB-5 |
+
+The survey's 31 and 24 are main's, row for row. It placed neither `user-config` row (they never
+had `params_more`, so they were in neither list); this slice puts them under table-driven.
+
+**The constants** (each the one list its command's check uses; made `pub(crate)` where the register
+reads it; no list changed a flag):
+
+| # | Rows | File (`apps/actinglab/src/`) | Constant | Before |
+|---|---|---|---|---|
+| L5B2-1 | `tap`, `swipe`, `long-tap`; `key`, `text` | `commands/device_commands.rs` | `DIRECT_TOUCH_FLAGS`, `DIRECT_INPUT_FLAGS` (both empty) | `FlagArgs::reject_flags(command)`, which refused every flag; it now takes the command's list, `reject_flags(command, accepted)`, and refuses every flag outside it with the same text (`flag_args.rs`) |
+| L5B2-2 | `observe`, `do`, `ensure`, `wait` | `lab2_cli.rs` | `LAB2_EVERY_PATH_READS` and each path's `Lab2Path` (`OBSERVE_PATHS`, `DO_PATHS`, `ENSURE_PATHS`, `WAIT_PATHS`), unchanged; `verb_reads` (tests only) gives a verb's union | already constants |
+| L5B2-3 | `watch` | `runtime_debug.rs` | `WATCH_QUERY_FLAGS`, `WATCH_CURSOR_FLAGS` (new) | the cursor flags were a `matches!` arm and, again, a literal in `watch_options` (the capability listing, the same JSON) |
+| L5B2-4 | `unpin` | `runtime_debug.rs` | `UNPIN_FLAGS` | a local array |
+| L5B2-5 | `signatures register\|match\|retire` | `signature_cli.rs` | `DEFINITION`, `LIFECYCLE`, `REGISTRATION`, `MATCH_FLAGS` through `options`, unchanged | already constants |
+| L5B2-6 | `record mark`, `record stop` | `commands/session_record.rs` | `RECORD_MARK_SHORTCUT_FLAGS`, `RECORD_MARK_REQUEST_FLAGS` (new), `RECORD_STOP_FLAGS` | mark's four other flags were a `matches!` arm |
+| L5B2-7 | `package check`, `package preflight` | `package_cli.rs` | `CHECK_FLAGS`, `PREFLIGHT_FLAGS` | a comparison, a `matches!` arm |
+| L5B2-8 | `package loading` | `package_build.rs` | `LOADING_FLAGS`, `LOADING_SWITCHES` (new) | its two switches were a local array |
+| L5B2-9 | `package fmt`, `package edit` | `package_tool.rs` | `FMT_FLAGS`, `EDIT_FLAGS` | already constants |
+| L5B2-10 | `resource catalog`, `validate`, `verify`, `restore` | `resource_runtime_support.rs`, `resource_declarations.rs`, `resource_verify.rs`, `resource_restore.rs` | `CATALOG_FLAGS`, `VALIDATE_FLAGS`, `FLAGS`, `RESTORE_FLAGS` | `matches!` arms; `verify`'s was a constant |
+| L5B2-11 | `standard-pack check`, `compose` | `standard_pack_cli.rs` | `CHECK_FLAGS`, `COMPOSE_FLAGS` | a comparison, a local array |
+| L5B2-12 | `scheduling compile`, `timeline` | `scheduling_cli.rs` | `COMPILE_FLAGS`, `TIMELINE_FLAGS` | two local arrays |
+| L5B2-13 | `regression`, `replay` | `recognition_regression.rs`, `replay_cli.rs` | `REGRESSION_FLAGS`, `REPLAY_FLAGS` | `matches!` arms |
+
+**The register.** `cli_module::own_flags::accepted(row)` answers for exactly the strict rows: the
+command's options and switches (`--name-with-dashes`), read from the constants above (for the four
+verbs whose flags depend on the path the command line takes, the union of their paths' lists),
+the flags it reads in place of a positional the row declares (`do --target`, read as `do`'s
+`<target>` by `target_argument`), and the positionals it checks, least and most: `tap` 2, `swipe`
+5, `long-tap` 3, `key` 1, `text` at least 1, exactly none for the others, and no count for `observe`,
+`do`, `ensure`, `wait` (each reads its first positional, if any, as its target or page),
+`package preflight`, `resource catalog` and `resource validate`. Which flags take no value the
+lists do not say; the register says it beside them: `LAB2_SWITCHES` (read with `FlagArgs::bool`)
+and `RECORD_MARK_SWITCHES` (read with `record_flag_switch`) in `own_flags.rs`, `record stop
+--dry-run`, `package fmt --check`, and `package loading`'s `LOADING_SWITCHES` from its code. Some
+lists hold actinglab's global options (`--instance`, `--verbose` and `--dry-run` in the four
+verbs', `--instance`, `--game`, `--server` and `--dry-run` in `record stop`'s), which actinglab's
+parser takes before the command sees its flags; they stay, as the rule of the slice keeps every
+list as it was.
+
+**Corrections of the table (work order point 5).** None: on main the 31 rows declare exactly what
+their commands accept, in both directions, and their positionals fit the counts the commands check.
+
+**Tests.** New: apps row "#434 LAB-5B2": `gate_434_lab5b2::strict_rows_match_their_commands` (for
+each strict row, in both directions: every option and switch the row declares, but actinglab's
+global options, is an option or a switch of its command; every flag of the command is declared by
+the row in the same form, a global option in any form, `do --target` as its positional; the row's
+positionals, the instance not among them since the command line hands it on as `--instance`, fit
+the least the command checks and its most where it checks one; a failure names the row, the flag
+and the direction) and `gate_434_lab5b2::every_debugging_and_authoring_row_has_one_kind` (every
+planned row of the two modules in exactly one kind, each kind listing only such rows, once, and
+the register answering for exactly the strict rows); actinglab's binary tests, the embedded table
+and the code's constants only, no Runtime, device, file or clock. No existing test is changed;
+`lab_ops_table_complete` and `gate_434_lab5a` are untouched.
+
+**Interface.** None raised. No row, type, member, code, key or location is added; the table is
+unchanged.
+
+**Left to other slices.** B1: the table-driven rows (the names `core_ops` and the rescue module read
+by literal name, the rescue module's installer and agent lists). B3: the 24 lenient commands, each
+to get a read list a test holds equal to its row, which also checks the positionals of the
+commands that count none. C, E, F, G as their work orders say.
+
+**What LAB-5B2 changes live.** Nothing: every command line accepts, refuses and prints as before,
+and `serve --stdio` answers as before.
+
+**LAB-5B2 rollback** (to the release before it). Nothing persisted: code only.
+
 #### Slice LAB-5F (0.12.52): the Lab reads the authoring option
 
 Coordinator work order `rd-1108/arch-013/brief-lab5f.md`, after the read-only survey
@@ -10210,6 +10423,103 @@ in place), `wrong-hash-fails-after-attempts`, `missing-registry-entry`,
 test outside this slice changed: `Test-WindowsRemoteBuildTools.ps1` pins only
 `ppocrv6-medium-source`'s state and the entry's two `pinned_files`, and `gate_407_gpu1a` reads
 only `pinned_files`.
+
+### 1.298 Slice VIS-LOAD-1 (0.12.52): a model's one-time load is outside the OCR request's deadline (#428; a resource repository's CI frame regression runs each case as its own `actinglab` process on a hosted runner, on the CPU, and with targets that declare `timeout_ms` 1000, 2 of 7 runs of the same commit failed there, each on one to four of 157 OCR checks, with `candidate_feature_failed` … `Timeout: fatal vision FFI error in ppocr_ctc_engine: PPOCR recognizer could not start before the configured timeout`; the coordinator's ruling of 11-11, not Alice's words: a model's one-time load is not inference, the request's deadline bounds inference, the load a request triggers happens before its clock starts, and the packages' timeouts are not changed for this; coordinator work order `rd-1110/brief-vis-load-1.md`)
+
+[vision-model-folders.md](vision-model-folders.md), "Startup and first use", is the contract: it
+already said that a model's own load does not count against a target's `timeout_ms`, and gains
+one sentence that the `timeout_ms` bounds inference and not a model's one-time load. 1.298 is the
+next free number: main `4116cbf4` holds 1.297, CI-OCR-1, merged as PR #1567. No
+persisted ledger shape, wire shape, configuration key, diagnostics member, outcome code, location
+or vocabulary is new or changed, and no package's `timeout_ms` or its bounds (1 to 60 000) change.
+
+**Why.** The OCR engine (`providers/ppocr-onnx-json`) turns a request's `timeout_ms` into one
+deadline, and each stage first asks what is left of it (`remaining_inference_budget`); a stage
+that finds nothing left fails with `Timeout`, "<stage> could not start before the configured
+timeout". On a route that detects first, the detector's session was built lazily inside the
+request, after that deadline was taken, so the first such request of a process paid the detector's
+load out of its inference budget. A resident Runtime pays it once after each start; the Lab pays it
+in every process.
+
+**What.** A request takes its deadline only once every session its route needs is built: it decides
+its route, builds the detector when the route detects and the detector is not built yet, and then
+takes the deadline. The detection's budget is the whole `timeout_ms` and each later stage gets what
+the earlier ones left, as before. A load that fails fails the request with the load's own error, as
+before. No second timeout is added for loading: a load is bounded by no target's `timeout_ms`. The
+request path is one function over the model's stages (`read_request` over the trait
+`RequestStages`) so that the logic tests run it over a fake; its deadline and each stage's budget
+are read on the engine's monotonic clock (`Instant::elapsed` from the engine's load), and
+production's only stages are the engine's ONNX Runtime sessions.
+
+**What is loaded where, and against which clock.**
+
+- The recognizer's session, the dictionary and ONNX Runtime's initialisation: at the model's load
+  (`load_ocr`), which the kernel runs before it calls the engine and does not charge to
+  `timeout_ms` (Workflow #360). Outside the deadline, before and after.
+- The detector's session, its file read again and checked against the hash the load verified (and
+  on DirectML its node-placement shadow): on the model's first request that detects. Inside the
+  deadline before; outside after.
+- A DirectML detector that cannot be built under `gpu_fallback` `cpu` (GPU-1 B2, §1.286): the
+  recognizer is built again on the CPU and the detector there. This answers the detector load's own
+  build failure, not a failure of the request's inference, and it is part of the one load call, so
+  it moved with it. Inside before; outside after.
+- The rebuild after a failed DirectML run (GPU-1 E, §1.286): the failing request fails
+  (`ProviderUnavailable`), the kernel unloads the engine, and the model's next request loads it
+  again through the kernel's `load_ocr`, outside the deadline before and after; the rebuilt
+  engine's detector is then built as any detector is. Unchanged.
+- Each inference's run options and inference watchdog: inference, inside the deadline, as before.
+
+**The outer bounds of a vision request.** None fires on a slow load where the engine's deadline
+would not, except the run-level bounds below, which bound a run's wall time and already counted the
+recognizer's load; none is changed.
+
+- `crates/vision-ffi`: no deadline or watchdog; it checks only that `timeout_ms` is 1 to 60 000.
+- `crates/onnx-provider-support`, `InferenceWatchdog`: started per stage with what is left of the
+  budget; it bounds that stage's inference only.
+- The kernel's `VisionFfiProvider::call_ocr` (`crates/execution-kernel/src/provider.rs`), which the
+  Runtime and the Lab (`crates/lab/src/ocr.rs`, the same provider over the same engine on the CPU,
+  with no bound of its own) both use: its deadline of `timeout_ms` bounds the wait for the model's
+  lock and, as `load_ocr`'s `wait_deadline`, the wait for another request's runtime
+  initialisation; the model's own load is not charged, and the engine gets `timeout_ms` less those
+  waits. A request that waits for the lock while another request of the same model builds the
+  detector pays that wait, as it pays the wait for any load another request makes (#360's rule,
+  unchanged). Its PERF-READ timing measures the engine call, a detector load included as before; it
+  is a measurement and bounds nothing.
+- The recognition pack: under a sample deadline it refuses to start an OCR target whose
+  `timeout_ms` exceeds what is left (`recognition sample budget insufficient`), which a load does
+  not change; a saved frame's OCR (`evaluate_saved_artifact_ocr`) caps the target's `timeout_ms` by
+  what its deadline leaves, which the engine then spends on inference only. Its text-read budget
+  counts calls and area, not time.
+- Run-level bounds: the run's budget and a sampling deadline (`recognition_sample_deadline_exceeded`,
+  checked after each evaluation), the host's join of handed-off readings
+  (`scheduling.fact_refresh.recognition_join_timeout_ms`; a reading not back in time is the miss
+  `join_timeout`) and the saved-artifact OCR request's 120-second deadline bound the wall time of a
+  run or request, everything in it included, and none interrupts a provider call. A detector load
+  longer than what such a bound leaves ends that run or request as a slow recognizer load already
+  could; they are not the request's deadline, and the ruling leaves them as they are.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): no record, payload
+member, closed vocabulary or configuration key changes; the engine's request path and its clock are
+Runtime-internal, and a request whose inference runs out answers the same code and text.
+
+**At deploy.** A package's OCR `timeout_ms` now bounds inference only: the first detecting request
+after a start no longer fails because the detector was still loading. Nothing else changes; no
+configuration key; no interface. **Rollback** (below 0.12.52): the first request of a process that
+detects pays the detector's load out of its `timeout_ms` again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| VISL1-1 | the OCR engine's request path (`providers/ppocr-onnx-json`, `read_request` over `RequestStages`) | Runtime-internal behaviour | VIS-LOAD-1 | — | `since` 0.12.52; the route's sessions are built before the deadline is taken; the deadline and each stage's budget on the engine's monotonic clock; errors unchanged |
+| VISL1-2 | what a target's `timeout_ms` bounds ([vision-model-folders.md](vision-model-folders.md)) | contract sentence | VIS-LOAD-1 | — | inference, not a model's one-time load; values and bounds unchanged |
+
+Tests (exec gate row "#428 VIS-LOAD-1"):
+`gate_428_vis_load1::vis_load1_a_detector_load_longer_than_the_timeout_leaves_inference_its_whole_budget`
+and `gate_428_vis_load1::vis_load1_inference_past_the_timeout_still_fails_with_its_timeout`, both
+running `read_request` over a test-only fake whose detector load takes five times the request's
+`timeout_ms` and whose inferences take what they are told, on the fake's own clock (no wall clock,
+no sleep, no model file). No existing test changed: none called the request path,
+`remaining_inference_budget` or the detector's load (`gate_407_gpu1b1`, `gate_407_gpu1b2` and
+`gate_407_gpu1e` build sessions through `ModelSessions` over their own fakes).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

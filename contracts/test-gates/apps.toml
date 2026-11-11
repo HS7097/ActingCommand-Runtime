@@ -1330,6 +1330,15 @@ tests = [
 ]
 incident = ["#434 LAB-5A"]
 
+# Workflow #434 LAB-5B2 (0.12.52; register §1.287, "Slice LAB-5B2"; brief rd-1108/arch-013/brief-lab5b2.md; contracts/lab-two-entries.md §9.1): the 31 strict rows of the debugging and authoring modules (tap, swipe, long-tap, key, text, observe, do, ensure, wait, watch, the three signatures rows, unpin, record mark, record stop, package check, preflight, loading, fmt and edit, resource catalog, validate, verify and restore, standard-pack check and compose, scheduling compile and timeline, regression, replay), whose own command checks its flags against lists in code, each list one named constant its check uses, declare what their command accepts, in both directions: every option and switch a row declares, but actinglab's global options, is an option or a switch of its command, every flag of the command is declared by the row in the same form (a global option in any form, do's --target as its positional), and the row's positionals, the instance not among them, fit the count the command checks (tap 2, swipe 5, long-tap 3, key 1, text at least 1, exactly none for the others but observe, do, ensure, wait, package preflight, resource catalog and resource validate, which check no count); every planned row of the two modules is in exactly one of the kinds strict, lenient, table-driven and no command, each kind lists only such rows, once, and the register of strict rows answers for exactly those
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5b2::strict_rows_match_their_commands",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5b2::every_debugging_and_authoring_row_has_one_kind",
+]
+incident = ["#434 LAB-5B2"]
+
 # Workflow #434 LAB-5D (0.12.52; register §1.287, "Slice LAB-5D"; brief rd-1108/arch-013/brief-lab5d.md; contracts/lab-two-entries.md §9.3): the answer budget is the caller's; on small made-up answers, each of the eleven reads whose MCP answer MCP's own code cut or exported (status, diagnose, events, schedule, runs, run evidence, codes; facts, packs, remedy, summary) answers its whole answer, the answer the CLI prints, when no budget is passed; given a fits that refuses the whole answer, each of the seven that cut cuts it as MCP's code did with the same markers (status's <block>_truncated and truncated in cut order, diagnose's fewest-count groups first and <list>_truncated, events' rows from the end with truncated and the cursor after the last row kept, then the one row's materials_truncated, schedule's candidate rows from the last entry with candidates_truncated, runs' and codes' truncated with next_cursor after the last row kept, run evidence's truncated and next_step, then the first step's frames referenced); and each of the four that export, and the payload page of events, writes the whole answer through the caller's writer as <sha256>.json and answers its header members beside the export reference with answer_exported naming the file (packs' {source, export}, its note counting the warnings the file holds), while a caller with no export gets the whole answer
 [[gate]]
 coverage = "Y"
@@ -1339,6 +1348,16 @@ tests = [
     "actingcommand-lab-ops::lib::gate_434_lab5d::lab_ops_budget_exports_the_header",
 ]
 incident = ["#434 LAB-5D"]
+
+# Workflow #434 LAB-5C (0.12.52; register §1.287, "Slice LAB-5C"; brief rd-1108/arch-013/brief-lab5c.md; contracts/lab-two-entries.md §9.1): the arguments only today's MCP tools took are parameters of their rows, and a command line without them gives what it gave before; events' view, since_unix_ms, until_unix_ms, through_sequence, event_type, exclude_event_types, fact_key, min_severity, max_severity, origin_module, task_id and correlation_id go to lab-ops' events under their flags and are its query, and detail and wait_s its read's; diagnose's since_unix_ms goes on under its flag and a start more than seven days back is lab-ops' since_out_of_range; codes' prefix, owner and limit go on after the code and give the page they ask for, offline, and beside a code are lab-ops' conflicting; packs' role goes on after the instance and the install root, and a role lab-ops does not know is refused by name; material's out asks for the whole material into that directory, offset and max_bytes beside it are conflicting, and without it the slice is read as before; remedy set takes its rows file as before or its rows inline, which lab-ops reads (another shape --rows wrong_type; fix 1: above a rows file's bound --rows out_of_range with range_max the bound, before anything is sent) and goes on with to the Runtime, both refused as --rows conflicting and neither as <file> required, on the command line and in serve; material --out writes a made-up material into a temporary directory and its line names the file with its sha256 and size
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5c::lab5c_new_parameters_reach_their_function",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5c::remedy_set_takes_a_rows_file_or_rows_inline",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5c::material_out_writes_the_whole_material",
+]
+incident = ["#434 LAB-5C"]
 
 # Workflow #434 LAB-5F (0.12.52; register §1.287, "Slice LAB-5F"; brief rd-1108/arch-013/brief-lab5f.md; contracts/lab-two-entries.md §8.3 and the coordinator's ruling of 2026-11-10 on #434, point 15): on a made-up single-location installation root in a temporary folder, with lab_module_authoring true the authoring rows are listed (help's commands and options, list commands, capabilities) and a call reaches its command (package fmt writes; regression, given by its short words, answers its command's own refusal); with the key absent, false, a value that is no boolean, a configuration that is no JSON and none at all they are not listed and a call is refused with lab_command_option_disabled (operation the row's name, lab_option authoring, exit 1, a --via line exit 2) before anything is written or sent (package fmt's file unchanged, record start makes no state directory, observe --capture refused), the details naming the configuration or carrying config_read_failed or config_decode_failed as cause; outside any installation root they are listed and served; codes, user-config and (on Windows) op status answer the same in every place; serve --stdio answers an authoring row's call with the line the command line's --json prints, and the other modules' rows as before
 [[gate]]

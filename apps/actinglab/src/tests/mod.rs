@@ -87,6 +87,14 @@ mod gate_434_lab2b;
 // Workflow #434 LAB-5A: every offered row declares its parameters; no command line changes.
 #[path = "gate_434_lab5a.rs"]
 mod gate_434_lab5a;
+// Workflow #434 LAB-5C: the arguments only MCP took are parameters of their rows; no command line
+// changes.
+#[path = "gate_434_lab5c.rs"]
+mod gate_434_lab5c;
+// Workflow #434 LAB-5B2: each strict command's flag list is one constant, held equal to its row,
+// and every debugging and authoring row has one kind.
+#[path = "gate_434_lab5b2.rs"]
+mod gate_434_lab5b2;
 // Workflow #434 LAB-5F: the authoring rows are listed and served only where the module is
 // installed.
 #[path = "gate_434_lab5f.rs"]
