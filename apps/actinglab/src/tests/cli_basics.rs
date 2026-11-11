@@ -395,7 +395,7 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
                 "user-config",
                 "set",
                 "instance.ak.package",
-                "com.hypergryph.arknights.bilibili",
+                "com.example.fixture.a",
             ],
             true,
         );
@@ -411,7 +411,7 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
                 .unwrap()
                 .get("value")
                 .and_then(Value::as_str),
-            Some("com.hypergryph.arknights.bilibili")
+            Some("com.example.fixture.a")
         );
     }
 

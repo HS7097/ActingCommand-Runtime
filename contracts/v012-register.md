@@ -12715,6 +12715,85 @@ a neutral standard-pack root); `idle2_auto_tests::idle2_auto_c1_the_word_and_the
 test changes. One existing test pins the revision step: `actinglab-architecture`'s
 `the_runtime_declares_each_v0120_interface_revision_once` now pins `actingd-config` [5, 28].
 
+### 1.305 Slice NEUT-1 (0.12.54): the core's tests and fixtures name no real game (Workflow #434; Alice's hard constraint of 10-10 that the program itself is game-neutral, in code, contracts, configuration, code tables and tests, with game content only in the resource repositories; coordinator work order `rd-1111/brief-neut1.md`, read on main `ae15bb5f`)
+
+The slice was written on `ae15bb5f` as §1.304; IDLE-2 took that number and merged first, so the
+coordinator renumbered this section to 1.305 on 2026-11-11. Tests, fixtures, one golden and one guard only: no product
+code, behaviour, assertion, contract text, wire shape, configuration key, ledger shape, outcome
+code or interface revision changes. No register precedent for a change across many tests was
+found, so the note is a section of its own.
+
+**What was renamed.** 240 lines of 16 files, all tests or test fixtures of the three authoring
+members, whose tests the C2 and R2-F guards do not read: `crates/resource-tooling`
+(`src/resource_convert/tests.rs`, the `#[cfg(test)]` module of `src/package_validate.rs`),
+`crates/lab` (`src/env_detection/tests.rs`, `src/lab_run/tests/fixtures.rs`,
+`guards_and_recovery.rs`, `bundle_and_actions.rs`) and `apps/actinglab` (`src/tests/mod.rs`,
+`semantic_fixture.rs`, `session_record.rs`, `contained_semantic.rs`, `cli_basics.rs`;
+`tests/golden_protocol.rs`, `tests/golden/expected.json`, `runtime_input_proxy.rs`,
+`readonly_page_conflict.rs`, `lab2_cli_contract.rs`). They used a real game's id, its server and
+channel names, a real application package and the game's page ids as fixture values, written
+before 10-10. No file was renamed: every game-named file name is built inside a test.
+
+**The mapping**, one table applied by the slice's script, in this order, to every file (exact
+bytes; the old values are listed in the pull request, which the guard below does not read):
+
+| Old value | New value |
+|---|---|
+| the real application package (its publisher, game and channel) | `com.example.fixture.a` |
+| the one server-and-channel name | `s3` |
+| `<game>.<server>` of the first game with its two servers (file names `<game>.<server>.pack.json` and the like, resource pack ids in messages) | `fixture-game-a.s1`, `fixture-game-a.s2` |
+| the three game ids, also as a page or target id's prefix (`<game>/home`) | `fixture-game-a`, `fixture-game-b`, `fixture-game-c` |
+| the two server names, as quoted values | `s1`, `s2` |
+
+The work order proposed `fixture-game-a` and `-b`, `s1` and `s2`; a third game (once, as the other
+game of a page-prefix mismatch and as a converter's game) and a server-and-channel name (two
+instance configurations) take `-c` and `s3`, so that the mapping stays one to one and no two
+values a test tells apart become equal. Each new value passes the reader of its kind:
+`canonical_environment_selector` and `canonical_resource_identifier` (`[a-z0-9._-]`, at most 128),
+`is_exact_mapping_page_id` (`<game>/<page>`), an application package's dotted segments. A test
+that passed `--game` as a game's abbreviation against a package of another game id keeps doing so.
+
+**Pins recomputed** (`apps/actinglab/tests/golden/expected.json`, test
+`protocol_goldens_match_current_cli`), each by a model of the product's own computation that first
+reproduces the old pin from the old values:
+
+- `resource_pack_hash` (`detect_success`, `env_status_success`, `env_status_failure` twice):
+  SHA-256 of `serde_json::to_vec` of the golden's `EnvDetector`
+  (`crates/lab/src/env_detection.rs`, `detector_resource_hash`, no template), now
+  `1d72a141423664282998b866f0efd69054e144d176b27f9ec2ddd95de7283a86`.
+- `observe_success`'s `observation.content_sha256`: SHA-256 of the projection's value without
+  `content_sha256`, in struct order (`page_projection.rs`, `PageProjection::refresh`; serde_json's
+  `preserve_order`), now `3acf5335520805ad2d7c48978eafaeb32ffdd0360c31462d588dce6090d5777e`. The
+  answer stays on the same path of Min's cuts: about 1140 bytes, over 1024 and far under 2048.
+- `lab_run_success`'s task-diagnostic `file_write` bytes (`task_diagnostic.rs`,
+  `write_diagnostic_record`, the record and its framing): recognition `successful_returned_bytes`
+  786 → 791 (record 1, the `page` row, carries the page id; record 2's 410 is unchanged),
+  finalization `returned_bytes` 256 → 261 and `successful_returned_bytes` 2482 → 2487 (record 6,
+  the `terminal` row, carries `final_page`).
+
+No pin is left for CI. rustfmt reflowed three lines that the longer names pushed past the width.
+
+**The guard.** `actingcommand-actinglab-architecture::workspace_guards::neut1_source_and_test_trees_name_no_real_game`,
+in the gate row A4 (project neutrality) of `test-gates/contract.toml`. It reads every file, of any
+kind, under `.github`, `apps`, `ci`, `contracts`, `crates`, `distribution`, `providers`,
+`ratchet`, `scripts`, `tests` and `tools`, and fails on each line that holds one of the work
+order's 13 words in any ASCII case, also inside a longer word (four games' ids in their joined,
+underscore and spaced forms, one game's subtitle, two publishers and an application channel),
+naming the file and line. Its allow list holds `tools/actinglab-architecture/src/lib.rs` (the C2
+and R2-F guards' own word lists and the counterexamples their unit tests feed them) and
+`tools/actinglab-architecture/tests/workspace_guards.rs` (this guard's list and counterexample);
+an entry whose file is gone or holds none of the words fails. It does not read the repository's
+root files or `docs`, `benchmarks` and `resources`, which hold third-party attributions, an
+upstream manifest and dated reports, not the program.
+
+**Not renamed.** The four game abbreviations that actinglab's tests use as instance names and game
+values (and the instance ids built from them) are outside the work order's word list. They are the
+short words of the C2 guard's own list, which forbids them in the Runtime domain only, this
+register included; so this note does not spell them. They are left for a later slice.
+
+**Interface.** None raised ([component-interfaces.md](component-interfaces.md)): nothing a reader
+or writer of any interface sees changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
