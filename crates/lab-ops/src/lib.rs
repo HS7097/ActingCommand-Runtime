@@ -22,6 +22,8 @@
 //!   answers were cut or exported in MCP's own code (`status`, `diagnose`, `events`, `schedule`,
 //!   `runs`, `run evidence`, `codes`; `facts`, `packs`, `remedy`, `summary`) do it here, each in
 //!   its module's `within_budget`, only when the caller passes a budget.
+//! - Workflow #434 LAB-5G1: [`core_ops`], the code that serves each row actinglab's CLI module
+//!   served itself, from the row and its parameters, moved from actinglab.
 
 #![forbid(unsafe_code)]
 
@@ -124,6 +126,12 @@ pub mod ladder_drill;
 // Workflow #434 LAB-5D: the answer budget, the caller's: what it passes to say that an answer
 // must fit and where one that does not is written whole; the reads that cut or export take it.
 pub mod budget;
+
+// Workflow #434 LAB-5G1: the code that serves the rows actinglab's CLI module served itself (the
+// core rows but `app launch|restart|stop`, and `run start`, `run stop`, `reset`, `drill`), moved
+// from actinglab so that another program serves them with it; the program gives what stays its
+// own (`core_ops::Caller`).
+pub mod core_ops;
 
 // Test-only: Workflow #434 LAB-1, the slice's named tests (`lab_ops_table_complete`,
 // `lab_ops_locate_defaults`).

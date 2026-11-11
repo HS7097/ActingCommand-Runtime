@@ -22,6 +22,7 @@
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::front::Connection;
 use actingcommand_contract::codes::{ReceiptCode, SanitizationCode};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
@@ -128,6 +129,15 @@ struct Parsed {
 
 /// The `perf-preset` command, when it is the first word.
 pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit> {
+    dispatch_on(arguments, detail, Connection::per_call())
+}
+
+/// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
+pub fn dispatch_on(
+    arguments: &[OsString],
+    detail: Detail,
+    connection: Connection<'_>,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -135,7 +145,7 @@ pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit
         Ok(parsed) => parsed,
         Err(outcome) => return Some(cli_line::failure(&outcome, Some(USAGE))),
     };
-    Some(match run(&parsed, detail) {
+    Some(match run(&parsed, detail, connection) {
         Ok((answer, outcome)) => cli_line::success(cli_line::members(answer, COMMAND), &outcome),
         Err(Failure::Unknown(name)) => {
             cli_line::failure(&Failure::Unknown(name).outcome(), Some(USAGE))
@@ -226,13 +236,17 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
 
 /// Connects with the CLI's (Cli, Cli) origin and runs the action: its answer and the line's
 /// outcome.
-fn run(parsed: &Parsed, detail: Detail) -> Result<(Value, Outcome), Failure> {
-    let config = crate::front::client_config(&parsed.state_root);
-    let config = match detail {
-        Detail::Codes => config.with_detail(Detail::Codes),
-        Detail::Full => config,
-    };
-    let client = RuntimeClient::connect(config).map_err(Failure::Runtime)?;
+fn run(
+    parsed: &Parsed,
+    detail: Detail,
+    connection: Connection<'_>,
+) -> Result<(Value, Outcome), Failure> {
+    let client = connection
+        .reach(&parsed.state_root, |config| match detail {
+            Detail::Codes => config.with_detail(Detail::Codes),
+            Detail::Full => config,
+        })
+        .map_err(Failure::Runtime)?;
     match (parsed.action, parsed.preset.as_deref()) {
         (SET, Some(name)) => Ok((
             set(&client, name)?,

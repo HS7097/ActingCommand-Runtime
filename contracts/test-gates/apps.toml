@@ -1385,3 +1385,12 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5e::lab5e_offered_rows_have_help",
 ]
 incident = ["#434 LAB-5E"]
+
+# Workflow #434 LAB-5G1 (0.12.52; register §1.287, "Slice LAB-5G1"; brief rd-1108/arch-013/brief-lab5g1.md; contracts/lab-two-entries.md §9.3): the code that serves the rows actinglab's CLI module serves itself moved into lab_ops::core_ops and takes its connection from its caller; against the runtime client's scripted Runtime, for codes (an offline command of lab-ops: the kept connection carries nothing past its handshake), events (a command of lab-ops that reads the Runtime) and resume (parameters read on a client), and for the debugging rows run start and reset (refused by the Runtime), run stop --cancel-only and drill, the moved code on a connection the caller keeps answers the line and exit code the CLI module prints for the same words on a connection made for the call, the request and correlation ids each run issues masked, both connections carry the same requests after their handshake, and no other connection is made
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g1::lab5g1_three_ways_serve_on_a_kept_connection",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g1::lab5g1_debugging_rows_serve_on_a_kept_connection",
+]
+incident = ["#434 LAB-5G1"]
