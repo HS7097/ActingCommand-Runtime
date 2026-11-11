@@ -18056,6 +18056,34 @@
       "description": "A completed receipt of a StopInstanceRun request: the stop, settled with how the Runtime's own reset went or still stopping after wait_ms; a failed reset's failure is this code's cause (caused_by). Workflow #378 A4: one success code per request kind (Workflow #429 R-0 adds the kind; R-6 first completes it).",
       "common_causes": "The request succeeded; the run was asked to stop, or had stopped.",
       "handling": "Read settled and reset; with reset failed, the cause names the fence of the instance, which a self-check lifts."
+    },
+    "request_edit_pack_schedule_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.55",
+      "description": "A completed receipt of an EditPackSchedule request: one package's rows of one scope's session.pack.schedule list were replaced and the scope's whole list published as one fact.published; the result names the list's version after the edit and that event. Workflow #378 A4: one success code per request kind (Workflow #429 R-0 adds the kind; R-8 first completes it).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; send the result's version as the next edit's expected_version."
+    },
+    "request_pack_schedule_view_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.55",
+      "description": "A completed receipt of a PackScheduleView request: for one instance, each scope's pack schedule list version and, per task package of the instance's tasks, whether it is schedulable now and which layer decided, from the Runtime's memory; nothing is recorded. Workflow #378 A4: one success code per request kind (Workflow #429 R-0c adds the kind; R-8 first completes it).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the view."
     }
   },
   "locations": {

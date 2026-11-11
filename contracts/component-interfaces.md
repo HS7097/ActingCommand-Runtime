@@ -298,6 +298,12 @@ Also planned by the same design (§5.2), outside the rows above:
   them when R-15c builds it, inside revision 1. `install-cli` stays 1 too: the rescue module's
   operation kinds `config_replace` and `pack_place` are operations a UI of revision 1 never starts.
 
+#428 S168-LB1a ([v012-register.md](v012-register.md) §1.309; "Planned: Workflow #428 S168-LB1"
+below; the coordinator's ruling 4 of 11-11, not Alice's words) takes `runtime-client` 7 and
+`ledger` 8. The planned `runtime-client` 7 and `ledger` 8 rows of LAB-6 above join those
+revisions when LAB-6 ships in the same Runtime release as S168-LB1a, and take the next free
+revisions when it ships in another; their meaning is unchanged.
+
 ### Planned: Workflow #428 168 (S168-4, S168-5a and S168-5b; [v012-register.md](v012-register.md) §1.291)
 
 Planned rows, **not in force** when S168-0 wrote them: Runtime 0.12.47 declared `package` [3, 7]
@@ -324,10 +330,49 @@ declares them.
 - **Not moved.** `runtime-client`: a list travels in the existing `InstanceFactSnapshot` answer
   and a judge's record in the existing event reads; `list_reading_key_reserved` is the code of a
   denied receipt of an existing shape. `actingd-config`: no key; the bounds (16 `read_list`
-  steps per task, 256 rows per list, 32 distinct list maxima per document, 16 lists per list maximum)
-  are the formats'.
+  steps per task, 256 rows per list, 1024 from S168-LB1a, 32 distinct list maxima per document,
+  16 lists per list maximum) are the formats'.
   `runtime-outcomes`: new codes in the catalog only. `install-selection`, `install-control`,
   `install-cli`, `install-root`, `player-hold` and `tools-layout`: untouched.
+
+#428 S168-LB1 ([v012-register.md](v012-register.md) §1.309; "Planned: Workflow #428 S168-LB1"
+below; the coordinator's rulings 4 and 10 of 11-11, not Alice's words): S168-LB1a takes `ledger`
+8 and S168-LB1b `package` 9. The planned `package` 9 and `ledger` 8 rows of S168-5b above join
+those revisions when S168-5b ships in the same Runtime release as the slice that takes them, and
+take the next free revisions when it ships in another; their meaning is unchanged. A list of more
+than 256 rows travels in the `InstanceFactSnapshot` answer only from `runtime-client` 7 (S168-LB1a),
+so the bullet "Not moved" above holds for lists of at most 256 rows.
+
+### Planned: Workflow #428 S168-LB1 (S168-LB1a and S168-LB1b; [v012-register.md](v012-register.md) §1.309)
+
+Planned rows, **not in force**: no build declares them. Main at `e5efe44e` declares `ledger`
+[3, 7], `runtime-client` [3, 6] and `package` [3, 8]. S168-LB1, which writes these rows, raises
+nothing. The two code slices are independent of each other and may ship in one release or in two.
+
+| Interface | Rev | Meaning | Anchor | Slice |
+|---|---|---|---|---|
+| `ledger` | 8 | revision 7 plus a `fact.published` whose `record_list` record holds 257 to 1024 rows ([instance-fact-store.md](instance-fact-store.md), "List reading facts", "Row bound"; [resource-readings.md](resource-readings.md), "List readings", "Rows"): the record's shape does not change, its row bound does, a constant of its own apart from the store's 256 records an observation. A reader of revision 7 refuses such a record by the record's own check (`fact_record_limit_exceeded`) wherever it reads it: at its start, which loads every active record, while the record is among the newest `open_verify_tail_records` records, and in any page that holds it. SQLite format 2, `actingcommand.event.v3`, the record types, the tables, the indexes and every view's type list are unchanged, so the Runtime still reads revisions 3 to 7 and declares [3, 8], with no fresh state root and no migration. One way by the Rp.max rule (R\*): once the Runtime that declares it has run, going back below it is refused, whether or not a long list was written; after the first long list is written no build before it opens that ledger. The Runtime combines only with a console whose `ledger` range holds 8. #434's planned `ledger` 8 (LAB-6) and S168-5b's `judge_only` join this revision when they ship in the same release, and take the next free revision otherwise (sentences above); S168-5b's open pull request #1566 writes `ledger` 8 into the table above, so whichever merges first declares [3, 8] and the coordinator renumbers at the release | `crates/actingcommand-contract/src/fact.rs`, the row constant (planned, `MAX_FACT_RECORD_LIST_ROWS`) and `FactValue::validate`; `crates/actingcommand-contract/src/taskflow.rs`, `MAX_LIST_READING_ROWS`; `distribution/windows/component-interfaces.json` | S168-LB1a |
+| `runtime-client` | 7 | revision 6 plus an `InstanceFactSnapshot` answer whose view holds a record list of 257 to 1024 rows, the request's optional member `key_prefix` and the answer's optional `records_total` ([instance-fact-store.md](instance-fact-store.md), "Reading the seeds", "The frame bound with long lists"). A client of revision 6 refuses such a view (`InstanceFactView::validate` checks each record), so it cannot read the facts of an instance that holds a long list, and a Runtime of revision 6 cannot decode a request that names `key_prefix` (the request denies unknown members; it drops the connection). Every other request is answered as before and a request without `key_prefix` serializes as before, so `min` stays 3 and the Runtime declares [3, 7]; actingctl (MCP included) and actinglab of the same build speak 7 through the same contract crate. **The console must read revision 7 in the same release** (the UI repository's work), and its `ledger` range hold 8 (the row above). LAB-6's planned `runtime-client` 7 joins this revision when it ships in the same release, and takes the next free revision otherwise | `crates/actingcommand-contract/src/fact.rs`, `InstanceFactView::validate`; `crates/actingcommand-contract/src/runtime.rs`, `RuntimeOperation::InstanceFactSnapshot`, `RuntimeResult::InstanceFactSnapshot`; `distribution/windows/component-interfaces.json` | S168-LB1a |
+| `package` | 9 | revision 8 plus `table_max_over_list`'s optional member `lower_bound_column` ([selection-policy.md](selection-policy.md), "Lower bound of a list maximum"). A reader before S168-LB1b refuses a document that writes it at admission (`contained_task_select_policy_invalid`: the reference denies unknown members); a document without it keeps its canonical bytes and its pack its revision, so the Runtime declares [3, 9]. A bundle whose packs use it declares `package` [9, 9]. The selection format has no `requires` of its own: the bundle's declared range is the gate. S168-5b's planned `package` 9 joins this revision when it ships in the same release, and takes the next free revision otherwise | `crates/selection-policy/src/schema.rs`, `ValueRef::TableMaxOverList` (planned `lower_bound_column`); `crates/selection-policy/src/list_max.rs`; `distribution/windows/component-interfaces.json` | S168-LB1b |
+
+- **`package` for S168-LB1a: no raise** (proposed; the coordinator decides). A pack's bytes and
+  members do not change: the row bound is the Runtime's reading, not a member a pack declares. A
+  build before S168-LB1a reads the same pack and, on a list of more than 256 positions, warns
+  `list_rows_exceeded` and publishes nothing, as today, so a selection that reads that list stays
+  unknown there. The Runtime of S168-LB1a is therefore deployed before a standard package relies
+  on a long list; no reader refuses the pack.
+- **`ledger` for S168-LB1b: no move.** Its read reaches the ledger only as reasons of
+  `task.selection_evaluated` (the existing `selection_table_list_max` with new keys, and
+  `selection_decided_on_lower_bound`), codes and value words the reader only spells; an unsettled
+  comparison reads the existing unknown reason `lookup_miss`, so the closed vocabulary
+  `TaskSelectionUnknownReason` gains no word; and the judge's record gains no member.
+- **Not moved.** `actingd-config`: no key; the row bound is the format's, which every reader
+  checks, so it is no tunable. `runtime-client` for S168-LB1b: no request or answer shape.
+  `runtime-outcomes`: stays 1, with the codes `policy_fact_rows_exceeded` and
+  `selection_decided_on_lower_bound`, the keys `bound`, `unknown_count`, `lower_bound` and
+  `lower_bound_identity` and the vocabulary `list_max_bound` added within the revision (proposed
+  names). `install-selection`, `install-control`, `install-cli`, `install-root`, `player-hold`
+  and `tools-layout`: untouched.
 
 ## Bump rule
 

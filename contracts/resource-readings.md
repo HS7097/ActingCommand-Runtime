@@ -706,10 +706,12 @@ The list holds only when every position was read. Otherwise it gives no reading:
 | --- | --- |
 | `list_position_unread` | a position that was readable at least once holds no fixed Known reading of its identity or of a column's feature: never Known, contradicted later, or out of the dictionary, which counts as Unknown |
 | `list_duplicate_key` | two positions read the same business ID |
-| `list_rows_exceeded` | a 257th position was read: the list holds more rows than one fact can (256). The scan stops there; nothing is cut to fit |
+| `list_rows_exceeded` | a 1025th position was read (S168-LB1a, not built yet; until it, a 257th): the list holds more rows than one fact can (1024, until S168-LB1a 256; section "Rows" below). The scan stops there; nothing is cut to fit |
+| `list_bytes_exceeded` (S168-LB1a, not built yet; a proposed word) | the list was read whole, within the row bound, and its record is larger than one observation can hold (512 KiB; section "Rows" below). Nothing is cut to fit. Until S168-LB1a such a list fails its run at publication instead |
 
 Each is the warning `contained_task_resource_reading_unresolved` (`reading_id` the operation's
-id, `fact_key`, `reading_problem`, and `count`: the unread positions, the repeated keys, or 257;
+id, `fact_key`, `reading_problem`, and `count`: the unread positions, the repeated keys, 1025
+(S168-LB1a, not built yet; until it 257), or for `list_bytes_exceeded` the rows read;
 `count` is an optional value S168-4 adds to that code, [v012-register.md](v012-register.md)
 §1.291 S168C-3),
 written at once as one task diagnostic row of kind `error` (`TaskDiagnosticErrorData::Recognition`,
@@ -729,6 +731,47 @@ At this step a layout whose anchor template matches nothing on the page cannot b
 list that is really empty: both read zero positions and, when both checks pass, publish an empty
 list. A package must therefore make its start and end checks specific to the list page, so that
 they do not both pass where the list does not show.
+
+### Rows (S168-LB1a, not built yet)
+
+Workflow #428 S168-LB1 ([v012-register.md](v012-register.md) §1.309; the coordinator's ruling 1
+of 11-11, not Alice's words). Until S168-LB1a a list holds at most 256 rows, and a roster or a list
+of holdings longer than that is never written: the run succeeds, warns `list_rows_exceeded` and
+publishes nothing, so a selection that reads the list has nothing. From S168-LB1a:
+
+- **1024 rows.** A list holds at most 1024 rows, the bound of a business identity domain
+  (`MAX_IDENTITY_ENTRIES`; [selection-policy.md](selection-policy.md), "Limits": enumerated
+  members 1024). A row is one business ID and a list read whole never repeats one, so a list
+  never holds more rows than its dictionary has IDs. The kernel counts the positions it has
+  read, whatever their identity, and stops the scan on the viewport that reads the 1025th
+  (`list_rows_exceeded`, `count` 1025), before it resolves that position's key.
+- **One constant, the format's.** `MAX_LIST_READING_ROWS` is 1024 and equal to the row bound of
+  a `record_list` fact, a constant of its own apart from the store's record counts
+  ([instance-fact-store.md](instance-fact-store.md), "List reading facts", "Row bound"). It is no
+  configuration key: every reader of the fact checks it, so a configured value would let one
+  build write a record that another refuses.
+- **The scan's bounds stay.** At most 128 viewports (`max_viewports`,
+  [selection-graph.md](selection-graph.md), "Select step"), within `bounds.max_ms` and the task's
+  `timeout_ms`: a list whose first viewport shows *f* positions and whose every advance brings *n*
+  new ones reads at most *f* + 127 × *n* positions, so 1024 rows need about 8 new positions per
+  advance. A scan that runs out of its bounds before its end check passes fails as today
+  (`selection_scan_bounds_exceeded`).
+- **The observation's bytes stay.** One list is one observation of at most 512 KiB (section
+  Publication), each row at most 64 fields, each string at most 1024 bytes. Measured on the
+  serialized record by the read-only survey of 11-11 (register §1.309): a row of the key and 3
+  short columns takes about 170 bytes, of the key and 8 about 356 bytes, of the key and 63 about
+  2.6 KB, so 512 KiB hold about 3,079, 1,470 and 203 such rows. 1024 rows fit up to about the key
+  and 8 short columns; a wider list meets the byte bound first. Today that fails its run at
+  publication (`contained_task_resource_reading_rejected`), as a list of the key and 63 columns
+  does near 200 rows. From S168-LB1a it is a miss of the list, as a list over the row bound is
+  (`list_bytes_exceeded` above; the coordinator's answer to question 4 of §1.309): the run settles
+  as without the list, the previous record stays, and the warning says so at every run. A list
+  that grows with its account must not start failing its run one day.
+- **One instance's whole read stays within one frame.** All of an instance's records together
+  cross the 1 MiB frame of the instance fact read, which is refused past it
+  ([instance-fact-store.md](instance-fact-store.md), "Reading the seeds"): about 6,000 rows of the
+  key and 3 short columns, or about 2,900 of the key and 8, over every list of the instance, less
+  its other records.
 
 ### Publication
 
@@ -772,7 +815,11 @@ the run the same way.
   the same run (a judge step) reads them as they stood before the run.
 - **Nothing refreshes a list on demand.** The fact refresh raises demand only for keys a catalog
   predicate reads, and no predicate reads a record list ([selection-policy.md](selection-policy.md),
-  "Scheduling consumer"); the standard package schedules its reading task itself.
+  "Scheduling consumer"); the standard package schedules its reading task itself. From S168-LB1a
+  (not built yet) the scheduler's fact projection leaves every key under `inventory.list.` out,
+  and the catalog compile refuses a catalog that names one to read
+  ([instance-fact-store.md](instance-fact-store.md), "Projection into the evaluation"): a list is
+  the selection's input, never the scheduler's.
 
 ### Capacity and reserved keys
 

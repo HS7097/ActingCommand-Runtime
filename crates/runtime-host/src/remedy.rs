@@ -101,11 +101,25 @@ pub(crate) struct BuiltTable {
     /// UPD-1 (design-upd1 §4.2): the catalog tasks whose bound package declares `store_update`,
     /// read by the same metadata-only scan; a package the scan could not read is not one.
     store_tasks: BTreeSet<String>,
+    /// Workflow #429 R-8: the `package_id` the bound package of each catalog task declares, by
+    /// task id, read by the same scan; a task whose package the scan could not read has none.
+    task_packages: BTreeMap<String, String>,
     catalog_hash: String,
     built_at_unix_ms: u64,
 }
 
 impl BuiltTable {
+    /// Workflow #429 R-8: the task package each catalog task runs (its bound package's
+    /// `package_id`), by task id: what the pack schedule opens and closes.
+    pub(crate) fn task_packages(&self) -> &BTreeMap<String, String> {
+        &self.task_packages
+    }
+
+    /// The hash of the catalog this table was built for.
+    pub(crate) fn catalog_hash(&self) -> &str {
+        &self.catalog_hash
+    }
+
     /// UPD-1: the catalog tasks whose bound package declares `store_update`; position 4a lets
     /// only these run on an instance that waits for its client update.
     pub(crate) fn store_tasks(&self) -> BTreeSet<String> {
@@ -248,6 +262,10 @@ pub(crate) fn build_table(
             remedy.problem = Some(RemedyProblem::CapabilityUnbound);
         }
     }
+    let task_packages = packages
+        .iter()
+        .map(|(task_id, package_id)| ((*task_id).to_owned(), (*package_id).to_owned()))
+        .collect();
     BuiltTable {
         table: RemedyTable {
             remedies,
@@ -257,6 +275,7 @@ pub(crate) fn build_table(
         findings,
         unreadable,
         store_tasks,
+        task_packages,
         catalog_hash: catalog.catalog_hash().to_owned(),
         built_at_unix_ms,
     }

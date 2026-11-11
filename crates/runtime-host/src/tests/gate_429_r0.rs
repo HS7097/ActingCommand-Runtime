@@ -7,13 +7,13 @@
 // nothing is appended to the ledger and no instance's status changes. Workflow #429 R-4 (register
 // §1.239, since 0.12.36) gives `ConfigureSettings.expected_version` its behaviour, so that case
 // left this test (`gate_387_d1b`, `r4_t*`); so does `RoutineSummary` with R-12 (register §1.264,
-// since 0.12.38; `gate_429_r12`), and `StopInstanceRun` with R-6 (register §1.302; `gate_429_r6`).
+// since 0.12.38; `gate_429_r12`), `StopInstanceRun` with R-6 (register §1.302; `gate_429_r6`),
+// and `EditPackSchedule` with R-8 (register §1.308; `gate_429_r8`), which also gives R-0c's
+// `PackScheduleView` its behaviour, so this file's test of that read left with it.
 
 use super::gate_383_ao4q::ledger_head;
 use super::*;
-use actingcommand_contract::{
-    FactScope, PackScheduleEditRow, ResourceTargetEdit, RuntimeInstanceStatus,
-};
+use actingcommand_contract::{ResourceTargetEdit, RuntimeInstanceStatus};
 use serde_json::json;
 
 const ALIAS: &str = "node.a";
@@ -55,21 +55,6 @@ fn r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effe
             "run_instance_task",
         ),
         (
-            client.request(RuntimeOperation::EditPackSchedule {
-                scope: FactScope::Instance {
-                    instance_id: ALIAS.to_owned(),
-                },
-                package_id: "package.example".to_owned(),
-                rows: vec![PackScheduleEditRow {
-                    from_unix_ms: 1,
-                    until_unix_ms: None,
-                    schedulable: false,
-                }],
-                expected_version: None,
-            }),
-            "edit_pack_schedule",
-        ),
-        (
             client.request(RuntimeOperation::EditResourceTarget {
                 instance_alias: ALIAS.to_owned(),
                 expected_version: 1,
@@ -103,40 +88,6 @@ fn r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effe
         assert!(receipt.result().is_none(), "{operation}");
         assert!(receipt.terminal().is_none(), "{operation}");
     }
-
-    assert_eq!(ledger_head(&mut reader), head_before);
-    assert_eq!(instances(&mut reader), status_before);
-    drop(client);
-    drop(reader);
-    host.close().expect("close host");
-}
-
-// Workflow #429 R-0c (register §1.216 R0C-3): the pack schedule's read view has its wire shape
-// and no behaviour yet (R-8). It is refused `not_implemented` (Denied) naming its operation
-// `pack_schedule_view`, with no result and no terminal, and has no effect: nothing is appended to
-// the ledger and no instance's status changes.
-#[test]
-fn r0c_pack_schedule_view_answers_not_implemented_with_no_effect() {
-    let root = TempDir::new().expect("tempdir");
-    let host = host_with_state(&root, ALIAS, Arc::new(FakeState::default()));
-    let mut client = TestClient::connect(&host);
-    let mut reader = TestClient::connect(&host);
-
-    let status_before = instances(&mut reader);
-    let head_before = ledger_head(&mut reader);
-
-    let request = client.request(RuntimeOperation::PackScheduleView {
-        instance_alias: ALIAS.to_owned(),
-    });
-    let receipt = client.send(&request);
-    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
-    assert_eq!(receipt.outcome().code().as_str(), "not_implemented");
-    assert_eq!(
-        receipt.outcome().value("operation"),
-        Some(&json!("pack_schedule_view"))
-    );
-    assert!(receipt.result().is_none());
-    assert!(receipt.terminal().is_none());
 
     assert_eq!(ledger_head(&mut reader), head_before);
     assert_eq!(instances(&mut reader), status_before);

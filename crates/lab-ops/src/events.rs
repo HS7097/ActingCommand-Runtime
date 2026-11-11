@@ -16,6 +16,16 @@
 //! `--after-sequence <last_sequence>`: every `actingctl events` call is its own process, so the
 //! `next_cursor` one call prints always answers `cursor_invalid` in the next call, by design;
 //! `last_sequence` stays valid across calls and Runtime restarts.
+//!
+//! The newest records (Workflow #434 CLI-EV, register §1.306). A read that names no position and
+//! no window (no `after_sequence`, cursor, `through_sequence`, `since_unix_ms` or `until_unix_ms`,
+//! and no `run_id`, `request_id` or `correlation_id`) answers the newest `limit` records its other
+//! filters match, oldest first within the page, with `first_sequence` (read the records before it
+//! with `through_sequence <first_sequence - 1>`) and, when it found fewer than `limit` and older
+//! records were not searched, `searched_from_sequence`, the lowest sequence it searched. It reads
+//! the ledger's head once, then windows that end at the head and widen twice to a largest width,
+//! every read bounded by sequence at the head's snapshot ([`NEWEST_WINDOWS`]). With any of those
+//! members a read is as before: the page from that position or window on, oldest first.
 
 use crate::budget::{self, Budget, Fitted};
 use crate::cli_line;
@@ -30,7 +40,7 @@ use actingcommand_contract::{
     ProjectionProfile, RequestId, RunId, RuntimeEventQueryCursor, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest, SanitizationError, TaskId,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
+use actingcommand_runtime_client::{ClientCode, RuntimeClient, RuntimeClientError};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use std::collections::hash_map::RandomState;
@@ -92,7 +102,30 @@ pub const MAX_WAIT_S: u64 = 20;
 pub const MAX_INTEGER: u64 = i64::MAX.unsigned_abs();
 /// An empty first page is read again this often while the wait lasts.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
-const CLI_USAGE: &str = "usage: actingctl events --state-root <dir> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--after-sequence <seq> | --cursor <cursor>] [--through-sequence <seq>] [--event-type <type> | --event-types <type,...>] [--exclude-event-types <type,...>] [--fact-key <key>] [--min-severity <severity>] [--max-severity <severity>] [--origin-module <module>] [--task-id <id>] [--run-id <id>] [--request-id <id>] [--correlation-id <id>] [--detail brief|summary|payload] [--limit 1-256] [--wait-s 0-20]\npage on with --after-sequence <last_sequence>: the next_cursor one call prints answers cursor_invalid in any later call";
+const CLI_USAGE: &str = "usage: actingctl events --state-root <dir> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--after-sequence <seq> | --cursor <cursor>] [--through-sequence <seq>] [--event-type <type> | --event-types <type,...>] [--exclude-event-types <type,...>] [--fact-key <key>] [--min-severity <severity>] [--max-severity <severity>] [--origin-module <module>] [--task-id <id>] [--run-id <id>] [--request-id <id>] [--correlation-id <id>] [--detail brief|summary|payload] [--limit 1-256] [--wait-s 0-20]\nwith none of --after-sequence, --cursor, --through-sequence, --since-unix-ms, --until-unix-ms, --run-id, --request-id and --correlation-id the page is the newest records, oldest first: read the records before them with --through-sequence <first_sequence - 1>\npage on with --after-sequence <last_sequence>: the next_cursor one call prints answers cursor_invalid in any later call";
+
+/// Workflow #434 CLI-EV (ruling 3; register §1.306): the windows of a read that names no position
+/// and no window, in sequences, each ending at the ledger's head: the first, the factor of each of
+/// the two widenings and the largest. Constants of the contract, not settings. QP-1 (register
+/// §1.292) bounds every page by its sequence range: a page reads its range in statements whose
+/// spans double from one sequence up to `ledger_observer.history_scan_rows` (65 536 by default),
+/// each inside its span, so a range of `w` sequences takes at most `ceil(log2(w + 1))`
+/// statements. The first window is the Runtime's page bound, the CLI's largest `limit`: where every
+/// record matches it holds the page whatever the limit, in nine statements. The largest is that
+/// default span: no read of the search spans more sequences than one full-size statement, at most
+/// seventeen statements. Each widening adds four of the doublings.
+pub const NEWEST_FIRST_WINDOW: u64 = MAX_RUNTIME_EVENT_QUERY_EVENTS as u64;
+pub const NEWEST_WINDOW_FACTOR: u64 = 16;
+pub const NEWEST_LARGEST_WINDOW: u64 = 65_536;
+/// The three windows of the search: the first, widened twice.
+pub const NEWEST_WINDOWS: [u64; 3] = [
+    NEWEST_FIRST_WINDOW,
+    NEWEST_FIRST_WINDOW * NEWEST_WINDOW_FACTOR,
+    NEWEST_FIRST_WINDOW * NEWEST_WINDOW_FACTOR * NEWEST_WINDOW_FACTOR,
+];
+const _: () = assert!(NEWEST_WINDOWS[2] == NEWEST_LARGEST_WINDOW);
+/// The search counts records and reads no payload; only the rows it found are read with theirs.
+const SEARCH_PROFILE: ProjectionProfile = ProjectionProfile::Concise;
 
 /// What each row carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +166,23 @@ impl Request {
     /// the query the Runtime is sent holds them.
     pub const fn filters(&self) -> &EventQuery {
         &self.filters
+    }
+
+    /// Workflow #434 CLI-EV (ruling 1): whether the read names no position and no window: no
+    /// `after_sequence`, no cursor, no `through_sequence`, no `since_unix_ms` or `until_unix_ms`
+    /// and no id that pins a run (`run_id`, `request_id`, `correlation_id`). Such a read answers
+    /// the newest records its other filters match; any other reads as before.
+    pub const fn newest(&self) -> bool {
+        let filters = &self.filters;
+        self.after_sequence.is_none()
+            && self.cursor.is_none()
+            && filters.from_sequence.is_none()
+            && filters.to_sequence.is_none()
+            && filters.from_timestamp_unix_ms.is_none()
+            && filters.to_timestamp_unix_ms.is_none()
+            && filters.run_id.is_none()
+            && filters.request_id.is_none()
+            && filters.correlation_id.is_none()
     }
 }
 
@@ -250,6 +300,11 @@ pub enum EventsError {
     /// Workflow #434 LAB-5D: a payload page its caller's budget did not take could not be written
     /// whole to the caller's export: the export's outcome (`material_export_failed`).
     Export(Outcome),
+    /// Workflow #434 CLI-EV: the Runtime's pages of a read of the newest records do not fit
+    /// together (a page at another snapshot than the head the read pinned, a row outside the range
+    /// it was asked for, the rows the search found not read back): the runtime client's
+    /// `runtime_event_query_pagination_invalid`, which says the same of its own paged reads.
+    Pagination,
 }
 
 impl EventsError {
@@ -300,6 +355,7 @@ impl EventsError {
             }
             Self::Runtime(error) => error.outcome(),
             Self::Export(outcome) => outcome.clone(),
+            Self::Pagination => Outcome::new(ClientCode::RuntimeEventQueryPaginationInvalid),
         }
     }
 }
@@ -514,40 +570,64 @@ impl CursorBinding {
 
 /// One page as the Runtime answered it, with the query its cursors are bound to.
 pub struct Page {
-    page: RuntimeEventQueryPage,
+    events: Vec<ProjectedEvent>,
+    /// The ledger position the page was read at.
+    snapshot: u64,
+    /// The sequence the Runtime's next page of the snapshot goes on after; `None` once the
+    /// snapshot is read to its end.
+    continues_after: Option<u64>,
     query: EventQuery,
     /// With a wait: how long the answered read started after the first one.
     waited_ms: Option<u64>,
+    /// Workflow #434 CLI-EV: the page is the newest records (a read without a position or a
+    /// window), so it says its `first_sequence`.
+    newest: bool,
+    /// Workflow #434 CLI-EV: the lowest sequence such a read searched, when it found fewer records
+    /// than its limit and older records were not searched (`searched_from_sequence`).
+    searched_from: Option<u64>,
 }
 
 impl Page {
+    /// The page the Runtime answered for a read from a position or a window: its rows, snapshot
+    /// and continuation as they are.
+    fn answered(page: &RuntimeEventQueryPage, query: EventQuery, waited_ms: Option<u64>) -> Self {
+        Self {
+            events: page.events().to_vec(),
+            snapshot: page.snapshot_ledger_position(),
+            continues_after: page
+                .next_cursor()
+                .map(RuntimeEventQueryCursor::after_sequence),
+            query,
+            waited_ms,
+            newest: false,
+            searched_from: None,
+        }
+    }
+
     pub fn events(&self) -> &[ProjectedEvent] {
-        self.page.events()
+        &self.events
     }
 
     /// The cursor that goes on after `after` within this page's snapshot. It is bound to the
     /// query without `after_sequence`, so that it is sent back without it.
     pub fn cursor_after(&self, after: u64) -> Result<RuntimeEventQueryCursor, EventsError> {
-        RuntimeEventQueryCursor::new(
-            self.page.snapshot_ledger_position(),
-            after,
-            &self.query,
-            PROFILE,
-        )
-        .map_err(|error| EventsError::CursorEncode(Some(error.code())))
+        RuntimeEventQueryCursor::new(self.snapshot, after, &self.query, PROFILE)
+            .map_err(|error| EventsError::CursorEncode(Some(error.code())))
     }
 
     /// Where the Runtime's next page starts; `None` once the snapshot is read to its end.
     pub fn next_cursor(&self) -> Result<Option<RuntimeEventQueryCursor>, EventsError> {
-        self.page
-            .next_cursor()
-            .map(|next| self.cursor_after(next.after_sequence()))
+        self.continues_after
+            .map(|after| self.cursor_after(after))
             .transpose()
     }
 
-    /// `{events, next_cursor?, truncated?, snapshot_ledger_position, last_sequence?,
-    /// waited_ms?}` with these rows; `last_sequence` is the seq of the last of them, for the
-    /// next `after_sequence`.
+    /// `{events, next_cursor?, truncated?, snapshot_ledger_position, first_sequence?,
+    /// last_sequence?, searched_from_sequence?, waited_ms?}` with these rows; `last_sequence` is
+    /// the seq of the last of them, for the next `after_sequence`. Workflow #434 CLI-EV: a page of
+    /// the newest records also has `first_sequence`, the seq of the first of them (the records
+    /// before it are read with `through_sequence <first_sequence - 1>`), and
+    /// `searched_from_sequence` when its search found fewer than its limit and stopped there.
     pub fn result(&self, rows: &[Value], next_cursor: Option<String>, truncated: bool) -> Value {
         let mut result = Map::new();
         result.insert("events".to_owned(), Value::Array(rows.to_vec()));
@@ -557,12 +637,17 @@ impl Page {
         if truncated {
             result.insert("truncated".to_owned(), json!(true));
         }
-        result.insert(
-            "snapshot_ledger_position".to_owned(),
-            json!(self.page.snapshot_ledger_position()),
-        );
+        result.insert("snapshot_ledger_position".to_owned(), json!(self.snapshot));
+        if self.newest
+            && let Some(first) = rows.first().and_then(|row| row.get("seq"))
+        {
+            result.insert("first_sequence".to_owned(), first.clone());
+        }
         if let Some(last) = rows.last().and_then(|row| row.get("seq")) {
             result.insert("last_sequence".to_owned(), last.clone());
+        }
+        if let Some(searched_from) = self.searched_from {
+            result.insert("searched_from_sequence".to_owned(), json!(searched_from));
         }
         if let Some(waited_ms) = self.waited_ms {
             result.insert("waited_ms".to_owned(), json!(waited_ms));
@@ -669,7 +754,9 @@ pub fn list_within_budget<E>(
 /// `events_count` its rows. It is given whole without a budget, when the budget takes it or for a
 /// caller with no export; otherwise it is written whole through the caller's export
 /// ([`budget::write_json`]) and answered as `{export, events_count, next_cursor?,
-/// last_sequence?}` with the warning `answer_exported` naming the file (`path`).
+/// first_sequence?, last_sequence?, searched_from_sequence?}` with the warning `answer_exported`
+/// naming the file (`path`); Workflow #434 CLI-EV: `first_sequence` and `searched_from_sequence`
+/// as the page has them (a page of the newest records).
 pub fn payload_within_budget(
     page: Value,
     events_count: usize,
@@ -689,8 +776,10 @@ pub fn payload_within_budget(
     if let Some(next) = page.get("next_cursor") {
         answer.insert("next_cursor".to_owned(), next.clone());
     }
-    if let Some(last) = page.get("last_sequence") {
-        answer.insert("last_sequence".to_owned(), last.clone());
+    for member in ["first_sequence", "last_sequence", "searched_from_sequence"] {
+        if let Some(value) = page.get(member) {
+            answer.insert(member.to_owned(), value.clone());
+        }
     }
     Ok(Fitted {
         result: Value::Object(answer),
@@ -700,7 +789,9 @@ pub fn payload_within_budget(
 
 /// Reads one page of `request` with the resolved instance. A page from `after_sequence` starts
 /// at the next sequence; a cursor resumes where its page ended. With a wait, an empty page is
-/// read again every second until rows arrive, `wait_until` comes or `stop` says so.
+/// read again every second until rows arrive, `wait_until` comes or `stop` says so. Workflow #434
+/// CLI-EV: a request without a position or a window ([`Request::newest`]) reads the newest
+/// records (`read_newest`).
 pub fn read(
     client: &RuntimeClient,
     request: &Request,
@@ -710,6 +801,9 @@ pub fn read(
     stop: &dyn Fn() -> bool,
 ) -> Result<Page, EventsError> {
     let query = request.query(instance_id);
+    if request.newest() {
+        return read_newest(client, request, query, wait_until, stop);
+    }
     let resume = request
         .cursor
         .as_deref()
@@ -745,14 +839,294 @@ pub fn read(
         {
             let waited_ms =
                 u64::try_from(started.duration_since(first).as_millis()).unwrap_or(u64::MAX);
-            return Ok(Page {
-                page,
-                query,
-                waited_ms: waiting.then_some(waited_ms),
-            });
+            return Ok(Page::answered(&page, query, waiting.then_some(waited_ms)));
         }
         thread::sleep(POLL_INTERVAL);
     }
+}
+
+/// Workflow #434 CLI-EV (rulings 1 and 3): [`read`] of a request without a position or a window:
+/// the newest `limit` records its filters match, oldest first. The head is read once
+/// ([`ledger_head`]); the search reads windows that end there, at its snapshot, each by its
+/// sequence range and without run recovery ([`Search::newest`]); the rows it found are read once
+/// more with their payloads ([`Search::rows`]). With a wait, an answer that found nothing (and was
+/// not cut short) is searched again every second among the records appended since, until rows
+/// arrive, `wait_until` comes or `stop` says so.
+fn read_newest(
+    client: &RuntimeClient,
+    request: &Request,
+    query: EventQuery,
+    wait_until: Instant,
+    stop: &dyn Fn() -> bool,
+) -> Result<Page, EventsError> {
+    let waiting = !request.wait.is_zero();
+    let first = Instant::now();
+    let mut started = first;
+    let mut head = ledger_head(client)?;
+    let mut found = Search {
+        client,
+        query: &query,
+        head,
+    }
+    .newest(request.limit, 1)?;
+    // The lowest sequence of the range searched through the head without a gap.
+    let mut reached = found.reached;
+    while waiting
+        && found.sequences.is_empty()
+        && !found.cut
+        && !stop()
+        && Instant::now() + POLL_INTERVAL < wait_until
+    {
+        thread::sleep(POLL_INTERVAL);
+        started = Instant::now();
+        let latest = ledger_head(client)?;
+        if latest > head {
+            let floor = head + 1;
+            found = Search {
+                client,
+                query: &query,
+                head: latest,
+            }
+            .newest(request.limit, floor)?;
+            // A search that reached its floor goes on from the range searched before; one that
+            // stopped above it leaves a gap, below which nothing counts as searched.
+            if found.reached > floor {
+                reached = found.reached;
+            }
+            head = latest;
+        }
+    }
+    let Rows {
+        events,
+        continues_after,
+    } = Search {
+        client,
+        query: &query,
+        head,
+    }
+    .rows(&found.sequences)?;
+    let searched_from =
+        (found.sequences.len() < usize::from(request.limit) && reached > 1).then_some(reached);
+    let waited_ms = u64::try_from(started.duration_since(first).as_millis()).unwrap_or(u64::MAX);
+    Ok(Page {
+        events,
+        snapshot: head,
+        continues_after,
+        query,
+        waited_ms: waiting.then_some(waited_ms),
+        newest: true,
+        searched_from,
+    })
+}
+
+/// Workflow #434 CLI-EV: the ledger's head, read once per search: the snapshot of one page that
+/// selects nothing (its range starts past every sequence a ledger reaches, with no other
+/// condition, one row, no run recovery), which the Runtime answers without reading a record: a
+/// page's statements run only while its range is not empty (QP-1, register §1.292).
+fn ledger_head(client: &RuntimeClient) -> Result<u64, EventsError> {
+    let request = RuntimeEventQueryPageRequest::new(1, None)
+        .map_err(|_| EventsError::Pagination)?
+        .without_run_recovery();
+    let nothing = EventQuery {
+        from_sequence: Some(MAX_INTEGER),
+        ..EventQuery::default()
+    };
+    let page = client
+        .query_event_page(nothing, SEARCH_PROFILE, request)
+        .map_err(EventsError::Runtime)?;
+    if !page.events().is_empty() {
+        return Err(EventsError::Pagination);
+    }
+    Ok(page.snapshot_ledger_position())
+}
+
+/// Workflow #434 CLI-EV: the reads of one search for the newest records: the records `query`
+/// matches at the snapshot `head`, each read by a sequence range and without run recovery.
+struct Search<'a> {
+    client: &'a RuntimeClient,
+    query: &'a EventQuery,
+    head: u64,
+}
+
+/// What a search found: the sequences of the newest records it found, oldest first; `reached`,
+/// the lowest sequence of the range it searched through the head without a gap (`head + 1` when
+/// it searched none); `cut` when a read the Runtime cut short (its read budget) ended it.
+struct Found {
+    sequences: Vec<u64>,
+    reached: u64,
+    cut: bool,
+}
+
+impl Found {
+    /// The records of `page`, older than every record found so far, go before them; the range
+    /// searched now starts at `from`.
+    fn take(&mut self, page: &RuntimeEventQueryPage, from: u64) {
+        let mut sequences = page
+            .events()
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>();
+        sequences.append(&mut self.sequences);
+        self.sequences = sequences;
+        self.reached = from;
+    }
+}
+
+impl Search<'_> {
+    /// The records the query matches from `from` through `through`, at most `limit`, in
+    /// `profile`, at the search's snapshot. A page at another snapshot or with a row outside the
+    /// range is refused.
+    fn read(
+        &self,
+        (from, through): (u64, u64),
+        limit: u16,
+        profile: ProjectionProfile,
+    ) -> Result<RuntimeEventQueryPage, EventsError> {
+        let request = RuntimeEventQueryPageRequest::new(limit, None)
+            .and_then(|request| request.at_snapshot(self.head))
+            .map_err(|_| EventsError::Pagination)?
+            .without_run_recovery();
+        let query = EventQuery {
+            from_sequence: Some(from),
+            to_sequence: Some(through),
+            ..self.query.clone()
+        };
+        let page = self
+            .client
+            .query_event_page(query, profile, request)
+            .map_err(EventsError::Runtime)?;
+        if page.snapshot_ledger_position() != self.head
+            || page
+                .events()
+                .iter()
+                .any(|event| event.sequence < from || event.sequence > through)
+        {
+            return Err(EventsError::Pagination);
+        }
+        Ok(page)
+    }
+
+    /// The newest `limit` records at or above `floor`, through the head. The windows of
+    /// [`NEWEST_WINDOWS`] end at the head; each read is the part of its window the one before did
+    /// not hold, so no record is read twice, and the last reaches `floor` or the largest window's
+    /// lower bound, whichever is higher. A part that holds the records still wanted, or more,
+    /// ends the search ([`Self::narrow`]); a read the Runtime cut short ends it with what was
+    /// found.
+    fn newest(&self, limit: u16, floor: u64) -> Result<Found, EventsError> {
+        let lowest = floor
+            .max(self.head.saturating_sub(NEWEST_LARGEST_WINDOW - 1))
+            .max(1);
+        let mut found = Found {
+            sequences: Vec::new(),
+            reached: self.head.saturating_add(1),
+            cut: false,
+        };
+        let mut need = limit;
+        let mut top = self.head;
+        for width in NEWEST_WINDOWS {
+            if top < lowest {
+                break;
+            }
+            let from = self.head.saturating_sub(width - 1).max(lowest);
+            let page = self.read((from, top), need, SEARCH_PROFILE)?;
+            let rows = page.returned_count();
+            if page.has_more() {
+                if rows < need {
+                    found.cut = true;
+                    return Ok(found);
+                }
+                return self.narrow(found, (from, top), need);
+            }
+            found.take(&page, from);
+            need = need.checked_sub(rows).ok_or(EventsError::Pagination)?;
+            if need == 0 {
+                break;
+            }
+            top = from - 1;
+        }
+        Ok(found)
+    }
+
+    /// `range` holds at least `need` of the records, all older than those `found` holds: its
+    /// newest `need` go before them. The first read is the range's top `need` sequences (where
+    /// every record matches, they are the ones wanted); each later read is the upper half of what
+    /// is left. A read that holds more than `need` leaves the rest of the range below it, which
+    /// is dropped; otherwise its records are taken and the search goes on below it. Each read
+    /// halves the range, so a range of `w` sequences takes at most `log2(w) + 2` reads; the loop's
+    /// bound only stops a Runtime whose pages contradict each other.
+    fn narrow(
+        &self,
+        mut found: Found,
+        (mut low, mut high): (u64, u64),
+        mut need: u16,
+    ) -> Result<Found, EventsError> {
+        let mut start = high.saturating_sub(u64::from(need) - 1).max(low);
+        for _ in 0..=u64::BITS {
+            let page = self.read((start, high), need, SEARCH_PROFILE)?;
+            let rows = page.returned_count();
+            if page.has_more() {
+                if rows < need {
+                    found.cut = true;
+                    return Ok(found);
+                }
+                low = start;
+            } else {
+                found.take(&page, start);
+                need = need.checked_sub(rows).ok_or(EventsError::Pagination)?;
+                if need == 0 {
+                    return Ok(found);
+                }
+                // The whole range read held fewer than it was found to hold.
+                if start == low {
+                    return Err(EventsError::Pagination);
+                }
+                high = start - 1;
+            }
+            start = low + (high - low).div_ceil(2);
+        }
+        Err(EventsError::Pagination)
+    }
+
+    /// The records the search found, in [`PROFILE`] (their payloads), by one read from the first
+    /// to the last of them, with the sequence the Runtime's next page goes on after when it cut
+    /// the page to its response bound. Every record of that range was found, so the page holds
+    /// them all, or the first of them with the rest to come.
+    fn rows(&self, sequences: &[u64]) -> Result<Rows, EventsError> {
+        let (Some(&first), Some(&last)) = (sequences.first(), sequences.last()) else {
+            return Ok(Rows {
+                events: Vec::new(),
+                continues_after: None,
+            });
+        };
+        let count = u16::try_from(sequences.len()).map_err(|_| EventsError::Pagination)?;
+        let page = self.read((first, last), count, PROFILE)?;
+        let read = page
+            .events()
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>();
+        let whole = read.len() == sequences.len();
+        if !sequences.starts_with(&read) || !(whole || page.has_more()) {
+            return Err(EventsError::Pagination);
+        }
+        let continues_after = if whole {
+            None
+        } else {
+            page.next_cursor()
+                .map(RuntimeEventQueryCursor::after_sequence)
+        };
+        Ok(Rows {
+            events: page.events().to_vec(),
+            continues_after,
+        })
+    }
+}
+
+/// The rows a search found, read with their payloads, and the sequence the Runtime's next page
+/// goes on after when it cut them to its response bound.
+struct Rows {
+    events: Vec<ProjectedEvent>,
+    continues_after: Option<u64>,
 }
 
 /// A row of `detail`; `envelope` writes an outcome as the frontend writes it (the CLI line's and

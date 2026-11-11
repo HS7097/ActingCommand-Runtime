@@ -79,7 +79,7 @@
       "name": "status",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"},
         {"name": "sections", "form": "option", "type": "list<string>", "required": false, "note": "the overview's block names, as ac_overview's; absent: all"}
       ],
       "help": "Reads an overview of the Runtime and every instance, one block per section; the install, watchdog and configuration blocks need no Runtime.",
@@ -97,7 +97,7 @@
       "name": "facts",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "the instance whose facts are read; exactly one of instance, program and config (none is refused as <instance> required, two as --program conflicting)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "the instance whose facts are read; exactly one of instance, program and config (none is refused as <instance> required, two as --program conflicting); on the command line also --instance <x>, in place of the positional"},
         {"name": "program", "form": "switch", "type": "boolean", "required": false, "note": "the program's facts; exactly one of instance, program and config"},
         {"name": "config", "form": "switch", "type": "boolean", "required": false, "note": "the configuration facts; exactly one of instance, program and config"},
         {"name": "prefix", "form": "option", "type": "string", "required": false, "note": "only keys under this prefix; with instance or program"}
@@ -117,7 +117,7 @@
       "name": "schedule",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Explains why each task did not run, per instance, from the latest policy evaluation since the Runtime started.",
       "output": "the latest evaluation's not-run explanation",
@@ -135,7 +135,7 @@
       "name": "summary",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"},
         {"name": "hour", "form": "switch", "type": "boolean", "required": false, "note": "hour buckets (the default)"},
         {"name": "day", "form": "switch", "type": "boolean", "required": false, "note": "day buckets"},
         {"name": "since", "form": "option", "type": "integer", "required": false, "note": "the revision of the previous page (since_revision)"}
@@ -155,7 +155,7 @@
       "name": "events",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"},
         {"name": "since", "form": "option", "type": "duration", "required": false, "note": "how far back, for example 10m"},
         {"name": "type", "form": "option", "type": "list<string>", "required": false, "note": "event types"},
         {"name": "run", "form": "option", "type": "string", "required": false, "note": "a run_id (run_<32 hex>)"},
@@ -177,7 +177,7 @@
         {"name": "detail", "form": "option", "type": "enum:brief|summary|payload", "required": false, "default": "brief", "note": "brief rows; summary adds the outcome a record carries; payload adds the projected payload"},
         {"name": "wait_s", "form": "option", "type": "integer", "required": false, "default": "0", "note": "seconds to wait for rows while the first page is empty, 0 to 20"}
       ],
-      "help": "Reads one page of the Runtime's ledger events, oldest first, with the cursor that continues it.",
+      "help": "Reads the Runtime's newest ledger events, oldest first; with a position or a window, the page from there on with the cursor that continues it.",
       "output": "an event page with its next cursor",
       "writes": false,
       "irreversible": false,
@@ -276,7 +276,7 @@
       "name": "diagnose",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"},
         {"name": "task", "form": "option", "type": "string", "required": false},
         {"name": "since", "form": "option", "type": "duration", "required": false},
         {"name": "since_unix_ms", "form": "option", "type": "unsigned", "required": false, "note": "absolute window start, unix ms, at most 7 days back (absent: 24 hours back); not with since: both name the window's start (--since-unix-ms to the operation layer), which refuses the second as repeated"}
@@ -296,7 +296,7 @@
       "name": "targets",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Reads what one instance can target and the resource target policy it holds now, as the Runtime reports them.",
       "output": "the resource target view",
@@ -314,7 +314,7 @@
       "name": "targets set",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
         {"name": "file", "form": "positional", "type": "file", "required": false, "note": "a whole targets document; exactly one of file and targets (none is refused as <file> required, both as --targets conflicting)"},
         {"name": "targets", "form": "option", "type": "json", "required": false, "note": "the targets inline, a JSON list, instead of a file; exactly one of file and targets"},
         {"name": "valid_days", "form": "option", "type": "integer", "required": false, "note": "with targets"}
@@ -358,7 +358,7 @@
       "name": "remedy",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Reads the remedy choice records that apply to one instance, most specific first, and which one is in effect.",
       "output": "the remedy choices in effect",
@@ -395,7 +395,7 @@
       "name": "remedy lift",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Republishes one instance's own remedy record unchanged as a new observation, which lifts a remedy stop.",
       "output": "the published record",
@@ -413,7 +413,7 @@
       "name": "frame",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
         {"name": "out", "form": "option", "type": "path", "required": false, "note": "also write the frame there"}
       ],
       "help": "Captures one frame of one instance now, read only, and answers its material ref, size and coordinate system.",
@@ -432,7 +432,7 @@
       "name": "frames",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
         {"name": "count", "form": "option", "type": "integer", "required": false, "note": "CLI short form -n"},
         {"name": "interval", "form": "option", "type": "duration", "required": false}
       ],
@@ -468,7 +468,7 @@
       "name": "pause",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"},
         {"name": "reason", "form": "option", "type": "string", "required": false, "required_in": ["mcp"], "note": "CLI short form -r"},
         {"name": "drain", "form": "option", "type": "duration", "required": false, "default": "300s"}
       ],
@@ -488,7 +488,7 @@
       "name": "resume",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"},
         {"name": "expect", "form": "option", "type": "json", "required": false, "required_in": ["mcp"], "note": "the pause the resume lifts, as read from status"}
       ],
       "help": "Lifts the scheduling pause of one instance or of everywhere and answers the Runtime's result.",
@@ -614,7 +614,7 @@
       "name": "monitor clear",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Clears the Runtime's monitor policy of one instance, so that nothing checks its page, and answers its monitor status.",
       "output": "the monitor policy",
@@ -634,7 +634,7 @@
       "params": [
         {"name": "task", "form": "positional", "type": "string", "required": true},
         {"name": "ms", "form": "positional", "type": "integer", "required": true},
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Publishes a scheduling priority offset for one task on one instance or, without one, on every instance when they share one scope.",
       "output": "the published record",
@@ -688,7 +688,7 @@
       "name": "emu start",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
         {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
       ],
       "help": "Starts one instance's emulator through the Runtime and answers the receipt.",
@@ -707,7 +707,7 @@
       "name": "emu stop",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
         {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
       ],
       "help": "Stops one instance's emulator through the Runtime, ending whatever runs on it, and answers the receipt.",
@@ -727,7 +727,7 @@
       "name": "emu restart",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
         {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
       ],
       "help": "Restarts one instance's emulator through the Runtime, ending whatever runs on it, and answers the receipt.",
@@ -747,7 +747,7 @@
       "name": "emu selfcheck",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Reconnects one instance and runs its self-check through the Runtime now; a check that does not pass answers as a failure.",
       "output": "the receipt",
@@ -765,7 +765,7 @@
       "name": "app launch",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Launches the application the Runtime configures for one instance.",
       "output": "the receipt",
@@ -783,7 +783,7 @@
       "name": "app restart",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Restarts the application the Runtime configures for one instance, ending what runs in it.",
       "output": "the receipt",
@@ -802,7 +802,7 @@
       "name": "app stop",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Stops the application the Runtime configures for one instance, ending what runs in it.",
       "output": "the receipt",
@@ -891,7 +891,7 @@
       "name": "devices bind",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "the instance's alias: devices takes no instance_id and no ADB port"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "the instance's alias: devices takes no instance_id and no ADB port; on the command line also --instance <x>, in place of the positional"},
         {"name": "handle", "form": "positional", "type": "string", "required": true, "note": "a device handle from devices, for example usb:7"}
       ],
       "help": "Binds an adb device to a handset instance in the state root's private binding file; it takes effect at the Runtime's next start.",
@@ -910,7 +910,7 @@
       "name": "devices unbind",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "the instance's alias: devices takes no instance_id and no ADB port"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "the instance's alias: devices takes no instance_id and no ADB port; on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Removes a handset instance's device binding from the private binding file; it takes effect at the Runtime's next start.",
       "output": "the binding removed",
@@ -928,7 +928,7 @@
       "name": "packs",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"},
         {"name": "role", "form": "option", "type": "enum:procedure|startup|resource_package", "required": false, "note": "only the rows of this role; absent: every role"}
       ],
       "help": "Lists the packages the selected configuration binds, per instance and for the installation, read from disk without the Runtime.",
@@ -1024,7 +1024,7 @@
       "name": "task stop",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
         {"name": "request", "form": "positional", "type": "request_id", "required": true},
         {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
       ],
@@ -1045,40 +1045,42 @@
       "name": "pack-schedule",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"}
       ],
+      "help": "Reads whether each task package of an instance may be scheduled now, the layer and row that decide it, and each scope's list version.",
       "output": "the pack schedule view (PackScheduleViewed)",
       "writes": false,
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["PackScheduleView"],
+      "requests": ["PackScheduleView", "Status"],
       "source": [],
       "new": "#429 R-8 (PackScheduleView; runtime-interface.md plans pack-schedule)",
       "slice": "R-8",
-      "status": "reserved",
-      "opens_with": "R-8"
+      "status": "planned",
+      "notes": "#429 R-8: requests add Status, the read that resolves <inst>"
     },
     {
       "name": "pack-schedule set",
       "module": "core",
       "params": [
-        {"name": "scope", "form": "positional", "type": "scope", "required": true},
+        {"name": "scope", "form": "positional", "type": "scope", "required": true, "note": "instance:<inst>, server:<server id> or game:<game id>"},
         {"name": "package_id", "form": "positional", "type": "string", "required": true},
-        {"name": "rows", "form": "option", "type": "json", "required": true},
-        {"name": "expected_version", "form": "option", "type": "integer", "required": false}
+        {"name": "rows", "form": "option", "type": "json", "required": true, "note": "a list of {from_unix_ms, until_unix_ms?, schedulable}; [] withdraws the package's rows of the scope"},
+        {"name": "expected_version", "form": "option", "type": "integer", "required": false, "note": "the scope's list version from pack-schedule; 0 while the scope has no list; absent: compare nothing"}
       ],
+      "help": "Replaces one task package's schedule rows in one scope's list, the rows that open or close it for scheduling there.",
       "output": "the edit (PackScheduleEdited)",
       "writes": true,
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["EditPackSchedule"],
+      "requests": ["EditPackSchedule", "Status"],
       "source": [],
       "new": "#429 R-8 (EditPackSchedule; runtime-interface.md plans pack-schedule set)",
       "slice": "R-8",
-      "status": "reserved",
-      "opens_with": "R-8"
+      "status": "planned",
+      "notes": "#429 R-8: requests add Status, the read that resolves an instance scope's <inst>; a run in progress is not stopped"
     },
     {
       "name": "crash-log",
@@ -1105,7 +1107,7 @@
       "name": "run start",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
         {"name": "package", "form": "positional", "type": "path", "required": true},
         {"name": "recovery", "form": "option", "type": "string", "required": false},
         {"name": "deadline", "form": "option", "type": "duration", "required": false},
@@ -1146,7 +1148,7 @@
       "name": "reset",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Resets one instance's input through the Runtime, lifting any touch still held, and answers the receipt.",
       "output": "the receipt",
@@ -1164,7 +1166,7 @@
       "name": "tap",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "x", "form": "positional", "type": "integer", "required": true},
         {"name": "y", "form": "positional", "type": "integer", "required": true}
       ],
@@ -1183,7 +1185,7 @@
       "name": "swipe",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "x1", "form": "positional", "type": "integer", "required": true},
         {"name": "y1", "form": "positional", "type": "integer", "required": true},
         {"name": "x2", "form": "positional", "type": "integer", "required": true},
@@ -1205,7 +1207,7 @@
       "name": "long-tap",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "x", "form": "positional", "type": "integer", "required": true},
         {"name": "y", "form": "positional", "type": "integer", "required": true},
         {"name": "duration_ms", "form": "positional", "type": "integer", "required": true}
@@ -1225,7 +1227,7 @@
       "name": "key",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "key", "form": "positional", "type": "string", "required": true, "note": "back, home, menu, enter, escape or a key code"}
       ],
       "help": "Sends one key press to an instance through the Runtime.",
@@ -1243,7 +1245,7 @@
       "name": "text",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "text", "form": "positional", "type": "string", "required": true, "repeat": true, "note": "the words are joined with one space"}
       ],
       "help": "Sends a text as input to an instance through the Runtime.",
@@ -1261,7 +1263,7 @@
       "name": "touch-probe",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line only --instance <x> (actinglab's own command reads no positional instance)"}
       ],
       "help": "Opens the Runtime's input proxy of an instance and closes it again without touching the screen, to see that input works.",
       "output": "as today's command",
@@ -1278,7 +1280,7 @@
       "name": "recover",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
         {"name": "capture", "form": "switch", "type": "boolean", "required": false},
         {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
         {"name": "scene", "form": "option", "type": "file", "required": false, "note": "an offline PNG frame"},
@@ -1319,7 +1321,7 @@
       "name": "do",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "target", "form": "positional", "type": "string", "required": false, "note": "offline the target, with capture a Runtime element id; also --target"},
         {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
         {"name": "capture", "form": "switch", "type": "boolean", "required": false},
@@ -1360,7 +1362,7 @@
       "name": "ensure",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
         {"name": "capture", "form": "switch", "type": "boolean", "required": false},
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
@@ -1392,7 +1394,7 @@
       "name": "wait",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
         {"name": "capture", "form": "switch", "type": "boolean", "required": false},
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
@@ -1421,7 +1423,7 @@
       "name": "tap-target",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "target", "form": "option", "type": "string", "required": true, "note": "also the first positional"},
         {"name": "seed", "form": "option", "type": "unsigned", "required": false},
         {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
@@ -1446,7 +1448,7 @@
       "name": "navigate",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "to", "form": "option", "type": "string", "required": true},
         {"name": "seed", "form": "option", "type": "unsigned", "required": false},
         {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
@@ -1473,7 +1475,7 @@
       "name": "drill",
       "module": "debugging",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
         {"name": "device", "form": "switch", "type": "boolean", "required": false, "note": "a drill on the device; absent: plan"}
       ],
       "help": "Asks the Runtime for a drill of one instance's stuck-recovery ladder, recorded and tagged as a drill.",
@@ -1789,7 +1791,7 @@
       "name": "observe",
       "module": "authoring",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "capture", "form": "switch", "type": "boolean", "required": false, "note": "capture a live frame through the Runtime"},
         {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
@@ -1818,7 +1820,7 @@
       "name": "record start",
       "module": "authoring",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "task_id", "form": "option", "type": "string", "required": true},
         {"name": "force", "form": "switch", "type": "boolean", "required": false},
         {"name": "holder", "form": "option", "type": "string", "required": false},
@@ -1847,7 +1849,7 @@
       "name": "record mark",
       "module": "authoring",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "request", "form": "option", "type": "file", "required": false, "note": "an actingcommand.lab-record-mark.v1 request file"},
         {"name": "request_json", "form": "option", "type": "string", "required": false, "note": "the same request as JSON text"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"},
@@ -1903,7 +1905,7 @@
       "name": "record status",
       "module": "authoring",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
       "help": "Reads the recording session and the steps of its Lab recording.",
@@ -1921,7 +1923,7 @@
       "name": "record stop",
       "module": "authoring",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "lab_dir", "form": "option", "type": "dir", "required": false},
         {"name": "package_id", "form": "option", "type": "string", "required": false},
         {"name": "requires", "form": "option", "type": "string", "required": false},
@@ -1949,7 +1951,7 @@
       "name": "record candidates",
       "module": "authoring",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "step_id", "form": "option", "type": "string", "required": true, "note": "also the first positional"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
@@ -1968,7 +1970,7 @@
       "name": "record amend",
       "module": "authoring",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "step_id", "form": "option", "type": "string", "required": false, "note": "also the first positional"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"},
         {"name": "from_drift_diagnostics", "form": "option", "type": "file", "required": false},
@@ -2004,7 +2006,7 @@
       "name": "record step",
       "module": "authoring",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true},
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "kind", "form": "option", "type": "string", "required": true},
         {"name": "step_id", "form": "option", "type": "string", "required": false},
         {"name": "id", "form": "option", "type": "string", "required": false},
@@ -2652,7 +2654,7 @@
       "name": "locate",
       "module": "authoring",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "template", "form": "option", "type": "file", "required": true, "note": "also the first positional"},
         {"name": "metric", "form": "option", "type": "enum:ccorr_normed|ccoeff_normed", "required": false, "default": "ccorr_normed"},
         {"name": "scene", "form": "option", "type": "file", "required": false, "note": "an offline PNG frame"},

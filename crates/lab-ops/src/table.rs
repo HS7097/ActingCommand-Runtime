@@ -313,7 +313,8 @@ pub enum ParamType {
     OperationId,
     MaterialRef,
     Code,
-    /// An instance or a game.
+    /// An instance, a server or a game (Workflow #429 R-8: `instance:<inst>`, `server:<id>` or
+    /// `game:<id>`).
     Scope,
     TagOrCommit,
     Sha256,

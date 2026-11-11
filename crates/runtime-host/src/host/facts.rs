@@ -339,201 +339,207 @@ impl HostShared {
         source_request: Option<&ValidatedRuntimeRequest<'_>>,
         purpose: FactPublicationPurpose,
     ) -> RuntimeHostResult<FactPublication> {
-        let result: RuntimeHostResult<FactPublication> =
-            (|| {
-                // Workflow #411 B15 R5: `session.dispatch.` holds a run's read-only parameters,
-                // which exist only as an overlay of its snapshots; no origin publishes under it.
-                if let Some(record) = observation.records.iter().find(|record| {
-                    record
-                        .key
-                        .starts_with(actingcommand_execution_kernel::RUN_PARAMETERS_KEY_PREFIX)
-                }) {
-                    let fact_key = record.key.clone();
-                    return Err(RuntimeHostError::request(
-                        crate::codes::RemedyHostCode::SessionDispatchKeyReserved,
-                        ContractLocation::PublishFacts,
-                        RuntimeErrorCode::InvalidRequest,
-                    )
-                    .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
-                }
-                // SCH-M ED-2 (§3.4 D-14): the Runtime is the only writer of the run-duration
-                // samples; any other publication of the key is refused before the gate.
-                if purpose != FactPublicationPurpose::RunDuration
-                    && let Some(record) = observation
+        let result: RuntimeHostResult<FactPublication> = (|| {
+            // Workflow #411 B15 R5: `session.dispatch.` holds a run's read-only parameters,
+            // which exist only as an overlay of its snapshots; no origin publishes under it.
+            if let Some(record) = observation.records.iter().find(|record| {
+                record
+                    .key
+                    .starts_with(actingcommand_execution_kernel::RUN_PARAMETERS_KEY_PREFIX)
+            }) {
+                let fact_key = record.key.clone();
+                return Err(RuntimeHostError::request(
+                    crate::codes::RemedyHostCode::SessionDispatchKeyReserved,
+                    ContractLocation::PublishFacts,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+                .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
+            }
+            // SCH-M ED-2 (§3.4 D-14): the Runtime is the only writer of the run-duration
+            // samples; any other publication of the key is refused before the gate.
+            if purpose != FactPublicationPurpose::RunDuration
+                && let Some(record) = observation
+                    .records
+                    .iter()
+                    .find(|record| record.key == crate::run_duration::RUN_DURATION_FACT_KEY)
+            {
+                let fact_key = record.key.clone();
+                return Err(RuntimeHostError::request(
+                    crate::codes::RunDurationCode::KeyReserved,
+                    ContractLocation::PublishFacts,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+                .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
+            }
+            // UPD-1 (design §3.3): the Runtime is the only writer of the application update
+            // fact; any other publication of the key is refused before the gate.
+            if purpose != FactPublicationPurpose::ApplicationUpdate
+                && let Some(record) = observation.records.iter().find(|record| {
+                    record.key == crate::application_update::APPLICATION_UPDATE_FACT_KEY
+                })
+            {
+                let fact_key = record.key.clone();
+                return Err(RuntimeHostError::request(
+                    crate::codes::ApplicationUpdateCode::KeyReserved,
+                    ContractLocation::PublishFacts,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+                .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
+            }
+            // Workflow #428 S168-4: only a list reading writes under `inventory.list.`; every
+            // other publication of such a key, from every origin, is refused before the gate.
+            if purpose != FactPublicationPurpose::ListReading
+                && let Some(record) = observation
+                    .records
+                    .iter()
+                    .find(|record| actingcommand_contract::is_list_reading_key(&record.key))
+            {
+                let fact_key = record.key.clone();
+                return Err(RuntimeHostError::request(
+                    HostCode::ListReadingKeyReserved,
+                    ContractLocation::PublishFacts,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+                .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
+            }
+            // Workflow #308 RT-S1a: the resource target policy key has one formal entry.
+            match purpose {
+                FactPublicationPurpose::Ordinary
+                | FactPublicationPurpose::RunDuration
+                | FactPublicationPurpose::ApplicationUpdate
+                | FactPublicationPurpose::ListReading
+                | FactPublicationPurpose::ResourceAdjustment { .. } => {
+                    if observation
                         .records
                         .iter()
-                        .find(|record| record.key == crate::run_duration::RUN_DURATION_FACT_KEY)
-                {
-                    let fact_key = record.key.clone();
-                    return Err(RuntimeHostError::request(
-                        crate::codes::RunDurationCode::KeyReserved,
-                        ContractLocation::PublishFacts,
-                        RuntimeErrorCode::InvalidRequest,
-                    )
-                    .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
-                }
-                // UPD-1 (design §3.3): the Runtime is the only writer of the application update
-                // fact; any other publication of the key is refused before the gate.
-                if purpose != FactPublicationPurpose::ApplicationUpdate
-                    && let Some(record) = observation.records.iter().find(|record| {
-                        record.key == crate::application_update::APPLICATION_UPDATE_FACT_KEY
-                    })
-                {
-                    let fact_key = record.key.clone();
-                    return Err(RuntimeHostError::request(
-                        crate::codes::ApplicationUpdateCode::KeyReserved,
-                        ContractLocation::PublishFacts,
-                        RuntimeErrorCode::InvalidRequest,
-                    )
-                    .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
-                }
-                // Workflow #428 S168-4: only a list reading writes under `inventory.list.`; every
-                // other publication of such a key, from every origin, is refused before the gate.
-                if purpose != FactPublicationPurpose::ListReading
-                    && let Some(record) = observation
-                        .records
-                        .iter()
-                        .find(|record| actingcommand_contract::is_list_reading_key(&record.key))
-                {
-                    let fact_key = record.key.clone();
-                    return Err(RuntimeHostError::request(
-                        HostCode::ListReadingKeyReserved,
-                        ContractLocation::PublishFacts,
-                        RuntimeErrorCode::InvalidRequest,
-                    )
-                    .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
-                }
-                // Workflow #308 RT-S1a: the resource target policy key has one formal entry.
-                match purpose {
-                    FactPublicationPurpose::Ordinary
-                    | FactPublicationPurpose::RunDuration
-                    | FactPublicationPurpose::ApplicationUpdate
-                    | FactPublicationPurpose::ListReading
-                    | FactPublicationPurpose::ResourceAdjustment { .. } => {
-                        if observation
-                            .records
-                            .iter()
-                            .any(|record| record.key == RESOURCE_TARGETS_FACT_KEY)
-                        {
-                            return Err(RuntimeHostError::request(
-                                HostCode::ResourceTargetsFormalEntryRequired,
-                                ContractLocation::PublishFacts,
-                                RuntimeErrorCode::InvalidRequest,
-                            ));
-                        }
-                    }
-                    FactPublicationPurpose::ResourceTargets => {
-                        if !matches!(
-                            observation.records.as_slice(),
-                            [record] if record.key == RESOURCE_TARGETS_FACT_KEY
-                                && matches!(record.scope, FactScope::Instance { .. })
-                        ) {
-                            return Err(RuntimeHostError::fatal(
-                                HostCode::ResourceTargetsRecordInvalid,
-                                ContractLocation::PublishFacts,
-                                RuntimeErrorCode::RuntimeHalted,
-                            ));
-                        }
-                    }
-                }
-                // A priority offset (Workflow #308 slice 4a-2) names a task of the scheduling
-                // identifier charset, holds an inline integer within ±1 000 000 milli, and is never
-                // invalidated by events (its lifetime is the publisher's TTL).
-                for record in &observation.records {
-                    if let Some(task_id) = priority_offset_task_id(&record.key)
-                        && (!valid_priority_offset_task_id(task_id)
-                            || priority_offset_milli(record).is_none()
-                            || !record.invalidate_on.is_empty())
+                        .any(|record| record.key == RESOURCE_TARGETS_FACT_KEY)
                     {
                         return Err(RuntimeHostError::request(
-                            SharedCode::PriorityOffsetInvalid,
+                            HostCode::ResourceTargetsFormalEntryRequired,
                             ContractLocation::PublishFacts,
                             RuntimeErrorCode::InvalidRequest,
                         ));
                     }
                 }
-                // Workflow #411 B15 R6 (model-b15 §5.1): a write of the remedy choices is checked
-                // whole before the fact write gate; a refusal appends nothing.
-                for record in &observation.records {
-                    if record.key == actingcommand_contract::REMEDY_CHOICES_FACT_KEY {
-                        self.check_remedy_choices(record)?;
-                    }
-                }
-                // An observation of a family with the origin exception (priority offsets, remedy
-                // choices) and a resource target policy keep their request's origin on the
-                // `fact.published` event, so the ledger shows who set them; every other
-                // publication stays a Runtime fact-store event.
-                let (event_source, event_actor) = match source_request {
-                    Some(request)
-                        if purpose == FactPublicationPurpose::ResourceTargets
-                            || (!observation.records.is_empty()
-                                && observation.records.iter().all(|record| {
-                                    actingcommand_contract::fact_key_family(&record.key)
-                                        .takes_origin_exception()
-                                })) =>
-                    {
-                        (request.source(), request.actor())
-                    }
-                    _ => (EventSource::Runtime, EventActor::Runtime),
-                };
-                let _gate = lock(&self.fact_write_gate, ContractLocation::PublishFact)?;
-                self.synchronize_fact_store_under_gate()?;
-                // Workflow #384 D2-S3: the adjustment's base is read and its record written in
-                // this one hold of the gate.
-                if let FactPublicationPurpose::ResourceAdjustment { base_sequence } = purpose {
-                    let facts = lock(&self.facts, ContractLocation::PublishFact)?;
-                    let current = match observation.records.as_slice() {
-                        [record] => facts
-                            .active_revision(&record.scope, &record.key)
-                            .map(|(_, sequence, _)| sequence),
-                        _ => None,
-                    };
-                    if current != Some(base_sequence) {
-                        return Err(RuntimeHostError::request(
-                            HostCode::FactObservationVersionConflict,
+                FactPublicationPurpose::ResourceTargets => {
+                    if !matches!(
+                        observation.records.as_slice(),
+                        [record] if record.key == RESOURCE_TARGETS_FACT_KEY
+                            && matches!(record.scope, FactScope::Instance { .. })
+                    ) {
+                        return Err(RuntimeHostError::fatal(
+                            HostCode::ResourceTargetsRecordInvalid,
                             ContractLocation::PublishFacts,
-                            RuntimeErrorCode::InvalidRequest,
+                            RuntimeErrorCode::RuntimeHalted,
                         ));
                     }
                 }
-                let now = self.clock.sample()?.unix_ms;
-                // A resource target policy equal to the active, unexpired one is a replay: the
-                // active revision answers and nothing is appended.
-                let mut previous_version = None;
-                if purpose == FactPublicationPurpose::ResourceTargets {
-                    let record = &observation.records[0];
-                    let facts = lock(&self.facts, ContractLocation::PublishFact)?;
-                    if let Some((active, sequence, event_id)) =
-                        facts.active_revision(&record.scope, &record.key)
-                    {
-                        if active.resource_bundle_hash == record.resource_bundle_hash
-                            && !active.is_expired(now)
-                        {
-                            return Ok(FactPublication {
-                                event_id,
-                                sequence,
-                                previous_version: Some(sequence),
-                                replayed: true,
-                            });
-                        }
-                        previous_version = Some(sequence);
-                    }
+            }
+            // A priority offset (Workflow #308 slice 4a-2) names a task of the scheduling
+            // identifier charset, holds an inline integer within ±1 000 000 milli, and is never
+            // invalidated by events (its lifetime is the publisher's TTL).
+            for record in &observation.records {
+                if let Some(task_id) = priority_offset_task_id(&record.key)
+                    && (!valid_priority_offset_task_id(task_id)
+                        || priority_offset_milli(record).is_none()
+                        || !record.invalidate_on.is_empty())
+                {
+                    return Err(RuntimeHostError::request(
+                        SharedCode::PriorityOffsetInvalid,
+                        ContractLocation::PublishFacts,
+                        RuntimeErrorCode::InvalidRequest,
+                    ));
                 }
-                let preview = lock(&self.facts, ContractLocation::PublishFact)?
-                    .preview_observation(&observation, now, &self.ledger)?;
-                if let Some(event_id) = preview {
-                    let record = &observation.records[0];
-                    let facts = lock(&self.facts, ContractLocation::PublishFact)?;
-                    let (_, sequence, _) = facts
-                        .active_revision(&record.scope, &record.key)
-                        .filter(|(_, _, active_event)| *active_event == event_id)
-                        .ok_or_else(|| {
-                            RuntimeHostError::fatal(
-                                HostCode::FactPublicationSequenceMissing,
-                                ContractLocation::PublishFacts,
-                                RuntimeErrorCode::RuntimeHalted,
-                            )
-                        })?;
+            }
+            // Workflow #411 B15 R6 (model-b15 §5.1): a write of the remedy choices is checked
+            // whole before the fact write gate; a refusal appends nothing.
+            for record in &observation.records {
+                if record.key == actingcommand_contract::REMEDY_CHOICES_FACT_KEY {
+                    self.check_remedy_choices(record)?;
+                }
+            }
+            // Workflow #429 R-8 (`instance-fact-store.md`, "Pack schedule facts"): a published
+            // pack schedule list is checked whole before the fact write gate; a refusal
+            // (`session_pack_schedule_invalid`) appends nothing.
+            for record in &observation.records {
+                if record.key == crate::pack_schedule::PACK_SCHEDULE_FACT_KEY {
+                    crate::pack_schedule::check_record(record)
+                        .map_err(|refusal| refusal.into_error(ContractLocation::PublishFacts))?;
+                }
+            }
+            // An observation of a family with the origin exception (priority offsets, remedy
+            // choices, Workflow #429 R-8: the pack schedule) and a resource target policy keep
+            // their request's origin on the `fact.published` event, so the ledger shows who
+            // set them; every other publication stays a Runtime fact-store event.
+            let origin = match source_request {
+                Some(request)
+                    if purpose == FactPublicationPurpose::ResourceTargets
+                        || (!observation.records.is_empty()
+                            && observation.records.iter().all(|record| {
+                                actingcommand_contract::fact_key_family(&record.key)
+                                    .takes_origin_exception()
+                            })) =>
+                {
+                    (request.source(), request.actor())
+                }
+                _ => (EventSource::Runtime, EventActor::Runtime),
+            };
+            let _gate = lock(&self.fact_write_gate, ContractLocation::PublishFact)?;
+            self.publish_facts_under_gate(observation, source_request, purpose, origin)
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    /// The part of [`Self::publish_facts`] that runs under `fact_write_gate`, which the caller
+    /// holds, after the checks made before the gate: the store is synchronized, the observation
+    /// previewed against it and appended as one `fact.published` with `origin` (its source and
+    /// actor). Workflow #429 R-8: an `EditPackSchedule` reads the scope's list and writes the
+    /// edited one in one hold of the gate through it. A fatal failure is the caller's to mark.
+    pub(super) fn publish_facts_under_gate(
+        &self,
+        observation: actingcommand_contract::FactObservation,
+        source_request: Option<&ValidatedRuntimeRequest<'_>>,
+        purpose: FactPublicationPurpose,
+        origin: (EventSource, EventActor),
+    ) -> RuntimeHostResult<FactPublication> {
+        let (event_source, event_actor) = origin;
+        self.synchronize_fact_store_under_gate()?;
+        // Workflow #384 D2-S3: the adjustment's base is read and its record written in
+        // this one hold of the gate.
+        if let FactPublicationPurpose::ResourceAdjustment { base_sequence } = purpose {
+            let facts = lock(&self.facts, ContractLocation::PublishFact)?;
+            let current = match observation.records.as_slice() {
+                [record] => facts
+                    .active_revision(&record.scope, &record.key)
+                    .map(|(_, sequence, _)| sequence),
+                _ => None,
+            };
+            if current != Some(base_sequence) {
+                return Err(RuntimeHostError::request(
+                    HostCode::FactObservationVersionConflict,
+                    ContractLocation::PublishFacts,
+                    RuntimeErrorCode::InvalidRequest,
+                ));
+            }
+        }
+        let now = self.clock.sample()?.unix_ms;
+        // A resource target policy equal to the active, unexpired one is a replay: the
+        // active revision answers and nothing is appended.
+        let mut previous_version = None;
+        if purpose == FactPublicationPurpose::ResourceTargets {
+            let record = &observation.records[0];
+            let facts = lock(&self.facts, ContractLocation::PublishFact)?;
+            if let Some((active, sequence, event_id)) =
+                facts.active_revision(&record.scope, &record.key)
+            {
+                if active.resource_bundle_hash == record.resource_bundle_hash
+                    && !active.is_expired(now)
+                {
                     return Ok(FactPublication {
                         event_id,
                         sequence,
@@ -541,69 +547,91 @@ impl HostShared {
                         replayed: true,
                     });
                 }
-                let scope = &observation.records[0].scope;
-                let inputs = lock(&self.policy_inputs, HostLocation::BindFactScope)?;
-                if inputs.as_ref().is_some_and(|inputs| {
-                    observation.records.iter().any(|record| {
-                        inputs.facts().facts.iter().any(|fact| {
-                            fact.scope == crate::fact_store::policy_scope(&record.scope)
-                                && fact.fact_key == record.key
-                        })
-                    })
-                }) {
-                    return Err(policy_admission_request(
-                        HostCode::PolicyFactAuthorityConflict,
-                        ContractLocation::PublishFacts,
-                    ));
-                }
-                drop(inputs);
-                let scope_instances = self.fact_scope_instances(scope)?;
-                lock(&self.facts, HostLocation::ValidateFactInputBoundary)?
-                    .validate_input_boundaries(&observation.records[0], &scope_instances)?;
-                if scope_instances.is_empty()
-                    && observation.records[0].invalidate_on.iter().any(|event| {
-                        matches!(event, EventType::InputCommitted | EventType::InputFailed)
-                    })
-                {
-                    return Err(policy_admission_request(
-                        HostCode::FactInvalidationScopeUnbound,
-                        ContractLocation::PublishFacts,
-                    ));
-                }
-                let payload =
-                    FactPayloadDraft::observation(observation, scope_instances, AuditInput::new())
-                        .map_err(|_| {
-                            policy_admission_request(
-                                HostCode::FactObservationInvalid,
-                                ContractLocation::PublishFacts,
-                            )
-                        })?;
-                let links = match source_request {
-                    Some(request) => self.events.request_links(request, None, None, None),
-                    None => self.events.system_links()?,
-                };
-                let event = self.append_event_under_fact_gate(
-                    EventSeverity::Info,
-                    event_source,
-                    OriginModule::FactStore,
-                    event_actor,
-                    links,
-                    payload,
-                )?;
-                self.synchronize_fact_store_under_gate()?;
-                Ok(FactPublication {
-                    event_id: *event.event_id(),
-                    sequence: event.sequence(),
-                    previous_version,
-                    replayed: false,
-                })
-            })();
-        if let Err(error) = &result
-            && error.is_fatal()
-        {
-            self.fatal.mark(error.clone())?;
+                previous_version = Some(sequence);
+            }
         }
-        result
+        let preview = lock(&self.facts, ContractLocation::PublishFact)?.preview_observation(
+            &observation,
+            now,
+            &self.ledger,
+        )?;
+        if let Some(event_id) = preview {
+            let record = &observation.records[0];
+            let facts = lock(&self.facts, ContractLocation::PublishFact)?;
+            let (_, sequence, _) = facts
+                .active_revision(&record.scope, &record.key)
+                .filter(|(_, _, active_event)| *active_event == event_id)
+                .ok_or_else(|| {
+                    RuntimeHostError::fatal(
+                        HostCode::FactPublicationSequenceMissing,
+                        ContractLocation::PublishFacts,
+                        RuntimeErrorCode::RuntimeHalted,
+                    )
+                })?;
+            return Ok(FactPublication {
+                event_id,
+                sequence,
+                previous_version: Some(sequence),
+                replayed: true,
+            });
+        }
+        let scope = &observation.records[0].scope;
+        let inputs = lock(&self.policy_inputs, HostLocation::BindFactScope)?;
+        if inputs.as_ref().is_some_and(|inputs| {
+            observation.records.iter().any(|record| {
+                inputs.facts().facts.iter().any(|fact| {
+                    fact.scope == crate::fact_store::policy_scope(&record.scope)
+                        && fact.fact_key == record.key
+                })
+            })
+        }) {
+            return Err(policy_admission_request(
+                HostCode::PolicyFactAuthorityConflict,
+                ContractLocation::PublishFacts,
+            ));
+        }
+        drop(inputs);
+        let scope_instances = self.fact_scope_instances(scope)?;
+        lock(&self.facts, HostLocation::ValidateFactInputBoundary)?
+            .validate_input_boundaries(&observation.records[0], &scope_instances)?;
+        if scope_instances.is_empty()
+            && observation.records[0]
+                .invalidate_on
+                .iter()
+                .any(|event| matches!(event, EventType::InputCommitted | EventType::InputFailed))
+        {
+            return Err(policy_admission_request(
+                HostCode::FactInvalidationScopeUnbound,
+                ContractLocation::PublishFacts,
+            ));
+        }
+        let payload =
+            FactPayloadDraft::observation(observation, scope_instances, AuditInput::new())
+                .map_err(|_| {
+                    policy_admission_request(
+                        HostCode::FactObservationInvalid,
+                        ContractLocation::PublishFacts,
+                    )
+                })?;
+        let links = match source_request {
+            Some(request) => self.events.request_links(request, None, None, None),
+            None => self.events.system_links()?,
+        };
+        let event = self.append_event_under_fact_gate(
+            EventSeverity::Info,
+            event_source,
+            OriginModule::FactStore,
+            event_actor,
+            links,
+            payload,
+        )?;
+        self.synchronize_fact_store_under_gate()?;
+        Ok(FactPublication {
+            event_id: *event.event_id(),
+            sequence: event.sequence(),
+            previous_version,
+            replayed: false,
+        })
     }
 
     /// Workflow #411 B15 R6 (model-b15 §5.1): the write rule of one `session.remedy.choices`

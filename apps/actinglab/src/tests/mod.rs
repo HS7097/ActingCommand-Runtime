@@ -125,6 +125,16 @@ mod gate_434_lab5f;
 // Workflow #429 R-6: the core row `task stop` reaches `StopInstanceRun`.
 #[path = "gate_429_r6.rs"]
 mod gate_429_r6;
+// Workflow #434 CLI-EV: `events` without a position or a window shows the newest records, by
+// reads bounded by sequence; with one it reads as before.
+#[path = "gate_434_cli_ev.rs"]
+mod gate_434_cli_ev;
+// Workflow #434 CLI-IN: `--instance <alias>` names the instance on every command that acts on one.
+#[path = "gate_434_cli_in.rs"]
+mod gate_434_cli_in;
+// Workflow #429 R-8: the core rows `pack-schedule` and `pack-schedule set` reach their requests.
+#[path = "gate_429_r8.rs"]
+mod gate_429_r8;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

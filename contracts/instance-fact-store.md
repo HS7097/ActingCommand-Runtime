@@ -12,7 +12,8 @@ Runtime's facts about itself live in the separate runtime fact store
 
 Every change is one ledger event under the `fact_write_gate`: `fact.published`
 carries one observation (1–256 records of one scope and one
-`source_snapshot_id`), `fact.invalidated` drops one record. The store loads
+`source_snapshot_id`; the rows of a `record_list` record are bounded apart, "List reading
+facts", "Row bound"), `fact.invalidated` drops one record. The store loads
 at startup from the ledger's tagged state (Workflow #422 LN-2; "Start load" below),
 afterwards synchronizes incrementally from
 `last_sequence + 1`, and can replay history at an exact ledger position
@@ -150,8 +151,9 @@ unchanged appends nothing for that instance.
 
 **Failure.** Every refusal fails startup through the normal abort path (Fail
 Loud); only the idempotent path is success. The refusals are the store's own:
-`fact_record_invalid` (for example more than 256 capability or preferred-task
-identifiers, the `record_list` bound), `fact_observation_not_newer`,
+`fact_record_invalid` (for example more capability or preferred-task identifiers than the
+`record_list` row bound: 256, 1024 from S168-LB1a, not built yet; "List reading facts", "Row
+bound"), `fact_observation_not_newer`,
 `fact_store_capacity_exceeded`, `fact_source_snapshot_invalidated` (a seed of
 this snapshot id was invalidated), `policy_fact_authority_conflict` (the
 configured static `facts` declare the same key for the same instance), and the
@@ -321,6 +323,41 @@ instance), the priority offsets for it or for every instance, its own task
 states and outcomes, and every host. A change this contract describes for the
 intent's own instance, server or game still refuses it.
 
+**Left out of the projection (Workflow #428 S168-LB1a, not built yet;
+[v012-register.md](v012-register.md) §1.309; the coordinator's ruling 2 of 11-11, not Alice's
+words; #419: one long list never stops the scheduler for every instance).** The projection of the
+evaluation's `facts`, authoritative and forward alike, already leaves out three classes, each
+consumed by a projection of its own: the policy instance keys, the priority offsets and the
+run-duration samples. It leaves out two more:
+
+1. **Every record under `inventory.list.`**, whatever its rows. A list reading is a selection's
+   input, read by a select or judge step through its own snapshot ("List reading facts"), never
+   the scheduler's. No decision changes: no catalog predicate reads such a key, and a record list
+   is unusable to the scheduler's selection document. The evaluation's `facts`, its
+   `fact_snapshot_id` and an intent's instance view (above) no longer hold the lists, so a list's
+   publication no longer makes an evaluated intent `policy_facts_stale`. The catalog compile
+   refuses a catalog that names a key under the prefix to read
+   ([scheduling/README.md](scheduling/README.md), "Record lists and the projection"), so no
+   predicate meets the gap at evaluation.
+2. **Every other inline `record_list` record of more than 256 rows**, the policy's own bound,
+   which stays: the evaluator's input check (`observed_fact_value_is_bounded`, which refuses the
+   whole input that holds one) and the catalog schema's `maxItems` do not move. The store holds
+   such a record from S168-LB1a on (its row bound is 1024, "List reading facts", "Row bound").
+   The projection leaves it out for every instance its scope applies to (an instance record for
+   its instance, a server or game record for every instance of that server or game), so the
+   evaluation never refuses its whole input for it. The host records one warning
+   `policy_fact_rows_exceeded` (a proposed name the code slice registers; `fact_key`, and `count`
+   the record's rows) for each such record, the first time after a start that the projection
+   leaves it out, and no more in that start: the warning is not carried on every decision (the
+   coordinator's answer to question 3 of §1.309). A predicate that reads the key is Unknown for
+   that instance, and the key raises no fact refresh demand: a reading cannot shorten a list, so a
+   refresh would be asked for at every evaluation and never served. The code slice says which
+   unknown reason the predicate carries and how the demand is kept from rising; every other
+   instance and every other key evaluate as before.
+
+A ledger that holds no record under `inventory.list.` and no record list over 256 rows projects
+byte for byte as before.
+
 ## Policy input authority
 
 `validate_policy_input_authority` compares the registered alias set with the
@@ -477,12 +514,32 @@ The store accepts or refuses it like any other observation.
 
 | Key | Value | Scope |
 | --- | --- | --- |
-| `inventory.list.<name>` | `record_list`, one row `{<key_column>: <string>, <column>: <boolean, integer or string>, …}` per position of the list, at most 256 rows, in ascending byte order of the key | `instance` only |
+| `inventory.list.<name>` | `record_list`, one row `{<key_column>: <string>, <column>: <boolean, integer or string>, …}` per position of the list, at most 1024 rows (S168-LB1a, not built yet; until it 256), in ascending byte order of the key | `instance` only |
 
 - **Family.** The keys are of the `inventory.` family; no family is added. They are the only
   `record_list` records a package's reading writes.
+- **Row bound (S168-LB1a, not built yet; [v012-register.md](v012-register.md) §1.309).** The rows
+  of any `record_list` record of this store are bounded by a constant of their own, 1024 (the
+  proposed name `MAX_FACT_RECORD_LIST_ROWS`, in `crates/actingcommand-contract/src/fact.rs`), no
+  longer by `MAX_FACT_RECORDS`. `MAX_FACT_RECORDS` stays 256 and keeps bounding what it bounds
+  besides: the records of one observation, of an `InstanceFactSnapshot` and of an
+  `InstanceFactView`. The byte bounds do not move: 512 KiB an observation, 64 fields a row,
+  1024 bytes a string, the 1 MiB frame. After S168-LB1a each reader checks:
+
+  | Reader | Rows of a record list | Records |
+  | --- | --- | --- |
+  | the record's own check (`FactValue::validate`): every write and publication, a client's publication (`fact_record_invalid`), the host's check of a list before it publishes (`contained_task_resource_reading_rejected`), the decode of a `fact.published` ledger record (`validate_fact_observation`), a snapshot's and a view's check of each record, the client's check of an `InstanceFactSnapshot` answer | the new constant, 1024 | — |
+  | an observation (`validate_fact_observation`) | — | `MAX_FACT_RECORDS`, 256 |
+  | `InstanceFactSnapshot::validate`, `InstanceFactView::validate` | — | `MAX_FACT_RECORDS`, 256 |
+  | the kernel's list reading (`MAX_LIST_READING_ROWS`) | 1024, equal to the new constant | — |
+  | the scheduler's input (`observed_fact_value_is_bounded`) and the catalog's predicate value (`maxItems`) | 256, the policy's own (the projection leaves a longer list out, "Projection into the evaluation") | — |
+  | a key whose own contract bounds its rows (`session.remedy.choices`, `health.run_duration`) and the runtime fact store, a store of its own (`MAX_RUNTIME_FACT_RECORD_ROWS`, [runtime-fact-store.md](runtime-fact-store.md)) | its own bound, 256 | — |
+
+  A key whose contract states only "the `record_list` bound" takes 1024 with it, unless its own
+  write rule says otherwise ("Pack schedule facts").
 - **Whole or not at all.** A record holds every position the list showed. A list that could not
-  be read whole (an unread position, a repeated key, more than 256 positions) is never written,
+  be read whole (an unread position, a repeated key, more than 1024 positions, until S168-LB1a
+  more than 256) is never written,
   in part or as an empty list: the previous record, or none, stays. So in a usable record a key
   without a row is not present, and a record that is missing, expired, stale or below a reader's
   floor is unknown, never an empty list ([selection-policy.md](selection-policy.md), "Facts and
@@ -500,7 +557,9 @@ The store accepts or refuses it like any other observation.
 - **Projection.** An ordinary instance fact: visible to `InstanceFactSnapshot` and `ac_facts`,
   carried with its rows in the snapshot of a select or judge step whose document declares it,
   and loaded at the start as every tagged instance record. No catalog predicate and no
-  scheduling consumer reads it: record lists stay unusable to the scheduler.
+  scheduling consumer reads it: record lists stay unusable to the scheduler. From S168-LB1a (not
+  built yet) the scheduler's projection leaves the prefix out altogether ("Projection into the
+  evaluation", "Left out of the projection").
 - **Capacity.** One active fact identity per list per instance, however many rows and however
   often they change; booked in the capacity ledger below.
 - **Account data.** The rows say what the instance's account holds. They stay in this store and
@@ -575,6 +634,30 @@ one status read and print `{scope, read_at_unix_ms, snapshot, records_total, rec
 `observed_at_unix_ms` and `expires_at_unix_ms` tell its freshness; `--key-prefix` keeps only
 the records whose key starts with it.
 
+**The frame bound with long lists (Workflow #428 S168-LB1a, not built yet;
+[v012-register.md](v012-register.md) §1.309; the coordinator's ruling 3 of 11-11, not Alice's
+words).** No paging: the read answers one instance whole in one frame, and keeps its explicit
+refusal past it (`instance_fact_snapshot_too_large_for_frame`). What fits, by the read-only
+survey's measurement of the serialized records (register §1.309): all of an instance's records
+together hold about 6,000 list rows of the key and 3 short columns (about 5 lists of 1024 rows) or
+about 2,900 of the key and 8 (about 2 such lists), less what its other records take; a row of the
+key and 63 columns takes about 2.6 KB, and one such list stops at the observation's 512 KiB near
+200 rows ([resource-readings.md](resource-readings.md), "List readings", "Rows").
+
+A read by key prefix must be filtered before the frame is built. **Today it is not:** the request
+names only the instance (`InstanceFactSnapshot{instance}`), the host builds and measures the whole
+view, and `actingctl facts --key-prefix` and `ac_facts` with `key_prefix` drop the other records
+only after the answer arrived, so a prefix read of an instance whose whole view is over the frame
+is refused as the whole read is. S168-LB1a adds the optional request member `key_prefix` (an
+instance fact key prefix, the CLI's and the MCP tool's value): the host keeps only the records
+whose key starts with it, then builds and measures the view, and the answer carries the optional
+`records_total`, the instance's records before the filter, so `records_total` and
+`records_kept` print as before. A request without the member answers and serializes as before.
+Both are `runtime-client` 7 shapes ([component-interfaces.md](component-interfaces.md),
+"Planned: Workflow #428 S168-LB1"). `actinglab replay --facts` still needs the answer read
+without a prefix, so an instance over the frame cannot be replayed with its facts until a later
+slice pages the read.
+
 ## Capacity ledger (Workflow #383 AO-0)
 
 The store holds at most 256 active facts for the whole host (`MAX_ACTIVE_FACTS`,
@@ -631,47 +714,91 @@ Workflow #386 slice SR-11 (scheduling model v1.4.2 §6.1). A person or an agent 
 state and not as a one-off command, during which periods a task package may be scheduled on an
 instance. The state is stored in this store as one record of the `session.` family per scope.
 
-**Status.** Written ahead of its code (documentation slice SR-0); slice SR-11 implements it.
-Until then a `session.pack.schedule` record is an ordinary `session.` record that nothing reads.
+**Status.** Built by Workflow #429 R-8 (register §1.308, since 0.12.55), which implements
+SR-11 with #429 A.7.1: the key's family and origins, the rows' rule, the per-package layering,
+the deferral at position 5, `EditPackSchedule` and `PackScheduleView`. Left for later slices:
+the standard package's default layer (item 2 below; Workflow #429 R-9, until which that layer
+decides nothing and no `source` is `pack_default`) and a package's parameters (R-10). Before
+0.12.55 a `session.pack.schedule` record was an ordinary `session.` record that nothing read.
 
 | Key | Value | Scope |
 | --- | --- | --- |
-| `session.pack.schedule` | `record_list`, one row `{ "package_id": <string>, "from_unix_ms": <timestamp_ms>, "until_unix_ms": <timestamp_ms>, "schedulable": <boolean> }` per period | `instance` (that instance), or `server` / `game` (every instance of that server or game) |
+| `session.pack.schedule` | `record_list`, one row `{ "package_id": <string>, "from_unix_ms": <timestamp_ms>, "until_unix_ms"?: <timestamp_ms>, "schedulable": <boolean> }` per period; without `until_unix_ms` the row is open-ended | `instance` (that instance), or `server` / `game` (every instance of that server or game) |
 
 **Rows.** A row says "from `from_unix_ms` until `until_unix_ms` (half-open), the task package
-`package_id` is schedulable or not". `package_id` is the task package's id as the procedure
-manifest names it; the granularity is the task package, so every catalog task of one package
-opens and closes together, never one task and never a whole standard package. A row whose
-`until_unix_ms` is not after its `from_unix_ms`, rows of one `package_id` that overlap, or a
-value of another shape are refused as the non-fatal request error
-`session_pack_schedule_invalid` (`fact_key`, `field` pointing at the member). One scope holds at
-most the `record_list` bound of 256 rows, for all its packages together.
+`package_id` is schedulable or not"; a row without `until_unix_ms` is open-ended: it holds from
+`from_unix_ms` on (#429 A.7.1 point 2). `package_id` is the task package's id as its control
+declares it (the package the catalog task's procedure binding locates, read metadata-only as the
+remedy table reads it); the granularity is the task package, so every catalog task of one
+package opens and closes together, never one task and never a whole standard package. It is a
+text of 1 to 256 bytes without a control character. A row whose `until_unix_ms` is not after its
+`from_unix_ms`, rows of one `package_id` that overlap (an open-ended row overlaps every row of
+its package that starts after it), a row of another shape (a member it does not have, a member
+of another type, no `package_id`, `from_unix_ms` or `schedulable`) or a value that is not an
+inline `record_list` are refused as the non-fatal request error `session_pack_schedule_invalid`
+(`fact_key`, `field`), before the fact write gate, with nothing appended. `field` is a JSON
+pointer into the list: `/<row>/<member>` for a member (`/<row>/until_unix_ms` for a period that
+ends at or before it starts), `/<row>` for a row that overlaps an earlier row of its package
+(the later row), `""` for the list as a whole. One scope holds at most 256 rows, for all its
+packages together: this key's own bound, which the row rule checks (R-8: a published list beyond
+it is refused with `field` `""`, an edit beyond it with `/rows`), so that the general
+`record_list` row bound rising to 1024 with S168-LB1a (not built yet) does not raise it ("List
+reading facts", "Row bound"); until LB1a a published list beyond 256 rows is already the
+request's own refusal.
 
-**Writing.** One observation writes a scope's whole list, atomically. The publisher chooses the
-lifetime: no `expires_at_unix_ms` never expires. Publishing an empty list withdraws every row of
-the scope; publishing the list without a package's rows withdraws only those. The writers are
-`actingctl pack-schedule set` and `pack-schedule get`, the MCP general tools
-`ac_pack_schedule_set` and `ac_pack_schedule_get` (no tier), and the UI console (slice UI-2);
-they write the same rows. Under Workflow #389 the key is in the general key family
-(`fact_key_family`, `contracts/runtime-interface.md`), so all three counters may write it, and
-an observation that mixes it with keys of another family is refused as `fact_origin_mixed`.
-Before #389's slice U-6 removes the origin exception, SR-11 accepts it like a priority offset:
-from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`. There is no offline writer: a write goes
-through a running actingd, like `actingctl task-offset`.
+**Writing.** One observation writes a scope's whole list, atomically: a `PublishFacts` of the
+key alone, or `EditPackSchedule {scope, package_id, rows, expected_version?}`, which replaces
+only `package_id`'s rows in the scope's list as a compare-and-swap ([runtime-interface.md](runtime-interface.md),
+"Workbench request kinds"; #429 A.7.1 point 3): under the fact write gate the host reads the
+scope's list, compares its version (the sequence of the `fact.published` that holds it, `0`
+without a record) with `expected_version` (absent compares nothing; another value is
+`fact_observation_version_conflict` with `fact_key` and `current_version`, nothing appended),
+replaces the package's rows (the other packages' rows kept in their order, the package's after
+them; an expired list keeps none), checks the whole list and publishes it as one
+`fact.published` without expiry that keeps the request's origin; `rows: []` withdraws the
+package's rows of the scope. An edit's refusal points into the request: `/package_id`, `/rows`
+(more rows than the bound, the package's or the list's), `/rows/<row>/until_unix_ms` and
+`/rows/<row>`. The edit's record is observed at the host's clock, and the store takes a record
+of a key only when it is newer than the one it replaces: an edit that changes a scope's list in
+the same millisecond as the record it would replace is Denied `fact_observation_not_newer`, as
+every observation that is not newer is, with nothing appended, and the client sends it again
+(the coordinator's note in the 0.12.55 train, read from the store's publish rule; no test of
+R-8 pins it). A run in progress is not stopped by either. The publisher of a whole list chooses
+the lifetime: no `expires_at_unix_ms` never expires; publishing an empty list withdraws every
+row of the scope; publishing the list without a package's rows withdraws only those. The writers
+(R-8) are the Lab's two core rows, `pack-schedule <inst>` (the view) and `pack-schedule set
+<scope> <package_id> --rows <json> [--expected-version <n>]` (the edit; the scope one word,
+`instance:<inst>`, `server:<id>` or `game:<id>`; `contracts/lab-operations.json`), an agent
+through MCP's tools of those rows, and the console; there is no `actingctl pack-schedule` and
+none is added. The key is a family of its own in the general key family (`fact_key_family`,
+`FactKeyFamily::PackSchedule`, `contracts/runtime-interface.md`), so all three counters may write
+it, and an observation that mixes it with keys of another family is refused as
+`fact_origin_mixed`. Until #389's slice U-6 removes the origin exception, R-8 accepts it like a
+priority offset: from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`. There is no offline
+writer: a write goes through a running actingd.
 
 **Which row applies.** For instance `I`, task package `P` and time `t`, each package is
 resolved on its own (Workflow #429 R-0c, the coordinator's decision of 2026-10-29 on #429 item
-4, register §1.216 R0C-5; R-8 implements it): instance over server over game over the pack's
-default row, per package, never per record. A layer that holds no row of `P` decides nothing for
-`P`, so an instance record that names only package `A` leaves every other package to the server,
-game and pack default layers, and `EditPackSchedule` replaces only `P`'s rows in its scope.
-The general read `PackScheduleView` answers, per package, the decision, the layer that made it
-and its row ([runtime-interface.md](runtime-interface.md), "Workbench request kinds"), and the
-layer below's decision `below` (Workflow #429 R-0d, register §1.217): the items below applied
-again to `P` without the deciding layer's rows of `P`, that is the decision `P` would have now,
-and the layer that would make it (`server`, `game`, `pack_default` or `none`), if those rows
-were withdrawn; absent when the pack default or item 3 decided. R-8 fills `below` with the rest
-of the view.
+4, register §1.216 R0C-5; built by R-8, register §1.308): instance over server over game over the
+pack's default row, per package, never per record. A layer that holds no row of `P` decides
+nothing for `P`, so an instance record that names only package `A` leaves every other package to
+the server, game and pack default layers, and `EditPackSchedule` replaces only `P`'s rows in its
+scope. A record that has expired holds no row; one the Runtime cannot read (only a record
+written before R-8 could be one) decides nothing for the instances it covers (#419), and an
+evaluation reports it (below). The general read `PackScheduleView` answers, per package, the
+decision, the layer that made it and its row ([runtime-interface.md](runtime-interface.md),
+"Workbench request kinds"), when the decision next changes (the deciding row's end, or the
+start of the deciding layer's next row of `P`; absent when no row bounds it), and the layer
+below's decision `below` (Workflow #429 R-0d, register §1.217): the items below applied again to
+`P` without the deciding layer's rows of `P`, that is the decision `P` would have now, and the
+layer that would make it (`server`, `game`, `pack_default` or `none`), if those rows were
+withdrawn; absent when the pack default or item 3 decided. It lists every task package that at
+least one task of the active catalog that covers the instance runs, in package id order, whether
+or not a row names it (the coordinator's decision of 2026-11-11, which the plan left to R-8); a
+package only a row names, and one no task runs (held, or a helper only chains and recovery run),
+are not listed. It names each scope that applies to the instance (instance, then its server and
+game when the policy inputs name the instance) with its list's version, `0` without a record. It
+reads memory only and records nothing; an alias no instance has is Denied `instance_unknown`.
 
 1. the instruction layer: of the `session.pack.schedule` records that apply to `I`, the most
    specific scope that has a row of `P` (instance over server over game); a row of `P` there
@@ -680,7 +807,9 @@ of the view.
    declares in a data file at its root, compiled when the catalog is activated. The Runtime
    only reads them and never stores them here; the file's name and format belong to the
    standard-package data-file model of Workflow #373 (NAV-M). A default row should not close a
-   recognition maintenance package;
+   recognition maintenance package. Workflow #429 R-9 adds this layer; until it, the layer
+   decides nothing (`crates/runtime-host/src/pack_schedule.rs`, `pack_default`, the one place
+   R-9 fills);
 3. otherwise `P` is schedulable.
 
 Schedulable does not mean that it runs: the task's own trigger, budgets, cooldown and blackouts
@@ -688,15 +817,25 @@ still decide, and a task that runs only on request still runs only on request.
 
 **Evaluation.** When `P` is not schedulable for `I` at the evaluation instant, every candidate of
 `P` on `I` is deferred with `pack_schedule_closed` (info; `package_id`, and
-`next_eligible_unix_ms` the end of the covering row). Its place in the order of deferrals is
-after an active blackout and after `pack_registry_not_loaded` of Workflow #389
-(`scheduling-blackout.md`, "Order of the deferrals"). A row of a package that #389 has unloaded
-stays stored and takes effect again when the package is loaded. A changed record wakes the
-evaluation (`FactsChanged`); a row boundary wakes it through the deferral's wake time.
+`next_eligible_unix_ms` the end of the covering row, absent for an open-ended row), its wake
+that end (none for an open-ended row). Its place in the order of deferrals is after an active
+blackout (and after UPD-1's position 4a) and after `pack_registry_not_loaded` of Workflow #389
+(`scheduling-blackout.md`, "Order of the deferrals", position 5), before the pacing of position
+6. The evaluation reads the records as its facts hold them (the projection overlays them as
+ordinary instance facts) and each catalog task's package from the remedy table that evaluation
+uses. A row of a package that #389 has unloaded stays stored and takes effect again when the
+package is loaded. A changed record wakes the evaluation (`FactsChanged`); a row boundary wakes
+it through the deferral's wake time. A client's run (a direct run, a Lab operation) is not held
+by it, and a run in progress is not stopped.
 
 **Unknown packages.** A row naming a package that no task of the active catalog uses is not an
 error: a cycle evaluated by `evaluate_policy_cycle` reports it once as
-`pack_schedule_unknown_package` (info; `package_id`) and the row has no effect.
+`pack_schedule_unknown_package` (info; `package_id`) and the row has no effect. As for a priority
+offset's unknown task, the report is one extra `TaskDecision`, here of the task id
+`session.pack.schedule` (the key; no task is named), with no instance, eligibility `unknown`,
+state `blocked`, no rank and that one reason; it selects nothing and reaches no dispatch intent
+or ledger event. A record the evaluation cannot read is reported the same way, once per cycle,
+with the reason `session_pack_schedule_invalid` (`fact_key`, `field`).
 
 **Identity.** As for priority offsets, `combined_policy_snapshot_id` hashes the records the
 projection consumed, so a record written after an evaluation and before its admission refuses
@@ -711,7 +850,10 @@ like every key of this store it is a tagged record that the start loads from the
 (Workflow #383).
 
 **Codes.** `pack_schedule_closed` and `pack_schedule_unknown_package` (policy),
-`session_pack_schedule_invalid` (runtime-host); none of them triggers the recovery ladder.
+`session_pack_schedule_invalid` (runtime-host); none of them triggers the recovery ladder. The
+two requests' success codes are `request_edit_pack_schedule_completed` and
+`request_pack_schedule_view_completed` (contract, since 0.12.55); an edit's version conflict is
+the shared `fact_observation_version_conflict`.
 
 ## Remedy choice facts
 
@@ -744,8 +886,8 @@ are refused as arguments they do not take). Only the instance and game scopes ex
 because the server scope is not game-qualified.
 
 **Which record applies.** The record that applies to an instance is the most specific one
-(instance over game) and applies as a whole, as for the pack schedule: an instance record
-replaces the game record entirely.
+(instance over game) and applies as a whole (unlike the pack schedule, which is resolved per
+package): an instance record replaces the game record entirely.
 
 **Write rule.** Refused as the non-fatal request error `session_remedy_choices_invalid`
 (`fact_key`, `field` pointing at the row and member, and `instance_id` for a meaning error), before

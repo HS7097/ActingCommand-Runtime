@@ -294,8 +294,9 @@ tests = [
     "actingcommand-actingctl::gate::mcp_fact_refresh_parity::gate_actingctl_fact_refresh_and_ac_overview_answer_the_same_fact_refresh_status",
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_labobs::gate_labobs_ac_lab_observe_and_ac_lab_do_pass_preview_to_actinglab_as_the_cli_takes_it",
     "actingcommand-actingctl::gate::mcp_capability_gap_parity::gate_actingctl_capability_gap_and_ac_capability_gap_record_the_same_gap_locally",
+    "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_newest_page_without_a_position",
 ]
-incident = ["#389", "#385 P-m", "#384 D2-S5", "#410"]
+incident = ["#389", "#385 P-m", "#384 D2-S5", "#410", "#434 CLI-EV"]
 
 # actingctl config set|clear and MCP ac_config_set send the same changes, from an observer session (Workflow #387 D1b, D1-M8)
 [[gate]]
@@ -1470,3 +1471,33 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_429_r6::r6_task_stop_words_and_serve_line_reach_the_same_stop",
 ]
 incident = ["#429 R-6"]
+
+# Workflow #434 CLI-EV (0.12.55; register §1.306; brief rd-1111/brief-cli-events-newest.md; contracts/runtime-interface.md, the ac_events row; contracts/lab-operations.json, the events row): through the people's command on the runtime client's scripted Runtime, events without a position or a window answers the newest limit records its filters match, oldest first, with first_sequence and last_sequence (600 matching records: the newest 20 by default, the newest 5 with --limit 5; the first window read the 256 sequences at the head); its reads are the head's (a page that selects nothing), then sequence ranges inside the largest window below the head, each pinned to the head's snapshot, without a cursor and without run recovery, at most 23 of them; a filter the largest window holds fewer than limit records of answers those with searched_from_sequence the window's lower bound, the three windows' parts and the rows' read being the only reads, and --through-sequence <first_sequence - 1> reads the records below it as before; a filter whose records lie in the second and third windows only is found by the two widenings, the third window's part halved inside itself; with after, through_sequence, since_unix_ms, until_unix_ms, run, request or correlation_id the command sends one unpinned page request with run recovery of the query it sent before and prints only the members of before, and a cursor no process of the test issued is cursor_invalid before any read (the parity of the MCP tool and the people's command is gate 41's)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_ev::cli_ev_no_position_answers_the_newest_limit_oldest_first",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_ev::cli_ev_fewer_matches_than_the_limit_name_the_bound_and_no_read_leaves_the_window",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_ev::cli_ev_a_sparse_filter_is_found_by_widening_within_the_fixed_steps",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_ev::cli_ev_a_position_or_a_window_reads_as_before",
+]
+incident = ["#434 CLI-EV"]
+
+# Workflow #434 CLI-IN (0.12.55; register §1.307; brief rd-1111/brief-cli-instance-flag.md; contracts/lab-two-entries.md §9.3): actinglab's global --instance <alias> names the instance on every command that acts on one; on every offered row that declares a positional instance and whose command line is the CLI module's or that of an own command under other words (instance required, instance optional, own command), --instance after the row's words, before them or between them and the other positionals gives the call the positional gives, the module gets the line as it is or the own command the same words, and the parameter's note says so; devices bind, task stop (its stop's run and wait), run start, status, events, packs (the words lab-ops is given), offset, facts, pause, runs and monitor set, app launch and recover compared by name; on every such row the positional and the flag on one line with every positional of the row given, the same instance or another, in any order, and the flag twice are refused repeated naming the positional instance's word (or --instance), while targets set with a lone word beside the flag reads it as its optional file, the module's line exits 1 with the refusal alone and an own command's row is actinglab's validation_failed, and --instance without a value is value_missing; the 20 rows actinglab's own command serves under their own name go to that command as written with --instance before or after the words, take no positional instance and say so in their note, remedy set and wake-test read --instance as their own option, and a row without an instance refuses --instance by name before or after its words; serve --stdio gives every such row the call its parameter instance gave, equal to both command-line spellings, and refuses a member written as the flag, and MCP's --via mcp child's lines stay actinglab's own as written
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_in::cli_in_the_flag_reaches_the_request_of_the_positional",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_in::cli_in_both_spellings_on_one_line_are_refused_before_anything_is_sent",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_in::cli_in_the_own_commands_and_the_own_options_read_as_before",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_in::cli_in_serve_and_the_mcp_lines_are_unchanged",
+]
+incident = ["#434 CLI-IN"]
+
+# Workflow #429 R-8 (0.12.55; register §1.308; contracts/lab-operations.json, the rows pack-schedule and pack-schedule set): both core rows are offered with their help and name PackScheduleView and EditPackSchedule; their command lines are the CLI module's; their words (pack-schedule <inst>; pack-schedule set instance:<inst> <package> --rows <json> --expected-version 7) and the serve --stdio lines with the same parameters give the same call; the rows read as the edit's rows, an open-ended one included, and a row of another shape is refused; the scope word instance:, server: or game: names its scope and another word is refused
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_429_r8::r8_pack_schedule_rows_reach_their_requests",
+]
+incident = ["#429 R-8"]

@@ -750,8 +750,8 @@ impl HostShared {
                 Err(not_implemented(HostLocation::UpgradeStateStatus))
             }
             // Workflow #429 R-0 (register §1.213): the player workbench's kinds have their wire
-            // shapes; R-5, R-8 and R-13c add the behaviour. Until then each is refused and
-            // records nothing.
+            // shapes; R-5 and R-13c add the behaviour. Until then each is refused and records
+            // nothing.
             RuntimeOperation::RunInstanceTask { .. } => {
                 Err(not_implemented(HostLocation::RunInstanceTask))
             }
@@ -769,9 +769,15 @@ impl HostShared {
                 *run_request_id,
                 *wait_ms,
             ),
-            RuntimeOperation::EditPackSchedule { .. } => {
-                Err(not_implemented(HostLocation::EditPackSchedule))
-            }
+            // Workflow #429 R-8 (register §1.308): one package's rows of one scope's pack schedule
+            // list replaced under the fact write gate, compared with `expected_version` when the
+            // request names one.
+            RuntimeOperation::EditPackSchedule {
+                scope,
+                package_id,
+                rows,
+                expected_version,
+            } => self.edit_pack_schedule(validated, scope, package_id, rows, *expected_version),
             RuntimeOperation::EditResourceTarget { .. } => {
                 Err(not_implemented(HostLocation::EditResourceTarget))
             }
@@ -794,10 +800,10 @@ impl HostShared {
                     failure_outcome: None,
                 })
                 .map_err(|error| RequestFailure::request(error, RuntimeReceiptState::Denied, None)),
-            // Workflow #429 R-0c (register §1.216): the pack schedule's read view has its wire
-            // shape; R-8 adds the behaviour. Until then it is refused and records nothing.
-            RuntimeOperation::PackScheduleView { .. } => {
-                Err(not_implemented(HostLocation::PackScheduleView))
+            // Workflow #429 R-8 (register §1.308): one instance's pack schedule per package, read
+            // from memory; it records nothing.
+            RuntimeOperation::PackScheduleView { instance_alias } => {
+                self.pack_schedule_view(instance_alias)
             }
             // Workflow #429 R-7a (register §1.233): the player hold's two kinds have their wire
             // shapes; R-7b adds the behaviour. Until then each is refused on every channel,

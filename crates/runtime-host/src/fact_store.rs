@@ -2053,7 +2053,9 @@ fn policy_fact_identity(scope: &ScopeSelector, fact_key: &str) -> String {
     format!("{}\u{1f}{fact_key}", policy_scope_key(scope))
 }
 
-fn policy_value(value: &ContractFactValue) -> PolicyFactValue {
+/// A stored value as the evaluation reads it (Workflow #429 R-8: the pack schedule's rows are
+/// read in this one form, from the evaluation's facts and from the store alike).
+pub(crate) fn policy_value(value: &ContractFactValue) -> PolicyFactValue {
     match value {
         ContractFactValue::Boolean(value) => PolicyFactValue::Boolean(*value),
         ContractFactValue::Integer(value) => PolicyFactValue::Integer(*value),
