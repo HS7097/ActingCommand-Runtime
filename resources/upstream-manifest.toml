@@ -1,19 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 # This manifest records upstream locations for local reference artifacts.
-# It does not include upstream source code, binaries, screenshots, templates,
-# game assets, OCR data, or generated resource packs in this repository.
+# Apart from an entry that says included_in_repository = true, it records
+# nothing that is in this repository: no upstream source code, binaries,
+# screenshots, templates, game assets, OCR data, or generated resource packs.
 
 [[tools]]
 id = "maatouch"
 name = "MaaTouch"
-source_project = "wess09/AzurPilot"
-source_url = "https://github.com/wess09/AzurPilot"
-source_path = "bin/MaaTouch/maatouch"
+source_project = "MaaAssistantArknights/MaaTouch"
+source_url = "https://github.com/MaaAssistantArknights/MaaTouch"
+source_path = "the built maatouch binary; the same file (git blob e164cdb89963d21fb08defb35f9759760eeb1944, 13775 bytes) as bin/MaaTouch/maatouch in LmeSzinc/AzurLaneAutoScript and in wess09/AzurPilot"
 local_hint = "external-tools/maatouch/maatouch"
-included_in_repository = false
-license_review = "Upstream repository license and file-level attribution must be reviewed before redistribution."
-notes = "Used by the Runtime's MaaTouch input backend through the actingd configuration (device_paths.maatouch_path, or an instance's maatouch_local_path) or an ignored external-tools copy. Do not commit the binary."
+included_in_repository = true
+license_review = "Apache-2.0; the licence text is external-tools/maatouch/LICENSE. Included after licence review by the project owner's instruction: see NOTICE.md, 'Included external tool binaries'."
+notes = "Used by the Runtime's MaaTouch input backend through the actingd configuration (device_paths.maatouch_path, or an instance's maatouch_local_path) or the committed external-tools copy. This entry was corrected on 2026-11-12: it had named wess09/AzurPilot as the source and said the binary was not committed."
 
 [[tools]]
 id = "fastdeploy"

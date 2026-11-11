@@ -401,4 +401,4 @@ Issues are welcome. The commit identity guard accepts only commits whose author 
 
 ## License
 
-`AGPL-3.0-only`. Full text in [LICENSE](./LICENSE). Third-party material in [NOTICE.md](./NOTICE.md).
+`AGPL-3.0-only`. Full text in [LICENSE](./LICENSE). Third-party material in [NOTICE.md](./NOTICE.md): no source code of another automation project is in this repository. The upstream license matrix of the whole family is in the umbrella repository's [LICENSE_POLICY.md](https://github.com/HS7097/ActingCommand/blob/main/LICENSE_POLICY.md).

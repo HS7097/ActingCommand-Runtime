@@ -397,4 +397,4 @@ actingcommand-vision-provider-check --models-root <vision root>\models --hash
 
 ## 许可
 
-`AGPL-3.0-only`。完整文本见 [LICENSE](./LICENSE)。第三方材料见 [NOTICE.md](./NOTICE.md)。
+`AGPL-3.0-only`。完整文本见 [LICENSE](./LICENSE)。第三方材料见 [NOTICE.md](./NOTICE.md)：本仓没有其他自动化项目的源码。整个项目族的上游许可矩阵见伞仓的 [LICENSE_POLICY.md](https://github.com/HS7097/ActingCommand/blob/main/LICENSE_POLICY.md)。

@@ -1,10 +1,10 @@
 # NOTICE.md
 
-ActingCommand Runtime is planned to use `AGPL-3.0-only`.
+ActingCommand Runtime is licensed under `AGPL-3.0-only` (see [LICENSE](./LICENSE)). State as of 2026-11-12.
 
-This split repository was created from the local ActingCommand workspace. It contains the `AliceRuntimeOrchestrator` runtime prototype and independent runtime scripts.
+This repository holds the resident Runtime, its command line and tools, and its local MCP server.
 
-No upstream automation source code has been copied into this repository as part of the split.
+No source code of another automation project is in this repository. Where the Runtime follows a format or a protocol another project published (the task format of MaaAssistantArknights, the minitouch protocol), the implementation is its own. The source files adapted from another project, the third-party binary in the repository and the components the release artifacts carry are listed below. The upstream license matrix of the whole family is in the umbrella repository's [LICENSE_POLICY.md](https://github.com/HS7097/ActingCommand/blob/main/LICENSE_POLICY.md).
 
 ## Source code adapted from other projects
 
@@ -26,6 +26,7 @@ No upstream automation source code has been copied into this repository as part 
 - Source project: `MaaAssistantArknights/MaaTouch`
 - Source URL: https://github.com/MaaAssistantArknights/MaaTouch
 - Source path reviewed locally through BAAH release `DATA/touch.zip` and the upstream `MaaTouch` repository.
+- Identity of the committed file (checked 2026-11-12): 13775 bytes, git blob `e164cdb89963d21fb08defb35f9759760eeb1944`, the same blob as `bin/MaaTouch/maatouch` in LmeSzinc/AzurLaneAutoScript and in wess09/AzurPilot, which carry the same MaaTouch build.
 - Local destination: `external-tools/maatouch/maatouch`
 - License: Apache-2.0
 - License text: `external-tools/maatouch/LICENSE`
