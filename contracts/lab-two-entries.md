@@ -152,7 +152,7 @@ No roles, users or tokens. It equals the table's `ui_kinds` (section 9), which L
 | `PauseScheduling`, `ResumeScheduling`, `ControlEmulatorInstance`, `SelfCheckInstance`, `RequestShutdown` | write | the console sends them today |
 | `ApplicationLifecycle` | write | the console sends it today; the kind acts only on the instance's assigned application |
 | `ConfigureSettings` | write | the console sends it today; every key `daily` or `advanced` and settable (section 2.3) |
-| `StopInstanceRun` | write | built by #429 R-6's first slice (0.12.53): it stops a client's direct run and the Runtime resets the device itself; a policy run and a host run are refused with `run_origin`, a policy run until #429 R-6b (not built yet; `v012-register.md` §1.314), which stops it as a direct run is and settles it as a stop, leaving only a host run refused (runtime-interface.md, "Workbench request kinds") |
+| `StopInstanceRun` | write | built by #429 R-6's first slice (0.12.53) and R-6b (since 0.12.55; `v012-register.md` §1.314, §1.316): it stops a client's direct run and a run the scheduler started (a fact refresh read included), and the Runtime resets the device itself; a stopped scheduled run settles as a stop, neither a success nor a failure of its task; only a run the Runtime started for itself is refused, with `run_origin` `host`. A stop ends this run only: a task whose trigger still holds is dispatched again once its cooldown has passed (at the next evaluation when the stopped run outlasted it); a closing row (`pack-schedule set`) or a pause keeps it from running (runtime-interface.md, "Workbench request kinds") |
 | `EditPackSchedule` | write | built by #429 R-8 (0.12.55), with the read `PackScheduleView`: it replaces one task package's rows in one scope's pack schedule list, a compare-and-swap with `expected_version`; a run in progress is not stopped (instance-fact-store.md, "Pack schedule facts") |
 | `RunInstanceTask`, `EditResourceTarget`, `AcquirePlayerHold`, `ReleasePlayerHold` | write | on the list before they are built (#429 R-5, R-13c, R-7b); until then the Runtime answers them `not_implemented` |
 | `RecordClientAction` | write | transitional: the console's button trace, until UI-L1 ships; LAB-7 takes it off the list, since the G14 record's initiator replaces it |
@@ -750,6 +750,52 @@ sentence fails that test.
     one such entry, or `group` and `members`. A line with `--via` keeps its envelope.
   - The module's refusal of a row's words names `actinglab help` in its developer text, where it
     named this table's file.
+- **Completion** (Workflow #434 CLI-COMP, 0.12.55; register §1.318; the coordinator's rulings of
+  2026-11-11, not Alice's words).
+  - `actinglab completion powershell` and `actinglab completion bash` print a script for a person
+    to load from the shell's profile (without `--json` the script as it is, with it `{shell,
+    script}`); actinglab and the installer never edit a profile. PowerShell: `actinglab
+    completion powershell | Out-String | Invoke-Expression` turns it on in the session, and the
+    same line added to `$PROFILE` in every session. bash: `source <(actinglab completion bash)`,
+    and the same line added to `~/.bashrc`. Another shell word, or none, is refused as a read list
+    refuses one (`validation_failed`, `argument_problem` `not_recognised` or `required`).
+  - The scripts are plain ASCII and thin: each registers itself for `actinglab` and
+    `actinglab.exe` (`Register-ArgumentCompleter -Native`; `complete -o default -F`) and, at each
+    Tab, calls back the program the line names (its first word as typed: `actinglab` on the path,
+    or the path the person typed) with the words typed so far and the index of the word being
+    completed, so that a new row or a renamed word needs no new script. Where the callback gives
+    no candidate the shell completes file names itself; that is how a `path`, `file` or `dir`
+    parameter is completed.
+  - The callback, `actinglab __complete [--json] [--wait-ms <ms>] <index> <word>...`, is an own
+    command that is not for people. Its words are every word typed so far, the program's first
+    (index 0), up to the one being completed, each in the word form: `:` and the word with `%`,
+    `"`, a space and a tab written `%25`, `%22`, `%20` and `%09` (it reads any `%` and two hex
+    digits as that byte). It prints the candidates of the word at the index, by its prefix, sorted,
+    one per line and nothing else; with `--json` the line of an own command with the member
+    `candidates`. It runs nothing, sends no request that changes anything, writes no file, and
+    exits 0 with no candidate when it has none or anything goes wrong, writing nothing on stderr;
+    `main` answers a line that begins with it before anything else reads the line.
+  - What completes, from what the build knows: the command words `actinglab help` lists (the
+    offered rows' names, the words of the own command that serves a row or that a row replaces,
+    the own commands without a row; the callback's own word left out), by prefix at each position;
+    `help <words>` as the words. After a row's own name: its options and switches (`--name`, `_`
+    as `-`), not one already on the line unless it repeats; an enumeration's words after its
+    option or in its positional's place; the global options its line takes (where the row's
+    command takes them as written, those a person gives, else `--json` and `--help`), and
+    `--instance` while it may still name the row's instance. After an own command without a row,
+    or a row's other spelling: the global options only (their own flags come with a later slice).
+    The global options a person gives are those `help` lists but `--via`, `--instances`,
+    `--profile` and `--quiet`.
+  - An instance, wherever a row's parameter is one (the positional, `--instance` before or after
+    the words, or the instance option of `remedy set` and `wake-test`; on the 20 rows actinglab's
+    own command serves under the row's name only `--instance`, never in a positional's place):
+    the aliases of the running Runtime, asked with `Status`, the read that resolves `<instance>`
+    today, on one Lab connection whose every exchange ends by the wait (`--wait-ms`, default 500
+    milliseconds; 0 asks no Runtime); where no Runtime answers in time, those of the selected
+    configuration the offline rows read; none where neither reads. The handshake and `Status`
+    record nothing; no configuration key is read for the wait.
+  - Not completed: a file, path, directory, key, id, number, duration, JSON or free text, and an
+    own command's own flags.
 
 ### 9.4 Changing the table
 

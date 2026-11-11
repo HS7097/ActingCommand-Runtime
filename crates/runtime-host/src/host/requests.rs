@@ -756,9 +756,9 @@ impl HostShared {
             RuntimeOperation::RunInstanceTask { .. } => {
                 Err(not_implemented(HostLocation::RunInstanceTask))
             }
-            // Workflow #429 R-6, first slice (register §1.302): a client's direct run is stopped
-            // and the Runtime resets the device itself; a policy run and a host run are refused
-            // with `run_origin`.
+            // Workflow #429 R-6, first slice (register §1.302), and R-6b2 (§1.316): a client's
+            // direct run and a policy run are stopped and the Runtime resets the device itself;
+            // a host run is refused with `run_origin` `host`.
             RuntimeOperation::StopInstanceRun {
                 instance_alias,
                 request_id: run_request_id,

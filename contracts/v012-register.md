@@ -14168,6 +14168,109 @@ helpers that enumerate the kinds of the result name the third, which reads as no
 **Rollback.** A revert of the code. Nothing is written, so no state root, ledger record or
 configuration changes; the revisions are S168-LB1a's (and §1.314's rollback rule applies to them).
 
+### 1.316 Slice R-6b2 (code, 0.12.55): a scheduled run is stopped and settles as a stop (Workflow #429 R-6b, §1.314 with the coordinator's answers to its eight questions; R-6b1, §1.315, on its base; coordinator work order `rd-1111/brief-r6b2-stop-settle.md`; built on the 0.12.55 train head `fd8f693d`, stacked on its pull request)
+
+The number is the coordinator's. R-6b2 builds everything that writes the form R-6b1 built and
+read: the stop of a policy run, its reset, its live settlement and its settlement from its
+terminal at a start. No record type, table, index, SQLite format, `actingcommand.event.v3`,
+configuration key, outcome code, vocabulary token or request or answer shape is new or changed.
+After it a person's stop of a scheduled run works end to end.
+
+**Interfaces.** None raised. The base declares `ledger` [3, 8] and `runtime-client` [3, 7]
+(S168-LB1a, §1.311); R-6b joins both. The two rows of "Planned: Workflow #429 R-6b" are moved
+into the rows 8 of `ledger` and 7 of `runtime-client` of [component-interfaces.md](component-interfaces.md),
+whose planned section now says so ("Workflow #429 R-6b"); `distribution/windows/component-interfaces.json`
+and its architecture test are unchanged. `runtime-outcomes` stays 1: four descriptions change
+within it (below).
+
+| Row | What R-6b2 builds | Where |
+|---|---|---|
+| R6B-1 | `StopInstanceRun` stops a policy run, a fact refresh read included, as a direct run: asked `ClientRequested` at its next checkpoint, the same wait, `settled` and `reset`. Only a run the Runtime started for itself (a startup package, a ladder rung, an idle action's rest) stays refused, with `run_origin` `host`; the token `policy` stays registered and is no longer produced. The host mark is set before the run enters the run registry, so no stop ever sees a host run unmarked (it was set just after). `CancelContainedTask` (`ac_stop_run`, `run stop`) keeps refusing every scheduled run (`client_cancellable`), unchanged | `crates/runtime-host/src/host/contained_task.rs`, `ContainedRunControl::stop_refused_origin` (refuses `host` only) and `HostShared::begin_contained_run` (its new `host`, used by `prepare_package_run`); `crates/runtime-host/src/host/stop_instance_run.rs`, `stop_target` (unchanged code, its description) |
+| answer 8 | a policy run's control enters the run registry before its package's preparation, for either provenance (a physical run prepared its package first until now; a fixture-simulated one already registered first): a stop sent while the run prepares is asked, and the run ends at its first check (`contained_task_cancelled`, the reset done). The deadline the control holds is the one the preparation reads under (the earlier of the response deadline and the lease's bound, as before). A failed preparation ends as before: its refusal returns, no terminal, the run leaves the registry and its stop answers `reset: not_needed`, so the fallback (keeping `contained_task_cancellation_identity_missing`) was not taken | `HostShared::run_scheduled_contained_task`: `begin_contained_run` and the deadlines before `prepare_scheduled_package` and the second `validated_instance` |
+| R6B-2 | the cancel branch resets a stopped policy run as a direct run, with the run's own lease (the end phase's), before its terminal and its lease end (`InputReset`, linked to the run); a failed reset fences that instance only (#419), the stop answers `reset: failed` with the fence's failure (`instance_resources_fenced`) as its receipt's cause; the run's lease ends as every scheduled cancel's, a failed run's (`LeaseReleaseReason::BackendFailure`), and its committed `task.failed` is taken off its control, so its lease end finds no ladder trigger and hands the instance to no ladder, whatever `recovery_ladder.triggers` lists | `execute_contained_task_with_lease`, the cancel branch (`runtime_stop`, no longer gated on `!scheduled`; `ContainedRunControl::take_failed_terminal` before `cleanup_composite_failure_with_run_links`); `HostShared::reset_stopped_run` (unchanged code) |
+| R6B-4 | the live settlement: `PolicyExecutionInput::Stopped { outcome }`, read from the run's `task.failed` terminal with `contained_task_cancelled` (its outcome's top node), as every scheduled cancel writes it; no failure identity is computed; `decide_condition` answers `Ordinary` whatever `scheduling.rerun.condition_codes` lists; the record is built where its replay rebuilds it (`preview_stopped_settlement`), before any runtime-budget comparison, so it is never rewritten as `policy_runtime_budget_exceeded`, and a condition passed with it is refused `policy_execution_record_mismatch`; it is committed by `commit_paced_execution` (R-6b1); it records no settlement fact, also for a pair whose only run it is, where both the live and the replayed settlement refused `policy_settlement_missing` before; no run-duration sample (a success only); the authoritative outcome is cleared as for a failure. A run the stop found ending for its deadline or a pause's drain keeps that end, and one that ended on its own keeps its result; both answer `reset: not_needed` | `crates/runtime-host/src/host/policy_outcome.rs`, `scheduled_policy_failure_input`, `record_policy_dispatch_outcome_under_gate` and `settlement_of`; `crates/runtime-host/src/policy_control.rs`, `PolicyExecutionInput::Stopped`, `names_failure`, `preview_paced_settlement`; `crates/runtime-host/src/host/failure_settlement.rs`, `build_scheduled_failure_identity`, `recorded_failure_input`; `crates/runtime-host/src/policy_host.rs`, `execution_input_matches` |
+| R6B-7, the runtime-host half | the start's reconciliation and the reconciliation of a run its worker abandoned settle a run whose terminal is a `task.failed` with `contained_task_cancelled` as `stopped`, `runtime_ms` measured as a failure's, never re-judged as over its budget, through the ledger's recovery rule (R-6b1); a run with no terminal settles as interrupted, as before (answer 2). A stopped record already in the ledger whose dispatch has no completion is completed from it by the start's completion pass (`pending_dispatch_completions`; the ledger returns the existing record), never settled a second time: no change was needed there | `reconcile_scheduled_policy_outcomes_for` and `policy_recovery_outcome_matches` (`host/policy_outcome.rs`) |
+| R6B-9 | the texts: the row `StopInstanceRun` of [runtime-interface.md](runtime-interface.md) and the `ui` row of [lab-two-entries.md](lab-two-entries.md); the row `task stop` of [lab-operations.json](lab-operations.json), its `help` (159 bytes: "Stops one manual or scheduled run of an instance and resets its touches. It ends this run only; its task runs again after its cooldown unless closed or paused.") and its `notes`; every "(R-6b, not built yet)" and "(proposed)" of §1.314's contract texts ([policy-suspension.md](policy-suspension.md), [scheduling/README.md](scheduling/README.md), [runtime-fact-store.md](runtime-fact-store.md)) becomes "since 0.12.55"; the catalog's descriptions of `scheduled_contained_task_not_client_cancellable` and `request_stop_instance_run_completed` (`outcome-codes/contract.json`), of the key `run_origin` and of its vocabulary and tokens (`outcome-codes/catalog.json`, `RunOrigin`'s comments); the comments of `stop_instance_run.rs` and `contained_task.rs` | as named. §1.314 itself keeps its marks: it is the record of the contract slice |
+| R6B-10 | the declarations, as above | `contracts/component-interfaces.md` |
+
+**A stop ends this run only** (answer 5; said where a person reads it: the row `StopInstanceRun`
+and the `help` and `notes` of the row `task stop`). The cooldown counts from the dispatch: a task
+whose trigger still holds is dispatched again once its cooldown has passed, at the next evaluation
+when the stopped run outlasted it; a closing row of the pack schedule (`pack-schedule set`) or a
+pause keeps it from running. A clock slot's occurrence is served by the stopped dispatch; a
+`fact_time_reached` reading with `once_per_reading` is not (serving needs a success).
+
+**Settled by this slice** (each reported to the coordinator):
+
+- *The stop's mark is the terminal's code, live as at a start.* The live settlement reads the
+  run's `task.failed` terminal, not the control's memory of the stop: on a scheduled run only a
+  `StopInstanceRun` asks `ClientRequested` (difference (d)), so the live and the restarted
+  settlement read the same terminal the same way.
+- *The activity begins after the preparation.* Difference (g) and the activity row of
+  [runtime-interface.md](runtime-interface.md) ("`policy_run` ... from its package's preparation")
+  read the activity as shown from the preparation; the code begins it after the preparation, since
+  it names the prepared package's `package_id` (R-0b), and the run's request appears in no record
+  before its lifecycle, which also follows the preparation. A stop that names a run read from the
+  status or the records therefore always found its control registered; the registration now
+  precedes the preparation as answer 8 asks. This slice does not change the activity. The
+  coordinator's ruling on reading this (2026-11-11, not Alice's words): the code stands, and the
+  activity row of runtime-interface.md is corrected at the merge to say what the code does (the
+  activity begins once the package is prepared).
+- *A pause's drain during the preparation.* With the control registered, a scheduling pause's
+  drain sees a physical policy run during its preparation too (it saw a fixture-simulated one
+  already) and, at its drain timeout, asks it to stop; the run then ends at its first check
+  `contained_task_paused`, as any run in flight. Before, the drain saw the physical run only from
+  its registration after the preparation.
+- *Settlement facts.* A stopped record writes none of the four (rather than writing the pair's
+  previous settlement again).
+- *The policy driver's diagnostic.* As for every scheduled cancel, the driver records the run's
+  error as a `runtime.failed` warning (`record_scheduled_policy_failure`); it counts nothing and no
+  reader of a stop takes it as a failure. Unchanged.
+- *A test seam.* `ContainedTaskCheckpointPoint::ScheduledPreparation` (test builds only), after the
+  control's registration and before the package is read.
+
+**What an operator sees after deploy.** A scheduled run can be stopped from the console's "close
+this task" (R-8's second step now acts on it), from actinglab `task stop` and from an agent
+through the Lab's tool: it ends at its next check, or at its first one when the stop came while it
+prepared its package; the Runtime resets the device with the run's lease (one `InputReset` before
+the lease's release); the stop answers `settled` and `reset` as for a direct run. `actingctl runs`
+and `ac_runs` show the run `failed` with `contained_task_cancelled`; its `policy.execution_recorded`
+is `stopped`; nothing counts as a failure, retries, backs off, pauses or enters a ladder, no rerun
+is owed and a rerun the dispatch served ends; the routine summary counts it under `interruptions`;
+the task snapshot shows `cancelled`. A host run, and every scheduled run through `ac_stop_run` and
+`run stop`, stay refused. A console of `runtime-client` 6 cannot read an event page that holds a
+stopped record, so the console of the release is deployed with it.
+
+**Tests** (gate rows `#429 R-6b2` in `contracts/test-gates/host.toml` and `policy.toml`; neutral
+ids, a manual clock, no sleep): through the host (`gate_429_r6b2`), a stopped policy run end to end
+(the reset on its lease before its release, its terminal, its `stopped` record, the later stop's
+`settled` and `reset: done`, no streak, failure state, retry round or owed rerun held and replayed
+alike, no ladder, the snapshot `cancelled`, an interruption in the routine summary); a sensitive
+task's stopped run not paused; the stop over `scheduling.rerun.condition_codes` and a
+`recovery_ladder.triggers` item naming `contained_task_cancelled`; the live settlement of a stopped
+owed rerun; the restart from the terminal (`stopped`) and with no terminal (interrupted); a failed
+reset fencing only its instance with no ladder while the other instance's run completes; a stop
+during the preparation; a stopped fact refresh read. In the decision memory (`policy_control`), the
+live input: an immediate rerun's round, an owed rerun and a remedy retry ended; never a condition,
+never over its budget, a condition refused. In the evaluator (`policy` crate): the clock
+occurrence served, a `once_per_reading` reading not served and the task dispatched after its
+cooldown from the dispatch (`gate_405_cf1`); a stopped fact refresh reader neither exhausted nor
+backed off (`gate_d2_s4`).
+Changed: `gate_429_r6::r6_a_host_run_and_a_policy_run_are_refused_with_their_origin_and_nothing_is_cancelled`,
+its policy half (a policy run is asked to stop), renamed
+`r6_a_host_run_is_refused_with_its_origin_and_a_policy_run_is_asked_to_stop` with its `[[retired]]`
+entry in `ci/retired-gates.toml`; `gate_429_r8::r8_closing_a_task_then_stopping_its_run`, its policy
+half (the second step asks the scheduled run to stop), name kept; the test helpers
+`begin_uncancellable_run_for_test` and `end_uncancellable_run_for_test` (renamed from
+`..._unstoppable_...`). No golden, schema or census reads the `help` of `task stop`; the tests that
+read it read the table at run time.
+
+**Rollback.** `ledger` 8 is one way (the Rp.max rule): once the Runtime of the release has run,
+going back below it is refused, whether or not a stop was recorded, and after the first stop a
+stopped record exists that no build before R-6b1 decodes. A revert of R-6b2's code alone returns to
+refusing a policy run's stop (the readers of R-6b1 stay and read nothing new). The configuration
+needs nothing.
+
 ### 1.317 Slice NEUT-2 (0.12.55): the core's tests and fixtures hold no game abbreviation (Workflow #434; Alice's hard constraint of 10-10 that the program itself is game-neutral, in code, contracts, configuration, code tables and tests, with game content only in the resource repositories; coordinator work order `rd-1111/brief-neut2.md`, read on main `385bb500`)
 
 The section number is the coordinator's. Tests, fixtures, one guard, one gate row and one
@@ -14288,6 +14391,175 @@ the words fails:
 
 **Interface.** None raised ([component-interfaces.md](component-interfaces.md)): nothing a reader
 or writer of any interface sees changes.
+
+### 1.318 Slice CLI-COMP (0.12.55): Tab completes `actinglab`'s command lines in PowerShell and bash (Workflow #434; the customer-view audit of 2026-11-11 asked for a command line a person can use without the manual; the coordinator's eight rulings of the same day, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §2, on main `a62434a4`; coordinator work order `rd-1111/brief-cli-completion.md`, read on main `fed839c2`)
+
+The number is the coordinator's: §1.315 to §1.317 and §1.319 are open at the same time.
+[lab-two-entries.md](lab-two-entries.md) §9.3, "Completion", is the contract. No persisted shape,
+wire shape, request kind, configuration key, outcome code, ledger record or interface revision is
+new or changed; [lab-operations.json](lab-operations.json) is unchanged.
+
+**Why.** CLI-EV, CLI-IN and CLI-HELP (§1.306, §1.307, §1.313) fixed what the command line's words
+mean and what its help prints, but nothing completed them: a person typed every row's words,
+options and instance aliases from the help or from memory.
+
+**Turning it on** (ruling 1): two lines per shell, which a person adds; actinglab and the installer
+never edit a profile.
+
+- PowerShell (Windows PowerShell 5.1 and PowerShell 7): `actinglab completion powershell |
+  Out-String | Invoke-Expression` turns it on in the session; `Add-Content $PROFILE 'actinglab
+  completion powershell | Out-String | Invoke-Expression'` keeps it on in every new session.
+- bash: `source <(actinglab completion bash)` turns it on in the shell; `echo 'source <(actinglab
+  completion bash)' >> ~/.bashrc` keeps it on in every new shell.
+
+**What** (`apps/actinglab/src/cli_completion.rs`; `main`, `execute`, `OWN_COMMANDS`,
+`cli_help::OWN_WITHOUT_ROW`).
+
+- **The two commands** (rulings 1, 2 and 8). `completion powershell|bash` (`run_completion`, its
+  read list `COMPLETION_READS`: no flag, the shell) answers `{shell, script}`; without `--json`
+  `main` prints the script as it is (`cli_completion::for_people`, `script_text`). Its sentence:
+  "Prints the Tab completion script of PowerShell or bash, which a person loads from the shell's
+  profile; the script asks actinglab for each word's candidates." `__complete [--json] [--wait-ms
+  <ms>] <index> <:word>...` is the scripts' callback (`callback_line`, `callback_text`,
+  `run_callback`); its sentence says it is not for people: "Not for people: the completion
+  scripts' callback, which prints the candidates of the typed word at the index, one per line; it
+  runs and writes nothing."
+- **The scripts** (`cli_completion::POWERSHELL`, `BASH`, product constants; ruling 2 and the work
+  order's "Build"). Plain ASCII; they need only the shell and the program. Each registers for
+  `actinglab` and `actinglab.exe` (`Register-ArgumentCompleter -Native -CommandName`; `complete -o
+  default -F`), takes the words up to the one being completed (PowerShell: the command's elements
+  that begin before the cursor, a string constant by its value, and an empty word when the word
+  being completed is empty; bash: `COMP_WORDS` up to `COMP_CWORD`), and calls back the program
+  the line names, its first word as typed (`actinglab` on the path, or the path the person typed),
+  with the index of the last and every word quoted and in the word form. PowerShell quotes a
+  candidate that holds a character outside `[\w./\\:=+%-]` in single quotes.
+- **The word form** (`WORD_MARK`): `:` and the word with `%` written `%25`, `"` `%22`, a space
+  `%20` and a tab `%09`; the callback reads any `%` and two hex digits as that byte
+  (`decoded`). Windows PowerShell 5.1 hands a native program an empty word as nothing and a word
+  with a quote broken; a word of the form is never empty and holds no space and no quote, and it
+  never reads as one of actinglab's global options, `--help` or `--via` (none begins with `-`), so
+  it reaches the callback whole in every shell.
+- **The callback** (ruling 2). It reads its line itself: `main` answers a line whose first word is
+  `__complete` before anything else reads it (no option parse, no `--help`, no installation
+  check, no channel reporter), prints the candidates one per line and exits 0; with `--json` it
+  prints the own command's line `{candidates, outcome}`. A line that reaches the dispatch another
+  way (the word not first) answers the same candidates as data. A line it cannot read (no index,
+  a second one, a flag it does not read, a word without the mark, a wait that is no whole number
+  or has no value, a word that is no UTF-8), an index beyond the words or the program's own,
+  and words that begin no command give no candidate. Nothing on stderr, ever; a stdout that
+  refuses the text is left as it is.
+- **What completes** (ruling 3; `candidates`, `names`, `position`, `command_candidates`,
+  `row_candidates`, `RowLine`, `flags`). The command words are those `actinglab help` lists: each
+  offered row (the authoring rows where §8.3 lists them, as help's list does) by its name, by the
+  own command that serves it under other words and by each own command it replaces
+  (`cli_help::row_names`), and each own command without a row, but `__complete`. At each position,
+  the next words of every name the words so far begin, by prefix; actinglab's global options and
+  their values are skipped among the words; `help <words>` completes as the words. After a row's
+  own name: the row's options and switches, `--name` with `_` as `-`, one already on the line left
+  out unless its parameter repeats; after an option of type `enum:…`, or in a positional's place of
+  that type, its words; in a positional's place of another type nothing (the shell's own file
+  names); the global options the row's line takes: where the row hands actinglab's global options
+  to its command as written (`engine::as_written`) those a person gives, else `--json` and
+  `--help` (the CLI module refuses the others by name, §9.3); and `--instance` while the row's
+  positional instance is not given. After an own command without a row, or a row's other
+  spelling: the global options a person gives, nothing else (ruling 5: `own_flags` stays in the
+  test build). The global options a person gives are `help`'s (`cli_help::GLOBAL_OPTION_PHRASES`,
+  where the retired `--require-session` is not listed) but `--via` and the three no command reads
+  (`--instances`, `--profile`, `--quiet`).
+- **An instance** (rulings 3, 4 and 7; `instance_aliases`). Wherever a row's parameter is an
+  instance: its positional (where its command line takes one: never on the 20 rows actinglab's own
+  command serves under the row's name, whose note says "only --instance", register §1.307),
+  `--instance` before or after the row's words, and the instance option of `remedy set` and
+  `wake-test`. The aliases of the running Runtime, asked with `Status`, the read that resolves
+  `<instance>` today (`core_ops::alias_of` and the reads beside it), on one connection of the Lab
+  channel made as actinglab's own commands make theirs (`lab_client_config_via`) with one deadline
+  (`RuntimeClientConfig::with_deadline`) that ends the connect, the handshake (`Health`,
+  `BindChannel`) and the read. When no Runtime answers by then (none is located, none runs, it
+  answers no `Status` in time), the aliases of the selected configuration the offline rows read
+  (`lab_ops::packs::selected_config` and `packs::read`, as `packs` reads it, from the install root
+  this program runs from); none where neither reads. The Runtime is asked only at an instance's
+  place. The host answers `Health`, `BindChannel` and `Status` from memory and appends no ledger
+  record for any of them (`HostShared::control_plane_status`, `governance.rs` `bind_channel`), so
+  ruling 7's condition holds: no new request, no ledger record.
+- **The wait** (ruling 4). `--wait-ms <ms>`, a parameter of the callback, default 500
+  (`cli_completion::DEFAULT_WAIT_MS`); the scripts pass none. `0` asks no Runtime. No configuration
+  key.
+- **Not completed** (ruling 6): files, paths, directories, keys, ids, numbers, durations, JSON and
+  free text: the callback answers nothing there, and both scripts leave the word to the shell's
+  own file name completion (PowerShell's when a native completer returns nothing; bash's by
+  `complete -o default`).
+
+**Settled where the rulings left it open** (the implementer's; for the coordinator to confirm).
+(a) The callback's word is `__complete`, and it is left out of the command words a person is
+offered, though `help` lists it with its sentence. (b) The words reach the callback in the word
+form, not bare: PowerShell 5.1's native argument passing drops an empty word and breaks one with
+a quote, and a bare word could read as actinglab's own option. (c) The scripts call back the
+program the line names, its first word as typed. (d) The callback's index counts the program's
+word as 0, as bash's `COMP_CWORD` does, and its words end at the one being completed. (e) The
+candidates are sorted and given once; PowerShell quotes one that needs it, bash inserts each as
+it is. (f) After a row's own name a word that is no flag gets its positional's candidates (an
+instance's aliases, an enumeration's words) and, where no positional is left and nothing is typed,
+the row's flags; a flag gets the flags. (g) The global options after a row are those its line takes
+(see above), not all of them. (h) A row's other spellings (`session app launch`, `lab watch`)
+complete as own commands, by the coordinator's ruling 5. (i) A group's words followed by a flag
+(`lab --`) offer `--help`. (j) The wait's default is 500 milliseconds and `0` skips the Runtime;
+the subprocess test passes a longer wait so that a slow runner's handshake still fits. (k) A
+line that reaches the dispatch with the word not first answers the candidates as data (the
+dispatch arm the inventory counts), its global options already parsed. (l) The `completion`
+command and the callback are in LAB-5B5's group (a): the first refuses by its read list, the
+second reads every word of its line and answers one it cannot read with no candidate, ignoring
+none.
+
+**Censuses** (ruling 8; each moved with the two commands).
+
+- The dispatch: two arms in `execute` after `explain`; `OWN_COMMANDS` 32 → 34.
+- The command inventory `ratchet/actinglab_commands.json`: `dispatch_arm_count` 45 → 47,
+  `command_count` 100 → 102, `completion` and `__complete` after `explain` in both lists; the
+  README's count (both READMEs, the English and the Chinese, two places each) with it.
+- LAB-5B5's census (`cli_module::own_flags`, test build only): `REFUSING_COMMANDS` 59 → 61.
+- CLI-HELP's table of own commands without a row: `cli_help::OWN_WITHOUT_ROW` 35 → 37, each with
+  its sentence; its test's count, `gate_434_cli_help::cli_help_the_list_has_every_offered_row_and_own_command_once`,
+  34 → 36 (the two commands have no row either), and the CLI-HELP gate row's text with it. The
+  help's list holds both with their sentences.
+
+**What a person sees.** `actinglab pa<Tab>` offers the command words that begin so (`pause`,
+`packs`, `pack-schedule`, `package` and `paths` among them); `actinglab pause <Tab>` the running
+Runtime's aliases; `actinglab events --view <Tab>`
+`changes`, `errors`, `events`, `health`, `lab` and `observation`; `actinglab tap --<Tab>` the flags
+`tap`'s line takes, `--instance` among them; `actinglab run start <alias> <Tab>` file names. With
+the Runtime stopped, an alias comes from the selected configuration. A Tab never prints an error.
+
+**Interface.** None moves: `ledger` 8, `runtime-client` 7, `actingd-config` 28, `package` 9 and
+`runtime-outcomes` 1, as the release's other slices leave them, unchanged by this one; no request,
+no outcome code, no configuration key.
+
+**Rollback.** Nothing is persisted. A build before this one answers `completion` and `__complete`
+as unknown commands (exit 1, nothing on stdout the scripts read), so a loaded script then offers
+no candidate and the shell completes file names; removing the profile's line ends it.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CLICOMP-1 | `actinglab completion powershell\|bash` | own command, `{shell, script}`; the script as it is without `--json` | CLI-COMP | actinglab | `since` 0.12.55 |
+| CLICOMP-2 | `actinglab __complete [--json] [--wait-ms <ms>] <index> <:word>...` | own command not for people: candidates one per line, `{candidates}` with `--json`; exit 0 always, nothing on stderr | CLI-COMP | actinglab, the two scripts | `since` 0.12.55; the word form `:` with `%25`, `%22`, `%20`, `%09` |
+| CLICOMP-3 | `cli_completion::POWERSHELL`, `BASH` | product constants, plain ASCII | CLI-COMP | — | `Register-ArgumentCompleter -Native`; `complete -o default -F` |
+| CLICOMP-4 | `--wait-ms`, default 500 | a parameter of the callback (no configuration key) | CLI-COMP | — | `0` asks no Runtime |
+
+Tests (apps gate row "#434 CLI-COMP"; the table this build embeds, neutral aliases, a configuration
+in a temporary folder and the runtime client's scripted Runtime):
+`gate_434_cli_comp::cli_comp_command_words_by_prefix_at_each_position`,
+`cli_comp_a_row_s_flags_and_an_enumeration_s_words`,
+`cli_comp_instances_from_the_runtime_else_the_configuration`,
+`cli_comp_a_row_whose_instance_is_only_the_flag_offers_the_flag`,
+`cli_comp_anything_wrong_gives_no_candidate` and
+`cli_comp_the_scripts_are_ascii_and_pass_the_words_marked` (the bin's), and the integration test
+`completion_callback::completion_callback_prints_on_stdout_only_and_exits_zero` (the program run as
+a process: stdout only, exit 0, with an answering Runtime, a silent one, none, and lines it cannot
+read). That the embedded operation table does not read is not reachable in a test. The only
+existing test that changes is CLI-HELP's count above; the inventory guard
+`command_inventory_matches_checked_in_snapshot`, LAB-2's
+`consumer_command_lines_take_the_old_path_unchanged`, LAB-2b's `own_results_never_name_outcome`
+and LAB-5B5's `the_census_puts_every_inventory_word_in_one_group` read the moved censuses
+unchanged. No golden changes.
 
 ### 1.319 Slice NAV-L1 (0.12.55): a phased route run as a layer enters at the stage its entry page starts (Workflow #428; a production run of 11-11 failed as a layer where the offline regression of the same package was green; the coordinator's ruling of 11-11, not Alice's words: one rule for every run of a phased route; coordinator work order `rd-1111/brief-nav-l1.md`, read on main `385bb500`)
 

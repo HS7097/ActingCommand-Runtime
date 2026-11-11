@@ -220,7 +220,9 @@ fn cli_help_the_list_has_every_offered_row_and_own_command_once() {
         rest, own,
         "the own commands without a row are the inventory's commands no row names"
     );
-    assert_eq!(own.len(), 34, "the survey's count");
+    // Workflow #434 CLI-COMP (register §1.318): its two own commands, `completion` and
+    // `__complete`, have no row either.
+    assert_eq!(own.len(), 36, "the survey's 34 and CLI-COMP's two");
 
     // The text for people: each entry once, its sentence beside it; plain ASCII, 100 columns.
     let text = people_of(&["help"]);

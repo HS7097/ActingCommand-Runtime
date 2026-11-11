@@ -3,7 +3,7 @@
   "source": "apps/actinglab/src/**/*.rs",
   "dispatch_function": "execute",
   "denominator_kind": "top_level_dispatch_arm",
-  "dispatch_arm_count": 45,
+  "dispatch_arm_count": 47,
   "dispatch_arms": [
     "help",
     "version",
@@ -37,6 +37,8 @@
     "stream",
     "record",
     "explain",
+    "completion",
+    "__complete",
     "user-config <subcommand>",
     "env <subcommand>",
     "lab <subcommand>",
@@ -51,7 +53,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 100,
+  "command_count": 102,
   "commands": [
     "help",
     "version",
@@ -85,6 +87,8 @@
     "stream",
     "record",
     "explain",
+    "completion",
+    "__complete",
     "user-config get",
     "user-config set",
     "env resolve",

@@ -1772,6 +1772,18 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeHalted,
             ));
         }
+        // Workflow #429 R-6b2 (register §1.314 R6B-4, difference (d)): on a scheduled run only a
+        // `StopInstanceRun` asks the cancel whose terminal carries `contained_task_cancelled`
+        // (`CancelContainedTask` refuses a scheduled run), so that terminal settles the run as a
+        // stop, neither a success nor a failure of its task: its terminal outcome's top node, no
+        // failure identity, no class. The start's reconciliation reads the same terminal so.
+        if outcome.is(RuntimeErrorCode::ContainedTaskCancelled) {
+            return Ok(ScheduledFailureSettlement::Failed(
+                PolicyExecutionInput::Stopped {
+                    outcome: outcome.without_causes(),
+                },
+            ));
+        }
         // Ledger revision 3 (model section 8.1): the class comes from the terminal through the
         // contract's shared function, as the startup recovery and the ledger read it, no longer
         // from the terminal's severity (now its category). Workflow #378 A2-P: the failure is the
@@ -1959,11 +1971,11 @@ impl HostShared {
                 let mut policy = lock(self.policy()?, HostLocation::FinishReplayedPolicyOutcome)?;
                 self.finish_policy_dispatch_outcome(&mut policy, &existing, context, cache_update)?;
                 self.record_policy_values(&mut policy)?;
-                let settlement = policy
-                    .latest_settlement(&existing.task_id, &existing.instance_id)?
-                    .ok_or_else(policy_settlement_missing)?;
+                let settlement = settlement_of(&policy, &existing)?;
                 drop(policy);
-                self.record_policy_settlement_facts(&settlement)?;
+                if let Some(settlement) = settlement {
+                    self.record_policy_settlement_facts(&settlement)?;
+                }
                 return Ok(existing);
             }
             if let Some(context) = context {
@@ -2109,13 +2121,14 @@ impl HostShared {
             };
             self.finish_policy_dispatch_outcome(&mut policy, &data, context, cache_update)?;
             self.record_policy_values(&mut policy)?;
-            // The settled run's four settlement facts (Workflow #308 slice 5b).
-            let settlement = policy
-                .latest_settlement(&data.task_id, &data.instance_id)?
-                .ok_or_else(policy_settlement_missing)?;
+            // The settled run's four settlement facts (Workflow #308 slice 5b); none for a stopped
+            // run (Workflow #429 R-6b2).
+            let settlement = settlement_of(&policy, &data)?;
             let rerun_signals = policy.take_rerun_signals();
             drop(policy);
-            self.record_policy_settlement_facts(&settlement)?;
+            if let Some(settlement) = settlement {
+                self.record_policy_settlement_facts(&settlement)?;
+            }
             // Workflow #386 SR-2b-1: an exhausted condition termination's `policy_rerun_exhausted`
             // (and any a reconciliation queued before it). The execution is committed, so a
             // failure here is fatal, as the settlement facts' is.
@@ -2829,8 +2842,15 @@ fn reconcile_scheduled_policy_outcomes_for(
                     };
                     let runtime_ms =
                         recovered_scheduled_task_runtime_ms(ledger, read, through, terminal)?;
-                    (
-                        terminal.timestamp_unix_ms(),
+                    // Workflow #429 R-6b2 (register §1.314 R6B-7): a scheduled run's terminal
+                    // with `contained_task_cancelled` is a stop's, so the run settles `stopped`
+                    // from it, as the live settlement settles it and the ledger's recovery rule
+                    // accepts it; `runtime_ms` is measured as a failure's.
+                    let input = if outcome.is(RuntimeErrorCode::ContainedTaskCancelled) {
+                        PolicyExecutionInput::Stopped {
+                            outcome: outcome.without_causes(),
+                        }
+                    } else {
                         // Ledger revision 3 (model section 8.1): the class comes from the
                         // terminal through the contract's shared function, as the live
                         // settlement and the ledger read it; the failure is the terminal
@@ -2842,9 +2862,9 @@ fn reconcile_scheduled_policy_outcomes_for(
                                 outcome.code(),
                                 *failure_severe,
                             ),
-                        },
-                        runtime_ms,
-                    )
+                        }
+                    };
+                    (terminal.timestamp_unix_ms(), input, runtime_ms)
                 }
                 [] => (
                     lease_ended_at,
@@ -2895,9 +2915,11 @@ fn reconcile_scheduled_policy_outcomes_for(
             };
             // Coordinator ruling on #670 (runtime budget): a run over its admitted runtime budget
             // is recorded with the policy's own rewrite, derived with the policy's rule. A run a
-            // condition ended is never re-judged (SR-2a, SCHED §4.2 item 4).
-            let runtime_exceeded =
-                condition.is_none() && policy.runtime_budget_exceeded(&decision_id, runtime_ms)?;
+            // condition ended is never re-judged (SR-2a, SCHED §4.2 item 4), nor a stopped run
+            // (Workflow #429 R-6b2).
+            let runtime_exceeded = condition.is_none()
+                && !matches!(input, PolicyExecutionInput::Stopped { .. })
+                && policy.runtime_budget_exceeded(&decision_id, runtime_ms)?;
             if !policy_recovery_outcome_matches(&data.outcome, &input, runtime_exceeded) {
                 return Err(policy_admission_fatal(
                     HostCode::PolicyExecutionRecoveryOutcomeConflict,
@@ -3723,6 +3745,17 @@ fn policy_recovery_outcome_matches(
         (PolicyExecutionOutcome::Failed { failure }, PolicyExecutionInput::Failed { .. }) => {
             !failure.reported_success && input.names_failure(failure)
         }
+        // Workflow #429 R-6b2 (register §1.314 R6B-7): a stopped run settled from its terminal
+        // carries that terminal's code.
+        (
+            PolicyExecutionOutcome::Stopped {
+                outcome: recorded, ..
+            },
+            PolicyExecutionInput::Stopped { outcome },
+        ) => {
+            actingcommand_contract::scheduled_failure_code_str(recorded)
+                == actingcommand_contract::scheduled_failure_code_str(outcome)
+        }
         _ => false,
     }
 }
@@ -3800,6 +3833,24 @@ fn run_lease_release_matches(
         && event.links().task_id() == Some(task_id)
         && event.links().run_id() == Some(run_id)
         && event.links().lease_id() == Some(lease_id)
+}
+
+/// The settlement the recorded execution `data` gives its pair's four settlement facts (Workflow
+/// #308 slice 5b): the pair's latest settlement, which a success or a failure always gives
+/// (`policy_settlement_missing` otherwise). Workflow #429 R-6b2 (register §1.314 question 7): a
+/// stopped run is no settlement of its pair, so it gives none (also for a pair whose only run it
+/// is), and the four keep the pair's latest success or failure.
+fn settlement_of(
+    policy: &PolicyHost,
+    data: &PolicyExecutionEventData,
+) -> RuntimeHostResult<Option<crate::policy_host::PolicySettlement>> {
+    if matches!(data.outcome, PolicyExecutionOutcome::Stopped { .. }) {
+        return Ok(None);
+    }
+    policy
+        .latest_settlement(&data.task_id, &data.instance_id)?
+        .ok_or_else(policy_settlement_missing)
+        .map(Some)
 }
 
 /// A recorded execution always gives its pair a settlement; its absence is a host invariant

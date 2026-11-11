@@ -53,8 +53,8 @@ pub(crate) const SERVE: &str = "serve";
 const VIA: &str = "--via";
 
 /// actinglab's global options that take a value (`crate::cli_parse`); the other words of
-/// `words::GLOBAL_OPTIONS` take none.
-const VALUE_OPTIONS: [&str; 12] = [
+/// `words::GLOBAL_OPTIONS` take none. Workflow #434 CLI-COMP: completion reads them too.
+pub(crate) const VALUE_OPTIONS: [&str; 12] = [
     "--run-root",
     "--instance",
     "--instances",
@@ -150,10 +150,11 @@ pub(crate) struct OwnCommand {
     pub(crate) sentence: &'static str,
 }
 
-/// Every own command of actinglab without a row (the 34 commands of the inventory,
-/// `ratchet/actinglab_commands.json`, that no offered row names, serves or replaces), and `serve`,
-/// the CLI module's resident mode, which is no command of the inventory.
-pub(crate) static OWN_WITHOUT_ROW: [OwnCommand; 35] = [
+/// Every own command of actinglab without a row (the 36 commands of the inventory,
+/// `ratchet/actinglab_commands.json`, that no offered row names, serves or replaces: the survey's
+/// 34 and, since Workflow #434 CLI-COMP, `completion` and `__complete`), and `serve`, the CLI
+/// module's resident mode, which is no command of the inventory.
+pub(crate) static OWN_WITHOUT_ROW: [OwnCommand; 37] = [
     OwnCommand {
         words: "help",
         usage: "help [<command words>]",
@@ -353,6 +354,20 @@ pub(crate) static OWN_WITHOUT_ROW: [OwnCommand; 35] = [
         usage: "report export --last-error --out <path>",
         sentence: "Writes a placeholder last-error report archive to the path it names; it reads \
                    no error data.",
+    },
+    // Workflow #434 CLI-COMP (register §1.318): the completion script of a shell, and its
+    // callback.
+    OwnCommand {
+        words: crate::cli_completion::COMPLETION,
+        usage: "completion powershell|bash",
+        sentence: "Prints the Tab completion script of PowerShell or bash, which a person loads \
+                   from the shell's profile; the script asks actinglab for each word's candidates.",
+    },
+    OwnCommand {
+        words: crate::cli_completion::CALLBACK,
+        usage: "__complete [--json] [--wait-ms <ms>] <index> <:word>...",
+        sentence: "Not for people: the completion scripts' callback, which prints the candidates \
+                   of the typed word at the index, one per line; it runs and writes nothing.",
     },
     OwnCommand {
         words: SERVE,
@@ -612,8 +627,9 @@ fn served(operation: &Operation) -> Option<String> {
 }
 
 /// Whether actinglab's own command serves `operation` under the row's own name: its command line
-/// is that command's, which takes the instance only as `--instance` (register §1.307).
-fn own_named(operation: &Operation) -> bool {
+/// is that command's, which takes the instance only as `--instance` (register §1.307; Workflow
+/// #434 CLI-COMP: completion offers the flag there, never the positional).
+pub(crate) fn own_named(operation: &Operation) -> bool {
     served(operation).is_some_and(|command| command == operation.name)
 }
 

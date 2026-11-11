@@ -225,12 +225,15 @@ crate::outcome_vocabulary! {
 crate::outcome_vocabulary! {
     /// Who started a run that a client cannot stop (vocabulary `run_origin`; Workflow #429 R-6):
     /// `StopInstanceRun` refuses it with `scheduled_contained_task_not_client_cancellable`, naming
-    /// it, and a pause or a person's hold stops it instead.
+    /// it, and a pause or a person's hold stops it instead. Since 0.12.55 (R-6b2) only `host` is
+    /// produced: a policy run is stopped and settles as a stop.
     pub enum RunOrigin: "run_origin" {
-        /// A run the scheduler dispatched (a policy run). The first slice of R-6 refuses it until
-        /// the ledger's revision 8 can record its stop as an interruption.
+        /// A run the scheduler dispatched (a policy run). The first slice of R-6 (0.12.53) refused
+        /// it with this token; since 0.12.55 (R-6b2) `StopInstanceRun` stops it, and the token
+        /// stays registered.
         Policy => "policy",
-        /// A run the Runtime starts for itself: a startup package or a recovery ladder rung.
+        /// A run the Runtime starts for itself: a startup package, a recovery ladder rung or an
+        /// idle action's rest.
         Host => "host",
     }
 }
