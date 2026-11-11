@@ -3220,18 +3220,19 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
     let config_path = root.path().join("actinglab.json");
     fs::write(&config_path, "{}").expect("write config");
     write_navigation_resources(&resources);
-    let pack = fs::read_to_string(resources.join("recognition/arknights.cn.pack.json"))
+    let pack = fs::read_to_string(resources.join("recognition/fixture-game-a.s1.pack.json"))
         .unwrap()
         .replace("[0,0,255]", "[0,255,0]");
-    let pages = fs::read(resources.join("recognition/arknights.cn.pages.json")).unwrap();
-    let navigation = fs::read(resources.join("navigation/arknights.cn.navigation.json")).unwrap();
+    let pages = fs::read(resources.join("recognition/fixture-game-a.s1.pages.json")).unwrap();
+    let navigation =
+        fs::read(resources.join("navigation/fixture-game-a.s1.navigation.json")).unwrap();
     write_zip(&semantic_package, &[
-        ("control.json", br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#),
+        ("control.json", br#"{"game":"fixture-game-a","server":"s1","entry_task_id":"task"}"#),
         ("resources/manifest.json", br#"{"schema_version":"0.3","entry_task_id":"task"}"#),
         ("resources/operations/task/task.json", br#"{"task_id":"task","post_admission_ocr":{"mode":"fields_v1","fields":[{"id":"name","target_id":"home_anchor","privacy":"personal"}]}}"#),
-        ("resources/recognition/arknights.cn.pack.json", pack.as_bytes()),
-        ("resources/recognition/arknights.cn.pages.json", &pages),
-        ("resources/navigation/arknights.cn.navigation.json", &navigation),
+        ("resources/recognition/fixture-game-a.s1.pack.json", pack.as_bytes()),
+        ("resources/recognition/fixture-game-a.s1.pages.json", &pages),
+        ("resources/navigation/fixture-game-a.s1.navigation.json", &navigation),
     ]);
     let state = Arc::new(FakeState::default());
     state.transition_after_tap.store(true, Ordering::Release);
@@ -3514,13 +3515,13 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
     let config_path = root.path().join("actinglab.json");
     fs::write(&config_path, "{}").expect("write config");
     write_semantic_resources(&resources);
-    let pack_path = resources.join("recognition/arknights.cn.pack.json");
+    let pack_path = resources.join("recognition/fixture-game-a.s1.pack.json");
     let pack = fs::read_to_string(&pack_path).expect("recognition pack");
     fs::write(&pack_path, pack.replace("[255,0,0]", "[0,0,255]"))
         .expect("mismatched recognition pack");
     fs::write(
-        resources.join("recognition/arknights.cn.pages.json"),
-        br#"{"schema_version":"0.3","pages":[{"id":"arknights/home","required":["home_button"]}]}"#,
+        resources.join("recognition/fixture-game-a.s1.pages.json"),
+        br#"{"schema_version":"0.3","pages":[{"id":"fixture-game-a/home","required":["home_button"]}]}"#,
     )
     .expect("declared arrival page");
     write_semantic_package(&semantic_package, &resources);
@@ -3634,7 +3635,7 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
                     "--zip",
                     semantic_package.to_str().unwrap(),
                     "--after-page",
-                    "arknights/home",
+                    "fixture-game-a/home",
                     "--verbose",
                 ],
             )
@@ -3813,7 +3814,7 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
         ],
     );
     assert_eq!(ensure["state"], "arrived");
-    assert_eq!(ensure["page"], "arknights/target");
+    assert_eq!(ensure["page"], "fixture-game-a/target");
     assert_eq!(ensure["executed"], true);
     assert_eq!(ensure["arbitration"]["authority"], "runtime_scheduler");
 
@@ -3879,7 +3880,7 @@ fn write_semantic_resources(root: &std::path::Path) {
     fs::create_dir_all(&recognition).expect("recognition dir");
     fs::create_dir_all(&navigation).expect("navigation dir");
     fs::write(
-        recognition.join("arknights.cn.pack.json"),
+        recognition.join("fixture-game-a.s1.pack.json"),
         r#"{
             "schema_version":"0.3",
             "coordinate_space":{"width":1,"height":1},
@@ -3890,13 +3891,13 @@ fn write_semantic_resources(root: &std::path::Path) {
     )
     .expect("recognition pack");
     fs::write(
-        recognition.join("arknights.cn.pages.json"),
+        recognition.join("fixture-game-a.s1.pages.json"),
         r#"{"schema_version":"0.3","pages":[]}"#,
     )
     .expect("page set");
     fs::write(
-        navigation.join("arknights.cn.navigation.json"),
-        r#"{"schema_version":"0.3","game":"arknights","server":"cn","navigation":[],"destructive_actions":[]}"#,
+        navigation.join("fixture-game-a.s1.navigation.json"),
+        r#"{"schema_version":"0.3","game":"fixture-game-a","server":"s1","navigation":[],"destructive_actions":[]}"#,
     )
     .expect("navigation graph");
 }
@@ -3907,7 +3908,7 @@ fn write_navigation_resources(root: &std::path::Path) {
     fs::create_dir_all(&recognition).expect("recognition dir");
     fs::create_dir_all(&navigation).expect("navigation dir");
     fs::write(
-        recognition.join("arknights.cn.pack.json"),
+        recognition.join("fixture-game-a.s1.pack.json"),
         r#"{
             "schema_version":"0.3",
             "coordinate_space":{"width":1,"height":1},
@@ -3919,26 +3920,26 @@ fn write_navigation_resources(root: &std::path::Path) {
     )
     .expect("recognition pack");
     fs::write(
-        recognition.join("arknights.cn.pages.json"),
+        recognition.join("fixture-game-a.s1.pages.json"),
         r#"{
             "schema_version":"0.3",
             "pages":[
-                {"id":"arknights/home","required":["home_anchor"]},
-                {"id":"arknights/target","required":["target_anchor"]}
+                {"id":"fixture-game-a/home","required":["home_anchor"]},
+                {"id":"fixture-game-a/target","required":["target_anchor"]}
             ]
         }"#,
     )
     .expect("page set");
     fs::write(
-        navigation.join("arknights.cn.navigation.json"),
+        navigation.join("fixture-game-a.s1.navigation.json"),
         r#"{
             "schema_version":"0.3",
-            "game":"arknights",
-            "server":"cn",
+            "game":"fixture-game-a",
+            "server":"s1",
             "navigation":[{
                 "id":"home_to_target",
-                "from_page":"arknights/home",
-                "to_page":"arknights/target",
+                "from_page":"fixture-game-a/home",
+                "to_page":"fixture-game-a/target",
                 "click":{"kind":"point","x":0,"y":0}
             }],
             "destructive_actions":[]
@@ -3948,26 +3949,26 @@ fn write_navigation_resources(root: &std::path::Path) {
 }
 
 fn write_semantic_package(path: &Path, root: &Path) {
-    let pack = fs::read(root.join("recognition/arknights.cn.pack.json")).expect("pack");
-    let pages = fs::read(root.join("recognition/arknights.cn.pages.json")).expect("pages");
+    let pack = fs::read(root.join("recognition/fixture-game-a.s1.pack.json")).expect("pack");
+    let pages = fs::read(root.join("recognition/fixture-game-a.s1.pages.json")).expect("pages");
     let navigation =
-        fs::read(root.join("navigation/arknights.cn.navigation.json")).expect("navigation");
+        fs::read(root.join("navigation/fixture-game-a.s1.navigation.json")).expect("navigation");
     write_zip(
         path,
         &[
             (
                 "control.json",
-                br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#,
+                br#"{"game":"fixture-game-a","server":"s1","entry_task_id":"task"}"#,
             ),
             (
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
             ),
             ("resources/operations/task/task.json", br#"{}"#),
-            ("resources/recognition/arknights.cn.pack.json", &pack),
-            ("resources/recognition/arknights.cn.pages.json", &pages),
+            ("resources/recognition/fixture-game-a.s1.pack.json", &pack),
+            ("resources/recognition/fixture-game-a.s1.pages.json", &pages),
             (
-                "resources/navigation/arknights.cn.navigation.json",
+                "resources/navigation/fixture-game-a.s1.navigation.json",
                 &navigation,
             ),
         ],

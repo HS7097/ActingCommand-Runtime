@@ -49,8 +49,8 @@ fn detect_page_uses_verified_bundle_when_loose_root_is_also_present() {
     let temp = TempDir::new().unwrap();
     let recognition = temp.path().join("recognition");
     fs::create_dir(&recognition).unwrap();
-    let pack = recognition.join("arknights.cn.pack.json");
-    let pages = recognition.join("arknights.cn.pages.json");
+    let pack = recognition.join("fixture-game-a.s1.pack.json");
+    let pages = recognition.join("fixture-game-a.s1.pages.json");
     let scene = temp.path().join("scene.png");
     fs::write(
         &pack,
@@ -67,7 +67,7 @@ fn detect_page_uses_verified_bundle_when_loose_root_is_also_present() {
     )
     .unwrap();
     fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
-    let temp = seal_semantic_fixture(temp, "arknights", "cn", &pack, &pages, None);
+    let temp = seal_semantic_fixture(temp, "fixture-game-a", "s1", &pack, &pages, None);
     let result = run_semantic_cli(
         &temp,
         [
@@ -105,8 +105,8 @@ fn detect_page_ignores_reorganized_loose_root_after_bundle_admission() {
     let operations = ours.join("operations");
     fs::create_dir_all(&recognition).unwrap();
     fs::create_dir_all(&operations).unwrap();
-    let pack = recognition.join("arknights.cn.pack.json");
-    let pages = recognition.join("arknights.cn.pages.json");
+    let pack = recognition.join("fixture-game-a.s1.pack.json");
+    let pages = recognition.join("fixture-game-a.s1.pages.json");
     let scene = temp.path().join("scene.png");
     fs::write(
         &pack,
@@ -123,7 +123,7 @@ fn detect_page_ignores_reorganized_loose_root_after_bundle_admission() {
     )
     .unwrap();
     fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
-    let temp = seal_semantic_fixture(temp, "arknights", "cn", &pack, &pages, None);
+    let temp = seal_semantic_fixture(temp, "fixture-game-a", "s1", &pack, &pages, None);
     fs::write(&pack, b"not-json").unwrap();
 
     let result = run_semantic_cli(

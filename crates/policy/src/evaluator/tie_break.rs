@@ -35,8 +35,9 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    EvaluationTime, InstanceSnapshot, PlacementContext, PredicateTruth, TaskRuntimeSnapshot,
-    dependency_served, evaluate_predicate, project_pool_value, referenced_integer,
+    Amounts, EvaluationTime, InstanceSnapshot, PlacementContext, PredicateTruth,
+    TaskRuntimeSnapshot, dependency_served, evaluate_predicate, project_pool_value,
+    referenced_integer,
 };
 use crate::{
     Comparison, FactComparand, FactReference, FactValue, ObservationRef, PredicateSpec,
@@ -308,13 +309,22 @@ pub(super) fn tie_key(
     };
     let mut bounds = Bounds::default();
     let mut conditions = 0_u32;
+    // SCHED-C1f1 (register §1.303): a run's consumption as it is in effect on the instance.
+    let amounts = context.amounts.on(&instance.instance_id);
     for condition in required_conditions(&task.trigger) {
         conditions = conditions.saturating_add(1);
-        measure_condition(&mut bounds, condition, task, own, &scope, context);
+        measure_condition(
+            &mut bounds,
+            condition,
+            (task, amounts),
+            own,
+            &scope,
+            context,
+        );
     }
     for reserve in task.reserves.iter().flatten() {
         conditions = conditions.saturating_add(1);
-        measure_reserve(&mut bounds, reserve, task, context);
+        measure_reserve(&mut bounds, reserve, (task, amounts), context);
     }
     let measure = if bounds.unknown {
         Measure::Unknown
@@ -363,7 +373,7 @@ fn least_true(comparison: Comparison, threshold: i128) -> Option<i128> {
 fn measure_condition(
     bounds: &mut Bounds,
     condition: &PredicateSpec,
-    task: &TaskSpec,
+    (task, amounts): (&TaskSpec, Amounts<'_>),
     own: Option<&TaskRuntimeSnapshot>,
     scope: &ScopeSelector,
     context: &PlacementContext<'_>,
@@ -400,7 +410,7 @@ fn measure_condition(
             comparison,
             value,
         } => {
-            let Some(consumes) = consumed(task, pool_id, bounds) else {
+            let Some(consumes) = consumed(task, pool_id, amounts, bounds) else {
                 return;
             };
             let Some(threshold) = (match value {
@@ -446,7 +456,7 @@ fn measure_condition(
             }) else {
                 return;
             };
-            let Some(consumes) = consumed(task, &pool.id, bounds) else {
+            let Some(consumes) = consumed(task, &pool.id, amounts, bounds) else {
                 return;
             };
             let threshold = match value {
@@ -478,10 +488,10 @@ fn measure_condition(
 fn measure_reserve(
     bounds: &mut Bounds,
     reserve: &ReserveSpec,
-    task: &TaskSpec,
+    (task, amounts): (&TaskSpec, Amounts<'_>),
     context: &PlacementContext<'_>,
 ) {
-    let Some(consumes) = consumed(task, &reserve.pool_id, bounds) else {
+    let Some(consumes) = consumed(task, &reserve.pool_id, amounts, bounds) else {
         return;
     };
     if let Some(actual) = projected(context, &reserve.pool_id, bounds) {
@@ -490,10 +500,16 @@ fn measure_reserve(
     }
 }
 
-/// The task's declared consumption of the pool, when its runs consume some: an expected
-/// consumption rounded up to whole units (SS-2g), as the reserve gate reads it.
-fn consumed(task: &TaskSpec, pool_id: &str, bounds: &mut Bounds) -> Option<u64> {
-    match crate::resource_targets::declared_consumption(task, pool_id) {
+/// The task's consumption of the pool, when its runs consume some: an expected consumption
+/// rounded up to whole units (SS-2g), as the reserve gate reads it; SCHED-C1f1: an amount read
+/// from a fact as it is in effect on the instance (`amounts`).
+fn consumed(
+    task: &TaskSpec,
+    pool_id: &str,
+    amounts: Amounts<'_>,
+    bounds: &mut Bounds,
+) -> Option<u64> {
+    match crate::resource_targets::consumption(task, pool_id, amounts) {
         Ok(0) => None,
         Ok(consumes) => Some(consumes),
         Err(_) => {

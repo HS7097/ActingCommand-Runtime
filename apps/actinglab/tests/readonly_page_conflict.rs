@@ -102,9 +102,9 @@ impl Fixture {
                 "--run-root",
                 self.run_root.to_str().expect("run root UTF-8"),
                 "--game",
-                "arknights",
+                "fixture-game-a",
                 "--server",
-                "cn",
+                "s1",
                 command,
                 "--scene",
                 self.scene.to_str().expect("scene UTF-8"),
@@ -138,7 +138,7 @@ fn write_resources(root: &Path) {
     fs::create_dir_all(&recognition).expect("recognition root");
     fs::create_dir_all(&navigation).expect("navigation root");
     fs::write(
-        recognition.join("arknights.cn.pack.json"),
+        recognition.join("fixture-game-a.s1.pack.json"),
         br#"{
             "schema_version":"0.3",
             "coordinate_space":{"width":1,"height":1},
@@ -150,7 +150,7 @@ fn write_resources(root: &Path) {
     )
     .expect("pack");
     fs::write(
-        recognition.join("arknights.cn.pages.json"),
+        recognition.join("fixture-game-a.s1.pages.json"),
         br#"{
             "schema_version":"0.3",
             "pages":[
@@ -161,11 +161,11 @@ fn write_resources(root: &Path) {
     )
     .expect("pages");
     fs::write(
-        navigation.join("arknights.cn.navigation.json"),
+        navigation.join("fixture-game-a.s1.navigation.json"),
         br#"{
             "schema_version":"0.3",
-            "game":"arknights",
-            "server":"cn",
+            "game":"fixture-game-a",
+            "server":"s1",
             "navigation":[],
             "destructive_actions":[]
         }"#,
@@ -174,26 +174,26 @@ fn write_resources(root: &Path) {
 }
 
 fn write_package(path: &Path, root: &Path) {
-    let pack = fs::read(root.join("recognition/arknights.cn.pack.json")).expect("pack");
-    let pages = fs::read(root.join("recognition/arknights.cn.pages.json")).expect("pages");
+    let pack = fs::read(root.join("recognition/fixture-game-a.s1.pack.json")).expect("pack");
+    let pages = fs::read(root.join("recognition/fixture-game-a.s1.pages.json")).expect("pages");
     let navigation =
-        fs::read(root.join("navigation/arknights.cn.navigation.json")).expect("navigation");
+        fs::read(root.join("navigation/fixture-game-a.s1.navigation.json")).expect("navigation");
     write_zip(
         path,
         &[
             (
                 "control.json",
-                br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#,
+                br#"{"game":"fixture-game-a","server":"s1","entry_task_id":"task"}"#,
             ),
             (
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
             ),
             ("resources/operations/task/task.json", br#"{}"#),
-            ("resources/recognition/arknights.cn.pack.json", &pack),
-            ("resources/recognition/arknights.cn.pages.json", &pages),
+            ("resources/recognition/fixture-game-a.s1.pack.json", &pack),
+            ("resources/recognition/fixture-game-a.s1.pages.json", &pages),
             (
-                "resources/navigation/arknights.cn.navigation.json",
+                "resources/navigation/fixture-game-a.s1.navigation.json",
                 &navigation,
             ),
         ],

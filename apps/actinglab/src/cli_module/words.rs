@@ -29,7 +29,7 @@
 //!
 //!   `serve --stdio` refuses every member a row does not declare, and (Workflow #434 LAB-5G4a)
 //!   every string value, or string in a list, that begins with `--` ([`from_json`]).
-//! - Workflow #434 CLI-IN (register §1.305; `contracts/lab-two-entries.md` §9.3): on a row that
+//! - Workflow #434 CLI-IN (register §1.306; `contracts/lab-two-entries.md` §9.3): on a row that
 //!   declares a positional instance ([`positional_instance`]) actinglab's global `--instance <x>`
 //!   ([`INSTANCE_FLAG`]) is that positional, after the row's words or before them
 //!   ([`instance_first`]); the row's other positionals then keep their order. The positional and
@@ -149,7 +149,7 @@ pub(crate) const COMPLETED_ROWS: [(&str, &[&str]); 15] = [
 /// the command line and in `serve --stdio` alike. `remedy set`'s rows file, or its rows inline.
 pub(crate) const ONE_OF: [(&str, &str, &str); 1] = [("remedy set", "file", "rows")];
 
-/// Workflow #434 CLI-IN (register §1.305): actinglab's global option that names the instance. On
+/// Workflow #434 CLI-IN (register §1.306): actinglab's global option that names the instance. On
 /// the command line of a row that declares a positional instance it is that positional: one
 /// spelling for every command that acts on one instance.
 pub(crate) const INSTANCE_FLAG: &str = "--instance";

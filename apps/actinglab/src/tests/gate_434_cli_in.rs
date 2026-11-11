@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #434 CLI-IN (register §1.305; contracts/lab-two-entries.md §9.3; coordinator work order
+// Workflow #434 CLI-IN (register §1.306; contracts/lab-two-entries.md §9.3; coordinator work order
 // rd-1111/brief-cli-instance-flag.md, the coordinator's rulings of 2026-11-11, not Alice's words):
 // actinglab's global `--instance <alias>` names the instance on every command that acts on one.
 // - `cli_in_the_flag_reaches_the_request_of_the_positional`: for every offered row that declares a

@@ -3,7 +3,9 @@
 //! Pure forward planning and evidence-bounded maintenance assessment.
 
 use crate::codes::PolicyCode;
-use crate::evaluator::{PoolBound, pool_bound, project_time_validity, unknown_token};
+use crate::evaluator::{
+    ConsumptionAmounts, PoolBound, pool_bound, project_time_validity, unknown_token,
+};
 use crate::{
     CompiledCatalog, DetectionSuggestion, EffectDirection, EvaluationFacts, EvaluationResources,
     EvaluationTime, HostResourceSnapshot, ObservationSource, PolicyEvaluationError, PoolCapacity,
@@ -193,6 +195,10 @@ pub fn project_forward(
         .ok_or_else(|| ForwardError::overflow("projection end time overflowed"))?;
     let mut projected_facts = facts.clone();
     let (mut pools, capacity_gaps) = initialize_pools(catalog, facts, resources, time)?;
+    // SCHED-C1f1 (register §1.303, "Who reads it" item 9): a consumption read from a fact is read
+    // once, from the facts the projection starts from, and held across its horizon, as a capacity
+    // read from its fact is; a simulated run does not rewrite it.
+    let held = held_amounts(catalog, facts, time)?;
     let hosts = resources.hosts.clone();
     let mut current = time.unix_ms;
     let mut current_monotonic = time.monotonic_ms;
@@ -273,7 +279,12 @@ pub fn project_forward(
             break;
         }
         let before_waste = total_waste(&pools)?;
-        apply_round_effects(catalog, &evaluation.dispatch_intents, &mut pools, current)?;
+        apply_round_effects(
+            catalog,
+            &evaluation.dispatch_intents,
+            (&mut pools, &held),
+            current,
+        )?;
         update_task_states(
             &mut projected_facts.tasks,
             &evaluation.dispatch_intents,
@@ -343,10 +354,40 @@ pub fn project_forward(
     })
 }
 
+/// SCHED-C1f1: the amounts in effect of the consumptions read from a fact at the projection's
+/// start, resolved by the evaluator's one resolution from the facts as the time-validity
+/// projection leaves them at `time`. The facts are read only for a catalog that writes the form,
+/// so a catalog without it projects as before.
+fn held_amounts(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+) -> ForwardResult<ConsumptionAmounts> {
+    let tasks = &catalog.catalog().tasks.tasks;
+    if !tasks.iter().any(|task| {
+        task.consumes
+            .iter()
+            .any(|effect| effect.fact_amount().is_some())
+    }) {
+        return Ok(ConsumptionAmounts::default());
+    }
+    let effective =
+        project_time_validity(catalog, facts, time).map_err(ForwardError::evaluation)?;
+    let specs = catalog
+        .catalog()
+        .pools
+        .pools
+        .iter()
+        .map(|pool| (pool.id.as_str(), pool))
+        .collect::<BTreeMap<_, _>>();
+    crate::evaluator::resolve_consumptions(tasks, &specs, &effective, time)
+        .map_err(ForwardError::evaluation)
+}
+
 fn apply_round_effects(
     catalog: &CompiledCatalog,
     intents: &[crate::DispatchIntent],
-    pools: &mut BTreeMap<String, SimulatedPool>,
+    (pools, held): (&mut BTreeMap<String, SimulatedPool>, &ConsumptionAmounts),
     started_at_unix_ms: u64,
 ) -> ForwardResult<()> {
     let mut ordered = intents.to_vec();
@@ -367,10 +408,21 @@ fn apply_round_effects(
         while end < ordered.len() && ordered[end].expected_duration_ms == duration_ms {
             end += 1;
         }
-        apply_declared_effects(catalog, &ordered[start..end], pools)?;
+        apply_held_effects(catalog, &ordered[start..end], pools, held)?;
         start = end;
     }
     Ok(())
+}
+
+/// The declared effects of a catalog without a consumption read from a fact, as
+/// [`apply_held_effects`] applies them: what the projection's own tests read.
+#[cfg(test)]
+fn apply_declared_effects(
+    catalog: &CompiledCatalog,
+    intents: &[crate::DispatchIntent],
+    pools: &mut BTreeMap<String, SimulatedPool>,
+) -> ForwardResult<()> {
+    apply_held_effects(catalog, intents, pools, &ConsumptionAmounts::default())
 }
 
 /// The simulated pools at the projection's start. #386 CF-5: a capacity fact is read there, with
@@ -498,10 +550,14 @@ fn advance_pools(
     Ok(())
 }
 
-fn apply_declared_effects(
+/// The effects of the dispatched `intents` on the simulated `pools`: each entry's integer amount;
+/// SCHED-C1f1 (register §1.303, "Who reads it" item 9): an amount read from a fact at its amount
+/// `held` from the projection's start on the intent's instance, applied as a constant one is.
+fn apply_held_effects(
     catalog: &CompiledCatalog,
     intents: &[crate::DispatchIntent],
     pools: &mut BTreeMap<String, SimulatedPool>,
+    held: &ConsumptionAmounts,
 ) -> ForwardResult<()> {
     let tasks = catalog
         .catalog()
@@ -514,10 +570,17 @@ fn apply_declared_effects(
         let task = tasks.get(intent.task_id.as_str()).ok_or_else(|| {
             ForwardError::invalid(format!("projected task '{}' is missing", intent.task_id))
         })?;
-        for effect in task.consumes.iter().chain(task.produces.iter()) {
-            let amount = effect.units().ok_or_else(|| {
-                ForwardError::invalid("expected production cannot update projected inventory")
-            })?;
+        // The `consumes` entries come first, so an entry's position is its index there; only
+        // they may read their amount from a fact.
+        for (position, effect) in task.consumes.iter().chain(task.produces.iter()).enumerate() {
+            // SCHED-C1f1: an amount read from a fact is applied as a constant one is, at its
+            // amount held from the projection's start on the intent's instance.
+            let amount = match effect.fact_amount() {
+                Some(form) => held.on(&intent.instance_id).of(&task.id, position, form),
+                None => effect.units().ok_or_else(|| {
+                    ForwardError::invalid("expected production cannot update projected inventory")
+                })?,
+            };
             let pool = pools.get_mut(&effect.pool_id).ok_or_else(|| {
                 ForwardError::invalid(format!(
                     "task '{}' references missing projected pool '{}'",

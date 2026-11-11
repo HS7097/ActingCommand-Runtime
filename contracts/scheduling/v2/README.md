@@ -346,3 +346,19 @@ to `direction: produce`. A V1 consumption still requires `amount`. The net benef
 consumption in thousandths exactly; the reserve gate, the tie-break and the selection fields
 read it rounded up to whole units. No member is added: a catalog without an expected consumption
 serializes, and hashes, exactly as before.
+
+SCHED-C1f1 (since 0.12.54; register §1.303; `../README.md`, "A run's consumption read from a
+fact"), V2 only: a `consumes` entry's `amount` may be `{"type": "fact", "fact_key": B,
+"fallback": F}` (schema `consumptionFact`), one run's amount read at each evaluation from the fact
+B in the scope of the instance the evaluation decides for, F while B gives no usable reading. All
+three members are required. Refused, each at its pointer: in a V1 document `unknown_field` at
+`amount/type`; a `type` other than `fact`, a `fact_key` that is no identifier and a `fallback` that
+is no integer (`null` included) `type_mismatch` at the member; a `fallback` outside
+`1..=9007199254740991` `limit_exceeded` at `amount/fallback`, and one above a constant capacity
+`effect_incompatible` at the entry; a missing member `missing_required_field` at `amount`; `offset`,
+`scope` or any other member `unknown_field` at it; the form beside `expected_amount_milli`
+`limit_exceeded` at the entry; on a `produces` entry `effect_incompatible` at its `amount`; a second
+entry of one task on one pool with the form `effect_incompatible` at its `amount` (constant entries
+beside it add to it). The form is hashed as written; a catalog without it serializes, hashes and
+decides exactly as before. A `schedule.json` whose rule writes it names `consumption_fact` in
+`requires`.

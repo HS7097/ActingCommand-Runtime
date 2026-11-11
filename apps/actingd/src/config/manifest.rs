@@ -215,6 +215,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // SCHED-C1f1 (register §1.303): this build reads a `consumes` entry's `amount` written as
+        // a fact with a fallback (one run's amount read from the instance's fact at each
+        // evaluation); a `schedule.json` whose rule writes one requires it, so an older Runtime
+        // refuses the file instead of misreading the amount.
+        subsystem(
+            "consumption_fact",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // Workflow #411 P19: this build reads a timeline event's `excludes_fact_prefixes`, and its
         // resets keep a task's own last result for the task's own edges; a `schedule.json` whose
         // event writes the member requires it, so an older Runtime refuses the file instead of

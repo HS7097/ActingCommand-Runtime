@@ -12533,6 +12533,74 @@ name `consumption_fact`, so its composer refuses such a `schedule.json` (`schedu
 first replace the form by a constant `amount` and let this build activate a generation without it,
 as §1.289's rollback says for SS-2h's.
 
+#### Slice SCHED-C1f1 (0.12.54): a run's consumption read from a fact (coordinator work order `rd-1111/brief-sched-c1f1.md`; rows SC1F-1 to SC1F-7 and the rulings above)
+
+**What.**
+
+- **The form** (SC1F-1; `crates/policy/src/schema.rs`, `EffectAmount::Fact`, `ConsumptionFact`;
+  `crates/policy/src/validation.rs`, `validate_consumption_fact`). An object `amount` is read as
+  the form when it is exactly `{type: "fact", fact_key: <string>, fallback: <unsigned>}`, and is
+  kept as written otherwise (`EffectAmount::Malformed`) so that each refusal points at its member;
+  a compiled catalog holds none of the latter. Every refusal of SC1F-1 is at its pointer; a catalog
+  without the form serializes, hashes and decides as before.
+- **The one resolution** (SC1F-2; `crates/policy/src/evaluator/consumption.rs`, `resolve`). At
+  each evaluation, after the time-validity projection, each fact-driven entry of each task is read
+  once for each instance its scope covers, in exactly that instance's scope, by every fact's rule
+  (ruling 1): missing, past its own expiry or invalidated by a reset, the fallback with no warning;
+  at a confidence of 0, of another kind or an integer outside `1..=2^53−1` or above a constant
+  capacity, the fallback with `consumption_fact_unusable`; otherwise its value. The forward
+  projection resolves once at its start and holds the amounts (`forward.rs`, `held_amounts`).
+- **Every reader through it.** `resource_targets::consumption_milli` and `consumption` (the former
+  `declared_consumption_milli` and `declared_consumption`) take the amounts (`Amounts::InEffect`
+  of the evaluation and instance, or `Amounts::Declared`, the fallback): the net benefit's cost and
+  `ε` (`evaluator/benefit.rs`, `judge`); the pool's reading and the hard-line hold (`capped.rs`,
+  `lines`, `plan`); `pool_lines_unspendable` (`capped.rs`, `least_consumption`, in effect;
+  `validation.rs`, `unspendable_lines`, declared); the capped listing, order, plan, head's check,
+  block fit and fallbacks (`capped.rs`, `start_round`, `Round::plan`, `step`, `RoundView::decide`,
+  by `member_amounts`); who is a consumer and the consumers key (`capped.rs`, `consumers`,
+  `ConsumerKey::of`, declared); the reserve views and selection fields, the unshown consumption
+  and the reserve gate (`resource_targets.rs`, `reserve_views_with`, `unshown_consumption`,
+  `reserve_hold`); SS-6's allowance and `run_cap` (`spend_values`, `run_cap` reading the view's
+  consumption); the tie-break (`tie_break.rs`, `consumed`); the forward projection
+  (`forward.rs`, `apply_held_effects`).
+- **Episodes and rounds** (SC1F-3): the consumers key holds the declared consumption; a round
+  keeps its frozen order and `Member::consumed`, while its plan and checks read the amounts in
+  effect (`Member::in_effect`). `host.capped_episodes` keeps its rows.
+- **What a person sees** (SC1F-4): `consumption_fact_unusable` (warning / none; `task_id`,
+  `pool_id`, `fact_key`, `unknown_reason`, `consumption`) opens each decision of the task on the
+  instance, before `benefit_fixed_value`, and never settles one; `consumption` and
+  `consumption_source` (vocabulary `consumption_source`: `fact`, `fallback`) on `pool_line_held`,
+  `capped_spend`, `resource_reserve_insufficient` and `pool_lines_unspendable` when the reason's
+  task's consumption of the pool is fact-driven (`consumption::with_values`). New prefix
+  `consumption_` (policy).
+- **Freshness and wakes** (ruling 1): a usable record's expiry, as the projection leaves it, bounds
+  the freshness of each candidate of its instance whose task consumes or reserves its pool, and the
+  evaluation wakes a millisecond after it; the fallback bounds nothing.
+- **Composer and tools** (SC1F-5 to SC1F-7; `compose.rs`): the form passes through; `requires`
+  `consumption_fact` (`CONSUMPTION_FACT_SUBSYSTEM`), refused `schedule_invalid` at the first such
+  `amount`; `consumption_facts` (`ConsumptionFactRule`) per game of the rules not held, answered by
+  `standard-pack check` and `package bundle --schedule` (absent without `schedule.json`); the
+  coverage counts the form as a declared quantity. The always-on row `consumption_fact` of
+  `config.subsystems` (`apps/actingd/src/config/manifest.rs`).
+
+**Tests** (gate rows "#428 SCHED-C1f1" of `contracts/test-gates/policy.toml`):
+`gate_sched_c1f1::sched_c1f1_t1_the_form_is_refused_at_its_pointer_and_its_absence_changes_nothing`,
+`sched_c1f1_t2_one_evaluation_reads_a_usable_record_or_the_fallback`,
+`sched_c1f1_t3_every_reader_reads_the_amount_in_effect`,
+`sched_c1f1_t4_an_episode_keeps_its_consumers_key_and_its_round_its_order`,
+`sched_c1f1_t5_a_usable_records_expiry_bounds_freshness_and_wakes_the_evaluation`,
+`sched_c1f1_t6_the_composer_carries_the_form_and_requires_its_subsystem` (policy) and
+`sched_c1f1_t7_the_check_lists_the_consumptions_read_from_a_fact` (resource tooling). One existing
+test changes because a whole struct gained a member: `gate_cov1::cov1_t4_a_file_without_followers_answers_as_before`
+builds a `StandardPackCheckResponse`, which gained `consumption_facts`. No golden is re-recorded.
+
+**What changes live.** Nothing until a `schedule.json` writes the form beside `consumption_fact`
+in `requires`: a catalog without it keeps its hash and decides byte for byte as before;
+`config.subsystems` gains the always-on row `consumption_fact`. No configuration key, no ledger
+shape and no interface revision.
+
+**Rollback** as above (SCHED-C1f1 rollback).
+
 ### 1.304 Slice IDLE-2 (0.12.54): `idle.action` `auto` takes the idle action by the gap to the next task (Workflow #386; Alice's words of 11-11: 「原本我考虑的是在调度器上线后。根据任务间隔时间自动选择是关闭模拟器还是关闭应用还是回到主页面」; the coordinator's rulings on #386, comment 6787682270, not Alice's words; the read-only survey `rd-1111/idle2-step0-result.txt`; coordinator work order `rd-1111/brief-idle2.md`)
 
 [runtime-config.md](runtime-config.md) ("The `idle` section", the `auto` paragraph and its table)
@@ -12647,10 +12715,90 @@ a neutral standard-pack root); `idle2_auto_tests::idle2_auto_c1_the_word_and_the
 test changes. One existing test pins the revision step: `actinglab-architecture`'s
 `the_runtime_declares_each_v0120_interface_revision_once` now pins `actingd-config` [5, 28].
 
-### 1.305 Slice CLI-IN (0.12.55): `--instance <alias>` names the instance on every command (Workflow #434; the audit of 2026-11-11, which found that the module's rows take the instance only as a positional and actinglab's own commands only as the global `--instance`; the coordinator's five rulings of the same day, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §3, on main `a62434a4`; coordinator work order `rd-1111/brief-cli-instance-flag.md`)
+### 1.305 Slice NEUT-1 (0.12.54): the core's tests and fixtures name no real game (Workflow #434; Alice's hard constraint of 10-10 that the program itself is game-neutral, in code, contracts, configuration, code tables and tests, with game content only in the resource repositories; coordinator work order `rd-1111/brief-neut1.md`, read on main `ae15bb5f`)
 
-The number is the next free one on main `a62434a4`; the coordinator renumbers this section if
-another open slice takes it first.
+The slice was written on `ae15bb5f` as §1.304; IDLE-2 took that number and merged first, so the
+coordinator renumbered this section to 1.305 on 2026-11-11. Tests, fixtures, one golden and one guard only: no product
+code, behaviour, assertion, contract text, wire shape, configuration key, ledger shape, outcome
+code or interface revision changes. No register precedent for a change across many tests was
+found, so the note is a section of its own.
+
+**What was renamed.** 240 lines of 16 files, all tests or test fixtures of the three authoring
+members, whose tests the C2 and R2-F guards do not read: `crates/resource-tooling`
+(`src/resource_convert/tests.rs`, the `#[cfg(test)]` module of `src/package_validate.rs`),
+`crates/lab` (`src/env_detection/tests.rs`, `src/lab_run/tests/fixtures.rs`,
+`guards_and_recovery.rs`, `bundle_and_actions.rs`) and `apps/actinglab` (`src/tests/mod.rs`,
+`semantic_fixture.rs`, `session_record.rs`, `contained_semantic.rs`, `cli_basics.rs`;
+`tests/golden_protocol.rs`, `tests/golden/expected.json`, `runtime_input_proxy.rs`,
+`readonly_page_conflict.rs`, `lab2_cli_contract.rs`). They used a real game's id, its server and
+channel names, a real application package and the game's page ids as fixture values, written
+before 10-10. No file was renamed: every game-named file name is built inside a test.
+
+**The mapping**, one table applied by the slice's script, in this order, to every file (exact
+bytes; the old values are listed in the pull request, which the guard below does not read):
+
+| Old value | New value |
+|---|---|
+| the real application package (its publisher, game and channel) | `com.example.fixture.a` |
+| the one server-and-channel name | `s3` |
+| `<game>.<server>` of the first game with its two servers (file names `<game>.<server>.pack.json` and the like, resource pack ids in messages) | `fixture-game-a.s1`, `fixture-game-a.s2` |
+| the three game ids, also as a page or target id's prefix (`<game>/home`) | `fixture-game-a`, `fixture-game-b`, `fixture-game-c` |
+| the two server names, as quoted values | `s1`, `s2` |
+
+The work order proposed `fixture-game-a` and `-b`, `s1` and `s2`; a third game (once, as the other
+game of a page-prefix mismatch and as a converter's game) and a server-and-channel name (two
+instance configurations) take `-c` and `s3`, so that the mapping stays one to one and no two
+values a test tells apart become equal. Each new value passes the reader of its kind:
+`canonical_environment_selector` and `canonical_resource_identifier` (`[a-z0-9._-]`, at most 128),
+`is_exact_mapping_page_id` (`<game>/<page>`), an application package's dotted segments. A test
+that passed `--game` as a game's abbreviation against a package of another game id keeps doing so.
+
+**Pins recomputed** (`apps/actinglab/tests/golden/expected.json`, test
+`protocol_goldens_match_current_cli`), each by a model of the product's own computation that first
+reproduces the old pin from the old values:
+
+- `resource_pack_hash` (`detect_success`, `env_status_success`, `env_status_failure` twice):
+  SHA-256 of `serde_json::to_vec` of the golden's `EnvDetector`
+  (`crates/lab/src/env_detection.rs`, `detector_resource_hash`, no template), now
+  `1d72a141423664282998b866f0efd69054e144d176b27f9ec2ddd95de7283a86`.
+- `observe_success`'s `observation.content_sha256`: SHA-256 of the projection's value without
+  `content_sha256`, in struct order (`page_projection.rs`, `PageProjection::refresh`; serde_json's
+  `preserve_order`), now `3acf5335520805ad2d7c48978eafaeb32ffdd0360c31462d588dce6090d5777e`. The
+  answer stays on the same path of Min's cuts: about 1140 bytes, over 1024 and far under 2048.
+- `lab_run_success`'s task-diagnostic `file_write` bytes (`task_diagnostic.rs`,
+  `write_diagnostic_record`, the record and its framing): recognition `successful_returned_bytes`
+  786 → 791 (record 1, the `page` row, carries the page id; record 2's 410 is unchanged),
+  finalization `returned_bytes` 256 → 261 and `successful_returned_bytes` 2482 → 2487 (record 6,
+  the `terminal` row, carries `final_page`).
+
+No pin is left for CI. rustfmt reflowed three lines that the longer names pushed past the width.
+
+**The guard.** `actingcommand-actinglab-architecture::workspace_guards::neut1_source_and_test_trees_name_no_real_game`,
+in the gate row A4 (project neutrality) of `test-gates/contract.toml`. It reads every file, of any
+kind, under `.github`, `apps`, `ci`, `contracts`, `crates`, `distribution`, `providers`,
+`ratchet`, `scripts`, `tests` and `tools`, and fails on each line that holds one of the work
+order's 13 words in any ASCII case, also inside a longer word (four games' ids in their joined,
+underscore and spaced forms, one game's subtitle, two publishers and an application channel),
+naming the file and line. Its allow list holds `tools/actinglab-architecture/src/lib.rs` (the C2
+and R2-F guards' own word lists and the counterexamples their unit tests feed them) and
+`tools/actinglab-architecture/tests/workspace_guards.rs` (this guard's list and counterexample);
+an entry whose file is gone or holds none of the words fails. It does not read the repository's
+root files or `docs`, `benchmarks` and `resources`, which hold third-party attributions, an
+upstream manifest and dated reports, not the program.
+
+**Not renamed.** The four game abbreviations that actinglab's tests use as instance names and game
+values (and the instance ids built from them) are outside the work order's word list. They are the
+short words of the C2 guard's own list, which forbids them in the Runtime domain only, this
+register included; so this note does not spell them. They are left for a later slice.
+
+**Interface.** None raised ([component-interfaces.md](component-interfaces.md)): nothing a reader
+or writer of any interface sees changes.
+
+### 1.306 Slice CLI-IN (0.12.55): `--instance <alias>` names the instance on every command (Workflow #434; the audit of 2026-11-11, which found that the module's rows take the instance only as a positional and actinglab's own commands only as the global `--instance`; the coordinator's five rulings of the same day, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §3, on main `a62434a4`; coordinator work order `rd-1111/brief-cli-instance-flag.md`)
+
+The number is the next free one on main `e5efe44e` (written on `a62434a4` as §1.305, which
+NEUT-1 took and merged first); the coordinator renumbers this section if another open slice
+takes it first.
 
 [lab-two-entries.md](lab-two-entries.md) §9.3 (its first rule, and the global options a core row
 refuses) is the contract; [lab-operations.json](lab-operations.json) records it in the instance
