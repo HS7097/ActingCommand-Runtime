@@ -38,7 +38,7 @@ const OTHER: &str = "r6.instance.b";
 /// 2026-10-26 07:01 UTC.
 const START_UNIX_MS: u64 = 1_792_998_060_000;
 /// How long a test waits for something the host does on another thread.
-const WAIT: Duration = Duration::from_secs(30);
+const GATE_WAIT: Duration = Duration::from_secs(30);
 
 /// A host on a fake clock with the instances `entries`.
 fn start_host(root: &TempDir, entries: Vec<(&str, InstanceId, Arc<FakeState>)>) -> RuntimeHost {
@@ -197,7 +197,7 @@ fn r6_stopping_a_direct_run_cancels_it_and_the_runtime_resets_it_before_its_leas
     );
 
     // Asked while the run waits at its checkpoint: still stopping.
-    let first = answered.recv_timeout(WAIT).expect("the stop's answer");
+    let first = answered.recv_timeout(GATE_WAIT).expect("the stop's answer");
     assert_eq!(
         stopped(&first),
         InstanceRunStop {
@@ -295,7 +295,7 @@ fn r6_the_reset_happens_after_the_requesting_client_disconnects() {
             .expect("the stop is sent");
             drop(requester);
             // The run goes on once the stop is asked.
-            let _ = asked.recv_timeout(WAIT).expect("the stop is asked");
+            let _ = asked.recv_timeout(GATE_WAIT).expect("the stop is asked");
         },
     );
     assert!(
@@ -395,7 +395,7 @@ fn r6_after_wait_ms_the_stop_answers_unsettled_without_a_reset() {
                 .expect("the stop's answer");
         },
     );
-    let answer = answered.recv_timeout(WAIT).expect("the stop's answer");
+    let answer = answered.recv_timeout(GATE_WAIT).expect("the stop's answer");
     assert_eq!(
         stopped(&answer),
         InstanceRunStop {
@@ -448,7 +448,7 @@ fn r6_a_failed_reset_fences_only_its_instance_and_answers_failed() {
             device.fail_input.store(true, Ordering::Release);
         },
     );
-    let first = answered.recv_timeout(WAIT).expect("the stop's answer");
+    let first = answered.recv_timeout(GATE_WAIT).expect("the stop's answer");
     assert!(!stopped(&first).settled, "{first:?}");
     assert!(
         matches!(
@@ -508,7 +508,7 @@ fn r6_a_run_that_ended_on_its_own_needed_no_reset() {
                 .expect("the stop's answer");
         },
     );
-    let first = answered.recv_timeout(WAIT).expect("the stop's answer");
+    let first = answered.recv_timeout(GATE_WAIT).expect("the stop's answer");
     assert!(!stopped(&first).settled, "{first:?}");
     assert!(
         matches!(
