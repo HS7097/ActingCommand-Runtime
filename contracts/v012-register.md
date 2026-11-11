@@ -13380,6 +13380,119 @@ words).** The differences (a) to (i) above are accepted as written. On the quest
 
 **Rollback of this slice.** Nothing to roll back: text only.
 
+### 1.312 Slice S168-LB1b (0.12.55): a list maximum reads "at least L" where one entry has no value (Workflow #428; the customer-view audit of 11-11 and the coordinator's rulings 5 to 10 and answers 6 to 8 of 11-11, not Alice's words, as §1.309 writes them; coordinator work order `rd-1111/brief-s168-lb1b.md`, read on main `385bb500`)
+
+The code of §1.309's rows LB1-7 to LB1-11. [selection-policy.md](selection-policy.md) ("Table
+maximum over a list", "Lower bound of a list maximum") is the contract, its marks now "since
+0.12.55"; [component-interfaces.md](component-interfaces.md) moves the planned `package` 9 row of
+"Planned: Workflow #428 S168-LB1" into the table in force; [selection-graph.md](selection-graph.md)
+("Judge step") keeps its paragraph on the judge planned. LB1-12, the judge's use, is not built
+here: S168-5b (PR #1566) is not on main, so it builds LB1-12 when it merges. The section number is
+the coordinator's (four slices open at once with §1.310 to §1.313). The text names no game,
+resource or value: a roster, a list of holdings, a value table, a group.
+
+**What.**
+
+- **The member** (LB1-7; `crates/selection-policy/src/schema.rs`, `ValueRef::TableMaxOverList`,
+  `Scope::resolve`): `lower_bound_column`, optional, not written when absent (so a document
+  without it keeps its canonical bytes, `policy_sha256` and `input_sha256`). An undeclared column
+  is `dangling_reference`, another type than `integer` or the `value_column` itself `type_mismatch`,
+  each with the detail `table_max_over_list=lower_bound_column`. `SelectionTables::bind` needs no
+  change: the column is a declared column of the table, which bind checks as it checks the
+  `value_column` (`table_mismatch`: `column_absent`, `column_type`). Two references that differ
+  only by it are two references.
+- **The read** (LB1-8; `crates/selection-policy/src/list_max.rs`, `read_list_maximum`,
+  `ListMaxReading::bound`, `unknown_count`, the vocabulary enum `ListMaxBound`): without the
+  member, steps 3 and 4 are S168-5a's, byte for byte. With it, a key with no row and a null value
+  cell of the class are uncertain keys: each counts in `unknown_count`, and the bound cell of the
+  same row (when it holds a value) joins the known values. No uncertain key: exact M, or `empty`;
+  an uncertain key and something known: at least L, the largest of the values and bounds known,
+  with the smallest key that gives it; an uncertain key and nothing known: Unknown `lookup_miss`.
+  A value or bound cell of another type is `type_mismatch` as before.
+- **The readers** (LB1-9; `crates/selection-policy/src/evaluator.rs`): `integer_side` reads a list
+  maximum read as at least as `Side::AtLeast(L)`, and `compare_sides` settles a comparison only
+  where every value of the range agrees, the rules of the contract on both sides (on the right the
+  range is [L × `mul` + `add`, +∞)), two at-least sides settling nothing; an unsettled comparison
+  is `Truth::Unknown(lookup_miss)`, which the gate's `on_unknown` decides, and its drop is no
+  static table drop. A term (`transform_at_least`) takes L through `identity` and gives
+  `then_milli` through `threshold` once L reaches `at_least`, Unknown `lookup_miss` below. The
+  upper bound (`crates/selection-policy/src/bound.rs`, `Reading::AtLeast`, `MaximumRead`) takes
+  [L, +∞): a gate compares it as a range with no upper end, `identity` has no finite bound under a
+  positive weight and its bound at L under any other, `threshold` gives `then_milli` once L reaches
+  `at_least` and both of its values otherwise.
+- **The reasons** (LB1-10, LB1-11; `evaluator.rs`, `list_max_reasons`, `BoundSettled`): a known
+  read of a reference that opts in adds `bound` and `unknown_count` to its
+  `selection_table_list_max`, and, read at least, `lower_bound` and `lower_bound_identity` in the
+  place of `maximum` and `maximum_identity`. A decision in which a lower bound settled something
+  carries `selection_decided_on_lower_bound` once, right before the outcome's reasons.
+- **The catalog**: the keys `bound` (`vocab:list_max_bound`), `unknown_count` (`integer`),
+  `lower_bound` (`integer`) and `lower_bound_identity` (`id`) in `catalog.json` and the contract's
+  key table (`crates/actingcommand-contract/src/outcome/keys.rs`); the vocabulary `list_max_bound`
+  (`exact`, `at_least`); in the fragment `selection-policy.json` the four keys as optional values
+  of `selection_table_list_max` (its description says since 0.12.55 what they mean) and the code
+  `selection_decided_on_lower_bound` (info, ladder class `none`; `rule_id`, `count`; `since`
+  0.12.55), with its `SelectionPolicyCode` variant.
+
+| # | Shape | Kind | Where |
+|---|---|---|---|
+| LB1-7 | `table_max_over_list`'s `lower_bound_column` | selection document format, `package` 9 | `schema.rs`, `ValueRef::TableMaxOverList`, `Scope::resolve` |
+| LB1-8 | exact M, at least L, Unknown only when nothing is known; `empty` exact | behaviour | `list_max.rs`, `read_list_maximum` |
+| LB1-9 | the range [L, +∞) in `integer_compare`, `threshold`, `identity` and the upper bound | behaviour; no unknown reason added | `evaluator.rs`, `compare_sides`, `transform_at_least`; `bound.rs`, `Hypothesis::possible`, `Hypothesis::outputs` |
+| LB1-10 | `bound` (`list_max_bound`: `exact`, `at_least`), `unknown_count`, `lower_bound`, `lower_bound_identity` | outcome keys and vocabulary, `runtime-outcomes` 1 | `evaluator.rs`, `list_max_reasons` |
+| LB1-11 | `selection_decided_on_lower_bound` (info; `rule_id`, `count`) | outcome code, `runtime-outcomes` 1 | `evaluator.rs`, `BoundSettled::reason`, `evaluate_with_tables` |
+
+**Settled here** (the contract left them open; each the slice's, the coordinator may change them):
+
+- An Unknown read of a reference that opts in carries `unknown_reason` only, neither `bound` nor
+  `unknown_count`: `bound` names only the two known readings.
+- `unknown_count` counts every key with no value, a key whose bound gives L included.
+- `selection_decided_on_lower_bound`'s `count` is the number of distinct gates and terms over every
+  candidate of the decision; a gate counts when a comparison the bound settled lies in it and its
+  verdict is known, a term when the bound gave its value (an `identity` at L, a `threshold` the
+  bound reached).
+- The bound cell is read wherever the row is of the class, so a bound cell of another type is
+  `type_mismatch` also beside a value (the case table's row); after binding no such cell exists.
+- In the upper bound an `identity` term of weight 0 is bounded (its contribution is 0); a list
+  maximum read as at least in a predicate other than `integer_compare` would be the range up to
+  the largest integer, which validation does not admit.
+
+**Interface.** `package` [3, 9] (`distribution/windows/component-interfaces.json`; the row 9 of
+the `package` interface, in force; the architecture test
+`the_runtime_declares_each_v0120_interface_revision_once`). `ledger`, `runtime-client` and
+`actingd-config` do not move (S168-LB1a raises `ledger` and `runtime-client` in the same release);
+`runtime-outcomes` stays 1, one code, four keys and one vocabulary added within it. The record of a
+decision gains no member: the new keys and code are values of reasons the ledger's reader only
+spells, and an unsettled comparison reads the existing `lookup_miss`.
+
+**What an operator sees after deploy.** Nothing changes until a selection document writes the
+member: a document without it reads, hashes and decides as before, and no reason carries the new
+keys or code. Once a pack's document opts in, its `task.selection_evaluated` records show, in the
+`selection_table_list_max` reason, `bound` `exact` with `unknown_count` 0 where every listed key
+has a value, or `bound` `at_least` with `lower_bound`, `lower_bound_identity` and `unknown_count`
+where some have none; a candidate the bound decided stands as `ranked` or `gate_rejected`, one it
+could not decide is `unknown_dropped` with `lookup_miss` as before, and the decision then carries
+`selection_decided_on_lower_bound` naming the first gate or term so decided. A group of which
+nothing is known reads Unknown as before. A bundle whose packs write the member declares
+`package` [9, 9]; the Runtime is deployed before such a bundle.
+
+**Rollback** (below 0.12.55): before a pack writes the member, nothing to undo. After, a build
+before 0.12.55 refuses that document at admission (`contained_task_select_policy_invalid`: the
+reference denies the unknown member), and a bundle that declares `package` [9, 9] is not placed
+on it (§1.309, "Rollback"): first replace the pack by one without the member. The
+ledger needs nothing: an older build reads the records with the new keys and code, which it only
+spells.
+
+Tests (policy gate row "#428 S168-LB1b", `crates/selection-policy/src/gate_428_s168_lb1b.rs`, tables
+parsed from bytes, fake snapshots, made-up ids): `lower_bound_column_validation`,
+`lower_bound_absent_reads_as_before`, `lower_bound_read`, `lower_bound_compare_left`,
+`lower_bound_compare_right`, `lower_bound_two_ranges_settle_nothing`, `lower_bound_terms`,
+`lower_bound_upper_bound`, `lower_bound_reasons` and `lower_bound_member_needs_package_9`. One
+existing test changes with the revision it pins: actinglab-architecture's
+`the_runtime_declares_each_v0120_interface_revision_once` (`package` [3, 8] to [3, 9]). S168-5a's
+tests, among them `table_list_max_missing_key_is_unknown` and
+`table_list_max_unknown_follows_the_declared_action`, pin documents without the member and do not
+change. No golden changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

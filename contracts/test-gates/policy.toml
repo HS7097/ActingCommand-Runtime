@@ -1299,3 +1299,20 @@ tests = [
     "actingcommand-policy::lib::source::tests::table_list_max_validation",
 ]
 incident = ["#428 S168-5a"]
+
+# Workflow #428 S168-LB1b (register §1.309 rows LB1-7 to LB1-11, §1.312; contracts/selection-policy.md, "Lower bound of a list maximum"; since 0.12.55): table_max_over_list's optional lower_bound_column, a declared integer column other than value_column (dangling_reference, type_mismatch, table_mismatch column_absent and column_type at their places); without it a document keeps its bytes and its identity and reads and decides as S168-5a's; with it the read is exact M, at least L (from a known value, a bound or both) or Unknown lookup_miss only when nothing of the class is known, empty staying exact; integer_compare settled only where every value of [L, +∞) agrees on both sides (mul and add on the right), ne included, two at-least sides settling nothing; threshold at L, identity taking L; the upper bound over the range; the reason's keys bound, unknown_count, lower_bound and lower_bound_identity only for a reference that opts in; selection_decided_on_lower_bound once before the outcome's reasons and never on an unknown evaluation; a reference denies a member it does not know, which is how a package 8 reader refuses the member
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-selection-policy::lib::gate_428_s168_lb1b::lower_bound_column_validation",
+    "actingcommand-selection-policy::lib::gate_428_s168_lb1b::lower_bound_absent_reads_as_before",
+    "actingcommand-selection-policy::lib::gate_428_s168_lb1b::lower_bound_read",
+    "actingcommand-selection-policy::lib::gate_428_s168_lb1b::lower_bound_compare_left",
+    "actingcommand-selection-policy::lib::gate_428_s168_lb1b::lower_bound_compare_right",
+    "actingcommand-selection-policy::lib::gate_428_s168_lb1b::lower_bound_two_ranges_settle_nothing",
+    "actingcommand-selection-policy::lib::gate_428_s168_lb1b::lower_bound_terms",
+    "actingcommand-selection-policy::lib::gate_428_s168_lb1b::lower_bound_upper_bound",
+    "actingcommand-selection-policy::lib::gate_428_s168_lb1b::lower_bound_reasons",
+    "actingcommand-selection-policy::lib::gate_428_s168_lb1b::lower_bound_member_needs_package_9",
+]
+incident = ["#428 S168-LB1b"]

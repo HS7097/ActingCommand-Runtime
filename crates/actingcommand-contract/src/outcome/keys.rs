@@ -762,6 +762,13 @@ outcome_keys! {
     maximum: integer,
     maximum_identity: id,
     // ---- #428 S168-5a: end ----
+    // ---- #428 S168-LB1b (a list maximum read as a lower bound, contracts/selection-policy.md
+    // "Lower bound of a list maximum"): begin ----
+    bound: vocab(list_max_bound),
+    unknown_count: integer,
+    lower_bound: integer,
+    lower_bound_identity: id,
+    // ---- #428 S168-LB1b: end ----
     // ---- #428 SCHED-C1a (a rule's fixed value, contracts/scheduling/README.md "Fixed values
     // written in the pack"): the value `V` a judged candidate's net benefit was computed from. ----
     fixed_value_milli: integer,

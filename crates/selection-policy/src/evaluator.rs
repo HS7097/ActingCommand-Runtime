@@ -28,9 +28,9 @@ use serde::{Deserialize, Serialize};
 use crate::canonical::canonical_sha256;
 use crate::codes::SelectionPolicyCode;
 use crate::facts::{Candidate, RecordRow, ScalarValue, SelectionFactSnapshot, UnknownReason};
-use crate::list_max::{self, ListMaxRead};
+use crate::list_max::{self, ListMaxBound, ListMaxRead};
 use crate::schema::{
-    FactDeclaration, GateUnknownHandling, LookupKey, MAX_CANDIDATES, RowFilter,
+    FactDeclaration, GateUnknownHandling, IntegerCompareOp, LookupKey, MAX_CANDIDATES, RowFilter,
     SELECTION_POLICY_SCHEMA_VERSION, SelectionError, SelectionErrorCode, SelectionMode,
     SelectionPolicy, SortDirection, TermUnknownHandling, TieBreakKey, Transform, ValueRef,
     ValueType,
@@ -336,13 +336,19 @@ pub fn evaluate_with_tables(
     let mut resolver = Resolver::new(policy, facts, lists, tables, now_unix_ms);
     resolver.list_maxima = list_maxima
         .into_iter()
-        .map(|read| (read.reference, read.reading.value))
+        .map(|read| ListMaxValue {
+            reference: read.reference,
+            at_least: read.reading.at_least(),
+            value: read.reading.value,
+        })
         .collect();
 
     let mut verdicts = Vec::with_capacity(candidates.len());
     let mut survivors: Vec<Ranked> = Vec::new();
+    // Workflow #428 S168-LB1b: the gates and terms a lower bound settled for some candidate.
+    let mut on_bound = BoundSettled::default();
     for candidate in candidates {
-        match assess(policy, candidate, &resolver)? {
+        match assess(policy, candidate, &resolver, &mut on_bound)? {
             Assessment::Aborted { verdict, reason } => {
                 verdicts.push(verdict);
                 reasons.push(DecisionReason::unknown(reason.0, &reason.1));
@@ -421,6 +427,12 @@ pub fn evaluate_with_tables(
             .collect(),
         _ => Vec::new(),
     };
+    // Workflow #428 S168-LB1b: a decision made on a lower bound says so once, after the
+    // candidates' assessment and before the outcome's reasons. An evaluation that ended unknown
+    // returned above and carries none.
+    if let Some(reason) = on_bound.reason(policy) {
+        reasons.push(reason);
+    }
     match &outcome {
         SelectionOutcome::Selected { count } => reasons.push(DecisionReason::new(
             SelectionPolicyCode::SelectionSelected,
@@ -470,7 +482,9 @@ pub fn evaluate_with_tables(
 /// and the gate or term that reads the reference first, then `selection_table_list_max` with
 /// the table, its column, the lists in the order of `lists`, the number of distinct keys of the
 /// union and either the largest value with the smallest key that holds it, or nothing for
-/// `empty`, or the unknown reason.
+/// `empty`, or the unknown reason. Workflow #428 S168-LB1b: a known read of a reference that
+/// names a `lower_bound_column` adds `bound` and `unknown_count`, and, at least, `lower_bound`
+/// and `lower_bound_identity` in the place of `maximum` and `maximum_identity`.
 fn list_max_reasons(read: &ListMaxRead<'_>, reasons: &mut Vec<DecisionReason>) {
     let ValueRef::TableMaxOverList {
         table_id,
@@ -495,7 +509,28 @@ fn list_max_reasons(read: &ListMaxRead<'_>, reasons: &mut Vec<DecisionReason>) {
         .table_column(value_column.as_str())
         .fact_keys(lists.iter().map(|list| list.fact_key.clone()))
         .count(reading.count);
+    // Workflow #428 S168-LB1b: a known read of a reference that names a `lower_bound_column`
+    // says whether it is exact and how many keys have no value; at least, it names L and its key
+    // in the place of the maximum's.
+    let outcome = match reading.bound {
+        Some(bound) => outcome.bound(bound).unknown_count(reading.unknown_count),
+        None => outcome,
+    };
     let (outcome, detail) = match (&reading.value, &reading.maximum_identity) {
+        (Ok(ScalarValue::Integer(lower_bound)), Some(identity))
+            if reading.bound == Some(ListMaxBound::AtLeast) =>
+        {
+            (
+                outcome
+                    .lower_bound(*lower_bound)
+                    .lower_bound_identity(identity.as_str()),
+                format!(
+                    "table `{table_id}` at least {lower_bound} identity={identity} with {} keys \
+                     without a value",
+                    reading.unknown_count
+                ),
+            )
+        }
         (Ok(ScalarValue::Integer(maximum)), Some(identity)) => (
             outcome
                 .maximum(*maximum)
@@ -855,7 +890,16 @@ struct Resolver<'a> {
     tables: &'a SelectionTables,
     now_unix_ms: u64,
     /// Workflow #428 S168-5a: what each distinct list maximum read, before any candidate.
-    list_maxima: Vec<(&'a ValueRef, Result<ScalarValue, UnknownReason>)>,
+    list_maxima: Vec<ListMaxValue<'a>>,
+}
+
+/// One distinct list maximum as the candidates read it (Workflow #428 S168-5a).
+struct ListMaxValue<'a> {
+    reference: &'a ValueRef,
+    /// The value, `empty`, L for a read that is at least, or why the read is unknown.
+    value: Result<ScalarValue, UnknownReason>,
+    /// Workflow #428 S168-LB1b: the read is "at least" its value, the range [L, +∞).
+    at_least: bool,
 }
 
 impl<'a> Resolver<'a> {
@@ -890,8 +934,18 @@ impl<'a> Resolver<'a> {
     fn list_max(&self, reference: &ValueRef) -> Result<ScalarValue, UnknownReason> {
         self.list_maxima
             .iter()
-            .find(|(read, _)| *read == reference)
-            .map_or(Err(UnknownReason::TypeMismatch), |(_, value)| value.clone())
+            .find(|read| read.reference == reference)
+            .map_or(Err(UnknownReason::TypeMismatch), |read| read.value.clone())
+    }
+
+    /// Whether `reference` is a list maximum read as "at least" its value (Workflow #428
+    /// S168-LB1b): [`Self::read`] gives L, and every reader takes the range [L, +∞).
+    fn reads_at_least(&self, reference: &ValueRef) -> bool {
+        reference.is_list_max()
+            && self
+                .list_maxima
+                .iter()
+                .any(|read| read.reference == reference && read.at_least)
     }
 
     /// A declared scalar fact in the pinned snapshot, or why it is unknown.
@@ -1060,6 +1114,9 @@ struct TableMarks {
     otherwise_column: Option<String>,
     static_unknown: bool,
     other_unknown: bool,
+    /// Workflow #428 S168-LB1b: a comparison with a list maximum read as a lower bound was
+    /// settled, true or false, by that bound.
+    settled_on_bound: bool,
 }
 
 impl TableMarks {
@@ -1136,10 +1193,41 @@ impl Reads {
     }
 }
 
+/// Workflow #428 S168-LB1b (contracts/selection-policy.md, "What a person sees"): the gates and
+/// the terms in which a list maximum read as a lower bound settled something for a candidate (a
+/// comparison the bound settled in a gate whose verdict is known, a threshold the bound settled,
+/// an identity term taken at L), each once, by its place: the gates in document order, then the
+/// terms, the order of "One read".
+#[derive(Default)]
+struct BoundSettled {
+    gates: BTreeSet<usize>,
+    terms: BTreeSet<usize>,
+}
+
+impl BoundSettled {
+    /// `selection_decided_on_lower_bound` with the first such rule and how many there were, or
+    /// none for a decision no lower bound settled anything of.
+    fn reason(&self, policy: &SelectionPolicy) -> Option<DecisionReason> {
+        let first = match (self.gates.first(), self.terms.first()) {
+            (Some(&gate), _) => policy.gates.get(gate).map(|gate| gate.gate_id.as_str()),
+            (None, Some(&term)) => policy.scoring.get(term).map(|term| term.term_id.as_str()),
+            (None, None) => None,
+        }?;
+        let count = self.gates.len() + self.terms.len();
+        Some(DecisionReason::with(
+            Outcome::new(SelectionPolicyCode::SelectionDecidedOnLowerBound)
+                .rule_id(first)
+                .count(count),
+            format!("{count} gates and terms decided on a lower bound, the first `{first}`"),
+        ))
+    }
+}
+
 fn assess(
     policy: &SelectionPolicy,
     candidate: &Candidate,
     resolver: &Resolver<'_>,
+    on_bound: &mut BoundSettled,
 ) -> Result<Assessment, SelectionError> {
     let mut verdict = CandidateVerdict {
         candidate_id: candidate.candidate_id.clone(),
@@ -1153,9 +1241,14 @@ fn assess(
     };
 
     let mut unrecorded = Reads::ignored();
-    for gate in &policy.gates {
+    for (gate_index, gate) in policy.gates.iter().enumerate() {
         unrecorded.marks = TableMarks::default();
-        let (outcome, keep) = match truth(&gate.predicate, candidate, resolver, &mut unrecorded) {
+        let decided = truth(&gate.predicate, candidate, resolver, &mut unrecorded);
+        // Workflow #428 S168-LB1b: a known verdict to which a lower bound settled a comparison.
+        if unrecorded.marks.settled_on_bound && !matches!(decided, Truth::Unknown(_)) {
+            on_bound.gates.insert(gate_index);
+        }
+        let (outcome, keep) = match decided {
             Truth::True => (GateOutcome::Passed, true),
             Truth::False => (GateOutcome::Failed, false),
             Truth::Unknown(reason) => match gate.on_unknown {
@@ -1228,12 +1321,24 @@ fn assess(
     }
 
     let mut total: i128 = 0;
-    for term in &policy.scoring {
+    for (term_index, term) in policy.scoring.iter().enumerate() {
         let mut term_reads = Reads::ignored();
         let read = resolver.read_noting(&term.value, candidate, &mut term_reads);
         // A value the term's own transform cannot use is the document's, not the table's.
         let static_unknown = read.is_err() && term_reads.marks.only_static();
-        let resolved = read.and_then(|value| transform(&term.transform, &value));
+        // Workflow #428 S168-LB1b: a list maximum read as a lower bound is the range [L, +∞):
+        // `identity` takes L, `threshold` is settled only once L reaches `at_least`.
+        let at_least = resolver.reads_at_least(&term.value);
+        let resolved = read.and_then(|value| {
+            if at_least {
+                transform_at_least(&term.transform, &value)
+            } else {
+                transform(&term.transform, &value)
+            }
+        });
+        if at_least && resolved.is_ok() {
+            on_bound.terms.insert(term_index);
+        }
         let (outcome, keep) = match resolved {
             Ok(transformed_milli) => (TermOutcome::Scored { transformed_milli }, true),
             Err(reason) => match term.on_unknown {
@@ -1416,9 +1521,24 @@ fn truth(
             match (left, right) {
                 (Err(reason), _) | (Ok(_), Err(reason)) => Truth::Unknown(reason),
                 (Ok(left), Ok(right)) => {
-                    let right = i128::from(right) * i128::from(mul.unwrap_or(1))
-                        + i128::from(add.unwrap_or(0));
-                    bool_truth(op.holds(i128::from(left), right))
+                    let scale = |value: i64| {
+                        i128::from(value) * i128::from(mul.unwrap_or(1))
+                            + i128::from(add.unwrap_or(0))
+                    };
+                    let ranged = left.is_at_least() || right.is_at_least();
+                    match compare_sides(*op, left, right, scale) {
+                        Some(holds) => {
+                            reads.marks.settled_on_bound |= ranged;
+                            bool_truth(holds)
+                        }
+                        // Workflow #428 S168-LB1b: a range whose values disagree settles
+                        // nothing; the existing unknown reason says so, and it is no static
+                        // table drop.
+                        None => {
+                            reads.marks.other_unknown = true;
+                            Truth::Unknown(UnknownReason::LookupMiss)
+                        }
+                    }
                 }
             }
         }
@@ -1484,18 +1604,36 @@ fn leaf(
     }
 }
 
-/// Reads one side of an `integer_compare`: an integer value, or the reason it is unknown (any
-/// other type is a type mismatch).
+/// One side of an `integer_compare`: one integer, or, for a list maximum read as a lower bound
+/// (Workflow #428 S168-LB1b), every integer from L up.
+#[derive(Debug, Clone, Copy)]
+enum Side {
+    Exact(i64),
+    AtLeast(i64),
+}
+
+impl Side {
+    fn is_at_least(self) -> bool {
+        matches!(self, Self::AtLeast(_))
+    }
+}
+
+/// Reads one side of an `integer_compare`: an integer value, the range [L, +∞) of a list
+/// maximum read as a lower bound, or the reason it is unknown (any other type is a type
+/// mismatch).
 fn integer_side(
     reference: &ValueRef,
     candidate: &Candidate,
     resolver: &Resolver<'_>,
     reads: &mut Reads,
-) -> Result<i64, UnknownReason> {
+) -> Result<Side, UnknownReason> {
     let read = resolver
         .read_noting(reference, candidate, reads)
         .and_then(|value| match value {
-            ScalarValue::Integer(value) => Ok(value),
+            ScalarValue::Integer(value) if resolver.reads_at_least(reference) => {
+                Ok(Side::AtLeast(value))
+            }
+            ScalarValue::Integer(value) => Ok(Side::Exact(value)),
             _ => Err(UnknownReason::TypeMismatch),
         });
     match read {
@@ -1503,6 +1641,68 @@ fn integer_side(
         Err(reason) => reads.record_unknown(reference, reason),
     }
     read
+}
+
+/// Decides `left op right × mul + add` (`scale` applies `mul` and `add`), computed and compared
+/// in 128 bits. Workflow #428 S168-LB1b: a side that is a range [L, +∞) settles the comparison
+/// only where every value of the range gives the same answer, and `None` stands for a range
+/// whose values disagree. On the right, `mul` is at least one, so the range is
+/// [L × `mul` + `add`, +∞). Two ranges settle nothing.
+fn compare_sides(
+    op: IntegerCompareOp,
+    left: Side,
+    right: Side,
+    scale: impl Fn(i64) -> i128,
+) -> Option<bool> {
+    match (left, right) {
+        (Side::Exact(left), Side::Exact(right)) => Some(op.holds(i128::from(left), scale(right))),
+        // Every value of the left side is at least `low`.
+        (Side::AtLeast(low), Side::Exact(right)) => {
+            let (low, right) = (i128::from(low), scale(right));
+            match op {
+                IntegerCompareOp::Ge => (low >= right).then_some(true),
+                IntegerCompareOp::Gt | IntegerCompareOp::Ne => (low > right).then_some(true),
+                IntegerCompareOp::Le | IntegerCompareOp::Eq => (low > right).then_some(false),
+                IntegerCompareOp::Lt => (low >= right).then_some(false),
+            }
+        }
+        // Every value of the right side is at least `low`.
+        (Side::Exact(left), Side::AtLeast(low)) => {
+            let (left, low) = (i128::from(left), scale(low));
+            match op {
+                IntegerCompareOp::Le => (left <= low).then_some(true),
+                IntegerCompareOp::Lt | IntegerCompareOp::Ne => (left < low).then_some(true),
+                IntegerCompareOp::Ge | IntegerCompareOp::Eq => (left < low).then_some(false),
+                IntegerCompareOp::Gt => (left <= low).then_some(false),
+            }
+        }
+        (Side::AtLeast(_), Side::AtLeast(_)) => None,
+    }
+}
+
+/// A term's transform over a list maximum read as a lower bound, the range [L, +∞) (Workflow
+/// #428 S168-LB1b): `identity` takes L; `threshold` gives `then_milli` once L reaches
+/// `at_least`, and is Unknown (`lookup_miss`) otherwise, which the term's `on_unknown` decides.
+/// Validation admits no lookup over a list maximum.
+fn transform_at_least(transform: &Transform, value: &ScalarValue) -> Result<i64, UnknownReason> {
+    match (transform, value) {
+        (Transform::Identity, ScalarValue::Integer(low)) => Ok(*low),
+        (
+            Transform::Threshold {
+                at_least,
+                then_milli,
+                ..
+            },
+            ScalarValue::Integer(low),
+        ) => {
+            if low >= at_least {
+                Ok(*then_milli)
+            } else {
+                Err(UnknownReason::LookupMiss)
+            }
+        }
+        _ => Err(UnknownReason::TypeMismatch),
+    }
 }
 
 fn bool_truth(value: bool) -> Truth {
