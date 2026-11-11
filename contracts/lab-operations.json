@@ -1243,7 +1243,10 @@
         {"name": "navigation", "form": "option", "type": "file", "required": false},
         {"name": "pack", "form": "option", "type": "file", "required": false},
         {"name": "pack_root", "form": "option", "type": "dir", "required": false},
-        {"name": "pages", "form": "option", "type": "file", "required": false}
+        {"name": "pages", "form": "option", "type": "file", "required": false},
+        {"name": "env_task", "form": "option", "type": "string", "required": false, "note": "LAB-5B3: the task the pack's env markers resolve for"},
+        {"name": "game", "form": "option", "type": "string", "required": false, "note": "actinglab's global --game; LAB-5B3"},
+        {"name": "server", "form": "option", "type": "string", "required": false, "note": "actinglab's global --server; LAB-5B3"}
       ],
       "output": "as today's command",
       "writes": true,
@@ -1904,7 +1907,9 @@
         {"name": "to", "form": "option", "type": "string", "required": false},
         {"name": "click", "form": "option", "type": "string", "required": false},
         {"name": "destructive", "form": "switch", "type": "boolean", "required": false},
-        {"name": "non_destructive", "form": "switch", "type": "boolean", "required": false}
+        {"name": "non_destructive", "form": "switch", "type": "boolean", "required": false},
+        {"name": "negative_frame", "form": "option", "type": "file", "required": false, "note": "LAB-5B3: read when contrast_frame is absent"},
+        {"name": "metric", "form": "option", "type": "enum:ccorr_normed|ccoeff_normed", "required": false, "default": "ccorr_normed", "note": "LAB-5B3: the backtest of a resource step's frame"}
       ],
       "output": "as today's command",
       "writes": true,
@@ -1944,7 +1949,9 @@
         {"name": "drag", "form": "option", "type": "string", "required": false},
         {"name": "long_press", "form": "option", "type": "string", "required": false},
         {"name": "long_tap", "form": "option", "type": "string", "required": false},
-        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"},
+        {"name": "metric", "form": "option", "type": "enum:ccorr_normed|ccoeff_normed", "required": false, "default": "ccorr_normed", "note": "LAB-5B3: the backtest of an anchor, color probe or verify template's frame"},
+        {"name": "duration_ms", "form": "option", "type": "integer", "required": false, "note": "LAB-5B3: an operation's swipe or drag (default 500) or long press (default 700)"}
       ],
       "output": "as today's command",
       "writes": true,

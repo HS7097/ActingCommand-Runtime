@@ -910,13 +910,13 @@ pub(super) fn admission(
 pub(super) fn preflight(
     directory: &Path,
 ) -> Result<actingcommand_lab::PreparedContainedTask, CliError> {
-    let flags = FlagArgs {
-        flags: BTreeMap::from([(
+    let flags = FlagArgs::from_parts(
+        BTreeMap::from([(
             "--package".to_owned(),
             vec![directory.to_string_lossy().into_owned()],
         )]),
-        positionals: Vec::new(),
-    };
+        Vec::new(),
+    );
     crate::package_cli::preflight_admission(&flags)
 }
 

@@ -76,8 +76,33 @@ fn run_lab_vendor_stdio_selftest(args: &[String]) -> CliOutcome<Value> {
     }))
 }
 
+/// Workflow #434 LAB-5B3 (tests only): the flags `package inspect` reads.
+#[cfg(test)]
+pub(crate) const INSPECT_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "package inspect",
+        parts: &[&crate::flag_args::reads::ReadPart {
+            options: &["--zip"],
+            switches: &[],
+            refused: &[],
+        }],
+    };
+
 pub(super) fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    // Workflow #434 LAB-5B3: in test builds, a lenient subcommand's reads are held to its read
+    // list, and those of `fmt` and `loading` to the forms the register gives their flags.
+    #[cfg(test)]
+    {
+        match sub {
+            "validate" => flags.reading(&package_cli::VALIDATE_READS),
+            "inspect" => flags.reading(&INSPECT_READS),
+            "bundle" => flags.reading(&package_build::BUNDLE_READS),
+            "fmt" => flags.reading_forms("package fmt"),
+            "loading" => flags.reading_forms("package loading"),
+            _ => {}
+        }
+    }
     match sub {
         "validate" => package_cli::run_validate(global, &flags),
         "preflight" => package_cli::run_preflight(&flags),
@@ -196,12 +221,58 @@ fn write_package_light_event(
     }))
 }
 
+/// Workflow #434 LAB-5B3 (tests only): the flags `operation validate` reads.
+#[cfg(test)]
+pub(crate) const OPERATION_VALIDATE_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "operation validate",
+        parts: &[&crate::flag_args::reads::ReadPart {
+            options: &["--repo", "--operation-dir"],
+            switches: &[],
+            refused: &[],
+        }],
+    };
+
+/// Workflow #434 LAB-5B3 (tests only): the flags `operation inspect` reads.
+#[cfg(test)]
+pub(crate) const OPERATION_INSPECT_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "operation inspect",
+        parts: &[&OPERATION_DIR_READS],
+    };
+
+/// Workflow #434 LAB-5B3 (tests only): the flags `operation explain` reads, as `inspect`'s.
+#[cfg(test)]
+pub(crate) const OPERATION_EXPLAIN_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "operation explain",
+        parts: &[&OPERATION_DIR_READS],
+    };
+
+/// The operation directory `operation inspect` and `operation explain` read.
+#[cfg(test)]
+const OPERATION_DIR_READS: crate::flag_args::reads::ReadPart = crate::flag_args::reads::ReadPart {
+    options: &["--operation-dir"],
+    switches: &[],
+    refused: &[],
+};
+
 pub(super) fn run_operation(
     sub: &str,
     _global: &GlobalOptions,
     args: &[String],
 ) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    // Workflow #434 LAB-5B3: in test builds, each lenient subcommand's reads are held to its list.
+    #[cfg(test)]
+    {
+        match sub {
+            "validate" => flags.reading(&OPERATION_VALIDATE_READS),
+            "inspect" => flags.reading(&OPERATION_INSPECT_READS),
+            "explain" => flags.reading(&OPERATION_EXPLAIN_READS),
+            _ => {}
+        }
+    }
     match sub {
         "validate" => {
             let repo = flags.required_path("--repo")?;

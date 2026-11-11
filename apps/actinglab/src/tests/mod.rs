@@ -95,6 +95,10 @@ mod gate_434_lab5c;
 // and every debugging and authoring row has one kind.
 #[path = "gate_434_lab5b2.rs"]
 mod gate_434_lab5b2;
+// Workflow #434 LAB-5B3: each lenient command's read list is one constant beside it, its test
+// builds hold every read to it, and it is held equal to its row.
+#[path = "gate_434_lab5b3.rs"]
+mod gate_434_lab5b3;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

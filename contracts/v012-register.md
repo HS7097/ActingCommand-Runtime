@@ -8990,6 +8990,136 @@ and `serve --stdio` answers as before.
 
 **LAB-5B2 rollback** (to the release before it). Nothing persisted: code only.
 
+#### Slice LAB-5B3 (0.12.52): each lenient command declares the flags it reads, held equal to its row
+
+Coordinator work order `rd-1108/arch-013/brief-lab5b3.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` §3 (kind T4), read against main `be1a963b` (LAB-5B2
+merged), which wins over the survey. The coordinator's ruling (board #434, 6770034832 point 3):
+these 24 commands keep ignoring a flag they do not read in this round; making them refuse is a
+later slice. The rule of the slice: no command line changes what it accepts, refuses or prints.
+
+**The read lists** (`#[cfg(test)]` constants beside each command, none in the product build).
+Their types are `flag_args::reads::{FlagReads, ReadPart}`: a list names its row and is the union
+of its parts, each part the options (read for their value: `optional`, `values`, `required` and
+their path forms), the switches (read with `bool`) and the refused flags (read only to refuse
+them) of one path of the command or of a helper several commands share. Shared parts:
+`commands/device_commands.rs` `LEGACY_ROUTING_READS` (`--via-daemon`, `--local`, `--state-dir`,
+refused), `contained_resources.rs` `PACKAGE_LOCATOR_READS` (`--package`, `--zip`), `lab_draw.rs`
+`SEED_READS`, `readonly_cli.rs` `READONLY_INPUT_READS` (`--scene`, `--require-fresh`; `--capture`
+refused, so `--fresh-delay-ms` is never read there), `env_detection.rs` `ENV_MARKER_READS`,
+`commands/navigation_recovery.rs` `SCENE_READS`, `commands/session_record.rs`
+`RECORD_SESSION_READS` and `RECORD_BACKTEST_READS`.
+
+| Row | File (`apps/actinglab/src/`) | Constant | Per-path parts |
+|---|---|---|---|
+| `touch-probe` | `commands/device_commands.rs` | `TOUCH_PROBE_READS` (`--touch-backend` refused) | |
+| `recover` | `commands/navigation_recovery.rs` | `RECOVER_READS` | `RECOVER_PATH_READS`, `RECOVER_STALE_CAPTURE_READS`, `RECOVER_RESOURCE_READS`, `RECOVER_ROUTE_READS`, `RECOVER_STARTUP_LOGIN_READS` |
+| `locate` | `commands/navigation_recovery.rs` | `LOCATE_READS` | |
+| `tap-target`, `navigate` | `drive_cli.rs` | `TAP_TARGET_READS`, `NAVIGATE_READS` | |
+| `debug-package`, `export-evidence` | `runtime_debug.rs` | `DEBUG_PACKAGE_READS`, `EXPORT_EVIDENCE_READS` | |
+| `recognize-artifact`, `recognize`, `detect-page`, `current-page`, `is-visible` | `readonly_cli.rs` | `RECOGNIZE_ARTIFACT_READS`, `RECOGNIZE_READS`, `DETECT_PAGE_READS`, `CURRENT_PAGE_READS`, `IS_VISIBLE_READS` | |
+| `record start`, `status`, `candidates`, `amend`, `step` | `commands/session_record.rs` | `RECORD_START_READS`, `RECORD_STATUS_READS`, `RECORD_CANDIDATES_READS`, `RECORD_AMEND_READS`, `RECORD_STEP_READS` | amend: `RECORD_AMEND_STEP_READS`, `RECORD_AMEND_RESOURCE_READS`, `RECORD_AMEND_OPERATION_READS`; step by `--kind`: `RECORD_STEP_RESOURCE_READS`, `RECORD_STEP_OPERATION_READS` |
+| `package validate` | `package_cli.rs` | `VALIDATE_READS` | |
+| `package inspect`, `operation validate`, `inspect`, `explain` | `lab_package_control.rs` | `INSPECT_READS`, `OPERATION_VALIDATE_READS`, `OPERATION_INSPECT_READS`, `OPERATION_EXPLAIN_READS` | |
+| `package bundle` | `package_build.rs` | `BUNDLE_READS` | |
+| `resource compile-maa` | `maa_task_graph.rs` | `COMPILE_MAA_READS` (with `--repo`, which `run_resource` reads for every resource command) | |
+
+Global options a command reads through its flags are on its list (`--instance` of the record
+actions and the env markers, `--dry-run` of `recover`, `tap-target` and `navigate`, `--game` and
+`--server` of `record start` and the env markers, `--touch-backend` refused): actinglab's parser
+takes them first, so these reads see nothing on the command line, and the command reads the global
+option.
+
+**The test-only recording** (`flag_args.rs`, module `reads`). A command declares its list where it
+starts, right after it parses its flags (`FlagArgs::reading`; the dispatchers of `record`,
+`package`, `operation` and `resource` by subcommand, before their first read). From then on every
+read of those flags and of every copy of them (`bool`, `optional`, `values`, `count`, the new
+`given`, and the readers built on them) is recorded on the reading thread (`reads::take`), and a
+read of a name the list does not hold, or in the form the list does not give it (a switch read for
+its value, an option read with `bool`), panics with the row and the name, failing the test. A
+refused flag may be read in any form. Flags no command declared for (the global gates' own parse,
+`FlagArgs::default()`, the helpers' tests) are not held. `FlagArgs::from_parts` builds flags the
+code makes itself (the input relay's action, `resource verify`'s preflight); the struct literal is
+gone. In the product build `FlagArgs` has no such field and reads as before.
+
+**Work order point 4.** `FlagArgs::reading_forms(row)` holds a strict command to the forms the
+register gives its flags (`own_flags::accepted`): a flag the register lists as taking a value read
+with `bool`, or a switch read for its value, fails; a name off its list is left to the command's
+own refusal. It is declared by `observe`, `do`, `ensure`, `wait` (checking `LAB2_SWITCHES`),
+`package fmt` (`--check`) and `package loading` (`LOADING_SWITCHES`), so their existing tests
+check those switch lists. `RECORD_MARK_SWITCHES` and `record stop --dry-run` cannot be checked so:
+`record_flag_switch` reads a switch with `values`.
+
+**The register.** `cli_module::own_flags::reads(row)` answers for exactly the lenient rows: the
+list, its options, switches and refused flags, the option the first positional stands in for
+(`tap-target` and `is-visible` `--target`, `locate` `--template`, `record candidates` and `record
+amend` `--step-id`) and the count of positionals the code checks (exactly none for `touch-probe`,
+`debug-package` and `export-evidence`; no count for the others, `recover --stale-capture` exactly
+none on its own path only).
+
+**Reads outside `FlagArgs`'s readers** (work order, fail loud). `package bundle`
+(`--maintenance`, `--source-repository`, `--source-commit`, the root files) and `record amend`
+(`--threshold`) asked the flag map itself whether a flag was given: they read it through the new
+`FlagArgs::given` now, the same answer, so the recording sees it. `main.rs`'s
+`record_flag_gate` and `retired_digest_flag_gate` read the raw words of every command line, to
+refuse `--record` and `--tap-rect` outside their commands and the retired digest flags; they are
+refusals common to every command and on no list. `refuse_repeated_options` and `record amend
+--from-drift-diagnostics`'s own list (`reject_direct_drift_amend_flags`) look at every flag given,
+by no name; that list lets `--holder`, `--lease-holder` and `--lease-id` through, which amend never
+reads.
+
+**Corrections of the table (work order point 6; the table follows the code).** Each makes the row
+say what its command already reads; on the command line nothing changes (`recover` hands every
+further flag on, and the record actions are actinglab's own words), and `serve --stdio` now takes
+these parameters and hands them on:
+
+| # | Row | Added | The code that reads it |
+|---|---|---|---|
+| L5B3-1 | `recover` | `env_task` (option, string) | `env_detection::resolve_env_markers_in_value`, on the maintenance route's pack |
+| L5B3-2 | `recover` | `game`, `server` (options, string; actinglab's global options) | the same, and the route's resources by `--game`/`--server` |
+| L5B3-3 | `record step` | `metric` (option, `enum:ccorr_normed\|ccoeff_normed`, default `ccorr_normed`), `duration_ms` (option, integer) | the backtest of a resource step's frame (`parse_match_metric_flag`); an operation's swipe or long press (`parse_record_duration_ms`) |
+| L5B3-4 | `record amend` | `metric` (as step's), `negative_frame` (option, file) | the backtest of the amended step's frame; `read_session_record_contrast_frame` when `contrast_frame` is absent |
+
+No row promised a flag its command never reads.
+
+**What the tests reach** (work order point 5). Existing in-process tests reach the reads of 16
+commands: `recover`, `tap-target`, `navigate`, `recognize-artifact`, the five record actions,
+`package validate`, `package bundle`, `recognize`, `detect-page`, `current-page`, `is-visible`,
+`locate`. No test reached the other 8 through the place their list is declared (`touch-probe`,
+`debug-package`, `export-evidence`, `package inspect`, `resource compile-maa`, whose tests call
+its inner function directly, `operation validate`, `inspect`, `explain`):
+`every_lenient_command_reads_through_its_list` runs each of them, as every lenient command, on a
+command line refused (or, `record status`, answered) before any Runtime connection, and reaches
+all of their reads. No list rests on reading alone; within the reached commands, reads behind a
+condition no test takes rest on reading: `recover`'s `--pack-root` and `--pages` (with `--pack`)
+and the freshness of a capture, `navigate`'s step timing (only when it presses), `locate`'s
+capture flags.
+
+**Tests.** New: apps row "#434 LAB-5B3": `gate_434_lab5b3::lenient_rows_match_their_reads` (for
+each lenient row, in both directions: every option and switch the row declares, but actinglab's
+global options, is on its list in the same form; every option and switch of the list is declared
+by the row in the same form, a global option in any form; no refused flag is a parameter of the
+row; the option the first positional stands in for is an option of the row; the row's
+positionals, the instance not among them, fit the count the command checks; the register answers
+for exactly the lenient rows, each list naming its row; a failure names the row, the flag and the
+direction), `gate_434_lab5b3::a_held_read_outside_its_list_fails` (the recording itself, and a
+strict row held to its register's forms) and
+`gate_434_lab5b3::every_lenient_command_reads_through_its_list`. LAB-5B2's helpers `flag`,
+`global` and `row_positionals` are `pub(super)` for the new file; its two tests are unchanged.
+Every existing test now also fails on an undeclared read.
+
+**Interface.** None raised. No type, member, code, key or location is added; the table gains the
+parameters of L5B3-1 to L5B3-4.
+
+**Left to other slices.** Making the 24 commands refuse a flag their list does not hold (the
+coordinator's ruling: a later slice); B1, C, E, F, G as their work orders say.
+
+**What LAB-5B3 changes live.** No command line accepts, refuses or prints anything new; `serve
+--stdio` takes the parameters L5B3-1 to L5B3-4 add and hands them to the command, which reads them
+as it reads them from the command line.
+
+**LAB-5B3 rollback** (to the release before it). Nothing persisted: code and the table only.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
