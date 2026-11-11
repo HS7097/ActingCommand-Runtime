@@ -3096,6 +3096,11 @@ fn rank_breakdown_detail(rank: &TaskRank, record: &RankRecord, lead: Option<i128
         detail.push_str(&format!(" offset_kept={}", u8::from(resources.offset_kept)));
     }
     push_ss2_fields(&mut detail, record, lead == Some(0));
+    // SCHED-C1a (register §1.299): a judged winner whose B came from a fixed value names it after
+    // its B and E.
+    if let Some(value) = record.benefit.and_then(|benefit| benefit.fixed_value_milli) {
+        detail.push_str(&format!(" fixed_value_milli={value}"));
+    }
     detail
 }
 

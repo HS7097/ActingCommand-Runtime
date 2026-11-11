@@ -49,6 +49,16 @@
 //!   tries is kept whatever the sign of its `B` (its own `B` charging only the part of its
 //!   consumption below the stop line); any other consumer of a capped pool is held; a candidate
 //!   that would pass but leave a pool below its hard line is held too.
+//! - **A fixed value** (SCHED-C1a, register §1.299; Alice's two kinds of scoring of 11-09 15:47
+//!   and 15:50; `contracts/scheduling/README.md`, "Fixed values written in the pack"). A task
+//!   that writes `benefit_fixed_value_milli` `V` is judged by
+//!   `B = V − Σ_p consume(k,p)·W(k,p)/Q_p`: `V` itself without a consumption, its `produces`
+//!   unread. A consumed pool still needs its valuation and a regenerating one its reading, as
+//!   above; `ε` holds the consumption's terms only, a fixed value being exact. So below the cap a
+//!   consumer's `B` is `V − W·c`, and in a capped round its value without the pool's cost is `V`
+//!   less the other pools' cost ([`super::capped`] reads it from `S`). Static and dynamic
+//!   candidates rank on the one scale `B ÷ E`. Every decision whose `B` came from a fixed value
+//!   carries `benefit_fixed_value` before its other reasons.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -98,6 +108,9 @@ pub(super) struct KnownBenefit {
     pub(super) benefit_milli: i64,
     /// `E`: the duration the utility term divides by, at least 1.
     pub(super) expected_duration_ms: u64,
+    /// SCHED-C1a (register §1.299): `V`, the task's fixed value `B` was computed from; `None` for
+    /// a `B` the effects give. A judged winner's `rank_breakdown` names it.
+    pub(super) fixed_value_milli: Option<i64>,
 }
 
 impl KnownBenefit {
@@ -362,6 +375,10 @@ fn valued_pool<'a>(
 /// The candidate's net benefit (module doc). `weight` is the resource layer's effective weight
 /// `W(k,p)` of a pool the task produces, when its term holds one; otherwise the pool's base
 /// weight is `W`.
+///
+/// SCHED-C1a (register §1.299): with the task's fixed value `V` the sum starts at `V`, its
+/// `produces` are not read (neither their pools' valuations nor `ε`'s production terms), and the
+/// consumption is judged as before: `B = V` without one, `V` less its cost otherwise.
 fn judge(
     task: &TaskSpec,
     instance: &InstanceSnapshot,
@@ -373,11 +390,16 @@ fn judge(
         gap,
         suggestions: Vec::new(),
     };
-    if task.produces.is_empty() && task.consumes.is_empty() {
+    let fixed_value = task.benefit_fixed_value_milli;
+    let produces: &[crate::ResourceEffectSpec] = match fixed_value {
+        Some(_) => &[],
+        None => &task.produces,
+    };
+    if fixed_value.is_none() && task.produces.is_empty() && task.consumes.is_empty() {
         return Ok(unknown(Gap::NoEffects));
     }
     // Every entry and every pool it touches, in declaration order, produces first.
-    for effect in task.produces.iter().chain(&task.consumes) {
+    for effect in produces.iter().chain(&task.consumes) {
         if effect.is_pending() {
             return Ok(unknown(Gap::EntryPending(effect.pool_id.clone())));
         }
@@ -392,12 +414,22 @@ fn judge(
         ))
     };
     let mut sum = ExactSum::new();
+    // SCHED-C1a: a fixed value is exact, so it adds nothing to `ε`.
+    if let Some(value) = fixed_value {
+        let value = u128::try_from(value).map_err(|_| {
+            PolicyEvaluationError::invalid(format!(
+                "task '{}' has a negative fixed value on instance '{}'",
+                task.id, instance.instance_id
+            ))
+        })?;
+        sum.add(value, 1, false).ok_or_else(overflow)?;
+    }
     // SS-2d: the rounding bound `ε` of `sum`, accumulated as exactly (module doc).
     let mut tolerance = ExactSum::new();
     let mut downstream = false;
     let mut items = Vec::new();
     let mut seen = Vec::<&str>::new();
-    for effect in &task.produces {
+    for effect in produces {
         if seen.contains(&effect.pool_id.as_str()) {
             continue;
         }
@@ -664,13 +696,16 @@ pub(super) fn gate(
                             min_wake(task_work.next_wake_unix_ms, Some(wake));
                     }
                 };
-                // SS-2h: a capped pool's order decides before the sign of `B`.
+                // SS-2h: a capped pool's order decides before the sign of `B`. SCHED-C1a: a `B`
+                // computed from a fixed value says so first, whatever the gate then decides.
                 let hold = match disposition {
                     Disposition::Held(reason) => {
+                        note_fixed_value(task_work, task, saturating_milli(sum.floor()), expected);
                         defer(task_work, reason);
                         continue;
                     }
                     Disposition::Member { benefit, mut slot } => {
+                        note_fixed_value(task_work, task, benefit.benefit_milli, expected);
                         // SS-2h fix 1: a fallback of its block that waits takes the wake a held
                         // candidate takes.
                         slot.wake_unix_ms =
@@ -686,6 +721,7 @@ pub(super) fn gate(
                     Disposition::Normal { hold } => hold,
                 };
                 let benefit_milli = saturating_milli(sum.floor());
+                note_fixed_value(task_work, task, benefit_milli, expected);
                 // SS-2d: within its rounding error the sign is not trusted (module doc).
                 let within = sum.within(&tolerance).ok_or_else(|| {
                     PolicyEvaluationError::invalid(format!(
@@ -739,6 +775,7 @@ pub(super) fn gate(
                     let known = KnownBenefit {
                         benefit_milli,
                         expected_duration_ms: expected,
+                        fixed_value_milli: task.benefit_fixed_value_milli,
                     };
                     candidate.benefit = Some(known);
                     if let Some(record) = task_work.record.as_mut() {
@@ -813,6 +850,32 @@ fn tolerance_reason(
             sum.fraction(),
             tolerance.fraction(),
             items.join(",")
+        ),
+    )
+}
+
+/// SCHED-C1a (register §1.299): a judged candidate whose task has a fixed value carries
+/// `benefit_fixed_value` with the `B` its decision reads before its other reasons.
+fn note_fixed_value(task_work: &mut TaskWork, task: &TaskSpec, benefit_milli: i64, expected: u64) {
+    if let Some(value) = task.benefit_fixed_value_milli {
+        task_work
+            .reasons
+            .insert(0, fixed_value_reason(benefit_milli, value, expected));
+    }
+}
+
+/// SCHED-C1a (register §1.299): `benefit_fixed_value` (info; `benefit_milli` `B`,
+/// `fixed_value_milli` `V`, `expected_duration_ms` `E`).
+fn fixed_value_reason(benefit_milli: i64, fixed_value_milli: i64, expected: u64) -> DecisionReason {
+    let outcome = Outcome::new(PolicyCode::BenefitFixedValue)
+        .benefit_milli(benefit_milli)
+        .fixed_value_milli(fixed_value_milli)
+        .expected_duration_ms(expected);
+    reason_with(
+        outcome,
+        format!(
+            "benefit_milli={benefit_milli} fixed_value_milli={fixed_value_milli} \
+             expected_duration_ms={expected}"
         ),
     )
 }

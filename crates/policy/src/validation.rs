@@ -400,6 +400,14 @@ fn validate_tasks(
             diagnostics,
         );
         validate_limited(task, &path, map, descriptor, diagnostics);
+        validate_fixed_value(
+            task,
+            &path,
+            map,
+            &bundle.pools.pools,
+            descriptor,
+            diagnostics,
+        );
     }
     validate_continuations(bundle, map, task_ids, descriptor, diagnostics);
     validate_realization_cycles(bundle, map, descriptor, diagnostics);
@@ -523,6 +531,78 @@ fn validate_limited(
             CatalogDiagnosticCode::MissingRequiredField,
             format!("{path}/benefit_judged"),
             "benefit_limited requires benefit_judged: true",
+            descriptor,
+        ));
+    }
+}
+
+/// SCHED-C1a (register §1.299; `contracts/scheduling/README.md`, "Fixed values written in the
+/// pack", "Refused at compile time"): a task's `benefit_fixed_value_milli`. It is a V2 member (a
+/// V1 document that names it is refused as an unknown member). Its value lies in
+/// `1..=MAX_CANONICAL_INTEGER` (`limit_exceeded` at the member; a value of 0 is no value); it
+/// requires `benefit_judged: true` (`missing_required_field` at `benefit_judged`). Beside it,
+/// each a `fixed_value_conflict` at the member, since the task would then have two values and
+/// neither may silently win: (a) a `produces` entry on a pool whose `valuation` is a declared
+/// block or the pending marker, (b) `benefit_realization: true`, whose zero tier reads a modelled
+/// value's rounding.
+fn validate_fixed_value(
+    task: &TaskSpec,
+    path: &str,
+    map: &SourceMap,
+    pools: &[PoolSpec],
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let Some(value) = task.benefit_fixed_value_milli else {
+        return;
+    };
+    let member = format!("{path}/benefit_fixed_value_milli");
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            member,
+            "benefit_fixed_value_milli requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if !(1..=MAX_CANONICAL_INTEGER).contains(&value) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            &member,
+            format!("benefit_fixed_value_milli must be within 1..={MAX_CANONICAL_INTEGER}"),
+            descriptor,
+        ));
+    }
+    if !task.is_benefit_judged() {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::MissingRequiredField,
+            format!("{path}/benefit_judged"),
+            "benefit_fixed_value_milli requires benefit_judged: true",
+            descriptor,
+        ));
+    }
+    if let Some(effect) = task.produces.iter().find(|effect| {
+        pools
+            .iter()
+            .any(|pool| pool.id == effect.pool_id && pool.valuation.is_some())
+    }) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::FixedValueConflict,
+            &member,
+            format!(
+                "benefit_fixed_value_milli beside a production of the priced pool `{}`: remove the \
+                 fixed value or the pool's valuation",
+                effect.pool_id
+            ),
+            descriptor,
+        ));
+    }
+    if task.is_benefit_realization() {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::FixedValueConflict,
+            &member,
+            "benefit_fixed_value_milli beside benefit_realization: true",
             descriptor,
         ));
     }

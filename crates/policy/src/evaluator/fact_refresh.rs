@@ -200,6 +200,7 @@ pub fn fact_refresh_task() -> &'static TaskSpec {
         benefit_judged: None,
         benefit_realization: None,
         benefit_limited: None,
+        benefit_fixed_value_milli: None,
     })
 }
 

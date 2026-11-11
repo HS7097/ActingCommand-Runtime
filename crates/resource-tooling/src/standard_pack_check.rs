@@ -323,8 +323,10 @@ pub fn check_standard_pack_root(
         BTreeMap::new(),
     )?;
     // ROUT-L RL-1a: the schedule rules, composed as the Runtime composes them; SS-2b: with the
-    // judged rules' coverage and one warning per judged rule that declares no value.
+    // judged rules' coverage and one warning per judged rule that declares no value; SCHED-C1a:
+    // and who wrote their fixed values and the pools' valuation blocks.
     let mut benefit_coverage = None;
+    let mut benefit_provenance = None;
     if let Some(schedule) = bytes(STANDARD_PACK_SCHEDULE_FILE) {
         let maintenance = bytes(STANDARD_PACK_BUNDLE_FILE)
             .and_then(|bundle| serde_json::from_slice::<BundleIndex>(bundle).ok())
@@ -339,6 +341,7 @@ pub fn check_standard_pack_root(
         )?;
         warnings.extend(report.warnings);
         benefit_coverage = Some(report.benefit_coverage);
+        benefit_provenance = Some(report.benefit_provenance);
         // UPD-1 fix round 1 (review L6): a store update rule needs a cooldown.
         store_update_cooldowns(
             &game,
@@ -367,6 +370,7 @@ pub fn check_standard_pack_root(
         pack_count: checked.registry.len(),
         warnings,
         benefit_coverage,
+        benefit_provenance,
     })
 }
 

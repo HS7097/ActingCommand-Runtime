@@ -294,6 +294,8 @@ fn ss2c_t5_the_coverage_counts_a_declared_rule_as_not_judged() {
                 maintenance_declared: 2,
                 // SS-2d (register §1.235): no rule carries the realization mark.
                 realization: 0,
+                // SCHED-C1a (register §1.299): no rule writes a fixed value.
+                fixed_value: 0,
             }
         )]
     );

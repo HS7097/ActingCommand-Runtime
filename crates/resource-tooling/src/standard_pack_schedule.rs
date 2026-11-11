@@ -35,7 +35,7 @@ use actingcommand_contract::{
     StandardPackRoot, StandardPackRootBytes, read_standard_pack_root, validate_instance_alias,
 };
 use actingcommand_policy::{
-    BenefitCoverage, ComposedGame, ComposedProcedure, StandardPackBinding,
+    BenefitCoverage, BenefitProvenance, ComposedGame, ComposedProcedure, StandardPackBinding,
     StandardPackComposeFailure, StandardPackComposeInput, StandardPackComposition,
     StandardPackGameFiles, compose_standard_pack_rules,
 };
@@ -105,10 +105,12 @@ pub(crate) fn check_schedule(
 /// disagrees with its tier, then, SS-4 (register §1.231), one
 /// `standard_pack_escalation_threshold_high` per rule without a daily bound whose escalation
 /// threshold is above 10, and the game's judged rules' coverage (complete, pending, undeclared;
-/// SS-2c: and the rules declared maintenance).
+/// SS-2c: and the rules declared maintenance); SCHED-C1a (register §1.299): and who wrote the
+/// game's fixed values and valuation blocks.
 pub(crate) struct ScheduleReport {
     pub(crate) warnings: Vec<Outcome>,
     pub(crate) benefit_coverage: BenefitCoverage,
+    pub(crate) benefit_provenance: BenefitProvenance,
 }
 
 /// Checks `schedule` (the bytes of the game root's `schedule.json` at `path`) against the game
@@ -135,9 +137,17 @@ pub(crate) fn report_schedule(
         .find(|(game_id, _)| game_id == game)
         .map(|(_, coverage)| coverage)
         .unwrap_or_default();
+    // SCHED-C1a: the game's provenance, as the composer reports it.
+    let benefit_provenance = composition
+        .benefit_provenance()
+        .iter()
+        .find(|(game_id, _)| game_id == game)
+        .map(|(_, provenance)| provenance.clone())
+        .unwrap_or_default();
     Ok(ScheduleReport {
         warnings,
         benefit_coverage,
+        benefit_provenance,
     })
 }
 

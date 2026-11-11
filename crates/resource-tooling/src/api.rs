@@ -136,9 +136,15 @@ pub struct StandardPackCheckResponse {
     /// SS-2b (register §1.225): with `schedule.json`, how many of the game's judged rules (their
     /// package is not maintenance-role and, SS-2c, they do not declare themselves maintenance)
     /// have complete values, how many are pending, and how many declare none; SS-2c: and how many
-    /// rules declare themselves maintenance. Absent without `schedule.json`.
+    /// rules declare themselves maintenance; SCHED-C1a: and how many write a fixed value. Absent
+    /// without `schedule.json`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub benefit_coverage: Option<actingcommand_policy::BenefitCoverage>,
+    /// SCHED-C1a (register §1.299): with `schedule.json`, which judged rules run on a fixed value
+    /// and which pools on a declared valuation block, each by who wrote it (`pack` or `model`), in
+    /// file order. Absent without `schedule.json`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub benefit_provenance: Option<actingcommand_policy::BenefitProvenance>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -162,9 +168,15 @@ pub struct PackageBundleResponse {
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
     /// SS-2b (register §1.225): with `--schedule`, how many of the game's judged rules have
     /// complete values, how many are pending, and how many declare none; SS-2c: and how many
-    /// rules declare themselves maintenance. Absent without it.
+    /// rules declare themselves maintenance; SCHED-C1a: and how many write a fixed value. Absent
+    /// without it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub benefit_coverage: Option<actingcommand_policy::BenefitCoverage>,
+    /// SCHED-C1a (register §1.299): with `--schedule`, which judged rules run on a fixed value and
+    /// which pools on a declared valuation block, each by who wrote it (`pack` or `model`), in
+    /// file order. Absent without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub benefit_provenance: Option<actingcommand_policy::BenefitProvenance>,
 }
 
 #[derive(Debug, Clone)]
