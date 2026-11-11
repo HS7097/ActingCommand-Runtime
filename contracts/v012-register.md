@@ -14836,6 +14836,108 @@ existing test changed: none compared an outcome of this code (the kernel's and t
 pinned a run's end with it, so the end's step, category and receipt state are asserted beside the
 new values.
 
+### 1.321 Slice CODES-IX (0.12.56): a generated index of the outcome code catalog, kept current by CI (Workflow #439; Alice, 11-12: 「错误码可以分批做，并且可以搞个索引」; the coordinator's eight rulings of 11-12, not Alice's words; coordinator work order `rd-1111/brief-codes-index.md`, read on main `2e3062ec`)
+
+[runtime-outcomes.md](runtime-outcomes.md), "The index", is the contract. 1.321 is the
+coordinator's number for this slice, appended after 1.319 on main `2e3062ec`; the numbers between
+belong to other slices. No persisted shape, wire shape, request kind, configuration key, outcome
+code, ledger record, vocabulary or interface revision is new or changed, and no catalog entry is
+edited: the index only reads the catalog.
+
+**Why.** The catalog is 29 owner fragments under `contracts/outcome-codes/` with 3912 codes: a
+person could not see at a glance what exists, which codes have their text written and which still
+hold placeholders. The index answers that for people who read the repository; `actingledger
+codes`, `actingctl codes` and `ac_outcome_code` stay the lookups of one code.
+
+**What the index holds** (`contracts/outcome-codes/index/`; rulings 2 to 4).
+
+- `README.md`: the codes by status (active, retired); the active codes by category; the active
+  codes by text (`common_causes` and `handling` both written, one of the two written, neither; a
+  text is written unless it is missing, empty or `TBD`, as G10 reads it) and by review
+  (`settled`, `pending`); one table of the owners (the owner with a link to its file, codes,
+  active, text written, settled; text written and settled count active codes) with a total row;
+  and one paragraph saying what each column means and how to regenerate.
+- `<owner>.md`, one per owner fragment: one table sorted by code, with the code, category, ladder
+  class, `since`, status (`active`, or `retired, replaced by <code>` where the entry names one),
+  review, text (`written` when both texts are written, else `TBD`) and the description's first
+  sentence.
+- The first sentence: white space, newlines included, reads as one space; the sentence ends at the
+  first `.`, `!` or `?` followed by a space or the end; longer than 160 characters it is cut at
+  the last space within the 160 (at 160 when it has none) and ends in `…`. In a cell every `|` is
+  written `\|`, and a `<` outside a code span `\<`.
+- Nothing that changes without the catalog: no time, no commit id. Owners and codes sorted by
+  name, LF line ends, UTF-8 without BOM; the same text on Windows and Linux.
+
+**How it is generated** (rulings 1 and 6). `ci/outcome_codes_index.py [--check] [<workspace
+root>]`, standard library only. It reads the catalog with `ci/outcome_release.py`'s new
+`owner_fragments(root)`: the release script's loop over the header's `fragments` (an owner without
+a file skipped, a name registered twice failing), moved into a function that `catalog_signatures`
+now calls too, so both scripts read the same entries; on main `2e3062ec`'s catalog the release
+script's signatures and rendered release file are the same as before the move. The index script
+loads `outcome_release.py` by its path, so it runs under `py -3 -I -B` as well as `python3`. An
+entry the index cannot count (a status, review or category outside the guard's sets, a text
+member that is no text) fails the run; other inconsistencies it sees (a fragment's or an entry's
+`owner` other than the fragment's, a `replaced_by` that names no code, a settled code without its
+text) are printed as `NOTE outcome_codes_index:` lines on stderr. On `2e3062ec` it printed none.
+Without `--check` it writes the index and deletes nothing: a file under `index/` that it does not
+generate fails the run, naming the file.
+
+**How CI keeps it** (ruling 5). The `gate` job of `.github/workflows/ci.yml` (check name `rust`,
+a required check), where `ci/gate_check.py check` and its logic tests run, checks out
+`contracts/outcome-codes/` too and runs `python3 ci/outcome_codes_index.py --check`, then `python3
+ci/test_outcome_codes_index.py -v`, after a red job too (`if: ${{ !cancelled() }}`). A stale index
+exits 1 naming the first file in name order that is missing, differs, or is no file of the index:
+
+    ERROR outcome_codes_index: contracts/outcome-codes/index/<file> differs from what the script generates from the catalog (and N other files): the committed index is stale; run py -3 -I -B ci/outcome_codes_index.py from the workspace root and commit contracts/outcome-codes/index/
+
+A pull request that changes a fragment therefore regenerates the index. Two such pull requests
+meet in `README.md`: `main` merges only a branch that is up to date with it, so the later one
+merges `main`, regenerates and commits the index.
+
+**The counts at the time of writing** (main `2e3062ec`): 3912 codes, 3894 active and 18 retired;
+the active ones by category: success 126, info 205, warning 146, error 3403, fatal 14; of the
+active codes 624 have both texts written, 9 one of the two, 3261 neither; 171 are settled and 3723
+pending. 29 of the header's 39 owners have a fragment file; the catalog's 1750 locations are not
+indexed. 30 files, 687,208 bytes; the largest are `runtime-host.md` (192,838 bytes, 1145 codes)
+and `contract.md` (164,200 bytes, 915 codes), every file under the 400 KB the work order allows.
+
+**Settled where the rulings left it open** (the implementer's; for the coordinator to confirm).
+(a) The index lists codes only; the README's paragraph counts the locations it leaves out. (b) The
+text and review counts, per owner too, count active codes, as the coordinator's count of 11-11
+did; an owner's *codes* counts active and retired ones, and an *active* column stands beside it.
+(c) The README splits the active codes whose text is not written into one of the two written and
+neither. (d) The cut falls at a space and splits no word: a word cut in two can read as another
+word, and the neutral-word guards (C2, NEUT-1, NEUT-2) read every word under `contracts/`. (e) A
+`<` outside a code span is escaped as well, so that a renderer shows `<root>` instead of dropping
+it as a tag. (f) The tests are `ci/test_outcome_codes_index.py`, in the place and style of
+`ci/test_gate_check.py`, run by the same job.
+
+**Interface.** None moves: `ledger` 8, `runtime-client` 7, `actingd-config` 28, `package` 9 and
+`runtime-outcomes` 1, as main `2e3062ec` declares them; no request, no outcome code, no
+configuration key.
+
+**At deploy.** Nothing changes at run time: no program reads the index.
+
+**Rollback.** Delete `contracts/outcome-codes/index/` and, in the `gate` job of `ci.yml`, the two
+steps and the sparse checkout's line `contracts/outcome-codes/` (`ci/outcome_codes_index.py` and
+its test may go with them). `owner_fragments` may stay: the release script reads the catalog as
+before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CODESIX-1 | `contracts/outcome-codes/index/README.md` and `<owner>.md` | generated Markdown, no interface | CODES-IX | `ci/outcome_codes_index.py` | `since` 0.12.56; `--check` in the `rust` check |
+| CODESIX-2 | `ci/outcome_release.py` `owner_fragments(root)` | the shared reader of the header and the fragments | CODES-IX | — | `catalog_signatures` reads with it; release output unchanged |
+
+Tests (`ci/test_outcome_codes_index.py`, run by the `gate` job; a synthetic catalog of three
+neutral owners, one without a fragment file, in a temporary folder):
+`test_the_summary_counts_by_status_category_text_review_and_owner`,
+`test_owners_and_codes_are_sorted_and_a_retired_code_names_its_replacement`,
+`test_a_pipe_a_newline_and_a_tag_are_safe_in_a_table_cell`,
+`test_a_description_is_cut_at_a_space_within_160_characters` and
+`test_check_fails_on_a_stale_index_and_passes_on_a_fresh_one` (missing, fresh, one file changed by
+hand, a file the index does not hold; no BOM, no CR). No Rust test, gate map entry or golden
+changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
