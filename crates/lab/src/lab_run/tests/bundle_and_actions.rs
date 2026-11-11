@@ -103,8 +103,8 @@ fn rejects_fullscreen_rect_unless_explicitly_allowed() {
         schema_version: CONTROL_SCHEMA.to_string(),
         package_id: "pkg".to_string(),
         execution_mode: "navigable_route".to_string(),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         resolution: Resolution {
             width: 1280,
             height: 720,
@@ -308,8 +308,8 @@ fn operation_bundle_accepts_schema_0_6_retry_recovery_fields() {
     let bundle: OperationBundle = serde_json::from_value(json!({
         "schema_version": "0.6",
         "task_id": "task",
-        "game": "arknights",
-        "server_scope": ["cn"],
+        "game": "fixture-game-a",
+        "server_scope": ["s1"],
         "goal": "navigation",
         "coordinate_space": {"width": 1280, "height": 720},
         "defaults": {
@@ -349,8 +349,8 @@ fn lab_bundle_normalizes_finite_target_and_destination_sets() {
     let bundle: OperationBundle = serde_json::from_value(json!({
         "schema_version": "0.6",
         "task_id": "task",
-        "game": "arknights",
-        "server_scope": ["cn"],
+        "game": "fixture-game-a",
+        "server_scope": ["s1"],
         "coordinate_space": {"width": 1280, "height": 720},
         "target_page": ["terminal", "alternate"],
         "operations": [{

@@ -181,8 +181,8 @@ fn schema_0_7_post_admission_ocr_validates_truth_and_closed_algorithms() {
 fn build_pages_derives_variant_any_of_only_without_positive_page_rule() {
     let mut converter = OperationParser {
         root: PathBuf::from("."),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.9}),
@@ -231,8 +231,8 @@ fn build_pages_derives_variant_any_of_only_without_positive_page_rule() {
 fn build_pages_matches_authoritative_mail_page_rule_output() {
     let converter = OperationParser {
         root: PathBuf::from("."),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.9}),
@@ -295,9 +295,9 @@ fn build_pages_matches_authoritative_mail_page_rule_output() {
     };
 
     assert_eq!(
-        page("arknights/mail_inbox_claimable"),
+        page("fixture-game-a/mail_inbox_claimable"),
         &json!({
-            "id": "arknights/mail_inbox_claimable",
+            "id": "fixture-game-a/mail_inbox_claimable",
             "required": ["page/mail_inbox_claimable"],
             "optional": [],
             "forbidden": [
@@ -312,9 +312,9 @@ fn build_pages_matches_authoritative_mail_page_rule_output() {
         })
     );
     assert_eq!(
-        page("arknights/mail_post_claim"),
+        page("fixture-game-a/mail_post_claim"),
         &json!({
-            "id": "arknights/mail_post_claim",
+            "id": "fixture-game-a/mail_post_claim",
             "required": ["page/mail_post_claim_reward"],
             "optional": [],
             "forbidden": [
@@ -329,8 +329,8 @@ fn build_pages_matches_authoritative_mail_page_rule_output() {
 fn build_pages_applies_page_rules() {
     let converter = OperationParser {
         root: PathBuf::from("."),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.9}),
@@ -376,8 +376,8 @@ fn build_pages_applies_page_rules() {
 fn build_pages_rejects_unknown_page_rule() {
     let converter = OperationParser {
         root: PathBuf::from("."),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.9}),
@@ -984,8 +984,8 @@ fn selected_build_requires_error_page_definition_in_selected_closure() {
 fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
     let converter = OperationParser {
         root: PathBuf::from("."),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.9}),
@@ -1100,8 +1100,8 @@ fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
 fn build_pack_includes_color_probe_targets() {
     let converter = OperationParser {
         root: PathBuf::from("."),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.95}),
@@ -1814,8 +1814,8 @@ fn write_synthetic_maa_convert_fixture() -> (tempfile::TempDir, PathBuf) {
         serde_json::to_vec_pretty(&json!({
             "schema_version": "0.5",
             "task_id": "synthetic-maa",
-            "game": "arknights",
-            "server_scope": ["cn"],
+            "game": "fixture-game-a",
+            "server_scope": ["s1"],
             "locale": "zh-CN",
             "coordinate_space": {"width":1280,"height":720},
             "defaults": {"template_threshold":0.5},
@@ -1904,9 +1904,9 @@ fn write_synthetic_maa_convert_fixture() -> (tempfile::TempDir, PathBuf) {
     let mappings = (0..64)
         .map(|index| {
             let (product_heading, page_id) = match index % 3 {
-                0 => ("warehouse", "arknights/depot"),
-                1 => ("home_sanity", "arknights/home"),
-                _ => ("stage_proxy_settlement", "arknights/terminal"),
+                0 => ("warehouse", "fixture-game-a/depot"),
+                1 => ("home_sanity", "fixture-game-a/home"),
+                _ => ("stage_proxy_settlement", "fixture-game-a/terminal"),
             };
             let role = match index % 5 {
                 0 => "page_anchor",
@@ -2165,7 +2165,7 @@ fn source_declarations_strictly_admit_maa_semantic_mapping_read_only() {
                 mapping["mappings"][0]["role"] = json!("unknown");
             }
             InvalidCase::MalformedPageId => {
-                mapping["mappings"][0]["page_id"] = json!("arknights");
+                mapping["mappings"][0]["page_id"] = json!("fixture-game-a");
             }
             InvalidCase::RowKeyExpansion => {
                 mapping["mappings"][0]
@@ -2194,7 +2194,7 @@ fn source_declarations_strictly_admit_maa_semantic_mapping_read_only() {
             .expect("write mapping");
         }
 
-        let error = admit_maa_semantic_mapping(root.path(), "arknights")
+        let error = admit_maa_semantic_mapping(root.path(), "fixture-game-a")
             .expect_err("invalid semantic mapping must fail");
         assert_eq!(error.code, "package_invalid", "case {case:?}");
         assert!(
@@ -2203,9 +2203,9 @@ fn source_declarations_strictly_admit_maa_semantic_mapping_read_only() {
             error.message
         );
         for output in [
-            "recognition/arknights.cn.pack.json",
-            "recognition/arknights.cn.pages.json",
-            "navigation/arknights.cn.navigation.json",
+            "recognition/fixture-game-a.s1.pack.json",
+            "recognition/fixture-game-a.s1.pages.json",
+            "navigation/fixture-game-a.s1.navigation.json",
             "operations/operations.index.json",
             "operations/operations.primitives.json",
         ] {
@@ -2256,8 +2256,8 @@ fn default_operation_bundle_mode_does_not_apply_maa_overlay_fields() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let converter = OperationParser {
         root: root.clone(),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.5}),
@@ -2302,8 +2302,8 @@ fn build_primitives_synthesizes_guard_from_operation_verify_template() {
     fs::write(task_dir.join("assets/VERIFY_READY.png"), b"png").unwrap();
     let converter = OperationParser {
         root: root.path().to_path_buf(),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.95}),
@@ -2343,7 +2343,7 @@ fn build_primitives_synthesizes_guard_from_operation_verify_template() {
 
     assert_eq!(
         primitive.pointer("/guard/page_id").and_then(Value::as_str),
-        Some("arknights/home")
+        Some("fixture-game-a/home")
     );
     assert_eq!(
         primitive
@@ -2372,8 +2372,8 @@ fn build_primitives_synthesizes_guard_from_source_anchor_without_operation_verif
     fs::write(task_dir.join("assets/HOME.png"), b"png").unwrap();
     let converter = OperationParser {
         root: root.path().to_path_buf(),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.95}),
@@ -2409,7 +2409,7 @@ fn build_primitives_synthesizes_guard_from_source_anchor_without_operation_verif
 
     assert_eq!(
         primitive.pointer("/guard/page_id").and_then(Value::as_str),
-        Some("arknights/home")
+        Some("fixture-game-a/home")
     );
     assert_eq!(
         primitive
@@ -2437,8 +2437,8 @@ fn build_primitives_synthesizes_any_page_guard_from_matching_anchor_template() {
     fs::write(task_dir.join("assets/HOME_BUTTON.png"), b"png").unwrap();
     let converter = OperationParser {
         root: root.path().to_path_buf(),
-        game: "azurlane".to_string(),
-        server: "jp".to_string(),
+        game: "fixture-game-b".to_string(),
+        server: "s2".to_string(),
         locale: "ja-JP".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.9}),
@@ -2492,8 +2492,8 @@ fn build_primitives_synthesizes_guard_from_source_anchor_without_verify_template
     fs::write(task_dir.join("assets/HOME.png"), b"png").unwrap();
     let converter = OperationParser {
         root: root.path().to_path_buf(),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.95}),
@@ -2527,7 +2527,7 @@ fn build_primitives_synthesizes_guard_from_source_anchor_without_verify_template
 
     assert_eq!(
         primitive.pointer("/guard/page_id").and_then(Value::as_str),
-        Some("arknights/home")
+        Some("fixture-game-a/home")
     );
     assert_eq!(
         primitive
@@ -2549,8 +2549,8 @@ fn build_primitives_rejects_rect_and_specific_rect_without_guard_source() {
         fs::create_dir_all(&task_dir).unwrap();
         let converter = OperationParser {
             root: root.path().to_path_buf(),
-            game: "arknights".to_string(),
-            server: "cn".to_string(),
+            game: "fixture-game-a".to_string(),
+            server: "s1".to_string(),
             locale: "zh-CN".to_string(),
             coordinate_space: json!({"width":1280,"height":720}),
             defaults: json!({"template_threshold":0.95}),
@@ -2590,8 +2590,8 @@ fn build_primitives_rejects_drag_without_guard_source() {
     fs::create_dir_all(&task_dir).unwrap();
     let converter = OperationParser {
         root: root.path().to_path_buf(),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.95}),
@@ -2642,8 +2642,8 @@ fn build_primitives_rejects_point_and_long_press_without_guard_source() {
         fs::create_dir_all(&task_dir).unwrap();
         let converter = OperationParser {
             root: root.path().to_path_buf(),
-            game: "arknights".to_string(),
-            server: "cn".to_string(),
+            game: "fixture-game-a".to_string(),
+            server: "s1".to_string(),
             locale: "zh-CN".to_string(),
             coordinate_space: json!({"width":1280,"height":720}),
             defaults: json!({"template_threshold":0.95}),
@@ -2683,8 +2683,8 @@ fn build_primitives_allows_explicit_trusted_unguarded_long_press() {
     fs::create_dir_all(&task_dir).unwrap();
     let converter = OperationParser {
         root: root.path().to_path_buf(),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.95}),
@@ -2729,8 +2729,8 @@ fn build_primitives_allows_explicit_trusted_unguarded_drag() {
     fs::create_dir_all(&task_dir).unwrap();
     let converter = OperationParser {
         root: root.path().to_path_buf(),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.95}),
@@ -2805,8 +2805,8 @@ fn build_primitives_synthesizes_guard_from_operation_verify_template_click_rect(
     fs::write(task_dir.join("assets/HOME_ICON.png"), b"png").unwrap();
     let converter = OperationParser {
         root: root.path().to_path_buf(),
-        game: "bluearchive".to_string(),
-        server: "jp".to_string(),
+        game: "fixture-game-c".to_string(),
+        server: "s2".to_string(),
         locale: "ja-JP".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.9}),
@@ -2859,8 +2859,8 @@ fn build_primitives_rejects_unmatched_verify_template_without_rect_guard_source(
     fs::write(task_dir.join("assets/VERIFY_READY.png"), b"png").unwrap();
     let converter = OperationParser {
         root: root.path().to_path_buf(),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.95}),
@@ -2903,8 +2903,8 @@ fn build_primitives_allows_explicit_trusted_unguarded_coordinate() {
     fs::create_dir_all(&task_dir).unwrap();
     let converter = OperationParser {
         root: root.path().to_path_buf(),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
+        game: "fixture-game-a".to_string(),
+        server: "s1".to_string(),
         locale: "zh-CN".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
         defaults: json!({"template_threshold":0.95}),

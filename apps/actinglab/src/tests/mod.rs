@@ -638,12 +638,12 @@ fn session_instance_list_reads_config() {
             "user-config",
             "set",
             "instance.azur.game",
-            "azurlane",
+            "fixture-game-b",
         ],
         true,
     );
     let _ = run_cli(
-        ["--json", "user-config", "set", "instance.azur.server", "jp"],
+        ["--json", "user-config", "set", "instance.azur.server", "s2"],
         true,
     );
     let _ = run_cli(
@@ -703,8 +703,8 @@ fn session_instance_registry_reports_contract() {
         InstanceConfig {
             serial: Some("127.0.0.1:16416".to_string()),
             game: Some("ark".to_string()),
-            server: Some("cn-bilibili".to_string()),
-            package: Some("com.hypergryph.arknights.bilibili".to_string()),
+            server: Some("s3".to_string()),
+            package: Some("com.example.fixture.a".to_string()),
             adb_path: Some("C:\\Tools\\adb.exe".to_string()),
             capture_backend: Some("nemu_ipc".to_string()),
             touch_backend: None,
@@ -790,7 +790,7 @@ fn session_instance_registry_rejects_invalid_configured_backend() {
         InstanceConfig {
             serial: Some("127.0.0.1:16416".to_string()),
             game: Some("ark".to_string()),
-            server: Some("cn-bilibili".to_string()),
+            server: Some("s3".to_string()),
             package: None,
             adb_path: None,
             capture_backend: Some("not-a-backend".to_string()),
@@ -2783,7 +2783,7 @@ fn current_page_resolves_semantic_page() {
             .unwrap()
             .get("page")
             .and_then(Value::as_str),
-        Some("arknights/home")
+        Some("fixture-game-a/home")
     );
 }
 
@@ -2929,7 +2929,7 @@ fn lab2_observe_reports_page_targets_actions_and_frame_path() {
     assert!(data.get("req_id").and_then(Value::as_str).is_some());
     assert_eq!(
         data.get("page").and_then(Value::as_str),
-        Some("arknights/home")
+        Some("fixture-game-a/home")
     );
     assert_eq!(
         data.get("backend").and_then(Value::as_str),
@@ -3416,7 +3416,7 @@ fn lab2_wait_reports_page_and_stable_target() {
             "ark",
             "wait",
             "--page",
-            "arknights/home",
+            "fixture-game-a/home",
             "--scene",
             scene.to_str().unwrap(),
             "--timeout-ms",
@@ -3488,7 +3488,7 @@ fn lab2_capabilities_and_schema_report_compiled_contracts() {
         InstanceConfig {
             serial: Some("127.0.0.1:16416".to_string()),
             game: Some("ark".to_string()),
-            server: Some("cn".to_string()),
+            server: Some("s1".to_string()),
             capture_backend: Some("adb".to_string()),
             touch_backend: Some("maatouch".to_string()),
             ..Default::default()
@@ -4098,9 +4098,9 @@ fn session_recover_standby_dry_run_uses_wake_control_point() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "arknights",
+            "fixture-game-a",
             "--server",
-            "cn",
+            "s1",
             "session",
             "recover",
             "--scene",
@@ -4141,9 +4141,9 @@ fn session_recover_dry_run_plans_route_to_home() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "arknights",
+            "fixture-game-a",
             "--server",
-            "cn",
+            "s1",
             "session",
             "recover",
             "--to",
@@ -4181,9 +4181,9 @@ fn session_recover_real_execution_requires_capture() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "arknights",
+            "fixture-game-a",
             "--server",
-            "cn",
+            "s1",
             "session",
             "recover",
             "--scene",
@@ -4218,9 +4218,9 @@ fn session_recover_startup_login_dry_run_reads_resource_file() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "arknights",
+            "fixture-game-a",
             "--server",
-            "cn",
+            "s1",
             "session",
             "recover",
             "--startup-login",
@@ -4264,9 +4264,9 @@ fn session_recover_startup_login_missing_resource_is_fatal() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "arknights",
+            "fixture-game-a",
             "--server",
-            "cn",
+            "s1",
             "session",
             "recover",
             "--startup-login",
@@ -4301,9 +4301,9 @@ fn session_recover_startup_login_missing_coordinate_is_fatal() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "arknights",
+            "fixture-game-a",
             "--server",
-            "cn",
+            "s1",
             "session",
             "recover",
             "--startup-login",
