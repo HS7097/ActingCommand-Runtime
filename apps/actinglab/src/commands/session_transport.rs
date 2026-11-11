@@ -1,3 +1,5 @@
+use super::device_commands::LEGACY_ROUTING_READS;
+use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::runtime_endpoint::runtime_endpoint_check;
 use crate::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, REQUIRE_SESSION_DAEMON_ENV,
@@ -100,8 +102,24 @@ fn session_transport_contract() -> Value {
     })
 }
 
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags `session transport` reads:
+/// the legacy routing it refuses and the endpoint of its `plan` and `check`; its one positional is
+/// that action (any other is its own refusal); its command line is parsed by it.
+pub(crate) const SESSION_TRANSPORT_READS: FlagReads = FlagReads {
+    row: "session transport",
+    parts: &[
+        &LEGACY_ROUTING_READS,
+        &ReadPart {
+            options: &["--endpoint"],
+            switches: &[],
+            refused: &[],
+        },
+    ],
+    positionals: &["<action>"],
+};
+
 pub(crate) fn run_session_transport(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &SESSION_TRANSPORT_READS)?;
     let _ = global;
     reject_legacy_session_routing(&flags)?;
     session_transport_payload(&flags)

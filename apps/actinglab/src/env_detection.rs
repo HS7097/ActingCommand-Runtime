@@ -27,8 +27,65 @@ use std::time::Duration;
 
 pub(super) use actingcommand_lab::ResolvedEnvValue;
 
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the scope every env detection
+/// command reads ([`command_scope`]): the resource root, the game, the instance and the server,
+/// each a global option of actinglab too, which its parser takes first.
+const ENV_SCOPE_READS: crate::flag_args::reads::ReadPart = crate::flag_args::reads::ReadPart {
+    options: &["--resource-root", "--game", "--instance", "--server"],
+    switches: &[],
+    refused: &[],
+};
+
+/// Workflow #434 LAB-5B5: the flags `detect` reads: `--capture`, only to refuse it, the scope, the
+/// detector's task and its frame (`--scene`, or its freshness), and `--dry-run` (actinglab's global
+/// option); no positional. Its command line is parsed by it (`FlagArgs::parse_reading`).
+pub(crate) const DETECT_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "detect",
+        parts: &[
+            &ENV_SCOPE_READS,
+            &crate::flag_args::reads::ReadPart {
+                options: &["--task", "--scene", "--fresh-delay-ms"],
+                switches: &["--require-fresh", "--dry-run"],
+                refused: &["--capture"],
+            },
+        ],
+        positionals: &[],
+    };
+
+/// Workflow #434 LAB-5B5: the flags `env resolve` reads: the scope, the task and the input it
+/// resolves (`--path`, `--value`, or its one positional) with its key.
+pub(crate) const ENV_RESOLVE_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "env resolve",
+        parts: &[
+            &ENV_SCOPE_READS,
+            &crate::flag_args::reads::ReadPart {
+                options: &["--task", "--path", "--value", "--key"],
+                switches: &[],
+                refused: &[],
+            },
+        ],
+        positionals: &["<input>"],
+    };
+
+/// Workflow #434 LAB-5B5: the flags `env status` reads: the scope and the task; no positional.
+pub(crate) const ENV_STATUS_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "env status",
+        parts: &[
+            &ENV_SCOPE_READS,
+            &crate::flag_args::reads::ReadPart {
+                options: &["--task"],
+                switches: &[],
+                refused: &[],
+            },
+        ],
+        positionals: &[],
+    };
+
 pub(super) fn run_detect(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &DETECT_READS)?;
     if flags.bool("--capture") {
         return Err(CliError::usage(
             "legacy detect --capture is retired; live debug operations must use the Runtime-correlated Lab2 commands",
@@ -73,7 +130,7 @@ pub(super) fn run_env(
 }
 
 fn run_env_resolve(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &ENV_RESOLVE_READS)?;
     let mut ledger = semantic_ledger_context("env-resolve", global, args);
     let result = (|| -> CliOutcome<Value> {
         let (request, config) = resolve_request(global, &flags)?;
@@ -97,7 +154,7 @@ fn run_env_resolve(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
 }
 
 fn run_env_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &ENV_STATUS_READS)?;
     let (request, config) = status_request(global, &flags)?;
     let mut lab = build_lab(&request.scope, config, None, None)?;
     serialize_response(lab.env_status(request)?)

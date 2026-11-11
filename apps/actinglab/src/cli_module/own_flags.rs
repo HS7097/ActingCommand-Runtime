@@ -26,15 +26,24 @@
 //! exactly one kind; `gate_434_lab5b3` holds each row of [`READ_LIST_ROWS`] equal to its command's
 //! read list, in both directions. Only the tests and the test-only recording of `flag_args` read
 //! this register, so it is built for the tests only.
+//!
+//! Workflow #434 LAB-5B5 ("Slice LAB-5B5"): the census of every command of the inventory, each in
+//! one group ([`REFUSING_COMMANDS`], [`TABLE_COMMANDS`], [`WORK_LIST`], [`NO_WORD_COMMANDS`]), and
+//! for each command of the work list the read lists its command line is parsed by since the
+//! slice; `gate_434_lab5b5` holds the census to the inventory and the lists to their commands.
 
-use crate::commands::{device_commands, navigation_recovery, session_record};
+use crate::commands::{
+    capabilities, device_commands, navigation_recovery, session_contracts, session_record,
+    session_transport,
+};
 use crate::flag_args::reads::FlagReads;
 use crate::resource_runtime_support::resource_declarations;
 use crate::{
-    drive_cli, lab_package_control, lab2_cli, maa_task_graph, package_build, package_cli,
-    package_tool, readonly_cli, recognition_regression, replay_cli, resource_restore,
-    resource_runtime_support, resource_verify, runtime_debug, scheduling_cli, signature_cli,
-    standard_pack_cli,
+    cli_information, drive_cli, env_detection, lab_package_control, lab_run, lab2_cli,
+    maa_task_graph, package_build, package_cli, package_tool, readonly_cli, recognition_regression,
+    replay_cli, resource_restore, resource_runtime_support, resource_verify, runtime_debug,
+    runtime_session_adapter, runtime_stream_adapter, scheduling_cli, session_management,
+    signature_cli, standard_pack_cli,
 };
 
 /// The strict rows: [`accepted`] answers for each of them and, beside them, for the rows of
@@ -397,3 +406,197 @@ pub(crate) const UNROWED_READS: [&FlagReads; 4] = [
     &lab2_cli::RECEIPT_READS,
     &lab2_cli::EVIDENCE_READS,
 ];
+
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the census of actinglab's own
+/// commands, every word of the command inventory (`ratchet/actinglab_commands.json`, the commands
+/// of `execute`) in exactly one of four groups, as main had them before the slice. Group (a): the
+/// commands that already refused every flag and word they do not read: by a read list or a strict
+/// list (LAB-5B2, LAB-5B4), or by their own check (`schema`, whose words are the kind it names;
+/// `package dry-run`, `runtime reset|observe`, `run summary` and `session backend`, each against
+/// its own list; `record` and `session record`, whose actions are LAB-5B4's).
+pub(crate) const REFUSING_COMMANDS: [&str; 59] = [
+    "schema",
+    "touch-probe",
+    "tap",
+    "swipe",
+    "long-tap",
+    "key",
+    "text",
+    "capture",
+    "detect-page",
+    "recognize",
+    "recognize-artifact",
+    "observe",
+    "replay",
+    "recognition-regression",
+    "do",
+    "ensure",
+    "wait",
+    "current-page",
+    "is-visible",
+    "locate",
+    "tap-target",
+    "navigate",
+    "record",
+    "lab signatures",
+    "lab debug-package",
+    "lab watch",
+    "lab unpin",
+    "lab export-evidence",
+    "lab receipt",
+    "lab evidence",
+    "package validate",
+    "package preflight",
+    "package check",
+    "package dry-run",
+    "package inspect",
+    "package bundle",
+    "package loading",
+    "package fmt",
+    "package edit",
+    "operation validate",
+    "operation inspect",
+    "operation explain",
+    "scheduling compile",
+    "scheduling timeline",
+    "resource restore",
+    "resource validate",
+    "resource compile-maa",
+    "resource catalog",
+    "resource verify",
+    "standard-pack check",
+    "standard-pack compose",
+    "runtime reset",
+    "runtime observe",
+    "session backend",
+    "session capture",
+    "session recover",
+    "session record",
+    "run list",
+    "run summary",
+];
+
+/// Workflow #434 LAB-5B5: group (b), the commands of the inventory the CLI module serves from the
+/// table, whose words are the row's: none. The table-driven rows' commands (`run start`, `run
+/// stop`, `reset`, `drill`) are no command of the inventory, and `user-config get|set`, which the
+/// rows `user-config` and `user-config set` reach with their declared words, are reached in their
+/// own words too, where they ignored a further word: group (c).
+pub(crate) const TABLE_COMMANDS: [&str; 0] = [];
+
+/// One command of [`WORK_LIST`]: its words in the inventory, and the read lists its command line
+/// is parsed by (more than one where its first word chooses the list).
+pub(crate) type CommandReads = (&'static str, &'static [&'static FlagReads]);
+
+/// Workflow #434 LAB-5B5: group (c), this slice's work list: the commands that read their flags
+/// by name (or their words by position) and ignored the rest, each with the read lists its command
+/// line is parsed by since the slice (`FlagArgs::parse_reading`), which refuse a flag or a word
+/// the list does not hold, as LAB-5B4's.
+pub(crate) const WORK_LIST: [CommandReads; 38] = [
+    ("help", &[&cli_information::HELP_READS]),
+    ("version", &[&cli_information::VERSION_READS]),
+    ("paths", &[&cli_information::PATHS_READS]),
+    ("capabilities", &[&capabilities::CAPABILITIES_READS]),
+    ("doctor", &[&cli_information::DOCTOR_READS]),
+    ("list", &[&cli_information::LIST_READS]),
+    ("detect", &[&env_detection::DETECT_READS]),
+    ("stream", &[&runtime_stream_adapter::STREAM_READS]),
+    ("explain", &[&resource_runtime_support::EXPLAIN_READS]),
+    (
+        "user-config get",
+        &[&cli_information::USER_CONFIG_GET_READS],
+    ),
+    (
+        "user-config set",
+        &[&cli_information::USER_CONFIG_SET_READS],
+    ),
+    ("env resolve", &[&env_detection::ENV_RESOLVE_READS]),
+    ("env status", &[&env_detection::ENV_STATUS_READS]),
+    ("lab run", &[&lab_run::LAB_RUN_READS]),
+    ("lab validate", &[&lab_run::LAB_VALIDATE_READS]),
+    (
+        "lab replay-evidence",
+        &[&runtime_debug::REPLAY_EVIDENCE_READS],
+    ),
+    (
+        "lab status",
+        &[&runtime_session_adapter::SESSION_STATUS_READS],
+    ),
+    (
+        "lab vendor-stdio-selftest",
+        &[&lab_package_control::VENDOR_STDIO_SELFTEST_READS],
+    ),
+    ("package run", &[&lab_package_control::PACKAGE_RUN_READS]),
+    (
+        "control inspect",
+        &[&lab_package_control::CONTROL_INSPECT_READS],
+    ),
+    (
+        "control verify",
+        &[&lab_package_control::CONTROL_VERIFY_READS],
+    ),
+    (
+        "control probe-click",
+        &[&lab_package_control::CONTROL_PROBE_CLICK_READS],
+    ),
+    ("control diff", &[&lab_package_control::CONTROL_DIFF_READS]),
+    (
+        "session status",
+        &[&runtime_session_adapter::SESSION_STATUS_READS],
+    ),
+    (
+        "session throat-policy",
+        &[&session_contracts::SESSION_THROAT_POLICY_READS],
+    ),
+    (
+        "session capture-policy",
+        &[&session_contracts::SESSION_CAPTURE_POLICY_READS],
+    ),
+    (
+        "session record-policy",
+        &[&session_contracts::SESSION_RECORD_POLICY_READS],
+    ),
+    (
+        "session self-heal-policy",
+        &[&session_contracts::SESSION_SELF_HEAL_POLICY_READS],
+    ),
+    (
+        "session contract",
+        &[&session_contracts::SESSION_CONTRACT_READS],
+    ),
+    ("session api", &[&session_contracts::SESSION_API_READS]),
+    (
+        "session transport",
+        &[&session_transport::SESSION_TRANSPORT_READS],
+    ),
+    (
+        "session monitor-policy",
+        &[
+            &runtime_session_adapter::MONITOR_POLICY_STATUS_READS,
+            &runtime_session_adapter::MONITOR_POLICY_SET_READS,
+            &runtime_session_adapter::MONITOR_POLICY_CLEAR_READS,
+        ],
+    ),
+    (
+        "session instance",
+        &[
+            &session_management::SESSION_INSTANCE_READS,
+            &session_management::SESSION_APP_READS,
+        ],
+    ),
+    ("session app", &[&session_management::SESSION_APP_READS]),
+    ("session stream", &[&runtime_stream_adapter::STREAM_READS]),
+    ("run open", &[&crate::run_summary::RUN_OPEN_READS]),
+    ("run export", &[&crate::run_summary::RUN_EXPORT_READS]),
+    (
+        "report export",
+        &[&resource_runtime_support::REPORT_EXPORT_READS],
+    ),
+];
+
+/// Workflow #434 LAB-5B5: group (d), the commands that take no flag and no word (but the flags
+/// they read only to refuse them) and refuse every command line, so that none ignores a word: `lab
+/// arbitrator` (retired, `legacy_lab2_arbitrator_retired`), `control export` (reserved,
+/// `not_implemented`) and `operation run` (`lab_lease_required`; the legacy routing flags
+/// `legacy_session_authority_retired`). Left as they are.
+pub(crate) const NO_WORD_COMMANDS: [&str; 3] =
+    ["lab arbitrator", "control export", "operation run"];

@@ -323,7 +323,9 @@ fn refused(command: &str, word: &str, problem: ArgumentProblem) -> CliError {
 /// recording of the reads of flags a list holds.
 ///
 /// Since LAB-5B4 such a command parses its command line by its list
-/// ([`FlagArgs::parse_reading`]), which refuses a flag or a positional the list does not hold. In
+/// ([`FlagArgs::parse_reading`]), which refuses a flag or a positional the list does not hold;
+/// since LAB-5B5 ("Slice LAB-5B5") every own command that read its flags by name and ignored the
+/// rest does, so that no own command of actinglab ignores a flag or a word. In
 /// test builds the parse holds the flags to the list ([`FlagArgs::reading`]); from then on every
 /// read of them (`bool`, `optional`, `values`, `count`, `given` and the readers built on them) is
 /// recorded on the reading thread ([`take`]), and a read the list does not give, by name or by
@@ -344,7 +346,9 @@ pub(super) mod reads {
         pub(crate) parts: &'static [&'static ReadPart],
         /// Workflow #434 LAB-5B4: the positional words the command reads, in order, each of which
         /// may be absent: a name in angle brackets takes any word (`<target>`), another is that
-        /// word itself (`capture`'s `diagnose`). A word beyond them is refused.
+        /// word itself (`capture`'s `diagnose`). A word beyond them is refused. Workflow #434
+        /// LAB-5B5: a last name that ends in `...` (`<word>...`) takes every further word too, for
+        /// a command whose own check reads them (`stream`'s input relay action and its words).
         pub(crate) positionals: &'static [&'static str],
     }
 
@@ -361,9 +365,11 @@ pub(super) mod reads {
 
     /// Workflow #434 LAB-5B4: whether a command whose positionals are `positionals` (as
     /// [`FlagReads::positionals`] names them) reads `word` as its positional number `index`.
+    /// Workflow #434 LAB-5B5: beyond them, a last name ending in `...` takes the word.
     pub(crate) fn takes_positional(positionals: &[&str], index: usize, word: &str) -> bool {
         positionals
             .get(index)
+            .or_else(|| positionals.last().filter(|name| name.ends_with("...")))
             .is_some_and(|name| name.starts_with('<') || *name == word)
     }
 

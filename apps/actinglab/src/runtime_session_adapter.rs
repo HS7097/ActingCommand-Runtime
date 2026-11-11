@@ -4,6 +4,8 @@ use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, current_unix_ms, monitor_policy_monitor_args,
     parse_optional_duration_ms, runtime_slice_cli, runtime_state_root,
 };
+use crate::commands::device_commands::LEGACY_ROUTING_READS;
+use crate::flag_args::reads::{FlagReads, ReadPart};
 use actingcommand_contract::{
     RUNTIME_INFO_FILE, RuntimeControlPlaneStatus, RuntimeInfo, RuntimeMonitorInstanceStatus,
     RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
@@ -12,8 +14,77 @@ use actingcommand_runtime_client::RuntimeClient;
 use serde_json::{Value, json};
 use std::path::Path;
 
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags `session status` (and
+/// `lab status`) reads: the legacy routing it refuses, and `--diagnostics`; no positional.
+pub(crate) const SESSION_STATUS_READS: FlagReads = FlagReads {
+    row: "session status",
+    parts: &[&LEGACY_ROUTING_READS, &DIAGNOSTICS_READS],
+    positionals: &[],
+};
+
+const DIAGNOSTICS_READS: ReadPart = ReadPart {
+    options: &[],
+    switches: &["--diagnostics"],
+    refused: &[],
+};
+
+/// The instance every action of `session monitor-policy` reads (actinglab's global option, which
+/// its parser takes first).
+const MONITOR_INSTANCE_READS: ReadPart = ReadPart {
+    options: &["--instance"],
+    switches: &[],
+    refused: &[],
+};
+
+/// Workflow #434 LAB-5B5: the flags `session monitor-policy status` reads after its action: the
+/// legacy routing it refuses and the instance; no positional.
+pub(crate) const MONITOR_POLICY_STATUS_READS: FlagReads = FlagReads {
+    row: "session monitor-policy status",
+    parts: &[&LEGACY_ROUTING_READS, &MONITOR_INSTANCE_READS],
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: `session monitor-policy clear`'s, as `status`'s.
+pub(crate) const MONITOR_POLICY_CLEAR_READS: FlagReads = FlagReads {
+    row: "session monitor-policy clear",
+    parts: &[&LEGACY_ROUTING_READS, &MONITOR_INSTANCE_READS],
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: `session monitor-policy set`'s: besides `status`'s, the policy it sets
+/// and the frame it requires (`--scene` or `--capture`), and `--max-iterations`, which it reads
+/// only to refuse it. The monitor arguments it once stored (`monitor_policy_monitor_args`) are
+/// read for their refusals only; the flags that scan let through unread (`--request-timeout-ms`,
+/// `--lease-holder`, `--holder`, `--lease-id`) are refused as every flag off the list.
+pub(crate) const MONITOR_POLICY_SET_READS: FlagReads = FlagReads {
+    row: "session monitor-policy set",
+    parts: &[
+        &LEGACY_ROUTING_READS,
+        &MONITOR_INSTANCE_READS,
+        &ReadPart {
+            options: &["--interval-ms", "--expect", "--to", "--scene"],
+            switches: &["--recover", "--capture"],
+            refused: &["--max-iterations"],
+        },
+    ],
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: the flags of `session monitor-policy <action>` after the action's word:
+/// a known action's parsed by its read list, which refuses a word it does not hold; a word that
+/// is no action's as before, which the action's match refuses.
+fn monitor_policy_flags(action: &str, args: &[String]) -> CliOutcome<FlagArgs> {
+    let list = match action {
+        "status" => &MONITOR_POLICY_STATUS_READS,
+        "set" => &MONITOR_POLICY_SET_READS,
+        "clear" => &MONITOR_POLICY_CLEAR_READS,
+        _ => return FlagArgs::parse(args),
+    };
+    FlagArgs::parse_reading(args, list)
+}
+
 pub(super) fn run_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &SESSION_STATUS_READS)?;
     let _ = global;
     reject_legacy_flags(&flags)?;
     flags.expect_positionals("session status", 0)?;
@@ -25,7 +96,7 @@ pub(super) fn run_monitor_policy(global: &GlobalOptions, args: &[String]) -> Cli
         .first()
         .map(String::as_str)
         .ok_or_else(|| CliError::usage("session monitor-policy requires status|set|clear"))?;
-    let flags = FlagArgs::parse(&args[1..])?;
+    let flags = monitor_policy_flags(action, &args[1..])?;
     let _ = global;
     reject_legacy_flags(&flags)?;
     if action == "set" || action == "clear" {

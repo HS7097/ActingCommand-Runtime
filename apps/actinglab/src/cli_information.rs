@@ -1,14 +1,81 @@
+use crate::flag_args::reads::FlagReads;
 use crate::runtime_endpoint::runtime_endpoint_check;
 use crate::user_config_keys::{config_get, config_set};
 use crate::user_config_store::{config_path, read_user_config, write_user_config};
 use crate::{
-    CliError, CliOutcome, GlobalOptions, RUNTIME_VERSION, SCHEMA_VERSION, command_capabilities,
-    effective_resource_root, effective_run_root, effective_runtime_endpoint, lab2_cli,
-    list_resource_kind, path_string, process_env_overrides, resolved_adb_json,
+    CliError, CliOutcome, FlagArgs, GlobalOptions, RUNTIME_VERSION, SCHEMA_VERSION,
+    command_capabilities, effective_resource_root, effective_run_root, effective_runtime_endpoint,
+    lab2_cli, list_resource_kind, path_string, process_env_overrides, resolved_adb_json,
     resolved_adb_json_from,
 };
 use actingcommand_device::resolve_adb_path;
 use serde_json::{Value, json};
+
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags and words `help` reads:
+/// none; its command line is parsed by it (`FlagArgs::parse_reading`), which refuses any.
+pub(crate) const HELP_READS: FlagReads = FlagReads {
+    row: "help",
+    parts: &[],
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: `version`'s: none. A line `--version` makes a version line keeps its
+/// words, which are the line's own and not the command's (`cli_parse`), unread as before.
+pub(crate) const VERSION_READS: FlagReads = FlagReads {
+    row: "version",
+    parts: &[],
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: `paths`' flags and words: none (it reads actinglab's global options).
+pub(crate) const PATHS_READS: FlagReads = FlagReads {
+    row: "paths",
+    parts: &[],
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: `doctor`'s flags and words: none (it reads the global options).
+pub(crate) const DOCTOR_READS: FlagReads = FlagReads {
+    row: "doctor",
+    parts: &[],
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: `list`'s: no flag, and the kind it lists as its one positional.
+pub(crate) const LIST_READS: FlagReads = FlagReads {
+    row: "list",
+    parts: &[],
+    positionals: &["<kind>"],
+};
+
+/// Workflow #434 LAB-5B5: `user-config get`'s: no flag, and the key as its one positional.
+pub(crate) const USER_CONFIG_GET_READS: FlagReads = FlagReads {
+    row: "user-config get",
+    parts: &[],
+    positionals: &["<key>"],
+};
+
+/// Workflow #434 LAB-5B5: `user-config set`'s: no flag, and the key and its value.
+pub(crate) const USER_CONFIG_SET_READS: FlagReads = FlagReads {
+    row: "user-config set",
+    parts: &[],
+    positionals: &["<key>", "<value>"],
+};
+
+/// Workflow #434 LAB-5B5: `help`, its command line parsed by [`HELP_READS`] first.
+pub(super) fn run_help(args: &[String]) -> CliOutcome<Value> {
+    FlagArgs::parse_reading(args, &HELP_READS)?;
+    crate::cli_module::authoring::listed_help(help_data())
+}
+
+/// Workflow #434 LAB-5B5: `version`, its command line parsed by [`VERSION_READS`] first, but on a
+/// line the global `--version` made a version line.
+pub(super) fn run_version(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    if !global.version {
+        FlagArgs::parse_reading(args, &VERSION_READS)?;
+    }
+    Ok(version_data())
+}
 
 pub(super) fn help_data() -> Value {
     let mut help = json!({
@@ -138,7 +205,8 @@ pub(super) fn version_data() -> Value {
     })
 }
 
-pub(super) fn run_paths(global: &GlobalOptions) -> CliOutcome<Value> {
+pub(super) fn run_paths(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    FlagArgs::parse_reading(args, &PATHS_READS)?;
     let config = read_user_config()?;
     let adb = resolved_adb_json(&config);
     Ok(json!({
@@ -151,10 +219,13 @@ pub(super) fn run_paths(global: &GlobalOptions) -> CliOutcome<Value> {
 }
 
 /// Workflow #434 LAB-2 (open point 7): `user-config get|set`, actinglab's own user configuration
-/// file (`config get|set` before LAB-2).
+/// file (`config get|set` before LAB-2). Workflow #434 LAB-5B5: each parses its command line by
+/// its read list first ([`USER_CONFIG_GET_READS`], [`USER_CONFIG_SET_READS`]), so that a flag
+/// or a word beyond its key (and value) is refused; its words are then the list's positionals.
 pub(super) fn run_config(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
         "get" => {
+            let args = FlagArgs::parse_reading(args, &USER_CONFIG_GET_READS)?.positionals;
             let config = read_user_config()?;
             if args.is_empty() {
                 serde_json::to_value(config)
@@ -168,6 +239,7 @@ pub(super) fn run_config(sub: &str, global: &GlobalOptions, args: &[String]) -> 
             }
         }
         "set" => {
+            let args = FlagArgs::parse_reading(args, &USER_CONFIG_SET_READS)?.positionals;
             if args.len() < 2 {
                 return Err(CliError::usage("user-config set requires <key> <value>"));
             }
@@ -197,7 +269,8 @@ pub(super) fn run_config(sub: &str, global: &GlobalOptions, args: &[String]) -> 
     }
 }
 
-pub(super) fn run_doctor(global: &GlobalOptions) -> CliOutcome<Value> {
+pub(super) fn run_doctor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    FlagArgs::parse_reading(args, &DOCTOR_READS)?;
     let config = read_user_config()?;
     let adb_resolution = resolve_adb_path(config.adb_path.as_deref(), &process_env_overrides());
     let runtime_endpoint = effective_runtime_endpoint(global, &config);
@@ -314,7 +387,13 @@ pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {
 }
 
 pub(super) fn run_list(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let kind = args.first().map(String::as_str).unwrap_or("commands");
+    // Workflow #434 LAB-5B5: a flag, or a word after the kind, is refused, not ignored.
+    let flags = FlagArgs::parse_reading(args, &LIST_READS)?;
+    let kind = flags
+        .positionals
+        .first()
+        .map(String::as_str)
+        .unwrap_or("commands");
     match kind {
         // Workflow #434 LAB-5F: the authoring module's commands only where the option lists them.
         "commands" => Ok(json!({

@@ -82,10 +82,32 @@ pub(super) fn run_resource(
     }
 }
 
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags `report export` reads, the
+/// switch it requires and the file it writes; its command line is parsed by it
+/// (`FlagArgs::parse_reading`); no positional.
+pub(crate) const REPORT_EXPORT_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "report export",
+        parts: &[&crate::flag_args::reads::ReadPart {
+            options: &["--out"],
+            switches: &["--last-error"],
+            refused: &[],
+        }],
+        positionals: &[],
+    };
+
+/// Workflow #434 LAB-5B5: `explain`'s: no flag, and the run id as its one positional.
+pub(crate) const EXPLAIN_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "explain",
+        parts: &[],
+        positionals: &["<run-id>"],
+    };
+
 pub(super) fn run_report(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
         "export" => {
-            let flags = FlagArgs::parse(args)?;
+            let flags = FlagArgs::parse_reading(args, &REPORT_EXPORT_READS)?;
             if !flags.bool("--last-error") {
                 return Err(CliError::usage("report export requires --last-error"));
             }
@@ -102,7 +124,10 @@ pub(super) fn run_report(sub: &str, global: &GlobalOptions, args: &[String]) -> 
 }
 
 pub(super) fn run_explain_run(args: &[String]) -> CliOutcome<Value> {
-    let run_id = args
+    // Workflow #434 LAB-5B5: a flag, or a word after the run id, is refused, not ignored.
+    let flags = FlagArgs::parse_reading(args, &EXPLAIN_READS)?;
+    let run_id = flags
+        .positionals
         .first()
         .ok_or_else(|| CliError::usage("explain requires <run-id>"))?;
     Ok(json!({

@@ -103,6 +103,10 @@ mod gate_434_lab5b3;
 // switch takes no value from the next word but `true` or `false`.
 #[path = "gate_434_lab5b4.rs"]
 mod gate_434_lab5b4;
+// Workflow #434 LAB-5B5: the rest of actinglab's own commands refuse a flag or a word they do not
+// read; every command of the inventory is in one group of the census.
+#[path = "gate_434_lab5b5.rs"]
+mod gate_434_lab5b5;
 // Workflow #434 LAB-5G4a: `serve --stdio --front mcp` records `Lab-MCP`; serve refuses a value
 // that begins with `--`.
 #[path = "gate_434_lab5g4a.rs"]

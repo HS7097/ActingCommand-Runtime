@@ -9228,7 +9228,8 @@ authoring rows that read their flags by name (`run open`, `run export`, `control
 `lab run|status|arbitrator|replay-evidence`, `package dry-run|run`, `operation run`, `session …`,
 `report export` and the like) are not changed: the work order's count was the four the check found
 outside the table, and sweeping some forty more commands, each needing a read list built from its
-code, is the coordinator's to decide (listed in the slice's report).
+code, is the coordinator's to decide (listed in the slice's report). (Done by LAB-5B5, on the
+coordinator's ruling of 11-11: "Slice LAB-5B5" below.)
 
 **The list of what is now refused** (work order point 5; the coordinator warns callers with it):
 
@@ -9355,6 +9356,175 @@ before.
 
 **LAB-5B4 rollback** (to the release before it). Nothing persisted: code, the register and the
 contract text only. Rolling back makes the 28 commands ignore an unknown flag again.
+
+#### Slice LAB-5B5 (0.12.53): the rest of actinglab's own commands refuse a flag or a word they do not read
+
+Coordinator work order `rd-1108/arch-013/brief-lab5b5.md`, on the coordinator's ruling of 11-11
+(not Alice's words): the rule of LAB-5B4 for every own command that still read its flags by name
+and ignored the rest (an ignored flag is a silent error; the user's global rule 1, "Fail Loud").
+Built on main `f4ff86ae` (LAB-5B4, #1587, merged). The slice changes what LAB-5B4 changed, for
+more commands: (1) a flag a command does not read is refused, (2) a switch takes no value from the
+next word but `true` or `false`, (3) a positional a command does not read is refused; with
+LAB-5B4's refusal (`cli_module::refused_word`) and its parse (`FlagArgs::parse_reading`). Nothing
+else.
+
+**The census** (work order point 1; `cli_module::own_flags`, tests only, held by
+`gate_434_lab5b5::the_census_puts_every_inventory_word_in_one_group`). Every command of the
+inventory (`ratchet/actinglab_commands.json`, the 100 commands of `execute`, which the guard
+`command_inventory_matches_checked_in_snapshot` keeps equal to the dispatchers) is in exactly one
+group, as main had them; 59 + 0 + 38 + 3 = 100.
+
+| Group | Count | Commands |
+|---|---|---|
+| (a) refuse every flag and word they do not read already (`REFUSING_COMMANDS`) | 59 | by a read list (LAB-5B4): `touch-probe`, `capture`, `detect-page`, `recognize`, `recognize-artifact`, `current-page`, `is-visible`, `locate`, `tap-target`, `navigate`, `lab debug-package`, `lab export-evidence`, `lab receipt`, `lab evidence`, `package validate`, `package inspect`, `package bundle`, `operation validate`, `operation inspect`, `operation explain`, `resource compile-maa`, `session capture`, `session recover`, `run list`; by a strict list (LAB-5B2, LAB-5B4): `tap`, `swipe`, `long-tap`, `key`, `text`, `observe`, `replay`, `recognition-regression`, `do`, `ensure`, `wait`, `lab signatures`, `lab watch`, `lab unpin`, `package preflight`, `package check`, `package loading`, `package fmt`, `package edit`, `scheduling compile`, `scheduling timeline`, `resource restore`, `resource validate`, `resource catalog`, `resource verify`, `standard-pack check`, `standard-pack compose`; `record` and `session record`, whose every action is LAB-5B4's (a word that is no action is refused); by their own check: `schema` (its words are the kind it names; an unknown kind is refused), `package dry-run` (its own flag list, positionals refused), `runtime reset` and `runtime observe` (`--state-root` and `--instance` only, no positional), `run summary` (exactly the run id and `--state-root`), `session backend` (`--touch`, `--capture`, `--clear`, no positional) |
+| (b) served by the CLI module from the table, its words the row's (`TABLE_COMMANDS`) | 0 | none: the table-driven rows' commands (`run start`, `run stop`, `reset`, `drill`) are no command of the inventory, and `user-config get` and `user-config set`, which the rows `user-config` and `user-config set` reach with their declared words, are reached in their own words too, where they ignored a further word: group (c) |
+| (c) read their flags by name (or their words by position) and ignored the rest: this slice's work list (`WORK_LIST`) | 38 | `help`, `version`, `paths`, `capabilities`, `doctor`, `list`, `detect`, `stream`, `explain`, `user-config get`, `user-config set`, `env resolve`, `env status`, `lab run`, `lab validate`, `lab replay-evidence`, `lab status`, `lab vendor-stdio-selftest`, `package run`, `control inspect`, `control verify`, `control probe-click`, `control diff`, `session status`, `session throat-policy`, `session capture-policy`, `session record-policy`, `session self-heal-policy`, `session contract`, `session api`, `session transport`, `session monitor-policy`, `session instance`, `session app`, `session stream`, `run open`, `run export`, `report export` |
+| (d) take no flag and no word (but the flags they read only to refuse them) and refuse every line (`NO_WORD_COMMANDS`) | 3 | `lab arbitrator` (retired: `legacy_lab2_arbitrator_retired`, whatever the line), `control export` (reserved: `not_implemented`), `operation run` (`lab_lease_required`, or `legacy_session_authority_retired` for the legacy routing flags); left as they are: no line of theirs succeeds, so none ignores a word |
+
+**The read lists** (point 2; product constants beside each command, `flag_args::reads::FlagReads`,
+built by reading every read of the command's flags on every path). Shared parts:
+`commands/device_commands.rs` `LEGACY_ROUTING_READS` (`--via-daemon`, `--local`, `--state-dir`,
+refused; also the readers of `runtime_session_adapter.rs` and `runtime_stream_adapter.rs`, which
+read the same three), `contained_resources.rs` `PACKAGE_LOCATOR_READS`, `env_detection.rs`
+`ENV_SCOPE_READS` (`--resource-root`, `--game`, `--instance`, `--server`, each a global option
+too), `commands/session_contracts.rs` `SESSION_VIEW_PARTS`, `runtime_session_adapter.rs`
+`MONITOR_INSTANCE_READS`. Each command parses its command line by its list where it starts, before
+it reads or writes anything: `lab run` in `lab_package_control::run_lab` before the legacy routing
+is refused (and again in `lab_run::run_lab_run`); `package run` in `package_flags`; `control
+inspect|verify|probe-click|diff` in the new `control_flags` and `run open|export` in `run_flags`,
+functions of their own so that the inventory guard still reads each dispatcher's first match;
+`session monitor-policy`, `session instance` and `session app` after their action word (their first
+word, read before as main read it: `session monitor-policy <status|set|clear>` by the action's own
+list, `monitor_policy_flags`; a word that is no action's as before); every other command at its
+function's start. In test builds the parse holds the reads to the list (LAB-5B3's recording).
+
+**The list of what is now refused** (point 5; the coordinator warns callers with it). Global options
+(`--instance`, `--game`, `--server`, `--dry-run`, `--json` and the rest) are taken by actinglab's
+parser anywhere on the line, as before; a list holds the ones its command reads through its flags.
+
+| # | Command (its name in the refusal) | Constant (`apps/actinglab/src/`) | Options it reads | Switches it reads | Positionals it reads (each may be absent) | A line main accepts silently, refused now |
+|---|---|---|---|---|---|---|
+| 1 | `help` | `HELP_READS` (`cli_information.rs`) | none | none | none | `help list` |
+| 2 | `version` | `VERSION_READS` (same) | none | none | none | `version --short` |
+| 3 | `paths` | `PATHS_READS` (same) | none | none | none | `paths --all` |
+| 4 | `capabilities` | `CAPABILITIES_READS` (`commands/capabilities.rs`) | none | none | none | `capabilities --command observe` |
+| 5 | `doctor` | `DOCTOR_READS` (`cli_information.rs`) | none | none | none | `doctor --fix` |
+| 6 | `list` | `LIST_READS` (same) | none | none | `<kind>` | `list targets extra` |
+| 7 | `detect` | `DETECT_READS` (`env_detection.rs`) | `--resource-root`, `--game`, `--instance`, `--server`, `--task`, `--scene`, `--fresh-delay-ms` | `--require-fresh`, `--dry-run` | none | `detect --task t --sceen f.png` |
+| 8 | `stream` (`session stream`) | `STREAM_READS` (`runtime_stream_adapter.rs`) | `--max-frames`, `--interval-ms`, `--fresh-delay-ms`, `--instance`, `--input-relay`, `--interactive-input`, `--input-event`, `--relay-event` | `--dry-run`, `--require-fresh` | `check` first; with `--input-relay` or `--interactive-input`, every word (the relay action and its words) | `stream --max-frame 5`; `stream extra` |
+| 9 | `explain` | `EXPLAIN_READS` (`resource_runtime_support.rs`) | none | none | `<run-id>` | `explain --run r1` (main took the flag for the run id) |
+| 10 | `user-config get` | `USER_CONFIG_GET_READS` (`cli_information.rs`) | none | none | `<key>` | `user-config get adb_path extra` |
+| 11 | `user-config set` | `USER_CONFIG_SET_READS` (same) | none | none | `<key>`, `<value>` | `user-config set adb_path p extra` |
+| 12 | `env resolve` | `ENV_RESOLVE_READS` (`env_detection.rs`) | the scope's four, `--task`, `--path`, `--value`, `--key` | none | `<input>` | `env resolve --task t --keys k` |
+| 13 | `env status` | `ENV_STATUS_READS` (same) | the scope's four, `--task` | none | none | `env status --task t extra` |
+| 14 | `lab run` | `LAB_RUN_READS` (`lab_run.rs`) | `--package`, `--zip`, `--out` (refused: the legacy routing, the 12 execution overrides) | none | none | `lab run --zip p.zip --out o.zip --timeout-ms 5` |
+| 15 | `lab validate` | `LAB_VALIDATE_READS` (same) | `--zip` | none | none | `lab validate --zip p.zip --strict` |
+| 16 | `lab replay-evidence` | `REPLAY_EVIDENCE_READS` (`runtime_debug.rs`) | `--zip`, `--expected-sha256` | none | none | `lab replay-evidence --zip e.zip --expected-sha256 h extra` |
+| 17 | `session status` (`lab status`) | `SESSION_STATUS_READS` (`runtime_session_adapter.rs`) | none (the legacy routing refused) | `--diagnostics` | none | `lab status --diagnostic` |
+| 18 | `lab vendor-stdio-selftest` | `VENDOR_STDIO_SELFTEST_READS` (`lab_package_control.rs`) | none | none | none | `lab vendor-stdio-selftest --trace` |
+| 19 | `package run` | `PACKAGE_RUN_READS` (same) | `--zip`, `--out` (the legacy routing refused) | none | none | `package run --zip p.zip --task t` |
+| 20 | `control inspect` | `CONTROL_INSPECT_READS` (same) | `--control` | none | none | `control inspect --controls c` |
+| 21 | `control verify` | `CONTROL_VERIFY_READS` (same) | `--candidate`, `--candidate-id` | none | none | `control verify --candidate c.json --candidate-id i --click` |
+| 22 | `control probe-click` | `CONTROL_PROBE_CLICK_READS` (same) | `--effect`, `--expect-before`, `--expect-after` | none | none | `control probe-click --effect navigation_only --expect-befor p` (main refused it for the missing guard, not the misspelled flag) |
+| 23 | `control diff` | `CONTROL_DIFF_READS` (same) | `--candidate`, `--stable` | none | none | `control diff --candidate a --stable b --ignore-order` |
+| 24 | `session throat-policy`, `capture-policy`, `record-policy`, `self-heal-policy`, `contract`, `api` (each its own name) | `SESSION_THROAT_POLICY_READS`, `SESSION_CAPTURE_POLICY_READS`, `SESSION_RECORD_POLICY_READS`, `SESSION_SELF_HEAL_POLICY_READS`, `SESSION_CONTRACT_READS`, `SESSION_API_READS` (`commands/session_contracts.rs`) | none (the legacy routing refused) | none | none | `session contract --format md` |
+| 25 | `session transport` | `SESSION_TRANSPORT_READS` (`commands/session_transport.rs`) | `--endpoint` (the legacy routing refused) | none | `<action>` (`plan`, `check`; another its own refusal) | `session transport check --endpoint 127.0.0.1:1 --timeout 5` |
+| 26 | `session monitor-policy status`, `clear` | `MONITOR_POLICY_STATUS_READS`, `MONITOR_POLICY_CLEAR_READS` (`runtime_session_adapter.rs`) | `--instance` (the legacy routing refused) | none | none after the action | `session monitor-policy clear --all` |
+| 27 | `session monitor-policy set` | `MONITOR_POLICY_SET_READS` (same) | `--instance`, `--interval-ms`, `--expect`, `--to`, `--scene` (refused: the legacy routing, `--max-iterations`) | `--recover`, `--capture` | none after the action | `session monitor-policy set --capture --holder h` |
+| 28 | `session instance` | `SESSION_INSTANCE_READS` (`session_management.rs`) | none (the legacy routing refused) | none | none after the action (`app` hands the rest to `session app`) | `session instance list extra` |
+| 29 | `session app` (`session instance app`) | `SESSION_APP_READS` (same) | `--instance` (refused: the legacy routing, `--package`) | `--record` | none after the action | `session app launch --wait-ms 5` |
+| 30 | `run open` | `RUN_OPEN_READS` (`run_summary.rs`) | none | none | `<run-id>` | `run open r1 r2` |
+| 31 | `run export` | `RUN_EXPORT_READS` (same) | `--out` | none | `<run-id>` | `run export r1 --out o.zip --format zip` |
+| 32 | `report export` | `REPORT_EXPORT_READS` (`resource_runtime_support.rs`) | `--out` | `--last-error` | none | `report export --last-error --out r.zip --since 1d` |
+
+Besides, as on LAB-5B4's lists: an option at the end of the line is refused `value_missing` where
+main took `true` for it (`control inspect --control`, `env resolve --task t --path`); in particular
+`stream tap 10 20 --input-relay`, the relay written as a switch at the end of the line (main took
+the first positional for its action), is refused `value_missing`, while `--input-relay` before
+another flag, or with its action as its value, answers as before. `session monitor-policy set`
+refuses `--request-timeout-ms`, `--lease-holder`, `--holder` and `--lease-id`, which the scan of
+its stored monitor arguments (`monitor_policy_monitor_args`, whose result nothing reads) let
+through unread, as LAB-5B4 refused the same three of `record amend --from-drift-diagnostics`; the
+scan stays for the refusals it makes.
+
+Lines that change from refused or another path to accepted: `stream --require-fresh check` (main
+took `check` for the switch's value and ran the Runtime's sequence; now the check, with
+`--require-fresh`).
+
+**Pass-throughs** (point 2): none. No command of the work list hands its words to another program
+or to a pack. Named for the coordinator: (i) `stream`'s input relay reads the words after
+`--input-relay` or `--interactive-input` as its action's (`tap`, `swipe`, `long-tap`, `key`,
+`text`), which checks its own count of words (the direct commands' strict check); its list takes
+every word there by a new form of a list's last positional, a name ending in `...` (`<word>...`,
+`flag_args::reads::takes_positional`), and without either flag `stream` reads no word but a first
+`check` and refuses another. (ii) A line the global `--version` makes a version line (`cli_parse`:
+`--version` anywhere hands the line's words to `version`) prints the version whatever its words, as
+before; the words are the line's, not the command's. `version` typed as its own word refuses a word
+(left as it is, for the coordinator to rule).
+
+**Reads that rest on reading** (point 3). The work list's in-process tests (the corpus below, and
+the existing `tests::session_status_without_runtime_is_exit_five` and
+`stream_command_reports_bounded_dry_run_contract`) reach most
+reads under the recording; the golden protocol (`lab run`, `lab validate`, `detect`, `env
+resolve`, `env status`) and the integration tests with a Runtime (`session status --diagnostics`,
+`session monitor-policy status|set|clear`, `session stream`, `session app`) run the binary, which
+has no recording. No in-process line reaches these, and
+`gate_434_lab5b5::the_reads_that_rest_on_reading_are_on_their_lists` parses each list's line of them
+and reads them in their commands' forms under the recording: `detect`'s past its scope (the task,
+the frame, its freshness, `--dry-run`) and `env resolve`'s and `env status`'s past theirs (the
+task, the input, the key): a line that passes the scope goes on to open the Lab's state folder
+(`build_lab`), outside a test's temporary folder; `package run --out`, read after its package is
+admitted; `session monitor-policy`'s (the instance, and `set`'s policy and frame): each action
+connects to the Runtime after them, or refuses `--dry-run` before them. `session app`'s `--record`
+is read among its words (`run_session_app_or_recorded`), not by a reader, as on main. No list missed
+a flag its command reads.
+
+**The repository's own lines** (point 4). Searched: the tests (`apps/actinglab/src/tests`,
+`apps/actinglab/tests`), the goldens (`tests/golden/expected.json`, `consumers.json`) and the golden
+harness's lines (`golden_protocol.rs`: the `lab validate`, `lab run`, `detect`, `env resolve`, `env
+status` cases pass only flags their lists hold), MCP's actinglab child (`apps/actingctl/src/mcp/lab.rs`
+runs only commands of group (a); `lab_ops::apps` runs `session app <action> --instance <alias>`),
+the scripts, the CI workflows, the READMEs and the contracts' examples (`session app restart
+--record`, `user-config set adb_path <path>`, `session backend …`). No line passes a flag or a word
+its command does not read; none changed.
+
+**Tests.** New: apps row "#434 LAB-5B5", `gate_434_lab5b5::the_census_puts_every_inventory_word_in_one_group`
+(the four groups partition the inventory; each command of the work list has a list; the three of
+group (d) refuse their line, `--frobnicate x` on it too, with their own code),
+`every_command_of_the_work_list_refuses_a_flag_it_does_not_read` (each of the 38 through every list
+it is parsed by, 42 lines: `--frobnicate` refused before anything runs, with the line, exit code and
+developer line of `watch --frobnicate` but for the name; no read, no Runtime, nothing written),
+`the_switch_and_positional_rules_on_stream_and_monitor_policy_set` (a switch and a word, `true`,
+`false`; the relay's words; the word left refused on both commands; `--holder` and
+`--request-timeout-ms` refused), `lines_that_pass_only_what_their_command_reads_answer_as_before`
+(47 lines of the work list, each the exit and error code main answered, none refused by the parse;
+not `lab status`, `session status` or `session monitor-policy status`, every line of which reads
+the Runtime, nor `lab vendor-stdio-selftest`, whose line runs the vendor diagnostic),
+`the_reads_that_rest_on_reading_are_on_their_lists` (above) and
+`serve_and_the_via_child_hand_the_work_list_only_what_it_reads`. Changed, without changing what they
+pin: `gate_434_lab5b4`'s helpers `printed`, `developer` and `Isolated` are `pub(super)` for the new
+file.
+
+**`serve --stdio` and MCP.** Unchanged. The rows whose command is one of the work list are `app
+launch|restart|stop` (`session app <action> --instance <alias>`) and `user-config`, `user-config set`
+(`user-config get|set` with their declared positionals): `engine::Line::Declared`, every word of
+which the command's list holds (the slice's test, with every parameter the rows declare); `serve
+--stdio` answers `user-config` as the command line does. MCP's `--via mcp` child runs `session app
+<action> --instance <alias>` (`lab_ops::apps`) of the work list, which parses by its list, and
+otherwise only commands of group (a).
+
+**Interface.** None raised. No outcome code, key, location or table row is added; the operation
+table is unchanged.
+
+**What an operator sees after deploy.** As after LAB-5B4, for 38 more commands: a command line that
+passes a flag or a word its command does not read is refused `validation_failed` naming it
+(`<command>: unknown <word>`, exit 1; exit 2 on a `--via` line), where it was ignored; an option
+left without its value at the end is refused `value_missing`; a switch followed by another word
+than `true` or `false` leaves it a positional. A script that relied on an ignored flag fails loud;
+the table above gives an example per command. No own command of actinglab ignores a flag now.
+
+**LAB-5B5 rollback** (to the release before it). Nothing persisted: code, the register and the
+contract text only. Rolling back makes the 38 commands ignore an unknown flag again.
 
 #### Slice LAB-5G4a (0.12.52): `serve --stdio --front mcp` records `Lab-MCP`; `serve` refuses values that begin with `--`
 
