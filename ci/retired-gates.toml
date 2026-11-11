@@ -957,3 +957,14 @@ test = "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b
 ruling = "Workflow #434 LAB-3 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §7)"
 reason = "Moved with its file from apps/actingctl/src/install to crates/lab-rescue/src/install, paths only: the test and what it asserts are unchanged."
 covered_by = "actingcommand-lab-rescue::lib::install::gate_r15b_release::r15b_the_runtime_and_tools_stage_answers_and_keeps_its_build_as_before, in the same apps.toml row."
+
+# Workflow #429 R-8 (PR #1607): the read R-0c left without behaviour is built. Listed by the
+# coordinator in the 0.12.55 train (PR #1608), where the gate check first ran on the slice.
+
+# host.toml, the row of Workflow #429 R-0c, which R-8's row replaced.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_429_r0::r0c_pack_schedule_view_answers_not_implemented_with_no_effect"
+ruling = "Workflow #429 R-8 (the plan's slice row R-8 and A.7.1 point 6, board #429 comment 6535257887; the coordinator's work order of 2026-11-11)"
+reason = "The test pinned that PackScheduleView is refused not_implemented with no effect, which was to hold only until the slice that builds the read (its own row said: until R-8). R-8 builds the read, so the refusal it pinned no longer exists."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_429_r8::r8_the_view_lists_the_instance_packages_and_an_unknown_package_is_reported_once, in the host.toml row that replaced it: the view answers, records nothing and changes no status, and an alias no instance has is refused instance_unknown."
