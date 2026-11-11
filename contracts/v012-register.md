@@ -11537,6 +11537,67 @@ refuses a pool that writes `trigger_line` at its reader (`unknown_field`) and do
 first remove the member and let this build activate a generation without it, as §1.289's rollback
 says for SS-2h's.
 
+#### Slice COV-1 (0.12.53): the coverage counts a rule that only rides with its chain
+
+Coordinator work order `rd-1111/brief-cov1.md` (the coordinator's ruling of 11-11, not Alice's
+words: the statistic gains a category, the evaluator stays the judge); on main `f4ff86ae`. The
+contract is [standard-pack-schedule.md](standard-pack-schedule.md), "Coverage". The text names no
+game, resource or value: the tests' ids are neutral.
+
+**The definition.** A judged rule with no `produces`, no `consumes` entry and no fixed value is a
+*follower* when its trigger requires, through `all`, an edge (`dependency_completed` accepting
+`succeeded` alone, `since_own_run: true`) to a complete rule or to a follower of one (walked up
+depth first, each rule once), and every chain link of its trigger names a judged rule; it rides
+with the complete rule the walk ends at.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| COV1-1 | `BenefitCoverage::follower` (`usize`, left out of the answer while 0); `BenefitFollower {task_id, rides_with}`, `StandardPackComposition::benefit_followers` | `actinglab standard-pack check` and `package bundle --schedule` answers: `benefit_coverage.follower`, `benefit_followers` | COV-1 | actinglab (resource tooling) | `crates/policy/src/compose.rs` `benefit_coverage`, `chain_followers`, `rides_with`, `chain_link`; `crates/resource-tooling` answers `benefit_followers` after `benefit_provenance`, absent while empty; no answer schema or golden names these answers |
+
+**Tests.** New: policy rows "#428 COV-1",
+`actingcommand-resource-tooling::lib::gate_cov1` tests 1 to 4
+(`cov1_t1_a_rule_riding_with_a_valued_head_is_a_follower_and_not_warned_about`,
+`cov1_t2_a_follower_of_a_follower_rides_with_the_valued_head`,
+`cov1_t3_each_way_of_not_being_a_follower_stays_undeclared_with_its_warning`,
+`cov1_t4_a_file_without_followers_answers_as_before`), on fakes, no clock, no sleep. Adapted,
+because they pin the whole `BenefitCoverage` struct and Rust makes them name the new member: the
+values of policy `gate_ss2b::ss2b_t9_the_composer_marks_the_judged_rules_and_counts_their_coverage`,
+`gate_ss2c::ss2c_t5_the_coverage_counts_a_declared_rule_as_not_judged` and
+`gate_ss2d::ss2d_t14_the_compiler_holds_the_mark_to_its_conditions` and of the resource tooling's
+`gate_ss2b::ss2b_t9_the_check_counts_the_judged_rules_and_warns_once_per_undeclared_rule`,
+`gate_ss2c::ss2c_t5_t6_the_check_counts_declared_rules_apart_and_warns_of_a_tier_mismatch` and
+`gate_sched_c1a::sched_c1a_t9_the_check_answers_coverage_and_provenance` gain `follower: 0`; nothing
+else of them changed.
+
+**Interface.** None raised: two members of the tools' answers (as §1.289). No outcome code,
+configuration key or catalog member; the Runtime's evaluation and `config.catalog_provenance` do
+not change.
+
+**Where COV-1 reads the contract.**
+
+- (a) The evaluator's chain link (`tie_break::required_predecessors`) is any `dependency_completed`
+  through `all` whose `terminal_states` holds `succeeded`; its run window takes, of the links in
+  their window, the one dispatched last, and the candidate rides only when a link walked from
+  there is marked. The work order's definition names one required task. Read alone, a rule with an
+  edge to a complete rule and a second link to an unmarked rule (a return home) would count as a
+  follower while the evaluator, walking up from that rule when it ran last, judges it on its own.
+  So the definition adds that every chain link names a judged rule; with it, a due follower's
+  first walked link is marked, and the static count and the evaluator agree.
+- (b) Otherwise they agree: an edge's predicate is true only when the named task's latest run
+  succeeded and the rule has not served it, which is the window's own test (`dependency_served`);
+  the window also needs that run's dispatch time, which every settled run the Runtime reports has.
+- (c) A pending head makes no follower (the work order: complete or a follower); the rule stays
+  undeclared until the head is complete.
+- (d) `rides_with` is the complete rule at the end of the walk, not the rule the edge names, so a
+  follower of a follower names the valued head.
+
+**What COV-1 changes for a person.** `standard-pack check` and `package bundle --schedule` show
+fewer `standard_pack_benefit_undeclared` warnings for a file whose rules ride with valued heads,
+and say which rule each rides with; a file without followers answers byte for byte as before.
+Composing, activating and deciding are unchanged.
+
+**COV-1 rollback.** Nothing to undo: no file, ledger or configuration shape is new.
+
 ### 1.300 Slice INST-5, first slice (0.12.52): the Lab's rescue module adds an emulator instance, committed as a configuration replacement (Workflow #421; the desktop program's "add account / device" button is disabled with the words "wait for the Runtime's support; edit the configuration file by hand for now", and adding an instance today means editing two places of the file and restarting; the read-only survey of 11-11 found that a first version fits today's interface revisions; the coordinator's ruling of 11-11, not Alice's words, that the new instance starts paused; coordinator work order `rd-1111/brief-inst5.md`, read on main `c0edc8b2`)
 
 [install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh root" ("Instances,
