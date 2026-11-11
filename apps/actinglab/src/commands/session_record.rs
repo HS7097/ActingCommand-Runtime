@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, UserConfig, canonical_game, canonical_server,
     capture_for_command, current_unix_ms, device_config, ensure_path_within, hex_sha256,
@@ -298,6 +300,191 @@ pub(crate) struct SessionRecordDriftDiagnostics {
     pub(crate) changed_fields: Vec<&'static str>,
 }
 
+/// Workflow #434 LAB-5B3 (tests only): the flags every record action reads first, the session's
+/// directory and the instance (`--instance` is actinglab's global option, which its parser takes
+/// before the command sees its flags).
+#[cfg(test)]
+const RECORD_SESSION_READS: ReadPart = ReadPart {
+    options: &["--state-dir", "--instance"],
+    switches: &[],
+    refused: &[],
+};
+
+/// Workflow #434 LAB-5B3 (tests only): the flags `record start` reads; `--game` and `--server` are
+/// actinglab's global options.
+#[cfg(test)]
+pub(crate) const RECORD_START_READS: FlagReads = FlagReads {
+    row: "record start",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &[
+                "--task-id",
+                "--game",
+                "--server",
+                "--locale",
+                "--template-threshold",
+                "--metric",
+                "--holder",
+                "--lease-holder",
+                "--record-id",
+                "--lease-id",
+            ],
+            switches: &["--force"],
+            refused: &[],
+        },
+    ],
+};
+
+/// Workflow #434 LAB-5B3 (tests only): the flags `record status` reads.
+#[cfg(test)]
+pub(crate) const RECORD_STATUS_READS: FlagReads = FlagReads {
+    row: "record status",
+    parts: &[&RECORD_SESSION_READS],
+};
+
+/// Workflow #434 LAB-5B3 (tests only): the flags `record candidates` reads; its step id is also
+/// its first positional.
+#[cfg(test)]
+pub(crate) const RECORD_CANDIDATES_READS: FlagReads = FlagReads {
+    row: "record candidates",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &["--step-id"],
+            switches: &[],
+            refused: &[],
+        },
+    ],
+};
+
+/// Workflow #434 LAB-5B3 (tests only): the flags `record amend` reads, by path: the drift
+/// diagnostics or the step it names (its step id also its first positional), then by the kind of
+/// the recorded step: a resource step's fields and the backtest of its frame, or an operation's.
+/// The drift path reads the backtest's flags too, which its own list refuses before
+/// (`reject_direct_drift_amend_flags`).
+#[cfg(test)]
+pub(crate) const RECORD_AMEND_READS: FlagReads = FlagReads {
+    row: "record amend",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &RECORD_AMEND_STEP_READS,
+        &RECORD_AMEND_RESOURCE_READS,
+        &RECORD_BACKTEST_READS,
+        &RECORD_AMEND_OPERATION_READS,
+    ],
+};
+
+/// `record amend`'s choice of its path and step.
+#[cfg(test)]
+const RECORD_AMEND_STEP_READS: ReadPart = ReadPart {
+    options: &["--from-drift-diagnostics", "--step-id"],
+    switches: &[],
+    refused: &[],
+};
+
+/// `record amend` of an anchor, color-probe or verify-template step.
+#[cfg(test)]
+const RECORD_AMEND_RESOURCE_READS: ReadPart = ReadPart {
+    options: &[
+        "--id",
+        "--candidate-index",
+        "--auto-candidate",
+        "--region",
+        "--threshold",
+    ],
+    switches: &["--color-check", "--no-color-check", "--clear-threshold"],
+    refused: &[],
+};
+
+/// `record amend` of an operation step.
+#[cfg(test)]
+const RECORD_AMEND_OPERATION_READS: ReadPart = ReadPart {
+    options: &["--from", "--to", "--click"],
+    switches: &["--destructive", "--non-destructive"],
+    refused: &[],
+};
+
+/// The flags the backtest of a resource step's frame reads (`backtest_anchor_crop`, the automatic
+/// region): the contrast frame and the match metric, for `record step` and `record amend`.
+#[cfg(test)]
+const RECORD_BACKTEST_READS: ReadPart = ReadPart {
+    options: &["--contrast-frame", "--negative-frame", "--metric"],
+    switches: &[],
+    refused: &[],
+};
+
+/// Workflow #434 LAB-5B3 (tests only): the flags `record step` reads, by `--kind`: every kind's,
+/// then an anchor's, color probe's or verify template's (its frame and the backtest of it), or an
+/// operation's.
+#[cfg(test)]
+pub(crate) const RECORD_STEP_READS: FlagReads = FlagReads {
+    row: "record step",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &["--kind", "--step-id"],
+            switches: &[],
+            refused: &[],
+        },
+        &RECORD_STEP_RESOURCE_READS,
+        &RECORD_BACKTEST_READS,
+        &RECORD_STEP_OPERATION_READS,
+    ],
+};
+
+/// `record step` of an anchor, color probe or verify template: the resource and its frame.
+#[cfg(test)]
+const RECORD_STEP_RESOURCE_READS: ReadPart = ReadPart {
+    options: &[
+        "--id",
+        "--region",
+        "--threshold",
+        "--frame",
+        "--source-frame",
+        "--artifact-dir",
+        "--fresh-delay-ms",
+    ],
+    switches: &[
+        "--color-check",
+        "--capture",
+        "--current-frame",
+        "--require-fresh",
+    ],
+    refused: &[],
+};
+
+/// `record step` of an operation: its pages, its gesture and how long a drag or press lasts.
+#[cfg(test)]
+const RECORD_STEP_OPERATION_READS: ReadPart = ReadPart {
+    options: &[
+        "--from",
+        "--to",
+        "--click",
+        "--swipe",
+        "--drag",
+        "--long-press",
+        "--long-tap",
+        "--duration-ms",
+    ],
+    switches: &["--destructive"],
+    refused: &[],
+};
+
+/// Workflow #434 LAB-5B3 (tests only): the read list of the lenient record action `action`;
+/// `None` for `mark` and `stop`, which check their flags against their own lists.
+#[cfg(test)]
+fn record_reads(action: &str) -> Option<&'static FlagReads> {
+    Some(match action {
+        "start" => &RECORD_START_READS,
+        "status" => &RECORD_STATUS_READS,
+        "candidates" | "candidate-list" => &RECORD_CANDIDATES_READS,
+        "amend" => &RECORD_AMEND_READS,
+        "step" => &RECORD_STEP_READS,
+        _ => return None,
+    })
+}
+
 pub(crate) fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     if let Some(action) = args
         .first()
@@ -327,6 +514,13 @@ fn run_session_record_inner(
         CliError::usage("session record requires start|status|stop|mark|step|candidates|amend")
     })?;
     let flags = FlagArgs::parse(&args[1..])?;
+    // Workflow #434 LAB-5B3: in test builds, a lenient action's reads are held to its read list.
+    #[cfg(test)]
+    {
+        if let Some(list) = record_reads(action) {
+            flags.reading(list);
+        }
+    }
     let config = read_user_config()?;
     let state_dir = forced_state_dir
         .map(Path::to_path_buf)
@@ -2016,7 +2210,7 @@ fn amend_anchor_record_step(
         *target.color_check = false;
         changed = true;
     }
-    if flags.flags.contains_key("--threshold") {
+    if flags.given("--threshold") {
         *target.threshold = parse_optional_unit_f64(flags, "--threshold")?;
         changed = true;
     }
@@ -2091,7 +2285,7 @@ fn amend_verify_template_record_step(
         auto_region_override = None;
         changed = true;
     }
-    if flags.flags.contains_key("--threshold") {
+    if flags.given("--threshold") {
         *target.threshold = parse_optional_unit_f64(flags, "--threshold")?;
         changed = true;
     }

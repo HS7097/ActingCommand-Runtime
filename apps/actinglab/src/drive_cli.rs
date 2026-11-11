@@ -6,6 +6,8 @@ use super::{
     parse_optional_duration_ms, read_user_config, reject_legacy_session_routing,
     resolve_instance_id, semantic_ledger_context, target_argument,
 };
+#[cfg(test)]
+use crate::flag_args::reads::{FlagReads, ReadPart};
 use actingcommand_lab::{NavigateRequest, TapTargetRequest};
 use serde::Serialize;
 use serde_json::Value;
@@ -15,8 +17,47 @@ use serde_json::Value;
 /// `repeated` before anything is read, never last-wins.
 const ONE_FRAME_REPEATS: &[&str] = &[];
 
+/// Workflow #434 LAB-5B3 (tests only): the flags `tap-target` reads: the legacy routing it
+/// refuses, its target (also its first positional, `target_argument`), the seed, the dry run, and
+/// the readers' frame input and package; `--capture` it reads and then refuses with the readers'.
+#[cfg(test)]
+pub(super) const TAP_TARGET_READS: FlagReads = FlagReads {
+    row: "tap-target",
+    parts: &[
+        &super::commands::device_commands::LEGACY_ROUTING_READS,
+        &ReadPart {
+            options: &["--target"],
+            switches: &["--dry-run", "--allow-destructive"],
+            refused: &[],
+        },
+        &super::lab_draw::SEED_READS,
+        &super::readonly_cli::READONLY_INPUT_READS,
+        &super::contained_resources::PACKAGE_LOCATOR_READS,
+    ],
+};
+
+/// Workflow #434 LAB-5B3 (tests only): the flags `navigate` reads; the step timing only when it
+/// presses (no dry run).
+#[cfg(test)]
+pub(super) const NAVIGATE_READS: FlagReads = FlagReads {
+    row: "navigate",
+    parts: &[
+        &super::commands::device_commands::LEGACY_ROUTING_READS,
+        &ReadPart {
+            options: &["--to", "--step-timeout-ms", "--poll-ms"],
+            switches: &["--dry-run", "--allow-destructive"],
+            refused: &[],
+        },
+        &super::lab_draw::SEED_READS,
+        &super::readonly_cli::READONLY_INPUT_READS,
+        &super::contained_resources::PACKAGE_LOCATOR_READS,
+    ],
+};
+
 pub(super) fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    #[cfg(test)]
+    flags.reading(&TAP_TARGET_READS);
     reject_legacy_session_routing(&flags)?;
     refuse_repeated_options(&flags, "tap-target", ONE_FRAME_REPEATS)?;
     let target = target_argument(&flags, "tap-target")?;
@@ -49,6 +90,8 @@ pub(super) fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutc
 
 pub(super) fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    #[cfg(test)]
+    flags.reading(&NAVIGATE_READS);
     reject_legacy_session_routing(&flags)?;
     refuse_repeated_options(&flags, "navigate", ONE_FRAME_REPEATS)?;
     let to = flags.required("--to")?;

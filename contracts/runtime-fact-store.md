@@ -458,8 +458,24 @@ the backend self-check facts (source `device-proxy` or `capture`).
   live path, and identical records append nothing, so replay never appends a
   record twice. A pair whose instance is no longer registered has no instance
   scope and keeps what the ledger holds. Any refusal while recording them
-  (stale, capacity, invalid, unknown instance) is fatal: the settlement is
-  already durable. They survive a takeover and emulator `stop`.
+  after a settlement (live, replayed or reconciled) is fatal: the settlement
+  is already durable. At the start's derivation (ISO-START-1, since 0.12.52,
+  `v012-register.md` §1.301) a refusal of one pair's facts is that pair's
+  alone, and the start goes on with the other pairs: a pair whose record the
+  store refuses before anything of it is appended (stale, invalid, over
+  capacity) or whose value does not fit is recorded once,
+  `policy_settlement_facts_skipped` (Warning, under the instance's links,
+  with the task, the instance alias, the refused key and its observation, the
+  refusal's code as `failure_code` and the refusal as the `caused_by` link,
+  which for `runtime_fact_stale` carries the stored record's observation),
+  and nothing more of the pair is written. A stale pair holds nothing: the
+  store holds a record of the key at least as new. Any other refused pair
+  pauses its instance with that code as the reason, after the persisted
+  pauses are restored and before any instance is prepared, as the start holds
+  the instance of a dispatch it could not settle. A fatal failure (the
+  ledger's append, a lock, the store and the ledger disagreeing, a failure
+  after a record's commit) still fails the start. They survive a takeover and
+  emulator `stop`.
   The key bound limits a catalog task id to 102 bytes (128 −
   `task.` − `.completed_at_unix_ms`); catalog activation, rollback and
   promotion refuse a catalog with a longer task id with
@@ -784,8 +800,10 @@ Contract: `runtime_fact_ledger_position_invalid`,
 `invalid_config_subsystem_name`, `invalid_config_parameter_key`. Host: `runtime_fact_stale`,
 `runtime_fact_capacity_exceeded`, `runtime_fact_missing`,
 `runtime_fact_instance_unknown`, `task_id_too_long_for_facts` (request class;
-a refusal while recording settlement facts is raised as fatal with the same
-code); `runtime_fact_store_desync`, `runtime_fact_replay_failed`,
+a refusal while recording settlement facts after a settlement is raised as
+fatal with the same code; at the start's derivation it is the refused pair's
+`failure_code` in `policy_settlement_facts_skipped`, warning, ISO-START-1);
+`runtime_fact_store_desync`, `runtime_fact_replay_failed`,
 `invalid_runtime_config_manifest`, `policy_settlement_instance_unknown`,
 `policy_settlement_missing`, `policy_settlement_fact_overflow`,
 `backend_selfcheck_instance_missing`, `backend_selfcheck_fact_overflow` (fatal);

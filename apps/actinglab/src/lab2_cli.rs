@@ -109,6 +109,10 @@ struct Lab2CommandContract {
 
 pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    // Workflow #434 LAB-5B3 (point 4): in test builds, every read of a flag the verb accepts is held
+    // to the form the register gives it.
+    #[cfg(test)]
+    flags.reading_forms("observe");
     let path = if flags.bool("--capture") {
         &OBSERVE_CAPTURE
     } else {
@@ -1918,6 +1922,8 @@ fn refuse_operation_conflicts(global: &GlobalOptions, flags: &FlagArgs) -> CliOu
 
 pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    #[cfg(test)]
+    flags.reading_forms("do");
     let dry_run = global.dry_run || flags.bool("--dry-run");
     // #411 Lab L1: online `do --capture` does not read the destructive guard flags.
     refuse_unread_flags(&flags, do_path(&flags, dry_run), &DO_PATHS)?;
@@ -2077,6 +2083,8 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
 
 pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    #[cfg(test)]
+    flags.reading_forms("ensure");
     let dry_run = global.dry_run || flags.bool("--dry-run");
     refuse_unread_flags(&flags, ensure_path(&flags, dry_run), &ENSURE_PATHS)?;
     let ids = Lab2Ids::new();
@@ -2166,6 +2174,8 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
 
 pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    #[cfg(test)]
+    flags.reading_forms("wait");
     let path = if flags.bool("--capture") {
         &WAIT_CAPTURE
     } else {

@@ -8990,6 +8990,146 @@ and `serve --stdio` answers as before.
 
 **LAB-5B2 rollback** (to the release before it). Nothing persisted: code only.
 
+#### Slice LAB-5B3 (0.12.52): each lenient command declares the flags it reads, held equal to its row
+
+Coordinator work order `rd-1108/arch-013/brief-lab5b3.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` §3 (kind T4), read against main `be1a963b` (LAB-5B2
+merged), which wins over the survey, and merged with main `c0edc8b2` (LAB-5G4a, LAB-5E), which
+changes no lenient command's reads, before the push. The coordinator's ruling (board #434, 6770034832 point 3):
+these 24 commands keep ignoring a flag they do not read in this round; making them refuse is a
+later slice. The rule of the slice: no command line changes what it accepts, refuses or prints.
+
+**The read lists** (`#[cfg(test)]` constants beside each command, none in the product build).
+Their types are `flag_args::reads::{FlagReads, ReadPart}`: a list names its row and is the union
+of its parts, each part the options (read for their value: `optional`, `values`, `required` and
+their path forms), the switches (read with `bool`) and the refused flags (read only to refuse
+them) of one path of the command or of a helper several commands share. Shared parts:
+`commands/device_commands.rs` `LEGACY_ROUTING_READS` (`--via-daemon`, `--local`, `--state-dir`,
+refused), `contained_resources.rs` `PACKAGE_LOCATOR_READS` (`--package`, `--zip`), `lab_draw.rs`
+`SEED_READS`, `readonly_cli.rs` `READONLY_INPUT_READS` (`--scene`, `--require-fresh`; `--capture`
+refused, so `--fresh-delay-ms` is never read there), `env_detection.rs` `ENV_MARKER_READS`,
+`commands/navigation_recovery.rs` `SCENE_READS`, `commands/session_record.rs`
+`RECORD_SESSION_READS` and `RECORD_BACKTEST_READS`.
+
+| Row | File (`apps/actinglab/src/`) | Constant | Per-path parts |
+|---|---|---|---|
+| `touch-probe` | `commands/device_commands.rs` | `TOUCH_PROBE_READS` (`--touch-backend` refused) | |
+| `recover` | `commands/navigation_recovery.rs` | `RECOVER_READS` | `RECOVER_PATH_READS`, `RECOVER_STALE_CAPTURE_READS`, `RECOVER_RESOURCE_READS`, `RECOVER_ROUTE_READS`, `RECOVER_STARTUP_LOGIN_READS` |
+| `locate` | `commands/navigation_recovery.rs` | `LOCATE_READS` | |
+| `tap-target`, `navigate` | `drive_cli.rs` | `TAP_TARGET_READS`, `NAVIGATE_READS` | |
+| `debug-package`, `export-evidence` | `runtime_debug.rs` | `DEBUG_PACKAGE_READS`, `EXPORT_EVIDENCE_READS` | |
+| `recognize-artifact`, `recognize`, `detect-page`, `current-page`, `is-visible` | `readonly_cli.rs` | `RECOGNIZE_ARTIFACT_READS`, `RECOGNIZE_READS`, `DETECT_PAGE_READS`, `CURRENT_PAGE_READS`, `IS_VISIBLE_READS` | |
+| `record start`, `status`, `candidates`, `amend`, `step` | `commands/session_record.rs` | `RECORD_START_READS`, `RECORD_STATUS_READS`, `RECORD_CANDIDATES_READS`, `RECORD_AMEND_READS`, `RECORD_STEP_READS` | amend: `RECORD_AMEND_STEP_READS`, `RECORD_AMEND_RESOURCE_READS`, `RECORD_AMEND_OPERATION_READS`; step by `--kind`: `RECORD_STEP_RESOURCE_READS`, `RECORD_STEP_OPERATION_READS` |
+| `package validate` | `package_cli.rs` | `VALIDATE_READS` | |
+| `package inspect`, `operation validate`, `inspect`, `explain` | `lab_package_control.rs` | `INSPECT_READS`, `OPERATION_VALIDATE_READS`, `OPERATION_INSPECT_READS`, `OPERATION_EXPLAIN_READS` | |
+| `package bundle` | `package_build.rs` | `BUNDLE_READS` | |
+| `resource compile-maa` | `maa_task_graph.rs` | `COMPILE_MAA_READS` (with `--repo`, which `run_resource` reads for every resource command) | |
+
+Global options a command reads through its flags are on its list (`--instance` of the record
+actions and the env markers, `--dry-run` of `recover`, `tap-target` and `navigate`, `--game` and
+`--server` of `record start` and the env markers, `--touch-backend` refused): actinglab's parser
+takes them first, so these reads see nothing on the command line, and the command reads the global
+option.
+
+**The test-only recording** (`flag_args.rs`, module `reads`). A command declares its list where it
+starts, right after it parses its flags (`FlagArgs::reading`; the dispatchers of `record`,
+`package`, `operation` and `resource` by subcommand, before their first read; `package` and
+`operation` through the test-only `hold_package_reads` and `hold_operation_reads` of
+`lab_package_control.rs`). From then on every
+read of those flags and of every copy of them (`bool`, `optional`, `values`, `count`, the new
+`given`, and the readers built on them) is recorded on the reading thread (`reads::take`), and a
+read of a name the list does not hold, or in the form the list does not give it (a switch read for
+its value, an option read with `bool`), panics with the row and the name, failing the test. A
+refused flag may be read in any form. Flags no command declared for (the global gates' own parse,
+`FlagArgs::default()`, the helpers' tests) are not held. `FlagArgs::from_parts` builds flags the
+code makes itself (the input relay's action, `resource verify`'s preflight); the struct literal is
+gone. In the product build `FlagArgs` has no such field and reads as before.
+
+**Fix round 1 (the command inventory guard).** `hold_package_reads` and `hold_operation_reads`
+are functions of their own, not a test-only match in the dispatcher: the guard
+`command_inventory_matches_checked_in_snapshot` takes the first match on the subcommand in a
+group's dispatcher for its dispatch, and such a match read `package` with 5 of its 10
+subcommands and `operation` with 3 of its 4 (94 commands, not 100). No command a person can type
+moved; `ratchet/actinglab_commands.json` is unchanged.
+
+**Work order point 4.** `FlagArgs::reading_forms(row)` holds a strict command to the forms the
+register gives its flags (`own_flags::accepted`): a flag the register lists as taking a value read
+with `bool`, or a switch read for its value, fails; a name off its list is left to the command's
+own refusal. It is declared by `observe`, `do`, `ensure`, `wait` (checking `LAB2_SWITCHES`),
+`package fmt` (`--check`) and `package loading` (`LOADING_SWITCHES`), so their existing tests
+check those switch lists. `RECORD_MARK_SWITCHES` and `record stop --dry-run` cannot be checked so:
+`record_flag_switch` reads a switch with `values`.
+
+**The register.** `cli_module::own_flags::reads(row)` answers for exactly the lenient rows: the
+list, its options, switches and refused flags, the option the first positional stands in for
+(`tap-target` and `is-visible` `--target`, `locate` `--template`, `record candidates` and `record
+amend` `--step-id`) and the count of positionals the code checks (exactly none for `touch-probe`,
+`debug-package` and `export-evidence`; no count for the others, `recover --stale-capture` exactly
+none on its own path only).
+
+**Reads outside `FlagArgs`'s readers** (work order, fail loud). `package bundle`
+(`--maintenance`, `--source-repository`, `--source-commit`, the root files) and `record amend`
+(`--threshold`) asked the flag map itself whether a flag was given: they read it through the new
+`FlagArgs::given` now, the same answer, so the recording sees it. `main.rs`'s
+`record_flag_gate` and `retired_digest_flag_gate` read the raw words of every command line, to
+refuse `--record` and `--tap-rect` outside their commands and the retired digest flags; they are
+refusals common to every command and on no list. `refuse_repeated_options` and `record amend
+--from-drift-diagnostics`'s own list (`reject_direct_drift_amend_flags`) look at every flag given,
+by no name; that list lets `--holder`, `--lease-holder` and `--lease-id` through, which amend never
+reads.
+
+**Corrections of the table (work order point 6; the table follows the code).** Each makes the row
+say what its command already reads; on the command line nothing changes (`recover` hands every
+further flag on, and the record actions are actinglab's own words), and `serve --stdio` now takes
+these parameters and hands them on:
+
+| # | Row | Added | The code that reads it |
+|---|---|---|---|
+| L5B3-1 | `recover` | `env_task` (option, string) | `env_detection::resolve_env_markers_in_value`, on the maintenance route's pack |
+| L5B3-2 | `recover` | `game`, `server` (options, string; actinglab's global options) | the same, and the route's resources by `--game`/`--server` |
+| L5B3-3 | `record step` | `metric` (option, `enum:ccorr_normed\|ccoeff_normed`, default `ccorr_normed`), `duration_ms` (option, integer) | the backtest of a resource step's frame (`parse_match_metric_flag`); an operation's swipe or long press (`parse_record_duration_ms`) |
+| L5B3-4 | `record amend` | `metric` (as step's), `negative_frame` (option, file) | the backtest of the amended step's frame; `read_session_record_contrast_frame` when `contrast_frame` is absent |
+
+No row promised a flag its command never reads.
+
+**What the tests reach** (work order point 5). Existing in-process tests reach the reads of 16
+commands: `recover`, `tap-target`, `navigate`, `recognize-artifact`, the five record actions,
+`package validate`, `package bundle`, `recognize`, `detect-page`, `current-page`, `is-visible`,
+`locate`. No test reached the other 8 through the place their list is declared (`touch-probe`,
+`debug-package`, `export-evidence`, `package inspect`, `resource compile-maa`, whose tests call
+its inner function directly, `operation validate`, `inspect`, `explain`):
+`every_lenient_command_reads_through_its_list` runs each of them, as every lenient command, on a
+command line refused (or, `record status`, answered) before any Runtime connection, and reaches
+all of their reads. No list rests on reading alone; within the reached commands, reads behind a
+condition no test takes rest on reading: `recover`'s `--pack-root` and `--pages` (with `--pack`)
+and the freshness of a capture, `navigate`'s step timing (only when it presses), `locate`'s
+capture flags.
+
+**Tests.** New: apps row "#434 LAB-5B3": `gate_434_lab5b3::lenient_rows_match_their_reads` (for
+each lenient row, in both directions: every option and switch the row declares, but actinglab's
+global options, is on its list in the same form; every option and switch of the list is declared
+by the row in the same form, a global option in any form; no refused flag is a parameter of the
+row; the option the first positional stands in for is an option of the row; the row's
+positionals, the instance not among them, fit the count the command checks; the register answers
+for exactly the lenient rows, each list naming its row; a failure names the row, the flag and the
+direction), `gate_434_lab5b3::a_held_read_outside_its_list_fails` (the recording itself, and a
+strict row held to its register's forms) and
+`gate_434_lab5b3::every_lenient_command_reads_through_its_list`. LAB-5B2's helpers `flag`,
+`global` and `row_positionals` are `pub(super)` for the new file; its two tests are unchanged.
+Every existing test now also fails on an undeclared read.
+
+**Interface.** None raised. No type, member, code, key or location is added; the table gains the
+parameters of L5B3-1 to L5B3-4.
+
+**Left to other slices.** Making the 24 commands refuse a flag their list does not hold (the
+coordinator's ruling: a later slice); B1, C, E, F, G as their work orders say.
+
+**What LAB-5B3 changes live.** No command line accepts, refuses or prints anything new; `serve
+--stdio` takes the parameters L5B3-1 to L5B3-4 add and hands them to the command, which reads them
+as it reads them from the command line.
+
+**LAB-5B3 rollback** (to the release before it). Nothing persisted: code and the table only.
+
 #### Slice LAB-5G4a (0.12.52): `serve --stdio --front mcp` records `Lab-MCP`; `serve` refuses values that begin with `--`
 
 Coordinator work order `rd-1108/arch-013/brief-lab5g4a.md`, after the read-only survey
@@ -10391,10 +10531,14 @@ records, followed by a start of v0.12.50. That start's re-alignment commits the 
 under its older rule, as the pair's latest failure, and its value record then names the late
 dispatch as the pair's latest completed one (by completion order; alone, for a task outside the
 remedy journal). That start starts. In R the start after it fails with `runtime_fact_stale`,
-which is fatal, on either version: it loads only the late run and records that run's settlement
-facts over the later run's newer ones; only a run the pair completes in between avoids it. In N
-it does not fail. Hence the operating rule: after a deploy of 0.12.51, do not go back to v0.12.50
-before one start of 0.12.51 has completed after the settlement.
+which is fatal, on v0.12.50 and 0.12.51: it loads only the late run and records that run's
+settlement facts over the later run's newer ones; only a run the pair completes in between
+avoids it. In N it does not fail. Hence the operating rule: after a deploy of 0.12.51, do not go
+back to v0.12.50 before one start of 0.12.51 has completed after the settlement. From 0.12.52
+(ISO-START-1, §1.301) a start of 0.12.52 or later in that place starts: it records the pair's
+refused record once (`policy_settlement_facts_skipped`, Warning, `failure_code`
+`runtime_fact_stale`), keeps the later run's newer facts, writes none of the late run's and
+holds nothing; a start of v0.12.50 or 0.12.51 there still fails.
 
 **The online path.** The changed check also serves the online settlement of abandoned and inactive
 runs (`reconcile_scheduled_policy_outcomes_for` with no start, #427-A). A run with its own
@@ -10434,9 +10578,10 @@ a task that declares a remedy or provides a capability when the pair ran since: 
 reads the late run as the pair's latest, and the pair's outcome key is missing until the pair's
 next completion. The edge: a settling start of 0.12.51 cut after the settlement and before its
 value records, followed by a start of v0.12.50: that start starts, and when the pair ran since,
-the start after it fails with `runtime_fact_stale`, on either version, unless the pair completed
-a run in between. Operating rule: after a deploy of 0.12.51, do not go back to v0.12.50 before
-one start of 0.12.51 has completed after the settlement.
+the start after it fails with `runtime_fact_stale`, on v0.12.50 and 0.12.51 (a start of 0.12.52
+or later records the pair's skip and starts, §1.301), unless the pair completed a run in
+between. Operating rule: after a deploy of 0.12.51, do not go back to v0.12.50 before one start
+of 0.12.51 has completed after the settlement.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -10835,6 +10980,137 @@ the capacity, data the pack or a person sets).
 `schedule.json` writes the members or a person or an agent sets an instance's lines, except
 SCHED-C1d: a valued pool's episode then survives a start, a generation and an unknown reading (no
 production pool is valued today).
+
+### 1.301 Slice ISO-START-1 (0.12.52): one pair's refused settlement fact no longer stops the start (#419; Alice's requirement on board #419 of 10-24: one emulator's fault must not bring down the whole Runtime; the debt the coordinator logged on 11-11, #421 6774483473 and #428 6770731970: isolate only that pair; the coordinator's ruling on the three cases, not Alice's words: coordinator work order `rd-1111/brief-iso-start-1.md`)
+
+[runtime-fact-store.md](runtime-fact-store.md) ("Settlement facts" and "Typed codes") and the
+catalog entries of `policy_settlement_facts_skipped` and `runtime_fact_stale` are the contract.
+1.301 is this slice's number, after SCHED-C1's section on main `09a615f3` (PR #1582) and 1.300,
+which the open INST-5 (PR #1584) takes. No persisted ledger shape, wire shape, configuration key,
+location or vocabulary is new or changed; one outcome code is new, and one pending code gains an
+optional value.
+
+**Why.** Once per start the host derives the four settlement facts (Workflow #308 slice 5b) of
+every registered (task, instance) pair again (`record_policy_settlement_facts_on_start`, after
+the standard packs are registered). It wrote each pair through the live path's
+`record_policy_settlement_facts`, which turns every refusal fatal ("the settlement itself is
+already durable"), so one pair whose record the store refused (`precheck_runtime_fact`: an older
+or equal observation is `runtime_fact_stale`) failed the start of the whole Runtime, for every
+instance. UNSET-2 (§1.296) names such a start: after its rollback edge, the start derives a
+pair's facts from the late run over the later run's newer ones and fails with
+`runtime_fact_stale`.
+
+**What changed: the three cases.** The start's derivation writes each pair with the records and
+in the order of the live path (`settlement_fact_records`, which both paths now share:
+`last_duration_ms`, `last_outcome`, `failure_streak`, `completed_at_unix_ms`, instance scope,
+source `policy`, no lifetime, observed at the settlement time) and decides per pair
+(`HostShared::record_start_settlement_facts` and `record_policy_settlement_facts_on_start`,
+`crates/runtime-host/src/host/runtime_facts.rs`):
+
+1. **Stale.** The store refuses a record of the pair as `runtime_fact_stale`: it holds a record
+   of that key observed at the settlement time or later, so nothing is lost by not writing. The
+   start writes nothing more of the pair, records one Warning `runtime.failed`
+   `policy_settlement_facts_skipped` (below) with `failure_code` `runtime_fact_stale`, holds
+   nothing and goes on with the next pair and the rest of its steps.
+2. **Another refusal of the pair alone.** A value that does not fit an integer fact
+   (`policy_settlement_fact_overflow`, decided before the pair's first record, as on the live
+   path) or the store's refusal of one record before anything of it is appended (a key it cannot
+   form, `invalid_runtime_fact_key`, `runtime_fact_family_unknown`; a full store,
+   `runtime_fact_capacity_exceeded`; an unregistered instance scope,
+   `runtime_fact_instance_unknown`, which the start's own check of the instance leaves
+   unreachable). The start writes nothing more of the pair, records the same Warning with that
+   code as `failure_code`, and holds the pair's instance (below); the other instances start.
+3. **A fault of no one pair.** A fatal failure of the write (the ledger's append, a lock, the
+   store and the ledger disagreeing, `runtime_fact_store_desync`), and a request-class failure
+   after a record's commit (the store holds the record after all: a failure of the instance fact
+   store's synchronization behind the write, which every later write meets too), fails the start
+   as before: the error, made fatal, is latched and returned.
+
+**How the code tells case 2 from case 3.** By the failure's class and the store's state after it.
+A fatal failure is case 3. A request-class failure is the store's refusal of that one record (its
+rules are applied, `precheck_runtime_fact`, under the fact write gate before the record is
+appended), so case 1 or 2 by its code, unless the store holds exactly that record afterwards, in
+which case the failure came after the commit and is case 3. Only a failure that would also break
+every other pair's write is case 3.
+
+**The record.** `runtime.failed` (an existing record; `DiagnosticCode::RuntimeDiagnostic`, effect
+`not_performed`, the diagnostic detail of the start's settlement records: `policy_settlement`,
+stage `runtime_lifecycle_policy_initialization`), Warning, under the instance's links (system links with the
+registered instance), once per refused pair and start, written at the pair's place in the step:
+`operation` `record_policy_settlement_facts`, `task_id` the pair's catalog task, `instance_id`
+the instance alias, `fact_key` the refused record's key, `observed_at_unix_ms` its observation
+(the settlement time), `failure_code` the refusal's code, and the refusal as the `caused_by`
+link; for `runtime_fact_stale` that link carries `observed_at_unix_ms`, the observation of the
+record the store holds for the key. It is handed to the daemon's log as a warning too, and the
+ledger's event reads (`actingctl events`, the MCP's `ac_events`) show it under the instance.
+
+**The hold (case 2).** The start's existing hold of an instance it cannot make ready to schedule:
+the hold of an instance whose dispatch the start could not settle (Workflow #369 E3,
+`hold_unsettled_dispatches` through `hold_instance_pause_at_start`). It fits because the cause is
+the same kind: the pair's settled state is missing from what the scheduler reads (its settlement
+facts), and a rule that reads them would decide without them. It is a persisted instance pause
+(`host.scheduling_pause`, stage `released`), with `policy_settlement_facts_skipped` as its reason,
+taken right after the unsettled dispatches' holds (after the persisted pauses are restored, before
+any instance is prepared; the daemon-start preparation then leaves the instance unprepared), once
+per instance, unless the instance is paused already (that pause stays as it is). The status read
+shows it as the instance's `pause` with that reason. A person lifts it after looking (`actingctl
+resume`). No new kind of hold. The refusal is not persisted, so a later start that meets the same
+refusal records it and holds the instance again, as E3 did before UNSET-1.
+
+**What stays.** For every pair that passes, the start writes the records main writes, byte for
+byte, in main's order, and appends nothing for a stored identical record. The live path
+(`record_policy_settlement_facts`: a live settlement, a replayed completion, the reconciliation
+tick) keeps "any refusal is fatal". The order of the start's steps stays; the hold is one step
+added after `hold_unsettled_dispatches`. UNSET-2's behaviour (which dispatches are settled, with
+which values) is unchanged.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): `ledger`: a
+new code of an existing record (the reader checks a code's spelling, never whether it is
+registered), a new optional value of a pending code on a link, and a pause row whose reason is a
+name; `runtime-outcomes`: one new code and one optional key of an existing pending code, in the
+catalog only; `runtime-client` and the protocol: no request kind, no member; no configuration
+key.
+
+**What an operator sees after deploy.** Ordinarily nothing: every pair's facts derive as before
+and no record is new. After the UNSET-2 rollback edge (§1.296) a start of 0.12.52 or later
+records one Warning `policy_settlement_facts_skipped` (`failure_code` `runtime_fact_stale`, the
+pair's task, instance and key) in the ledger and as a `WARN actingd:` line, and starts; the
+pair's newer facts stand and nothing is paused. A pair refused for another reason gives the same
+Warning with its own code, and its instance shows a scheduling pause with reason
+`policy_settlement_facts_skipped` in `actingctl status` and `ac_overview`, while every other
+instance runs. A ledger or store fault fails the start as before.
+
+**Rollback** (below 0.12.52). A start of 0.12.51 or earlier fails again at a refused pair (every
+refusal is fatal there, `runtime_fact_stale` included). A pause with reason
+`policy_settlement_facts_skipped` that 0.12.52 persisted is restored by an earlier build as any
+instance pause and lifted by a person's resume; an earlier build reads the new records as a code
+it does not act on. Nothing else to undo.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ISOS1-1 | `runtime.failed` with `policy_settlement_facts_skipped` (warning, `none`; `failure_code`, `fact_key`, `instance_id`, `observed_at_unix_ms`, `task_id`, `operation`) | new code of an existing record (host gate row "#419 ISO-START-1") | ISO-START-1 | ISO-START-1 | `since` 0.12.52; once per refused pair and start, under the instance's links |
+| ISOS1-2 | `runtime_fact_stale` with the optional value `observed_at_unix_ms` | optional key of a pending code (catalog only) | ISO-START-1 | ISO-START-1 | only as the `caused_by` link of ISOS1-1: the observation of the record the store holds |
+| ISOS1-3 | the start's derivation of the settlement facts: a refusal of one pair is that pair's alone (`record_policy_settlement_facts_on_start`, `record_start_settlement_facts`) | rule (no shape; corrects [runtime-fact-store.md](runtime-fact-store.md), "Settlement facts") | ISO-START-1 | — | the live path stays fatal; a fault of no one pair stays fatal at start |
+| ISOS1-4 | the start's instance pause with reason `policy_settlement_facts_skipped` (`hold_skipped_settlement_fact_instances`, through E3's `hold_instance_pause_at_start`) | rule (the existing pause row; a reason is a name) | ISO-START-1 | ISO-START-1 | case 2 only; after `hold_unsettled_dispatches`; an instance paused already keeps its pause |
+
+Tests (host gate row "#419 ISO-START-1", `gate_419_iso_start1`):
+`iso_start1_a_stale_pair_is_skipped_once_and_the_two_others_are_written` (three pairs, the
+stale one between the two others; a later run's record of its first key, newer than its
+settlement, written by the first start; the restart completes with no host fault, writes the two
+others' facts as main writes them, keeps the newer record, writes none of the stale pair's,
+records the skip once with `runtime_fact_stale`, the key and both observations, and holds
+nothing); `iso_start1_a_pair_refused_for_its_own_reason_holds_only_its_instance` (A's pair names
+a catalog task of 128 bytes, so the store cannot form its keys, `invalid_runtime_fact_key`; A is
+held with `policy_settlement_facts_skipped` in the status read, its pair recorded once and none
+of its records written; B's pair is written as main writes it and B is not held); and
+`iso_start1_a_store_that_cannot_be_written_still_fails_the_start` (the step's first write fails
+as an append the ledger cannot make; the start fails with `ledger_failure`, fatal). The pairs come
+from settlements a test-only hook adds to the step after the recovered ones
+(`START_SETTLEMENT_FACTS_FOR_TEST`; a pair with no dispatch in the ledger), and test 3's append
+failure is injected at the step; the refusals of tests 1 and 2 are the store's own. Two test-only
+helpers write and read the Runtime's fact store (`record_runtime_fact_for_test`,
+`runtime_fact_for_test`). No existing test changed: main had no test that pinned "any refusal is
+fatal" at the start, nor a start whose settlement-fact write failed.
 
 ### 1.302 Slice R-6, first slice (0.12.52): `StopInstanceRun` stops a client's direct run and the Runtime resets the device itself (Workflow #429 A.2 contract point 2 and the slice row R-6, board #429 6535257381; the desktop program's "close this task" button is disabled because the Runtime answered `not_implemented`, and a run the scheduler started could not be stopped from the Lab or MCP at all; the coordinator's choice of 11-11, option C, not Alice's words: this slice stops direct runs only and refuses a policy run with `run_origin` until `ledger` 8; coordinator work order `rd-1111/brief-r6.md`, read on main `c0edc8b2`)
 
