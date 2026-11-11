@@ -53,9 +53,12 @@ actingcommand_contract::outcome_vocabulary! {
         ListPositionUnread => "list_position_unread",
         /// Workflow #428 S168-4: two positions of a list read the same business ID.
         ListDuplicateKey => "list_duplicate_key",
-        /// Workflow #428 S168-4: a list showed more positions than one fact holds (256); its
-        /// scan stopped at the 257th.
+        /// Workflow #428 S168-4: a list showed more positions than one fact holds; its scan
+        /// stopped there. Since S168-LB1a (0.12.55) the bound is 1024, so at the 1025th.
         ListRowsExceeded => "list_rows_exceeded",
+        /// Workflow #428 S168-LB1a (since 0.12.55): a list read whole, within the row bound,
+        /// whose record is larger than one observation holds (512 KiB); nothing is cut to fit.
+        ListBytesExceeded => "list_bytes_exceeded",
     }
 }
 

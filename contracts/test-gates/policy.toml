@@ -1310,6 +1310,15 @@ tests = [
 ]
 incident = ["#428 S168-5a"]
 
+# Workflow #428 S168-LB1a (0.12.55; register §1.309 row LB1-4, §1.311; brief rd-1111/brief-s168-lb1a.md; contracts/scheduling/README.md, "Record lists and the projection"): on the neutral example catalog declared V2, a member that names a key under inventory.list. to read is refused type_mismatch at its key, one case per place: a fact predicate, a record_deadline predicate, a fact reference, a pool's ledger key, a pool's fact reference (capacity), a consumption read from a fact and a fact the selection document declares (/facts/0/fact_key); the same member of another key is not refused there; a timeline event that invalidates inventory.list. compiles, and so does the example
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_428_s168_lb1a::lb1a_a_catalog_that_names_a_list_key_to_read_is_refused_at_its_key",
+    "actingcommand-policy::lib::tests::gate_428_s168_lb1a::lb1a_a_timeline_prefix_under_the_list_prefix_is_not_refused",
+]
+incident = ["#428 S168-LB1a"]
+
 # Workflow #428 S168-LB1b (register §1.309 rows LB1-7 to LB1-11, §1.312; contracts/selection-policy.md, "Lower bound of a list maximum"; since 0.12.55): table_max_over_list's optional lower_bound_column, a declared integer column other than value_column (dangling_reference, type_mismatch, table_mismatch column_absent and column_type at their places); without it a document keeps its bytes and its identity and reads and decides as S168-5a's; with it the read is exact M, at least L (from a known value, a bound or both) or Unknown lookup_miss only when nothing of the class is known, empty staying exact; integer_compare settled only where every value of [L, +∞) agrees on both sides (mul and add on the right), ne included, two at-least sides settling nothing; threshold at L, identity taking L; the upper bound over the range; the reason's keys bound, unknown_count, lower_bound and lower_bound_identity only for a reference that opts in; selection_decided_on_lower_bound once before the outcome's reasons and never on an unknown evaluation; a reference denies a member it does not know, which is how a package 8 reader refuses the member
 [[gate]]
 coverage = "Y"

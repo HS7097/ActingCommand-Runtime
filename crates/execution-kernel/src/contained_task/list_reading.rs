@@ -16,10 +16,13 @@
 //!   `linear_steps` task refuses the step with `contained_task_linear_invalid`, `reason=read_list`.
 //! - **The read.** The scan session of a select over a scan, its steps 1 and 2, with no policy:
 //!   each position's first complete reading (its identity and every declared column's feature
-//!   Known) is one row. A position read but never fixed, two positions of one key, or a 257th
-//!   position is a miss: the warning `contained_task_resource_reading_unresolved` with its
-//!   `reading_problem` and `count`, and no list. A failure of the scan itself ends the run with its
-//!   code at the stage `read_list`.
+//!   Known) is one row. A position read but never fixed, two positions of one key, or a position
+//!   past `MAX_LIST_READING_ROWS` (the 1025th since S168-LB1a, 0.12.55) is a miss: the warning
+//!   `contained_task_resource_reading_unresolved` with its `reading_problem` and `count`, and no
+//!   list. A failure of the scan itself ends the run with its code at the stage `read_list`.
+//!   S168-LB1a: a list read whole whose record is larger than one observation holds is the miss
+//!   `list_bytes_exceeded`, which the host finds when it takes the list (it alone knows the
+//!   record the run's end would publish).
 //! - **The traces.** When the end check passes the step records [`ContainedTaskTrace::
 //!   ListReadingFrame`] for the frame captured last; the step then records one
 //!   [`ContainedTaskTrace::ListReading`], the list whole or its miss, which the host publishes at

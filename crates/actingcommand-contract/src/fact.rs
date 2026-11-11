@@ -10,7 +10,14 @@ use std::path::Path;
 
 const MAX_FACT_KEY_BYTES: usize = 192;
 const MAX_FACT_TEXT_BYTES: usize = 1_024;
+/// The records of one observation, of an `InstanceFactSnapshot` and of an `InstanceFactView`.
 const MAX_FACT_RECORDS: usize = 256;
+/// Workflow #428 S168-LB1a (since 0.12.55; `contracts/instance-fact-store.md`, "List reading
+/// facts", "Row bound"): the rows of one `record_list` fact, a bound of its own apart from
+/// `MAX_FACT_RECORDS`, checked by every reader of a record (`FactValue::validate`). It is the
+/// format's, not a configuration key: a configured value would let one build write a record that
+/// another refuses.
+pub const MAX_FACT_RECORD_LIST_ROWS: usize = 1_024;
 const MAX_FACT_RECORD_FIELDS: usize = 64;
 const MAX_INVALIDATION_EVENTS: usize = 32;
 pub const MIN_FACT_TTL_MS: u64 = 1;
@@ -614,7 +621,7 @@ impl FactValue {
         match self {
             Self::String(value) => validate_text(value, "fact_value"),
             Self::RecordList(records) => {
-                if records.len() > MAX_FACT_RECORDS {
+                if records.len() > MAX_FACT_RECORD_LIST_ROWS {
                     return Err(SanitizationError::new(
                         SanitizationCode::FactRecordLimitExceeded,
                         "fact_value",
@@ -843,6 +850,18 @@ pub(crate) fn validate_fact_key(value: &str) -> Result<(), SanitizationError> {
     validate_token(value, "fact_key")
 }
 
+/// Workflow #428 S168-LB1a: the `key_prefix` of an `InstanceFactSnapshot` request, the start of an
+/// instance fact key: not empty, at most a key's 192 bytes, no control character.
+pub(crate) fn validate_fact_key_prefix(value: &str) -> Result<(), SanitizationError> {
+    if value.is_empty() || value.len() > MAX_FACT_KEY_BYTES || value.chars().any(char::is_control) {
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidFactKey,
+            "key_prefix",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_token(value: &str, field: &'static str) -> Result<(), SanitizationError> {
     if value.is_empty() || value.len() > MAX_FACT_TEXT_BYTES || value.chars().any(char::is_control)
     {
@@ -884,6 +903,12 @@ fn path_safe_string(value: &str) -> bool {
         && !value.contains("..")
         && !Path::new(value).is_absolute()
 }
+
+// Workflow #428 S168-LB1a: the row bound of a record list, the records' bound and the instance fact
+// read's new members.
+#[cfg(test)]
+#[path = "fact/gate_428_s168_lb1a.rs"]
+mod gate_428_s168_lb1a;
 
 #[cfg(test)]
 mod tests {

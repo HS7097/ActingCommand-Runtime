@@ -150,4 +150,7 @@ mod tests {
     // #428 SS-4b (0.12.55; register §1.310): a no-progress guard holds its pair only while the
     // pair is due for the cause the guard served.
     mod gate_ss4b;
+    // #428 S168-LB1a (0.12.55; register §1.309 LB1-4, §1.311): a catalog that names a key under
+    // `inventory.list.` to read is refused at compile.
+    mod gate_428_s168_lb1a;
 }

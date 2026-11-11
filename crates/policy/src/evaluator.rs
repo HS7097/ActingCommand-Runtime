@@ -97,6 +97,12 @@ pub const MAX_EVALUATION_INSTANCES: usize = 1_024;
 pub const MAX_EVALUATION_POOLS: usize = 4_096;
 pub const MAX_EVALUATION_HOSTS: usize = 1_024;
 pub const MAX_EVALUATION_PRIORITY_OFFSETS: usize = 16_384;
+/// The rows of a record list the evaluation's input may hold, the policy's own bound, and the
+/// catalog schema's `maxItems` of a predicate's `record_list` value. Workflow #428 S168-LB1a
+/// (since 0.12.55; `contracts/scheduling/README.md`, "Record lists and the projection"): it stays
+/// 256 while the fact store holds record lists of up to 1024 rows; the Runtime's projection leaves
+/// a longer record out ([`LeftOutFacts`]), so an input that holds one is still refused whole.
+pub const MAX_OBSERVED_RECORD_LIST_ROWS: usize = 256;
 /// Longest last-run duration accepted as evaluation input: one day.
 pub const MAX_TASK_LAST_DURATION_MS: u64 = 86_400_000;
 /// Longest failure streak accepted as evaluation input.
@@ -217,6 +223,41 @@ pub struct EvaluationFacts {
     /// Manual priority offsets; absent in older planning documents and fixtures.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub priority_offsets: Vec<PriorityOffset>,
+}
+
+/// Workflow #428 S168-LB1a (since 0.12.55; `contracts/instance-fact-store.md`, "Left out of the
+/// projection"): the instance facts the Runtime's projection left out of an evaluation's input for
+/// their record list's rows, more than [`MAX_OBSERVED_RECORD_LIST_ROWS`]: per instance alias, the
+/// keys left out for it (an instance record's own instance; every instance of a server or game
+/// record's server or game). A predicate or a document that reads such a key reads it as missing
+/// (`fact_missing`), and the key raises no fact refresh demand on that instance: a reading cannot
+/// shorten a list, so a refresh would be asked for at every evaluation and never served. Memory
+/// only: none of it enters a snapshot or decision identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LeftOutFacts {
+    keys: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl LeftOutFacts {
+    /// Notes `fact_key` as left out for the instance `instance_id`.
+    pub fn insert(&mut self, instance_id: &str, fact_key: &str) {
+        self.keys
+            .entry(instance_id.to_owned())
+            .or_default()
+            .insert(fact_key.to_owned());
+    }
+
+    /// Whether `fact_key` was left out for the instance `instance_id`.
+    pub fn covers(&self, instance_id: &str, fact_key: &str) -> bool {
+        self.keys
+            .get(instance_id)
+            .is_some_and(|keys| keys.contains(fact_key))
+    }
+
+    /// Whether nothing was left out.
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1116,6 +1157,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         &NoProgressGuards::default(),
         &mut CappedMemory::default(),
         &InstancePoolLines::default(),
+        &LeftOutFacts::default(),
         eligibility,
     )
 }
@@ -1153,6 +1195,7 @@ pub fn evaluate_with_fact_refresh<E: From<PolicyEvaluationError>>(
         &NoProgressGuards::default(),
         &mut CappedMemory::default(),
         &InstancePoolLines::default(),
+        &LeftOutFacts::default(),
         eligibility,
     )
 }
@@ -1196,6 +1239,7 @@ pub fn evaluate_with_remedies<E: From<PolicyEvaluationError>>(
         &NoProgressGuards::default(),
         &mut CappedMemory::default(),
         &InstancePoolLines::default(),
+        &LeftOutFacts::default(),
         eligibility,
     )
 }
@@ -1487,6 +1531,57 @@ pub fn evaluate_with_instance_lines<E: From<PolicyEvaluationError>>(
     no_progress: &NoProgressGuards,
     capped: &mut CappedMemory,
     instance_lines: &InstancePoolLines,
+    entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    evaluate_with_left_out_facts(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        fact_refresh,
+        remedies,
+        chain_handover,
+        run_slots,
+        owed_reruns,
+        instance_holds,
+        no_progress,
+        capped,
+        instance_lines,
+        &LeftOutFacts::default(),
+        entry_holds,
+        eligibility,
+    )
+}
+
+/// Workflow #428 S168-LB1a (since 0.12.55; `contracts/instance-fact-store.md`, "Left out of the
+/// projection"): `evaluate_with_instance_lines` with the instance facts the Runtime's projection
+/// left out of `facts` for their record list's rows ([`LeftOutFacts`]). A predicate, a pool or a
+/// document that reads such a key on its instance reads it as missing, as before, but the key
+/// raises no fact refresh demand there: the candidate keeps the reason its unknown read gives
+/// (`trigger_unknown`, `feedback_stop_unknown`, `selection_input_unknown`), with no
+/// `fact_refresh_*` reason, and the instance's reader is not asked for it. With nothing left out
+/// the evaluation is the one `evaluate_with_instance_lines` gives.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_with_left_out_facts<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    fact_refresh: &FactRefreshInputs,
+    remedies: &RemedyPlan,
+    chain_handover: &ChainHandoverInputs,
+    run_slots: &RunSlots,
+    owed_reruns: &OwedReruns,
+    instance_holds: &InstanceHolds,
+    no_progress: &NoProgressGuards,
+    capped: &mut CappedMemory,
+    instance_lines: &InstancePoolLines,
+    left_out: &LeftOutFacts,
     mut entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
     eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
@@ -1507,6 +1602,7 @@ pub fn evaluate_with_instance_lines<E: From<PolicyEvaluationError>>(
         no_progress,
         capped,
         instance_lines,
+        left_out,
         eligibility,
     )
 }
@@ -1528,6 +1624,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     no_progress: &NoProgressGuards,
     capped: &mut CappedMemory,
     instance_lines: &InstancePoolLines,
+    left_out: &LeftOutFacts,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
@@ -1654,6 +1751,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         turns: &turns,
         instance_lines,
         amounts: &amounts,
+        left_out,
     };
     let mut work = Vec::new();
     let mut candidates = Vec::new();
@@ -3430,6 +3528,9 @@ struct PlacementContext<'a> {
     /// #428 SCHED-C1f1 (register §1.303 SC1F-2): the amounts in effect of the consumptions read
     /// from a fact, resolved once for the evaluation ([`consumption::resolve`]).
     amounts: &'a ConsumptionAmounts,
+    /// #428 S168-LB1a: the keys the Runtime's projection left out for each instance; they raise
+    /// no fact refresh demand ([`LeftOutFacts`]). None outside the Runtime's cycle.
+    left_out: &'a LeftOutFacts,
 }
 
 impl PlacementContext<'_> {
@@ -4049,7 +4150,14 @@ fn apply_priority_selection(
         BTreeMap::new()
     };
     let scores = match policy {
-        Some(policy) => score_candidates(policy, facts, time, &candidates, &reserves)?,
+        Some(policy) => score_candidates(
+            policy,
+            facts,
+            time,
+            &candidates,
+            &reserves,
+            context.left_out,
+        )?,
         None => vec![None; candidates.len()],
     };
     let mut ranked = Vec::with_capacity(candidates.len());
@@ -4685,6 +4793,7 @@ fn score_candidates(
     time: EvaluationTime,
     candidates: &[PlacementCandidate],
     reserves: &BTreeMap<usize, Vec<crate::resource_targets::ReserveView>>,
+    left_out: &LeftOutFacts,
 ) -> PolicyEvaluationResult<Vec<Option<CandidateScore>>> {
     let mut by_instance: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     for (index, candidate) in candidates.iter().enumerate() {
@@ -4767,7 +4876,7 @@ fn score_candidates(
                     known_until_unix_ms,
                 },
                 CollectedVerdict::Unknown { inputs } => {
-                    unknown_inputs(instance_id, inputs, &projection.expired_fields)
+                    unknown_inputs(instance_id, inputs, &projection.expired_fields, left_out)
                 }
             });
         }
@@ -4788,10 +4897,14 @@ pub(crate) const REALISTIC_FACT_PREFIXES: [&str; 2] = ["resource.", "inventory."
 /// 2. otherwise every unknown key, once, with the rule that read it first, for the fact refresh
 ///    (D2-S4) or, without it, for `fact_refresh_unbound` with no reader problem (D2-S1,
 ///    decision D6).
+///
+/// #428 S168-LB1a: a key the Runtime's projection left out for the instance (`left_out`) is no
+/// realistic input: a reading cannot shorten its list, so it takes row 1.
 fn unknown_inputs(
     instance_id: &str,
     inputs: &[UnknownInput],
     expired_fields: &BTreeSet<String>,
+    left_out: &LeftOutFacts,
 ) -> CandidateScore {
     let inputs = inputs
         .iter()
@@ -4822,10 +4935,9 @@ fn unknown_inputs(
         })
         .collect::<Vec<_>>();
     let mut seen = BTreeSet::new();
-    if inputs
-        .iter()
-        .all(|(_, key, unknown_reason)| is_realistic(key, *unknown_reason))
-    {
+    if inputs.iter().all(|(_, key, unknown_reason)| {
+        is_realistic_on(key, *unknown_reason, instance_id, left_out)
+    }) {
         CandidateScore::RefreshNeeded(
             inputs
                 .iter()
@@ -4841,7 +4953,9 @@ fn unknown_inputs(
         CandidateScore::InputUnknown(
             inputs
                 .iter()
-                .filter(|(_, key, unknown_reason)| !is_realistic(key, *unknown_reason))
+                .filter(|(_, key, unknown_reason)| {
+                    !is_realistic_on(key, *unknown_reason, instance_id, left_out)
+                })
                 .filter(|(rule_id, _, _)| seen.insert(*rule_id))
                 .map(|(rule_id, _, unknown_reason)| {
                     reason_with(
@@ -4867,6 +4981,17 @@ fn is_realistic(key: &str, unknown_reason: UnknownReason) -> bool {
         && REALISTIC_FACT_PREFIXES
             .iter()
             .any(|prefix| key.starts_with(prefix))
+}
+
+/// #428 S168-LB1a: [`is_realistic`] on the instance `instance_id`, where a key the Runtime's
+/// projection left out for it (`left_out`) is no realistic input either.
+fn is_realistic_on(
+    key: &str,
+    unknown_reason: UnknownReason,
+    instance_id: &str,
+    left_out: &LeftOutFacts,
+) -> bool {
+    is_realistic(key, unknown_reason) && !left_out.covers(instance_id, key)
 }
 
 /// A selection-policy reason as a token of the catalog vocabulary `unknown_reason`, so a reason's
@@ -5048,7 +5173,7 @@ fn predicate_refresh(
     facts: &EvaluationFacts,
     suggestions: &[DetectionSuggestion],
 ) -> PolicyEvaluationResult<Option<AffectedCandidate>> {
-    let keys = fact_refresh::predicate_keys(suggestions, instance);
+    let keys = fact_refresh::predicate_keys(suggestions, instance, context.left_out);
     if keys.is_empty() {
         return Ok(None);
     }
@@ -7957,7 +8082,7 @@ fn observed_fact_value_is_bounded(value: &FactValue) -> bool {
     match value {
         FactValue::String(value) => value.len() <= MAX_TEXT_BYTES,
         FactValue::RecordList(records) => {
-            records.len() <= 256
+            records.len() <= MAX_OBSERVED_RECORD_LIST_ROWS
                 && records.iter().all(|record| {
                     record.len() <= 64
                         && record.iter().all(|(key, value)| {

@@ -3266,3 +3266,20 @@ actingcommand_contract::outcome_locations! {
     }
 }
 // ---- #428 SCHED-C1d: end ----
+
+// ---- #428 S168-LB1a (register §1.309 LB1-5, §1.311): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's code of a record list the scheduler's projection leaves out for its rows
+    /// (S168-LB1a; `contracts/instance-fact-store.md`, "Left out of the projection"). No existing
+    /// code fits: `policy_evaluation_input_invalid` refuses the whole input, which the projection
+    /// now avoids, and `policy_instance_fact_missing` names a policy instance key.
+    pub(crate) enum PolicyFactRowsCode {
+        /// Warning (since 0.12.55). The scheduler's fact projection left out an inline record list
+        /// of more rows than the evaluation reads (256) for every instance its scope applies to: a
+        /// predicate that reads it is Unknown there and the key raises no fact refresh demand.
+        /// Recorded once for each such record after a start, never on a decision. Keys `fact_key`,
+        /// `count` (the record's rows).
+        Exceeded => "policy_fact_rows_exceeded": warning / none,
+    }
+}
+// ---- #428 S168-LB1a: end ----

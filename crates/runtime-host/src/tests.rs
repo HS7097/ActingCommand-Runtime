@@ -168,6 +168,9 @@ mod gate_308_l4b;
 // halves.
 mod gate_336_pkgs2;
 mod gate_428_s168_4;
+// Workflow #428 S168-LB1a: lists of up to 1024 rows, the scheduler's projection without lists and
+// long record lists, the instance fact read by key prefix, and the revisions.
+mod gate_428_s168_lb1a;
 // Workflow #336 PKG-S3: bindings without a package digest, failure identity v2 and the lift of
 // a pause by a package's content hash.
 mod gate_336_pkgs3;

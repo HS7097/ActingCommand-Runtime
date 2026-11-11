@@ -97,7 +97,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `nemu_app_index_source`; revision-3 to revision-5 ledgers are still read, so [3, 6], one way.
 ///   Workflow #404 FS-3 (0.12.43, register §1.284) raises `max` to 7: the select confirmations
 ///   `tracked` and `track_lost`; revision-3 to revision-6 ledgers are still read, so [3, 7], one
-///   way.
+///   way. Workflow #428 S168-LB1a (0.12.55, register §1.309, §1.311) raises `max` to 8: a
+///   `fact.published` `record_list` record of 257 to 1024 rows; revision-3 to revision-7 ledgers
+///   are still read, so [3, 8], one way.
 /// - `package` 3: the one `package` bump of v0.12.0 (register §6); only bundle index v4 is read.
 ///   Workflow #411 B15 R1 (register §1.111) raises `max` to 4 in v0.12.3: a pack's `remedy` and
 ///   `provides`; a revision-3 pack is still read. Workflow #406 T3 (register §1.137) raises it to
@@ -126,15 +128,18 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   as before, so [3, 5]. Workflow #407 PERF-READ (0.12.41, register §1.280) raises `max` to 6:
 ///   the `PerformanceStatus` answer's members `memory` and `vision`, which a reader whose `max` is
 ///   below 6 refuses (the status denies unknown members); no request changes and every earlier
-///   request is answered as before, so [3, 6].
+///   request is answered as before, so [3, 6]. Workflow #428 S168-LB1a (0.12.55, register §1.309,
+///   §1.311) raises `max` to 7: an `InstanceFactSnapshot` view with a record list of 257 to 1024
+///   rows, the request's optional `key_prefix` and the answer's optional `records_total`; a
+///   request without the member is answered as before, so [3, 7].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 28]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
-    ("ledger", [3, 7]),
+    ("ledger", [3, 8]),
     ("package", [3, 9]),
-    ("runtime-client", [3, 6]),
+    ("runtime-client", [3, 7]),
     ("runtime-outcomes", [1, 1]),
 ];
 

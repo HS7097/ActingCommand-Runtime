@@ -13471,6 +13471,110 @@ Tests (policy gate row "#428 SS-4b"; the policy crate's fixtures, fixed instants
 changes: every SS-4 test (`gate_ss4`) and SS-2d's test 16 hold a pair due for its served cause or
 arm no guard. No test is removed or renamed.
 
+### 1.311 Workflow #428 S168-LB1a (0.12.55): lists of up to 1024 rows, and no list in the scheduler's facts (the code of §1.309's rows LB1-1 to LB1-6 with LB1-5b, built to the contract on main; the coordinator's rulings 1 to 10 and answers 1 to 10 of 11-11 recorded in §1.309, not Alice's words; the section number the coordinator's; coordinator work order `rd-1111/brief-s168-lb1a.md`, read on main `385bb500`)
+
+**Before any code** (the coordinator's answer 1 of §1.309). The four resource repositories' `main`
+were read, without a checkout, at `f97007b3`, `f5ba5569`, `831db61a` and `de3edbd`: a search of
+every file of each tree for `inventory.list` (each `schedule.json` and every selection document
+included) finds no match, and no pack declares a `read_list` step yet. No catalog in use names a
+key under `inventory.list.` to read, so the compile refusal was built.
+
+| # | Built | Where |
+|---|---|---|
+| LB1-1 | `MAX_FACT_RECORD_LIST_ROWS`, 1024, public, the rows of a `record_list` fact, checked by `FactValue::validate`, which every reader of a record runs: a write and a publication (`FactObservation::validate`), a client's publication, the host's check of a list before it publishes, the structural check of a decoded `fact.published`, a snapshot's and a view's check of each record and the client's check of an `InstanceFactSnapshot` answer; `MAX_FACT_RECORDS` stays 256 for the records of an observation, a snapshot and a view; no byte bound moves; no configuration key | `crates/actingcommand-contract/src/fact.rs` |
+| LB1-2 | `MAX_LIST_READING_ROWS` is defined as that constant; the kernel's scan, which reads it, stops on the viewport that reads the 1025th position (`list_rows_exceeded`, `count` 1025); the catalog's descriptions of the code and of the word say so | `crates/actingcommand-contract/src/taskflow.rs`; `crates/execution-kernel/src/contained_task/list_reading.rs`, `readings.rs` |
+| LB1-3 | the scheduler's fact projection leaves out every record under `inventory.list.` beside its three classes, for the authoritative and the forward projection alike; the evaluation's `facts`, its `fact_snapshot_id` and an intent's instance view (all built from the projection) hold no list | `crates/runtime-host/src/fact_store.rs`, `FactStore::overlay_policy_facts_with_disposition` |
+| LB1-4 | `type_mismatch` at the member's key: a `fact` and a `record_deadline` predicate's `fact_key`, every fact reference (a `fact` predicate's and a `resource_projection`'s `value`, a pool's `capacity`, a pool line), a pool's `observation/fact_key`, a consumption read from a fact (`amount/fact_key`), and a selection document's `facts[]` (`/facts/<i>/fact_key`, after the document's own checks); a timeline event's `invalidates_fact_prefixes` is not checked | `crates/policy/src/validation.rs`, `validate_read_fact_key`; `crates/policy/src/source.rs`, `parse_selection_document` |
+| LB1-5 | an inline record list of more than `MAX_OBSERVED_RECORD_LIST_ROWS` (256, now a public constant of the policy crate that the evaluator's input check reads too) is left out for every instance its scope applies to; the host hands the evaluation those keys per instance (`LeftOutFacts`, through the new entry `evaluate_with_left_out_facts`), and the fact refresh's demand skips them; the warning `policy_fact_rows_exceeded` is recorded once per record after a start | `crates/runtime-host/src/fact_store.rs`; `crates/runtime-host/src/host/policy_dispatch.rs`, `HostShared::report_left_out_record_lists`; `crates/runtime-host/src/policy_host.rs`, `PolicyHost::note_rows_exceeded_warning`; `crates/policy/src/evaluator.rs`, `LeftOutFacts`, `unknown_inputs`; `crates/policy/src/evaluator/fact_refresh.rs`, `predicate_keys` |
+| LB1-5b | a list read whole whose record is over the observation's 512 KiB is the miss `list_bytes_exceeded` (`count` the rows read), written at once on the frame its end check passed on; the run settles as without the list and the previous record stays | `crates/runtime-host/src/host/contained_task.rs`, `RuntimeContainedTask::list_over_observation_bytes`, `list_record_over_observation_bytes`; the word in `crates/execution-kernel/src/contained_task/readings.rs` |
+| LB1-6 | `InstanceFactSnapshot`'s optional `key_prefix` (kept before the view is built and measured) and the answer's optional `records_total`; `actingctl facts --instance … --key-prefix` and `ac_facts` send the prefix through `lab-ops`' one read and print `records_total` from the answer | `crates/actingcommand-contract/src/runtime.rs`; `crates/runtime-host/src/host/instance_fact_read.rs`; `crates/runtime-client/src/client.rs`, `RuntimeClient::instance_fact_snapshot_by_prefix`; `crates/lab-ops/src/facts.rs`, `read` |
+
+**What the contract left to the code slice, and how it is settled** (each reported to the
+coordinator):
+
+- **The unknown reason and the demand** (answer 3). A predicate that reads a left-out key reads it
+  as missing, `fact_missing`: the record is not in its input. The demand is kept from rising by
+  the keys the host left out per instance (`LeftOutFacts`, memory only, in no snapshot or decision
+  identity), which the fact refresh's collection of a catalog predicate's and the benefit gate's
+  keys (`predicate_keys`) and of a selection document's unknown inputs (`unknown_inputs`, where
+  such a key is no realistic input and gives `selection_input_unknown`) consults. The candidate
+  keeps `trigger_unknown` (or `feedback_stop_unknown`) with its detection suggestion and gets no
+  `fact_refresh_*` reason; the instance's reader is not asked for the key.
+- **"Once for each such record"**: per stored record, the event that published it. The policy
+  host keeps, per fact identity, the event it warned of; a later publication of the key is another
+  record and is warned of once more; a restart warns once more (memory only, iron rule 13).
+- **The warning's record**: one Warning `runtime.failed` under the system links (operation
+  `project_policy_facts`, stage the policy driver's), handed to the daemon's log, recorded from an
+  evaluated cycle's projection only (not from an admission's or a forward projection's).
+- **Where LB1-5b is found**: in the host, when it takes the step's list (`ListReading`), measured
+  on the record the run's end would publish (instance, entry task, package, run, frame, capture
+  time): only the host knows them. The kernel adds the word.
+- **The key prefix's rule**: not empty, at most a key's 192 bytes, no control character, else
+  `invalid_fact_key` at the request's check; `records_total` is answered only to a request with a
+  prefix, a client refuses an answer whose total is below its records (`invalid_fact_snapshot`)
+  and one that carries a total it did not ask for, or lacks one it did.
+- **Places outside the row**: `fact_time_reached` and an activity goal's fact metric also name a
+  key to read but are not in LB1-4's list, so they are not refused; a left-out key reads as
+  missing there (`fact_time_reached` false with `fact_time_unavailable`, which asks no refresh).
+- **Question 10**: no reader recomputes a persisted `fact_snapshot_id`. The id is computed only by
+  the projection, at an evaluation and at an admission inside one running Runtime; the ledger's
+  idempotency check of a dispatch compares two persisted records' ids with each other only.
+
+**Tests** (gate maps `contract.toml`, `policy.toml`, `host.toml`; fakes, the manual Runtime clock
+or a fake source's clock; no sleep):
+
+| Row | Test |
+|---|---|
+| LB1-1, LB1-2 | `actingcommand-contract` `fact::gate_428_s168_lb1a`: 257 and 1024 rows accepted by every reader, 1025 refused by each; 257 records of an observation, a snapshot and a view refused |
+| LB1-1 | `runtime-host` `gate_428_s168_lb1a::lb1a_a_list_of_1024_rows_is_published_and_read_back_after_a_restart`: a ledger holding a list of 256 rows (what revision 7 writes) opens; 1024 rows published, read from the store and the instance fact read, and after a restart |
+| LB1-2 | `execution-kernel` `gate_428_s168_4::list_reading_miss_publishes_nothing`, changed (below) |
+| LB1-3 | `runtime-host` `…::lb1a_the_projection_holds_no_list_and_every_decision_is_as_without_it`: lists of 3 and 1024 rows; the facts hold none, the intent's `fact_snapshot_id` and every decision are those of before, and a list published between an evaluation and its admission leaves the intent admitted |
+| LB1-4 | `policy` `tests::gate_428_s168_lb1a`: one case per place, the same member of another key not refused there, and a timeline prefix under `inventory.list.` compiling |
+| LB1-5 | `runtime-host` `…::lb1a_a_long_record_list_is_left_out_for_its_instance_with_one_warning`: two instances; 257 rows of one, the evaluation not skipped, the predicate Unknown with `fact_missing` and no `fact_refresh_*` reason (it raised `fact_refresh_unbound` while the key was missing), one warning with the key and 257, none from a second evaluation, the other instance as before |
+| LB1-5b | `runtime-host` `…::lb1a_a_list_is_measured_against_the_observation_bytes` (the 512 KiB itself) and `gate_428_s168_4::list_reading_over_observation_bytes_is_a_miss` (a run, with the bound lowered for its own key by a test hook: the run succeeds, nothing is published, the record from before stays, one row `list_bytes_exceeded`, `count` 6) |
+| LB1-6 | `runtime-host` `…::lb1a_a_key_prefix_is_kept_before_the_frame_is_measured`; the request's serialization in the contract test above |
+| revisions | `actinglab-architecture` `the_runtime_declares_each_v0120_interface_revision_once` at `ledger` [3, 8] and `runtime-client` [3, 7] |
+
+Tests changed, each because the requirement changes what it pins: `execution-kernel`
+`gate_428_s168_4::list_reading_miss_publishes_nothing` pins the 1025th position and `count` 1025
+instead of the 257th (§1.309, "Tests the survey names": 1,032 positions on the 114th viewport,
+after 113 advances; its scan declares 128 viewports instead of 32, and its dictionary holds 1024
+ids, a position past the 1024th repeating an earlier one); `lab-rescue`
+`gate_429_r0b_pairing`'s two tests pin this build's `runtime-client` [3, 7] instead of [3, 6].
+`runtime-host` `gate_389_mcp4` names the new request member (`key_prefix: None`) and matches the
+answer with `..`, so it compiles; its assertions do not change. No golden changes.
+
+**Interfaces.** `ledger` [3, 8], one way, and `runtime-client` [3, 7], in the revision tables of
+[component-interfaces.md](component-interfaces.md) and in `distribution/windows/component-interfaces.json`;
+`package`, `actingd-config` and `runtime-outcomes` do not move (one code, `policy_fact_rows_exceeded`,
+and one word of `reading_problem`, `list_bytes_exceeded`, added within revision 1). #434's planned
+`ledger` 8 and `runtime-client` 7 (LAB-6) and S168-5b's `judge_only` join these revisions when
+they ship in this release, and take the next free ones otherwise.
+
+**What an operator sees after deploy.**
+
+- A list reading of up to 1024 rows is written; before, a list of more than 256 positions warned
+  `list_rows_exceeded` and wrote nothing.
+- The scheduler's evaluation no longer holds list readings: a list's publication no longer makes a
+  waiting dispatch stale, and no decision changes.
+- A record list of more than 256 rows under another key no longer stops the evaluation of every
+  instance: the instances it applies to read it as missing, and one warning
+  `policy_fact_rows_exceeded` (the key and its rows) is recorded per record after each start.
+- A list too large for one observation is a warning row `list_bytes_exceeded` in its run's
+  diagnostics: the run succeeds and the earlier list stays.
+- `actingctl facts --instance … --key-prefix` and `ac_facts` with `key_prefix` answer an instance
+  whose whole set of facts no longer fits one frame, for a prefix that fits.
+- A scheduling catalog that names a key under `inventory.list.` to read is refused at compile
+  (`type_mismatch`); no catalog of the four resource repositories' `main` does.
+- The console of the same release must read `runtime-client` 7 and `ledger` 8; the update to this
+  build is a one-way ledger update.
+
+**Rollback.** After this build has run, no build before it opens the ledger: going back below
+`ledger` 8 is refused by the Rp.max rule whether or not a long list was written, and once a list
+of more than 256 rows is written a build before this one refuses that record at its start and in
+every page that holds it. The way back is a later build, or a fresh state root; there is no
+migration, and the configuration needs nothing.
+
 ### 1.312 Slice S168-LB1b (0.12.55): a list maximum reads "at least L" where one entry has no value (Workflow #428; the customer-view audit of 11-11 and the coordinator's rulings 5 to 10 and answers 6 to 8 of 11-11, not Alice's words, as §1.309 writes them; coordinator work order `rd-1111/brief-s168-lb1b.md`, read on main `385bb500`)
 
 The code of §1.309's rows LB1-7 to LB1-11. [selection-policy.md](selection-policy.md) ("Table
@@ -14085,7 +14189,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`, `device.screen_off_timeout_ms` (per instance, a bound handset only, with a lifetime; §1.59 RD5-2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-5b |
 | `session.remedy.choices` (one per scope: instance, server or game; §1.110 B15-6) | instance | yes | #411 B15 R6 |
 | `session.dispatch.parameter.<name>` (an overlay of a run's snapshots only, never stored; the prefix `session.dispatch.` is refused to publishers; §1.110 B15-7) | — (never stored) | — | #411 B15 R5 |
-| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 256 rows, 1024 from S168-LB1a, not built yet, §1.309; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
+| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 1024 rows since S168-LB1a, 0.12.55, §1.309, §1.311, 256 before it; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).

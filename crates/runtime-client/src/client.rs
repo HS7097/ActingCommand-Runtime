@@ -420,6 +420,16 @@ pub struct StoppedRun {
     pub outcome: Outcome,
 }
 
+/// The result of `instance_fact_snapshot_by_prefix` (Workflow #428 S168-LB1a): the view, the
+/// read's state source, and the instance's records before the request's key prefix kept some of
+/// them (`None` for a read without one).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceFactRead {
+    pub snapshot: actingcommand_contract::InstanceFactView,
+    pub source: actingcommand_contract::RuntimeStateSource,
+    pub records_total: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeOfficialOcrFieldsProjection {
@@ -1219,17 +1229,40 @@ impl RuntimeClient {
         actingcommand_contract::InstanceFactView,
         actingcommand_contract::RuntimeStateSource,
     )> {
+        self.instance_fact_snapshot_by_prefix(instance_alias, None)
+            .map(|read| (read.snapshot, read.source))
+    }
+
+    /// Workflow #428 S168-LB1a (since 0.12.55, `runtime-client` 7): `instance_fact_snapshot` of
+    /// the records whose key starts with `key_prefix`, which the Runtime keeps before it builds
+    /// and measures the view (an instance whose whole view is over one frame is answered for a
+    /// prefix that fits), with `records_total`, the instance's records before the filter. Without
+    /// a prefix the request is the one before, and the answer carries no total.
+    pub fn instance_fact_snapshot_by_prefix(
+        &self,
+        instance_alias: &str,
+        key_prefix: Option<&str>,
+    ) -> RuntimeClientResult<InstanceFactRead> {
         const OPERATION: Location = ClientLocation::RuntimeInstanceFactSnapshot.location();
         match self.execute(
             OPERATION,
             RuntimeOperation::InstanceFactSnapshot {
                 instance: instance_alias.to_owned(),
+                key_prefix: key_prefix.map(str::to_owned),
             },
         )? {
-            RuntimeResult::InstanceFactSnapshot { snapshot, source }
-                if snapshot.instance_alias == instance_alias =>
+            RuntimeResult::InstanceFactSnapshot {
+                snapshot,
+                source,
+                records_total,
+            } if snapshot.instance_alias == instance_alias
+                && records_total.is_some() == key_prefix.is_some() =>
             {
-                Ok((*snapshot, source))
+                Ok(InstanceFactRead {
+                    snapshot: *snapshot,
+                    source,
+                    records_total,
+                })
             }
             _ => Err(self.unexpected_result(OPERATION)),
         }

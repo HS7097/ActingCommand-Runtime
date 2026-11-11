@@ -1903,9 +1903,10 @@ pub const MAX_LIST_READINGS: usize = 16;
 /// Workflow #428 S168-4: the most columns a `read_list` declares besides its key column (a row
 /// holds at most 64 fields).
 pub const MAX_LIST_READING_COLUMNS: usize = 63;
-/// Workflow #428 S168-4: the most rows one list reading's `record_list` holds; a 257th position
-/// is the miss `list_rows_exceeded`.
-pub const MAX_LIST_READING_ROWS: usize = 256;
+/// Workflow #428 S168-4: the most rows one list reading's `record_list` holds. Workflow #428
+/// S168-LB1a (since 0.12.55): equal to the row bound of a `record_list` fact, 1024; a 1025th
+/// position is the miss `list_rows_exceeded`.
+pub const MAX_LIST_READING_ROWS: usize = crate::fact::MAX_FACT_RECORD_LIST_ROWS;
 
 /// Workflow #428 S168-4: a list reading's `key_column` or `column`, a row member's name:
 /// `^[a-z][a-z0-9_]{0,31}$`.

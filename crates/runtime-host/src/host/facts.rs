@@ -1234,3 +1234,46 @@ impl HostShared {
         result
     }
 }
+
+#[cfg(test)]
+impl RuntimeHost {
+    /// Workflow #428 S168-LB1a, test only: publishes `record` as a list reading's record is
+    /// published at a run's end (the one purpose that writes under `inventory.list.`).
+    pub(crate) fn publish_list_reading_for_test(
+        &self,
+        record: FactRecord,
+    ) -> RuntimeHostResult<EventId> {
+        self.work_ref(ContractLocation::PublishFact)?
+            .publish_facts(
+                actingcommand_contract::FactObservation {
+                    records: vec![record],
+                },
+                None,
+                FactPublicationPurpose::ListReading,
+            )
+            .map(|publication| publication.event_id)
+    }
+
+    /// Workflow #428 S168-LB1a, test only: the evaluation's facts as the authoritative projection
+    /// gives them now, under the gates an evaluation reads them under.
+    pub(crate) fn projected_policy_facts_for_test(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_policy::EvaluationFacts> {
+        let shared = self.shared_ref(HostLocation::ProjectPolicyFacts)?;
+        let _outcome_gate = lock(
+            &shared.policy_outcome_gate,
+            HostLocation::SnapshotPolicyOutcomeState,
+        )?;
+        let mut policy = lock(shared.policy()?, HostLocation::ReadPolicyOutcomeKeys)?;
+        let outcome_keys = policy.outcome_key_snapshot()?;
+        let _fact_gate = lock(&shared.fact_write_gate, HostLocation::ProjectPolicyFacts)?;
+        shared
+            .project_authoritative_policy_inputs_under_gate(
+                &mut policy,
+                HostLocation::ProjectPolicyFacts,
+                &outcome_keys,
+                None,
+            )
+            .map(|(facts, _)| facts)
+    }
+}

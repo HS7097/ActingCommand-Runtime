@@ -1208,3 +1208,55 @@ fn list_reading_full_store_refused() {
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the host");
 }
+
+// Workflow #428 S168-LB1a (since 0.12.55; register §1.309 LB1-5b, §1.311;
+// `contracts/resource-readings.md`, "List readings", "Rows"): a list read whole whose record is
+// larger than one observation holds is a miss of the list, not a failure of its run. The test
+// lowers, for its own key only, the bound the host measures a list's record against, so the fake
+// device's six rows meet it (`set_list_observation_bytes_for_test`; the 512 KiB itself is
+// `gate_428_s168_lb1a::lb1a_a_list_is_measured_against_the_observation_bytes`). After a run
+// published the list, a run whose list is over the bound succeeds and publishes nothing: the key's
+// record from before stays byte for byte, and the step writes one warning row,
+// `contained_task_resource_reading_unresolved` with the step's id, the key,
+// `list_bytes_exceeded` and `count` 6, the rows read, an error row of the post-admission phase.
+#[test]
+fn list_reading_over_observation_bytes_is_a_miss() {
+    const BYTES_KEY: &str = "inventory.list.example_kind_e";
+    let root = TempDir::new().expect("tempdir");
+    let package = write_package(&root, "list.zip", BYTES_KEY);
+    let device = Device::new();
+    let host = start(&root, &[(ALIAS, &device)]);
+    device.shows(vec![list(0..6), detail()]);
+    let (receipt, _) = run(&host, ALIAS, &package);
+    completed(&host, &receipt);
+    let before = record(&host, ALIAS, BYTES_KEY).expect("the list's record");
+
+    crate::host::set_list_observation_bytes_for_test(BYTES_KEY, 64);
+    device.shows(vec![list(0..6), detail()]);
+    let (receipt, correlation_id) = run(&host, ALIAS, &package);
+    completed(&host, &receipt);
+    assert_eq!(
+        record(&host, ALIAS, BYTES_KEY).as_ref(),
+        Some(&before),
+        "the record from before stays"
+    );
+    assert_eq!(
+        publications(&host, BYTES_KEY).len(),
+        1,
+        "nothing is published"
+    );
+    let rows = miss_rows(&root, &host, correlation_id);
+    let [miss] = rows.as_slice() else {
+        panic!("exactly one miss row: {rows:?}");
+    };
+    let outcome = &miss["data"]["error"]["outcome"];
+    assert_eq!(outcome["category"], "warning");
+    assert_eq!(outcome["values"]["reading_id"], "read_members");
+    assert_eq!(outcome["values"]["fact_key"], BYTES_KEY);
+    assert_eq!(outcome["values"]["reading_problem"], "list_bytes_exceeded");
+    assert_eq!(outcome["values"]["count"], 6);
+    assert_eq!(miss["data"]["phase"], "post_admission");
+    assert!(miss["data"]["target_id"].is_null());
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}

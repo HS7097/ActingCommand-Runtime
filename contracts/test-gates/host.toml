@@ -3499,3 +3499,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_sched_c1e::sched_c1e_h1_an_instruction_sets_an_instances_lines_and_a_restart_keeps_them",
 ]
 incident = ["#428 SCHED-C1e"]
+
+# Workflow #428 S168-LB1a (0.12.55; register §1.309 rows LB1-1, LB1-3, LB1-5, LB1-5b and LB1-6, §1.311; brief rd-1111/brief-s168-lb1a.md; contracts/instance-fact-store.md, "List reading facts", "Left out of the projection", "The frame bound with long lists"; contracts/resource-readings.md, "List readings", "Rows"; contracts/scheduling/README.md, "Record lists and the projection"), the host's halves: a ledger holding a list of 256 rows (what revision 7 writes) opens and reads back, and a list of 1024 rows is published and read back from the store, through the instance fact read and after a restart; the scheduler's projection holds no record under inventory.list. (3 and 1024 rows): the evaluation's facts hold none, the intent's fact_snapshot_id and every decision are those without them, and a list published between an evaluation and its admission leaves the intent admitted; a record list of 257 rows of one instance is held by the store and left out for it: the evaluation of both instances goes on unskipped, its record_deadline predicate is Unknown with fact_missing and no fact_refresh_* reason (it raised fact_refresh_unbound while the key was missing), one Warning runtime.failed policy_fact_rows_exceeded names the key and 257 and a second evaluation records none, and the other instance decides as before; a list record is measured against the observation's 512 KiB (1024 rows of 8 columns of 64 bytes over, of 3 short columns within), and a run whose list is over the bound (lowered for its key only) succeeds, publishes nothing, keeps the record from before and writes one warning row list_bytes_exceeded with count 6; an instance too large for one frame whole is answered for a key prefix that fits, with records_total as the host's own projection counts the instance's records, a prefix of nothing answers no record and the same total, and a read without a prefix answers no total
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_428_s168_lb1a::lb1a_a_list_of_1024_rows_is_published_and_read_back_after_a_restart",
+    "actingcommand-runtime-host::lib::tests::gate_428_s168_lb1a::lb1a_the_projection_holds_no_list_and_every_decision_is_as_without_it",
+    "actingcommand-runtime-host::lib::tests::gate_428_s168_lb1a::lb1a_a_long_record_list_is_left_out_for_its_instance_with_one_warning",
+    "actingcommand-runtime-host::lib::tests::gate_428_s168_lb1a::lb1a_a_list_is_measured_against_the_observation_bytes",
+    "actingcommand-runtime-host::lib::tests::gate_428_s168_4::list_reading_over_observation_bytes_is_a_miss",
+    "actingcommand-runtime-host::lib::tests::gate_428_s168_lb1a::lb1a_a_key_prefix_is_kept_before_the_frame_is_measured",
+]
+incident = ["#428 S168-LB1a"]

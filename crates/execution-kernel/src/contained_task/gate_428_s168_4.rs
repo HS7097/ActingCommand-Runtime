@@ -464,9 +464,12 @@ fn missed(read: &Read) -> ListReadingMiss {
     }
 }
 
-// The grid of the 257th position: three columns at a row pitch of 100 px over the full band
-// (y 60 to 540, five rows), `rows` rows of distinct identities, each column's colour of its own
-// (its blue level raised by at most 6, so at most 31).
+// The grid of the 1025th position (Workflow #428 S168-LB1a; before it, of the 257th): three
+// columns at a row pitch of 100 px over the full band (y 60 to 540, five rows), `rows` rows, each
+// column's colour of its own (its blue level raised by at most 6, so at most 31). Position k reads
+// the identity `member.<k mod 1024>`, so the dictionary holds its 1024 entries at most (the
+// identity domain's bound) and a position past the 1024th repeats an earlier key: the scan counts
+// the positions it read, whatever their identity, and stops before any key is resolved.
 fn grid(rows: usize) -> Vec<(i32, Card)> {
     const CROSSES: [i32; 3] = [20, 140, 260];
     const COLORS: [[u8; 3]; 3] = [[25, 2, 2], [2, 25, 2], [2, 2, 25]];
@@ -474,7 +477,7 @@ fn grid(rows: usize) -> Vec<(i32, Card)> {
         .map(|index| {
             let mut card = card(
                 i32::try_from(index / 3).expect("row"),
-                &format!("member.{index:03}"),
+                &format!("member.{:04}", index % 1024),
                 COLORS[index % 3],
                 1,
             );
@@ -519,10 +522,13 @@ fn grid_view(grid: &[(i32, Card)], offset: i32) -> View {
 // S168-4 test 3, the session: a list that cannot be read whole gives no reading, never a part of
 // one. A position whose identity is out of the dictionary on every read is
 // `list_position_unread` (count 1); two positions that read one business ID are
-// `list_duplicate_key` (count 1, the repeated key); and a list that shows a 257th position is
-// `list_rows_exceeded` (count 257), the scan stopping on the viewport that read it: 15 positions
-// on the first viewport and 9 more on each advance of 300 px reach 258 on the 28th viewport, after
-// 27 advances, and no capture follows.
+// `list_duplicate_key` (count 1, the repeated key); and a list that shows a 1025th position is
+// `list_rows_exceeded` (count 1025), the scan stopping on the viewport that read it: 15 positions
+// on the first viewport and 9 more on each advance of 300 px reach 1,032 on the 114th viewport,
+// after 113 advances, within the 128 viewports a scan may declare, and no capture follows.
+// Workflow #428 S168-LB1a (register §1.309, "Tests the survey names"): this test pinned the 257th
+// position and `count` 257 (S168-4's bound of 256 rows); the bound is 1024 since 0.12.55, so it
+// pins the 1025th and `count` 1025, its viewports raised from 32 to 128.
 #[test]
 fn list_reading_miss_publishes_nothing() {
     let scan = declaration(|_| {});
@@ -542,12 +548,16 @@ fn list_reading_miss_publishes_nothing() {
     assert_eq!(miss.problem, ResourceReadingProblem::ListDuplicateKey);
     assert_eq!(miss.count, 1);
 
-    // The full band of the SEL-L3 grid: three columns, five rows a viewport, 300 px a move.
-    let long = grid(90);
+    // The full band of the SEL-L3 grid: three columns, five rows a viewport, 300 px a move; 344
+    // rows are 1,032 positions.
+    let long = grid(344);
     let identities = long
         .iter()
         .filter_map(|(_, card)| card.identity.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .collect::<Vec<_>>();
+    assert_eq!(identities.len(), 1024, "the dictionary's 1024 entries");
     let wide = declaration(|value| {
         value["advance"] = json!({"kind": "drag",
             "from": {"x": 150, "y": 450, "width": 100, "height": 20},
@@ -560,18 +570,19 @@ fn list_reading_miss_publishes_nothing() {
         value["track"]["area"] = json!({"x": 0, "y": 40, "width": 400, "height": 520});
         value["track"]["min_overlap_instances"] = json!(2);
         value["track"]["spacing"]["columns"] = json!(3);
+        value["bounds"]["max_viewports"] = json!(128);
     });
     let wide_layout = layout_in(&identities, 540);
     let mut script = Script::starting_with(grid_view(&long, 0));
-    for advance in 1..=27 {
+    for advance in 1..=113 {
         script = script.then(grid_view(&long, 300 * advance));
     }
     let read_long = read(&wide, &wide_layout, script);
     let miss = missed(&read_long);
     assert_eq!(miss.problem, ResourceReadingProblem::ListRowsExceeded);
-    assert_eq!(miss.count, 257);
-    assert_eq!(read_long.fake.drags.len(), 27);
-    assert_eq!(read_long.fake.captures, 1 + 2 * 27);
+    assert_eq!(miss.count, 1025);
+    assert_eq!(read_long.fake.drags.len(), 113);
+    assert_eq!(read_long.fake.captures, 1 + 2 * 113);
     assert!(read_long.fake.script.captures.is_empty());
     assert!(read_long.fake.end_passed_on.is_empty());
 
@@ -599,7 +610,7 @@ fn list_reading_miss_publishes_nothing() {
         warning.value("reading_problem"),
         Some(&json!("list_rows_exceeded"))
     );
-    assert_eq!(warning.value("count"), Some(&json!(257)));
+    assert_eq!(warning.value("count"), Some(&json!(1025)));
 }
 
 // S168-4 test 4, the session and the step's stage: the second viewport lies 30 px on, outside
