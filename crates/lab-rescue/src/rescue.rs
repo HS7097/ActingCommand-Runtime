@@ -76,9 +76,10 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-/// The developer text of a refused command line of the rescue module.
+/// The developer text of a refused command line of the rescue module (Workflow #434 CLI-HELP: it
+/// names `actinglab help`, where it named the table's contract file).
 const USAGE: &str = "usage: actinglab [--json] <rescue operation> [<positionals>] \
-     [--<option> <value>] [--<switch>]; contracts/lab-operations.json lists the rows of module \
+     [--<option> <value>] [--<switch>]; actinglab help lists the rows of module \
      rescue; no --root, no --state-root: the root is the one actinglab runs from";
 
 /// The rows of module `rescue` this slice serves, by the table's name (Workflow #421 INST-5: and

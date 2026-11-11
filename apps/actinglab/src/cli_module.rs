@@ -40,6 +40,9 @@
 //!   too ([`serve::Front`]).
 //! - **The authoring option** (§8.3; Workflow #434 LAB-5F, [`authoring`]): it decides only
 //!   whether the authoring rows are listed by default; they are served everywhere (fix 2).
+//! - **Help** (Workflow #434 CLI-HELP, register §1.313): a line that asks for help, `--help`
+//!   anywhere or an own group followed by `help`, is actinglab's own `help` for its words
+//!   ([`route`], `crate::cli_help`), which prints a text for people without `--json`.
 
 // Workflow #434 LAB-5F: the authoring option.
 pub(crate) mod authoring;
@@ -134,10 +137,11 @@ pub(crate) const PROGRAM: &str = "actinglab";
 pub(crate) const JSON: &str = "--json";
 /// The word of the resident mode.
 const SERVE: &str = "serve";
-/// The developer text of a command line the module refuses.
+/// The developer text of a command line the module refuses (Workflow #434 CLI-HELP: it names
+/// `actinglab help`, where it named the table's contract file).
 const USAGE: &str = "usage: actinglab [--json] <operation words> [<positionals>] \
      [--<option> <value>] [--<switch>]; a row's <instance> may be written --instance <instance> \
-     instead; contracts/lab-operations.json lists the operations; actinglab serve --stdio answers \
+     instead; actinglab help lists the operations; actinglab serve --stdio answers \
      one {op, params} per line";
 /// The developer text of an `ACTINGCOMMAND_INITIATOR` this process does not take.
 const INITIATOR_TEXT: &str = "ACTINGCOMMAND_INITIATOR takes Lab-制包 or Lab-救急; without it \
@@ -162,7 +166,13 @@ pub(crate) enum Route {
 }
 
 /// The route of the command line `arguments` (LAB-2 fix 1; see the module's description).
+/// Workflow #434 CLI-HELP: a line that asks for help (`--help` anywhere, or an own group followed
+/// by `help`) is actinglab's own `help` for its words, before anything reads it
+/// (`crate::cli_help::asked`): nothing runs and nothing is sent.
 pub(crate) fn route(arguments: Vec<String>) -> Route {
+    if let Some(help) = crate::cli_help::asked(&arguments) {
+        return Route::Own(help);
+    }
     let (json, words) = front_end(arguments.clone());
     if words.first().map(String::as_str) == Some(SERVE) {
         return Route::Module(arguments);
@@ -491,10 +501,16 @@ mod rescue {
 /// developer line on stderr. A line stdout refuses, or one that did not encode, leaves only the
 /// developer line `actingctl_output_failed`, exit 1.
 pub(crate) fn print(exit: &Exit, json: bool) -> ExitCode {
-    let text = match stdout_text(exit, json) {
-        Ok(text) => text,
-        Err(text) => return output_failed(&text),
-    };
+    match stdout_text(exit, json) {
+        Ok(text) => print_text(&text, exit),
+        Err(text) => output_failed(&text),
+    }
+}
+
+/// Prints `text` on stdout for `exit`, then its developer line on stderr, and ends with its exit
+/// code; a stdout that refuses the text leaves only the developer line `actingctl_output_failed`,
+/// exit 1. Workflow #434 CLI-HELP: `help`'s text for people (`crate::cli_help::people`) too.
+pub(crate) fn print_text(text: &str, exit: &Exit) -> ExitCode {
     let written = {
         let stdout = io::stdout();
         let mut writer = stdout.lock();
