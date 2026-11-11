@@ -41,6 +41,11 @@
 //! is unchanged. Fix 2: what is the module's own is its journal's pause step (the reason and the
 //! instances it paused), in any owner epoch, since the Runtime's restore numbers the pauses anew;
 //! an answer whose hold stays says `kept: true` and names in `next` the ways out that work today.
+//!
+//! Workflow #421 INST-5b: a pause step whose intent asks for it (the rescue module's `instance
+//! add`) also sets one global pause with the hold's reason after the instance pauses, unless a
+//! global pause is in effect, and records it in `own_pauses`; [`owned_hold`] reads it back and the
+//! release hands it back first, with the hold's other pauses.
 
 use super::guards;
 use super::hold::{self, HoldInputs, HoldReport, PauseIntent, ReleaseEvidence, ReleaseIntent};
@@ -219,9 +224,12 @@ fn pause(
     // Workflow #434 LAB-3 fix 1: the rescue module keeps a global pause and records the pauses it
     // set (`own_pauses`), the only ones its release hands back.
     let rescue = super::Face::of(operation.journal()).rescue();
+    // Workflow #421 INST-5b: and with an intent that asks for it (`instance add`), one global
+    // pause of the hold's own after the instance pauses, before the close.
+    let global = rescue && hold::global_of(&step.intent);
     operation.start(n)?;
     let host = operation.host();
-    match hold::run_pause(
+    let paused = hold::run_pause(
         host,
         &loaded.state_root,
         command,
@@ -230,8 +238,24 @@ fn pause(
         drained,
         loaded.settings.stop_busy_wait_ms,
         rescue,
-    ) {
-        Ok((drained, seen)) => {
+    )
+    .and_then(|(drained, seen)| {
+        if !global {
+            return Ok((drained, seen, None));
+        }
+        match hold::global_pause(
+            host.runtime(),
+            &loaded.state_root,
+            command,
+            &intent,
+            seen.as_ref(),
+        ) {
+            Ok(revision) => Ok((drained, seen, revision)),
+            Err(refusal) => Err(hold::PauseRefused { refusal, drained }),
+        }
+    });
+    match paused {
+        Ok((drained, seen, revision)) => {
             let mut evidence = json!({
                 "deferred": deferred,
                 "drained": hold::drained_value(&drained),
@@ -241,7 +265,9 @@ fn pause(
             });
             if rescue && let Some(seen) = &seen {
                 evidence[hold::OWN_PAUSES] =
-                    hold::OwnPauses::seen(seen, &intent.reason, &intent.instances).value();
+                    hold::OwnPauses::seen(seen, &intent.reason, &intent.instances)
+                        .with_global(revision)
+                        .value();
             }
             Ok(StepEnd::Done(Some(evidence)))
         }
@@ -257,10 +283,19 @@ fn pause(
                 "runs_stopped_at_checkpoint": cut,
             });
             // Workflow #434 LAB-3 fix 1: the pauses this step set before it was refused are the
-            // rescue module's own, which it hands back at once.
+            // rescue module's own, which it hands back at once. Workflow #421 INST-5b: so is a
+            // global pause with the hold's reason when the intent asked for one (an earlier run
+            // of the step set it).
             if rescue && let Ok(Some(seen)) = host.runtime().status(&loaded.state_root) {
+                let revision = seen
+                    .global_pause
+                    .as_ref()
+                    .filter(|pause| global && pause.reason == intent.reason)
+                    .map(|pause| pause.revision);
                 evidence[hold::OWN_PAUSES] =
-                    hold::OwnPauses::seen(&seen, &intent.reason, &intent.instances).value();
+                    hold::OwnPauses::seen(&seen, &intent.reason, &intent.instances)
+                        .with_global(revision)
+                        .value();
             }
             operation.progress(n, evidence)?;
             if cut > 0 {
@@ -978,8 +1013,12 @@ pub(crate) fn owned_hold(
             else {
                 continue;
             };
-            let recorded = hold::OwnPauses::of(step.evidence.as_ref())
-                .filter(|record| &record.reason == reason)
+            let record = hold::OwnPauses::of(step.evidence.as_ref())
+                .filter(|record| &record.reason == reason);
+            // Workflow #421 INST-5b: the global pause the step recorded as its own, with the owner
+            // epoch and the revision it recorded.
+            let global = record.as_ref().and_then(hold::OwnPauses::recorded_global);
+            let recorded = record
                 .map(|record| record.revisions.into_keys().collect::<Vec<_>>())
                 .unwrap_or_default();
             let paused = hold::drained_of(step.evidence.as_ref())
@@ -989,6 +1028,9 @@ pub(crate) fn owned_hold(
             let found = owned.get_or_insert_with(hold::OwnedHold::default);
             found.paused.extend(paused);
             found.intended.extend(intent.instances);
+            if global.is_some() {
+                found.global = global;
+            }
         }
     }
     Ok(owned)
@@ -1071,6 +1113,7 @@ fn release_hold(
                     reason: &reason,
                     skipped: Some("post_check_failed"),
                     resumed: None,
+                    global_resumed: false,
                     handed_back: None,
                 }
                 .value(),
@@ -1082,7 +1125,8 @@ fn release_hold(
     let runtime = host.runtime();
     // Workflow #434 LAB-3 fix 1 and 2: the rescue module hands back only its own hold: the
     // instances its pause step paused, each while its pause shows the hold's reason, in whatever
-    // owner epoch the Runtime runs now.
+    // owner epoch the Runtime runs now. Workflow #421 INST-5b: and first the global pause its
+    // pause step set (`global_resumed`).
     let released = if super::Face::of(operation.journal()).rescue() {
         let Some(owned) = owned_hold(host, &paths, &reason, Some(operation.journal()))? else {
             return Ok(StepEnd::Ends(
@@ -1092,15 +1136,16 @@ fn release_hold(
         };
         hold::release_own(runtime, &loaded.state_root, command, &reason, &owned).map(|released| {
             if released.left.is_empty() {
-                Ok(released.resumed)
+                Ok((released.resumed, released.global))
             } else {
                 Err(released)
             }
         })
     } else {
-        hold::release(runtime, &loaded.state_root, command, &reason).map(Ok)
+        hold::release(runtime, &loaded.state_root, command, &reason)
+            .map(|resumed| Ok((resumed, false)))
     };
-    let resumed = match released {
+    let (resumed, global_resumed) = match released {
         Ok(Ok(resumed)) => resumed,
         // An instance that shows the hold's reason though its pause step did not pause it is not
         // the module's pause: left as it is, and the release says so. Every pause of the module's
@@ -1143,6 +1188,7 @@ fn release_hold(
             reason: &reason,
             skipped: None,
             resumed: Some(&resumed),
+            global_resumed,
             handed_back: Some(&handed_back),
         }
         .value(),
@@ -1539,6 +1585,7 @@ pub(crate) fn known_from(seen: &super::runtime::RuntimeSeen, hold: &HoldInputs) 
         reason: hold.reason.clone(),
         known: pauses_seen(seen, Some(&hold.reason)),
         only: hold.only.clone(),
+        global: hold.global,
     }
 }
 
