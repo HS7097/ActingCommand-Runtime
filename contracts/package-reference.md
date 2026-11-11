@@ -1080,5 +1080,7 @@ data files beside its package directories, one directory per game below the conf
     chain package that is not of the run's server is not used; one that cannot be admitted or
     is not fit for its part ends the run with `contained_task_navigation_package_invalid`
     (`navigation_role` `edge` or `chain`). A layer's own failure ends the run with its own
-    code. The navigation's layers, an interrupt's handler and the run the host starts itself
+    code; a layer on a page that the stage it starts at has no operation from ends with
+    `contained_task_state_invalid`, `state_problem` `no_move_from_page`, `page_id` and
+    `phase_id` (Workflow #428 DIAG-SI, since 0.12.55). The navigation's layers, an interrupt's handler and the run the host starts itself
     never navigate. Requests carry no field for any of these packages.

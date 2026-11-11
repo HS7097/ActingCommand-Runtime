@@ -788,4 +788,8 @@ outcome_keys! {
     consumption: integer,
     consumption_source: vocab(consumption_source),
     // ---- #428 SCHED-C1f1: end ----
+    // ---- #428 DIAG-SI (register §1.320): what `contained_task_state_invalid` found invalid, kept
+    // in codes mode, and the declared id of the stage a phased route's run was in. ----
+    state_problem: vocab(state_problem),
+    phase_id: id,
 }

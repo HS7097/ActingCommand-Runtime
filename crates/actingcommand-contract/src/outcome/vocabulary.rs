@@ -238,6 +238,28 @@ crate::outcome_vocabulary! {
     }
 }
 
+crate::outcome_vocabulary! {
+    /// Which kind of invalid state ended a contained task's run with the shared code
+    /// `contained_task_state_invalid` (vocabulary `state_problem`; Workflow #428 DIAG-SI, register
+    /// §1.320, since 0.12.55). The kernel and the host emit the code at many places; each place
+    /// gives its kind, and the page (`page_id`), the operation (`pack_operation_id`) and the stage
+    /// (`phase_id`) where it knows them.
+    pub enum StateProblem: "state_problem" {
+        /// No operation of the stage the run is in (of the package, for a route without stages)
+        /// leaves the page the run observes, and the page is no target and no error page of the
+        /// package: an authoring error of the package.
+        NoMoveFromPage => "no_move_from_page",
+        /// The run's state machine refused a transition the kernel asked of it in its state.
+        TransitionRefused => "transition_refused",
+        /// A Runtime-internal invariant broke: a value that cannot be absent was absent, an
+        /// arithmetic that cannot fail failed, or an answer that is never given was given.
+        RuntimeInvariant => "runtime_invariant",
+        /// A state the run's layers or a package registry hold is not one the host can use (the
+        /// run's navigation or interrupt state, an admitted layer package, a registry entry).
+        HeldStateUnusable => "held_state_unusable",
+    }
+}
+
 impl IoKind {
     /// The token of a Rust error kind; a kind this vocabulary does not list is `uncategorized`.
     pub fn from_error_kind(kind: std::io::ErrorKind) -> Self {

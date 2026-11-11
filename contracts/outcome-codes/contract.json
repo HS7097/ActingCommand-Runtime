@@ -16442,14 +16442,19 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "state_problem": "optional",
+        "page_id": "optional",
+        "pack_operation_id": "optional",
+        "phase_id": "optional",
+        "package_id": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): contained task state invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): a contained task's run reached a state from which it cannot go on, and ended there. Since 0.12.55 (Workflow #428 DIAG-SI, register 1.320) the code carries state_problem, the kind of invalid state: no_move_from_page (no operation of the stage the run is in leaves the page it observes), transition_refused (the run's state machine refused a transition), runtime_invariant (a Runtime-internal invariant broke) or held_state_unusable (a state the run's layers or a package registry hold is not usable), with the page (page_id), the operation (pack_operation_id), the stage (phase_id) or the package (package_id) where the place that ends the run knows them.",
+      "common_causes": "no_move_from_page: the package lets the run reach a page that the stage it is in (the package, for a route without stages) has no operation from, and the page is neither a target nor an error page of the package; as a layer (a prerequisite, return-home, entry recovery, handler or navigation package) this is a first page outside its entry page set, on which the layer starts at the first stage. transition_refused, runtime_invariant, held_state_unusable: a fault of the Runtime itself, not of the package or the device.",
+      "handling": "no_move_from_page: the package author gives the stage named by phase_id an operation from the page named by page_id, makes that page a target of the stage, or, for a layer, adds the page to the entry page set together with the stage it starts. transition_refused, runtime_invariant, held_state_unusable: the Runtime's own to report; keep the run's records and report them with the outcome, its state_problem and its locating values."
     },
     "contained_task_entry_pages_missing": {
       "category": "error",

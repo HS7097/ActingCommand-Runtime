@@ -349,7 +349,8 @@ declared-operation mode over the Lab lease:
   operation with `contained_task_effect_frame_identity_mismatch` (since 0.12.25, ISO-2b #419: a
   failure of this operation alone, non-fatal, its record written; the instance is not fenced, as
   for every broken invariant of the operation's own state: `contained_task_effect_invalid`,
-  `contained_task_state_invalid`). Each attempt's intent and outcome are
+  `contained_task_state_invalid`, since 0.12.55 with `state_problem` `runtime_invariant`,
+  Workflow #428 DIAG-SI). Each attempt's intent and outcome are
   read as an element operation's input is, from after the previous attempt's events;
 * the point is drawn with the touch keys in effect and the instance's landing history, which
   runs share and which records the press; attempt 1 draws from the request's seed (or one

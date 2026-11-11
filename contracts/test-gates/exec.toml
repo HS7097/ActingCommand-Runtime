@@ -2891,3 +2891,14 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_428_nav_l1::nav_l1_t4_a_route_without_stages_and_a_single_entry_page_run_as_a_layer_as_before",
 ]
 incident = ["#428 NAV-L1"]
+
+# Workflow #428 DIAG-SI (0.12.55; register §1.320; brief rd-1111/brief-diag-si.md; catalog code contained_task_state_invalid, vocabulary state_problem): the code says what was invalid, with the same category, ladder class and end: a phased route run as each kind of layer on a page outside its entry page set and outside the first stage's moves ends before any step with no_move_from_page, page_id and phase_id, and an ordinary run of a route without stages brought by its operation to a page no operation leaves ends after that step with no_move_from_page and page_id; the run's state machine gives each refused decision its kind (no operation from the page, a refused transition, an invalid value) with the code it had before, and the kernel's token follows the kind; a pacing factor below 1000 is runtime_invariant; the codes-only projection keeps the token
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_diag_si::diag_si_t1_a_stage_without_a_move_from_the_observed_page_names_the_page_and_the_stage",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_diag_si::diag_si_t2_the_state_machine_names_the_kind_of_a_refused_decision",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_diag_si::diag_si_t3_a_pacing_factor_below_the_minimum_is_a_runtime_invariant",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_diag_si::diag_si_t4_the_codes_only_projection_keeps_the_token",
+]
+incident = ["#428 DIAG-SI"]

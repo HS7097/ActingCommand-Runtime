@@ -9476,13 +9476,22 @@ impl HostShared {
                         .map_err(ContainedTaskRunError::Boundary)?;
                     return Err(ContainedTaskRunError::Task(error));
                 }
+                // Workflow #428 DIAG-SI: a layer's `contained_task_state_invalid` keeps its values.
+                let kept = prerequisite::layer_state_values(&error);
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
                         package_label: Some(recovery_label),
-                        outcome: Outcome::relayed(error.code().as_str()),
+                        outcome: prerequisite::layer_failure_outcome(&error),
                         role,
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
+                if let Some(outcome) = kept {
+                    return fail_contained_task_entry_with(
+                        runtime,
+                        SharedCode::ContainedTaskStateInvalid,
+                        outcome,
+                    );
+                }
                 return fail_contained_task_entry(runtime, error.code().as_str());
             }
             Err(

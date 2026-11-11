@@ -53,7 +53,7 @@ use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, RuntimeContai
 use super::navigation::{RunNavigation, run_navigation};
 use super::*;
 use crate::codes::ApplicationUpdateCode;
-use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
+use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome, StateProblem};
 use actingcommand_contract::{
     InterruptLimitCause, InterruptResult, MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem,
     NavigationRole, RegistryProblem, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
@@ -986,6 +986,24 @@ pub(super) fn interrupt_failure(error: RuntimeHostError) -> ContainedTaskRunErro
     ContainedTaskRunError::Boundary(failure)
 }
 
+/// Workflow #428 DIAG-SI (register §1.320): `contained_task_state_invalid` where a state the run's
+/// layers hold (its interrupts, its navigation, a layer package it admitted) is not one the host
+/// can use: `state_problem` `held_state_unusable`, and the package (`package_id`) when one is
+/// named. The run ends as before; only the values are new.
+pub(super) fn held_state_unusable(
+    package_id: Option<&str>,
+) -> ContainedTaskRunError<RequestFailure> {
+    let outcome = Outcome::new(SharedCode::ContainedTaskStateInvalid)
+        .state_problem(StateProblem::HeldStateUnusable);
+    ContainedTaskRunError::task_with_outcome(
+        SharedCode::ContainedTaskStateInvalid,
+        match package_id {
+            Some(package_id) => outcome.package_id(package_id),
+            None => outcome,
+        },
+    )
+}
+
 /// UPD-1 fix round 1 (review M2): the outcome a failed interrupt handler links to the run's
 /// update-required end, or none when its failure keeps its own path: a fatal one (a poisoned or
 /// fatal boundary failure, which `run_interrupt_layer` carries out unrecorded) and a stop of the
@@ -1115,9 +1133,10 @@ impl RuntimeContainedTask<'_> {
             return Ok(SharedInterruptVerdict::NotHandled);
         }
         self.admit_features(interrupts)?;
-        let features = interrupts.admitted_features.as_ref().ok_or_else(|| {
-            ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
-        })?;
+        let features = interrupts
+            .admitted_features
+            .as_ref()
+            .ok_or_else(|| held_state_unusable(Some(interrupts.features.package_id.as_str())))?;
         // The feature package's page of each candidate interrupt page.
         let feature_pages = features
             .page_ids()
@@ -1210,13 +1229,15 @@ impl RuntimeContainedTask<'_> {
     pub(super) fn navigation_features(
         &mut self,
     ) -> Result<Arc<PreparedContainedTask>, ContainedTaskRunError<RequestFailure>> {
-        let mut interrupts = self.interrupts.take().ok_or_else(|| {
-            ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
-        })?;
+        let mut interrupts = self
+            .interrupts
+            .take()
+            .ok_or_else(|| held_state_unusable(None))?;
         let admitted = self.admit_features(&mut interrupts).and_then(|()| {
-            interrupts.admitted_features.clone().ok_or_else(|| {
-                ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
-            })
+            interrupts
+                .admitted_features
+                .clone()
+                .ok_or_else(|| held_state_unusable(Some(interrupts.features.package_id.as_str())))
         });
         self.interrupts = Some(interrupts);
         admitted
@@ -1246,9 +1267,10 @@ impl RuntimeContainedTask<'_> {
         &mut self,
         index: usize,
     ) -> Result<SharedInterruptVerdict, ContainedTaskRunError<RequestFailure>> {
-        let mut interrupts = self.interrupts.take().ok_or_else(|| {
-            ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
-        })?;
+        let mut interrupts = self
+            .interrupts
+            .take()
+            .ok_or_else(|| held_state_unusable(None))?;
         let verdict = self.handle_shared_interrupt(&mut interrupts, index);
         self.interrupts = Some(interrupts);
         verdict
@@ -1332,9 +1354,10 @@ impl RuntimeContainedTask<'_> {
                 .admitted
                 .insert(pack.package_id.clone(), admitted);
         }
-        let admitted = interrupts.admitted.get(&pack.package_id).ok_or_else(|| {
-            ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
-        })?;
+        let admitted = interrupts
+            .admitted
+            .get(&pack.package_id)
+            .ok_or_else(|| held_state_unusable(Some(pack.package_id.as_str())))?;
         if let Some(page) = page
             && !admitted.entry_holds_page(page)
         {
@@ -1514,9 +1537,10 @@ impl RuntimeContainedTask<'_> {
         interrupts: &mut RunInterrupts,
         package_id: &str,
     ) -> Result<(), ContainedTaskRunError<RequestFailure>> {
-        let package = interrupts.admitted.get(package_id).ok_or_else(|| {
-            ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
-        })?;
+        let package = interrupts
+            .admitted
+            .get(package_id)
+            .ok_or_else(|| held_state_unusable(Some(package_id)))?;
         let role = Some(TaskEntryRecoveryRole::InterruptHandler);
         let package_label = package.package_label().to_owned();
         // The run's steps stay within 1000 (§3.10, `MAX_GATED_STEPS`).

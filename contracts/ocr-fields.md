@@ -448,7 +448,7 @@ mask, so one pack reads a value at more than one interface zoom. The task's `con
 Only `fields_v1`. The `0.7` collection form stays in schema `0.7`: its comparison selects the
 run's scheduling outcome, and the keyed ends schema `0.9` adds (`on_max_runs`, a keyed
 `on_guard_refused`, a wait step's `on_timeout`) would be a second source for it, which ends a run
-in `contained_task_state_invalid`. In schema `0.9` it is refused `resource_declaration_invalid`
+in `contained_task_state_invalid` (since 0.12.55 with `state_problem` `runtime_invariant`). In schema `0.9` it is refused `resource_declaration_invalid`
 at its first member `fields_v1` does not name.
 
 A `template_relative` box on an anchor that declares `scales` follows the anchor by one rule:

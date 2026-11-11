@@ -13,13 +13,43 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunDecisionError {
     code: Code,
+    kind: RunDecisionKind,
     message: String,
+}
+
+/// Workflow #428 DIAG-SI (register §1.320): what kind of decision the run's state machine
+/// refused, so the kernel tells the kinds apart without reading the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunDecisionKind {
+    /// A value handed to the machine, or a page it observes, that it cannot take
+    /// (`run_decision_invalid`): an empty id, an attempt past its bound, a configuration it
+    /// refuses, a page that matches several target pages.
+    Invalid,
+    /// No operation of the stage the run is in (of the package, for a route without stages)
+    /// leaves the page it observes (`run_decision_invalid`, "no operation can continue from
+    /// page").
+    NoOperationFromPage,
+    /// A transition the machine refuses in its state (`run_transition_invalid`).
+    TransitionRefused,
+    /// Workflow #390 EXEC-1: every candidate operation of the page was passed over on its frame
+    /// (`contained_task_operation_candidates_exhausted`).
+    CandidatesExhausted,
 }
 
 impl RunDecisionError {
     fn invalid(message: impl Into<String>) -> Self {
         Self {
             code: ExecutionKernelCode::RunDecisionInvalid.code(),
+            kind: RunDecisionKind::Invalid,
+            message: message.into(),
+        }
+    }
+
+    /// Workflow #428 DIAG-SI: no operation of the current stage leaves the current page.
+    fn no_operation_from_page(message: impl Into<String>) -> Self {
+        Self {
+            code: ExecutionKernelCode::RunDecisionInvalid.code(),
+            kind: RunDecisionKind::NoOperationFromPage,
             message: message.into(),
         }
     }
@@ -27,6 +57,7 @@ impl RunDecisionError {
     fn invalid_transition(message: impl Into<String>) -> Self {
         Self {
             code: ExecutionKernelCode::RunTransitionInvalid.code(),
+            kind: RunDecisionKind::TransitionRefused,
             message: message.into(),
         }
     }
@@ -35,12 +66,18 @@ impl RunDecisionError {
     fn candidates_exhausted(message: impl Into<String>) -> Self {
         Self {
             code: ExecutionKernelCode::ContainedTaskOperationCandidatesExhausted.code(),
+            kind: RunDecisionKind::CandidatesExhausted,
             message: message.into(),
         }
     }
 
     pub const fn code(&self) -> Code {
         self.code
+    }
+
+    /// Workflow #428 DIAG-SI: the kind of the refused decision.
+    pub const fn kind(&self) -> RunDecisionKind {
+        self.kind
     }
 
     pub fn message(&self) -> &str {
@@ -676,7 +713,7 @@ impl RunStateMachine {
         let operation = select_run_operation(&self.config.game, &current_page, &phase_operations)
             .ok_or_else(|| {
             if self.passed_over.is_empty() {
-                RunDecisionError::invalid(format!(
+                RunDecisionError::no_operation_from_page(format!(
                     "no operation can continue from page '{current_page}'"
                 ))
             } else {

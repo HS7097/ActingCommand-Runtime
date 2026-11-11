@@ -527,7 +527,7 @@ mod vocabulary;
 
 pub use vocabulary::{
     BlackoutSource, CauseRelation, FileState, IoKind, IoOp, LadderClass, RawSource, RemedyProblem,
-    RemedySource, RunOrigin,
+    RemedySource, RunOrigin, StateProblem,
 };
 
 /// The merged outcome catalog, embedded at build time. The crate's `build.rs` generates it from

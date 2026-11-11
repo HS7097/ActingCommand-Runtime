@@ -32,10 +32,10 @@ use super::scan::{RuntimeScanSource, ScanDeclaration, ScanEnd, ScanSession, Scan
 use super::{
     ContainedTaskError, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
     ContainedTaskTrace, PageObservation, PreparedContainedTask, ResourceReadingProblem,
-    TaskControl, TaskOperation, TaskProgram, budget_observation_now, step_point_draw,
+    TaskControl, TaskOperation, TaskProgram, budget_observation_now, invariant_detailed,
+    step_point_draw,
 };
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
-use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     CandidateFeature, CandidateLayoutKind, FactScalar, MAX_FACT_TTL_MS, MAX_LIST_READING_COLUMNS,
@@ -409,13 +409,11 @@ impl ScanSession<'_> {
                     .unwrap_or(u32::MAX),
             })),
             // A list reading evaluates nothing, so it neither aborts nor stops early.
-            ScanEnd::Aborted { .. } | ScanEnd::EarlyStopped => {
-                Err(ContainedTaskError::with_detail(
-                    SharedCode::ContainedTaskStateInvalid.code(),
-                    "list reading ended without its end check",
-                )
-                .into())
-            }
+            ScanEnd::Aborted { .. } | ScanEnd::EarlyStopped => Err(invariant_detailed(
+                "list reading ended without its end check",
+                |outcome| outcome,
+            )
+            .into()),
         }
     }
 }
@@ -430,9 +428,9 @@ pub(super) fn list_rows_of<'p>(
     columns: &[(String, String)],
 ) -> Result<ListRead, ContainedTaskError> {
     let invariant = || {
-        ContainedTaskError::with_detail(
-            SharedCode::ContainedTaskStateInvalid.code(),
+        invariant_detailed(
             "list reading: a fixed position lacks a declared feature",
+            |outcome| outcome,
         )
     };
     let mut unread = 0_u32;
@@ -483,9 +481,9 @@ pub(super) fn list_rows_of<'p>(
         (true, _) => 1000,
         (false, Some(confidence)) => confidence,
         (false, None) => {
-            return Err(ContainedTaskError::with_detail(
-                SharedCode::ContainedTaskStateInvalid.code(),
+            return Err(invariant_detailed(
                 "list reading: no row feature carries a confidence",
+                |outcome| outcome,
             ));
         }
     };
@@ -563,10 +561,9 @@ impl PreparedContainedTask {
         let (latest, _) = source.into_parts();
         let read = read.map_err(at_read_list)?;
         let last = latest.ok_or_else(|| {
-            ContainedTaskError::with_detail(
-                SharedCode::ContainedTaskStateInvalid.code(),
-                "list reading captured no viewport",
-            )
+            invariant_detailed("list reading captured no viewport", |outcome| {
+                outcome.pack_operation_id(operation.id.as_str())
+            })
         })?;
         let declaration = ListReadingDeclaration {
             operation_id: operation.id.clone(),
@@ -577,10 +574,9 @@ impl PreparedContainedTask {
         {
             ListRead::Whole(rows) => (
                 end_captured_at.ok_or_else(|| {
-                    ContainedTaskError::with_detail(
-                        SharedCode::ContainedTaskStateInvalid.code(),
-                        "list reading whole without an end frame",
-                    )
+                    invariant_detailed("list reading whole without an end frame", |outcome| {
+                        outcome.pack_operation_id(operation.id.as_str())
+                    })
                 })?,
                 Ok(rows),
             ),

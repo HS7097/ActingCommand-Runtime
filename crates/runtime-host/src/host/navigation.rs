@@ -39,7 +39,8 @@
 use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, RuntimeContainedTask};
 use super::runtime_facts::TASK_PAGE_FACT_KEY;
 use super::standard_pack::{
-    GameRoot, RegisteredPack, RunInterrupts, interrupt_failure, package_invalid,
+    GameRoot, RegisteredPack, RunInterrupts, held_state_unusable, interrupt_failure,
+    package_invalid,
 };
 use super::*;
 use actingcommand_contract::{
@@ -243,8 +244,10 @@ fn operation_failure(failure: RequestFailure) -> ContainedTaskRunError<RequestFa
     }
 }
 
+/// Workflow #428 DIAG-SI: the run holds no navigation, or none whose entry is listed, where the
+/// gate navigates: a state the run's layers hold that the host cannot use.
 fn state_invalid() -> ContainedTaskRunError<RequestFailure> {
-    ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
+    held_state_unusable(None)
 }
 
 /// #411 A45: the gate's entry asked of a package that declares no entry page it can check.

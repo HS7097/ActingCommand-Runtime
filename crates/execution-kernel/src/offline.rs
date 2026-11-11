@@ -11,7 +11,7 @@ use crate::{
     SelectionStateRequest, TouchSampling,
 };
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Detail, Outcome};
+use actingcommand_contract::outcome::{Code, Detail, Outcome, StateProblem};
 use actingcommand_contract::{
     InputAction, InputSamplingEvidence, InstanceFactContext, InstanceFactSnapshot, OcrFieldPrivacy,
     OcrFieldsReport,
@@ -163,6 +163,9 @@ pub struct OfflinePostAdmissionOcrStatus {
 pub struct OfflineSimulationError {
     code: Code,
     detail: Option<String>,
+    /// Workflow #428 DIAG-SI: the error's outcome with the values its code declares, when the
+    /// adapter attached them (`contained_task_state_invalid`'s `state_problem`).
+    values: Option<Outcome>,
 }
 
 impl OfflineSimulationError {
@@ -170,6 +173,7 @@ impl OfflineSimulationError {
         Self {
             code: code.into(),
             detail: None,
+            values: None,
         }
     }
 
@@ -177,6 +181,17 @@ impl OfflineSimulationError {
         Self {
             code: code.into(),
             detail: Some(detail.into()),
+            values: None,
+        }
+    }
+
+    /// Workflow #428 DIAG-SI: an invariant of the replay adapter's own bookkeeping broke:
+    /// `contained_task_state_invalid` with `state_problem` `runtime_invariant`.
+    fn adapter_invariant() -> Self {
+        let code = SharedCode::ContainedTaskStateInvalid.code();
+        Self {
+            values: Some(Outcome::new(code).state_problem(StateProblem::RuntimeInvariant)),
+            ..Self::new(code)
         }
     }
 
@@ -186,6 +201,14 @@ impl OfflineSimulationError {
 
     pub fn detail(&self) -> Option<&str> {
         self.detail.as_deref()
+    }
+
+    /// Workflow #428 DIAG-SI: the error as an outcome: its code with the values the adapter
+    /// attached, otherwise its code alone.
+    pub fn outcome(&self) -> Outcome {
+        self.values
+            .clone()
+            .unwrap_or_else(|| Outcome::new(self.code))
     }
 }
 
@@ -874,6 +897,11 @@ where
                     code,
                 )));
             }
+            ReplayBoundary::AdapterInvariant => {
+                return Err(OfflineReplayError::Invariant(
+                    OfflineSimulationError::adapter_invariant(),
+                ));
+            }
         },
     };
     let seed = runtime
@@ -929,6 +957,9 @@ enum ReplayBoundary<E> {
     /// A started step names an operation the replay cannot describe; the run ends with it.
     Step(Box<crate::ContainedTaskError>),
     Invariant(Code),
+    /// Workflow #428 DIAG-SI: an invariant of the adapter's own bookkeeping broke (a trace of a
+    /// step that never started, readings without a handed-off frame).
+    AdapterInvariant,
 }
 
 impl<I> ReplayRuntime<'_, I> {
@@ -943,7 +974,7 @@ impl<I> ReplayRuntime<'_, I> {
 
 /// A step trace for a step that never started.
 fn step_not_started<E>() -> ReplayBoundary<E> {
-    ReplayBoundary::Invariant(SharedCode::ContainedTaskStateInvalid.code())
+    ReplayBoundary::AdapterInvariant
 }
 
 impl<I, E> ContainedTaskRuntime for ReplayRuntime<'_, I>
@@ -1128,9 +1159,10 @@ where
                 unresolved,
                 ..
             } => {
-                let frame = self.reading_frames.pop_front().ok_or_else(|| {
-                    ReplayBoundary::Invariant(SharedCode::ContainedTaskStateInvalid.code())
-                })?;
+                let frame = self
+                    .reading_frames
+                    .pop_front()
+                    .ok_or(ReplayBoundary::AdapterInvariant)?;
                 self.readings.push(OfflineReplayReadings {
                     frame,
                     readings: readings
