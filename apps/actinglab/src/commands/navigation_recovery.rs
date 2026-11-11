@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::{
     CaptureBackendChoice, CaptureFreshProbeReport, CaptureFreshProbeStatus,
     CaptureFreshnessExpectation, CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions,
@@ -39,8 +41,104 @@ pub(crate) fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutc
     readonly_cli::run_is_visible(global, args)
 }
 
+/// Workflow #434 LAB-5B3 (tests only): the flags `locate` reads: the legacy routing it refuses,
+/// its template (also its first positional) and metric, and its frame ([`SCENE_READS`]).
+#[cfg(test)]
+pub(crate) const LOCATE_READS: FlagReads = FlagReads {
+    row: "locate",
+    parts: &[
+        &super::device_commands::LEGACY_ROUTING_READS,
+        &ReadPart {
+            options: &["--template", "--metric"],
+            switches: &[],
+            refused: &[],
+        },
+        &SCENE_READS,
+    ],
+};
+
+/// Workflow #434 LAB-5B3 (tests only): the flags `recover` reads, path by path: the parts every
+/// path reads (the legacy routing it refuses, the seed, the flags that choose the path), then
+/// `--stale-capture`'s, then the maintenance route's (its resources, the env markers of its pack,
+/// its frame and the route) and `--startup-login`'s on top of the route's.
+#[cfg(test)]
+pub(crate) const RECOVER_READS: FlagReads = FlagReads {
+    row: "recover",
+    parts: &[
+        &super::device_commands::LEGACY_ROUTING_READS,
+        &crate::lab_draw::SEED_READS,
+        &RECOVER_PATH_READS,
+        &RECOVER_STALE_CAPTURE_READS,
+        &RECOVER_RESOURCE_READS,
+        &crate::env_detection::ENV_MARKER_READS,
+        &SCENE_READS,
+        &RECOVER_ROUTE_READS,
+        &RECOVER_STARTUP_LOGIN_READS,
+    ],
+};
+
+/// The flags that choose `recover`'s path; `--dry-run` is actinglab's global option.
+#[cfg(test)]
+const RECOVER_PATH_READS: ReadPart = ReadPart {
+    options: &[],
+    switches: &[
+        "--dry-run",
+        "--stale-capture",
+        "--startup-login",
+        "--capture",
+    ],
+    refused: &[],
+};
+
+/// `recover --stale-capture`'s own flags.
+#[cfg(test)]
+const RECOVER_STALE_CAPTURE_READS: ReadPart = ReadPart {
+    options: &["--fresh-delay-ms"],
+    switches: &["--capture", "--diagnose"],
+    refused: &[],
+};
+
+/// The recognition pack, its pages and the navigation the maintenance route loads
+/// (`recognition_resources`, `navigation_path`).
+#[cfg(test)]
+const RECOVER_RESOURCE_READS: ReadPart = ReadPart {
+    options: &["--pack", "--pack-root", "--pages", "--navigation"],
+    switches: &[],
+    refused: &[],
+};
+
+/// The maintenance route's target, limit and timing.
+#[cfg(test)]
+const RECOVER_ROUTE_READS: ReadPart = ReadPart {
+    options: &["--to", "--max-actions", "--step-timeout-ms", "--poll-ms"],
+    switches: &[],
+    refused: &[],
+};
+
+/// `recover --startup-login`'s own flags.
+#[cfg(test)]
+const RECOVER_STARTUP_LOGIN_READS: ReadPart = ReadPart {
+    options: &[
+        "--startup-max-rounds",
+        "--startup-interval-ms",
+        "--startup-login-file",
+    ],
+    switches: &[],
+    refused: &[],
+};
+
+/// The flags [`load_scene_from_flags`] reads: an offline frame, or a capture and its freshness.
+#[cfg(test)]
+const SCENE_READS: ReadPart = ReadPart {
+    options: &["--scene", "--fresh-delay-ms"],
+    switches: &["--capture", "--require-fresh"],
+    refused: &[],
+};
+
 pub(crate) fn run_locate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    #[cfg(test)]
+    flags.reading(&LOCATE_READS);
     reject_legacy_session_routing(&flags)?;
     let template = flags
         .optional_path("--template")
@@ -77,6 +175,8 @@ pub(crate) fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcom
 
 pub(crate) fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    #[cfg(test)]
+    flags.reading(&RECOVER_READS);
     reject_legacy_session_routing(&flags)?;
     // Workflow #406 T4: `--seed` draws the point of each box a recovery route presses; a path
     // that presses no route never reads it, so it is refused there, never ignored.

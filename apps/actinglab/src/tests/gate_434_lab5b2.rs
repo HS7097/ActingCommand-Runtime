@@ -28,21 +28,21 @@ use actingcommand_lab_ops::table::{
 };
 use std::collections::BTreeSet;
 
-/// A parameter's flag as the command line writes it.
-fn flag(name: &str) -> String {
+/// A parameter's flag as the command line writes it (also LAB-5B3's).
+pub(super) fn flag(name: &str) -> String {
     format!("--{}", name.replace('_', "-"))
 }
 
 /// Whether `flag` is one of actinglab's global options, which its parser takes anywhere on the
 /// command line before the command sees its flags (`words::GLOBAL_OPTIONS`).
-fn global(flag: &str) -> bool {
+pub(super) fn global(flag: &str) -> bool {
     words::GLOBAL_OPTIONS.contains(&flag)
 }
 
 /// The positional words `operation`'s own command is given: every positional of the row but the
 /// instance, which the command line hands on as actinglab's global `--instance`
 /// (`engine::arguments`).
-fn row_positionals(operation: &Operation) -> own_flags::Positionals {
+pub(super) fn row_positionals(operation: &Operation) -> own_flags::Positionals {
     let mut least = 0;
     let mut most = Some(0);
     for param in operation.params.iter().filter(|param| {

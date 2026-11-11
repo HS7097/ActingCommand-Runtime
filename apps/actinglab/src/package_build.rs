@@ -14,6 +14,31 @@ pub(crate) const LOADING_FLAGS: [&str; 4] = ["--root-file", "--packs-root", "--w
 /// Workflow #434 LAB-5B2: the flags of `package loading` that take no value.
 pub(crate) const LOADING_SWITCHES: [&str; 2] = ["--write", "--check"];
 
+/// Workflow #434 LAB-5B3 (tests only): the flags `package bundle` reads, each with its value.
+#[cfg(test)]
+pub(crate) const BUNDLE_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "package bundle",
+        parts: &[&crate::flag_args::reads::ReadPart {
+            options: &[
+                "--maintenance",
+                "--source-repository",
+                "--source-commit",
+                "--applications",
+                "--packs-root",
+                "--out",
+                "--pages",
+                "--interrupts",
+                "--navigation",
+                "--schedule",
+                "--display-layout",
+                "--loading",
+            ],
+            switches: &[],
+            refused: &[],
+        }],
+    };
+
 /// Workflow #288 A2b: `package bundle --applications <file> --packs-root <directory> --out
 /// <directory>`, with `--source-repository` and `--source-commit` together or not at all; it
 /// writes bundle v4 (Workflow #336 PKG-S5). Workflow #373 NAV-T: `--pages`, `--interrupts` and
@@ -22,8 +47,10 @@ pub(crate) const LOADING_SWITCHES: [&str; 2] = ["--write", "--check"];
 /// `--display-layout` (`display-layout.json`). Workflow #407 LOAD-1: `--loading` names the
 /// game's `loading.json`: every pack's loading copy is checked against it, and it is laid beside
 /// `bundle.json` with its templates.
+///
+/// Workflow #434 LAB-5B3: whether a flag was given is read through `FlagArgs::given`.
 pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
-    let maintenance = if flags.flags.contains_key("--maintenance") {
+    let maintenance = if flags.given("--maintenance") {
         use std::io::Read;
         let path = flags.required_path("--maintenance")?;
         let mut bytes = Vec::new();
@@ -46,8 +73,8 @@ pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
         None
     };
     let source = match (
-        flags.flags.contains_key("--source-repository"),
-        flags.flags.contains_key("--source-commit"),
+        flags.given("--source-repository"),
+        flags.given("--source-commit"),
     ) {
         (false, false) => None,
         (true, true) => Some(BundleSource {
@@ -62,7 +89,7 @@ pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
     };
     // Workflow #373 NAV-T: a root file flag given without its path is refused, not ignored.
     let root_file = |flag: &str| -> CliOutcome<Option<std::path::PathBuf>> {
-        if flags.flags.contains_key(flag) {
+        if flags.given(flag) {
             flags.required_path(flag).map(Some)
         } else {
             Ok(None)

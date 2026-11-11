@@ -8999,6 +8999,146 @@ launch|restart|stop` are B1's), and `accepted` still answers for it from
 that list; `every_debugging_and_authoring_row_has_one_kind` checks that its rows are planned core
 rows, each once, and that among the core rows the register answers for exactly these.
 
+#### Slice LAB-5B3 (0.12.52): each lenient command declares the flags it reads, held equal to its row
+
+Coordinator work order `rd-1108/arch-013/brief-lab5b3.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` §3 (kind T4), read against main `be1a963b` (LAB-5B2
+merged), which wins over the survey, and merged with main `c0edc8b2` (LAB-5G4a, LAB-5E), which
+changes no lenient command's reads, before the push. The coordinator's ruling (board #434, 6770034832 point 3):
+these 24 commands keep ignoring a flag they do not read in this round; making them refuse is a
+later slice. The rule of the slice: no command line changes what it accepts, refuses or prints.
+
+**The read lists** (`#[cfg(test)]` constants beside each command, none in the product build).
+Their types are `flag_args::reads::{FlagReads, ReadPart}`: a list names its row and is the union
+of its parts, each part the options (read for their value: `optional`, `values`, `required` and
+their path forms), the switches (read with `bool`) and the refused flags (read only to refuse
+them) of one path of the command or of a helper several commands share. Shared parts:
+`commands/device_commands.rs` `LEGACY_ROUTING_READS` (`--via-daemon`, `--local`, `--state-dir`,
+refused), `contained_resources.rs` `PACKAGE_LOCATOR_READS` (`--package`, `--zip`), `lab_draw.rs`
+`SEED_READS`, `readonly_cli.rs` `READONLY_INPUT_READS` (`--scene`, `--require-fresh`; `--capture`
+refused, so `--fresh-delay-ms` is never read there), `env_detection.rs` `ENV_MARKER_READS`,
+`commands/navigation_recovery.rs` `SCENE_READS`, `commands/session_record.rs`
+`RECORD_SESSION_READS` and `RECORD_BACKTEST_READS`.
+
+| Row | File (`apps/actinglab/src/`) | Constant | Per-path parts |
+|---|---|---|---|
+| `touch-probe` | `commands/device_commands.rs` | `TOUCH_PROBE_READS` (`--touch-backend` refused) | |
+| `recover` | `commands/navigation_recovery.rs` | `RECOVER_READS` | `RECOVER_PATH_READS`, `RECOVER_STALE_CAPTURE_READS`, `RECOVER_RESOURCE_READS`, `RECOVER_ROUTE_READS`, `RECOVER_STARTUP_LOGIN_READS` |
+| `locate` | `commands/navigation_recovery.rs` | `LOCATE_READS` | |
+| `tap-target`, `navigate` | `drive_cli.rs` | `TAP_TARGET_READS`, `NAVIGATE_READS` | |
+| `debug-package`, `export-evidence` | `runtime_debug.rs` | `DEBUG_PACKAGE_READS`, `EXPORT_EVIDENCE_READS` | |
+| `recognize-artifact`, `recognize`, `detect-page`, `current-page`, `is-visible` | `readonly_cli.rs` | `RECOGNIZE_ARTIFACT_READS`, `RECOGNIZE_READS`, `DETECT_PAGE_READS`, `CURRENT_PAGE_READS`, `IS_VISIBLE_READS` | |
+| `record start`, `status`, `candidates`, `amend`, `step` | `commands/session_record.rs` | `RECORD_START_READS`, `RECORD_STATUS_READS`, `RECORD_CANDIDATES_READS`, `RECORD_AMEND_READS`, `RECORD_STEP_READS` | amend: `RECORD_AMEND_STEP_READS`, `RECORD_AMEND_RESOURCE_READS`, `RECORD_AMEND_OPERATION_READS`; step by `--kind`: `RECORD_STEP_RESOURCE_READS`, `RECORD_STEP_OPERATION_READS` |
+| `package validate` | `package_cli.rs` | `VALIDATE_READS` | |
+| `package inspect`, `operation validate`, `inspect`, `explain` | `lab_package_control.rs` | `INSPECT_READS`, `OPERATION_VALIDATE_READS`, `OPERATION_INSPECT_READS`, `OPERATION_EXPLAIN_READS` | |
+| `package bundle` | `package_build.rs` | `BUNDLE_READS` | |
+| `resource compile-maa` | `maa_task_graph.rs` | `COMPILE_MAA_READS` (with `--repo`, which `run_resource` reads for every resource command) | |
+
+Global options a command reads through its flags are on its list (`--instance` of the record
+actions and the env markers, `--dry-run` of `recover`, `tap-target` and `navigate`, `--game` and
+`--server` of `record start` and the env markers, `--touch-backend` refused): actinglab's parser
+takes them first, so these reads see nothing on the command line, and the command reads the global
+option.
+
+**The test-only recording** (`flag_args.rs`, module `reads`). A command declares its list where it
+starts, right after it parses its flags (`FlagArgs::reading`; the dispatchers of `record`,
+`package`, `operation` and `resource` by subcommand, before their first read; `package` and
+`operation` through the test-only `hold_package_reads` and `hold_operation_reads` of
+`lab_package_control.rs`). From then on every
+read of those flags and of every copy of them (`bool`, `optional`, `values`, `count`, the new
+`given`, and the readers built on them) is recorded on the reading thread (`reads::take`), and a
+read of a name the list does not hold, or in the form the list does not give it (a switch read for
+its value, an option read with `bool`), panics with the row and the name, failing the test. A
+refused flag may be read in any form. Flags no command declared for (the global gates' own parse,
+`FlagArgs::default()`, the helpers' tests) are not held. `FlagArgs::from_parts` builds flags the
+code makes itself (the input relay's action, `resource verify`'s preflight); the struct literal is
+gone. In the product build `FlagArgs` has no such field and reads as before.
+
+**Fix round 1 (the command inventory guard).** `hold_package_reads` and `hold_operation_reads`
+are functions of their own, not a test-only match in the dispatcher: the guard
+`command_inventory_matches_checked_in_snapshot` takes the first match on the subcommand in a
+group's dispatcher for its dispatch, and such a match read `package` with 5 of its 10
+subcommands and `operation` with 3 of its 4 (94 commands, not 100). No command a person can type
+moved; `ratchet/actinglab_commands.json` is unchanged.
+
+**Work order point 4.** `FlagArgs::reading_forms(row)` holds a strict command to the forms the
+register gives its flags (`own_flags::accepted`): a flag the register lists as taking a value read
+with `bool`, or a switch read for its value, fails; a name off its list is left to the command's
+own refusal. It is declared by `observe`, `do`, `ensure`, `wait` (checking `LAB2_SWITCHES`),
+`package fmt` (`--check`) and `package loading` (`LOADING_SWITCHES`), so their existing tests
+check those switch lists. `RECORD_MARK_SWITCHES` and `record stop --dry-run` cannot be checked so:
+`record_flag_switch` reads a switch with `values`.
+
+**The register.** `cli_module::own_flags::reads(row)` answers for exactly the lenient rows: the
+list, its options, switches and refused flags, the option the first positional stands in for
+(`tap-target` and `is-visible` `--target`, `locate` `--template`, `record candidates` and `record
+amend` `--step-id`) and the count of positionals the code checks (exactly none for `touch-probe`,
+`debug-package` and `export-evidence`; no count for the others, `recover --stale-capture` exactly
+none on its own path only).
+
+**Reads outside `FlagArgs`'s readers** (work order, fail loud). `package bundle`
+(`--maintenance`, `--source-repository`, `--source-commit`, the root files) and `record amend`
+(`--threshold`) asked the flag map itself whether a flag was given: they read it through the new
+`FlagArgs::given` now, the same answer, so the recording sees it. `main.rs`'s
+`record_flag_gate` and `retired_digest_flag_gate` read the raw words of every command line, to
+refuse `--record` and `--tap-rect` outside their commands and the retired digest flags; they are
+refusals common to every command and on no list. `refuse_repeated_options` and `record amend
+--from-drift-diagnostics`'s own list (`reject_direct_drift_amend_flags`) look at every flag given,
+by no name; that list lets `--holder`, `--lease-holder` and `--lease-id` through, which amend never
+reads.
+
+**Corrections of the table (work order point 6; the table follows the code).** Each makes the row
+say what its command already reads; on the command line nothing changes (`recover` hands every
+further flag on, and the record actions are actinglab's own words), and `serve --stdio` now takes
+these parameters and hands them on:
+
+| # | Row | Added | The code that reads it |
+|---|---|---|---|
+| L5B3-1 | `recover` | `env_task` (option, string) | `env_detection::resolve_env_markers_in_value`, on the maintenance route's pack |
+| L5B3-2 | `recover` | `game`, `server` (options, string; actinglab's global options) | the same, and the route's resources by `--game`/`--server` |
+| L5B3-3 | `record step` | `metric` (option, `enum:ccorr_normed\|ccoeff_normed`, default `ccorr_normed`), `duration_ms` (option, integer) | the backtest of a resource step's frame (`parse_match_metric_flag`); an operation's swipe or long press (`parse_record_duration_ms`) |
+| L5B3-4 | `record amend` | `metric` (as step's), `negative_frame` (option, file) | the backtest of the amended step's frame; `read_session_record_contrast_frame` when `contrast_frame` is absent |
+
+No row promised a flag its command never reads.
+
+**What the tests reach** (work order point 5). Existing in-process tests reach the reads of 16
+commands: `recover`, `tap-target`, `navigate`, `recognize-artifact`, the five record actions,
+`package validate`, `package bundle`, `recognize`, `detect-page`, `current-page`, `is-visible`,
+`locate`. No test reached the other 8 through the place their list is declared (`touch-probe`,
+`debug-package`, `export-evidence`, `package inspect`, `resource compile-maa`, whose tests call
+its inner function directly, `operation validate`, `inspect`, `explain`):
+`every_lenient_command_reads_through_its_list` runs each of them, as every lenient command, on a
+command line refused (or, `record status`, answered) before any Runtime connection, and reaches
+all of their reads. No list rests on reading alone; within the reached commands, reads behind a
+condition no test takes rest on reading: `recover`'s `--pack-root` and `--pages` (with `--pack`)
+and the freshness of a capture, `navigate`'s step timing (only when it presses), `locate`'s
+capture flags.
+
+**Tests.** New: apps row "#434 LAB-5B3": `gate_434_lab5b3::lenient_rows_match_their_reads` (for
+each lenient row, in both directions: every option and switch the row declares, but actinglab's
+global options, is on its list in the same form; every option and switch of the list is declared
+by the row in the same form, a global option in any form; no refused flag is a parameter of the
+row; the option the first positional stands in for is an option of the row; the row's
+positionals, the instance not among them, fit the count the command checks; the register answers
+for exactly the lenient rows, each list naming its row; a failure names the row, the flag and the
+direction), `gate_434_lab5b3::a_held_read_outside_its_list_fails` (the recording itself, and a
+strict row held to its register's forms) and
+`gate_434_lab5b3::every_lenient_command_reads_through_its_list`. LAB-5B2's helpers `flag`,
+`global` and `row_positionals` are `pub(super)` for the new file; its two tests are unchanged.
+Every existing test now also fails on an undeclared read.
+
+**Interface.** None raised. No type, member, code, key or location is added; the table gains the
+parameters of L5B3-1 to L5B3-4.
+
+**Left to other slices.** Making the 24 commands refuse a flag their list does not hold (the
+coordinator's ruling: a later slice); B1, C, E, F, G as their work orders say.
+
+**What LAB-5B3 changes live.** No command line accepts, refuses or prints anything new; `serve
+--stdio` takes the parameters L5B3-1 to L5B3-4 add and hands them to the command, which reads them
+as it reads them from the command line.
+
+**LAB-5B3 rollback** (to the release before it). Nothing persisted: code and the table only.
+
 #### Slice LAB-5G4a (0.12.52): `serve --stdio --front mcp` records `Lab-MCP`; `serve` refuses values that begin with `--`
 
 Coordinator work order `rd-1108/arch-013/brief-lab5g4a.md`, after the read-only survey
@@ -10811,6 +10951,158 @@ running `read_request` over a test-only fake whose detector load takes five time
 no sleep, no model file). No existing test changed: none called the request path,
 `remaining_inference_budget` or the detector's load (`gate_407_gpu1b1`, `gate_407_gpu1b2` and
 `gate_407_gpu1e` build sessions through `ModelSessions` over their own fakes).
+
+### 1.299 Workflow #428 SCHED-C1 (contracts only): a rule's fixed value written in its pack, a valuation the pack declares, and the capped spending order's follow-ups (a trigger line, lines for one instance, episodes that survive, a pool its lines cannot spend, redundant old triggers); slices SCHED-C1a to SCHED-C1e (Alice's two kinds of scoring of 2026-11-09 15:47 and 15:50, board #428 6734155178, and her words of 15:57, 6734197818; her capped spending order and its two lines of 11-09, 6734854946 and 6735960127, and the planned red line of 11-07, 6706630435; the coordinator's rulings of 11-11, not Alice's words, coordinator work order `rd-1111/brief-sched-contract-c1.md`, on the facts checked on 11-11 in `rd-1111/audit-check/findings-rt-policy.md` and `findings-res.md`; design `rd-1031/design-c424-redline-1109.md` §1.6 and §4; read on main `c0edc8b2`)
+
+[scheduling/README.md](scheduling/README.md) ("Pool Valuation", "A valuation written in the pack";
+"Net benefit within a tier"; the new "Fixed values written in the pack"; "Pool lines" with "The
+trigger line", "Lines for one instance" and "A pool its lines cannot spend"; "Capped spending
+order" with "Episodes survive" and "Old triggers on a capped pool"; "Bounds") and
+[standard-pack-schedule.md](standard-pack-schedule.md) ("The file", `requires`, "Judged rules",
+"The fixed value", "Provenance", "What a resource repository writes", "Composition", "Tools", "A
+redundant trigger", "The scheduler workbench") are the contract. 1.299 is the next free number on
+`c0edc8b2`, where §1.298 is VIS-LOAD-1; the code slices add their rows under this section.
+
+**SCHED-C1 itself.** Contracts only: no code, no test, no schema file, no gate row, no CI file, no
+configuration key, no code of the outcome catalog, and no live revision raised. Every rule it adds
+is marked "(SCHED-C1, not built yet)" in the text. The rows that
+[v2/README.md](scheduling/v2/README.md), the schemas, [runtime-config.md](runtime-config.md),
+[actingd-check-config.md](actingd-check-config.md), [runtime-interface.md](runtime-interface.md)
+and the outcome catalog need are written by the code slice that builds each shape. The text names
+no game, resource or value.
+
+**Alice's words** (only these; ids above). 15:47: 「这个已经有结论了，就直接用固定值」 and
+「第一个就是在任务包里面已经写明了，这种就直接沿用就行。另一种是需要动态决策的，这种我们在启用打分器，在自己算。」;
+15:50: 「我们的这个数据建模它本身也是一个打分器，只不过它是产出的是离线数据，这个用来解决当前已经固定的。」;
+15:57, of the present benefit rule:
+「要是阻碍运行或者是不符合预期的话，就直接按照新的方法重写一遍就行。能跑就暂时可以先不用动它」; 17:42, of
+the lines: 「这个红线会随着时间由外部修改」; 11-07 (6706630435), of the planned red line:
+「不让资源达到上限，但是保留一些资源用于某些限时的，收益高的任务」. The trigger at the cap is point 2 of the ten points the
+coordinator wrote down from her approval of 17:48 (6735960127), and the old triggers point 9.
+
+**Why.** Every one of the four resource repositories' 237 schedule rules has empty `produces` and
+`consumes`; 136 are judged and would be refused `benefit_unknown` (`no_effects`) once the stop of
+ruling 116 is lifted, and no pool declares a valuation, so the lines written on three pools change
+no decision. A judged rule cannot carry a fixed value (`value_milli` is the score stage's term and
+`judge` does not read it). The capped spending order works only for valued pools, keeps its
+episodes in memory only (lost at a start, a new catalog generation and an expired reading), starts
+only at the cap, takes its lines only from the catalog, and reports a pool stuck at its cap only as
+an info reason. Alice's 15:57 words leave the present rule alone while it runs; it now blocks
+running, so the coordinator proceeds without asking again.
+
+**The coordinator's rulings of 11-11** (not Alice's words; the names, codes and shapes are this
+draft's, for the coordinator's review), each with its section:
+
+1. A rule may declare a fixed value, a new V2 task member `benefit_fixed_value_milli` (from the
+   `schedule.json` rule member `fixed_value_milli`), not `value_milli`; without effects it is its
+   known `B` (scheduling/README.md, "Fixed values written in the pack", "The member", "Without a
+   consumption").
+2. A consumer's fixed value is `V`; below the cap `V − W·c`, in a capped episode by `V ÷ c`; `W` may
+   be a constant valuation the pack declares, which the compiler already accepts, its origin marked
+   by `valuation_origin` ("With a consumption"; "A valuation written in the pack").
+3. Static and dynamic rules rank on one scale, `B ÷ E` inside the tier, with no second stage ("One
+   scale").
+4. Refused at compile time: a fixed value with a priced product or with the realization mark,
+   `fixed_value_conflict`; without `benefit_judged`, `missing_required_field` ("Refused at compile
+   time").
+5. `benefit_fixed_value` (info) on every decision whose `B` came from a fixed value ("What a person
+   sees").
+6. Provenance in the tools (`benefit_provenance`) and the workbench (`config.catalog_provenance`)
+   (standard-pack-schedule.md, "Provenance").
+7. The table by rule class (standard-pack-schedule.md, "What a resource repository writes").
+8. Lines for one instance through the Lab's `config set` and `config clear`, the key
+   `instance.<instance id>.scheduling.pool_lines` (scheduling/README.md, "Lines for one instance").
+9. Episodes survive a start, a generation with unchanged consumers and an unknown reading, in the
+   state file `policy/capped-episodes.json` ("Episodes survive").
+10. An optional `trigger_line`, absent the capacity ("The trigger line").
+11. A pool its lines cannot spend is the warning `pool_lines_unspendable`, in the status read ("A
+    pool its lines cannot spend").
+12. The old "reading ≥ capacity − margin" triggers are redundant once the pool is valued with lines;
+    the composer reports each (`standard_pack_line_trigger_redundant`) ("Old triggers on a capped
+    pool"; standard-pack-schedule.md, "A redundant trigger").
+
+**Where this changes or adds to the design** (`rd-1031/design-c424-redline-1109.md`):
+
+- §1.6 item 4, last point (the state in memory only, lost at a restart) and §4.1 test 16: changed;
+  episodes survive a start, a generation with unchanged consumers and an unknown or expired reading.
+- §1.6 item 3, the trigger (at or above the cap): added to; an optional trigger line, the cap
+  without one.
+- §1.6 item 1 (lines moved per instance through SS-2h-c) and §4.3 (SS-2h-c as the member
+  `pool_lines` of #429's v3 document through `ApplyResourceTargets`, after R-13a): changed; a
+  per-instance configuration key through `ConfigureSettings`, not waiting for R-13a.
+- §1.6 item 1 (`H = S − the costliest run`): added to; the state it prevents is checked and is a
+  warning.
+- §1.6 item 8 and §4.5 (the old triggers changed in RL-R with PRICE-4b's valuations): added to; the
+  composer's hint; and a pool's valuation may be the pack's constant, so the change need not wait
+  for PRICE-4b.
+- §1.6 item 9 (no valuation, so nothing changes at deploy) and §3.1 (the coordinator's earlier
+  reading: the settled kind also declares its effects): changed; the settled kind is a fixed value,
+  and behaviour changes when a `schedule.json` writes the members, not when the Runtime deploys.
+- §3.3 (each touched pool's valuation from the model's prices): added to; until the model's export,
+  a pool's valuation may be a constant written in the pack, replaced one by one.
+- §1.6 item 7 (the reason codes): added to; `pool_lines_unspendable` and the value `lines_source`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SC1-1 | a V2 task's `benefit_fixed_value_milli` (`1..=2^53−1`) | catalog format addition (no ledger shape) | SCHED-C1a | the composer; a raw V2 catalog | V2 only; requires `benefit_judged`; with a priced product or `benefit_realization`, `fixed_value_conflict`; absent serializes as nothing |
+| SC1-2 | the `schedule.json` rule members `fixed_value_milli`, `fixed_value_origin` (`"model"`), the pool member `valuation_origin` (`"model"`) | `schedule.json` format addition | SCHED-C1a | the resource side by hand; `acmodel bindings apply` writes `"model"` | taken out by the reader; refused on a maintenance rule; require `benefit_fixed_value` |
+| SC1-3 | `B` from a fixed value (`V`, less the cost of the pools consumed); its `ε` term 0; its `produces` unread by `B` | behaviour (evaluation) | SCHED-C1a | the policy evaluator | one scale: `B ÷ E`, and `V ÷ C` in a capped round |
+| SC1-4 | `benefit_fixed_value` (info; `benefit_milli`, `fixed_value_milli`, `expected_duration_ms`), the catalog diagnostic `fixed_value_conflict` (error), the key `fixed_value_milli`; `rank_breakdown` detail ` fixed_value_milli=<V>` | outcome catalog additions (policy) | SCHED-C1a | the policy evaluator and compiler | new prefix `fixed_value_` (policy) |
+| SC1-5 | `config.subsystems` rows `benefit_fixed_value` and `pool_trigger_line` (always on) | new row values of an existing fact | SCHED-C1a, SCHED-C1c | actingd | required through `requires` |
+| SC1-6 | `benefit_coverage.fixed_value`; `benefit_provenance {fixed_value {pack, model}, valuation {pack, model}}` | `actinglab standard-pack check` and `package bundle --schedule` answers | SCHED-C1a | actinglab | ids in file order |
+| SC1-7 | the program fact `config.catalog_provenance`; the overview's `catalog.benefit_provenance` | new key of the `config.` family; `actingctl overview` / `ac_overview` answer | SCHED-C1b | the workbench; lab-ops overview | as CW-1's `config.catalog_warnings` (§1.290): 256 rows with a cut row; no record of its own |
+| SC1-8 | a V2 pool's `trigger_line` (two forms) | catalog format addition | SCHED-C1c | `acmodel bindings apply` (RL-R) | only beside both lines; `pool_lines_invalid`; `0 ≤ H < S ≤ T ≤ cap` |
+| SC1-9 | `pool_lines_unspendable` (warning; `pool_id`, `pool_capacity`, `stop_line`, `hard_line`, `least_consumption`, `lines_source`) as a decision reason and a compile warning; the key `least_consumption` | outcome catalog addition (policy) | SCHED-C1c | the policy evaluator and compiler | shown by `ScheduleExplanation`; the compile warning reaches `config.catalog_warnings` |
+| SC1-10 | `standard_pack_line_trigger_redundant` (warning; `game`, `task_id`, `pool_id`) | outcome catalog addition (shared) | SCHED-C1c | the composer, for the tools | a hint; the workbench does not record it |
+| SC1-11 | the episodes kept: `<state root>/policy/capped-episodes.json` (`actingcommand.capped-episodes.v1`: owner epoch; per instance and pool the episode number, rounds, consumers key, round start, starting reading, order and passed members); the consumers key instead of the catalog hash; waiting on an unknown value; `capped_state_failed` (warning; `operation` `load` or `store`) | Runtime-owned state file (no ledger shape); behaviour; outcome addition (runtime-host) | SCHED-C1d | runtime-host policy host | no peer reads it; prefix `capped_` registered for runtime-host too |
+| SC1-12 | the per-instance key `instance.<instance id>.scheduling.pool_lines` (object of at most 32 pools); the value `lines_source` (vocabulary `instance`, `catalog`, `default`) on `pool_line_held`, `capped_spend` and `pool_lines_unspendable` | configuration key; outcome value and vocabulary | SCHED-C1e | the Lab's `config set` and `config clear`, the console | settable, no default; in the file the entry's `scheduling.pool_lines` |
+
+**The code slices, in order.**
+
+| Slice | Repository | Size | What | Depends on | Interfaces |
+|---|---|---|---|---|---|
+| SCHED-C1a | Runtime | M–L | SC1-1 to SC1-6 but `pool_trigger_line`: the task member and its refusals, `judge` reading `V`, the reason and the rank detail, the composer's members, coverage and provenance answers, the subsystem; `v2/README.md`, `v2/tasks.schema.json`, `actingd-check-config.md` rows | this contract | none: catalog and `schedule.json` additions gated by `requires`, outcome additions (as §1.289) |
+| SCHED-C1b | Runtime | S | SC1-7 | SCHED-C1a | none (as §1.290) |
+| SCHED-C1c | Runtime | M | SC1-8 to SC1-10 and `pool_trigger_line` | this contract | none |
+| SCHED-C1d | Runtime | M | SC1-11 | SCHED-C1c (the episode's rule reads `T`) | none: a file only the Runtime writes and reads; a rollback's build ignores it, and the next start of this one drops it (owner epoch) |
+| SCHED-C1e | Runtime | M | SC1-12: the key and its section check in `runtime-config` (the instance's valued pools of the active generation in its context), the host's read at every evaluated cycle into the evaluation, `capped::lines` reading an instance's set first, `lines_source`; `runtime-config.md` rows | SCHED-C1c | `actingd-config` by one (a new member of an `instances[]` entry), once, released together with the console's matching range |
+
+Order: SCHED-C1a first, since it is what lets a game's daily rules run once ruling 116's stop is
+lifted; SCHED-C1b beside or after it; SCHED-C1c before a pack writes a valuation with lines, so that
+a pool stuck at its cap is a warning from the first day; SCHED-C1d before capped episodes matter in
+production; SCHED-C1e last. None needs a heavy computation.
+
+**The coordinator's answers of 11-11** (the coordinator's, not Alice's words; to the draft's eight
+open questions, the draft accepted as written).
+
+1. *Value unit per game:* the research channel names each game's unit (its model's price unit where
+   one exists) and the pack writes fixed values and constant valuations in it; the resource side
+   states the unit and who named it beside the game's `schedule.json`, and this contract says only
+   "one unit per game, the unit of its valuations".
+2. *Where episodes are kept:* the new file `policy/capped-episodes.json`, as written; not the
+   ledger.
+3. *Per-instance lines:* the configuration key through `ConfigureSettings`, as written, replacing
+   design §4.3; SCHED-C1e raises `actingd-config` once and is released together with the console's
+   matching range.
+4. *Origin default:* absent means the pack, as written.
+5. *A line for a pool the active generation does not give the instance:* refused at the
+   instruction (`config_value_invalid` with its existing problem `section_check`; no new code or
+   token), kept at a restore, and changes nothing while the pool is absent.
+6. *`value_milli`:* left as it is.
+7. *The class of each judged rule:* the research channel lists it per game in the rule tables it is
+   writing now; nothing for this contract.
+8. *MCP tier of `scheduling.pool_lines`:* the tier of every key but the backends.
+
+The coordinator also added two sentences: the consumer row of "What a resource repository writes"
+(a `W` with `W·c ≥ V` keeps a consumer for capped rounds; one with `V > W·c` spends the reserve
+below the stop line, still held by the hard line, with Alice's words of 11-07, 6706630435), and
+"The trigger line" (a trigger line one costliest run above the stop line spends without reaching
+the capacity, data the pack or a person sets).
+
+**What changes live.** Nothing until a slice is built and deployed, and then nothing until a
+`schedule.json` writes the members or a person or an agent sets an instance's lines, except
+SCHED-C1d: a valued pool's episode then survives a start, a generation and an unknown reading (no
+production pool is valued today).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

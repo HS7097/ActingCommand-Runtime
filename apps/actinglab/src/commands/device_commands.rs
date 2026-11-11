@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::{
     CliError, CliOutcome, DeviceRuntimeConfig, FlagArgs, GlobalOptions, device_config,
     parse_optional_duration_ms, parse_touch_backend_override, read_user_config,
@@ -17,8 +19,22 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::time::Duration;
 
+/// Workflow #434 LAB-5B3 (tests only): the flags `touch-probe` reads: `--touch-backend`, only to
+/// refuse it (actingd owns the backend; actinglab's parser takes the flag globally).
+#[cfg(test)]
+pub(crate) const TOUCH_PROBE_READS: FlagReads = FlagReads {
+    row: "touch-probe",
+    parts: &[&ReadPart {
+        options: &[],
+        switches: &[],
+        refused: &["--touch-backend"],
+    }],
+};
+
 pub(crate) fn run_touch_probe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    #[cfg(test)]
+    flags.reading(&TOUCH_PROBE_READS);
     flags.expect_positionals("touch-probe", 0)?;
     if parse_touch_backend_override(&flags)?.is_some() || global.touch_backend.is_some() {
         return Err(CliError::usage(
@@ -165,6 +181,15 @@ fn run_capture_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<
         "recovery": capture_diagnosis_recovery_json(report.status, requested)
     }))
 }
+
+/// Workflow #434 LAB-5B3 (tests only): the flags [`reject_legacy_session_routing`] reads, each
+/// only to refuse it: a part of the read lists of the lenient commands that call it.
+#[cfg(test)]
+pub(crate) const LEGACY_ROUTING_READS: ReadPart = ReadPart {
+    options: &[],
+    switches: &[],
+    refused: &["--via-daemon", "--local", "--state-dir"],
+};
 
 pub(crate) fn reject_legacy_session_routing(flags: &FlagArgs) -> CliOutcome<()> {
     if flags.bool("--via-daemon")
@@ -869,10 +894,7 @@ impl StreamInputRelayAction {
     }
 
     fn parse_parts(action: String, action_args: Vec<String>) -> CliOutcome<Self> {
-        let action_flags = FlagArgs {
-            flags: BTreeMap::new(),
-            positionals: action_args,
-        };
+        let action_flags = FlagArgs::from_parts(BTreeMap::new(), action_args);
         match action.as_str() {
             "tap" | "swipe" | "long-tap" => {
                 DirectTouchCommand::parse(&action, &action_flags).map(Self::Touch)
