@@ -10,7 +10,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -29,7 +29,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "status",
@@ -42,7 +42,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "stop",
@@ -73,7 +73,7 @@
             start_data
                 .pointer("/record/instance")
                 .and_then(Value::as_str),
-            Some("ak")
+            Some("fixture-game-a")
         );
         assert_eq!(
             start_data.pointer("/record/holder").and_then(Value::as_str),
@@ -128,7 +128,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "record",
                 "start",
                 "--state-dir",
@@ -142,7 +142,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "status",
@@ -155,7 +155,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "record",
                 "stop",
                 "--state-dir",
@@ -212,7 +212,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "record",
                 "build-task",
                 "--state-dir",
@@ -242,7 +242,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "stream",
                 "--dry-run",
                 "--max-frames",
@@ -362,7 +362,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -377,7 +377,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -405,7 +405,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "build-task",
@@ -434,7 +434,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -449,7 +449,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -537,7 +537,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -552,7 +552,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -613,7 +613,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -628,7 +628,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -702,7 +702,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -717,7 +717,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -784,7 +784,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -799,7 +799,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -873,7 +873,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -888,7 +888,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -911,7 +911,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "amend",
@@ -982,7 +982,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -997,7 +997,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -1018,7 +1018,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "amend",
@@ -1067,7 +1067,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -1082,7 +1082,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -1105,7 +1105,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "amend",
@@ -1190,7 +1190,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -1205,7 +1205,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -1333,7 +1333,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -1348,7 +1348,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -1502,7 +1502,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -1517,7 +1517,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -1569,7 +1569,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -1584,7 +1584,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -1658,7 +1658,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -1673,7 +1673,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -1741,7 +1741,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -1756,7 +1756,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -1835,7 +1835,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -1850,7 +1850,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -1953,7 +1953,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -1968,7 +1968,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -1993,7 +1993,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "candidates",
@@ -2060,7 +2060,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -2075,7 +2075,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2098,7 +2098,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "candidates",
@@ -2152,7 +2152,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -2167,7 +2167,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2190,7 +2190,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "candidates",
@@ -2232,7 +2232,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -2247,7 +2247,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2298,7 +2298,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -2313,7 +2313,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2360,7 +2360,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -2375,7 +2375,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2439,7 +2439,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -2454,7 +2454,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2477,7 +2477,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2500,7 +2500,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2521,7 +2521,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2544,7 +2544,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "build-task",
@@ -2587,7 +2587,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -2602,7 +2602,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2625,7 +2625,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2648,7 +2648,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2669,7 +2669,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2692,7 +2692,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "build-task",
@@ -2739,7 +2739,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "promote",
@@ -2798,7 +2798,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "promote",
@@ -2846,7 +2846,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -2861,7 +2861,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2884,7 +2884,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "build-task",
@@ -2926,7 +2926,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -2941,7 +2941,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2964,7 +2964,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -2987,7 +2987,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "build-task",
@@ -3028,7 +3028,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -3043,7 +3043,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -3066,7 +3066,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -3089,7 +3089,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "build-task",
@@ -3127,7 +3127,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -3163,7 +3163,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -3178,7 +3178,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -3199,7 +3199,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -3241,7 +3241,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -3256,7 +3256,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -3280,7 +3280,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "amend",
@@ -3335,7 +3335,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -3350,7 +3350,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -3375,7 +3375,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "amend",
@@ -3471,7 +3471,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -3486,7 +3486,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -3511,7 +3511,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "amend",
@@ -3605,7 +3605,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -3620,7 +3620,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -3643,7 +3643,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "amend",
@@ -3687,7 +3687,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -3702,7 +3702,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -3726,7 +3726,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "amend",
@@ -3775,7 +3775,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -3790,7 +3790,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -3811,7 +3811,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "amend",
@@ -4068,7 +4068,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -4083,7 +4083,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -4106,7 +4106,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "step",
@@ -4129,7 +4129,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "amend",
@@ -4209,7 +4209,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "start",
@@ -4224,7 +4224,7 @@
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture-game-a",
                 "session",
                 "record",
                 "amend",

@@ -194,11 +194,11 @@ struct AuthoringRuntimeProvider {
 
 impl ExecutionBackendProvider for AuthoringRuntimeProvider {
     fn instance_aliases(&self) -> Vec<String> {
-        vec!["ak".to_string()]
+        vec!["fixture-game-a".to_string()]
     }
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        (instance_alias == "ak")
+        (instance_alias == "fixture-game-a")
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "<authoring-test>"))
     }
 
@@ -293,7 +293,7 @@ fn prepare_recorded_steps(config: &Path, state_dir: &Path, frame_path: &Path) {
         [
             "--json",
             "--instance",
-            "ak",
+            "fixture-game-a",
             "session",
             "record",
             "start",
@@ -308,7 +308,7 @@ fn prepare_recorded_steps(config: &Path, state_dir: &Path, frame_path: &Path) {
         [
             "--json",
             "--instance",
-            "ak",
+            "fixture-game-a",
             "session",
             "record",
             "step",
@@ -331,7 +331,7 @@ fn prepare_recorded_steps(config: &Path, state_dir: &Path, frame_path: &Path) {
         [
             "--json",
             "--instance",
-            "ak",
+            "fixture-game-a",
             "session",
             "record",
             "step",
@@ -354,7 +354,7 @@ fn prepare_recorded_steps(config: &Path, state_dir: &Path, frame_path: &Path) {
         [
             "--json",
             "--instance",
-            "ak",
+            "fixture-game-a",
             "session",
             "record",
             "step",
@@ -474,7 +474,7 @@ fn drift_test_record(steps: Value) -> SessionRecordContext {
         "schema_version": "session.record.v0.1",
         "record_id": "record-1",
         "task_id": "daily-check",
-        "instance": "ak",
+        "instance": "fixture-game-a",
         "status": "recording",
         "started_at_unix_ms": 1,
         "updated_at_unix_ms": 2,
@@ -607,7 +607,7 @@ fn session_record_start_requires_task_id() {
         [
             "--json",
             "--instance",
-            "ak",
+            "fixture-game-a",
             "session",
             "record",
             "start",
@@ -637,7 +637,7 @@ fn session_instance_list_reads_config() {
             "--json",
             "user-config",
             "set",
-            "instance.azur.serial",
+            "instance.fixture-game-b-s2.serial",
             "127.0.0.1:16385",
         ],
         true,
@@ -647,13 +647,9 @@ fn session_instance_list_reads_config() {
             "--json",
             "user-config",
             "set",
-            "instance.azur.game",
+            "instance.fixture-game-b-s2.game",
             "fixture-game-b",
         ],
-        true,
-    );
-    let _ = run_cli(
-        ["--json", "user-config", "set", "instance.azur.server", "s2"],
         true,
     );
     let _ = run_cli(
@@ -661,7 +657,17 @@ fn session_instance_list_reads_config() {
             "--json",
             "user-config",
             "set",
-            "instance.azur.adb_path",
+            "instance.fixture-game-b-s2.server",
+            "s2",
+        ],
+        true,
+    );
+    let _ = run_cli(
+        [
+            "--json",
+            "user-config",
+            "set",
+            "instance.fixture-game-b-s2.adb_path",
             "C:\\Tools\\adb.exe",
         ],
         true,
@@ -671,7 +677,7 @@ fn session_instance_list_reads_config() {
             "--json",
             "user-config",
             "set",
-            "instance.azur.capture_backend",
+            "instance.fixture-game-b-s2.capture_backend",
             "droidcast_raw",
         ],
         true,
@@ -689,7 +695,10 @@ fn session_instance_list_reads_config() {
         .and_then(Value::as_array)
         .unwrap();
     assert_eq!(instances.len(), 1);
-    assert_eq!(instances[0].get("id").and_then(Value::as_str), Some("azur"));
+    assert_eq!(
+        instances[0].get("id").and_then(Value::as_str),
+        Some("fixture-game-b-s2")
+    );
     assert_eq!(
         instances[0].get("adb_path").and_then(Value::as_str),
         Some("C:\\Tools\\adb.exe")
@@ -709,10 +718,10 @@ fn session_instance_registry_reports_contract() {
 
     let mut config = UserConfig::default();
     config.instances.insert(
-        "ak-b".to_string(),
+        "fixture-game-a-b".to_string(),
         InstanceConfig {
             serial: Some("127.0.0.1:16416".to_string()),
-            game: Some("ark".to_string()),
+            game: Some("fixture-game-a".to_string()),
             server: Some("s3".to_string()),
             package: Some("com.example.fixture.a".to_string()),
             adb_path: Some("C:\\Tools\\adb.exe".to_string()),
@@ -721,10 +730,10 @@ fn session_instance_registry_reports_contract() {
         },
     );
     config.instances.insert(
-        "ba-jp".to_string(),
+        "fixture-game-c-s2".to_string(),
         InstanceConfig {
             serial: Some("127.0.0.1:16384".to_string()),
-            game: Some("ba".to_string()),
+            game: Some("fixture-game-c".to_string()),
             server: None,
             package: None,
             adb_path: None,
@@ -750,36 +759,41 @@ fn session_instance_registry_reports_contract() {
         Some("droidcast_raw")
     );
     let instances = data.get("instances").and_then(Value::as_array).unwrap();
-    let ak = instances
+    let game_a = instances
         .iter()
-        .find(|instance| instance.get("id").and_then(Value::as_str) == Some("ak-b"))
+        .find(|instance| instance.get("id").and_then(Value::as_str) == Some("fixture-game-a-b"))
         .unwrap();
     assert_eq!(
-        ak.pointer("/effective/capture_backend")
+        game_a
+            .pointer("/effective/capture_backend")
             .and_then(Value::as_str),
         Some("nemu_ipc")
     );
     assert_eq!(
-        ak.pointer("/validation/ready_for_device_control")
+        game_a
+            .pointer("/validation/ready_for_device_control")
             .and_then(Value::as_bool),
         Some(true)
     );
-    let ba = instances
+    let game_c = instances
         .iter()
-        .find(|instance| instance.get("id").and_then(Value::as_str) == Some("ba-jp"))
+        .find(|instance| instance.get("id").and_then(Value::as_str) == Some("fixture-game-c-s2"))
         .unwrap();
     assert_eq!(
-        ba.pointer("/effective/capture_backend")
+        game_c
+            .pointer("/effective/capture_backend")
             .and_then(Value::as_str),
         Some("auto")
     );
     assert_eq!(
-        ba.pointer("/validation/ready_for_device_control")
+        game_c
+            .pointer("/validation/ready_for_device_control")
             .and_then(Value::as_bool),
         Some(false)
     );
     assert!(
-        ba.pointer("/validation/missing_required_fields")
+        game_c
+            .pointer("/validation/missing_required_fields")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
@@ -796,10 +810,10 @@ fn session_instance_registry_rejects_invalid_configured_backend() {
 
     let mut config = UserConfig::default();
     config.instances.insert(
-        "ak-b".to_string(),
+        "fixture-game-a-b".to_string(),
         InstanceConfig {
             serial: Some("127.0.0.1:16416".to_string()),
-            game: Some("ark".to_string()),
+            game: Some("fixture-game-a".to_string()),
             server: Some("s3".to_string()),
             package: None,
             adb_path: None,
@@ -824,7 +838,7 @@ fn session_instance_registry_rejects_invalid_configured_backend() {
             .as_ref()
             .unwrap()
             .message
-            .contains("invalid instance.ak-b.capture_backend")
+            .contains("invalid instance.fixture-game-a-b.capture_backend")
     );
 }
 
@@ -2695,12 +2709,12 @@ fn bare_instance_argument_is_used_as_adb_serial_without_config_entry() {
 #[test]
 fn device_config_uses_instance_capture_backend_default() {
     let global = GlobalOptions {
-        instance: Some("ak-b".to_string()),
+        instance: Some("fixture-game-a-b".to_string()),
         ..Default::default()
     };
     let (_adb_dir, mut config) = user_config_with_test_adb();
     config.instances.insert(
-        "ak-b".to_string(),
+        "fixture-game-a-b".to_string(),
         InstanceConfig {
             serial: Some("127.0.0.1:16416".to_string()),
             capture_backend: Some("nemu_ipc".to_string()),
@@ -2717,13 +2731,13 @@ fn device_config_uses_instance_capture_backend_default() {
 #[test]
 fn device_config_cli_capture_backend_overrides_instance_default() {
     let global = GlobalOptions {
-        instance: Some("ak-b".to_string()),
+        instance: Some("fixture-game-a-b".to_string()),
         capture_backend: Some(CaptureBackendChoice::Adb),
         ..Default::default()
     };
     let (_adb_dir, mut config) = user_config_with_test_adb();
     config.instances.insert(
-        "ak-b".to_string(),
+        "fixture-game-a-b".to_string(),
         InstanceConfig {
             serial: Some("127.0.0.1:16416".to_string()),
             capture_backend: Some("nemu_ipc".to_string()),
@@ -2739,13 +2753,13 @@ fn device_config_cli_capture_backend_overrides_instance_default() {
 #[test]
 fn device_config_cli_touch_backend_overrides_instance_default() {
     let global = GlobalOptions {
-        instance: Some("ak-b".to_string()),
+        instance: Some("fixture-game-a-b".to_string()),
         touch_backend: Some(TouchBackendChoice::AdbShellInput),
         ..Default::default()
     };
     let (_adb_dir, mut config) = user_config_with_test_adb();
     config.instances.insert(
-        "ak-b".to_string(),
+        "fixture-game-a-b".to_string(),
         InstanceConfig {
             serial: Some("127.0.0.1:16416".to_string()),
             touch_backend: Some("maatouch".to_string()),
@@ -2776,7 +2790,7 @@ fn current_page_resolves_semantic_page() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "current-page",
             "--scene",
             scene.to_str().unwrap(),
@@ -2815,7 +2829,7 @@ fn tap_target_dry_run_requires_visible_target_and_returns_point() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "tap-target",
             "home_button",
             "--scene",
@@ -2845,7 +2859,7 @@ fn navigate_dry_run_uses_navigation_graph() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "navigate",
             "--to",
             "target",
@@ -2885,7 +2899,7 @@ fn navigate_blocks_destructive_overlap_by_default() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "navigate",
             "--to",
             "target",
@@ -2922,7 +2936,7 @@ fn lab2_observe_reports_page_targets_actions_and_frame_path() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "observe",
             "--scene",
             scene.to_str().unwrap(),
@@ -3260,7 +3274,7 @@ fn lab2_do_dry_run_reports_guard_and_actual_click() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "do",
             "home_button",
             "--scene",
@@ -3307,7 +3321,7 @@ fn lab2_do_guard_miss_returns_actionable_error_details() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "do",
             "home_button",
             "--scene",
@@ -3352,7 +3366,7 @@ fn lab2_ensure_is_idempotent_and_plans_routes() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "ensure",
             "home",
             "--scene",
@@ -3380,7 +3394,7 @@ fn lab2_ensure_is_idempotent_and_plans_routes() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "ensure",
             "target",
             "--scene",
@@ -3423,7 +3437,7 @@ fn lab2_wait_reports_page_and_stable_target() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "wait",
             "--page",
             "fixture-game-a/home",
@@ -3452,7 +3466,7 @@ fn lab2_wait_reports_page_and_stable_target() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "wait",
             "--stable",
             "home_anchor",
@@ -3494,10 +3508,10 @@ fn lab2_capabilities_and_schema_report_compiled_contracts() {
     set_config_env(temp.path().join("config.json"));
     let mut config = UserConfig::default();
     config.instances.insert(
-        "ak-live".to_string(),
+        "fixture-game-a-live".to_string(),
         InstanceConfig {
             serial: Some("127.0.0.1:16416".to_string()),
-            game: Some("ark".to_string()),
+            game: Some("fixture-game-a".to_string()),
             server: Some("s1".to_string()),
             capture_backend: Some("adb".to_string()),
             touch_backend: Some("maatouch".to_string()),
@@ -3536,7 +3550,7 @@ fn lab2_capabilities_and_schema_report_compiled_contracts() {
     assert_eq!(
         data.pointer("/lab2_cli/instances/0/id")
             .and_then(Value::as_str),
-        Some("ak-live")
+        Some("fixture-game-a-live")
     );
     assert_eq!(
         data.pointer("/lab2_cli/recovery_transparency/event_type")
@@ -3621,7 +3635,7 @@ fn lab2_chain_acceptance_min_projection_and_error_shape_are_actionable() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "observe",
             "--scene",
             home.to_str().unwrap(),
@@ -3653,7 +3667,7 @@ fn lab2_chain_acceptance_min_projection_and_error_shape_are_actionable() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "do",
             "home_button",
             "--scene",
@@ -3697,7 +3711,7 @@ fn lab2_do_destructive_overlap_requires_opt_in_and_allows_explicit_opt_in() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "do",
             "home_button",
             "--scene",
@@ -3725,7 +3739,7 @@ fn lab2_do_destructive_overlap_requires_opt_in_and_allows_explicit_opt_in() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "do",
             "home_button",
             "--scene",
@@ -3807,7 +3821,7 @@ fn lab2_observe_unknown_reports_candidates() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "observe",
             "--scene",
             scene.to_str().unwrap(),
@@ -3854,7 +3868,7 @@ fn lab2_do_click_rect_follows_live_template_match_delta() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "do",
             "home_button",
             "--scene",
@@ -3912,7 +3926,7 @@ fn lab2_do_rejects_mixed_online_capture_and_offline_scene_before_touch() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "do",
             "home_button",
             "--scene",
@@ -4070,7 +4084,7 @@ fn lab2_observe_uses_delayed_stub_capture_and_stays_under_budget() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "fixture-game-a",
             "observe",
             "--scene",
             scene.to_str().unwrap(),
