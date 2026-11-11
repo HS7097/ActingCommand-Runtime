@@ -153,9 +153,9 @@ composer fills; a `resource.` or `inventory.` key; a place in the trigger outsid
 
 ### A run's consumption read from a fact
 
-SCHED-C1f (register §1.303, not built yet; the coordinator's work order of 11-11 and this draft's
-names, not Alice's words; [scheduling/README.md](scheduling/README.md), "A run's consumption read
-from a fact"). A consumer whose one run's amount of a pool is a state of the account (what the
+SCHED-C1f (register §1.303, not built yet; the coordinator's work order of 11-11 and the
+coordinator's rulings of 11-11 14:5x on its nine questions, with this draft's names, not Alice's
+words; [scheduling/README.md](scheduling/README.md), "A run's consumption read from a fact"). A consumer whose one run's amount of a pool is a state of the account (what the
 player fields), which its pack reads at each run and writes as an instance fact, writes that amount
 as the fact it reads, with the amount a run is judged by until the fact exists:
 
@@ -175,11 +175,15 @@ as the fact it reads, with the amount a run is judged by until the fact exists:
   constant `amount`.
 - **The tools** ("Tools") answer, per game, `consumption_facts`: one `{rule_id, pool_id, fact_key,
   fallback}` per entry with the form, in file order (the file's ids), empty when none. Nothing
-  checks the key against the rule's package: a key that no run writes leaves every decision on its
-  fallback, which the decisions show (`consumption_source` `fallback`).
+  checks the key against the rule's package (the coordinator's ruling 4; a later hint can be added
+  without a shape change): a key that no run writes leaves every decision on its fallback, which
+  the decisions show (`consumption_source` `fallback`).
 - **What a resource repository writes.** A consumer of the row "Consumer of a regenerating pool"
   ("What a resource repository writes") whose amount is a state of the account writes it as the
-  form instead of a constant, its fallback the amount a run of the usual setup consumes; a pack that wrote such an
+  form instead of a constant, its fallback the amount a run of the usual setup consumes. The pack
+  chooses how long its reading holds by the validity it writes, and keeps the key out of its
+  resets (`excludes_fact_prefixes`) when the amount outlives a day: a reading that expired or that a
+  reset invalidated is read as none, and the fallback decides. A pack that wrote such an
   amount as a constant replaces it by the form with that constant as its fallback, which keeps a
   capped episode under way ([scheduling/README.md](scheduling/README.md), "An episode under way and
   a round's frozen order").

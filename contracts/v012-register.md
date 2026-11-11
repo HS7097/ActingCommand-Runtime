@@ -11961,7 +11961,7 @@ no longer sends `StopInstanceRun`, and the contract's
 `a4_each_request_kind_that_completes_has_its_own_success_code` no longer lists it among the kinds
 that never complete.
 
-### 1.303 Workflow #428 SCHED-C1f (contracts only): a run's consumption of a pool may be read from a fact, with a fallback (the coordinator's work order of 11-11, `rd-1111/brief-sched-c1f-contract.md`, and its two additions of 11-11 14:4x on SCHED-C1d's consumers key and on SCHED-C1e, not Alice's words; Alice's rule of 10-26 that what belongs to the account is read from a fact, as scheduling/README.md's "Fact references" and "Pool fact references" cite it; the coordinator's rule of 10-28 on a fact a pack writes itself, as its "Self-read fact probe" cites it; read on main `f4ff86ae`, with SCHED-C1d's branch `claude/428-sched-c1d-episodes-kept` at `5dd645a2`, PR #1593, for "Episodes survive")
+### 1.303 Workflow #428 SCHED-C1f (contracts only): a run's consumption of a pool may be read from a fact, with a fallback (the coordinator's work order of 11-11, `rd-1111/brief-sched-c1f-contract.md`, its two additions of 11-11 14:4x on SCHED-C1d's consumers key and on SCHED-C1e, and the coordinator's rulings of 11-11 14:5x on the nine questions below, not Alice's words; Alice's rule of 10-26 that what belongs to the account is read from a fact, as scheduling/README.md's "Fact references" and "Pool fact references" cite it; the coordinator's rule of 10-28 on a fact a pack writes itself, as its "Self-read fact probe" cites it; read on main `f4ff86ae`, with SCHED-C1d's branch `claude/428-sched-c1d-episodes-kept` at `5dd645a2`, PR #1593, for "Episodes survive")
 
 [scheduling/README.md](scheduling/README.md) (the new section "A run's consumption read from a
 fact", after "Expected quantities (v2)"; "Bounds") and
@@ -11998,7 +11998,7 @@ manner.
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | SC1F-1 | a V2 `consumes` entry's `amount` `{"type": "fact", "fact_key": B, "fallback": F}` (all three required; F in `1..=2^53−1`, at most a constant capacity) | catalog format addition (no ledger shape) | SCHED-C1f1 | the composer; a raw V2 catalog | V2 only; V1 `unknown_field` at `amount/type`; `type_mismatch`, `limit_exceeded`, `missing_required_field`, `unknown_field` (`offset`, `scope`) at the member; beside `expected_amount_milli` `limit_exceeded`; on a `produces` entry, and a second fact-driven entry of one task on one pool, `effect_incompatible` at `amount`; absent, a catalog serializes as before |
-| SC1F-2 | the amount in effect: resolved once per evaluation for each (task, instance, entry) from the pinned fact snapshot, B in exactly the instance's scope; usable: the latest record, confidence above 0, an `integer` in range, whatever its age, expiry or resets; else F; every reader of the consumption reads it (the cost term and `ε`, `r` and the hard-line hold, `pool_lines_unspendable`, the capped listing, order, plan and checks, the reserves and selection fields, SS-6's allowance and `run_cap`, the tie-break, forward projection) | behaviour (evaluation) | SCHED-C1f1 | the policy evaluator | never Unknown: no fact refresh demand, no detection suggestion, no `benefit_unknown`, no freshness bound or wake of its own; consumer membership by the form (F ≥ 1) |
+| SC1F-2 | the amount in effect: resolved once per evaluation for each (task, instance, entry) from the pinned fact snapshot, B in exactly the instance's scope; usable: a record current by every fact's rule (confidence above 0, not past its own expiry, not invalidated by a reset since; no `max_age_ms`) whose value is an `integer` in range; else F (none, expired or reset: no warning); every reader of the consumption reads it (the cost term and `ε`, `r` and the hard-line hold, `pool_lines_unspendable`, the capped listing, order, plan and checks, the reserves and selection fields, SS-6's allowance and `run_cap`, the tie-break, forward projection) | behaviour (evaluation) | SCHED-C1f1 | the policy evaluator | never Unknown: no fact refresh demand, no detection suggestion, no `benefit_unknown`; a usable record's expiry bounds the reading candidates' `facts_fresh_until_unix_ms` and wakes the evaluation one millisecond after it, and a reset that will invalidate the key caps freshness before its occurrence and wakes at it, by every fact's rule (F bounds nothing); consumer membership by the form (F ≥ 1) |
 | SC1F-3 | the consumers key reads each consumer's declared consumption (F for a fact-driven amount); a round keeps its frozen order and reads the amounts in effect at each evaluation | behaviour (evaluation) | SCHED-C1f1 | the policy evaluator | `host.capped_episodes` keeps its row shape (C1D-1): a consumer row's `consumed` the declared consumption, a member row's the amount its order was frozen with |
 | SC1F-4 | `consumption_fact_unusable` (warning / none; `task_id`, `pool_id`, `fact_key`, `unknown_reason` (`fact_low_confidence`, `type_mismatch`), `consumption`), the first reason of each decision of the task on the instance, once per pool; the keys `consumption` (`integer`) and `consumption_source` (vocabulary `consumption_source`: `fact`, `fallback`) on `pool_line_held`, `capped_spend`, `resource_reserve_insufficient` and `pool_lines_unspendable` when the task's consumption of the pool is fact-driven | outcome catalog additions (policy) | SCHED-C1f1 | the policy evaluator | new prefix `consumption_` (policy); shown by `ScheduleExplanation` (`why`, `reasons`); no answer shape changes |
 | SC1F-5 | the compiler: F checked as a constant `amount`; the compile warning `pool_lines_unspendable` reads each consumer's declared consumption (F) | behaviour (compiler) | SCHED-C1f1 | the catalog compiler | the decision reason reads the amount in effect |
@@ -12015,21 +12015,32 @@ Order: SCHED-C1f1 once SCHED-C1d and SCHED-C1e have merged. A pack writes the fo
 release that carries it; a pack that wrote the amount as a constant then replaces it by the form
 with that constant as its fallback. None needs a heavy computation.
 
-**Open questions, each with the answer this draft proposes** (for the coordinator; not Alice's
-words).
+**The nine questions and the coordinator's rulings of 11-11 14:5x** (the coordinator's rulings, not
+Alice's words; each as this draft proposed but question 1, where the alternative was ruled).
 
-1. *Does the age of the reading matter?* Proposed: no. The latest record is used whatever its age:
-   no `max_age_ms`, and neither its own expiry nor a timeline reset that invalidated its key since
-   makes it unusable; it bounds no freshness and wakes nothing of its own. For: the pack rewrites
-   it at every run, the setup it measures does not end with a day or a reset, a wrong amount
-   misjudges only the runs until the next rewrite (as the fallback would), and a reader that reads
-   through a reset exists already, a task's own last result (P19). Against: every other fact reader
-   honours expiry and resets, so the code reads this record before the time-validity projection,
-   and a value from long ago is read as current with its age shown nowhere. The alternative: the
-   rule of every fact, with the pack writing a long validity and keeping the key out of its resets
-   (`excludes_fact_prefixes`).
+1. *Does the age of the reading matter?* Ruled: the alternative, not the proposal. The record is
+   read by every fact's rule: one that expired (its own `expires_at_unix_ms`) or that a timeline
+   reset invalidated is not usable, and the amount falls back to F exactly as with no record, with
+   no warning (the reasons' `consumption_source` says `fallback`); the form has no `max_age_ms`. The
+   pack states how long its reading holds by the validity it writes, and keeps the key out of its
+   resets (`excludes_fact_prefixes`) when the amount outlives a day. By the general rule a usable
+   record's expiry bounds the `facts_fresh_until_unix_ms` of the candidates that read it (an intent
+   past it is refused `policy_facts_stale`) and wakes the evaluation one millisecond after it, as a
+   pool's reading does, and a reset that will invalidate the key caps freshness before its
+   occurrence and wakes at it; F bounds nothing. The ruling's reason: one rule for facts (no reader
+   before the time-validity projection, no second meaning of a record's expiry), and with a
+   fallback an expired reading costs nothing but one run judged by F. The warning
+   `consumption_fact_unusable` stays for a record that is present and current but not usable. What
+   was weighed, the draft's proposal: the latest record whatever its age, its expiry or a reset
+   since. For it: the pack rewrites it at every run, the setup it measures does not end with a day
+   or a reset, a wrong amount misjudges only the runs until the next rewrite, and a reader that
+   reads through a reset exists already, a task's own last result (P19). Against it: every other
+   fact reader honours expiry and resets, so the code would read this record before the
+   time-validity projection, and a value from long ago would be read as current with its age shown
+   nowhere.
 2. *What does an amount that changes between two evaluations do to an episode under way and to a
-   round's frozen order?* Proposed: the consumers key holds what the catalog writes (each
+   round's frozen order?* Ruled, as proposed (the coordinator: the reason against its example is
+   right): the consumers key holds what the catalog writes (each
    consumer's declared consumption, a fact-driven amount at its fallback), never the value read,
    so a changed reading keeps the episode and a changed fallback ends it as a changed constant
    does; a round keeps its frozen order, and its plan and checks read the amounts in effect at each
@@ -12041,38 +12052,40 @@ words).
    the amount the next run is judged by. Against: the plan is no longer fixed at the round's start
    (a member can drop out of it or enter it), the key no longer tells what a consumer costs (an
    episode goes on while every amount changed, until `pool_lines_unspendable` makes it wait or a
-   round that plans nothing ends it), and the frozen order need not be the `V ÷ C` order of the amounts in effect
-   until the next round. The coordinator's example (a round keeps the amounts it froze, the next
-   round reads again) was weighed: it counts a member that ran by the amount before its run, and a
+   round that plans nothing ends it), and the frozen order need not be the `V ÷ C` order of the
+   amounts in effect until the next round. The coordinator's example (a round keeps the amounts it
+   froze, the next round reads again) was weighed and not ruled: it counts a member that ran by the amount before its run, and a
    frozen amount at the head's check could let a run end below the hard line.
-3. *Which scope, which keys?* Proposed: the fact is read in exactly the candidate's instance scope
-   (an amount is the account's), and any identifier may name it: unlike a probe (SS-5), which
+3. *Which scope, which keys?* Ruled, as proposed: the fact is read in exactly the candidate's
+   instance scope (an amount is the account's), and any identifier may name it: unlike a probe (SS-5), which
    admits a task and so is limited to the reading-mark keys of the task's own package, a fallback
    makes any key harmless, and a person may set an amount through an instruction fact. Against: a
    key no run writes is caught only by the tools' list and the decisions' `fallback`.
-4. *Is the key checked against the rule's package where a rule meets it?* Proposed: no; the tools
-   list every fact-driven rule with its key and fallback (SC1F-7). Against: a misspelt key is found
+4. *Is the key checked against the rule's package where a rule meets it?* Ruled, as proposed: no;
+   the tools list every fact-driven rule with its key and fallback (SC1F-7). Against: a misspelt key is found
    by reading the list, not by a refusal; a later hint (a warning when no package of the game root
    marks the key) can be added without a shape change.
-5. *Which word says that a value is out of range?* Proposed: `type_mismatch`, as CF-5 reads a
-   capacity below 1, so `unknown_reason` gains no word. Against: a person cannot tell a value of
+5. *Which word says that a value is out of range?* Ruled, as proposed: `type_mismatch`, as CF-5
+   reads a capacity below 1, so `unknown_reason` gains no word. Against: a person cannot tell a value of
    another kind from an integer out of range without reading the fact (`ac_facts`).
-6. *Do the net benefit's reasons carry the source?* Proposed: no. `benefit_fixed_value`,
+6. *Do the net benefit's reasons carry the source?* Ruled, as proposed: no. `benefit_fixed_value`,
    `policy_benefit_nonpositive`, `benefit_within_tolerance` and `rank_breakdown` name no pool, and
    a task may consume several; the pool's own reasons carry it, the warning says when a record is
    unusable, and the tools list the rules. Against: a judged candidate that runs below its trigger
    line with no pool hold shows its amount's source nowhere; a records value
    `consumptions [{pool_id, consumption, consumption_source}]` on those reasons would, at the cost
-   of a records key.
-7. *May one task write the form twice for one pool?* Proposed: no (`effect_incompatible`); constant
-   entries beside it add as before. For: one fact names one run's amount of a pool, and the
+   of a records key. The coordinator accepts for the first build that a dispatched candidate with no
+   pool reason shows its amount's source only through the tools' list and the fact itself, and may
+   revisit it after the trial (scheduling/README.md, "What a person sees").
+7. *May one task write the form twice for one pool?* Ruled, as proposed: no
+   (`effect_incompatible`); constant entries beside it add as before. For: one fact names one run's amount of a pool, and the
    consumers key and its rows hold one consumption per consumer. Against: a pack that reads an
    amount in two parts adds them itself before it writes the fact.
-8. *What does the compile warning `pool_lines_unspendable` read?* Proposed: each consumer's
-   declared consumption, the fallback for a fact-driven amount, the amount every evaluation reads
-   before the pack has written the fact. Against: a fact below the fallback can make the warning
+8. *What does the compile warning `pool_lines_unspendable` read?* Ruled, as proposed: each
+   consumer's declared consumption, the fallback for a fact-driven amount, the amount an evaluation
+   reads while the fact gives no usable reading. Against: a fact below the fallback can make the warning
    false for an instance, whose decisions read the fact and do not hold.
-9. *The code slice's name.* This draft's: SCHED-C1f1.
+9. *The code slice's name.* Ruled: SCHED-C1f1.
 
 **Interface.** None raised ([component-interfaces.md](component-interfaces.md)), as the
 coordinator expects: `ledger` (no record type, member or closed vocabulary the reader checks: the
@@ -12089,8 +12102,8 @@ revision, as §1.264 added a success code and 0.12.39 a key and a vocabulary).
 **What changes live.** Nothing until the code slice is built and a `schedule.json` writes the form
 (with `consumption_fact` in `requires`): a catalog without it keeps its hash, rules digest and
 decisions byte for byte; `config.subsystems` gains the always-on row `consumption_fact`. With the
-form, each consumer's amount is the fact its pack writes, its fallback until the pack has written
-one, on every reader of the consumption.
+form, each consumer's amount is the fact its pack writes, its fallback while that reading is
+missing, expired or invalidated by a reset, on every reader of the consumption.
 
 **SCHED-C1f1 rollback** (to the release before it). The ledger and the configuration need nothing:
 `host.capped_episodes` keeps its rows. Before a `schedule.json` writes the form: nothing to undo.

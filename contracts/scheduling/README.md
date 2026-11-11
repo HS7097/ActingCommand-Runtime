@@ -272,9 +272,10 @@ rejects it, so a state lineage containing these declarations requires a compatib
 
 ## A run's consumption read from a fact (SCHED-C1f, not built yet)
 
-Register §1.303. The rules of this section are the coordinator's work order of 11-11 and this
-draft's proposal for the coordinator's review, not Alice's words: the member names, the rules and
-the codes are this draft's. What one run of some tasks consumes of a pool is a state of the
+Register §1.303. The rules of this section are the coordinator's work order of 11-11 and the
+coordinator's rulings of 11-11 14:5x on the nine questions of §1.303, not Alice's words: the member
+names and the codes are this draft's, which the coordinator read, and the nine answers are the
+coordinator's rulings. What one run of some tasks consumes of a pool is a state of the
 account, not of the game: it depends on what the player fields and changes when they change it.
 The pack reads the real amount on the device and writes it as an instance fact each time it runs,
 and a line or threshold that belongs to the account is read from a fact, never written as a
@@ -324,29 +325,41 @@ carries a fallback and the amount is never Unknown.
   none reads B again. The amount is never Unknown: B raises no fact refresh demand ("Fact
   Refresh"), gives no detection suggestion, and never makes a net benefit unknown ("Net benefit
   within a tier").
-- **Which reading is usable.** The latest record of B in the instance's scope, at a confidence
-  above 0, whose value is an `integer` in `1..=9007199254740991` and, against a constant capacity
-  of the pool, at most that capacity. **Its age does not matter** (register §1.303, question 1): the
-  form has no `max_age_ms`, and neither the record's own `expires_at_unix_ms` nor a timeline reset
-  that invalidated its key since makes it unusable; the amount bounds no
-  `facts_fresh_until_unix_ms` and wakes no evaluation of its own (a new record wakes the scheduler as
-  every fact publication does, and the next evaluation reads it). For: the pack rewrites the value
-  at every run, the setup it measures does not end with a day or a reset, and a wrong amount
-  misjudges only the runs until the next one rewrites it, as the fallback would; and a reader that
-  reads through a reset exists already, a task's own last result ("Reset exclusions and the task's
-  own last result"). Against: every other fact reader honours a record's expiry and the resets (an
-  observation at or before the last matching reset is Unknown, "Runtime Enforcement"), so this
-  reader takes the record before the time-validity projection; and a value from long ago (the
-  account changed by hand, the task not run since) is read as current, its age shown nowhere. The
-  alternative is every fact's rule: an expired or reset record falls back, and the pack writes a
-  long validity and keeps the key out of its resets (`excludes_fact_prefixes`).
-  - *No record of B* (`fact_missing`): F, with no warning: it is the first run's state the fallback
-    exists for, and the source below says `fallback`.
-  - *A record that is not usable*: F, and the decision says so with the new warning
-    `consumption_fact_unusable` (warning; `task_id`, `pool_id`, `fact_key` B, `unknown_reason`
-    `fact_low_confidence` for a confidence of 0 or `type_mismatch` for a value of another kind, a
-    record list or an integer out of range, as CF-5 reads a capacity below 1; `consumption` the
-    `⌈C/1000⌉` the decision reads with F). It is the decision's first reason, before
+- **Which reading is usable** (the coordinator's ruling 1 of 11-11 14:5x, register §1.303 question
+  1: the record is read by every fact's rule, not as this draft proposed). The record of B in the
+  instance's scope that is current as every fact is: present at a confidence above 0, not past its
+  own `expires_at_unix_ms`, and not invalidated by a timeline reset since it was observed ("Runtime
+  Enforcement", with "Reset exclusions and the task's own last result"); its value an `integer` in
+  `1..=9007199254740991` and, against a constant capacity of the pool, at most that capacity. The
+  form has no `max_age_ms`: the pack states how long its reading holds by the validity it writes,
+  and keeps the key out of its resets (`excludes_fact_prefixes`) when the amount outlives a day.
+  - *Freshness and wakes, by the general rule.* A usable record bounds the
+    `facts_fresh_until_unix_ms` of every candidate whose evaluation read the amount by its
+    `expires_at_unix_ms` (an intent admitted past it is refused `policy_facts_stale`), and the
+    evaluation wakes one millisecond after that expiry, as after a pool's reading or a capacity read
+    from its fact ("Pool fact references"); a timeline reset that will invalidate the key caps a V2
+    candidate's freshness before its occurrence and wakes the evaluation at it, as for every
+    observation ("Runtime Enforcement"; [v2/README.md](v2/README.md)). The evaluation at that wake
+    finds the record expired or invalidated and reads F. F bounds no freshness and wakes nothing. A
+    new record wakes the scheduler as every fact publication does, and the next evaluation reads
+    it.
+  - *What was weighed.* The draft proposed the latest record whatever its age, its expiry or a
+    reset since. For it: the pack rewrites the value at every run, the setup it measures does not
+    end with a day or a reset, a wrong amount misjudges only the runs until the next one rewrites
+    it, and a reader that reads through a reset exists already, a task's own last result. Against
+    it, and ruled: one rule for facts, with no reader before the time-validity projection and no
+    second meaning of a record's expiry; with a fallback an expired reading costs nothing but one
+    run judged by F; and a value from long ago (the account changed by hand, the task not run
+    since) is not read as current.
+  - *No usable record because there is none, it expired, or a reset invalidated it*
+    (`fact_missing`, `fact_expired`): F, with no warning, exactly alike: it is the state the
+    fallback exists for (the first run, or a reading the pack let lapse), and the source below says
+    `fallback`.
+  - *A record that is present and current but not usable*: F, and the decision says so with the
+    new warning `consumption_fact_unusable` (warning; `task_id`, `pool_id`, `fact_key` B,
+    `unknown_reason` `fact_low_confidence` for a confidence of 0 or `type_mismatch` for a value of
+    another kind, a record list or an integer out of range, as CF-5 reads a capacity below 1
+    (ruling 5); `consumption` the `⌈C/1000⌉` the decision reads with F). It is the decision's first reason, before
     `benefit_fixed_value`, so it never settles the decision; it is given once per decision and pool,
     on every decision of that task on that instance in the evaluation. `fact_reference_unavailable`
     is not reused: it is info and says that a predicate is false.
@@ -362,8 +375,8 @@ carries a fallback and the amount is never Unknown.
   3. *A pool its lines cannot spend* ("Pool lines"): the decision reason `pool_lines_unspendable`
      reads each consumer's `⌈C/1000⌉` in effect on the instance (`least_consumption`). The compile
      warning of the same code has no instance: it reads each consumer's declared consumption, F in
-     place of the fact's value (the amount every evaluation reads before the pack has written B), so
-     a fallback no consumer's run fits under is named in the file. A fact below F can make that
+     place of the fact's value (the amount an evaluation reads while B gives no usable reading;
+     ruling 8), so a fallback no consumer's run fits under is named in the file. A fact below F can make that
      warning false for one instance; the decisions there read the fact and do not hold.
   4. *The capped spending order* ("Capped spending order"): a round's listing (`V = S +
      C·W/(1000·Q)` against `ε` without the pool's term), its order by `V ÷ C` frozen at its start,
@@ -395,7 +408,8 @@ carries a fallback and the amount is never Unknown.
   amount is no progress) and the fact refresh (above).
 - **An episode under way and a round's frozen order** (SCHED-C1d's "Episodes survive"; register
   §1.303, question 2). An amount read from a fact changes between two evaluations without a new
-  catalog generation. The proposed rule:
+  catalog generation (a new reading, or a reading that lapses to F). The rule (the coordinator's
+  ruling 2 of 11-11 14:5x, as this draft proposed):
   - *The consumers key holds what the catalog writes, not what the instance reads.* Each
     consumer's `⌈C/1000⌉` in the key is its declared consumption, every fact-driven amount taken at
     its F. A changed reading keeps the episode; a changed F ends it, as a changed constant does (the
@@ -424,8 +438,8 @@ carries a fallback and the amount is never Unknown.
     order need not be the `V ÷ C` order of the amounts in effect, as it need not be when a value
     changes.
   - The coordinator's example, a round that keeps the amounts it froze while the next round reads
-    again, was weighed and is not proposed: it counts a member that ran in the round by the amount
-    from before its run, and a frozen amount at the head's check could let a run end below `H`.
+    again, was weighed and not ruled: it counts a member that ran in the round by the amount from
+    before its run, and a frozen amount at the head's check could let a run end below `H`.
 - **What a person sees.**
   - *Where the amount came from*, in the manner of `lines_source`: the values `consumption`
     (`integer`, the `⌈C/1000⌉` of the reason's task for its pool in that evaluation) and
@@ -433,7 +447,11 @@ carries a fallback and the amount is never Unknown.
     `resource_reserve_insufficient` and `pool_lines_unspendable` (for this one, of the consumer that
     gives `least_consumption`, the first by task id among equal ones), whenever that task's
     consumption of that pool writes the form. A reason whose task's consumption is constant carries
-    neither, as before.
+    neither, as before. The net benefit's reasons (`benefit_fixed_value`,
+    `policy_benefit_nonpositive`, `benefit_within_tolerance`, `rank_breakdown`) name no pool and
+    carry no source (ruling 6). So a dispatched candidate with no pool reason shows its amount's
+    source only through the tools' list and the fact itself (`ac_facts`), which the coordinator
+    accepts for the first build and may revisit after the trial.
   - *The status read.* `ScheduleExplanation` shows them (`actingctl schedule`, `ac_schedule`,
     `ac_overview`'s `not_running`, `ac_diagnose`'s `not_run`): a row's `why` is the full outcome
     of its last reason, values included, and its `reasons` list the codes, the warning among them.
