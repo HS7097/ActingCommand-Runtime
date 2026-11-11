@@ -12059,7 +12059,7 @@ no longer sends `StopInstanceRun`, and the contract's
 `a4_each_request_kind_that_completes_has_its_own_success_code` no longer lists it among the kinds
 that never complete.
 
-### 1.303 Slice IDLE-2 (0.12.54): `idle.action` `auto` takes the idle action by the gap to the next task (Workflow #386; Alice's words of 11-11: 「原本我考虑的是在调度器上线后。根据任务间隔时间自动选择是关闭模拟器还是关闭应用还是回到主页面」; the coordinator's rulings on #386, comment 6787682270, not Alice's words; the read-only survey `rd-1111/idle2-step0-result.txt`; coordinator work order `rd-1111/brief-idle2.md`)
+### 1.304 Slice IDLE-2 (0.12.54): `idle.action` `auto` takes the idle action by the gap to the next task (Workflow #386; Alice's words of 11-11: 「原本我考虑的是在调度器上线后。根据任务间隔时间自动选择是关闭模拟器还是关闭应用还是回到主页面」; the coordinator's rulings on #386, comment 6787682270, not Alice's words; the read-only survey `rd-1111/idle2-step0-result.txt`; coordinator work order `rd-1111/brief-idle2.md`)
 
 [runtime-config.md](runtime-config.md) ("The `idle` section", the `auto` paragraph and its table)
 is the contract; [emulator-control.md](emulator-control.md) ("Idle stop (IDLE-1)"),

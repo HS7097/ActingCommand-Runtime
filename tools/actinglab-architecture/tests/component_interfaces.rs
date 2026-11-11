@@ -80,7 +80,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   [5, 26]. Workflow #407 GPU-1 D (0.12.44, Alice's approval of 166, register §1.286): revision
 ///   27 adds `vision.execution_provider` `directml` with `vision.directml_device` and
 ///   `vision.gpu_fallback`; revisions 5 to 26 are still read, so [5, 27]. IDLE-2 (0.12.54,
-///   register §1.303): revision 28 adds the `idle.action` value `auto` and the keys
+///   register §1.304): revision 28 adds the `idle.action` value `auto` and the keys
 ///   `idle.return_home_min_gap_ms` and `idle.stop_emulator_min_gap_ms` (section and per
 ///   instance); revisions 5 to 27 are still read, so [5, 28].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
