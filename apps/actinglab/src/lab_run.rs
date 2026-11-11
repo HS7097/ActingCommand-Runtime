@@ -15,6 +15,60 @@ use std::io::Write;
 use std::path::Path;
 use zip::{ZipWriter, write::FileOptions};
 
+/// The execution overrides `lab run` refuses (`reject_client_execution_overrides`): it reads
+/// each only to refuse it. `--run-root`, `--capture-backend` and `--touch-backend` are actinglab's
+/// global options too, which its parser takes first.
+const CLIENT_EXECUTION_OVERRIDES: [&str; 12] = [
+    "--run-root",
+    "--capture-interval-ms",
+    "--capture-backend",
+    "--touch-backend",
+    "--similarity-threshold",
+    "--tier1-ratio",
+    "--tier2-ratio",
+    "--tier3-ratio",
+    "--hysteresis-ratio",
+    "--max-mem-bytes",
+    "--os-reserve-bytes",
+    "--flush-workspace-reserve-bytes",
+];
+
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags `lab run` reads: the legacy
+/// routing and the execution overrides it refuses, the package by its path and the projection it
+/// writes; no positional. Its command line is parsed by it (`FlagArgs::parse_reading`), in
+/// `lab_package_control::run_lab` before the legacy routing is refused and here again.
+pub(crate) const LAB_RUN_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "lab run",
+        parts: &[
+            &crate::commands::device_commands::LEGACY_ROUTING_READS,
+            &crate::flag_args::reads::ReadPart {
+                options: &[],
+                switches: &[],
+                refused: &CLIENT_EXECUTION_OVERRIDES,
+            },
+            &super::contained_resources::PACKAGE_LOCATOR_READS,
+            &crate::flag_args::reads::ReadPart {
+                options: &["--out"],
+                switches: &[],
+                refused: &[],
+            },
+        ],
+        positionals: &[],
+    };
+
+/// Workflow #434 LAB-5B5: the flags `lab validate` reads: the package archive; no positional.
+pub(crate) const LAB_VALIDATE_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "lab validate",
+        parts: &[&crate::flag_args::reads::ReadPart {
+            options: &["--zip"],
+            switches: &[],
+            refused: &[],
+        }],
+        positionals: &[],
+    };
+
 pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     if global.dry_run {
         return Err(CliError::safety_blocked(
@@ -23,7 +77,7 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
             &["package_dry_run"],
         ));
     }
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &LAB_RUN_READS)?;
     flags.expect_positionals("lab run", 0)?;
     reject_client_execution_overrides(global, &flags)?;
     // Workflow #336 PKG-S4 (option 丙): the package by its path only (`--package` or `--zip`).
@@ -53,22 +107,9 @@ fn reject_client_execution_overrides(global: &GlobalOptions, flags: &FlagArgs) -
     let local_override = global.run_root.is_some()
         || global.capture_backend.is_some()
         || global.touch_backend.is_some()
-        || [
-            "--run-root",
-            "--capture-interval-ms",
-            "--capture-backend",
-            "--touch-backend",
-            "--similarity-threshold",
-            "--tier1-ratio",
-            "--tier2-ratio",
-            "--tier3-ratio",
-            "--hysteresis-ratio",
-            "--max-mem-bytes",
-            "--os-reserve-bytes",
-            "--flush-workspace-reserve-bytes",
-        ]
-        .iter()
-        .any(|name| flags.optional(name).is_some());
+        || CLIENT_EXECUTION_OVERRIDES
+            .iter()
+            .any(|name| flags.optional(name).is_some());
     if local_override {
         return Err(CliError::not_implemented(
             "actinglab_run_authority_retired",
@@ -116,7 +157,7 @@ fn write_projection_package(path: &Path, projection: &Value) -> CliOutcome<()> {
 /// Workflow #336 PKG-S4 (option 丙): the Lab package by its path; no digest is taken or
 /// computed.
 pub(super) fn run_lab_validate(args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &LAB_VALIDATE_READS)?;
     let request = LabValidateRequest {
         zip_path: flags.required_path("--zip")?,
     };

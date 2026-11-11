@@ -28,8 +28,10 @@ use actingcommand_resource_tooling::{canonical_game, canonical_server};
 use actingcommand_runtime_client::{
     ChannelVia, RuntimeChannel, RuntimeClient, RuntimeClientConfig,
 };
+#[cfg(test)]
+use cli_information::help_data;
 use cli_information::{
-    help_data, run_config, run_doctor, run_list, run_paths, run_schema, version_data,
+    run_config, run_doctor, run_help, run_list, run_paths, run_schema, run_version,
 };
 use cli_module::own_line;
 use cli_parse::parse_invocation;
@@ -491,11 +493,13 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
     match invocation.command.as_slice() {
         // Workflow #434 LAB-5F (fix 2): the help lists the authoring module's commands only where
         // the authoring option lists them; they are served everywhere.
-        [cmd] if cmd == "help" => cli_module::authoring::listed_help(help_data()),
-        [cmd] if cmd == "version" => Ok(version_data()),
-        [cmd] if cmd == "paths" => run_paths(&invocation.global),
-        [cmd] if cmd == "capabilities" => run_capabilities(&invocation.global),
-        [cmd] if cmd == "doctor" => run_doctor(&invocation.global),
+        // Workflow #434 LAB-5B5: the commands below that took no word but ignored any parse their
+        // command line by their read list, which refuses one.
+        [cmd] if cmd == "help" => run_help(&invocation.args),
+        [cmd] if cmd == "version" => run_version(&invocation.global, &invocation.args),
+        [cmd] if cmd == "paths" => run_paths(&invocation.global, &invocation.args),
+        [cmd] if cmd == "capabilities" => run_capabilities(&invocation.global, &invocation.args),
+        [cmd] if cmd == "doctor" => run_doctor(&invocation.global, &invocation.args),
         [cmd] if cmd == "schema" => run_schema(&invocation.args),
         [cmd] if cmd == "list" => run_list(&invocation.global, &invocation.args),
         [cmd] if cmd == "touch-probe" => run_touch_probe(&invocation.global, &invocation.args),

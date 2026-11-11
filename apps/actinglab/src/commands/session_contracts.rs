@@ -1,3 +1,5 @@
+use super::device_commands::LEGACY_ROUTING_READS;
+use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::{
     CliOutcome, FlagArgs, GlobalOptions, REQUIRE_SESSION_DAEMON_ENV, current_unix_ms,
     reject_legacy_session_routing,
@@ -1506,8 +1508,55 @@ fn session_bootstrap_view_contract() -> Value {
     })
 }
 
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): what each `session` command of this
+/// file reads: no flag but the legacy routing it refuses, and no positional; its command line is
+/// parsed by its read list (`FlagArgs::parse_reading`), one of the six below.
+const SESSION_VIEW_PARTS: &[&ReadPart] = &[&LEGACY_ROUTING_READS];
+
+/// Workflow #434 LAB-5B5: the read list of `session contract` ([`SESSION_VIEW_PARTS`]).
+pub(crate) const SESSION_CONTRACT_READS: FlagReads = FlagReads {
+    row: "session contract",
+    parts: SESSION_VIEW_PARTS,
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: the read list of `session api`.
+pub(crate) const SESSION_API_READS: FlagReads = FlagReads {
+    row: "session api",
+    parts: SESSION_VIEW_PARTS,
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: the read list of `session throat-policy`.
+pub(crate) const SESSION_THROAT_POLICY_READS: FlagReads = FlagReads {
+    row: "session throat-policy",
+    parts: SESSION_VIEW_PARTS,
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: the read list of `session capture-policy`.
+pub(crate) const SESSION_CAPTURE_POLICY_READS: FlagReads = FlagReads {
+    row: "session capture-policy",
+    parts: SESSION_VIEW_PARTS,
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: the read list of `session record-policy`.
+pub(crate) const SESSION_RECORD_POLICY_READS: FlagReads = FlagReads {
+    row: "session record-policy",
+    parts: SESSION_VIEW_PARTS,
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: the read list of `session self-heal-policy`.
+pub(crate) const SESSION_SELF_HEAL_POLICY_READS: FlagReads = FlagReads {
+    row: "session self-heal-policy",
+    parts: SESSION_VIEW_PARTS,
+    positionals: &[],
+};
+
 pub(crate) fn run_session_contract(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &SESSION_CONTRACT_READS)?;
     let _ = global;
     reject_legacy_session_routing(&flags)?;
     flags.expect_positionals("session contract", 0)?;
@@ -1515,7 +1564,7 @@ pub(crate) fn run_session_contract(global: &GlobalOptions, args: &[String]) -> C
 }
 
 pub(crate) fn run_session_api(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &SESSION_API_READS)?;
     let _ = global;
     reject_legacy_session_routing(&flags)?;
     flags.expect_positionals("session api", 0)?;
@@ -1526,7 +1575,7 @@ pub(crate) fn run_session_throat_policy(
     global: &GlobalOptions,
     args: &[String],
 ) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &SESSION_THROAT_POLICY_READS)?;
     reject_legacy_session_routing(&flags)?;
     session_throat_policy_payload(global, &flags, "session throat-policy")
 }
@@ -1535,7 +1584,7 @@ pub(crate) fn run_session_capture_policy(
     global: &GlobalOptions,
     args: &[String],
 ) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &SESSION_CAPTURE_POLICY_READS)?;
     reject_legacy_session_routing(&flags)?;
     session_capture_policy_payload(global, &flags, "session capture-policy")
 }
@@ -1544,7 +1593,7 @@ pub(crate) fn run_session_record_policy(
     global: &GlobalOptions,
     args: &[String],
 ) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &SESSION_RECORD_POLICY_READS)?;
     reject_legacy_session_routing(&flags)?;
     session_record_policy_payload(global, &flags, "session record-policy")
 }
@@ -1553,7 +1602,7 @@ pub(crate) fn run_session_self_heal_policy(
     global: &GlobalOptions,
     args: &[String],
 ) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &SESSION_SELF_HEAL_POLICY_READS)?;
     reject_legacy_session_routing(&flags)?;
     session_self_heal_policy_payload(global, &flags, "session self-heal-policy")
 }

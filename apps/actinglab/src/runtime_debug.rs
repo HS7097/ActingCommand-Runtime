@@ -247,8 +247,22 @@ fn run_export_evidence(args: &[String]) -> CliOutcome<Value> {
     }))
 }
 
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags `lab replay-evidence`
+/// reads: the evidence archive and its own SHA-256; its command line is parsed by it; no
+/// positional.
+pub(crate) const REPLAY_EVIDENCE_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "lab replay-evidence",
+        parts: &[&crate::flag_args::reads::ReadPart {
+            options: &["--zip", "--expected-sha256"],
+            switches: &[],
+            refused: &[],
+        }],
+        positionals: &[],
+    };
+
 fn run_replay_evidence(args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &REPLAY_EVIDENCE_READS)?;
     flags.expect_positionals("lab replay-evidence", 0)?;
     let archive = flags.required_path("--zip")?;
     let expected = flags

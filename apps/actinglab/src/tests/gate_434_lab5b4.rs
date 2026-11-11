@@ -50,8 +50,9 @@ fn owned(line: &[&str]) -> Vec<String> {
 }
 
 /// What actinglab prints for the command line `line`, as `main` routes it: actinglab's own command
-/// parsed and run, or the CLI module's refusal of a row's short words.
-fn printed(line: &[&str]) -> Exit {
+/// parsed and run, or the CLI module's refusal of a row's short words. Workflow #434 LAB-5B5: its
+/// test reads it too.
+pub(super) fn printed(line: &[&str]) -> Exit {
     let invocation = match cli_module::route(owned(line)) {
         Route::Own(own) => parse_invocation(own, false),
         Route::Refused {
@@ -65,7 +66,7 @@ fn printed(line: &[&str]) -> Exit {
 }
 
 /// The developer line of `exit`, as actinglab writes it.
-fn developer(exit: &Exit) -> Option<String> {
+pub(super) fn developer(exit: &Exit) -> Option<String> {
     exit.developer
         .as_ref()
         .map(|developer| developer.line(cli_module::PROGRAM))
@@ -73,14 +74,14 @@ fn developer(exit: &Exit) -> Option<String> {
 
 /// An environment in which no command can reach a Runtime: the state root names a folder that
 /// does not exist, no user configuration, no initiator variable.
-struct Isolated {
-    temp: TempDir,
-    runtime: std::path::PathBuf,
+pub(super) struct Isolated {
+    pub(super) temp: TempDir,
+    pub(super) runtime: std::path::PathBuf,
     _runtime_env: super::RuntimeStateEnvGuard,
 }
 
 impl Isolated {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         unsafe {
             env::remove_var(ENVIRONMENT_VARIABLE);
         }
@@ -95,7 +96,7 @@ impl Isolated {
         }
     }
 
-    fn path(&self, name: &str) -> String {
+    pub(super) fn path(&self, name: &str) -> String {
         self.temp.path().join(name).display().to_string()
     }
 }

@@ -1,3 +1,5 @@
+use crate::commands::device_commands::LEGACY_ROUTING_READS;
+use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::instance_resolution::resolve_instance_id_for_flags;
 use crate::runtime_slice_cli;
 use crate::session_backend::RuntimeBackendRead;
@@ -206,6 +208,32 @@ fn instance_missing_recommended_fields(instance: &InstanceConfig) -> Vec<&'stati
     .collect()
 }
 
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags `session instance` reads
+/// after its action word (its first word, read before; `app` hands the rest to `session app`): the
+/// legacy routing it refuses; no positional after the action.
+pub(crate) const SESSION_INSTANCE_READS: FlagReads = FlagReads {
+    row: "session instance",
+    parts: &[&LEGACY_ROUTING_READS],
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B5: the flags `session app` (and `session instance app`) reads after its
+/// action word, on its plain and its `--record` path: the legacy routing and `--package`, which
+/// it refuses, the instance (actinglab's global option) and `--record` (which the command finds
+/// among its words, `run_session_app_or_recorded`); no positional after the action.
+pub(crate) const SESSION_APP_READS: FlagReads = FlagReads {
+    row: "session app",
+    parts: &[
+        &LEGACY_ROUTING_READS,
+        &ReadPart {
+            options: &["--instance"],
+            switches: &["--record"],
+            refused: &["--package"],
+        },
+    ],
+    positionals: &[],
+};
+
 pub(super) fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let action = args
         .first()
@@ -219,7 +247,7 @@ pub(super) fn run_session_instance(global: &GlobalOptions, args: &[String]) -> C
         }
         return run_session_app_or_recorded(global, &args[1..]);
     }
-    let flags = FlagArgs::parse(&args[1..])?;
+    let flags = FlagArgs::parse_reading(&args[1..], &SESSION_INSTANCE_READS)?;
     reject_legacy_session_routing(&flags)?;
     let config = read_user_config()?;
     match action {
@@ -260,7 +288,7 @@ pub(super) fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOut
         .first()
         .map(String::as_str)
         .ok_or_else(|| CliError::usage("session app requires launch|stop|force-stop|restart"))?;
-    let flags = FlagArgs::parse(&args[1..])?;
+    let flags = FlagArgs::parse_reading(&args[1..], &SESSION_APP_READS)?;
     reject_legacy_session_routing(&flags)?;
     if flags.optional("--package").is_some() {
         return Err(CliError::usage(
@@ -316,7 +344,7 @@ fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutco
         .first()
         .map(String::as_str)
         .ok_or_else(|| CliError::usage("session app requires launch|stop|force-stop|restart"))?;
-    let flags = FlagArgs::parse(&args[1..])?;
+    let flags = FlagArgs::parse_reading(&args[1..], &SESSION_APP_READS)?;
     reject_legacy_session_routing(&flags)?;
     if flags.optional("--package").is_some() {
         return Err(CliError::usage(

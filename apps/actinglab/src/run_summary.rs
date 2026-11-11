@@ -4,7 +4,7 @@ use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, create_error_report_zip, effective_run_root,
     list_runs, read_user_config, runtime_slice_cli,
 };
-use crate::flag_args::reads::FlagReads;
+use crate::flag_args::reads::{FlagReads, ReadPart};
 use actingcommand_contract::RunId;
 use actingcommand_runtime_client::RuntimeClient;
 use serde_json::{Value, json};
@@ -18,14 +18,38 @@ pub(crate) const RUN_LIST_READS: FlagReads = FlagReads {
     positionals: &[],
 };
 
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags and words `run open`
+/// reads: no flag, and the run id as its one positional.
+pub(crate) const RUN_OPEN_READS: FlagReads = FlagReads {
+    row: "run open",
+    parts: &[],
+    positionals: &["<run-id>"],
+};
+
+/// Workflow #434 LAB-5B5: `run export`'s: the file it writes, and the run id.
+pub(crate) const RUN_EXPORT_READS: FlagReads = FlagReads {
+    row: "run export",
+    parts: &[&ReadPart {
+        options: &["--out"],
+        switches: &[],
+        refused: &[],
+    }],
+    positionals: &["<run-id>"],
+};
+
 /// Workflow #434 LAB-5B4: the flags of `run <sub>`: `list`'s parsed by its read list, the other
 /// words' as before. A function of its own, not an `if` or a match in [`dispatch`], which the
-/// command inventory guard reads for its first match on the subcommand.
+/// command inventory guard reads for its first match on the subcommand. Workflow #434 LAB-5B5:
+/// `open`'s and `export`'s by theirs too; `summary` checks its own words (exactly the run id and
+/// `--state-root`).
 fn run_flags(sub: &str, args: &[String]) -> CliOutcome<FlagArgs> {
-    if sub == "list" {
-        return FlagArgs::parse_reading(args, &RUN_LIST_READS);
-    }
-    FlagArgs::parse(args)
+    let list = match sub {
+        "list" => &RUN_LIST_READS,
+        "open" => &RUN_OPEN_READS,
+        "export" => &RUN_EXPORT_READS,
+        _ => return FlagArgs::parse(args),
+    };
+    FlagArgs::parse_reading(args, list)
 }
 
 /// actinglab's own `run` words. Workflow #434 LAB-2b: `run show` is the core row's (open point

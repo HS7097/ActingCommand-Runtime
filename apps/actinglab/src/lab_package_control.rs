@@ -11,7 +11,8 @@ use std::path::Path;
 pub(super) fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
         "run" => {
-            let flags = FlagArgs::parse(args)?;
+            // Workflow #434 LAB-5B5: parsed by its read list before anything is read.
+            let flags = FlagArgs::parse_reading(args, &lab_run::LAB_RUN_READS)?;
             reject_legacy_session_routing(&flags)?;
             lab_run::run_lab_run(global, args)
         }
@@ -64,8 +65,18 @@ pub(super) fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> Cli
     }
 }
 
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags and words `lab
+/// vendor-stdio-selftest` reads: none; its command line is parsed by it, which refuses any.
+pub(crate) const VENDOR_STDIO_SELFTEST_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "lab vendor-stdio-selftest",
+        parts: &[],
+        positionals: &[],
+    };
+
 fn run_lab_vendor_stdio_selftest(args: &[String]) -> CliOutcome<Value> {
-    FlagArgs::parse(args)?.expect_positionals("lab vendor-stdio-selftest", 0)?;
+    FlagArgs::parse_reading(args, &VENDOR_STDIO_SELFTEST_READS)?
+        .expect_positionals("lab vendor-stdio-selftest", 0)?;
     let capture =
         vendor_stdio_session_diagnostic().map_err(|err| CliError::device(err.to_string()))?;
     Ok(json!({
@@ -89,18 +100,37 @@ pub(crate) const INSPECT_READS: crate::flag_args::reads::FlagReads =
         positionals: &[],
     };
 
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags `package run` reads: the
+/// legacy routing it refuses, the published package and the result file it writes (the instance
+/// is actinglab's global option); no positional.
+pub(crate) const PACKAGE_RUN_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "package run",
+        parts: &[
+            &crate::commands::device_commands::LEGACY_ROUTING_READS,
+            &crate::flag_args::reads::ReadPart {
+                options: &["--zip", "--out"],
+                switches: &[],
+                refused: &[],
+            },
+        ],
+        positionals: &[],
+    };
+
 /// Workflow #434 LAB-5B4: the flags of `package <sub>`: `validate`'s, `inspect`'s and `bundle`'s
 /// parsed by their read lists (`FlagArgs::parse_reading`), which refuse a word the list does not
 /// hold; `fmt`'s and `loading`'s with their switches taking no value from the next word but `true`
 /// or `false` (they check their flags against their own lists); every other subcommand's as
 /// before. A function of its own, not a match in `run_package`: the command inventory guard
 /// (`command_inventory_matches_checked_in_snapshot`) takes the first match on the subcommand in a
-/// group's dispatcher for its dispatch.
+/// group's dispatcher for its dispatch. Workflow #434 LAB-5B5: `run`'s by its read list too; the
+/// others check their own lists (`preflight`, `check`, `dry-run`, `edit`).
 fn package_flags(sub: &str, args: &[String]) -> CliOutcome<FlagArgs> {
     Ok(match sub {
         "validate" => FlagArgs::parse_reading(args, &package_cli::VALIDATE_READS)?,
         "inspect" => FlagArgs::parse_reading(args, &INSPECT_READS)?,
         "bundle" => FlagArgs::parse_reading(args, &package_build::BUNDLE_READS)?,
+        "run" => FlagArgs::parse_reading(args, &PACKAGE_RUN_READS)?,
         "fmt" => FlagArgs::parse_switches(args, &crate::package_tool::FMT_SWITCHES),
         "loading" => FlagArgs::parse_switches(args, &package_build::LOADING_SWITCHES),
         _ => FlagArgs::parse(args)?,
@@ -333,12 +363,75 @@ pub(super) fn run_operation(
     }
 }
 
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags `control inspect` reads.
+pub(crate) const CONTROL_INSPECT_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "control inspect",
+        parts: &[&crate::flag_args::reads::ReadPart {
+            options: &["--control"],
+            switches: &[],
+            refused: &[],
+        }],
+        positionals: &[],
+    };
+
+/// Workflow #434 LAB-5B5: the flags `control verify` reads.
+pub(crate) const CONTROL_VERIFY_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "control verify",
+        parts: &[&crate::flag_args::reads::ReadPart {
+            options: &["--candidate", "--candidate-id"],
+            switches: &[],
+            refused: &[],
+        }],
+        positionals: &[],
+    };
+
+/// Workflow #434 LAB-5B5: the flags `control probe-click` reads, each to choose its refusal.
+pub(crate) const CONTROL_PROBE_CLICK_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "control probe-click",
+        parts: &[&crate::flag_args::reads::ReadPart {
+            options: &["--effect", "--expect-before", "--expect-after"],
+            switches: &[],
+            refused: &[],
+        }],
+        positionals: &[],
+    };
+
+/// Workflow #434 LAB-5B5: the flags `control diff` reads.
+pub(crate) const CONTROL_DIFF_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "control diff",
+        parts: &[&crate::flag_args::reads::ReadPart {
+            options: &["--candidate", "--stable"],
+            switches: &[],
+            refused: &[],
+        }],
+        positionals: &[],
+    };
+
+/// Workflow #434 LAB-5B5: the flags of `control <sub>`: `inspect`'s, `verify`'s, `probe-click`'s
+/// and `diff`'s parsed by their read lists, which refuse a word the list does not hold; `export`'s
+/// (it refuses every line, `not_implemented`) and an unknown word's as before. A function of its
+/// own for the reason `package_flags` gives.
+fn control_flags(sub: &str, args: &[String]) -> CliOutcome<FlagArgs> {
+    let list = match sub {
+        "inspect" => &CONTROL_INSPECT_READS,
+        "verify" => &CONTROL_VERIFY_READS,
+        "probe-click" => &CONTROL_PROBE_CLICK_READS,
+        "diff" => &CONTROL_DIFF_READS,
+        _ => return FlagArgs::parse(args),
+    };
+    FlagArgs::parse_reading(args, list)
+}
+
 pub(super) fn run_control(
     sub: &str,
     _global: &GlobalOptions,
     args: &[String],
 ) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = control_flags(sub, args)?;
     match sub {
         "inspect" => Ok(json!({
             "control": flags.optional("--control"),

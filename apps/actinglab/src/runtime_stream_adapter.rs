@@ -7,14 +7,62 @@ use super::{
     runtime_slice_cli, runtime_state_root, stream_check_requested, stream_contract_json,
     stream_events_json,
 };
+use crate::flag_args::reads::{FlagReads, ReadPart};
 use actingcommand_contract::{CaptureSequenceSpec, ReadonlyObservation, RuntimeResult};
 use actingcommand_runtime_client::RuntimeClient;
 use serde_json::{Value, json};
 use std::time::Duration;
 
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags `stream` (and `session
+/// stream`) reads on its three paths (the Runtime's bounded sequence, `--dry-run`, `check`): the
+/// legacy routing it refuses, the sequence's bounds and its instance, and the input relay. Its
+/// positionals are `check` first, or the input relay's action and its words: every word after
+/// `--input-relay` or `--interactive-input`, which the relay action checks itself (a direct
+/// command's count of words). Without either of the two no word but a first `check` is read, and
+/// another is refused ([`run_stream`]).
+pub(crate) const STREAM_READS: FlagReads = FlagReads {
+    row: "stream",
+    parts: &[
+        &crate::commands::device_commands::LEGACY_ROUTING_READS,
+        &ReadPart {
+            options: &[
+                "--max-frames",
+                "--interval-ms",
+                "--fresh-delay-ms",
+                "--instance",
+            ],
+            switches: &["--dry-run", "--require-fresh"],
+            refused: &[],
+        },
+        &ReadPart {
+            options: &[
+                INPUT_RELAY,
+                INTERACTIVE_INPUT,
+                "--input-event",
+                "--relay-event",
+            ],
+            switches: &[],
+            refused: &[],
+        },
+    ],
+    positionals: &["<word>..."],
+};
+
+/// The flags whose value, or whose first positional, is the input relay's action.
+const INPUT_RELAY: &str = "--input-relay";
+const INTERACTIVE_INPUT: &str = "--interactive-input";
+
+/// The one positional `stream` reads without an input relay action.
+const STREAM_CHECK: [&str; 1] = ["check"];
+
 pub(super) fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &STREAM_READS)?;
     reject_legacy_flags(&flags)?;
+    // Workflow #434 LAB-5B5: without an input relay action the words are not the relay's: only a
+    // first `check` is read, and any other word is refused, not ignored.
+    if !flags.given(INPUT_RELAY) && !flags.given(INTERACTIVE_INPUT) {
+        flags.refuse_unread_positionals("stream", &STREAM_CHECK)?;
+    }
     if stream_check_requested(&flags) {
         return run_stream_check(global, &flags.without_first_positional());
     }

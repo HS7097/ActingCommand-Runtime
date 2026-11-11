@@ -612,7 +612,19 @@ sentence fails that test.
     `false`, and leaves any other word where it is; `observe`, `do`, `ensure`, `wait`, `package
     preflight`, `resource catalog` and `resource validate` refuse a positional they do not read
     too. No own command of the two modules ignores a flag. `serve --stdio` hands a row only its
-    declared parameters, as before.
+    declared parameters, as before. Since Workflow #434 LAB-5B5 (register §1.287, "Slice
+    LAB-5B5") the rest of actinglab's own commands that read their flags by name and ignored the
+    rest (`help`, `version`, `paths`, `capabilities`, `doctor`, `list`, `detect`, `stream`,
+    `explain`, `user-config get|set`, `env resolve|status`, `lab run|validate|replay-evidence|status|
+    vendor-stdio-selftest`, `package run`, `control inspect|verify|probe-click|diff`, `session
+    status|throat-policy|capture-policy|record-policy|self-heal-policy|contract|api|transport|
+    monitor-policy|instance|app|stream`, `run open|export`, `report export`) parse their command line
+    by a read list too, with the same three rules and the same refusal; `lab arbitrator`, `control
+    export` and `operation run` refuse every line. **No own command of actinglab ignores a flag.**
+    Pass-throughs: none; no own command hands its words to another program or a pack. `stream`
+    reads the words after `--input-relay` or `--interactive-input` as the relay action's, which
+    checks them, and without either reads no word but a first `check`; a line the global
+    `--version` makes a version line prints the version whatever its words, as before.
   - **`serve --stdio`** answers each operation the line its `--json` answers: the CLI module's
     line, for actinglab's own commands too since LAB-2b.
   - **`status` and `run show`** (open point 10): the command line and `serve --stdio` answer them

@@ -211,7 +211,17 @@ fn resource_verify_capability() -> Value {
     capability
 }
 
-pub(crate) fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
+/// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags and words `capabilities`
+/// reads: none (it reads actinglab's global options); its command line is parsed by it.
+pub(crate) const CAPABILITIES_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "capabilities",
+        parts: &[],
+        positionals: &[],
+    };
+
+pub(crate) fn run_capabilities(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    crate::FlagArgs::parse_reading(args, &CAPABILITIES_READS)?;
     let config = read_user_config()?;
     let root = effective_resource_root(global, &config);
     let discovered = match root {
