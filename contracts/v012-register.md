@@ -13380,6 +13380,127 @@ words).** The differences (a) to (i) above are accepted as written. On the quest
 
 **Rollback of this slice.** Nothing to roll back: text only.
 
+### 1.317 Slice NEUT-2 (0.12.55): the core's tests and fixtures hold no game abbreviation (Workflow #434; Alice's hard constraint of 10-10 that the program itself is game-neutral, in code, contracts, configuration, code tables and tests, with game content only in the resource repositories; coordinator work order `rd-1111/brief-neut2.md`, read on main `385bb500`)
+
+The section number is the coordinator's. Tests, fixtures, one guard, one gate row and one
+visibility change in the architecture tool only: no product code, behaviour, assertion, contract
+text, wire shape, configuration key, ledger shape, outcome code or interface revision changes.
+This note spells none of the short abbreviations: it calls them by their games' order in the
+mapping of §1.305 (the first, second and third game), and the pull request lists the old values.
+
+**The survey.** A script of the slice listed every line of the repository, outside `target` and
+`Cargo.lock`, that holds one of the work order's six short words as a whole token: the four that
+§1.305 left ("Not renamed"), a second abbreviation of the second game and a short code of the
+fourth game of §1.305's guard list. It read each line twice, by the coordinator's pattern (letters
+as the only word characters) and by the C2 guard's word splitting. On text files the coordinator's
+pattern gives 259 lines in 29 files. Classified, both readings together:
+
+| Class | Lines | Files |
+|---|---|---|
+| a fixture value of test code (renamed below) | 195 | 8 |
+| product output (reported below) | 3 | 1 |
+| history or third-party text: four dated `benchmarks/reports/`, the upstream manifest | 27 | 5 |
+| the C2, R2-F and NEUT-1 guards' own word lists and counterexamples | 23 | 2 |
+| no game reference in a text file: digest digits, base64, a SQL table alias, an OCR fragment, a Unicode escape | 49 | 24 |
+| no game reference: the bytes of nine images under `docs/assets` and one executable | 550 | 10 |
+
+**What was renamed.** 195 lines of 8 files of `apps/actinglab`, all test code:
+`src/tests/session_record.rs` (113), `src/tests/mod.rs` (58), `src/tests/cli_basics.rs` (9),
+`src/tests/contained_semantic.rs` (2), and the `#[cfg(test)]` modules of `src/project_interface.rs`
+(5), `src/runtime_capture_backend.rs` (5), `src/runtime_session_adapter.rs` (2) and
+`src/runtime_slice_cli.rs` (1). The abbreviations were an instance alias (`--instance`, a fake
+provider's alias, a Runtime instance status), an instance id (also inside the keys
+`instance.<id>.<field>` and an error message a test reads), a `--game` value, the game of an
+instance configuration, a project id, an operation profile and a page set's file name. No file was
+renamed: no file name holds one. rustfmt reflowed 10 statements that the longer values pushed past
+the width; `cli_basics.rs` and `session_record.rs` are pulled into `src/tests/mod.rs` by
+`include!`, which `cargo fmt` does not format, and keep their lines as the script wrote them.
+
+**The mapping**, one table applied in this order by the slice's script, exact bytes, each count
+checked before any file was written:
+
+| Old value (its role in the tests) | New value |
+|---|---|
+| the first game's alias `<game>.<server>` (an instance alias) | `fixture-game-a.s1` |
+| a page set's file name built from the first game | `pages/fixture-game-a.pages.json` |
+| the first game's instance ids `<game>-b` and `<game>-live`, also inside `instance.<id>.` keys | `fixture-game-a-b`, `fixture-game-a-live` |
+| the first game's two abbreviations (instance alias and id, project id, `--game`, an instance's game) | `fixture-game-a` |
+| the second game's abbreviation (the id of an instance whose game is `fixture-game-b`, server `s2`) | `fixture-game-b-s2` |
+| the third game's instance id `<game>-<server>` | `fixture-game-c-s2` |
+| the third game's abbreviation (an instance id, an instance's game) | `fixture-game-c` |
+| two local bindings of one test, named after their instances | `game_a`, `game_c` |
+
+The work order proposed the new game id for a bare abbreviation. The second game's abbreviation is
+the id of an instance whose game a test sets to `fixture-game-b` (NEUT-1's value) and whose id the
+test reads back beside it; as `fixture-game-b` the two would be equal, so the id takes the
+instance's server too, as the third game's `<game>-<server>` id does, and no two values a test
+tells apart become equal. The two bindings are renamed only because they hold the words; no test's
+name, structure or assertion changes. Each new value passes its readers:
+`validate_instance_alias` (1 to 256 bytes without a control character), the user-config keys
+`instance.<id>.<field>` (exactly three parts at the dots, so an id inside a key holds no dot),
+`safe_file_stem` (a record's file name) and `canonical_resource_identifier` for `--game`
+(`[a-z0-9._-]`, at most 128). In the renamed `--game` tests the global `--game` is only checked as
+an identifier and handed to the resolution of environment markers, which their packages, holding
+no marker, never reach; the commands take the game of their package, so a value now equal to it
+decides nothing new.
+
+**Pins.** None changed and none left for CI. No renamed value reaches a hash, a byte count, a
+line of `apps/actinglab/tests/golden/expected.json` (which holds none of them), a sorted order (the
+two instances of the registry test keep theirs) or a column width.
+
+**The guard.** `actingcommand-actinglab-architecture::workspace_guards::neut2_source_and_test_trees_hold_no_game_abbreviation`,
+in the gate row A4 (project neutrality) of `test-gates/contract.toml`, beside NEUT-1's. It reads
+every file under NEUT-1's 11 trees and fails on each line that holds one of its five words as a
+word, naming the file and line. Words are split as the C2 guard splits them, by
+`identifier_words` of `tools/actinglab-architecture/src/lib.rs`, made public for it with a doc
+comment and otherwise unchanged: at every character outside ASCII letters and digits and at each case boundary, so
+`POLICY_X_MODE`, `policyXMode` and `x-mode` hold the word `x`, and a longer word or a run of digest
+digits does not. Its words are the four of §1.305 and the fourth game's short code, which no file
+holds. The second game's other abbreviation is not one of them: in the 11 trees it is on 31 lines
+of 8 files, a SQL table alias of the ledger's queries and the tests that pin them and one OCR
+fragment, never a game, and the rule cannot tell them apart. A counterexample checks the matcher
+first. Its allow list, each entry with its reason; an entry whose file is gone or holds none of
+the words fails:
+
+- `apps/actinglab/src/commands/session_contracts.rs`: product output, reported below for the
+  coordinator's ruling;
+- `scripts/windows-tools/Test-WindowsRemoteBuildTools.ps1`: a base64 archive whose letters the
+  word splitting cuts into one of the words, no game;
+- `tools/actinglab-architecture/src/lib.rs`: the C2 and R2-F guards' own word lists and their unit
+  tests' counterexamples;
+- `tools/actinglab-architecture/tests/workspace_guards.rs`: this guard's word list and
+  counterexample and the C2 guard's counterexample.
+
+**Places reported for a ruling** (not changed by this slice):
+
+- `apps/actinglab/src/commands/session_contracts.rs` lines 156, 157 and 164: the policy document
+  that `session capture-policy` prints (`session_capture_policy_payload`) carries, in
+  `stale_classification` and `freeze_classification_gate`, a member whose key holds the first
+  game's abbreviation and whose value is the digest of one game's frame, and twice a finding id
+  that names the game. No code of the repository reads them or decides by them;
+  `retired_instance_commands_are_absent_from_live_contracts` serializes the document and looks for
+  retired command names only.
+- Game words outside the work order's list, in product code: `reject_dangerous_semantic_id`
+  (`apps/actinglab/src/commands/navigation_recovery.rs` lines 1872 to 1891) refuses, unless
+  `--allow-destructive` is given, a semantic id that holds a word of its list, which names game
+  modes (it decides); the document of `session self-heal-policy` (`session_contracts.rs` line 510)
+  has a member whose key names a game mode (nothing decides by it); `resource validate`
+  (`apps/actinglab/src/resource_declarations.rs` lines 630 to 636, 752, 986 and 991) and the
+  converter (`crates/resource-tooling/src/resource_convert/mod.rs` lines 26 and 27) find a
+  third-party game tool's task file by its name (they decide: the file is checked and read); a
+  comment of `apps/actinglab/src/resource_runtime_support.rs` line 77 names two reserved commands
+  after another third-party tool; `distribution/windows/INSTALL.md` lines 394 and 573 name both
+  tools.
+- History and third-party text outside the 11 trees: four dated reports of `benchmarks/reports/`
+  (25 lines, and one file name), and `resources/upstream-manifest.toml` lines 10 and 11 (an
+  upstream project's name).
+
+**Not renamed.** Region values that are no game's abbreviation (the server option of
+`project_interface.rs`'s tests) are outside the work order's list and stay.
+
+**Interface.** None raised ([component-interfaces.md](component-interfaces.md)): nothing a reader
+or writer of any interface sees changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
