@@ -16,9 +16,10 @@
 //!     before LAB-5A ([`super::engine::as_written`]), hands its declared flags on as written
 //!     (`--flag value`, or `--flag` alone when no value follows; the command reads and checks
 //!     them, as it did), and actinglab's global options with them ([`GLOBAL_OPTIONS`], with `_`
-//!     or `-` in their words, as before);
-//!   - the rows of [`LENIENT_ON_COMMAND_LINE`] hand every further flag and word on, as their
-//!     command ignores what it does not read (a debt);
+//!     or `-` in their words, as before); Workflow #434 LAB-5B4: a flag the row does not declare,
+//!     and a word beyond its positionals, are refused on every such row (`recover`,
+//!     `debug-package` and `export-evidence` handed them on before, a debt now paid: their
+//!     commands refuse what they do not read too);
 //!   - the flags of [`KEPT_FLAGS`] go on as written too: a positional given as its flag (`runs
 //!     --instance <x>`, `run show --id <id>` and the like), and a flag of the source command the
 //!     row does not declare (`op status --operation <op>`, `devices bind --root <r>`);
@@ -65,13 +66,6 @@ pub(crate) fn rescue_served(name: &str) -> bool {
         false
     }
 }
-
-/// Workflow #434 LAB-5A: the rows whose command line hands every further flag and word on to
-/// their command, which ignores a flag it does not read, as before LAB-5A. A debt: a later slice
-/// makes these commands strict and this list goes. Only the command line: `serve --stdio` refuses
-/// what the row does not declare.
-pub(crate) const LENIENT_ON_COMMAND_LINE: [&str; 3] =
-    ["recover", "debug-package", "export-evidence"];
 
 /// Workflow #434 LAB-5A: actinglab's global options (`crate::cli_parse::parse_invocation` takes
 /// them anywhere on its command line), which the command line of a row whose flags go on as
@@ -196,10 +190,9 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
         .filter(|param| param.form == ParamForm::Positional)
         .collect::<Vec<_>>();
     let mut next = 0;
-    // Workflow #434 LAB-5A: the flags of a row whose command reads them again go on as written,
-    // and the further flags and words of a lenient row's command too.
+    // Workflow #434 LAB-5A: the flags of a row whose command reads them again go on as written
+    // (Workflow #434 LAB-5B4: and no row hands on a flag it does not declare, or a further word).
     let as_written = super::engine::as_written(operation);
-    let lenient = as_written && LENIENT_ON_COMMAND_LINE.contains(&operation.name.as_str());
     // Workflow #434 LAB-5A fix 1: the options a row LAB-5A completed declared before it.
     let completed = COMPLETED_ROWS
         .iter()
@@ -217,7 +210,7 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
             // A global option in either spelling, as a further flag was written before (`_` as
             // `-`; LAB-5A fix 1).
             let global = GLOBAL_OPTIONS.contains(&format!("--{}", name.replace('_', "-")).as_str());
-            let handed_on = as_written && (declared.is_some() || lenient || global);
+            let handed_on = as_written && (declared.is_some() || global);
             let kept = KEPT_FLAGS
                 .iter()
                 .any(|(row, flag_name)| *row == operation.name && *flag_name == name);
@@ -262,7 +255,6 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
                     put(&mut params, param, typed(param, word, word)?, word)?;
                     next += 1;
                 }
-                None if lenient => append(&mut params, MORE_WORDS, Value::String(word.to_owned())),
                 None => return Err(usage(Some(word), ArgumentProblem::Unknown)),
             }
             index += 1;

@@ -21,21 +21,21 @@ use zip::{ZipWriter, write::FileOptions};
 
 /// Workflow #434 LAB-5B2: the flags `resource catalog` takes.
 pub(crate) const CATALOG_FLAGS: [&str; 4] = ["--repo", "--catalog", "--catalog-server", "--field"];
+/// Workflow #434 LAB-5B4: the positionals `resource catalog` reads: none.
+pub(crate) const CATALOG_POSITIONALS: [&str; 0] = [];
 
 pub(super) fn run_resource(
     sub: &str,
     global: &GlobalOptions,
     args: &[String],
 ) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    // Workflow #434 LAB-5B3: in test builds, the lenient `compile-maa`'s reads are held to its
-    // read list from its first read on.
-    #[cfg(test)]
-    {
-        if sub == "compile-maa" {
-            flags.reading(&maa_task_graph::COMPILE_MAA_READS);
-        }
-    }
+    // Workflow #434 LAB-5B4: `compile-maa`'s command line is parsed by its read list, which
+    // refuses a word the list does not hold, before `--repo` is read.
+    let flags = if sub == "compile-maa" {
+        FlagArgs::parse_reading(args, &maa_task_graph::COMPILE_MAA_READS)?
+    } else {
+        FlagArgs::parse(args)?
+    };
     let repo = flags.required_path("--repo")?;
     let resource_root = resolve_resource_root(&repo);
     match sub {
@@ -53,6 +53,8 @@ pub(super) fn run_resource(
                     )));
                 }
             }
+            // Workflow #434 LAB-5B4: it reads no positional; one is refused, not ignored.
+            flags.refuse_unread_positionals("resource catalog", &CATALOG_POSITIONALS)?;
             let path = repo.join(flags.required_path("--catalog")?);
             let server = flags.required("--catalog-server")?;
             let field = flags

@@ -7,9 +7,9 @@ use serde_json::Value;
 
 const MAX_MAA_MULTI_TASK_FACTS_DATA_BYTES: usize = 16_777_216;
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `resource compile-maa` reads: `--repo`, which
-/// `run_resource` reads for every resource command, then its own.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `resource compile-maa` reads: `--repo`, which `run_resource`
+/// reads for every resource command, then its own. Workflow #434 LAB-5B4: its command line is
+/// parsed by it (`FlagArgs::parse_reading`); no positional.
 pub(crate) const COMPILE_MAA_READS: crate::flag_args::reads::FlagReads =
     crate::flag_args::reads::FlagReads {
         row: "resource compile-maa",
@@ -18,6 +18,7 @@ pub(crate) const COMPILE_MAA_READS: crate::flag_args::reads::FlagReads =
             switches: &["--facts"],
             refused: &[],
         }],
+        positionals: &[],
     };
 
 pub(super) fn run_resource_maa_task_compile(

@@ -103,11 +103,10 @@ fn run_env_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
     serialize_response(lab.env_status(request)?)
 }
 
-/// Workflow #434 LAB-5B3 (tests only): the flags [`resolve_env_markers_in_value`] reads, a part of
-/// the read list of `recover`. `--instance`, `--game` and `--server` are actinglab's global
-/// options, which its parser takes before the command sees its flags, so the command reads them
-/// from the global options; `--env-task` is the command's own.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags [`resolve_env_markers_in_value`] reads, a part of the read
+/// list of `recover`. `--instance`, `--game` and `--server` are actinglab's global options, which
+/// its parser takes before the command sees its flags, so the command reads them from the global
+/// options; `--env-task` is the command's own.
 pub(super) const ENV_MARKER_READS: crate::flag_args::reads::ReadPart =
     crate::flag_args::reads::ReadPart {
         options: &["--instance", "--game", "--server", "--env-task"],

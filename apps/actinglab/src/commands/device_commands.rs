@@ -1,4 +1,3 @@
-#[cfg(test)]
 use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::{
     CliError, CliOutcome, DeviceRuntimeConfig, FlagArgs, GlobalOptions, device_config,
@@ -19,9 +18,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::time::Duration;
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `touch-probe` reads: `--touch-backend`, only to
-/// refuse it (actingd owns the backend; actinglab's parser takes the flag globally).
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `touch-probe` reads: `--touch-backend`, only to refuse it
+/// (actingd owns the backend; actinglab's parser takes the flag globally). Workflow #434 LAB-5B4:
+/// its command line is parsed by it (`FlagArgs::parse_reading`); no positional.
 pub(crate) const TOUCH_PROBE_READS: FlagReads = FlagReads {
     row: "touch-probe",
     parts: &[&ReadPart {
@@ -29,12 +28,11 @@ pub(crate) const TOUCH_PROBE_READS: FlagReads = FlagReads {
         switches: &[],
         refused: &["--touch-backend"],
     }],
+    positionals: &[],
 };
 
 pub(crate) fn run_touch_probe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    #[cfg(test)]
-    flags.reading(&TOUCH_PROBE_READS);
+    let flags = FlagArgs::parse_reading(args, &TOUCH_PROBE_READS)?;
     flags.expect_positionals("touch-probe", 0)?;
     if parse_touch_backend_override(&flags)?.is_some() || global.touch_backend.is_some() {
         return Err(CliError::usage(
@@ -66,8 +64,30 @@ pub(crate) fn run_touch_probe(global: &GlobalOptions, args: &[String]) -> CliOut
     }))
 }
 
+/// Workflow #434 LAB-5B4: the flags `capture` (and `session capture`) reads, on its two paths: the
+/// legacy routing it refuses, `diagnose` as its positional or `--diagnose`, the frame's freshness,
+/// and, to capture, `--out` and `--record` with the recording's instance (`--instance` is
+/// actinglab's global option, which its parser takes before the command sees its flags).
+pub(crate) const CAPTURE_READS: FlagReads = FlagReads {
+    row: "capture",
+    parts: &[
+        &LEGACY_ROUTING_READS,
+        &ReadPart {
+            options: &["--fresh-delay-ms"],
+            switches: &["--diagnose", "--require-fresh"],
+            refused: &[],
+        },
+        &ReadPart {
+            options: &["--out", "--instance"],
+            switches: &["--record"],
+            refused: &[],
+        },
+    ],
+    positionals: &["diagnose"],
+};
+
 pub(crate) fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &CAPTURE_READS)?;
     if flags.bool("--diagnose")
         || flags
             .positionals
@@ -182,9 +202,8 @@ fn run_capture_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<
     }))
 }
 
-/// Workflow #434 LAB-5B3 (tests only): the flags [`reject_legacy_session_routing`] reads, each
-/// only to refuse it: a part of the read lists of the lenient commands that call it.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags [`reject_legacy_session_routing`] reads, each only to refuse
+/// it: a part of the read lists of the own commands that call it.
 pub(crate) const LEGACY_ROUTING_READS: ReadPart = ReadPart {
     options: &[],
     switches: &[],

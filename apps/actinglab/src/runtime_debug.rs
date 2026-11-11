@@ -117,18 +117,18 @@ fn run_unpin(args: &[String]) -> CliOutcome<Value> {
     )
 }
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `lab debug-package` reads: the package by its
-/// path.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `lab debug-package` reads: the package by its path. Workflow
+/// #434 LAB-5B4: its command line is parsed by it (`FlagArgs::parse_reading`); no positional.
 pub(crate) const DEBUG_PACKAGE_READS: crate::flag_args::reads::FlagReads =
     crate::flag_args::reads::FlagReads {
         row: "debug-package",
         parts: &[&super::contained_resources::PACKAGE_LOCATOR_READS],
+        positionals: &[],
     };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `lab export-evidence` reads: the package, then
-/// the archive it writes and the outcome it records.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `lab export-evidence` reads: the package, then the archive it
+/// writes and the outcome it records. Workflow #434 LAB-5B4: its command line is parsed by it; no
+/// positional.
 pub(crate) const EXPORT_EVIDENCE_READS: crate::flag_args::reads::FlagReads =
     crate::flag_args::reads::FlagReads {
         row: "export-evidence",
@@ -140,12 +140,11 @@ pub(crate) const EXPORT_EVIDENCE_READS: crate::flag_args::reads::FlagReads =
                 refused: &[],
             },
         ],
+        positionals: &[],
     };
 
 pub(super) fn run_package_debug(args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    #[cfg(test)]
-    flags.reading(&DEBUG_PACKAGE_READS);
+    let flags = FlagArgs::parse_reading(args, &DEBUG_PACKAGE_READS)?;
     flags.expect_positionals("lab debug-package", 0)?;
     let PreparedPackageDebug { request, reader } =
         package_debug_request(&flags, "lab debug-package")?;
@@ -197,9 +196,7 @@ pub(super) fn runtime_lab_client() -> CliOutcome<RuntimeClient> {
 }
 
 fn run_export_evidence(args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    #[cfg(test)]
-    flags.reading(&EXPORT_EVIDENCE_READS);
+    let flags = FlagArgs::parse_reading(args, &EXPORT_EVIDENCE_READS)?;
     flags.expect_positionals("lab export-evidence", 0)?;
     let PreparedPackageDebug {
         request: package,

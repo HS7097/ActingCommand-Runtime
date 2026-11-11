@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
 use super::*;
+use crate::flag_args::reads::{FlagReads, ReadPart};
 
 // Workflow #410 item 1: the frame's coordinate system, its preview and the after-action
 // attachment.
@@ -108,7 +109,8 @@ struct Lab2CommandContract {
 }
 
 pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    // Workflow #434 LAB-5B4: a switch takes no value from the next word but `true` or `false`.
+    let flags = FlagArgs::parse_switches(args, &LAB2_SWITCHES);
     // Workflow #434 LAB-5B3 (point 4): in test builds, every read of a flag the verb accepts is held
     // to the form the register gives it.
     #[cfg(test)]
@@ -119,6 +121,8 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         &OBSERVE_SCENE
     };
     refuse_unread_flags(&flags, path, &OBSERVE_PATHS)?;
+    // Workflow #434 LAB-5B4: it reads no positional; one is refused, not ignored.
+    flags.refuse_unread_positionals("observe", &OBSERVE_POSITIONALS)?;
     if flags.optional_path("--with-frame").is_some() {
         crate::dry_run_gate::refuse(global, "observe --with-frame", Some("observe"), Value::Null)?;
     }
@@ -1542,6 +1546,29 @@ struct Lab2Path {
 /// The flags every path of the four verbs reads: the instance and the answer's projection.
 const LAB2_EVERY_PATH_READS: [&str; 4] = ["--instance", "--fields", "--pretty", "--verbose"];
 
+/// Workflow #434 LAB-5B2: the flags of `observe`, `do`, `ensure` and `wait` that take no value
+/// (read with `FlagArgs::bool`); a verb's paths read some of them. Workflow #434 LAB-5B4: nor do
+/// they take one from the next word, but `true` or `false` (`FlagArgs::parse_switches`); the
+/// register reads them (`cli_module::own_flags`).
+pub(crate) const LAB2_SWITCHES: [&str; 8] = [
+    "--capture",
+    "--dry-run",
+    "--allow-destructive",
+    "--destructive",
+    "--record",
+    "--preview",
+    "--pretty",
+    "--verbose",
+];
+
+/// Workflow #434 LAB-5B4: the positionals each of the four verbs reads (as
+/// `flag_args::reads::FlagReads::positionals` names them): `observe` none, `do` its target, `ensure`
+/// and `wait` their page; one more is refused (`FlagArgs::refuse_unread_positionals`).
+pub(crate) const OBSERVE_POSITIONALS: [&str; 0] = [];
+pub(crate) const DO_POSITIONALS: [&str; 1] = ["<target>"];
+pub(crate) const ENSURE_POSITIONALS: [&str; 1] = ["<page>"];
+pub(crate) const WAIT_POSITIONALS: [&str; 1] = ["<page>"];
+
 /// What is wrong with a refused flag, spelled as the `argument_problem` values of MCP's
 /// `arguments_invalid`.
 #[derive(Clone, Copy)]
@@ -1921,13 +1948,16 @@ fn refuse_operation_conflicts(global: &GlobalOptions, flags: &FlagArgs) -> CliOu
 }
 
 pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    // Workflow #434 LAB-5B4: a switch takes no value from the next word but `true` or `false`.
+    let flags = FlagArgs::parse_switches(args, &LAB2_SWITCHES);
     #[cfg(test)]
     flags.reading_forms("do");
     let dry_run = global.dry_run || flags.bool("--dry-run");
     // #411 Lab L1: online `do --capture` does not read the destructive guard flags.
     refuse_unread_flags(&flags, do_path(&flags, dry_run), &DO_PATHS)?;
     refuse_operation_conflicts(global, &flags)?;
+    // Workflow #434 LAB-5B4: it reads one positional, its target; a second is refused.
+    flags.refuse_unread_positionals("do", &DO_POSITIONALS)?;
     // Workflow #410 item 1: do's preview is of the frame after the action it performed.
     if flags.bool("--preview") && (dry_run || !flags.bool("--capture")) {
         return Err(CliError::usage(
@@ -2082,11 +2112,14 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
 }
 
 pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    // Workflow #434 LAB-5B4: a switch takes no value from the next word but `true` or `false`.
+    let flags = FlagArgs::parse_switches(args, &LAB2_SWITCHES);
     #[cfg(test)]
     flags.reading_forms("ensure");
     let dry_run = global.dry_run || flags.bool("--dry-run");
     refuse_unread_flags(&flags, ensure_path(&flags, dry_run), &ENSURE_PATHS)?;
+    // Workflow #434 LAB-5B4: it reads one positional, its page; a second is refused.
+    flags.refuse_unread_positionals("ensure", &ENSURE_POSITIONALS)?;
     let ids = Lab2Ids::new();
     let to = ensure_target_page(&flags)?;
     let allow_destructive = flags.bool("--allow-destructive");
@@ -2173,7 +2206,8 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
 }
 
 pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    // Workflow #434 LAB-5B4: a switch takes no value from the next word but `true` or `false`.
+    let flags = FlagArgs::parse_switches(args, &LAB2_SWITCHES);
     #[cfg(test)]
     flags.reading_forms("wait");
     let path = if flags.bool("--capture") {
@@ -2182,6 +2216,8 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         &WAIT_SCENE
     };
     refuse_unread_flags(&flags, path, &WAIT_PATHS)?;
+    // Workflow #434 LAB-5B4: it reads one positional, its page; a second is refused.
+    flags.refuse_unread_positionals("wait", &WAIT_POSITIONALS)?;
     if flags.bool("--capture") {
         return run_runtime_wait(global, &flags);
     }
@@ -2219,8 +2255,32 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
     result.and_then(|payload| project_lab2_payload(&payload, &flags))
 }
 
+/// Workflow #434 LAB-5B4: the flags `lab receipt` reads: the correlation, as `--req` or its first
+/// positional; its command line is parsed by it (`FlagArgs::parse_reading`).
+pub(crate) const RECEIPT_READS: FlagReads = FlagReads {
+    row: "lab receipt",
+    parts: &[&ReadPart {
+        options: &["--req"],
+        switches: &[],
+        refused: &[],
+    }],
+    positionals: &["<req_id>"],
+};
+
+/// Workflow #434 LAB-5B4: the flags `lab evidence` reads: the evidence id, as `--id` or its first
+/// positional (the run root is actinglab's global `--run-root`); its command line is parsed by it.
+pub(crate) const EVIDENCE_READS: FlagReads = FlagReads {
+    row: "lab evidence",
+    parts: &[&ReadPart {
+        options: &["--id"],
+        switches: &[],
+        refused: &[],
+    }],
+    positionals: &["<evidence_id>"],
+};
+
 pub(crate) fn run_receipt(_global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &RECEIPT_READS)?;
     let req_id = flags
         .optional("--req")
         .filter(|value| value != "true")
@@ -2255,7 +2315,7 @@ pub(crate) fn run_receipt(_global: &GlobalOptions, args: &[String]) -> CliOutcom
 }
 
 pub(crate) fn run_evidence(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_reading(args, &EVIDENCE_READS)?;
     let evidence_id = flags
         .optional("--id")
         .filter(|value| value != "true")

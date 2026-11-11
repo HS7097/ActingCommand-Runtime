@@ -1026,7 +1026,6 @@ struct Fixture {
     red_scene: PathBuf,
     blue_scene: PathBuf,
     missing_scene: PathBuf,
-    invalid_pages: PathBuf,
     safe_package: PathBuf,
     bad_hash_package: PathBuf,
     lab_package: PathBuf,
@@ -1057,7 +1056,6 @@ impl Fixture {
         let blue_scene = root.join("blue.png");
         let lab_scene = root.join("lab-scene.png");
         let missing_scene = root.join("missing.png");
-        let invalid_pages = root.join("invalid-pages.json");
         let safe_package = root.join("safe.zip");
         let bad_hash_package = root.join("bad-hash.zip");
         let lab_package = root.join("lab.zip");
@@ -1068,7 +1066,6 @@ impl Fixture {
         fs::write(&red_scene, encode_png(1, 1, [255, 0, 0])).expect("red scene");
         fs::write(&blue_scene, encode_png(1, 1, [0, 0, 255])).expect("blue scene");
         fs::write(&lab_scene, encode_png(2, 2, [255, 0, 0])).expect("lab scene");
-        fs::write(&invalid_pages, b"not-json").expect("invalid pages");
         write_semantic_resources(&resource_root);
         write_semantic_package(&semantic_package, &resource_root);
         write_package_repo(&package_repo);
@@ -1098,7 +1095,6 @@ impl Fixture {
             red_scene,
             blue_scene,
             missing_scene,
-            invalid_pages,
             safe_package,
             bad_hash_package,
             lab_package,
@@ -1202,18 +1198,11 @@ impl Fixture {
                 args.push(os("detect-page"));
                 scene(&mut args, &self.red_scene);
             }
+            // Workflow #434 LAB-5B4: the case passed `--pack`, `--pack-root` and `--pages`, which
+            // `detect-page` never read and now refuses; its failure is the package that is not
+            // there (below), so its line is the same without them.
             "detect_page_failure" => {
-                args.extend([
-                    os("detect-page"),
-                    os("--pack"),
-                    self.resource_root
-                        .join("recognition/arknights.cn.pack.json")
-                        .into_os_string(),
-                    os("--pack-root"),
-                    self.resource_root.clone().into_os_string(),
-                    os("--pages"),
-                ]);
-                args.push(self.invalid_pages.clone().into_os_string());
+                args.push(os("detect-page"));
                 scene(&mut args, &self.red_scene);
             }
             "current_page_success" => {
