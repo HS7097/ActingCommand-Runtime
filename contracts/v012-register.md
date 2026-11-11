@@ -9141,7 +9141,7 @@ as it reads them from the command line.
 
 **LAB-5B3 rollback** (to the release before it). Nothing persisted: code and the table only.
 
-#### Slice LAB-5B4 (0.12.52): a flag a command does not read is refused; a switch does not swallow the next word
+#### Slice LAB-5B4 (0.12.53): a flag a command does not read is refused; a switch does not swallow the next word
 
 Coordinator work order `rd-1108/arch-013/brief-lab5b4.md`, on the coordinator's ruling of 11-11
 (board #434, 6784514298 point 3; not Alice's words), after the read-only check
