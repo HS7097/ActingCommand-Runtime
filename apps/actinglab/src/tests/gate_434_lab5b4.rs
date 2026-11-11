@@ -432,7 +432,11 @@ fn the_reads_that_rested_on_reading_are_on_their_lists() {
     ];
     let result = run_cli(line, true);
     let recorded = reads::take();
-    let code = result.envelope.error.as_ref().map(|error| error.code.as_str());
+    let code = result
+        .envelope
+        .error
+        .as_ref()
+        .map(|error| error.code.as_str());
     assert_eq!(code, Some("validation_failed"));
     for flag in ["--pack", "--pack-root", "--pages"] {
         assert!(
