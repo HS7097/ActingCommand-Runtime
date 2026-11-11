@@ -370,7 +370,13 @@ fn gate_an_events_page_over_the_budget_is_truncated_and_its_cursor_resumes_after
     let mut mcp = McpServer::spawn_with_tier(root.path(), None);
     mcp.initialize();
     let mut id = 1;
-    let first = events_page(&mut mcp, &mut id, json!({"limit": 100}));
+    // Workflow #434 CLI-EV: from the ledger's first record (`after_sequence` 0); without a
+    // position the page is the newest records.
+    let first = events_page(
+        &mut mcp,
+        &mut id,
+        json!({"limit": 100, "after_sequence": 0}),
+    );
     let reference = every_page(&mut mcp, &mut id, 10)
         .into_iter()
         .flat_map(|page| page.rows)
@@ -802,9 +808,14 @@ fn events_page(mcp: &mut McpServer, id: &mut u64, arguments: Value) -> Page {
 }
 
 /// Every page of the whole ledger in pages of `limit`, each next page asked with the previous
-/// page's next_cursor.
+/// page's next_cursor. Workflow #434 CLI-EV: the first page from the ledger's first record
+/// (`after_sequence` 0); without a position it would be the newest records.
 fn every_page(mcp: &mut McpServer, id: &mut u64, limit: u64) -> Vec<Page> {
-    let mut pages = vec![events_page(mcp, id, json!({"limit": limit}))];
+    let mut pages = vec![events_page(
+        mcp,
+        id,
+        json!({"limit": limit, "after_sequence": 0}),
+    )];
     while let Some(cursor) = pages.last().and_then(|page| page.next_cursor.clone()) {
         assert!(
             pages.len() < MAX_PAGES,
@@ -819,9 +830,11 @@ fn every_page(mcp: &mut McpServer, id: &mut u64, limit: u64) -> Vec<Page> {
     pages
 }
 
-/// The next_cursor of a first page of one row.
+/// The next_cursor of a first page of one row, from the ledger's first record (Workflow #434
+/// CLI-EV: `after_sequence` 0; without a position the page is the newest record, with no next
+/// page).
 fn first_cursor(mcp: &mut McpServer, id: &mut u64) -> String {
-    events_page(mcp, id, json!({"limit": 1}))
+    events_page(mcp, id, json!({"limit": 1, "after_sequence": 0}))
         .next_cursor
         .expect("setup: the ledger holds a single row, so no next_cursor")
 }

@@ -177,7 +177,7 @@
         {"name": "detail", "form": "option", "type": "enum:brief|summary|payload", "required": false, "default": "brief", "note": "brief rows; summary adds the outcome a record carries; payload adds the projected payload"},
         {"name": "wait_s", "form": "option", "type": "integer", "required": false, "default": "0", "note": "seconds to wait for rows while the first page is empty, 0 to 20"}
       ],
-      "help": "Reads one page of the Runtime's ledger events, oldest first, with the cursor that continues it.",
+      "help": "Reads the Runtime's newest ledger events, oldest first; with a position or a window, the page from there on with the cursor that continues it.",
       "output": "an event page with its next cursor",
       "writes": false,
       "irreversible": false,

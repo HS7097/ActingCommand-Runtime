@@ -481,6 +481,133 @@ fn gate_actingctl_events_and_ac_events_answer_the_same_summary_page_with_each_re
     drop(mcp);
 }
 
+// Workflow #434 CLI-EV (register §1.306; coordinator work order
+// rd-1111/brief-cli-events-newest.md, ruling 2): without a position or a window, the people's
+// command (`actingctl events`, which shares its parse and its read with `actinglab events`) and
+// `ac_events` answer the same page on one c4 fake Runtime child: the newest `limit` records the
+// filters match, oldest first, with `first_sequence`. Two instance pauses, each lifted again,
+// leave at least two rows of the type of the instance's last row; the filters are the instance
+// and that type. The ledger is far shorter than the largest window, so the search reaches its
+// first record and the page names no bound. The order of the calls is the first test's: the
+// server's first call resolves the alias; the CLI's one Status and the server's next call then
+// read at the same head.
+#[test]
+fn gate_actingctl_events_and_ac_events_answer_the_same_newest_page_without_a_position() {
+    let root = TempDir::new().expect("tempdir");
+    write_sealed_frame(&root.path().join("sealed.png"));
+    let mut runtime = RuntimeChild::spawn_for_instance(root.path(), CHILD_ENTRY, ALIAS);
+    runtime.wait_ready(root.path());
+    let connect = || {
+        RuntimeClient::connect(RuntimeClientConfig::new(
+            root.path(),
+            actingcommand_runtime_client::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        ))
+        .expect("connect a ledger client")
+    };
+    let ledger = connect();
+    let instance_id = ledger
+        .status()
+        .expect("read the Runtime status")
+        .instances()
+        .iter()
+        .find(|instance| instance.instance_alias() == ALIAS)
+        .expect("setup: the fake instance is not registered")
+        .instance_id();
+    let scope = SchedulingPauseScope::Instance {
+        instance_alias: ALIAS.to_owned(),
+    };
+    for _ in 0..2 {
+        ledger
+            .pause_scheduling(
+                scope.clone(),
+                SchedulingPauseReason::new("gate.newest").expect("the pause reason"),
+                60_000,
+            )
+            .expect("pause the instance");
+        ledger
+            .resume_scheduling(scope.clone())
+            .expect("resume the instance");
+    }
+    let event_type = ledger
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("read the ledger")
+        .iter()
+        .rev()
+        .find(|event| event.links.instance_id() == Some(&instance_id))
+        .expect("setup: no row names the instance")
+        .event_type;
+    drop(ledger);
+
+    let parameters = [
+        ("instance", json!(ALIAS)),
+        ("event_type", json!(event_type)),
+        ("limit", json!(2)),
+    ];
+    let arguments = arguments_of(&parameters);
+    let mut mcp = McpServer::spawn_with_tier(root.path(), None);
+    mcp.initialize();
+    accepted(
+        &mcp.call_tool(2, "ac_events", arguments.clone()),
+        "ac_events",
+    );
+    let printed = cli_events(root.path(), &parameters);
+    let answer = mcp.call_tool(3, "ac_events", arguments);
+    let result = accepted(&answer, "ac_events");
+    assert_eq!(
+        &printed, result,
+        "actingctl events printed another page of the newest records than ac_events answered"
+    );
+
+    // The newest two rows of the instance and the type at the page's snapshot, oldest first.
+    let snapshot = result["snapshot_ledger_position"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("a page without snapshot_ledger_position: {answer}"));
+    let matching = connect()
+        .query_events(
+            EventQuery {
+                instance_id: Some(instance_id),
+                event_type: Some(event_type),
+                to_sequence: Some(snapshot),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("read the instance's rows of the type")
+        .iter()
+        .map(|event| json!(event.sequence))
+        .collect::<Vec<_>>();
+    assert!(
+        matching.len() >= 2,
+        "setup: fewer than two rows of {event_type:?} name the instance"
+    );
+    let newest = matching[matching.len() - 2..].to_vec();
+    let rows = result["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("ac_events answered no events member: {answer}"));
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["seq"].clone())
+            .collect::<Vec<_>>(),
+        newest,
+        "not the newest two rows, oldest first: {answer}"
+    );
+    assert_eq!(
+        (&result["first_sequence"], &result["last_sequence"]),
+        (&newest[0], &newest[1]),
+        "{answer}"
+    );
+    assert!(
+        result.get("next_cursor").is_none() && result.get("searched_from_sequence").is_none(),
+        "a page of the newest two names a next page or a bound: {answer}"
+    );
+
+    mcp.close_input();
+    runtime.stop_clean();
+    drop(mcp);
+}
+
 // The MCP arguments of `parameters`, by their names.
 fn arguments_of(parameters: &[(&str, Value)]) -> Value {
     Value::Object(
