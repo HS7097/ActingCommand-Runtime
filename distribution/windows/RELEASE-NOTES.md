@@ -9,6 +9,230 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.54
+
+本版是 v0.12.53 之后合并的 4 个 PR：合并列车 #1599 带进的 #386 IDLE-2（#1597）和 #428 SCHED-C1e（#1598），以及 #434 NEUT-1（#1600）和 #428 SCHED-C1f1（#1602）。
+先说部署：**`actingd-config` 从 [5, 27] 升到 [5, 28]，两片只升这一次**；`ledger` 仍是 [3, 7]、`runtime-client` 仍是 [3, 6]、`package` 仍是 [3, 8]，部署不用带
+`--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步。**v0.12.52 的安装工具可以直接装本版（跳过 v0.12.53），不用任何标志，也不被拒**（逐条边见下面的升级与退回）；
+装上以后安装工具允许退回**本版替换的那一版**，不用标志，但要先把文件里和运行中设的本版新东西去掉（见退回）。新键是两个空闲门槛（整节和每台）和每台的
+`scheduling.pool_lines`（没有默认值）；默认值文件多这两个门槛；`config.subsystems` 多一行常开的 `consumption_fact`。从 v0.12.52 直接装本版的，v0.12.53 说明里部署时要核的
+`ledger_observer.tag.workbench_patterns` 那一处同样要核。运行上要知道的是这几处：
+
+- **配置修订只升一次，两片共用**（IDLE-2、SCHED-C1e；`contracts/component-interfaces.md` 的修订 28 那一行，`distribution/windows/component-interfaces.json` 4）。
+  - 修订 28 是 27 加三样：`idle.action` 的值 `auto`（整节和 `instances[]` 那一项的 `idle.action`）；`idle` 一节和那一项 `idle` 成员的 `return_home_min_gap_ms`、
+    `stop_emulator_min_gap_ms`；`instances[]` 那一项 `scheduling` 成员的 `pool_lines`。
+  - **不写这些的文件修订不变**，本版照读（仍读修订 5 到 27）；生产现在的文件不用改。
+  - **本版以前的版本拒收写了其中任何一样的文件**（v0.12.53、v0.12.52 在启动和 `check-config` 都拒：未知的值、未知的成员）。所以先部署本版、再往文件里写；退回前先从文件里去掉。
+  - `host.idle_state` 绝不记 `auto`（记的是实际取的档），所以账本修订不动。
+- **空闲动作 `auto`**（#386 IDLE-2，登记 §1.304；`contracts/runtime-config.md` 的 “The `idle` section”）。
+  - **怎么选档**：空闲检查发现一台实例什么都不欠（没有租约、排队、无钥匙的活，没有暂停、玩家占用、黑名单时段、围栏，模拟器开着，上次活之后做过计划且没有到期的任务）时，
+    读它到下一件事的间隔（下一个任务的唤醒或读数刷新，取早的，和今天 `idle.min_gap_ms` 的读法一样），直接取一档，恰好等于门槛时取从那里开始的一档
+    （`crates/runtime-host/src/idle_action.rs` 200–213 `auto_tier`）：
+    - 不到 `idle.return_home_min_gap_ms`（默认 600000，10 分钟）：不动；
+    - 从它起、不到 `idle.min_gap_ms`（默认 1800000）：回主页歇一次；
+    - 从 `idle.min_gap_ms` 起、不到 `idle.stop_emulator_min_gap_ms`（默认 7200000，2 小时）：`close_app`，和今天的 `close_app` 完全一样，带它的唤醒；
+    - 从 `idle.stop_emulator_min_gap_ms` 起，或者没有下一件事：`stop_emulator`，和今天一样，带它的唤醒；模拟器不归 Runtime 启动（`start_emulator` 关）的实例只到
+      `close_app`，不算错。
+    - 档位还受「回得来」限制（`IdleView::auto_cap`，同一文件 163–171）：没有启动包的实例不关应用也不关模拟器，但仍可以歇（歇不需要回来）。
+  - **回主页歇一次是什么**（`crates/runtime-host/src/host/idle.rs` 1204 起 `carry_out_idle_rest`）：在空闲动作的那把模拟器控制钥匙上，把这个游戏的标准包为这台实例的区服
+    声明的回主页包（`bundle.json` 里 `uses` 含 `return_home` 的维护项，读法和恢复阶梯、前置链相同，资源仓不用加新声明；游戏和区服取实例的策略身份，和 `close_app`
+    关的应用一样）作为宿主自己的一次运行跑**一次**（`HostPackageRun::IdleReturnHome`），响应期限是生效的 `idle.return_home_min_gap_ms`（最多一个任务的最长时限），所以
+    在下一个任务到期前跑完。跑完记一条 `instance_idle_action`（`operation` `run_idle_action`、`idle_action` `return_home`，不带 `at_unix_ms`，之后没有唤醒）。不论怎么
+    结束，这一段空闲都算歇过：不欠唤醒，`host.idle_state` 里没有它的行，有活（租约、排队、无钥匙的活）来之前不再歇；后来的计划间隔更长，就照常从它往上取档。
+  - **不是什么**：不进恢复阶梯，失败不在同一段里重试（只记宿主运行的失败记录，类别 `run_idle_action`），不停实例也不停 Runtime；暂停、玩家占用、黑名单时段、围栏挡着时
+    不歇，和别的空闲动作一样；歇的钥匙排不上、或者碰上没有声明的包，也算这一段歇过；碰上暂停或排队的请求就不执行，实例回到活动状态。adb 没就绪报
+    `startup_package_adb_not_ready`，和别的不进阶梯的宿主运行一样。
+  - **两条警告**（都是已有的码 `instance_idle_action_unsupported`，不加新码）：没有启动包的实例，`idle_action` `auto`、`member` `startup_package`，和别的动作一样报一次；
+    游戏没为这个区服声明回主页包（或实例的策略身份没有游戏和区服）时，`idle_action` `return_home`、`member` `maintenance`、`operation` `run_idle_action`，每次启动每台一次，
+    不歇，上面两档不受影响。处理：在标准包里给这个区服声明回主页包，或者把 `idle.return_home_min_gap_ms` 提到 `idle.min_gap_ms`，就没有间隔落在歇这一档。
+  - **记录里只写实际取的档**：`host.idle_state` 只会是 `close_app` 或 `stop_emulator`，绝不是 `auto`（形状不变，旧版照样读）；歇过的实例开着、没有行。`auto` 下「动作变了、
+    立刻叫醒」指的是它取的那一档不再被允许（启动包没了，或 `start_emulator` 关了），不是配置的词变了，所以重启恢复出来的已关应用不会立刻被叫醒；启动时读不回空闲状态的
+    `auto` 实例，按它能取的最高一档关着算（`idle_action.rs` 838 起 `wake`，`host/idle.rs` 的 `restore_idle_state`）。
+  - **这一版不做的**：已经关了应用的实例，后来间隔变长也不升成关模拟器（唤醒只会提前）。`idle.action` 的默认值仍是 `close_app`，两个唤醒提前量的默认值不变。裁定里
+    「回主页门槛要大于包的时限、配置检查里核」没有做成检查（配置检查读不到包自己的时限），改成歇的这次运行以回主页门槛为响应期限，总览 11-11 认了。
+  - **两个新键** `idle.return_home_min_gap_ms`、`idle.stop_emulator_min_gap_ms`：毫秒，60000 到 86400000，整节和每台（`instance.<id>.idle.*`）都能设，可在运行中改，
+    每次空闲检查都读；两个默认值都是待实测的起始值。`auto` 生效时（整节的或某台的），整节检查还要求 `return_home_min_gap_ms` ≤ `min_gap_ms` ≤ `stop_emulator_min_gap_ms`，
+    违反时在破坏规矩的那个键上拒成 `config_value_invalid`（`section_check`；`crates/runtime-config/src/idle.rs` 359–372）；别的动作下只核范围。`auto` 不需要 `start_emulator`。
+  - **看得到的**：歇的时候 `actingctl status` 和总览里这台的钥匙由 Runtime 的认领占着、跑的是回主页包，和启动包的运行一样；然后实例空出来，应用开着，没有关闭的行，也没有唤醒。
+  - **配置不写 `auto` 就什么都不变**：`none`、`close_app`、`stop_emulator` 都和以前一样。
+- **池的线可以按实例给**（#428 SCHED-C1e，登记 §1.299 的 “Slice SCHED-C1e”；`contracts/scheduling/README.md` 的 “Lines for one instance”，`contracts/runtime-config.md` 的
+  “Pool lines for one instance”）。
+  - **键** `instance.<实例 id>.scheduling.pool_lines`（文件里是 `instances[]` 那一项的 `scheduling.pool_lines`）：一个对象，没有默认值，可在运行中设；最多 32 个池，成员名是
+    这台实例 `schedule.json` 里的池 id（组合出的副本不带 `@<别名>`；目录的标识符规矩：1 到 128 字节，小写 ASCII 字母或数字开头，其后小写字母、数字、`.`、`_`、`:`、`-`），
+    每个池写 `{"stop_line", "hard_line", "trigger_line"?}`，每条线是 0 到 9007199254740991 的整数，或 `{"type": "fact", "fact_key", "offset"}`，和目录里的线一样两种写法，
+    引用在池的范围里读（`crates/runtime-config/src/scheduling.rs` 的 `instance_pool_lines`，`instance.rs` 281–290 的键表行、607 的整台检查）。
+  - **检查**（启动、`check-config` 和指令都核）：拒成 `config_value_invalid`，`config_key` 是这台的键，带出错处在值里的 JSON 指针（`/<池 id>`、`/<池 id>/<线>`、
+    `/<池 id>/<线>/<成员>`）：值、池、线或引用的形状不对或多了成员，`wrong_type`；第 33 个池、不合标识符规矩的成员名、越界的常数、偏移或事实键，`out_of_range`；
+    缺一条线（指在缺的那条上），或两边都是常数、或引用同一个事实而能比出大小时不满足「硬线 < 停手线 ≤ 触发线」（指在硬线或触发线上），`section_check`。
+  - **只有指令还要问现行的一代目录**：值里点名的每个池，都必须是现行一代给这台实例、并且声明了估值的池，否则 `section_check`、指针指到那个池；宿主在核请求之前把这些池
+    填进检查的上下文（`crates/runtime-host/src/host/runtime_config.rs` 217、1254 起 `valued_pools_context`），不加新码。启动时恢复以前设的值、`check-config`、改别的键都不问
+    这一条，所以后来某一代不再给这台的池，值留着、在那个池回来之前什么都不改。
+  - **效果**：某台设了某个池，在这台上就**整套替换**目录里这个池的线（没写 `trigger_line` 就是上限，不沿用目录的）；别的池、别的实例照旧用目录的线。宿主每个评估过的
+    策略周期都读（同一文件 1214 起 `pool_lines_context`），所以指令下一个周期生效；改线不结束正在进行的封顶回合，下一次评估按新线走，回合只照自己的规矩结束；清掉就照同样
+    的办法回到目录的线。`S ≤ 上限`、`T ≤ 上限` 每次评估照旧核（`lines_invalid`）。评估认目录里同 id 的池，也认这台的副本 `<id>@<别名>`
+    （`crates/policy/src/evaluator/capped.rs` 898–924 `lines`：先实例的设定、再目录、再默认）。
+  - **`lines_source`**（新键，词表 `lines_source`：`instance`、`catalog`、`default`）：凡是带线值（`stop_line`、`hard_line`）的理由都多带它：`capped_spend`；作为决定理由的
+    `pool_lines_unspendable`（编译诊断只读目录，不带）；`pool_line_held` 的 `would_cross_hard_line`、`lines_invalid` 和回合里带线的挂起（`capped_not_dispatchable`、
+    `capped_limited_spent`、`capped_would_cross_hard_line`、回合不试的成员的 `capped_not_head`）。不带线的挂起（`capped_cap_unknown`、`capped_round_empty`、排在已派出的
+    队首后面的块候选的 `capped_not_head`）不带。开发者文本末尾多 ` lines_source=<词>`。目录里它是可选的，v0.12.53 写的记录照旧读。池既没写线、也没人设时是 `default`，
+    目录写了线是 `catalog`，有实例的设定就是 `instance`，不论设定用哪种写法。
+  - **怎么设、怎么清**：Lab 的 `config set <键>=<值>` 和 `config clear <键>`（请求 `ConfigureSettings`），MCP 的 `ac_config_set`（observer 档，和除设备后端以外的每个键一样）；
+    每次改动都记进 `host.config_overrides` 的一行，带 `set_unix_ms`、`request_id` 和渠道。监控台不给这个键分档（看不到，UI 仓要用再加）。
+  - **生产上**：自 2026-11-11 起有一台实例的一个池声明了估值、在它上面试跑调度，其余实例暂停着。所以本版上线后，那一台带线值的理由从第一个评估过的周期起就多带
+    `lines_source` `catalog`；没人设线之前，派单和以前一样。
+- **一场消耗多少可以从事实读**（#428 SCHED-C1f1，登记 §1.303 的 “Slice SCHED-C1f1”；`contracts/scheduling/README.md` 的 “A run's consumption read from a fact”，
+  `contracts/scheduling/v2/README.md`，`contracts/standard-pack-schedule.md` 的同名一节）。v0.12.53 只写了契约，本版做成。
+  - **写法**：只在 V2，`consumes` 那一项的 `amount` 可以写成 `{"type": "fact", "fact_key": B, "fallback": F}`：每次评估从这台实例范围里的事实 B 读一场的量，读不到可用的值时用
+    F。三个成员都要写；写错的各在出错的成员上拒（V1 里 `unknown_field`；`type` 不是 `fact`、键不是标识符、兜底不是整数 `type_mismatch`；兜底越界 `limit_exceeded`，超过常数
+    上限 `effect_incompatible`；缺成员 `missing_required_field`；多成员 `unknown_field`；和 `expected_amount_milli` 一起写、写在 `produces` 上、同一任务同一池写两项这种形式，各见
+    v2/README）；兜底值 1 到 9007199254740991，且不超过池的常数上限（`crates/policy/src/schema.rs` `EffectAmount::Fact`，`validation.rs` `validate_consumption_fact`）。
+    `schedule.json` 里有规则写它的，要在 `requires` 里写 `consumption_fact`，否则在第一个这种 `amount` 处拒成 `schedule_invalid`（`crates/policy/src/compose.rs` 1428–1434）。
+    **不写这种形式的目录，序列化、哈希和决定都逐字节照旧。**
+  - **什么时候用事实、什么时候用兜底**（照所有事实的规矩；`crates/policy/src/evaluator/consumption.rs` 223–288 `resolve`、292 起 `read`）：每次评估，每个任务对它范围覆盖的
+    每台实例各读一次，只读这台实例范围里的那个键。在、没过期、没被重置作废、可信度大于 0、是 1 到 2^53−1 的整数且不超过池的常数上限，就用它；缺了、过期了、被重置作废了，用
+    兜底值、不告警；在而且是现行的、但不能用（可信度 0、别的类型、越界），用兜底值并告警。**永远不会是「未知」**，也不会为它发起读数刷新。前向投影开头读一次，整段投影都用这个数。
+  - **所有读消耗的地方读同一个数**：净收益的成本项、池的读数和硬线检查、`pool_lines_unspendable`、封顶回合的排位、计划和队首检查、保留量的各处、平局判定、前向投影。封顶回合
+    按消费者认回合的键只记兜底值，所以读数变了回合照旧、次序不变，计划和检查读当时的量；兜底值改了才算消费者变了。`host.capped_episodes` 的行不变。
+  - **警告** `consumption_fact_unusable`（新码，policy，warning，ladder `none`；`task_id`、`pool_id`、`fact_key`、`unknown_reason`（`fact_low_confidence` 或 `type_mismatch`）、
+    `consumption`）：事实在、没过期但不能用时，排在这个任务在这台实例上每个决定的最前面（每个池一次，在 `benefit_fixed_value` 之前），从不决定结果。处理：改正包为这个键写的
+    读数（`ac_facts` 看得到那条记录），或者改 `schedule.json` 里的兜底值。
+  - **理由上多两个值**：消耗从事实读的任务，在 `pool_line_held`、`capped_spend`、`resource_reserve_insufficient`、`pool_lines_unspendable` 上多带 `consumption`（这次评估读到的
+    整单位量）和 `consumption_source`（词表 `consumption_source`：`fact`、`fallback`）；常数消耗两个都不带。
+  - **新鲜度和唤醒**：用上的那条事实什么时候过期，同一台上消耗或保留这个池的候选的新鲜度就到什么时候，评估在过期后一毫秒醒来、改读兜底值；用兜底值时什么都不约束。
+  - **工具**：`actinglab standard-pack check` 和 `package bundle --schedule` 的回答多一个 `consumption_facts`（每个游戏、没挂起的规则里每个这种项一条
+    `{rule_id, pool_id, fact_key, fallback}`，按文件顺序；有 `schedule.json` 时总出现、可以为空，没有时不出现；`crates/resource-tooling/src/api.rs` 153–157、195–199）；覆盖统计
+    把它算作声明了数量。`config.subsystems` 多一行常开的 `consumption_fact`（`apps/actingd/src/config/manifest.rs` 218–226）。
+  - **没有排程文件写这种形式之前什么都不变**：没有新配置键、新账本形状，也不升接口修订。
+- **核心的测试和夹具不再点名真实游戏**（#434 NEUT-1，登记 §1.305）：只改测试、夹具、一份金样和一道守卫（架构测试 `neut1_source_and_test_trees_name_no_real_game`，门表
+  `contracts/test-gates/contract.toml` 的 A4 行）；产品代码、行为、契约、配置、账本、结果码和接口都不变。
+- **LAB-3 的运维规矩到 LAB-7 前照旧：生产照旧用 `actingctl install` 部署**，不对生产根用 Lab 救急模块的 `deploy`、`rollback`、`place`、`config replace`、`instance add`。
+  `crates/lab-rescue` 自 v0.12.53 一个文件都没改，`actingctl install` 走的代码就是 v0.12.53 说明核过的那份。
+
+配置：只升 `actingd-config`，按代码和 `contracts/component-interfaces.md` 核过。`distribution/windows/component-interfaces.json` 是 `actingd-config` [5, 28]、`install-selection`
+[1, 1]、`install-control` [0, 1]、`ledger` [3, 7]、`runtime-client` [3, 6]、`package` [3, 8]、`runtime-outcomes` [1, 1]；架构测试
+`tools/actinglab-architecture/tests/component_interfaces.rs` 的 `V0120` 一行随之钉 [5, 28]。
+
+- 升 `actingd-config` 一次（修订 28 一行写两片）：理由见上；修订 27 的文件就是修订 28 的文件。计划表里 LAB-6 那一行仍写 28，表下多一句：28 已被本版占用，LAB-6 做的时候取
+  下一个空号，含义不变。
+- 不升 `ledger`：`crates/ledger` 自 v0.12.53 没改；没有新记录、新动作、新载荷成员。歇记在已有的 `run_idle_action` 下（`idle_action`、`member` 是名字型的键，`return_home`、
+  `auto`、`maintenance` 是新值，不用登记）；`lines_source`、`consumption`、`consumption_source` 是已有决定理由的可选值，读者对码只核拼写（`component-interfaces.md` 137）；
+  `host.idle_state`、`host.capped_episodes` 形状不变；指令行不是文件或记录的形状（`host.config_overrides` 的行没变）。
+- 不升 `runtime-client`：`crates/runtime-client` 自 v0.12.52 没改，契约 crate 只多三个键名（`crates/actingcommand-contract/src/outcome/keys.rs`）。不升 `package`：
+  `consumes` 的事实写法由 `requires` 的 `consumption_fact` 把关（和 §1.289、§1.299 一样）。`runtime-outcomes` 仍是 1：新码、键和词表都在这一修订里追加。
+- 配置键：新键是整节的 `idle.return_home_min_gap_ms`（默认 600000）、`idle.stop_emulator_min_gap_ms`（默认 7200000）（`distribution/windows/actingd.defaults.json` 530–531，
+  `crates/runtime-config/src/idle.rs` 172–186）；每台的 `instance.<id>.idle.return_home_min_gap_ms`、`instance.<id>.idle.stop_emulator_min_gap_ms`（默认取整节的；
+  `INSTANCE_ROWS` 4 → 6，同一文件 190–218）；每台的 `instance.<id>.scheduling.pool_lines`（对象，没有默认值，只在文件写了或指令设了的实例上报行；`instance.rs` 281–290）。
+  都可在运行中改，`reader` 是 IDLE-2 或 SCHED-C1e，`since` 0.12.54。`idle.action` 的词表多 `auto`（`idle.rs` 62）。没有去掉的键；默认值文件只多那两项，示例配置没改。
+  `config.parameters.idle` 多两行，`config.parameters.instance` 每台多两行（设了线的再多一行），`actingd check-config` 列出它们；`config.selection` 里随包默认值文件的摘要随之改变。
+- `config.subsystems`：多一行常开的 `consumption_fact`（`apps/actingd/src/config/manifest.rs` 218–226；`contracts/actingd-check-config.md`、`contracts/runtime-config.md` 各添
+  一句）。从 v0.12.52 直接装的，还会看到 v0.12.53 加的 `pool_trigger_line`。
+- 结果码：目录从 3907 个码变成 3908 个码，位置仍是 1750 个，仍是 29 个分片，键从 626 个变成 629 个，词表从 219 个变成 221 个，没有退役的码。新码 1 个：
+  `consumption_fact_unusable`（policy，warning，ladder `none`，待定稿，since 0.12.54）。新键 3 个：`lines_source`（词表 `lines_source`）、`consumption`（`integer`）、
+  `consumption_source`（词表 `consumption_source`）；新词表 2 个：`lines_source`（`instance`、`catalog`、`default`）、`consumption_source`（`fact`、`fallback`）；前缀
+  `consumption_` 归 policy。改了的：`capped_spend`、`pool_line_held`、`pool_lines_unspendable` 各多三个可选键 `lines_source`、`consumption`、`consumption_source`，
+  `resource_reserve_insufficient` 多两个可选键 `consumption`、`consumption_source`，说明随之改；`instance_idle_action`、`instance_idle_action_unsupported` 的说明、常见原因和
+  处理多了 `auto` 和歇的写法；位置 `run_idle_action` 的说明多一句歇；键 `idle_action` 的说明多 `auto` 和 `return_home`。本版的发布文件是空的：没有新定稿或退役的条目。
+- 程序文件：workspace 仍是 39 个成员，`Cargo.toml`、`Cargo.lock` 自 v0.12.53 都没改，没有新的依赖。`.github/`、`ci/`、`ratchet/` 自 v0.12.53 都没改；`tools/` 只改了架构测试
+  （修订的钉值和 NEUT-1 的守卫）；两个包的文件清单和 v0.12.53 一样。`apps/actingctl`、`apps/mcp-entry` 没改，MCP 工具仍是 41 个；`apps/actinglab` 只改了测试，仍是 100 条命令、
+  45 个顶层分派臂；`contracts/lab-operations.json` 没改，救急模块提供的行仍是 30 行。不稳定表照旧是 FLK-08 和 FLK-10；NEUT-1 重算了 FLK-10 那个测试
+  （`protocol_goldens_match_current_cli`）读的金样里 8 处钉值，表本身没动。
+
+升级与退回（安装工具的代码 `crates/lab-rescue/src/install/` 自 v0.12.53 一个文件都没改；其中 `plan.rs`、`update.rs`、`undo.rs`、`programs.rs`、`postcheck.rs` 自 v0.12.51
+都没改，在 v0.12.52、v0.12.53 和本版里逐字节相同，下面这几份的行号对三个版本的安装工具都对；`deploy.rs` 在 v0.12.52 里少 INST-5b 的几段，行号是本版的，v0.12.52 的另注）：
+
+- **v0.12.52 的安装工具直接装本版：不用任何单向标志，也不被拒，生产可以跳过 v0.12.53。** 计划的边逐条（`plan.rs`）：
+  - `ledger` `previous_max_in_next`（288–294）：Rp [3, 7] 的上限 7 在 R\* [3, 7] 里，过；`one_way`（295–301）：7 不大于 7，过；计划里没有 `ledger_verify`（915）。
+  - `runtime-outcomes` `next_max_in_installer`（302–314）：R\* 的 1 在安装工具的 [1, 1] 里，过。
+  - `install-control`、`runtime-client` 的 `installer_meets_previous` 和 `installer_meets_next`（315–331）：安装工具的 [0, 1]、[3, 6] 和两边的声明都相交，过。
+  - `package` `bundle_max_in_next`（332–355）：目标仍是 [3, 8]，各包的结果和装 v0.12.52、v0.12.53 时一样。`speaks` `runtime_equals_tools`（756–763）：两半的声明相同，过。
+  - `actingd-config` `installer_knows_keys`（359–376、764；`unknown_keys` 506–536）：比的是**现在的配置文件**和**安装工具自己**（v0.12.52）的键表与默认值；生产的文件不写本版的
+    任何新成员（v0.12.52 自己就拒），`keys` 为空，过。安装工具声明的 [5, 27] 在这条边上只是列出来：**更新计划里没有哪条边拿安装工具的 `actingd-config` 去比目标的
+    [5, 28]**；三方共同修订的 `installer_ui_next_common`（`ui_edges` 431–465）只在门测试里算（430 `#[cfg_attr(not(test), allow(dead_code))]`），根目录有 UI 成员以后才进计划。
+  - `actingd-config` `next_check_config`（902–914）：本版的 check-config（带 `--install-root`：28 ≥ 17，`programs.rs` 34，`plan.rs` 858–866）读现行的文件，修订 27 的文件
+    它照收，过。
+  - 计划的 `defaults_diff`（574–598）：从 v0.12.52 装是三行，`idle.return_home_min_gap_ms`（`live` 为空，目标 600000）、`idle.stop_emulator_min_gap_ms`（空 → 7200000）两行
+    `source` 是 `default`，加上 v0.12.53 带来的 `ledger_observer.tag.workbench_patterns`；从 v0.12.53 装只有前两行。只是列出，不拒。
+  - 部署后检查的 `new_keys`（`postcheck.rs` 494–526，`added_keys` 593–601）核那两个空闲键在新 Runtime 的 `config.parameters.idle` 里来源是 `default`（文件不写它们）；本版报这
+    两行，过（v0.12.52 的 `runtime.rs` 254–285 和本版的 292–323 读法相同）。
+  - 所以部署本版仍由在线的 v0.12.52 安装工具跑，命令行和部署 v0.12.53 时的一样。
+- **v0.12.53 的安装工具装本版**：代码同上，声明和 v0.12.52 的相同（`actingd-config` [5, 27] 等），每条边同样过，不用标志；生产没有上过 v0.12.53，眼下用不到。
+- **退回：安装工具允许退回本版替换的那一版，不用标志。** `install rollback`、部署的自动回退（`deploy.rs` 763–854 的 `rollback_gate`，813 `accept_ledger_one_way: false`；
+  v0.12.52 的是 728、778）和 `install undo`（`undo.rs` 388、396）走同一个回退门（`update.rs` 383–505），四部分都要过：
+  1. 接口边（393–399）：除 `actingd-config` 外两边的声明都相同，都过。`installer_knows_keys` 用跑退回的那个安装工具的键表：本版的安装工具总认得；用 v0.12.52 的安装工具而文件
+     还写着本版的新成员时不过（`interface_edge`）。
+  2. 账本可读（400–437）：**只对本版替换的那一版过**（`contracts/install-cli.md` 的 “The rollback gate” 第 2 条）。生产从 v0.12.52 直接装本版的话，退回 v0.12.52 可以；
+     **退回 v0.12.53 被拒**（`rollback_gate_failed`，部分 `ledger_readability`，`previous` 写着 v0.12.52）：v0.12.53 没在这个根上跑过，要上它只能先退回 v0.12.52 再装 v0.12.53。
+     反过来，先装 v0.12.53 再装本版的，退回 v0.12.53 可以，直接退回 v0.12.52 不行（先退到 v0.12.53）。
+  3. 打开时间（438–489）：照旧。
+  4. 配置（490–503）：目标的 check-config 要收现行的配置文件。v0.12.53、v0.12.52 拒收写了 `auto`、两个空闲门槛或 `scheduling.pool_lines` 的文件，这一部分就不过
+     （`rollback_gate_failed`，部分 `config`），所以**退回前先改文件**。
+  - 旧版启动时，`host.config_overrides` 里它没有的键（两个空闲门槛、`scheduling.pool_lines`）和值不再合规的（`idle.action` `auto`）都丢掉，记 `config_override_dropped`、列在
+    启动报告的 `instructions_dropped` 里（`contracts/runtime-config.md` 的 “Restore at start”），带启动的退回的部署后检查 `instructions` 一项会因此不过
+    （`postcheck.rs` 415–448）。所以**运行中设的也先用 `config clear` 清掉**，再退。
+- **退回以后旧版在启动时读到的，逐片要先做的**：
+  - **IDLE-2**：把 `idle.action`（整节和每台）改回 `close_app`、`stop_emulator` 或 `none`，把 `return_home_min_gap_ms`、`stop_emulator_min_gap_ms`（整节和每台）从文件里去掉，
+    运行中设过的清掉，再退。`host.idle_state` 里只有 `close_app` 或 `stop_emulator`，每个版本都读得了；歇过的实例开着、没有行。
+  - **SCHED-C1e**：先用 `config clear` 清掉每台的 `scheduling.pool_lines`，文件里写了这个成员的去掉。旧版没有这个键，恢复出来的值它丢掉（`config_override_dropped`），那个池回到
+    目录的线；写了这个成员的文件它拒收（修订 27，那一项不收未知成员）。账本不用动。
+  - **SCHED-C1f1**：还没有排程文件写这种形式之前，没有要撤的。写了并生效以后，先把它换成常数 `amount`、让本版启用一代不带它的目录，再退：旧版在读取处拒这一项（`amount` 处
+    `type_mismatch`），也不认 `consumption_fact` 这个子系统（组合时 `schedule_requires_missing`），而它启动时要编译派单和决定记忆点名的每一代目录（§1.225 的退回更正）。
+    `host.capped_episodes` 的行不变（登记 §1.303 的 “SCHED-C1f1 rollback”）。
+  - **退回 v0.12.52 时另外**（v0.12.53 说明的退回）：SCHED-C1c 写了 `trigger_line` 并生效的，同样先换上不写它的排程文件、让本版启用那一代再退；SCHED-C1d 没有要撤的，
+    v0.12.52 不读也不记 `host.capped_episodes`，之后更新的版本再启动时那条记录按锚点规则过期、整份丢掉，记一条 Warning `capped_state_failed`（`load_capped_episodes`）；
+    INST-5b 留下的全局暂停 v0.12.52 的 `release-hold` 不管，用 `actingctl resume --state-root <s>` 解除，生产在 LAB-7 前不用 `instance add`，碰不到。
+  - **退回 v0.12.53 时**：`host.capped_episodes` 的形状不变，v0.12.53 照它自己的锚点规则读。
+  - **NEUT-1**：没有要做的。
+- 配对：
+  - **安装工具**：见上，部署本版跑的是 v0.12.52 的安装工具。
+  - **部署工具包的命令行，本版都照旧收**：它跑的全是 `actingctl install` 的 `release stage --root --dir --facts --expect-tag --expect-commit`、`guards --root --for stop
+    --hold --known-pause …`、`status --root [--operation]`、`update plan --root --build [--preview]`、`update apply --root --build --plan --stop --hold --known-pause …
+    --start --detach`、`release-hold --root --reason`，跑的是在线的 v0.12.52 的安装工具；`apps/actingctl` 和 `crates/lab-rescue` 自 v0.12.53 没改，`gate_434_lab3.rs` 照旧
+    逐条钉住。**没有一条被拒。** 答法变了的只有内容上的：预览和计划的 `defaults_diff` 多上面那两（或三）行，部署后检查的 `new_keys` 列出两个空闲键；`edges`、`steps`、
+    `check_config`、`extra` 的形状和结果不变。工具包另用新版 actinglab 跑的 `--json standard-pack check --root <游戏根>`，同下。**工具包要跟着改的**：它给热放置工具包写构建记录
+    的那一步核新包清单里的 `actingd-config` 是 [5, 27]、记成 `5,27`，本版要改成 [5, 28]、`5,28`（热放置工具包重钉时拿这个值和清单比）。
+  - **热放置工具包的命令行，本版都照旧收**：actinglab 两行，`--json standard-pack check --root <游戏根>`（S7）和 `--json standard-pack compose --root <包根>
+    --instance <别名>=<游戏>/<区服> … --out <新目录>`（K3）；actingctl 的 `status`、`status --config`、`pause --instance <别名> --reason <理由> --drain-timeout-ms <毫秒>`、
+    `resume --instance <别名>`、`schedule --instance <别名>`、`overview --root <根> --instance <别名> --sections catalog`（都带 `--state-root`）。命令行代码自 v0.12.53 没改
+    （`apps/actinglab/src/standard_pack_cli.rs` 自 v0.12.52 也没改；v0.12.53 说明核过这些行在 LAB-5B4、LAB-5B5 之后照旧收）。**没有一条被拒。** 答的内容上能看到的：
+    `standard-pack check` 有 `schedule.json` 时多 `consumption_facts`（工具包不读）；本版**没有新的检查警告码**；`status --config` 的 `config.subsystems` 多 `consumption_fact`
+    （从 v0.12.52 算还有 `pool_trigger_line`），`config.parameters.idle` 多两行、每台多两行（工具包只读来源为 instruction 的条目和 `standard_packs.check_interval_ms`）；
+    `schedule --instance` 在有估值的池上多 `lines_source`，消耗从事实读时多 `consumption`、`consumption_source`。**热放置工具包要学的**：它的子系统名单要加 `consumption_fact`；
+    跳过 v0.12.53 的话 v0.12.53 那次重钉没做，名单里也还没有 `pool_trigger_line`，要一起加，不然 `requires` 写了它们的排程文件会被工具包判成阻断；已知警告要加 v0.12.53 起就有、
+    本版照旧会报的 `standard_pack_line_trigger_redundant`（S7 把不认识的警告码当失败）。
+  - **控制台 UI**（最新发版 UI v0.12.15 的提交是 `bb0fd1c7`；UI 的 main 已到 `90b87443`，多 22 个提交、还没发版；两者都把 Runtime crate 钉在 `d06910c6`，即 v0.12.47，
+    `Cargo.toml`）：
+    - 两者声明的 `actingd-config` 都是 [5, 27]（`crates/acui-setup/component-interfaces.json`），**还到不了 28**。契约和登记写的是「和认得 28 的监控台同版发」，这件 UI 仓还没做。
+      眼下的影响：安装工具还不算 UI 的边（见上），部署不被它挡；控制台改设置走 `ConfigureSettings`，不写配置文件；`runtime-client` [3, 5] 和本版的 [3, 6] 相交，账本 [3, 7] 相同。
+    - **空闲动作 `auto`**：每台的 `idle.action` 在控制台的日常档。设置页照原样写出 `auto`（`crates/acui-app/src/workbench/settings.rs` 的 `value_words`：没有说法的词照写）；
+      主页的规则面板把它当作「没有名字的词」照原样显示（`crates/acui-source/src/workbench/rules.rs` 的 `IdleNow::Other`），人可以改成「什么都不做」或「关游戏」（控制台不提供
+      关模拟器），一改就换掉 `auto`。两个文件 v0.12.15 和 main 相同。
+    - **新键**：两个空闲门槛（整节和每台）和每台的 `scheduling.pool_lines` 不在它钉的 v0.12.47 键表里，控制台按「键表没有的键」藏起来，也不算读不了的行
+      （`crates/acui-source/src/workbench.rs` 的 `take`：main 1218–1224，v0.12.15 1106–1107）。
+    - **`lines_source`**：v0.12.15 读不运行说明时只读理由的码，main 另读 `benefit_gap`、`pool_line_hold` 两个值（main 的 `workbench.rs` 1717–1738）；`lines_source`、
+      `consumption`、`consumption_source` 两版都不读、不显示。新码 `consumption_fact_unusable` 不在它钉的码目录里，读者只核拼写。
+
+运行上的变化：
+
+- 部署本身不改变派单：配置不写 `auto`、没人给实例设线、排程文件不写消耗的事实写法，决定都和以前一样；`config.subsystems` 多一行，`config.parameters` 多几行。
+- 生产上有估值的那一个池（11-11 起，一台实例试跑），带线值的理由从本版第一个评估过的周期起多带 `lines_source` `catalog`；从 v0.12.52 直接装时，v0.12.53 的回合活过重启也随之上线。
+- 可以在运行中给某台的某个池单独设线（`config set`、`ac_config_set`），下一个周期生效、不结束回合；清掉回到目录的线。
+- `idle.action` 可以设成 `auto`：按到下一件事的间隔歇一次、关应用或关模拟器；不设就和今天一样关应用。
+
+本版合并的 PR：
+
+- #1597 IDLE-2（#386，登记 §1.304；经列车 #1599）：`idle.action` `auto`、两个门槛键、回主页歇一次（`crates/runtime-host/src/idle_action.rs`、`host/idle.rs`、
+  `crates/runtime-config/src/idle.rs`）；主机门行 `#386 IDLE-2 auto` 的 13 个测试（规划器 6 个 `gate_idle2_auto`，宿主 4 个 `gate_idle2_auto_host`，配置 3 个 `idle2_auto_tests`）；
+  改造架构测试钉修订的那一行（[5, 28]），现有的 IDLE 测试一个没动。没有新码。
+- #1598 SCHED-C1e（#428，登记 §1.299；经列车 #1599）：`instance.<实例 id>.scheduling.pool_lines`、指令只认有估值的池、评估先读实例的线、`lines_source`；策略 4 个
+  （`gate_sched_c1e`）、配置 5 个、宿主 1 个测试（门行 `#428 SCHED-C1e`），改造同一个架构测试的修订钉值，金样没有重录。新键 1 个和它的词表。
+- #1599 合并列车：带进上面两个，修订 28 在 `contracts/component-interfaces.md` 里对成一行，架构测试的注释并成一句，登记 §1.304 记下总览认了「以响应期限代替配置检查」；
+  没有别的代码和测试。
+- #1600 NEUT-1（#434，登记 §1.305）：16 个文件 240 行测试夹具换成中性的值，金样 `apps/actinglab/tests/golden/expected.json` 的 8 处钉值照产品自己的算法重算，新守卫 1 个
+  （门表 A4 行）；断言没动，没有产品代码。
+- #1602 SCHED-C1f1（#428，登记 §1.303）：`consumes` 的 `amount` 从事实读、带兜底（`crates/policy/src/evaluator/consumption.rs` 等）、`consumption_fact_unusable`、理由上的
+  `consumption` 和 `consumption_source`、`consumption_facts`、子系统行 `consumption_fact`；门行 `#428 SCHED-C1f1` 的 7 个测试（策略 6 个，资源工具 1 个）；改造
+  `gate_cov1` 的 1 个测试（整体构造的回答结构体多一个成员），金样没有重录。新码 1 个、新键 2 个、新词表 1 个，不升任何接口修订。
+
 ## v0.12.53
 
 本版是 v0.12.52 之后合并的 9 个 PR：合并列车 #1592 带进的 #429 R-6 第一片（#1586）、#434 LAB-5B4（#1587）、#428 SCHED-C1b（#1588）、SCHED-C1c（#1589）和
