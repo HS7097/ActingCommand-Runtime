@@ -22,6 +22,22 @@
 // - `inst5_the_journal_carries_the_initiator_and_what_was_added`: the operation's journal
 //   (`config_replace`) and the release's carry the initiator, and the first records the instance
 //   added (`inputs.instance_add`) with the id the configuration holds.
+// Workflow #421 INST-5b (register §1.300, "INST-5b"; coordinator work order
+// `rd-1111/brief-inst5b.md`): the hold of `instance add` also holds one global pause of its own
+// across the restart.
+// - `inst5b_the_global_pause_spans_the_restart`: the calls come in the order hold, global pause,
+//   close, start, the added instance's pause, global resume, release; every status read between
+//   the start and the added instance's pause shows the global pause in effect; the pause step
+//   records it as its own and the release says it resumed it;
+// - `inst5b_a_global_pause_from_before_is_neither_replaced_nor_lifted`: another party's global
+//   pause is there after the command with its reason and revision, and no global pause or resume
+//   was asked;
+// - `inst5b_a_refused_pause_of_the_added_instance_keeps_the_global_pause_and_the_hold`: the
+//   command ends `post_check_failed` with the global pause and the hold kept and `next` naming the
+//   added instance's pause and the global resume; `release-hold` then resumes the global pause and
+//   the hold's pause and nothing else;
+// - `inst5b_config_replace_and_restore_send_no_global_pause`: neither asks for a global pause or
+//   resume.
 // The machine is the fake host of `fixture.rs` with its fake Runtime, fake watchdog and fake
 // clock: no device, no emulator, no sleep; every root is a temporary folder with neutral files.
 
@@ -498,4 +514,273 @@ fn inst5_the_journal_carries_the_initiator_and_what_was_added() {
     let config = config_of(&root);
     let entry = member_of(&config, "/instances", "alias", ADDED).expect("the instance's entry");
     assert_eq!(added["instance_id"], entry["instance_id"]);
+}
+
+/// The rescue row `name` with `params` on `root`, as [`WORD`]; its one line and exit code.
+fn rescue_line(host: &FakeHost, root: &Path, name: &str, params: Value) -> (Value, u8) {
+    let location = location(root);
+    let context = Context {
+        host,
+        location: &location,
+        initiator: WORD,
+    };
+    let params = match params {
+        Value::Object(params) => params,
+        _ => Map::new(),
+    };
+    match rescue::answer_with(&context, name, &params) {
+        Answered::Line(exit) => (exit.line.expect("an encoded line"), exit.code),
+        other => panic!("{name}: a line, not {other:?}"),
+    }
+}
+
+/// The index of the last call that starts with `prefix`.
+fn last(calls: &[String], prefix: &str) -> usize {
+    calls
+        .iter()
+        .rposition(|call| call.starts_with(prefix))
+        .unwrap_or_else(|| panic!("no call {prefix}: {calls:?}"))
+}
+
+/// The hold's reason, as the hold asked for the pause of `alias`.
+fn hold_reason_of(calls: &[String], alias: &str) -> String {
+    let prefix = format!("pause {alias} ");
+    calls
+        .iter()
+        .filter_map(|call| call.strip_prefix(prefix.as_str()))
+        .find(|reason| reason.starts_with("lab-instance-"))
+        .map(str::to_owned)
+        .unwrap_or_else(|| panic!("no hold of {alias}: {calls:?}"))
+}
+
+/// The global pause the fake Runtime shows: its reason and its revision.
+fn global_seen(host: &FakeHost) -> Option<(String, u64)> {
+    host.runtime
+        .global_pause
+        .borrow()
+        .as_ref()
+        .map(|pause| (pause.reason.as_str().to_owned(), pause.revision))
+}
+
+/// The step of `kind` of a journal.
+fn step_of<'a>(journal: &'a Value, kind: &str) -> &'a Value {
+    journal["steps"]
+        .as_array()
+        .and_then(|steps| steps.iter().find(|step| step["kind"] == kind))
+        .unwrap_or_else(|| panic!("no step {kind}: {journal}"))
+}
+
+// INST-5b, the work order's first named test (build points 1, 2 and 4).
+#[test]
+fn inst5b_the_global_pause_spans_the_restart() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = running(temp.path(), "spans", &host);
+    let before = journals(&root);
+
+    let (line, exit) = add(&host, &root, ADDED, 2);
+    assert_eq!(exit, 0, "{line}");
+    assert_eq!(top_code(&line), "install_command_done", "{line}");
+
+    // The order: hold, global pause, close, start, the added instance's pause, global resume,
+    // release.
+    let calls = calls(&host);
+    let reason = hold_reason_of(&calls, "neutral.a");
+    let held = last(&calls, &format!("pause neutral.b {reason}"))
+        .max(last(&calls, &format!("pause neutral.a {reason}")));
+    let set = first(&calls, &format!("global pause {reason}"));
+    let close = first(&calls, "shutdown");
+    let start = first(&calls, "spawn ");
+    let paused = first(&calls, "pause neutral.added instance.added");
+    let lifted = first(&calls, "global resume");
+    let released = first(&calls, "resume neutral.a").min(first(&calls, "resume neutral.b"));
+    assert!(
+        held < set
+            && set < close
+            && close < start
+            && start < paused
+            && paused < lifted
+            && lifted < released,
+        "{calls:?}"
+    );
+    let global_calls = calls
+        .iter()
+        .filter(|call| call.starts_with("global "))
+        .count();
+    assert_eq!(global_calls, 2, "{calls:?}");
+
+    // Between the start and the added instance's pause every status read shows the global pause.
+    let window = host
+        .runtime
+        .status_reads
+        .borrow()
+        .iter()
+        .filter(|(at, _)| *at > start && *at <= paused)
+        .map(|(_, shown)| shown.clone())
+        .collect::<Vec<_>>();
+    assert!(!window.is_empty(), "{calls:?}");
+    assert!(
+        window
+            .iter()
+            .all(|shown| shown.as_deref() == Some(reason.as_str())),
+        "{window:?}"
+    );
+
+    // After it: the global pause lifted, the added instance paused with its own reason.
+    assert_eq!(global_seen(&host), None);
+    assert_eq!(
+        host.runtime.pause_of(ADDED).as_deref(),
+        Some("instance.added")
+    );
+    assert_eq!(host.runtime.pause_of("neutral.a"), None);
+
+    // The journal: the pause step asked for the global pause and records it as its own; the
+    // release says it resumed it.
+    let written = new_journals(&root, &before);
+    assert_eq!(written.len(), 2, "{written:?}");
+    let pause = step_of(&written[0].1, "pause");
+    assert_eq!(pause["intent"]["global"], json!(true), "{pause}");
+    let own = &pause["evidence"]["own_pauses"];
+    assert_eq!(own["reason"], reason.as_str(), "{pause}");
+    assert!(own["global"].is_u64(), "{pause}");
+    let release = step_of(&written[1].1, "release_hold");
+    assert_eq!(
+        release["evidence"]["global_resumed"],
+        json!(true),
+        "{release}"
+    );
+}
+
+// INST-5b, the work order's second named test (build point 1).
+#[test]
+fn inst5b_a_global_pause_from_before_is_neither_replaced_nor_lifted() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = running(temp.path(), "foreign", &host);
+    host.runtime.pause_global_as("other-party");
+    let other = global_seen(&host);
+    assert!(other.is_some());
+
+    let (line, exit) = add(&host, &root, ADDED, 2);
+    assert_eq!(exit, 0, "{line}");
+    assert_eq!(top_code(&line), "install_command_done", "{line}");
+    assert_eq!(global_seen(&host), other);
+    let calls = calls(&host);
+    assert!(
+        !calls.iter().any(|call| call.starts_with("global ")),
+        "{calls:?}"
+    );
+    assert_eq!(
+        host.runtime.pause_of(ADDED).as_deref(),
+        Some("instance.added")
+    );
+}
+
+// INST-5b, the work order's third named test (build point 3).
+#[test]
+fn inst5b_a_refused_pause_of_the_added_instance_keeps_the_global_pause_and_the_hold() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = running(temp.path(), "refused-added", &host);
+    host.runtime.pause_as("neutral.b", "other-party");
+    let other = pause_seen(&host, "neutral.b");
+    host.runtime
+        .refuse_pause
+        .borrow_mut()
+        .push(ADDED.to_owned());
+
+    let (line, exit) = add(&host, &root, ADDED, 2);
+    assert_eq!(exit, 1, "{line}");
+    assert_eq!(top_code(&line), "install_command_refused", "{line}");
+    assert_eq!(top_value(&line, "install_refusal"), "post_check_failed");
+    assert_eq!(top_value(&line, "alias"), ADDED);
+    let reason = line["hold"]["reason"]
+        .as_str()
+        .expect("the hold's reason")
+        .to_owned();
+    assert_eq!(line["hold"]["kept"], json!(true), "{line}");
+
+    // The global pause and the hold stay; the added instance is not paused.
+    assert_eq!(
+        global_seen(&host).map(|(found, _)| found),
+        Some(reason.clone())
+    );
+    assert_eq!(host.runtime.pause_of("neutral.a"), Some(reason.clone()));
+    assert_eq!(host.runtime.pause_of(ADDED), None);
+
+    // `next` names both ways out: the added instance's pause and the global pause's resume, the
+    // core commands as actingctl runs them, beside the module's own release.
+    let next = &line["next"];
+    assert_eq!(next["pause_added"][0], "actingctl", "{line}");
+    assert_eq!(next["pause_added"][1], "pause", "{line}");
+    assert_eq!(next["pause_added"][5], ADDED, "{line}");
+    assert_eq!(next["pause_added"][7], "instance.added", "{line}");
+    assert_eq!(
+        next["actingctl_resume_global"],
+        json!([
+            "actingctl",
+            "resume",
+            "--state-root",
+            next["pause_added"][3]
+        ]),
+        "{line}"
+    );
+    assert_eq!(
+        next["release_hold"],
+        json!(["release-hold", reason]),
+        "{line}"
+    );
+
+    // `release-hold` hands back the global pause and the hold's pause, and nothing else.
+    let asked = calls(&host).len();
+    let (released, exit) = rescue_line(&host, &root, "release-hold", json!({"reason": reason}));
+    assert_eq!(exit, 0, "{released}");
+    assert_eq!(top_code(&released), "install_command_done", "{released}");
+    let after = calls(&host)[asked..].to_vec();
+    assert_eq!(after, ["global resume", "resume neutral.a"], "{released}");
+    assert_eq!(global_seen(&host), None);
+    assert_eq!(host.runtime.pause_of("neutral.a"), None);
+    assert_eq!(pause_seen(&host, "neutral.b"), other);
+    assert_eq!(host.runtime.pause_of(ADDED), None);
+}
+
+// INST-5b, the work order's fourth named test (build point 1).
+#[test]
+fn inst5b_config_replace_and_restore_send_no_global_pause() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = installed(temp.path(), "replace", &host);
+    host.runtime.boot(&["neutral.a", "neutral.b"]);
+    let candidate = temp.path().join("candidate.json");
+    let document = config_of(&root);
+    fs::write(&candidate, serde_json::to_vec(&document).expect("JSON")).expect("the candidate");
+
+    let (replaced, exit) = rescue_line(
+        &host,
+        &root,
+        "config replace",
+        json!({"file": word(&candidate)}),
+    );
+    assert_eq!(exit, 0, "{replaced}");
+    assert_eq!(top_value(&replaced, "operation"), "install_config_replace");
+    let backup = replaced["backup"].as_str().expect("the backup").to_owned();
+    let (restored, exit) = rescue_line(&host, &root, "config restore", json!({"backup": backup}));
+    assert_eq!(exit, 0, "{restored}");
+    assert_eq!(top_value(&restored, "operation"), "install_config_restore");
+
+    // Each held, closed, started and released, and neither asked for a global pause.
+    let calls = calls(&host);
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| call.as_str() == "shutdown")
+            .count(),
+        2,
+        "{calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.starts_with("global ")),
+        "{calls:?}"
+    );
+    assert_eq!(global_seen(&host), None);
 }

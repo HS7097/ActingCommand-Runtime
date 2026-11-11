@@ -11,11 +11,12 @@ use serde_json::{Value, json};
 
 /// The flags of `package loading` (Workflow #407 LOAD-1).
 pub(crate) const LOADING_FLAGS: [&str; 4] = ["--root-file", "--packs-root", "--write", "--check"];
-/// Workflow #434 LAB-5B2: the flags of `package loading` that take no value.
+/// Workflow #434 LAB-5B2: the flags of `package loading` that take no value (Workflow #434
+/// LAB-5B4: nor from the next word, but `true` or `false`, `FlagArgs::parse_switches`).
 pub(crate) const LOADING_SWITCHES: [&str; 2] = ["--write", "--check"];
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `package bundle` reads, each with its value.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `package bundle` reads, each with its value. Workflow #434
+/// LAB-5B4: its command line is parsed by it (`FlagArgs::parse_reading`); no positional.
 pub(crate) const BUNDLE_READS: crate::flag_args::reads::FlagReads =
     crate::flag_args::reads::FlagReads {
         row: "package bundle",
@@ -37,6 +38,7 @@ pub(crate) const BUNDLE_READS: crate::flag_args::reads::FlagReads =
             switches: &[],
             refused: &[],
         }],
+        positionals: &[],
     };
 
 /// Workflow #288 A2b: `package bundle --applications <file> --packs-root <directory> --out

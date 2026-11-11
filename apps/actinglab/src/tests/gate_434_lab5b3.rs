@@ -4,14 +4,16 @@
 // rd-1108/arch-013/brief-lab5b3.md): each lenient command of the debugging and authoring modules
 // declares the flags it reads where it starts, its test builds hold every read to that list, and
 // the operation table's row says what it reads.
-// - `lenient_rows_match_their_reads`: for each lenient row (`own_flags::LENIENT_ROWS`), in both
-//   directions: every option and switch the row declares, but actinglab's global options, is on
-//   its command's read list in the same form; every option and switch of the list is declared by
-//   the row in the same form, a global option in any form; no flag the command reads only to
-//   refuse it is a parameter of the row; the option the command also takes as its first
-//   positional is an option of the row; the row's positionals, the instance not among them, fit
-//   the count the command checks; and the register answers for exactly the lenient rows, each
-//   list naming its row. A failure names the row, the flag and the direction.
+// - `lenient_rows_match_their_reads`: for each row that was lenient until LAB-5B4
+//   (`own_flags::READ_LIST_ROWS`, whose commands parse their command line by their read list
+//   since then), in both directions: every option and switch the row declares, but actinglab's
+//   global options, is on its command's read list in the same form; every option and switch of
+//   the list is declared by the row in the same form, a global option in any form; no flag the
+//   command reads only to refuse it is a parameter of the row; the option the command also takes
+//   as its first positional is an option of the row; the row's positionals, the instance not
+//   among them, with the first positional (LAB-5B4), fit the count the command checks; and the
+//   register answers for exactly those rows, each list naming its row. A failure names the row,
+//   the flag and the direction.
 // - `a_held_read_outside_its_list_fails`: flags read as before when no list holds them; once held,
 //   every read of them and of their copies is recorded with its form, and a name outside the list,
 //   or read in the form the list does not give it, fails with the row and the name; a strict row
@@ -21,10 +23,12 @@
 //   ones whose switch lists the recording checks (`observe`, `do`, `ensure`, `wait`, `package fmt`,
 //   `package loading`), on a command line answered before any Runtime connection, refused but
 //   `record status`, records the reads that come first under its row: the declaration is where the
-//   command starts.
+//   command starts. Workflow #434 LAB-5B4 takes these lines (`corpus`) as the lines that pass only
+//   flags their command reads, which answer as before; `resource compile-maa`'s writes `--facts`
+//   last, the same flags it gave before (`--task` at the end of the line is refused since then).
 // No Runtime, no device: the embedded operation table, the code's lists and temporary files.
 
-use super::gate_434_lab5b2::{flag, global, row_positionals};
+use super::gate_434_lab5b2::{flag, global, row_positionals, with_first_positional};
 use super::{env_lock, set_missing_config_env, use_runtime_state_root};
 use crate::cli_module::{self, own_flags};
 use crate::flag_args::FlagArgs;
@@ -38,7 +42,7 @@ use tempfile::TempDir;
 fn lenient_rows_match_their_reads() {
     let table = cli_module::table().expect("the operation table");
     let mut failures = Vec::new();
-    for name in own_flags::LENIENT_ROWS {
+    for name in own_flags::READ_LIST_ROWS {
         let operation = table
             .operation(name)
             .unwrap_or_else(|| panic!("{name} is a row of the table"));
@@ -126,7 +130,7 @@ fn lenient_rows_match_their_reads() {
                 ));
             }
         }
-        let given = row_positionals(operation);
+        let given = with_first_positional(row_positionals(operation), reads.first_positional);
         let checked = reads.positionals;
         if given.least != checked.least || checked.most.is_some_and(|most| given.most != Some(most))
         {
@@ -137,7 +141,7 @@ fn lenient_rows_match_their_reads() {
         }
     }
 
-    // The register answers for exactly the lenient rows of the two modules.
+    // The register answers for exactly these rows of the two modules.
     for operation in table.operations.iter().filter(|operation| {
         matches!(
             operation.module,
@@ -145,17 +149,17 @@ fn lenient_rows_match_their_reads() {
         ) && operation.status == OperationStatus::Planned
     }) {
         let name = operation.name.as_str();
-        let lenient = own_flags::LENIENT_ROWS.contains(&name);
-        if own_flags::reads(name).is_some() != lenient {
+        let listed = own_flags::READ_LIST_ROWS.contains(&name);
+        if own_flags::reads(name).is_some() != listed {
             failures.push(format!(
-                "{name}: the register answers its reads: {}, a lenient row: {lenient}",
+                "{name}: the register answers its reads: {}, a row of READ_LIST_ROWS: {listed}",
                 own_flags::reads(name).is_some()
             ));
         }
     }
     assert!(
         failures.is_empty(),
-        "lenient rows that differ from their command's reads:\n{}",
+        "rows that differ from their command's reads:\n{}",
         failures.join("\n")
     );
 }
@@ -168,6 +172,7 @@ const PROBE_READS: FlagReads = FlagReads {
         switches: &["--switch"],
         refused: &["--refused"],
     }],
+    positionals: &[],
 };
 
 fn words(line: &[&str]) -> Vec<String> {
@@ -279,7 +284,19 @@ fn a_held_read_outside_its_list_fails() {
 
 /// One command line of the next test: its row, the line, the exit code and error code it
 /// answers, and the reads it records first under the row.
-type Line<'a> = (&'a str, Vec<&'a str>, i32, &'a str, Vec<&'a str>);
+pub(super) type Line<'a> = (&'a str, Vec<&'a str>, i32, &'a str, Vec<&'a str>);
+
+/// The paths in `temp` the corpus's lines name: the recording session, a package, an evidence
+/// archive and a repository, none of which exists.
+pub(super) fn corpus_paths(temp: &TempDir) -> [String; 4] {
+    let path = |name: &str| temp.path().join(name).display().to_string();
+    [
+        path("session"),
+        path("package"),
+        path("evidence.zip"),
+        path("repo"),
+    ]
+}
 
 #[test]
 fn every_lenient_command_reads_through_its_list() {
@@ -288,13 +305,52 @@ fn every_lenient_command_reads_through_its_list() {
     let runtime = temp.path().join("runtime-must-not-exist");
     let _runtime_env = use_runtime_state_root(&runtime);
     set_missing_config_env();
-    let path = |name: &str| temp.path().join(name).display().to_string();
-    let (state, package, evidence, repo) = (
-        path("session"),
-        path("package"),
-        path("evidence.zip"),
-        path("repo"),
+    let paths = corpus_paths(&temp);
+    let mut failures = Vec::new();
+    reads::take();
+    for (row, line, exit_code, code, expected) in corpus(&paths) {
+        let result = run_cli(std::iter::once("--json").chain(line.iter().copied()), true);
+        let recorded = reads::take();
+        let answered = (
+            result.exit_code(),
+            result
+                .envelope
+                .error
+                .as_ref()
+                .map_or("", |error| error.code.as_str()),
+        );
+        if answered != (exit_code, code) {
+            failures.push(format!(
+                "{row}: {line:?} answered {answered:?}, not ({exit_code}, {code}): {}",
+                result.envelope_json()
+            ));
+        }
+        if let Some(read) = recorded.iter().find(|read| read.row != row) {
+            failures.push(format!("{row}: {line:?} recorded a read under {read:?}"));
+        }
+        for name in expected {
+            if !recorded.iter().any(|read| read.name == name) {
+                failures.push(format!(
+                    "{row}: {line:?} recorded no read of {name}: {recorded:?}"
+                ));
+            }
+        }
+    }
+    assert!(!runtime.exists(), "no command line reached the Runtime");
+    assert!(
+        failures.is_empty(),
+        "commands that do not read through their lists:\n{}",
+        failures.join("\n")
     );
+}
+
+/// The command lines of `every_lenient_command_reads_through_its_list`, which name `paths`
+/// ([`corpus_paths`]): (row, command line, exit code, error code, the reads it records first under
+/// the row), the 24 rows that were lenient, then six strict ones. Each passes only flags its
+/// command reads, with values where options need them (Workflow #434 LAB-5B4's corpus of lines
+/// that answer as before).
+pub(super) fn corpus(paths: &[String; 4]) -> [Line<'_>; 30] {
+    let [state, package, evidence, repo] = paths;
     let (state, package, evidence, repo) = (
         state.as_str(),
         package.as_str(),
@@ -316,8 +372,8 @@ fn every_lenient_command_reads_through_its_list() {
     let session = ["--state-dir", "--instance"].to_vec();
     let frame_input = legacy_and(&["--scene", "--capture", "--package", "--zip"]);
     // (row, command line, exit code, error code, the reads it records first under the row): the 24
-    // lenient rows, then six strict ones.
-    let lines: [Line<'_>; 30] = [
+    // rows that were lenient, then six strict ones.
+    [
         (
             "touch-probe",
             vec!["--touch-backend", "auto", "touch-probe"],
@@ -440,8 +496,11 @@ fn every_lenient_command_reads_through_its_list() {
                 repo,
                 "--maa-tasks",
                 repo,
-                "--facts",
+                // Workflow #434 LAB-5B4: `--task` before `--facts`, which gives the command the
+                // same flags as `--facts --task` did (`--task` true); at the end of the line an
+                // option is refused, `value_missing`, before anything is read.
                 "--task",
+                "--facts",
             ],
             2,
             "validation_failed",
@@ -559,41 +618,5 @@ fn every_lenient_command_reads_through_its_list() {
             "validation_failed",
             vec!["--write", "--check"],
         ),
-    ];
-    let mut failures = Vec::new();
-    reads::take();
-    for (row, line, exit_code, code, expected) in lines {
-        let result = run_cli(std::iter::once("--json").chain(line.iter().copied()), true);
-        let recorded = reads::take();
-        let answered = (
-            result.exit_code(),
-            result
-                .envelope
-                .error
-                .as_ref()
-                .map_or("", |error| error.code.as_str()),
-        );
-        if answered != (exit_code, code) {
-            failures.push(format!(
-                "{row}: {line:?} answered {answered:?}, not ({exit_code}, {code}): {}",
-                result.envelope_json()
-            ));
-        }
-        if let Some(read) = recorded.iter().find(|read| read.row != row) {
-            failures.push(format!("{row}: {line:?} recorded a read under {read:?}"));
-        }
-        for name in expected {
-            if !recorded.iter().any(|read| read.name == name) {
-                failures.push(format!(
-                    "{row}: {line:?} recorded no read of {name}: {recorded:?}"
-                ));
-            }
-        }
-    }
-    assert!(!runtime.exists(), "no command line reached the Runtime");
-    assert!(
-        failures.is_empty(),
-        "commands that do not read through their lists:\n{}",
-        failures.join("\n")
-    );
+    ]
 }

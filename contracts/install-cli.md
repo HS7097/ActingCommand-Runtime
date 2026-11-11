@@ -706,7 +706,8 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     milliseconds) so that its relative paths resolve as the live file's, passes the live build's
     check-config (`--install-root`; a refusal is `config_refused_by_target` with check-config's
     outcome as its cause, whole); then the hold of every unpaused instance (`lab-instance-<ms>`,
-    every other pause kept), the close, the swap with the replaced file kept as
+    every other pause kept) and its global pause (INST-5b, below), the close, the swap with the
+    replaced file kept as
     `actingd.config.json.prev-<ms>` (the candidate is the swap's own part, so nothing else is
     staged), the start and its post-start checks: one journal of kind `config_replace` with the
     initiator and the input `instance_add` (what was added, its `instance_id`, the pause reason).
@@ -719,9 +720,31 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     registered by the started Runtime, or its pause refused: `post_check_failed` (`alias`,
     `count` 1), the hold kept, and `next` names `pause_added`, the core pause as actingctl runs
     it (`actingctl pause --state-root <s> --instance <alias> --reason instance.added`). An
-    operation that stops after the swap pauses it the same way while a Runtime answers. Between
-    the new Runtime's readiness and that pause the instance is not paused: a stopped Runtime takes
-    no pause of an alias it did not register, and INST-R's Runtime half is what can start it held.
+    operation that stops after the swap pauses it the same way while a Runtime answers. A stopped
+    Runtime takes no pause of an alias it did not register, so the instance's own pause comes only
+    after the new Runtime's readiness; the global pause below holds it until then.
+  - **No moment unpaused** (Workflow #421 INST-5b, since 0.12.53; register §1.300, "INST-5b"; the
+    coordinator's ruling of 11-11, not Alice's words). The hold's pause step, after its instance
+    pauses and before the close, also sets one global pause with the hold's own reason
+    (`lab-instance-<ms>`: a global pause and the instance pauses are separate scopes, each with
+    its own revision, so one reason names the whole hold), unless a global pause is in effect
+    (anyone's: it sets none and leaves that one alone, reason and revision, since it holds every
+    instance as well). The Runtime persists it and restores it at its start before any physical
+    instance is prepared ([scheduling-pause.md](scheduling-pause.md), "Persistence, no expiry"),
+    so every instance, the new one too, is held from the new Runtime's readiness to the new
+    instance's own pause. The step's intent asks for it (`global: true`), and its evidence records
+    it as the operation's own (`own_pauses.global`, its revision, in `own_pauses.owner_epoch`); the
+    close's second read of S0 lists it, which the start restores, so the post-start check `pauses`
+    expects it. Only after the new instance's own pause does the release hand it back, first, then
+    the hold's instance pauses (the release's `global_resumed: true`). A Runtime that does not
+    answer when it is to be set, or that refuses it, refuses the pause step
+    (`runtime_not_running`; `runtime_stop_failed`, the Runtime's failure as the cause) before
+    anything changed on disk, the hold's own pauses handed back. Every failure after it keeps it as
+    the hold is kept: when the new instance's pause fails, the command ends `post_check_failed`
+    with both kept and `next` names `pause_added` and `actingctl_resume_global` (the core global
+    resume, "Ways out of a kept hold") beside `release-hold <its reason>`, which hands back the
+    global pause and the hold's instance pauses and nothing else. `config replace`, `config
+    restore` and every other composite set no global pause.
   - **Its answer**: `install_command_done` (`install_instance_add`, `install_operation_id`,
     `alias`, `game`), the steps `check_config`, `swap`, `pause_added`, `alive` and `release`, the
     `backup` and `added`. A candidate refused after it was written (by check-config, or a Runtime
@@ -808,6 +831,12 @@ the rescue face:
   answer says so (fix 3): the note `install_caveat_noted` of `install_release_hold` with
   `install_caveat` `hold_ownership_unconfirmed`, `hold_reason` when the reason parses, the read
   failure as its cause. `actingctl install release-hold` and `install stop` are unchanged.
+  Workflow #421 INST-5b: a global pause is the module's own only when the pause step of such a
+  journal recorded it (`own_pauses.global`, only `instance add`'s does) and it shows the hold's
+  reason now; in the owner epoch the step recorded, only at the revision it recorded, in a later
+  one (the restore numbers it 1) by its reason. Every hand-back of the hold (`release-hold`, a
+  composite's release, the hand-back after a refusal) resumes it first, by the owner epoch and
+  revision the Runtime shows; no other global pause is ever touched.
 - **Why the reason and the alias, not the revision** (fix 2). A changed owner epoch alone never
   denies the hand-back: the real Runtime's restore does not keep a pause's revision. Every start
   that is not installer-held (the installer's and the module's starts, which run the watchdog's
@@ -834,11 +863,14 @@ the rescue face:
   resumes the instances paused with exactly that reason, the module's own), and `actingctl_resume`,
   one `actingctl resume --state-root <state root> --instance <alias>` per instance the pause step
   paused that the running Runtime shows paused with the reason now (none when no status can be
-  read). The core `resume` goes through actingctl until then because the Lab's own
-  `resume <instance>` binds the Lab channel, whose resume the Runtime refuses until LAB-6 deletes
-  the origin gates (lab-two-entries.md §2.4). **After LAB-7** deletes actingctl, what stays is the
+  read), and (Workflow #421 INST-5b) `actingctl_resume_global`, `actingctl resume --state-root
+  <state root>`, the core global resume, when the running Runtime shows the hold's own global
+  pause (`actingctl install release-hold` leaves a global pause). The core `resume` goes through
+  actingctl until then because the Lab's own `resume <instance>` binds the Lab channel, whose
+  resume the Runtime refuses until LAB-6 deletes the origin gates (lab-two-entries.md §2.4).
+  **After LAB-7** deletes actingctl, what stays is the
   module's own `release-hold <reason>` and the Lab's core `resume <instance>` (on the Lab channel,
-  which LAB-6 opens for a resume); LAB-7 drops the two `actingctl_*` forms.
+  which LAB-6 opens for a resume); LAB-7 drops the `actingctl_*` forms.
 - **Its own running image.** The module runs from `<root>\tools\actinglab.exe`, which an update
   replaces: the image of the process that plans (matched by its process id) is renamed aside as
   `actingctl.exe` is and runs on (`running.renamed_own` in the plan); any other running
@@ -867,7 +899,8 @@ the rescue face:
   is the watchdog's status of the root; `instance add <alias> …` (Workflow #421 INST-5, first
   slice; "Configuration, instances, packs and a fresh root", "Instances, the first slice") composes
   the candidate and commits it as `config replace` does, with the new instance paused after the
-  start (step `pause_added`) before the release. `--detach` runs the module's own command again
+  start (step `pause_added`) before the release, and its hold's global pause kept across the
+  restart until that release (INST-5b). `--detach` runs the module's own command again
   through the WMI start with the same initiator. The download stays outside.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.

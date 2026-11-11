@@ -307,8 +307,8 @@ replace.
   so the composed pool never carries it.
 - The tools answer `benefit_provenance` for each game ("Tools"): `{fixed_value: {pack: [rule ids],
   model: [rule ids]}, valuation: {pack: [pool ids], model: [pool ids]}}`, in file order.
-- (SCHED-C1b, not built yet) The workbench holds the active generation's provenance, every
-  game's, in the program fact
+- (SCHED-C1b, register §1.299, since 0.12.53) The workbench holds the active generation's
+  provenance, every game's, in the program fact
   `config.catalog_provenance` (runtime scope, re-observed; [runtime-config.md](runtime-config.md),
   "Facts", its row with the code): one count row `{game, kind, origin, count}` per game, kind
   (`fixed_value`, `valuation`) and origin, then one row `{game, kind, origin, id}` per rule or
@@ -552,7 +552,7 @@ nothing.
   fact was cut ([runtime-interface.md](runtime-interface.md)). A warning the composer cannot place in a game's
   file (none so far) has no game, keeps its pointer in the composed document and is held in the
   fact only. Composing, activating and deciding do not depend on them.
-- **Provenance** (SCHED-C1, register §1.299, not built yet). After the same compositions the
+- **Provenance** (SCHED-C1b, register §1.299, since 0.12.53). After the same compositions the
   workbench also holds the active generation's provenance in `config.catalog_provenance`
   ("Provenance" above), with no record of its own: the `standard_pack_registered` record is
   unchanged.
@@ -668,5 +668,6 @@ No ledger record type or member is added. A composed generation is activated wit
 catalog records and no approval (RL-1b); `standard_pack_registered` gains the optional values
 `schedule_sha256`, `rules`, `held` and `unclassified`, and (#428 CW-1) `compile_warnings`, values
 the ledger's reader only spells, on the records the workbench writes already (no record is added);
-`config.catalog_warnings` is a new key of the `config.` fact family. The configuration's catalog section, its approvals and
+`config.catalog_warnings` and (#428 SCHED-C1b) `config.catalog_provenance` are new keys of the
+`config.` fact family. The configuration's catalog section, its approvals and
 its procedure manifest stay as they are until RL-C removes them.

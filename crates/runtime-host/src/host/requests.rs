@@ -750,14 +750,25 @@ impl HostShared {
                 Err(not_implemented(HostLocation::UpgradeStateStatus))
             }
             // Workflow #429 R-0 (register §1.213): the player workbench's kinds have their wire
-            // shapes; R-5, R-6, R-8 and R-13c add the behaviour. Until then each is refused and
+            // shapes; R-5, R-8 and R-13c add the behaviour. Until then each is refused and
             // records nothing.
             RuntimeOperation::RunInstanceTask { .. } => {
                 Err(not_implemented(HostLocation::RunInstanceTask))
             }
-            RuntimeOperation::StopInstanceRun { .. } => {
-                Err(not_implemented(HostLocation::StopInstanceRun))
-            }
+            // Workflow #429 R-6, first slice (register §1.302): a client's direct run is stopped
+            // and the Runtime resets the device itself; a policy run and a host run are refused
+            // with `run_origin`.
+            RuntimeOperation::StopInstanceRun {
+                instance_alias,
+                request_id: run_request_id,
+                wait_ms,
+            } => self.stop_instance_run(
+                request,
+                validated,
+                instance_alias,
+                *run_request_id,
+                *wait_ms,
+            ),
             RuntimeOperation::EditPackSchedule { .. } => {
                 Err(not_implemented(HostLocation::EditPackSchedule))
             }
@@ -873,6 +884,13 @@ impl OperationSuccess {
                     self.failure_outcome,
                 )
             }
+            // Workflow #429 R-6: a failed reset's failure is the success code's cause.
+            RuntimeResult::InstanceRunStopped { stopped } => RuntimeReceipt::instance_run_stopped(
+                request,
+                self.terminal,
+                stopped,
+                self.failure_outcome,
+            ),
             result => RuntimeReceipt::success(request, self.state, self.terminal, result),
         }
         .map_err(|_| receipt_error())

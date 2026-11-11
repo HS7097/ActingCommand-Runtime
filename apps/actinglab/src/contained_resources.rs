@@ -319,9 +319,8 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
     .map_err(|error| CliError::package_invalid(error.to_string()))
 }
 
-/// Workflow #434 LAB-5B3 (tests only): the flags [`load`] and [`PackageInput::open`] read, the
-/// package by its path: a part of the read lists of the lenient commands that take a package.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags [`load`] and [`PackageInput::open`] read, the package by its
+/// path: a part of the read lists of the own commands that take a package.
 pub(super) const PACKAGE_LOCATOR_READS: crate::flag_args::reads::ReadPart =
     crate::flag_args::reads::ReadPart {
         options: &["--package", "--zip"],

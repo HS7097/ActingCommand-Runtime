@@ -16543,12 +16543,13 @@
         "host_halted": "optional",
         "mcp_blocker": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "run_origin": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners use with one meaning (contract-owned, A2a D3): a scheduled contained task cannot be cancelled by a client.",
+      "description": "A code several owners use with one meaning (contract-owned, A2a D3): a scheduled contained task cannot be cancelled by a client. Workflow #429 R-6: StopInstanceRun refuses a run the scheduler or the Runtime itself started with it, naming run_origin (policy or host) and the run's request_id; nothing is cancelled.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -18041,6 +18042,20 @@
       "description": "A completed receipt of a RoutineSummary request: the page of the routine summary's health statistics, from the Runtime's memory. Workflow #378 A4: one success code per request kind (Workflow #429 R-0 adds the kind; R-12 first completes it).",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the page."
+    },
+    "request_stop_instance_run_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.53",
+      "description": "A completed receipt of a StopInstanceRun request: the stop, settled with how the Runtime's own reset went or still stopping after wait_ms; a failed reset's failure is this code's cause (caused_by). Workflow #378 A4: one success code per request kind (Workflow #429 R-0 adds the kind; R-6 first completes it).",
+      "common_causes": "The request succeeded; the run was asked to stop, or had stopped.",
+      "handling": "Read settled and reset; with reset failed, the cause names the fence of the instance, which a self-check lifts."
     }
   },
   "locations": {

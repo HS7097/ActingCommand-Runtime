@@ -15,8 +15,11 @@
 //   fix 1: the same for the core rows of `own_flags::CORE_STRICT_ROWS` (`standard-pack check`).
 // - `every_debugging_and_authoring_row_has_one_kind`: every planned row of the two modules (every
 //   row actinglab offers there, and `record draft`, which LAB-5 offers) is in exactly one of the
-//   four kinds (strict, lenient, table-driven, no command), each kind lists only such rows, once,
-//   and the register answers for exactly the strict rows. LAB-5F fix 1: the rows of
+//   four kinds (strict, strict by its read list, table-driven, no command; Workflow #434 LAB-5B4:
+//   the second was "lenient" until that slice made its commands refuse a flag they do not read),
+//   each kind lists only such rows, once, and the register answers for exactly the strict rows.
+//   LAB-5B4 also: the positionals of `ensure` and `wait` count the page each reads in place of
+//   `--page` (`own_flags::Accepted::first_positional`). LAB-5F fix 1: the rows of
 //   `own_flags::CORE_STRICT_ROWS` are planned core rows, each once, and among the core rows the
 //   register answers for exactly these.
 // The operation table this build embeds and the code's constants only: no Runtime, no device, no
@@ -58,6 +61,21 @@ pub(super) fn row_positionals(operation: &Operation) -> own_flags::Positionals {
         };
     }
     own_flags::Positionals { least, most }
+}
+
+/// Workflow #434 LAB-5B4 (also LAB-5B3's): the positionals a command is given whose row gives it
+/// `given`, with the one it reads in place of the option `first_positional` (which may be absent),
+/// when it reads one.
+pub(super) fn with_first_positional(
+    given: own_flags::Positionals,
+    first_positional: Option<&str>,
+) -> own_flags::Positionals {
+    own_flags::Positionals {
+        least: given.least,
+        most: given
+            .most
+            .map(|most| most + usize::from(first_positional.is_some())),
+    }
 }
 
 #[test]
@@ -125,8 +143,10 @@ fn strict_rows_match_their_commands() {
             }
         }
 
-        // The positionals: the least the command checks, and its most where it checks one.
-        let given = row_positionals(operation);
+        // The positionals: the least the command checks, and its most where it checks one
+        // (Workflow #434 LAB-5B4: with the one the command reads in place of an option the row
+        // declares, `ensure <page>` and `wait <page>`).
+        let given = with_first_positional(row_positionals(operation), accepted.first_positional);
         let checked = accepted.positionals;
         if given.least != checked.least || checked.most.is_some_and(|most| given.most != Some(most))
         {
@@ -146,9 +166,10 @@ fn strict_rows_match_their_commands() {
 #[test]
 fn every_debugging_and_authoring_row_has_one_kind() {
     let table = cli_module::table().expect("the operation table");
+    // Workflow #434 LAB-5B4: no kind is lenient; the rows that were are strict by their read list.
     let kinds: [(&str, &[&str]); 4] = [
         ("strict", &own_flags::STRICT_ROWS),
-        ("lenient", &own_flags::LENIENT_ROWS),
+        ("strict by its read list", &own_flags::READ_LIST_ROWS),
         ("table-driven", &own_flags::TABLE_DRIVEN_ROWS),
         ("no command", &own_flags::NO_COMMAND_ROWS),
     ];

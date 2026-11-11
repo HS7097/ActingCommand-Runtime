@@ -5,9 +5,10 @@
 //! `session app`) and `standard-pack check` (a core row since Workflow #434 LAB-5F fix 1) and the
 //! two `user-config` rows. [`COMMANDS`] names each row's command
 //! (Workflow #434 LAB-5A: before it, a row named its command in `params_more`). The operation's
-//! short words are given to that command: its words, the row's positional words and, on the
-//! command line of a lenient row, the further words, then the instance as `--instance`, the row's
-//! options and switches and the further flags the command line handed on.
+//! short words are given to that command: its words, the row's positional words, then the
+//! instance as `--instance`, the row's options and switches and the further flags the command
+//! line handed on (actinglab's global options and `words::KEPT_FLAGS`; Workflow #434 LAB-5B4: no
+//! row hands on a further word or an undeclared flag of its own any more).
 //!
 //! The command answers as it does under its own words: on the command line `main` prints its line
 //! and exits with its exit code, and `serve --stdio` answers the line its `--json` prints

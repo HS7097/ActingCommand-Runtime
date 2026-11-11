@@ -1,4 +1,3 @@
-#[cfg(test)]
 use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, UserConfig, canonical_game, canonical_server,
@@ -300,19 +299,19 @@ pub(crate) struct SessionRecordDriftDiagnostics {
     pub(crate) changed_fields: Vec<&'static str>,
 }
 
-/// Workflow #434 LAB-5B3 (tests only): the flags every record action reads first, the session's
-/// directory and the instance (`--instance` is actinglab's global option, which its parser takes
-/// before the command sees its flags).
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags every record action reads first, the session's directory
+/// and the instance (`--instance` is actinglab's global option, which its parser takes before the
+/// command sees its flags). Workflow #434 LAB-5B4: each read list of a record action below parses
+/// its command line (`FlagArgs::parse_reading`, through [`record_flags`]), with the positionals
+/// it names.
 const RECORD_SESSION_READS: ReadPart = ReadPart {
     options: &["--state-dir", "--instance"],
     switches: &[],
     refused: &[],
 };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `record start` reads; `--game` and `--server` are
+/// Workflow #434 LAB-5B3: the flags `record start` reads; `--game` and `--server` are
 /// actinglab's global options.
-#[cfg(test)]
 pub(crate) const RECORD_START_READS: FlagReads = FlagReads {
     row: "record start",
     parts: &[
@@ -334,18 +333,18 @@ pub(crate) const RECORD_START_READS: FlagReads = FlagReads {
             refused: &[],
         },
     ],
+    positionals: &[],
 };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `record status` reads.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `record status` reads.
 pub(crate) const RECORD_STATUS_READS: FlagReads = FlagReads {
     row: "record status",
     parts: &[&RECORD_SESSION_READS],
+    positionals: &[],
 };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `record candidates` reads; its step id is also
+/// Workflow #434 LAB-5B3: the flags `record candidates` reads; its step id is also
 /// its first positional.
-#[cfg(test)]
 pub(crate) const RECORD_CANDIDATES_READS: FlagReads = FlagReads {
     row: "record candidates",
     parts: &[
@@ -356,14 +355,14 @@ pub(crate) const RECORD_CANDIDATES_READS: FlagReads = FlagReads {
             refused: &[],
         },
     ],
+    positionals: &["<step-id>"],
 };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `record amend` reads, by path: the drift
+/// Workflow #434 LAB-5B3: the flags `record amend` reads, by path: the drift
 /// diagnostics or the step it names (its step id also its first positional), then by the kind of
 /// the recorded step: a resource step's fields and the backtest of its frame, or an operation's.
 /// The drift path reads the backtest's flags too, which its own list refuses before
 /// (`reject_direct_drift_amend_flags`).
-#[cfg(test)]
 pub(crate) const RECORD_AMEND_READS: FlagReads = FlagReads {
     row: "record amend",
     parts: &[
@@ -373,10 +372,10 @@ pub(crate) const RECORD_AMEND_READS: FlagReads = FlagReads {
         &RECORD_BACKTEST_READS,
         &RECORD_AMEND_OPERATION_READS,
     ],
+    positionals: &["<step-id>"],
 };
 
 /// `record amend`'s choice of its path and step.
-#[cfg(test)]
 const RECORD_AMEND_STEP_READS: ReadPart = ReadPart {
     options: &["--from-drift-diagnostics", "--step-id"],
     switches: &[],
@@ -384,7 +383,6 @@ const RECORD_AMEND_STEP_READS: ReadPart = ReadPart {
 };
 
 /// `record amend` of an anchor, color-probe or verify-template step.
-#[cfg(test)]
 const RECORD_AMEND_RESOURCE_READS: ReadPart = ReadPart {
     options: &[
         "--id",
@@ -398,7 +396,6 @@ const RECORD_AMEND_RESOURCE_READS: ReadPart = ReadPart {
 };
 
 /// `record amend` of an operation step.
-#[cfg(test)]
 const RECORD_AMEND_OPERATION_READS: ReadPart = ReadPart {
     options: &["--from", "--to", "--click"],
     switches: &["--destructive", "--non-destructive"],
@@ -407,17 +404,15 @@ const RECORD_AMEND_OPERATION_READS: ReadPart = ReadPart {
 
 /// The flags the backtest of a resource step's frame reads (`backtest_anchor_crop`, the automatic
 /// region): the contrast frame and the match metric, for `record step` and `record amend`.
-#[cfg(test)]
 const RECORD_BACKTEST_READS: ReadPart = ReadPart {
     options: &["--contrast-frame", "--negative-frame", "--metric"],
     switches: &[],
     refused: &[],
 };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `record step` reads, by `--kind`: every kind's,
+/// Workflow #434 LAB-5B3: the flags `record step` reads, by `--kind`: every kind's,
 /// then an anchor's, color probe's or verify template's (its frame and the backtest of it), or an
 /// operation's.
-#[cfg(test)]
 pub(crate) const RECORD_STEP_READS: FlagReads = FlagReads {
     row: "record step",
     parts: &[
@@ -431,10 +426,10 @@ pub(crate) const RECORD_STEP_READS: FlagReads = FlagReads {
         &RECORD_BACKTEST_READS,
         &RECORD_STEP_OPERATION_READS,
     ],
+    positionals: &[],
 };
 
 /// `record step` of an anchor, color probe or verify template: the resource and its frame.
-#[cfg(test)]
 const RECORD_STEP_RESOURCE_READS: ReadPart = ReadPart {
     options: &[
         "--id",
@@ -455,7 +450,6 @@ const RECORD_STEP_RESOURCE_READS: ReadPart = ReadPart {
 };
 
 /// `record step` of an operation: its pages, its gesture and how long a drag or press lasts.
-#[cfg(test)]
 const RECORD_STEP_OPERATION_READS: ReadPart = ReadPart {
     options: &[
         "--from",
@@ -471,9 +465,8 @@ const RECORD_STEP_OPERATION_READS: ReadPart = ReadPart {
     refused: &[],
 };
 
-/// Workflow #434 LAB-5B3 (tests only): the read list of the lenient record action `action`;
-/// `None` for `mark` and `stop`, which check their flags against their own lists.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the read list of the record action `action`; `None` for `mark` and
+/// `stop`, which check their flags against their own lists, and for a word that is no action.
 fn record_reads(action: &str) -> Option<&'static FlagReads> {
     Some(match action {
         "start" => &RECORD_START_READS,
@@ -482,6 +475,38 @@ fn record_reads(action: &str) -> Option<&'static FlagReads> {
         "amend" => &RECORD_AMEND_READS,
         "step" => &RECORD_STEP_READS,
         _ => return None,
+    })
+}
+
+/// Workflow #434 LAB-5B4: the switches of `record mark` (read with `record_flag_switch`), which
+/// take no value from the next word but `true` or `false` (`FlagArgs::parse_switches`); the
+/// register reads them (`cli_module::own_flags`).
+pub(crate) const RECORD_MARK_SWITCHES: [&str; 7] = [
+    "--dry-run",
+    "--replace-click",
+    "--replace-transition",
+    "--close-step",
+    "--optional",
+    "--not-optional",
+    "--no-anchor",
+];
+
+/// Workflow #434 LAB-5B4: the switch of `record stop` (read with `record_flag_switch`), as
+/// [`RECORD_MARK_SWITCHES`].
+pub(crate) const RECORD_STOP_SWITCHES: [&str; 1] = ["--dry-run"];
+
+/// Workflow #434 LAB-5B4: the flags of `record <action>` after the action's word: a read list's
+/// action's parsed by its list, which refuses a word it does not hold; `mark`'s and `stop`'s with
+/// their switches taking no value from the next word (they check their flags against their own
+/// lists); a word that is no action's as before, which the action's match refuses.
+fn record_flags(action: &str, args: &[String]) -> CliOutcome<FlagArgs> {
+    if let Some(list) = record_reads(action) {
+        return FlagArgs::parse_reading(args, list);
+    }
+    Ok(match action {
+        "mark" => FlagArgs::parse_switches(args, &RECORD_MARK_SWITCHES),
+        "stop" => FlagArgs::parse_switches(args, &RECORD_STOP_SWITCHES),
+        _ => FlagArgs::parse(args)?,
     })
 }
 
@@ -513,14 +538,8 @@ fn run_session_record_inner(
     let action = args.first().map(String::as_str).ok_or_else(|| {
         CliError::usage("session record requires start|status|stop|mark|step|candidates|amend")
     })?;
-    let flags = FlagArgs::parse(&args[1..])?;
-    // Workflow #434 LAB-5B3: in test builds, a lenient action's reads are held to its read list.
-    #[cfg(test)]
-    {
-        if let Some(list) = record_reads(action) {
-            flags.reading(list);
-        }
-    }
+    // Workflow #434 LAB-5B4: before anything is read or written.
+    let flags = record_flags(action, &args[1..])?;
     let config = read_user_config()?;
     let state_dir = forced_state_dir
         .map(Path::to_path_buf)
@@ -1745,14 +1764,14 @@ fn amend_session_record_from_drift_diagnostics(
     }))
 }
 
+/// Workflow #434 LAB-5B4 (the coordinator's ruling): `--holder`, `--lease-holder` and `--lease-id`,
+/// which amend never reads, are no longer let through; `record amend`'s read list refuses them,
+/// as every flag it does not read, before this list is checked.
 fn reject_direct_drift_amend_flags(flags: &FlagArgs) -> CliOutcome<()> {
     const ALLOWED: &[&str] = &[
         "--from-drift-diagnostics",
         "--state-dir",
         "--step-id",
-        "--holder",
-        "--lease-holder",
-        "--lease-id",
         "--contrast-frame",
     ];
     let unsupported = flags

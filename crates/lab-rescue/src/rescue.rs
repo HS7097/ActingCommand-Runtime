@@ -39,6 +39,9 @@
 //!   instance composed into a candidate (`crate::install::instance_add`) and committed by `config
 //!   replace`'s own path; after the start the new instance is paused with its own reason,
 //!   `instance.added`, before the hold is handed back, and stays paused until a person resumes it.
+//!   Workflow #421 INST-5b: the hold also sets one global pause of its own before the close
+//!   (unless a global pause is in effect), which the Runtime restores at its start, so the new
+//!   instance is never unpaused; the release hands it back after the new instance's pause.
 //! - **Until LAB-6** a request the module sends to a running Runtime goes as `actingctl install`'s
 //!   do, on the CLI channel with the CLI envelope (`crate::install::runtime`): the Runtime refuses
 //!   a pause, a resume and a shutdown from a Lab envelope until LAB-6 deletes those origin gates
@@ -436,7 +439,10 @@ fn ownership_unconfirmed(reason: Option<&SchedulingPauseReason>, cause: Outcome)
 /// shows paused with the reason now, the core `resume` as actingctl runs it (`actingctl resume
 /// --state-root <s> --instance <alias>`, on the CLI channel: the Lab's own `resume` goes on the Lab
 /// channel, whose resume the Runtime refuses until LAB-6). No form names another reason or an
-/// instance whose pause shows one; without a status read there is no `actingctl_resume`.
+/// instance whose pause shows one; without a status read there is no `actingctl_resume`. Workflow
+/// #421 INST-5b: `actingctl_resume_global`, the core global resume as actingctl runs it
+/// (`actingctl resume --state-root <s>`), when the running Runtime shows the hold's own global
+/// pause ([`hold::own_global`]); `actingctl install release-hold` leaves it.
 fn ways_out(
     context: &Context<'_>,
     next: &mut Map<String, Value>,
@@ -483,6 +489,12 @@ fn ways_out(
         .collect::<Vec<_>>();
     if !resume.is_empty() {
         next.insert("actingctl_resume".to_owned(), Value::Array(resume));
+    }
+    if hold::own_global(&seen, reason, owned).is_some() {
+        next.insert(
+            "actingctl_resume_global".to_owned(),
+            json!(["actingctl", "resume", "--state-root", state_root]),
+        );
     }
 }
 
@@ -1254,7 +1266,10 @@ struct Adding {
 /// close, the swap with the replaced file kept, the start and its checks (one `config_replace`
 /// operation), `alive` and the release; without one the swap alone. `instance add` needs a
 /// Runtime (it is refused `runtime_not_running` before anything changes) and pauses the added
-/// instance after the start, before `alive` ([`pause_added`]).
+/// instance after the start, before `alive` ([`pause_added`]). Workflow #421 INST-5b: its hold's
+/// pause step also sets one global pause of its own (unless one is in effect), kept across the
+/// restart and on every failure, which only the release, after the added instance's pause, hands
+/// back with the hold's other pauses.
 fn commit(
     context: &Context<'_>,
     paths: &Paths,
@@ -1292,10 +1307,13 @@ fn commit(
         );
     }
     let begun = if live {
+        // INST-5b: `instance add`'s hold also sets one global pause of its own before the close,
+        // so that the new instance is held from the new Runtime's start on.
         let hold = HoldInputs {
             reason: hold_reason(context, commit.word)?,
             known: std::collections::BTreeMap::new(),
             only: None,
+            global: commit.adding.is_some(),
         };
         match deploy::hold_start(
             context.host,
@@ -1357,7 +1375,8 @@ fn commit(
         let paused = pause_added(context, loaded, alias);
         steps.push(step("pause_added", &paused.outcome, paused.result));
         if let Some(refusal) = paused.refusal {
-            // The added instance is not paused: the hold stays, and `next` says how to pause it.
+            // The added instance is not paused: the hold stays, its global pause too (INST-5b), and
+            // `next` says how to pause it and, by `ways_out`, how to lift the global pause.
             let mut members = Map::new();
             for member in ["hold", "next"] {
                 if let Some(value) = swapped.members.get(member) {
@@ -1667,6 +1686,7 @@ fn place(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
             reason: hold_reason(context, "place")?,
             known: std::collections::BTreeMap::new(),
             only: Some(bound),
+            global: false,
         };
         let begun: HoldStart = match deploy::hold_start(
             context.host,

@@ -630,6 +630,12 @@ fn running_selection<'f>(facts: &'f RuntimeFactSnapshot, member: &str) -> Option
 /// also carries `items_omitted` and `counts_omitted`, how many place rows and count rows are
 /// missing (a warning whose count row is missing is in neither `count` nor `codes`). Without
 /// warnings the block is as before.
+///
+/// #428 SCHED-C1b (register §1.299): when the active composed generation holds fixed values or
+/// declared valuations (`config.catalog_provenance`), the block also carries
+/// [`CATALOG_BENEFIT_PROVENANCE`] `{fixed_value {pack, model}, valuation {pack, model}, items}`
+/// ([`benefit_provenance`]). Without them, and on a state root without the fact, the block is as
+/// before.
 fn catalog_block(facts: &RuntimeFactSnapshot) -> Result<Value, Outcome> {
     let Some(record) = facts.records.iter().find(|record| {
         record.scope == RuntimeFactScope::Runtime && record.key == CONFIG_CATALOG_FACT_KEY
@@ -643,6 +649,11 @@ fn catalog_block(facts: &RuntimeFactSnapshot) -> Result<Value, Outcome> {
         && let Value::Object(members) = &mut block
     {
         members.insert(CATALOG_COMPILE_WARNINGS.to_owned(), warnings);
+    }
+    if let Some(provenance) = benefit_provenance(facts)?
+        && let Value::Object(members) = &mut block
+    {
+        members.insert(CATALOG_BENEFIT_PROVENANCE.to_owned(), provenance);
     }
     Ok(block)
 }
@@ -695,6 +706,63 @@ fn compile_warnings(facts: &RuntimeFactSnapshot) -> Result<Option<Value>, Outcom
     if warnings.is_cut() {
         block["items_omitted"] = json!(warnings.places_omitted);
         block["counts_omitted"] = json!(warnings.counts_omitted);
+    }
+    Ok(Some(block))
+}
+
+/// #428 SCHED-C1b: the member of the `catalog` block that says who wrote the active composed
+/// generation's values; MCP cuts its `items` before the block, ahead of the compile warnings'
+/// ([`catalog_block`]).
+pub const CATALOG_BENEFIT_PROVENANCE: &str = "benefit_provenance";
+
+/// #428 SCHED-C1b (register §1.299; `contracts/standard-pack-schedule.md`, "Provenance"):
+/// `{fixed_value {pack, model}, valuation {pack, model}, items, items_omitted?, counts_omitted?}`
+/// of `config.catalog_provenance`: how many fixed values and declared valuations every game's
+/// file holds by the pack's hand and by the model's export, then each one as
+/// `{game, kind, origin, id}`; when the fact's 256 rows left some out, `items_omitted` and
+/// `counts_omitted`, how many id rows and count rows are missing (a value whose count row is
+/// missing is in no count). `None` without the fact or with nothing in it, as
+/// [`compile_warnings`]. A record that does not read back is its refusal
+/// (`invalid_fact_snapshot_record`).
+fn benefit_provenance(facts: &RuntimeFactSnapshot) -> Result<Option<Value>, Outcome> {
+    let Some(record) = facts.records.iter().find(|record| {
+        record.scope == RuntimeFactScope::Runtime
+            && record.key == actingcommand_contract::CONFIG_CATALOG_PROVENANCE_FACT_KEY
+    }) else {
+        return Ok(None);
+    };
+    let provenance = actingcommand_contract::ConfigCatalogProvenance::from_fact_record(record)
+        .map_err(|error| Outcome::new(error.code()))?;
+    if provenance.is_empty() {
+        return Ok(None);
+    }
+    let mut block = Map::new();
+    for kind in actingcommand_contract::CatalogValueKind::ALL {
+        let mut origins = Map::new();
+        for origin in actingcommand_contract::CatalogValueOrigin::ALL {
+            let total = provenance.total(kind, origin);
+            origins.insert(origin.as_str().to_owned(), json!(total));
+        }
+        block.insert(kind.as_str().to_owned(), Value::Object(origins));
+    }
+    let items = provenance
+        .ids
+        .iter()
+        .map(|entry| {
+            let mut item = Map::new();
+            item.insert("game".to_owned(), json!(entry.game));
+            item.insert("kind".to_owned(), json!(entry.kind.as_str()));
+            item.insert("origin".to_owned(), json!(entry.origin.as_str()));
+            item.insert("id".to_owned(), json!(entry.id));
+            Value::Object(item)
+        })
+        .collect::<Vec<_>>();
+    block.insert("items".to_owned(), Value::Array(items));
+    let mut block = Value::Object(block);
+    // As CW-1 fix 1 (Fail Loud): the fact's row bound left rows out; the block says how many.
+    if provenance.is_cut() {
+        block["items_omitted"] = json!(provenance.ids_omitted);
+        block["counts_omitted"] = json!(provenance.counts_omitted);
     }
     Ok(Some(block))
 }
@@ -1184,7 +1252,8 @@ fn install_view(place: &Place<'_>, warnings: &mut Vec<Warning>) -> Value {
 /// answer does not fit its caller's budget. A slice that adds an overview block registers its
 /// place here in the same PR; a block the answer does not hold is passed over. Workflow #432
 /// AGT-1b: `agent_wake` is not here: it is a few members of the Status read and is never cut. #428
-/// CW-1: `catalog.compile_warnings.items` is cut just before `catalog`.
+/// CW-1: `catalog.compile_warnings.items` is cut just before `catalog`; #428 SCHED-C1b:
+/// `catalog.benefit_provenance.items` just before that.
 const CUT_BLOCKS: [&str; 8] = [
     "host",
     "startup",
@@ -1247,16 +1316,19 @@ fn cut_next(result: &mut Value) -> Option<String> {
     let members = result.as_object_mut()?;
     for block in CUT_BLOCKS {
         // #428 CW-1: the places of the catalog's compile warnings go just before the catalog
-        // block, so their count and codes outlast them.
-        if block == Section::Catalog.name()
-            && let Some(warnings) = members
-                .get_mut(block)
-                .and_then(|catalog| catalog.get_mut(CATALOG_COMPILE_WARNINGS))
-                .and_then(Value::as_object_mut)
-            && warnings.remove("items").is_some()
-        {
-            warnings.insert("items_truncated".to_owned(), json!(true));
-            return Some(format!("/{block}/{CATALOG_COMPILE_WARNINGS}/items"));
+        // block, so their count and codes outlast them. #428 SCHED-C1b: the ids of the catalog's
+        // provenance go first, before the warnings' places, their counts staying.
+        for member in [CATALOG_BENEFIT_PROVENANCE, CATALOG_COMPILE_WARNINGS] {
+            if block == Section::Catalog.name()
+                && let Some(listed) = members
+                    .get_mut(block)
+                    .and_then(|catalog| catalog.get_mut(member))
+                    .and_then(Value::as_object_mut)
+                && listed.remove("items").is_some()
+            {
+                listed.insert("items_truncated".to_owned(), json!(true));
+                return Some(format!("/{block}/{member}/items"));
+            }
         }
         if members.remove(block).is_some() {
             members.insert(format!("{block}_truncated"), json!(true));
@@ -1725,6 +1797,216 @@ mod tests {
             assert_eq!(shown["items_omitted"], json!(items_omitted), "{case}");
             assert_eq!(shown["counts_omitted"], json!(counts_omitted), "{case}");
         }
+    }
+
+    // #428 SCHED-C1b (register §1.299; coordinator work order rd-1111/brief-sched-c1b.md), as CW-1
+    // fix 1: past the fact's 256 rows nothing is left out silently. The id rows are cut first,
+    // then the count rows; the fact ends with the cut row {counts_omitted, ids_omitted} and reads
+    // back as written, its rows spelled `{game, kind, origin, count}` and `{game, kind, origin,
+    // id}`, and the catalog block's provenance says how many items and count rows are missing.
+    #[test]
+    fn sched_c1b_c_a_cut_fact_and_the_catalog_block_say_how_many_rows_are_missing() {
+        use actingcommand_contract::{
+            CatalogProvenanceEntry, CatalogValueKind, CatalogValueOrigin, ConfigCatalogProvenance,
+            MAX_RUNTIME_FACT_RECORD_ROWS,
+        };
+        use std::collections::BTreeMap;
+
+        let catalog = ConfigCatalog {
+            catalog_id: "standard-packs".to_owned(),
+            catalog_version: 7,
+            catalog_hash: format!("sha256:{}", "c".repeat(64)),
+            activated_event_id: "evt_0123456789abcdef0123456789abcdef".to_owned(),
+            approval_id: None,
+            approval_disposition: None,
+            previous_catalog_id: None,
+            previous_catalog_version: None,
+        }
+        .to_fact_record(1, OriginModule::Policy);
+        let entry = |game: String, id: String| CatalogProvenanceEntry {
+            game,
+            kind: CatalogValueKind::FixedValue,
+            origin: CatalogValueOrigin::Pack,
+            id,
+        };
+        // 300 fixed values in one game's file: one count row, 254 id rows and the cut row.
+        let ids = (0..300)
+            .map(|index| entry("neutral-game-a".to_owned(), format!("rule.{index:03}")))
+            .collect::<Vec<_>>();
+        // One fixed value in each of 300 games' files: 255 count rows and the cut row.
+        let games = (0..300)
+            .map(|index| entry(format!("neutral-game-{index:03}"), "rule.a".to_owned()))
+            .collect::<Vec<_>>();
+        for (case, entries, count, items, ids_omitted, counts_omitted) in [
+            ("id rows cut", ids, 300, 254_usize, 46_i64, 0_i64),
+            ("count rows cut too", games, 255, 0, 300, 45),
+        ] {
+            let cut = ConfigCatalogProvenance::of(&entries);
+            let record = cut.to_fact_record(2, OriginModule::Policy);
+            let FactValue::RecordList(rows) = &record.value else {
+                panic!("{case}: a record list");
+            };
+            assert_eq!(rows.len(), MAX_RUNTIME_FACT_RECORD_ROWS, "{case}");
+            let members = rows[0].keys().map(String::as_str).collect::<Vec<_>>();
+            assert_eq!(members, ["count", "game", "kind", "origin"], "{case}");
+            let text = |value: &str| FactScalar::String(value.to_owned());
+            assert_eq!(rows[0].get("kind"), Some(&text("fixed_value")), "{case}");
+            assert_eq!(rows[0].get("origin"), Some(&text("pack")), "{case}");
+            let id_rows = rows.iter().filter(|row| row.contains_key("id")).count();
+            assert_eq!(id_rows, items, "{case}");
+            assert_eq!(
+                rows.last(),
+                Some(&BTreeMap::from([
+                    (
+                        "counts_omitted".to_owned(),
+                        FactScalar::Integer(counts_omitted)
+                    ),
+                    ("ids_omitted".to_owned(), FactScalar::Integer(ids_omitted)),
+                ])),
+                "{case}"
+            );
+            assert_eq!(
+                ConfigCatalogProvenance::from_fact_record(&record).expect("the fact reads back"),
+                cut,
+                "{case}"
+            );
+
+            let block =
+                catalog_block(&facts(vec![catalog.clone(), record])).expect("the catalog block");
+            let shown = &block["benefit_provenance"];
+            assert_eq!(
+                shown["fixed_value"],
+                json!({"pack": count, "model": 0}),
+                "{case}: {shown}"
+            );
+            assert_eq!(shown["valuation"], json!({"pack": 0, "model": 0}), "{case}");
+            assert_eq!(
+                shown["items"].as_array().map(Vec::len),
+                Some(items),
+                "{case}"
+            );
+            assert_eq!(shown["items_omitted"], json!(ids_omitted), "{case}");
+            assert_eq!(shown["counts_omitted"], json!(counts_omitted), "{case}");
+        }
+    }
+
+    // #428 SCHED-C1b (register §1.299; coordinator work order rd-1111/brief-sched-c1b.md;
+    // contracts/standard-pack-schedule.md, "Provenance"): the catalog block carries who wrote the
+    // active composed generation's values as `config.catalog_provenance` holds them, as the
+    // workbench writes it: benefit_provenance {fixed_value {pack, model}, valuation {pack,
+    // model}, items}. On an older state root without the fact, and with the fact recorded empty,
+    // the block is MCP-9a's, byte for byte, as CW-1's member leaves it. Beside the compile
+    // warnings, a cut to the budget takes the provenance's items first, then the warnings', then
+    // the block, the counts staying while the block does.
+    #[test]
+    fn sched_c1b_d_the_catalog_block_shows_the_provenance_and_is_unchanged_without_the_fact() {
+        use actingcommand_contract::CatalogValueKind::{FixedValue, Valuation};
+        use actingcommand_contract::CatalogValueOrigin::{Model, Pack};
+        use actingcommand_contract::{
+            CatalogCompileWarning, CatalogProvenanceEntry, ConfigCatalogProvenance,
+            ConfigCatalogWarnings,
+        };
+
+        let active = ConfigCatalog {
+            catalog_id: "standard-packs".to_owned(),
+            catalog_version: 7,
+            catalog_hash: format!("sha256:{}", "c".repeat(64)),
+            activated_event_id: "evt_0123456789abcdef0123456789abcdef".to_owned(),
+            approval_id: None,
+            approval_disposition: None,
+            previous_catalog_id: None,
+            previous_catalog_version: None,
+        };
+        let catalog = active.to_fact_record(1, OriginModule::Policy);
+        let entry = |game: &str, kind, origin, id: &str| CatalogProvenanceEntry {
+            game: game.to_owned(),
+            kind,
+            origin,
+            id: id.to_owned(),
+        };
+        let provenance = ConfigCatalogProvenance::of(&[
+            entry("neutral-b", Valuation, Model, "pool.b"),
+            entry("neutral-a", Valuation, Pack, "pool.a"),
+            entry("neutral-a", FixedValue, Pack, "rule.a"),
+            entry("neutral-a", FixedValue, Model, "rule.b"),
+        ]);
+        let shown = catalog_block(&facts(vec![
+            catalog.clone(),
+            provenance.to_fact_record(2, OriginModule::Policy),
+        ]))
+        .expect("the catalog block");
+        let mut expected = json!(active);
+        expected["benefit_provenance"] = json!({
+            "fixed_value": {"pack": 1, "model": 1},
+            "valuation": {"pack": 1, "model": 1},
+            "items": [
+                {"game": "neutral-a", "kind": "fixed_value", "origin": "pack", "id": "rule.a"},
+                {"game": "neutral-a", "kind": "fixed_value", "origin": "model", "id": "rule.b"},
+                {"game": "neutral-a", "kind": "valuation", "origin": "pack", "id": "pool.a"},
+                {"game": "neutral-b", "kind": "valuation", "origin": "model", "id": "pool.b"},
+            ],
+        });
+        assert_eq!(
+            serde_json::to_string(&shown).expect("the block"),
+            serde_json::to_string(&expected).expect("the expected block")
+        );
+
+        let before = serde_json::to_string(&json!(active)).expect("MCP-9a's block");
+        let empty = ConfigCatalogProvenance::of(&[]).to_fact_record(3, OriginModule::Policy);
+        for (case, records) in [
+            ("no fact", vec![catalog.clone()]),
+            ("the fact recorded empty", vec![catalog.clone(), empty]),
+        ] {
+            let block = catalog_block(&facts(records)).expect("the catalog block");
+            assert_eq!(
+                serde_json::to_string(&block).expect("the block"),
+                before,
+                "{case}"
+            );
+        }
+
+        let warnings = ConfigCatalogWarnings::of(&[CatalogCompileWarning {
+            warning: "pool_lines_unvalued".to_owned(),
+            game: Some("neutral-a".to_owned()),
+            pointer: "/pools/0/stop_line".to_owned(),
+        }]);
+        let both = catalog_block(&facts(vec![
+            catalog,
+            warnings.to_fact_record(2, OriginModule::Policy),
+            provenance.to_fact_record(2, OriginModule::Policy),
+        ]))
+        .expect("the catalog block");
+        let start = json!({"catalog": both});
+        let mut cut = start.clone();
+        cut_to_fit(&mut cut, |candidate| {
+            candidate["catalog"]["benefit_provenance"]
+                .get("items")
+                .is_none()
+        });
+        assert_eq!(
+            cut["truncated"],
+            json!(["/catalog/benefit_provenance/items"]),
+            "{cut}"
+        );
+        let mut kept = start["catalog"].clone();
+        let listed = kept["benefit_provenance"]
+            .as_object_mut()
+            .expect("the provenance");
+        listed.remove("items");
+        listed.insert("items_truncated".to_owned(), json!(true));
+        assert_eq!(cut["catalog"], kept, "{cut}");
+
+        let mut everything = start.clone();
+        cut_to_fit(&mut everything, |_| false);
+        assert_eq!(
+            everything["truncated"],
+            json!([
+                "/catalog/benefit_provenance/items",
+                "/catalog/compile_warnings/items",
+                "/catalog",
+            ]),
+            "{everything}"
+        );
     }
 
     // §4.10: config_generation names the generation actingd runs (`config.selection`) and the
