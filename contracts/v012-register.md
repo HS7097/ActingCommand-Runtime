@@ -11635,6 +11635,96 @@ the start anchor, so the next start of 0.12.53 or later finds that record stale 
 drops it with `capped_state_failed` (`operation` `load_capped_episodes`) and records the fact again
 with no episode.
 
+#### Slice SCHED-C1e (0.12.54): a pool's lines given for one instance
+
+Coordinator work order `rd-1111/brief-sched-c1e.md`; on SCHED-C1d's branch at `5dd645a2` (PR
+#1593, main `f4ff86ae` merged in), so its PR carries SCHED-C1d's commits until #1593 merges. The
+contract is [scheduling/README.md](scheduling/README.md) ("Pool lines" with "Lines for one
+instance", "Capped spending order" with "Episodes survive") and
+[runtime-config.md](runtime-config.md), row SC1-12 above and the coordinator's answers 3, 5 and 8
+(not Alice's words; Alice, 11-09 17:42: 「这个红线会随着时间由外部修改」). The text names no game,
+resource or value: the tests' ids are neutral.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| C1E-1 | `instance.<instance id>.scheduling.pool_lines` (object, at most 32 pools, each `{stop_line, hard_line, trigger_line?}` in the two forms of a catalog line), its `config.parameters.instance` row (object, default `none`, settable, `reader` SCHED-C1e, `since` 0.12.54), the entry member `InstanceSchedulingFile::pool_lines`; `scheduling::INSTANCE_POOL_LINES`, `MAX_POOL_LINES_POOLS`, `PoolLineValue`, `InstancePoolLineSet`, `EffectiveConfig::pool_lines` (SC1-12) | configuration key | SCHED-C1e | the file; `ConfigureSettings` (the Lab's `config set` and `config clear`, MCP `ac_config_set`, the console) | `crates/runtime-config/src/scheduling.rs` `instance_pool_lines`, `pool_lines_of`; `instance.rs` (the row, `check_instance`): `wrong_type`, `out_of_range` and `section_check` with the JSON pointer of what breaks the rule in the value |
+| C1E-2 | the instruction's pools: `CheckContext::valued_pools`, `CheckContext::with_valued_pools`; `EffectiveConfig::apply` asks them of each `scheduling.pool_lines` the request sets | behaviour (configuration check) | SCHED-C1e | the host: `valued_pools_context` (the policy inputs' instances, the active generation's valued pools by `instance_valued_pool_ids`) filled in by `configure_settings` only | `config_value_invalid` (`section_check`) for the instance's key, pointer `/<pool id>`; no new code, token or problem; a start's restore, `check-config` and another key's change do not ask |
+| C1E-3 | `InstanceLineSet`, `InstancePoolLines`, `instance_valued_pool_ids`, `evaluate_with_instance_lines` (`crates/policy/src/evaluator/capped.rs`, `evaluator.rs`); `capped::lines` reads the instance's set of the pool first, whole, then the catalog's lines, then the defaults | policy crate API; behaviour (evaluation) | SCHED-C1e | the host: `pool_lines_context` (`host/runtime_config.rs`) at every evaluated cycle into `PolicyEvaluationContext::pool_lines` (`policy_dispatch.rs`, `policy_host.rs`) | a set names the pool by its file id: the catalog pool of that id, or the instance's copy `<id>@<alias>`; `S ≤ cap`, `T ≤ cap` as before (`lines_invalid`); every other entry point evaluates with no set |
+| C1E-4 | the key `lines_source` (`vocab:lines_source`), the vocabulary `lines_source` (`instance`, `catalog`, `default`; `LinesSource`), optional on `pool_line_held`, `capped_spend` and `pool_lines_unspendable` (SC1-12) | outcome catalog additions (policy) | SCHED-C1e | the policy evaluator | on every reason that carries the lines (`stop_line`, `hard_line`), with ` lines_source=<word>` at the end of its developer text |
+| C1E-5 | `actingd-config` [5, 28] | interface revision | SCHED-C1e | — | `distribution/windows/component-interfaces.json`; [component-interfaces.md](component-interfaces.md), revision 28 |
+
+**Tests.** New: policy rows "#428 SCHED-C1e", `actingcommand-policy::lib::tests::gate_sched_c1e`
+tests 1 to 4 (`sched_c1e_t1_an_instance_set_comes_before_the_catalog_for_that_instance_only`,
+`sched_c1e_t2_a_change_ends_no_episode_and_clearing_returns_to_the_catalog`,
+`sched_c1e_t3_lines_source_names_where_the_lines_come_from`,
+`sched_c1e_t4_without_a_set_every_decision_is_as_before_but_the_new_value`), on fakes with a fixed
+clock, no sleep and no thread; host rows "#428 SCHED-C1e",
+`actingcommand-runtime-config::lib::gate_sched_c1e` tests C1 to C5
+(`sched_c1e_c1_the_key_is_read_from_the_file_and_set_and_cleared_by_an_instruction`,
+`sched_c1e_c2_each_refusal_of_the_section_check_names_the_key_and_its_problem`,
+`sched_c1e_c3_an_instruction_names_only_the_valued_pools_the_generation_gives_the_instance`,
+`sched_c1e_c4_the_restore_at_start_keeps_a_value_whose_pool_it_cannot_check`,
+`sched_c1e_c5_a_configuration_without_the_key_has_no_row_of_it`) and
+`actingcommand-runtime-host::lib::tests::gate_sched_c1e::sched_c1e_h1_an_instruction_sets_an_instances_lines_and_a_restart_keeps_them`
+(a Runtime on fakes started again on the same state root). Changed, because the contract raises
+the revision range it pins: the `actingd-config` row of `V0120` in
+`tools/actinglab-architecture/tests/component_interfaces.rs` ([5, 27] to [5, 28]), which
+`the_runtime_declares_each_v0120_interface_revision_once` and
+`the_exact_sha_build_validates_every_declared_interface` read. No other existing test changed: none
+pins the instance section's rows, and the existing tests read the capped reasons by value, so the
+added `lines_source` changes none of their assertions. No golden re-recorded: no golden file holds
+a capped reason, and the example catalog's golden hashes are asserted unchanged (test 4).
+
+**Interface.** `actingd-config` 28 (a new member of an `instances[]` entry; a file that does not
+name it keeps its revision, so [5, 28]), released together with a console whose range reaches 28.
+None of `ledger`, `runtime-client`, `package` or `runtime-outcomes`: an instruction row is no file
+or record shape (`host.config_overrides` keeps its rows), and `lines_source` is an optional value
+of existing decision reasons the record reader only spells.
+
+**Where SCHED-C1e reads the contract.**
+
+- (a) "A member that is no pool identifier": the catalog's identifier rule (1 to 128 bytes, a
+  lowercase ASCII letter or digit first, then lowercase ASCII letters, digits, `.`, `_`, `:` and
+  `-`), so a member never carries `@<alias>`; the evaluation takes a set for the catalog pool of
+  that id or for the instance's copy `<id>@<alias>`.
+- (b) The problems: another shape (a value, a pool's value, a line or a reference, an unknown
+  member, a `type` other than `fact`) is `wrong_type`; a 33rd pool, a member that is no pool
+  identifier, a constant, an offset or a fact key outside its range are `out_of_range`; a set
+  without both lines (at the line missing) and `H < S ≤ T` broken where the values tell (at the
+  hard line for `H < S`, at the trigger line for `S ≤ T` and `H < T`) are `section_check`; each with
+  the JSON pointer of what breaks the rule in the value.
+- (c) "The developer text names the pool": the refusal's JSON pointer into the value (`/<pool id>`,
+  `ConfigFailure::pointer`), as a remedy row's; no outcome value is added.
+- (d) The pools are asked only of the `scheduling.pool_lines` values a request sets, so a change of
+  another key, or of another instance's lines, never refuses a value set before.
+- (e) `lines_source` is on every reason that carries the lines: `capped_spend`,
+  `pool_lines_unspendable` and `pool_line_held` `would_cross_hard_line`, `lines_invalid` and the
+  round's holds (`capped_not_dispatchable`, `capped_limited_spent`, `capped_would_cross_hard_line`,
+  `capped_not_head` of a member the round does not try); the holds without lines
+  (`capped_cap_unknown`, `capped_round_empty`, the `capped_not_head` of a block candidate behind
+  its dispatched head) carry none. It is optional in the catalog, so a record of 0.12.53 reads as
+  before.
+- (f) A pool that writes no lines and that no set names is `default`; one whose catalog writes them
+  `catalog`; a set `instance`, whatever its lines' form.
+- (g) The console's tier: none (hidden); the UI repository adds one if it wants.
+- (h) The contract text: "(SCHED-C1, not built yet)" and "(SCHED-C1e, not built yet)" became
+  "SCHED-C1e, since 0.12.54" where this slice builds the sentence (`lines_source`, lines for one
+  instance, a change of the instance's lines), and the "later" line of "Pool lines" names
+  SCHED-C1e.
+
+**What SCHED-C1e changes live.** Nothing until a person or an agent sets an instance's lines: no
+configuration names the key. Every reason that carries a valued pool's lines gains `lines_source`
+(no production pool is valued today, ruling 116's stop holds). With a set, that instance's pool
+spends by its lines from the next evaluated cycle; the set survives restarts and generations
+until cleared.
+
+**SCHED-C1e rollback** (to the build before it). Clear every instance's `scheduling.pool_lines`
+first (`config clear`): a build before it does not have the key, so its start drops a restored
+instruction value of it (`config_override_dropped`) and the pool takes the catalog's lines; a
+configuration file that names the member is refused by it (`actingd-config` 27, the entry denies
+unknown members), so remove the member from the file before the rollback. The ledger needs
+nothing.
+
 ### 1.300 Slice INST-5, first slice (0.12.52): the Lab's rescue module adds an emulator instance, committed as a configuration replacement (Workflow #421; the desktop program's "add account / device" button is disabled with the words "wait for the Runtime's support; edit the configuration file by hand for now", and adding an instance today means editing two places of the file and restarting; the read-only survey of 11-11 found that a first version fits today's interface revisions; the coordinator's ruling of 11-11, not Alice's words, that the new instance starts paused; coordinator work order `rd-1111/brief-inst5.md`, read on main `c0edc8b2`)
 
 [install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh root" ("Instances,

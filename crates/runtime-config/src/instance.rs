@@ -47,7 +47,11 @@
 //! them ([`backend_switch_instance`]). Workflow #429 R-3 (register §1.272) makes `start_emulator`
 //! settable: every automatic emulator start reads the value in effect at its next decision, and
 //! the whole-instance check refuses `true` on an instance the check context does not name as bound
-//! by discovery (`check_start_emulator`).
+//! by discovery (`check_start_emulator`). #428 SCHED-C1e (register §1.299 SC1-12) adds
+//! `scheduling.pool_lines`, the instance's own lines of its pools, in the entry's `scheduling`
+//! member: no default (each pool's catalog lines are in effect), settable; checked whole per
+//! instance, and an instruction names only pools the active generation gives the instance with a
+//! declared valuation (`EffectiveConfig::apply`, the check context's valued pools).
 
 use crate::codes::ConfigValueProblem;
 use crate::display_safe_area;
@@ -58,8 +62,8 @@ use crate::recovery_ladder;
 use crate::scheduling::{
     self, DAY_BOUNDARY_QUIET, DELAY, EXPECTED_RUNTIME_ENABLED, EXPECTED_RUNTIME_MARGIN_MS,
     EXPECTED_RUNTIME_MARGIN_RANGE, EXPECTED_RUNTIME_RUNS, EXPECTED_RUNTIME_RUNS_RANGE,
-    INSTANCE_BLACKOUT, NO_PROGRESS_ENABLED, RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS,
-    RANDOM_DELAY_MIN_MS, REMEDY_CHOICES,
+    INSTANCE_BLACKOUT, INSTANCE_POOL_LINES, NO_PROGRESS_ENABLED, RANDOM_DELAY_ENABLED,
+    RANDOM_DELAY_MAX_MS, RANDOM_DELAY_MIN_MS, REMEDY_CHOICES,
 };
 use crate::table::{
     DefaultSource, FilePath, KeyName, KeyRange, KeyRow, NotSettable, Settable, ValueType,
@@ -266,6 +270,20 @@ pub(crate) static ROWS: &[KeyRow] = &[
     // LOAD-3 (register §1.260): the instance's own loading mode; reported only for an instance
     // whose entry names one or an instruction sets one, otherwise the section's is in effect.
     execution::INSTANCE_LOADING_MODE_ROW,
+    // #428 SCHED-C1e (register §1.299 SC1-12): the instance's own pool lines; reported only for
+    // an instance whose entry names them or an instruction sets them (no default: each pool's
+    // catalog lines are in effect); settable; checked whole with the instance, and an instruction
+    // names only pools the active generation gives the instance with a declared valuation.
+    KeyRow {
+        name: KeyName::PerInstance(INSTANCE_POOL_LINES),
+        file_path: FilePath::InstanceMember,
+        value_type: ValueType::Object,
+        range: KeyRange::Any,
+        default: DefaultSource::None,
+        settable: Settable::Yes,
+        reader: "SCHED-C1e",
+        since: "0.12.54",
+    },
 ];
 
 /// SCH-M ED-1: one instance's expected-duration member, named as the section-level key whose
@@ -579,6 +597,9 @@ pub(crate) fn check_instance(
     if value(&choices_key).is_some() {
         scheduling::remedy_choices(&reader, &choices_key)?;
     }
+    // #428 SCHED-C1e: the instance's own pool lines keep their shape and their order where the
+    // values tell it.
+    scheduling::instance_pool_lines(&read, instance)?;
     let enabled_key = instance_key(instance, STUCK_RECOVERY);
     let cooldown_key = instance_key(instance, STUCK_RECOVERY_COOLDOWN_SECS);
     let failed = |key: &str| ConfigFailure::invalid_value(key, ConfigValueProblem::SectionCheck);

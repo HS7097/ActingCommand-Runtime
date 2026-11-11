@@ -79,7 +79,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   may name it, and Nemu touch no longer needs it); revisions 5 to 25 are still read, so
 ///   [5, 26]. Workflow #407 GPU-1 D (0.12.44, Alice's approval of 166, register §1.286): revision
 ///   27 adds `vision.execution_provider` `directml` with `vision.directml_device` and
-///   `vision.gpu_fallback`; revisions 5 to 26 are still read, so [5, 27].
+///   `vision.gpu_fallback`; revisions 5 to 26 are still read, so [5, 27]. #428 SCHED-C1e (0.12.54,
+///   register §1.299 SC1-12): revision 28 adds an instance entry's `scheduling.pool_lines`;
+///   revisions 5 to 27 are still read, so [5, 28].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
@@ -123,7 +125,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   request is answered as before, so [3, 6].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 27]),
+    ("actingd-config", [5, 28]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 7]),

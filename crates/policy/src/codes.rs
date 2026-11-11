@@ -288,13 +288,13 @@ actingcommand_contract::outcome_codes! {
         /// Info. A dispatch the capped spending order chose: the head of its pool's frozen order
         /// on the instance (keys `pool_id`, `pool_capacity`, `stop_line`, `hard_line`,
         /// `capped_episode`, `capped_round`, `capped_rank`, `pool_reading`; SCHED-C1c: optional
-        /// `trigger_line`, when the pool writes one).
+        /// `trigger_line`, when the pool writes one; SCHED-C1e: `lines_source`).
         CappedSpend => "capped_spend": info / none,
         /// Info. A judged candidate a pool's lines hold back this round (keys `pool_line_hold`,
         /// `pool_id`; optional `pool_reading`, `pool_capacity`, `stop_line`, `hard_line`,
         /// `capped_episode`, `capped_round`, `amount_after`, `task_id`, `gate_code`, `fact_key`,
         /// `unknown_reason`; SCHED-C1c: `trigger_line` on `lines_invalid` of a pool that writes
-        /// one).
+        /// one; SCHED-C1e: `lines_source` on every hold that carries the lines).
         PoolLineHeld => "pool_line_held": info / none,
         /// Error (catalog compile diagnostic). A pool's `stop_line` and `hard_line` break their
         /// rules: one without the other, the stop line not above the hard line, or a line above
@@ -324,7 +324,8 @@ actingcommand_contract::outcome_codes! {
         /// line, so no run can start from the capacity without leaving the pool below its hard
         /// line. At or above the pool's trigger line no capped episode begins (one under way
         /// waits) and its judged candidates are deferred (keys `pool_id`, `pool_capacity`,
-        /// `stop_line`, `hard_line`, `least_consumption` the least consumption among them). Also a
+        /// `stop_line`, `hard_line`, `least_consumption` the least consumption among them;
+        /// SCHED-C1e: `lines_source`). Also a
         /// catalog compile diagnostic, a warning at the pool's `hard_line`, where the compiler can
         /// tell; the catalog compiles.
         PoolLinesUnspendable => "pool_lines_unspendable": warning / none,
@@ -361,6 +362,23 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- SS-2h: end ----
+
+// ---- #428 SCHED-C1e (`contracts/scheduling/README.md`, "Lines for one instance"): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Where the lines of a pool in effect on an instance come from (the vocabulary
+    /// `lines_source`), a value of `pool_line_held`, `capped_spend` and `pool_lines_unspendable`.
+    pub enum LinesSource: "lines_source" {
+        /// The instance's own `instance.<instance id>.scheduling.pool_lines` names the pool: its
+        /// set replaces the catalog's lines whole.
+        Instance => "instance",
+        /// The catalog's `stop_line` and `hard_line` (and `trigger_line`) of the pool.
+        Catalog => "catalog",
+        /// Neither: the stop line is the capacity, the hard line 0 and the trigger line the
+        /// capacity.
+        Defaults => "default",
+    }
+}
+// ---- #428 SCHED-C1e: end ----
 
 // ---- SS-2b: begin ----
 actingcommand_contract::outcome_vocabulary! {

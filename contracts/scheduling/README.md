@@ -1828,8 +1828,8 @@ A V2 pool may write `stop_line` and `hard_line` ([v2/README.md](v2/README.md);
 - **A constant**, an integer in `0..=9007199254740991`, the line itself.
 
 SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two forms,
-`trigger_line`, written only beside the other two ("The trigger line" below); SCHED-C1 (not built
-yet) adds lines given for one instance ("Lines for one instance" below).
+`trigger_line`, written only beside the other two ("The trigger line" below); SCHED-C1e (register
+§1.299, since 0.12.54) adds lines given for one instance ("Lines for one instance" below).
 
 - **Without lines** a pool's stop line `S` is its capacity and its hard line `H` is 0 (the
   research channel's proposal the coordinator approved, design §1.6 item 1): it is spent only at
@@ -1896,12 +1896,12 @@ yet) adds lines given for one instance ("Lines for one instance" below).
   it: `"capacity": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": 0}`,
   `"stop_line": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -40}` and
   `"hard_line": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -76}`.
-- A line given for one instance (SS-2h-c, later) will take precedence over the catalog's, and the
-  catalog's over the defaults above. SCHED-C1 specifies it ("Lines for one instance" below).
+- A line given for one instance takes precedence over the catalog's, and the catalog's over the
+  defaults above (SCHED-C1e, since 0.12.54, in place of SS-2h-c; "Lines for one instance" below).
 
 The three parts below are SCHED-C1's (register §1.299), the coordinator's rulings of 11-11, not
 Alice's words. "The trigger line" and "A pool its lines cannot spend" are built (SCHED-C1c, since
-0.12.53); "Lines for one instance" is not built yet.
+0.12.53); "Lines for one instance" is built by SCHED-C1e (since 0.12.54).
 
 - **The trigger line** (the coordinator's point 10). A pool that writes both lines may also write
   `trigger_line`, in either form: the reading at which a capped episode begins ("Capped spending
@@ -1914,7 +1914,8 @@ Alice's words. "The trigger line" and "A pool its lines cannot spend" are built 
   line held. A trigger line one costliest run above the stop line makes the pool spend whenever it
   is that far above its stop line, without ever reaching its capacity; that choice is data the pack
   or a person sets, not the Runtime's.
-- **Lines for one instance** (point 8; Alice, 11-09 17:42: 「这个红线会随着时间由外部修改」). A person
+- **Lines for one instance** (point 8; SCHED-C1e, since 0.12.54; Alice, 11-09 17:42:
+  「这个红线会随着时间由外部修改」). A person
   or an agent sets one instance's lines of a pool while the Runtime runs through the Lab's
   `config set`, and clears them with `config clear` (the rows of
   [../lab-operations.json](../lab-operations.json); the request `ConfigureSettings`,
@@ -1937,7 +1938,8 @@ Alice's words. "The trigger line" and "A pool its lines cannot spend" are built 
     `S ≤ cap` and `T ≤ cap` are checked at each evaluation (`lines_invalid`). An instruction that
     names a pool the active generation does not give the instance, or gives without a declared
     valuation, is refused with the existing `config_value_invalid` and its problem `section_check`
-    (`config_key` the instance's key; the developer text names the pool): the host fills the
+    (`config_key` the instance's key; the developer text names the pool: SCHED-C1e, the refusal's
+    JSON pointer into the value, `/<pool id>`, as a remedy row's, no outcome value): the host fills the
     section check's context with the instance's valued pools of the active generation, as it fills
     the backends, so no new code or token is added. A restore at start keeps such a value (its
     context holds no pools), and a value whose pool a later generation no longer gives the instance
@@ -1954,7 +1956,12 @@ Alice's words. "The trigger line" and "A pool its lines cannot spend" are built 
     `host.config_overrides` row with its `set_unix_ms`, `request_id` and `channel`, the entry it
     came through (the Lab's command line or MCP, or the console).
   - *Seen.* `pool_line_held` and `capped_spend` carry the lines in effect, as today, and the new
-    value `lines_source` (`instance`, `catalog` or `default`).
+    value `lines_source` (`instance`, `catalog` or `default`). SCHED-C1e: every reason that
+    carries the lines (`stop_line`, `hard_line`) carries it, `pool_lines_unspendable` too; the
+    holds that carry no lines (`capped_cap_unknown`, `capped_round_empty`, and the
+    `capped_not_head` of a block candidate behind its dispatched head) carry none. The
+    instance's set names the pool by its id in the instance's `schedule.json`: the evaluation
+    takes it for the catalog pool of that id, or for the instance's copy `<id>@<alias>`.
   - It replaces the design's SS-2h-c (an optional member `pool_lines` of the resource-targets v3
     document through `ApplyResourceTargets`, waiting for R-13a; design
     `rd-1031/design-c424-redline-1109.md` §4.3).
@@ -1968,7 +1975,7 @@ Alice's words. "The trigger line" and "A pool its lines cannot spend" are built 
   at an evaluation where the pool is at or above its trigger line, no episode begins (one under way
   waits), and its consumers are deferred with `pool_lines_unspendable` (warning; `pool_id`,
   `pool_capacity`, `stop_line`, `hard_line`, `least_consumption` the least `⌈C/1000⌉` among them;
-  SCHED-C1, not built yet: `lines_source`).
+  SCHED-C1e, since 0.12.54: `lines_source`).
   The status read shows it, as the not-run explanation every scheduling read answers
   (`ScheduleExplanation`: `actingctl schedule`, `ac_schedule`, `ac_overview`'s `not_running`,
   `ac_diagnose`'s `not_run`), and the idle plan counts it neither due nor as a wake of its own, as
@@ -2033,7 +2040,7 @@ without a valuation is untouched.
   (the reserve gate, the shared run limits, every pause, hold, blackout and budget of the Runtime)
   is dispatched with `capped_spend` (info; `pool_id`, `pool_capacity`, `stop_line`, `hard_line`,
   `capped_episode`, `capped_round`, `capped_rank` its place in the round's order,
-  `pool_reading`; SCHED-C1c, since 0.12.53: `trigger_line` when the pool has one; SCHED-C1, not built yet: `lines_source`). A block candidate a later gate defers keeps that gate's reason and the next one
+  `pool_reading`; SCHED-C1c, since 0.12.53: `trigger_line` when the pool has one; SCHED-C1e, since 0.12.54: `lines_source`). A block candidate a later gate defers keeps that gate's reason and the next one
   is tried; one behind the dispatched one, or behind its head when a more urgent candidate took
   the instance, waits with `pool_line_held` `capped_not_head` (`task_id` the head), a fallback
   with the hold the round gives it otherwise (`capped_not_head`, or
@@ -2119,8 +2126,9 @@ without a valuation is untouched.
     reading, a reset): the episode waits; while it waits its judged candidates are held with
     `pool_line_held` `capped_cap_unknown`, whether or not the pool writes lines, and when the values
     come back it goes on, or ends by its rule. Lines read that break their rules end it, as before.
-  - *a change of the instance's lines* ("Pool lines", "Lines for one instance"; SCHED-C1e, not
-    built yet).
+  - *a change of the instance's lines* ("Pool lines", "Lines for one instance"; SCHED-C1e, since
+    0.12.54): the next evaluation reads the new lines, and the episode ends only by its own rule
+    against them; clearing them returns the pool to the catalog's lines the same way.
 
   It is dropped when it ends by its rule (`r ≤ S` and `r < T`, or a round that lists or plans
   nothing though a consumer is a candidate), when a generation changes the pool's consumers, when
@@ -2153,7 +2161,9 @@ without a valuation is untouched.
   lines and `benefit_limited` decides, records and hashes byte for byte as before; ruling 116's
   stop holds (no production pool declares a valuation). SCHED-C1: a catalog without its members
   (a fixed value, `trigger_line`) and an instance without `scheduling.pool_lines` decide as before;
-  only the episodes' survival changes what an existing valued pool does.
+  only the episodes' survival changes what an existing valued pool does. SCHED-C1e (since
+  0.12.54): the reasons that carry a valued pool's lines carry `lines_source` too, the one value
+  they gain.
 
 ## Reset exclusions and the task's own last result (Workflow #411 P19)
 

@@ -458,6 +458,9 @@ mod gate_419_iso_start1;
 // `host.capped_episodes`, kept across a start by the anchor rule; what a start cannot keep and a
 // record the store refuses are warnings, and a Runtime without an episode records none.
 mod gate_sched_c1d;
+// #428 SCHED-C1e (register §1.299 SC1-12): one instance's pool lines through `ConfigureSettings`,
+// named only by the active generation's valued pools of the instance, and restored at start.
+mod gate_sched_c1e;
 // #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
 // the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
 mod gate_411_a35;

@@ -50,6 +50,10 @@
 //!   ([`BlackoutListKey`], [`BlackoutEntry::parse`], [`BlackoutEntry::parse_list`],
 //!   [`BlackoutEntry::to_json`], [`BlackoutEntry::list_json`]), with which the console builds and
 //!   checks the entries it sends through `ConfigureSettings`.
+//! - #428 SCHED-C1e (register §1.299 SC1-12, since 0.12.54): each instance's own pool lines
+//!   (`instance.<instance id>.scheduling.pool_lines`, [`EffectiveConfig::pool_lines`]); an
+//!   instruction names only pools the active generation gives the instance with a declared
+//!   valuation, as the caller names them ([`CheckContext::with_valued_pools`]).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -142,8 +146,9 @@ pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
     BlackoutConfig, BlackoutEntry, BlackoutListKey, BlackoutWindow, CostCommitConfig,
     EvaluationRetryConfig, ExpectedRuntimeConfig, FactRefreshConfig, FeatureLockConfig,
-    InstanceSchedulingFile, PacingStage, PackAdmissionConfig, QuietHorizon, RandomDelay,
-    RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
+    InstancePoolLineSet, InstanceSchedulingFile, PacingStage, PackAdmissionConfig, PoolLineValue,
+    QuietHorizon, RandomDelay, RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry,
+    SchedulingConfig, SchedulingFile,
 };
 pub use standard_packs::{
     CACHED_GENERATIONS as STANDARD_PACKS_CACHED_GENERATIONS,
@@ -269,3 +274,8 @@ mod gate_r3;
 // Workflow #429 BX-1 (register §1.273): the blackout entry's parser and shape for clients.
 #[cfg(test)]
 mod gate_bx1;
+
+// #428 SCHED-C1e (register §1.299 SC1-12): each instance's own pool lines, their checks, the
+// instruction's valued pools and the restore at start.
+#[cfg(test)]
+mod gate_sched_c1e;
