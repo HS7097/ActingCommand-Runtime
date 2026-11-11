@@ -3799,6 +3799,12 @@ pub enum RuntimeOperation {
     /// answer is `RuntimeResult::InstanceFactSnapshot`.
     InstanceFactSnapshot {
         instance: String,
+        /// Workflow #428 S168-LB1a (since 0.12.55, `runtime-client` 7;
+        /// `contracts/instance-fact-store.md`, "The frame bound with long lists"): the Runtime
+        /// keeps only the records whose key starts with it, then builds and measures the view.
+        /// Absent, the request serializes and is answered as before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key_prefix: Option<String>,
     },
     /// Reads the shadow measurement's state (Workflow #385 P-m, PERF §4.6; register §1.61 W15):
     /// a general read from memory that reads and records nothing in the ledger. The answer is
@@ -4370,10 +4376,18 @@ impl RuntimeOperation {
             | Self::ClearMonitor { instance_alias }
             | Self::ResourceTargetView { instance_alias }
             // Workflow #429 R-0c: only the alias until R-8, as for R-0's kinds.
-            | Self::PackScheduleView { instance_alias }
-            | Self::InstanceFactSnapshot {
-                instance: instance_alias,
-            } => validate_instance_alias(instance_alias),
+            | Self::PackScheduleView { instance_alias } => validate_instance_alias(instance_alias),
+            // Workflow #428 S168-LB1a: a key prefix is a non-empty start of an instance fact key.
+            Self::InstanceFactSnapshot {
+                instance,
+                key_prefix,
+            } => {
+                validate_instance_alias(instance)?;
+                key_prefix.as_deref().map_or(Ok(()), |prefix| {
+                    crate::fact::validate_fact_key_prefix(prefix)
+                        .map_err(|error| RuntimeContractError::new(error.code()))
+                })
+            }
             Self::ScheduleExplanation { instance, .. } => {
                 instance.as_deref().map_or(Ok(()), validate_instance_alias)
             }
@@ -5512,6 +5526,10 @@ pub enum RuntimeResult {
     InstanceFactSnapshot {
         snapshot: Box<crate::InstanceFactView>,
         source: crate::RuntimeStateSource,
+        /// Workflow #428 S168-LB1a (since 0.12.55, `runtime-client` 7): the instance's records
+        /// before the request's `key_prefix` kept some of them; absent for a request without one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        records_total: Option<u32>,
     },
     /// `PerformanceStatus` (Workflow #385 P-m, register §1.61 W15): the shadow measurement's
     /// host row and one row per registered instance, from memory.
@@ -6401,13 +6419,25 @@ impl RuntimeReceipt {
             Some(RuntimeResult::MonitorStatus { status }) => status.validate().map_err(|_| {
                 RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeMonitorStatus)
             })?,
-            Some(RuntimeResult::InstanceFactSnapshot { snapshot, source }) => {
+            Some(RuntimeResult::InstanceFactSnapshot {
+                snapshot,
+                source,
+                records_total,
+            }) => {
                 snapshot
                     .validate()
                     .map_err(|error| RuntimeContractError::new(error.code()))?;
                 source.validate().map_err(|_| {
                     RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeStateSource)
                 })?;
+                // Workflow #428 S168-LB1a: the records before the prefix hold those answered.
+                if records_total.is_some_and(|total| {
+                    usize::try_from(total).is_ok_and(|total| total < snapshot.records.len())
+                }) {
+                    return Err(RuntimeContractError::new(
+                        crate::codes::SanitizationCode::InvalidFactSnapshot,
+                    ));
+                }
             }
             Some(RuntimeResult::PerformanceStatus { status }) => {
                 if self.state != RuntimeReceiptState::Completed || self.terminal.is_some() {

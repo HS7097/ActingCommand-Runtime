@@ -4,9 +4,9 @@
     "actingd-config": [5, 28],
     "install-selection": [1, 1],
     "install-control": [0, 1],
-    "ledger": [3, 7],
-    "runtime-client": [3, 6],
-    "package": [3, 8],
+    "ledger": [3, 8],
+    "runtime-client": [3, 7],
+    "package": [3, 9],
     "runtime-outcomes": [1, 1]
   }
 }

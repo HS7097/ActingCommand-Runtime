@@ -13380,6 +13380,734 @@ words).** The differences (a) to (i) above are accepted as written. On the quest
 
 **Rollback of this slice.** Nothing to roll back: text only.
 
+### 1.310 Slice SS-4b (0.12.55): a no-progress guard holds a pair only while the pair is due for the cause the guard served (Workflow #428; a production incident of 11-11, a chain head held by its guard through a later clock slot until a person ran its chain by hand; the coordinator's ruling of 11-11, not Alice's words; coordinator work order `rd-1111/brief-ss4b-guard-cause.md`, read on main `385bb500`)
+
+The number is the coordinator's: four slices are open at once with §1.310 to §1.313.
+[scheduling/README.md](scheduling/README.md) ("No-progress guard": the "Released", "Held",
+"Chains" and "Entry point" bullets and the new "Why a new cause is not held"), one clause of
+[runtime-config.md](runtime-config.md) ("No-progress guard") and the description of
+`policy_no_progress` in [outcome-codes/policy.json](outcome-codes/policy.json) are the contract. No
+persisted shape, wire shape, configuration key, outcome code, value or interface revision is new
+or changed.
+
+**What happened** (production, 11-11). A chain of five tasks on one instance. Its head's trigger is
+an `any` of clock slots (each an `all` of a daily `clock` and a `timeline_active`) and, last, an
+`all` of an `any` of four `fact_time_reached` (`once_per_reading`, four completion-time facts) and
+a `dependency_completed`; only the chain's last task reads those four facts again. At 16:36 the
+head was dispatched because the second completion time had come (the first true child of the
+`any`) and succeeded, and its guard was armed with that one fact. The chain's second task then
+failed (a defect of its package, fixed since), so the last task never ran and no completion time
+was read again. From 16:56, the head's cooldown over, its trigger was true again and the head was
+held with `policy_no_progress` naming that fact with its admission reading; at 18:00 the trigger
+was true by its clock slot, and the head was still held, the whole chain waiting behind it
+(`trigger_unknown`). Nothing would have released it, since the only reader of the fact is the
+chain itself; it ended when a person ran the chain's packages by hand at 18:13.
+
+**The account, checked on the code** (`385bb500`). `NoProgressGuards::hold` compared the armed
+basis readings with the facts and never read the trigger; `NoProgressMemory::observe` released a
+guard only on a changed reading; and the contract's sentence that a dispatch decided by a clock
+alone "has no basis and no guard" was applied by `basis_keys` at capture only, never at a hold. So
+a guard armed by one cause held the pair against every later cause.
+
+**The ruling** (11-11, the coordinator's, not Alice's words). A guard holds a pair only while the
+pair is due for the cause the guard served. At the evaluation that would hold it, the trigger is
+read part by part as at capture, giving the basis keys of the trigger as it is true now (with the
+reserve gate's keys, as at capture): empty, or holding a key the armed basis does not hold, the
+pair is due for another cause, is not held, and its guard is released for good; every key in the
+armed basis (and none reading another value), it is held as before. Everything else of SS-4
+stays: the basis, the arming, the release by a changed reading, failures never held, memory only,
+the switch, the bound of 32 keys, the reason's values.
+
+**What** (`crates/policy/src/evaluator/no_progress.rs`, `NoProgressGuards::hold`, `serves`,
+`NoProgressMemory::forget_released`; the call in `evaluate_scheduling`; the Runtime's call in
+`crates/runtime-host/src/policy_host.rs`).
+
+- `hold` takes the task and what the evaluation read its trigger with (its own last result, its
+  instance's scope, the facts as the resets leave them, the pools and their values, the time and
+  the timeline). After SS-4's checks, `serves` reads the trigger with `basis_keys`, the capture's
+  own reading: the pair is held only when that gives at least one key and every key is a key of
+  the guard's basis. Otherwise it is not held, goes on to placement as any eligible pair, and the
+  pair is noted as released in the guards the evaluation was given.
+- `forget_released` drops each noted guard from the Runtime's memory when the armed guard is still
+  the one the evaluation was given. The Runtime calls it right after every evaluation, whatever
+  the evaluation's result, as `observe` releases before it; the pair's next admitted dispatch arms
+  a new guard (none, when a clock slot decided it).
+- With no guard, with the guard off, and for a pair held for its served cause, every decision is
+  byte for byte the one before.
+
+**Settled where the ruling left it open** (the implementer's; for the coordinator to confirm).
+(a) The reserve gate's keys count in the basis now, as the ruling writes: a task that reserves a
+pool has a basis now of at least those keys, which are in its guard's basis, so such a task due by
+a clock alone is still held (SS-2d test 16 pins this for a task due hourly that reserves its
+pool); only a task without reserves is released at a clock slot. (b) The release is decided inside
+the evaluation and reaches the memory through the guards the Runtime passed (a set of pairs in
+memory, never serialized), so the evaluation's entry points, result and records do not change.
+(c) The hold is reached only on a true trigger and the re-read is that same reading; a re-read that
+did not find it true would hold as before. (d) The release is judged only at the hold, after the
+trigger, the feedback stop and the cooldown: a cause true during the cooldown only, false again at
+its end, releases nothing. (e) The description of `policy_no_progress` (`review: pending`) and
+runtime-config.md's sentence on the key now say that a pair due for another cause is not held.
+
+**What an operator sees after deploy.** `policy_no_progress` on a pair only while the pair is due
+for the cause its guarded run was admitted on. A chain head held on a completion time runs at its
+next clock slot, or when another completion time comes, and its chain follows it; that run arms its
+own guard, or none for a clock slot. A pair whose runs change nothing is still held at every later
+evaluation, a clock beside its reading in an `all` included. One instance's guard is never read or
+released for another (#419).
+
+**Rollback** (below 0.12.55). Nothing persisted: the guard stays in memory only (iron rule 13; no
+ledger record, no state file). The build before holds by the armed guard alone again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS4B-1 | a pair due for another cause than its guard served is not held, and its guard is released | behaviour (policy) | SS-4b | the policy crate, `NoProgressGuards::hold` | `since` 0.12.55; no code, value or key added |
+| SS4B-2 | `NoProgressMemory::forget_released`, called after every evaluation | behaviour (Runtime memory) | SS-4b | runtime-host | memory only; nothing in the ledger |
+
+Tests (policy gate row "#428 SS-4b"; the policy crate's fixtures, fixed instants, no clock read):
+`gate_ss4b::ss4b_t1_the_incident_shape_runs_at_a_new_completion_time_and_at_the_next_clock_slot`,
+`ss4b_t2_a_run_without_progress_is_still_held_beside_a_due_clock`,
+`ss4b_t3_a_subset_of_the_basis_holds_and_a_key_outside_it_releases_for_good` and
+`ss4b_t4_with_the_guard_off_or_no_guard_the_evaluation_is_as_before`. No existing test or golden
+changes: every SS-4 test (`gate_ss4`) and SS-2d's test 16 hold a pair due for its served cause or
+arm no guard. No test is removed or renamed.
+
+### 1.311 Workflow #428 S168-LB1a (0.12.55): lists of up to 1024 rows, and no list in the scheduler's facts (the code of §1.309's rows LB1-1 to LB1-6 with LB1-5b, built to the contract on main; the coordinator's rulings 1 to 10 and answers 1 to 10 of 11-11 recorded in §1.309, not Alice's words; the section number the coordinator's; coordinator work order `rd-1111/brief-s168-lb1a.md`, read on main `385bb500`)
+
+**Before any code** (the coordinator's answer 1 of §1.309). The four resource repositories' `main`
+were read, without a checkout, at `f97007b3`, `f5ba5569`, `831db61a` and `de3edbd`: a search of
+every file of each tree for `inventory.list` (each `schedule.json` and every selection document
+included) finds no match, and no pack declares a `read_list` step yet. No catalog in use names a
+key under `inventory.list.` to read, so the compile refusal was built.
+
+| # | Built | Where |
+|---|---|---|
+| LB1-1 | `MAX_FACT_RECORD_LIST_ROWS`, 1024, public, the rows of a `record_list` fact, checked by `FactValue::validate`, which every reader of a record runs: a write and a publication (`FactObservation::validate`), a client's publication, the host's check of a list before it publishes, the structural check of a decoded `fact.published`, a snapshot's and a view's check of each record and the client's check of an `InstanceFactSnapshot` answer; `MAX_FACT_RECORDS` stays 256 for the records of an observation, a snapshot and a view; no byte bound moves; no configuration key | `crates/actingcommand-contract/src/fact.rs` |
+| LB1-2 | `MAX_LIST_READING_ROWS` is defined as that constant; the kernel's scan, which reads it, stops on the viewport that reads the 1025th position (`list_rows_exceeded`, `count` 1025); the catalog's descriptions of the code and of the word say so | `crates/actingcommand-contract/src/taskflow.rs`; `crates/execution-kernel/src/contained_task/list_reading.rs`, `readings.rs` |
+| LB1-3 | the scheduler's fact projection leaves out every record under `inventory.list.` beside its three classes, for the authoritative and the forward projection alike; the evaluation's `facts`, its `fact_snapshot_id` and an intent's instance view (all built from the projection) hold no list | `crates/runtime-host/src/fact_store.rs`, `FactStore::overlay_policy_facts_with_disposition` |
+| LB1-4 | `type_mismatch` at the member's key: a `fact` and a `record_deadline` predicate's `fact_key`, every fact reference (a `fact` predicate's and a `resource_projection`'s `value`, a pool's `capacity`, a pool line), a pool's `observation/fact_key`, a consumption read from a fact (`amount/fact_key`), and a selection document's `facts[]` (`/facts/<i>/fact_key`, after the document's own checks); a timeline event's `invalidates_fact_prefixes` is not checked | `crates/policy/src/validation.rs`, `validate_read_fact_key`; `crates/policy/src/source.rs`, `parse_selection_document` |
+| LB1-5 | an inline record list of more than `MAX_OBSERVED_RECORD_LIST_ROWS` (256, now a public constant of the policy crate that the evaluator's input check reads too) is left out for every instance its scope applies to; the host hands the evaluation those keys per instance (`LeftOutFacts`, through the new entry `evaluate_with_left_out_facts`), and the fact refresh's demand skips them; the warning `policy_fact_rows_exceeded` is recorded once per record after a start | `crates/runtime-host/src/fact_store.rs`; `crates/runtime-host/src/host/policy_dispatch.rs`, `HostShared::report_left_out_record_lists`; `crates/runtime-host/src/policy_host.rs`, `PolicyHost::note_rows_exceeded_warning`; `crates/policy/src/evaluator.rs`, `LeftOutFacts`, `unknown_inputs`; `crates/policy/src/evaluator/fact_refresh.rs`, `predicate_keys` |
+| LB1-5b | a list read whole whose record is over the observation's 512 KiB is the miss `list_bytes_exceeded` (`count` the rows read), written at once on the frame its end check passed on; the run settles as without the list and the previous record stays | `crates/runtime-host/src/host/contained_task.rs`, `RuntimeContainedTask::list_over_observation_bytes`, `list_record_over_observation_bytes`; the word in `crates/execution-kernel/src/contained_task/readings.rs` |
+| LB1-6 | `InstanceFactSnapshot`'s optional `key_prefix` (kept before the view is built and measured) and the answer's optional `records_total`; `actingctl facts --instance … --key-prefix` and `ac_facts` send the prefix through `lab-ops`' one read and print `records_total` from the answer | `crates/actingcommand-contract/src/runtime.rs`; `crates/runtime-host/src/host/instance_fact_read.rs`; `crates/runtime-client/src/client.rs`, `RuntimeClient::instance_fact_snapshot_by_prefix`; `crates/lab-ops/src/facts.rs`, `read` |
+
+**What the contract left to the code slice, and how it is settled** (each reported to the
+coordinator):
+
+- **The unknown reason and the demand** (answer 3). A predicate that reads a left-out key reads it
+  as missing, `fact_missing`: the record is not in its input. The demand is kept from rising by
+  the keys the host left out per instance (`LeftOutFacts`, memory only, in no snapshot or decision
+  identity), which the fact refresh's collection of a catalog predicate's and the benefit gate's
+  keys (`predicate_keys`) and of a selection document's unknown inputs (`unknown_inputs`, where
+  such a key is no realistic input and gives `selection_input_unknown`) consults. The candidate
+  keeps `trigger_unknown` (or `feedback_stop_unknown`) with its detection suggestion and gets no
+  `fact_refresh_*` reason; the instance's reader is not asked for the key.
+- **"Once for each such record"**: per stored record, the event that published it. The policy
+  host keeps, per fact identity, the event it warned of; a later publication of the key is another
+  record and is warned of once more; a restart warns once more (memory only, iron rule 13).
+- **The warning's record**: one Warning `runtime.failed` under the system links (operation
+  `project_policy_facts`, stage the policy driver's), handed to the daemon's log, recorded from an
+  evaluated cycle's projection only (not from an admission's or a forward projection's).
+- **Where LB1-5b is found**: in the host, when it takes the step's list (`ListReading`), measured
+  on the record the run's end would publish (instance, entry task, package, run, frame, capture
+  time): only the host knows them. The kernel adds the word.
+- **The key prefix's rule**: not empty, at most a key's 192 bytes, no control character, else
+  `invalid_fact_key` at the request's check; `records_total` is answered only to a request with a
+  prefix, a client refuses an answer whose total is below its records (`invalid_fact_snapshot`)
+  and one that carries a total it did not ask for, or lacks one it did.
+- **Places outside the row**: `fact_time_reached` and an activity goal's fact metric also name a
+  key to read but are not in LB1-4's list, so they are not refused; a left-out key reads as
+  missing there (`fact_time_reached` false with `fact_time_unavailable`, which asks no refresh).
+- **Question 10**: no reader recomputes a persisted `fact_snapshot_id`. The id is computed only by
+  the projection, at an evaluation and at an admission inside one running Runtime; the ledger's
+  idempotency check of a dispatch compares two persisted records' ids with each other only.
+
+**Tests** (gate maps `contract.toml`, `policy.toml`, `host.toml`; fakes, the manual Runtime clock
+or a fake source's clock; no sleep):
+
+| Row | Test |
+|---|---|
+| LB1-1, LB1-2 | `actingcommand-contract` `fact::gate_428_s168_lb1a`: 257 and 1024 rows accepted by every reader, 1025 refused by each; 257 records of an observation, a snapshot and a view refused |
+| LB1-1 | `runtime-host` `gate_428_s168_lb1a::lb1a_a_list_of_1024_rows_is_published_and_read_back_after_a_restart`: a ledger holding a list of 256 rows (what revision 7 writes) opens; 1024 rows published, read from the store and the instance fact read, and after a restart |
+| LB1-2 | `execution-kernel` `gate_428_s168_4::list_reading_miss_publishes_nothing`, changed (below) |
+| LB1-3 | `runtime-host` `…::lb1a_the_projection_holds_no_list_and_every_decision_is_as_without_it`: lists of 3 and 1024 rows; the facts hold none, the intent's `fact_snapshot_id` and every decision are those of before, and a list published between an evaluation and its admission leaves the intent admitted |
+| LB1-4 | `policy` `tests::gate_428_s168_lb1a`: one case per place, the same member of another key not refused there, and a timeline prefix under `inventory.list.` compiling |
+| LB1-5 | `runtime-host` `…::lb1a_a_long_record_list_is_left_out_for_its_instance_with_one_warning`: two instances; 257 rows of one, the evaluation not skipped, the predicate Unknown with `fact_missing` and no `fact_refresh_*` reason (it raised `fact_refresh_unbound` while the key was missing), one warning with the key and 257, none from a second evaluation, the other instance as before |
+| LB1-5b | `runtime-host` `…::lb1a_a_list_is_measured_against_the_observation_bytes` (the 512 KiB itself) and `gate_428_s168_4::list_reading_over_observation_bytes_is_a_miss` (a run, with the bound lowered for its own key by a test hook: the run succeeds, nothing is published, the record from before stays, one row `list_bytes_exceeded`, `count` 6) |
+| LB1-6 | `runtime-host` `…::lb1a_a_key_prefix_is_kept_before_the_frame_is_measured`; the request's serialization in the contract test above |
+| revisions | `actinglab-architecture` `the_runtime_declares_each_v0120_interface_revision_once` at `ledger` [3, 8] and `runtime-client` [3, 7] |
+
+Tests changed, each because the requirement changes what it pins: `execution-kernel`
+`gate_428_s168_4::list_reading_miss_publishes_nothing` pins the 1025th position and `count` 1025
+instead of the 257th (§1.309, "Tests the survey names": 1,032 positions on the 114th viewport,
+after 113 advances; its scan declares 128 viewports instead of 32, and its dictionary holds 1024
+ids, a position past the 1024th repeating an earlier one); `lab-rescue`
+`gate_429_r0b_pairing`'s two tests pin this build's `runtime-client` [3, 7] instead of [3, 6].
+`runtime-host` `gate_389_mcp4` names the new request member (`key_prefix: None`) and matches the
+answer with `..`, so it compiles; its assertions do not change. No golden changes.
+
+**Interfaces.** `ledger` [3, 8], one way, and `runtime-client` [3, 7], in the revision tables of
+[component-interfaces.md](component-interfaces.md) and in `distribution/windows/component-interfaces.json`;
+`package`, `actingd-config` and `runtime-outcomes` do not move (one code, `policy_fact_rows_exceeded`,
+and one word of `reading_problem`, `list_bytes_exceeded`, added within revision 1). #434's planned
+`ledger` 8 and `runtime-client` 7 (LAB-6) and S168-5b's `judge_only` join these revisions when
+they ship in this release, and take the next free ones otherwise.
+
+**What an operator sees after deploy.**
+
+- A list reading of up to 1024 rows is written; before, a list of more than 256 positions warned
+  `list_rows_exceeded` and wrote nothing.
+- The scheduler's evaluation no longer holds list readings: a list's publication no longer makes a
+  waiting dispatch stale, and no decision changes.
+- A record list of more than 256 rows under another key no longer stops the evaluation of every
+  instance: the instances it applies to read it as missing, and one warning
+  `policy_fact_rows_exceeded` (the key and its rows) is recorded per record after each start.
+- A list too large for one observation is a warning row `list_bytes_exceeded` in its run's
+  diagnostics: the run succeeds and the earlier list stays.
+- `actingctl facts --instance … --key-prefix` and `ac_facts` with `key_prefix` answer an instance
+  whose whole set of facts no longer fits one frame, for a prefix that fits.
+- A scheduling catalog that names a key under `inventory.list.` to read is refused at compile
+  (`type_mismatch`); no catalog of the four resource repositories' `main` does.
+- The console of the same release must read `runtime-client` 7 and `ledger` 8; the update to this
+  build is a one-way ledger update.
+
+**Rollback.** After this build has run, no build before it opens the ledger: going back below
+`ledger` 8 is refused by the Rp.max rule whether or not a long list was written, and once a list
+of more than 256 rows is written a build before this one refuses that record at its start and in
+every page that holds it. The way back is a later build, or a fresh state root; there is no
+migration, and the configuration needs nothing.
+
+### 1.312 Slice S168-LB1b (0.12.55): a list maximum reads "at least L" where one entry has no value (Workflow #428; the customer-view audit of 11-11 and the coordinator's rulings 5 to 10 and answers 6 to 8 of 11-11, not Alice's words, as §1.309 writes them; coordinator work order `rd-1111/brief-s168-lb1b.md`, read on main `385bb500`)
+
+The code of §1.309's rows LB1-7 to LB1-11. [selection-policy.md](selection-policy.md) ("Table
+maximum over a list", "Lower bound of a list maximum") is the contract, its marks now "since
+0.12.55"; [component-interfaces.md](component-interfaces.md) moves the planned `package` 9 row of
+"Planned: Workflow #428 S168-LB1" into the table in force; [selection-graph.md](selection-graph.md)
+("Judge step") keeps its paragraph on the judge planned. LB1-12, the judge's use, is not built
+here: S168-5b (PR #1566) is not on main, so it builds LB1-12 when it merges. The section number is
+the coordinator's (four slices open at once with §1.310 to §1.313). The text names no game,
+resource or value: a roster, a list of holdings, a value table, a group.
+
+**What.**
+
+- **The member** (LB1-7; `crates/selection-policy/src/schema.rs`, `ValueRef::TableMaxOverList`,
+  `Scope::resolve`): `lower_bound_column`, optional, not written when absent (so a document
+  without it keeps its canonical bytes, `policy_sha256` and `input_sha256`). An undeclared column
+  is `dangling_reference`, another type than `integer` or the `value_column` itself `type_mismatch`,
+  each with the detail `table_max_over_list=lower_bound_column`. `SelectionTables::bind` needs no
+  change: the column is a declared column of the table, which bind checks as it checks the
+  `value_column` (`table_mismatch`: `column_absent`, `column_type`). Two references that differ
+  only by it are two references.
+- **The read** (LB1-8; `crates/selection-policy/src/list_max.rs`, `read_list_maximum`,
+  `ListMaxReading::bound`, `unknown_count`, the vocabulary enum `ListMaxBound`): without the
+  member, steps 3 and 4 are S168-5a's, byte for byte. With it, a key with no row and a null value
+  cell of the class are uncertain keys: each counts in `unknown_count`, and the bound cell of the
+  same row (when it holds a value) joins the known values. No uncertain key: exact M, or `empty`;
+  an uncertain key and something known: at least L, the largest of the values and bounds known,
+  with the smallest key that gives it; an uncertain key and nothing known: Unknown `lookup_miss`.
+  A value or bound cell of another type is `type_mismatch` as before.
+- **The readers** (LB1-9; `crates/selection-policy/src/evaluator.rs`): `integer_side` reads a list
+  maximum read as at least as `Side::AtLeast(L)`, and `compare_sides` settles a comparison only
+  where every value of the range agrees, the rules of the contract on both sides (on the right the
+  range is [L × `mul` + `add`, +∞)), two at-least sides settling nothing; an unsettled comparison
+  is `Truth::Unknown(lookup_miss)`, which the gate's `on_unknown` decides, and its drop is no
+  static table drop. A term (`transform_at_least`) takes L through `identity` and gives
+  `then_milli` through `threshold` once L reaches `at_least`, Unknown `lookup_miss` below. The
+  upper bound (`crates/selection-policy/src/bound.rs`, `Reading::AtLeast`, `MaximumRead`) takes
+  [L, +∞): a gate compares it as a range with no upper end, `identity` has no finite bound under a
+  positive weight and its bound at L under any other, `threshold` gives `then_milli` once L reaches
+  `at_least` and both of its values otherwise.
+- **The reasons** (LB1-10, LB1-11; `evaluator.rs`, `list_max_reasons`, `BoundSettled`): a known
+  read of a reference that opts in adds `bound` and `unknown_count` to its
+  `selection_table_list_max`, and, read at least, `lower_bound` and `lower_bound_identity` in the
+  place of `maximum` and `maximum_identity`. A decision in which a lower bound settled something
+  carries `selection_decided_on_lower_bound` once, right before the outcome's reasons.
+- **The catalog**: the keys `bound` (`vocab:list_max_bound`), `unknown_count` (`integer`),
+  `lower_bound` (`integer`) and `lower_bound_identity` (`id`) in `catalog.json` and the contract's
+  key table (`crates/actingcommand-contract/src/outcome/keys.rs`); the vocabulary `list_max_bound`
+  (`exact`, `at_least`); in the fragment `selection-policy.json` the four keys as optional values
+  of `selection_table_list_max` (its description says since 0.12.55 what they mean) and the code
+  `selection_decided_on_lower_bound` (info, ladder class `none`; `rule_id`, `count`; `since`
+  0.12.55), with its `SelectionPolicyCode` variant.
+
+| # | Shape | Kind | Where |
+|---|---|---|---|
+| LB1-7 | `table_max_over_list`'s `lower_bound_column` | selection document format, `package` 9 | `schema.rs`, `ValueRef::TableMaxOverList`, `Scope::resolve` |
+| LB1-8 | exact M, at least L, Unknown only when nothing is known; `empty` exact | behaviour | `list_max.rs`, `read_list_maximum` |
+| LB1-9 | the range [L, +∞) in `integer_compare`, `threshold`, `identity` and the upper bound | behaviour; no unknown reason added | `evaluator.rs`, `compare_sides`, `transform_at_least`; `bound.rs`, `Hypothesis::possible`, `Hypothesis::outputs` |
+| LB1-10 | `bound` (`list_max_bound`: `exact`, `at_least`), `unknown_count`, `lower_bound`, `lower_bound_identity` | outcome keys and vocabulary, `runtime-outcomes` 1 | `evaluator.rs`, `list_max_reasons` |
+| LB1-11 | `selection_decided_on_lower_bound` (info; `rule_id`, `count`) | outcome code, `runtime-outcomes` 1 | `evaluator.rs`, `BoundSettled::reason`, `evaluate_with_tables` |
+
+**Settled here** (the contract left them open; each the slice's, the coordinator may change them):
+
+- An Unknown read of a reference that opts in carries `unknown_reason` only, neither `bound` nor
+  `unknown_count`: `bound` names only the two known readings.
+- `unknown_count` counts every key with no value, a key whose bound gives L included.
+- `selection_decided_on_lower_bound`'s `count` is the number of distinct gates and terms over every
+  candidate of the decision; a gate counts when a comparison the bound settled lies in it and its
+  verdict is known, a term when the bound gave its value (an `identity` at L, a `threshold` the
+  bound reached).
+- The bound cell is read wherever the row is of the class, so a bound cell of another type is
+  `type_mismatch` also beside a value (the case table's row); after binding no such cell exists.
+- In the upper bound an `identity` term of weight 0 is bounded (its contribution is 0); a list
+  maximum read as at least in a predicate other than `integer_compare` would be the range up to
+  the largest integer, which validation does not admit.
+
+**Interface.** `package` [3, 9] (`distribution/windows/component-interfaces.json`; the row 9 of
+the `package` interface, in force; the architecture test
+`the_runtime_declares_each_v0120_interface_revision_once`). `ledger`, `runtime-client` and
+`actingd-config` do not move (S168-LB1a raises `ledger` and `runtime-client` in the same release);
+`runtime-outcomes` stays 1, one code, four keys and one vocabulary added within it. The record of a
+decision gains no member: the new keys and code are values of reasons the ledger's reader only
+spells, and an unsettled comparison reads the existing `lookup_miss`.
+
+**What an operator sees after deploy.** Nothing changes until a selection document writes the
+member: a document without it reads, hashes and decides as before, and no reason carries the new
+keys or code. Once a pack's document opts in, its `task.selection_evaluated` records show, in the
+`selection_table_list_max` reason, `bound` `exact` with `unknown_count` 0 where every listed key
+has a value, or `bound` `at_least` with `lower_bound`, `lower_bound_identity` and `unknown_count`
+where some have none; a candidate the bound decided stands as `ranked` or `gate_rejected`, one it
+could not decide is `unknown_dropped` with `lookup_miss` as before, and the decision then carries
+`selection_decided_on_lower_bound` naming the first gate or term so decided. A group of which
+nothing is known reads Unknown as before. A bundle whose packs write the member declares
+`package` [9, 9]; the Runtime is deployed before such a bundle.
+
+**Rollback** (below 0.12.55): before a pack writes the member, nothing to undo. After, a build
+before 0.12.55 refuses that document at admission (`contained_task_select_policy_invalid`: the
+reference denies the unknown member), and a bundle that declares `package` [9, 9] is not placed
+on it (§1.309, "Rollback"): first replace the pack by one without the member. The
+ledger needs nothing: an older build reads the records with the new keys and code, which it only
+spells.
+
+Tests (policy gate row "#428 S168-LB1b", `crates/selection-policy/src/gate_428_s168_lb1b.rs`, tables
+parsed from bytes, fake snapshots, made-up ids): `lower_bound_column_validation`,
+`lower_bound_absent_reads_as_before`, `lower_bound_read`, `lower_bound_compare_left`,
+`lower_bound_compare_right`, `lower_bound_two_ranges_settle_nothing`, `lower_bound_terms`,
+`lower_bound_upper_bound`, `lower_bound_reasons` and `lower_bound_member_needs_package_9`. One
+existing test changes with the revision it pins: actinglab-architecture's
+`the_runtime_declares_each_v0120_interface_revision_once` (`package` [3, 8] to [3, 9]). S168-5a's
+tests, among them `table_list_max_missing_key_is_unknown` and
+`table_list_max_unknown_follows_the_declared_action`, pin documents without the member and do not
+change. No golden changes.
+
+### 1.313 Slice CLI-HELP (0.12.55): `actinglab help` prints a text a person reads, and `--help` asks for it on any line (Workflow #434; the customer-view audit of 2026-11-11 found the command line's help of no use to a person; the coordinator's eight rulings of the same day, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §1, on main `a62434a4`; coordinator work order `rd-1111/brief-cli-help.md`)
+
+The coordinator assigned this number while four slices were open at once (§1.310 to §1.313).
+[lab-two-entries.md](lab-two-entries.md) §9.3, "Help", is the contract, and §9.1's `help` member
+says that the command prints it. No persisted shape, wire shape, configuration key, outcome code or
+interface revision is new or changed; [lab-operations.json](lab-operations.json) is unchanged.
+
+**Why.** `actinglab help` answered JSON, and without `--json` a person saw counts (`[18 items]`,
+`{27 members}`), also on the bare `actinglab`; none of the Lab's rows was in it, and no command
+printed the one sentence per row LAB-5E gave the operation table. `actinglab --help`, `lab help`
+and `status --help` were refused as unknown, the last pointing a person at a contract file.
+
+**What** (`apps/actinglab/src/cli_help.rs`; `cli_module::route`, `cli_information::run_help`,
+`main`, `cli_module::authoring::listed_help`).
+
+- **The lines that ask** (rulings 2 and 6; `cli_help::asked`, read first in `cli_module::route`):
+  `--help` anywhere on a line, for the line's command words (actinglab's global options and their
+  values left out, up to the first other flag; a leading `help` left out when words follow it), and
+  one of actinglab's own groups of one word followed by `help` (`crate::OWN_GROUPS`, `run`,
+  `record`: `lab help`). Either line becomes actinglab's own `help` with those words (and the line's
+  `--json` and `--via <counter>`) before anything else reads it: nothing runs and nothing is sent. A
+  row's words keep a `help` after them as the row's word (`status help` names the instance `help`;
+  `user-config help` reads the key `help`), as before.
+- **`help`'s words** (`cli_information::HELP_READS`): its read list's positionals are
+  `<command>...`, the words it describes; a flag on its line is still refused (LAB-5B5).
+- **The list** (ruling 1; `cli_help::list`, the member `list`; `cli_help::listing`, the text):
+  every row this build offers (`words::offered`: the rescue rows on Windows only), by module (core,
+  debugging, authoring, rescue), each module's rows in the table's order, then actinglab's own
+  commands that no row serves or replaces (`cli_help::OWN_WITHOUT_ROW`). Each entry: the row's name
+  (what `serve` and MCP call it, ruling 5), its parameters in short form (its positionals in order,
+  `[<x>]` when not required, its required options, `[options]` for the rest), its sentence. Before
+  it, the usage lines and the global options with one phrase each, the retired `--require-session`
+  left out. The authoring rows are left out where §8.3 does not list them
+  (`authoring::listed_help` takes them out of `list` as it takes their commands out of `commands`).
+- **The detail** (ruling 2; `cli_help::topic`, the member `command`; `cli_help::detail`): `help
+  <command words>` and `<command words> --help` name an entry by the row's name, by the words of
+  the own command that serves it under other words (`engine::COMMANDS`: `session app launch` for
+  `app launch`, `lab watch` for `watch`) or by those of an own command it replaces (its `source`
+  entries `actinglab <words>` that are commands of actinglab's own dispatch: `capture` and `runtime
+  observe` for `frame`, `lab status` for `status`, `run list` for `runs`). It prints the usage, the
+  other spellings after the row's name ("Also: …"), the commands it replaces ("Replaces: …", each
+  with parameters of its own), the sentence, `Module: …. Writes: …. Irreversible: …. Runtime: …`
+  from the table, and each parameter with its form, type, whether it is required or repeats, its
+  default and its note. The instance as register §1.307 says: `<instance>` (`[<instance>]` when
+  optional) with the note "on the command line also --instance <x>, in place of the positional",
+  `--instance <instance>` on the 20 rows actinglab's own command serves under the row's name (whose
+  note says "only") and on `remedy set` and `wake-test`, which take it as an option.
+- **A group** (ruling 2; the members `group` and `members`; `cli_help::group_lines`): words that
+  begin the names of entries and name none (`lab`, `session`, `run`, `record`, `emu`, `lab
+  signatures`) list those entries, each by its words under the group, a row of another name said so
+  ("(row watch)", "(replaced by row status)").
+- **Words beyond a command's own** (a positional, or words that begin a known command) are left
+  out, the longest beginning of the words that names an entry or a group answering; words that begin
+  none are refused as `help`'s unknown word, as a read list refuses one (`validation_failed`,
+  `help: unknown <word>`, `argument_problem` `unknown`; no new code, ruling 7).
+- **For people** (`cli_help::people`, which `main` prints for `help` without `--json`,
+  `cli_help::for_people`): the text is built from the JSON line the same answer prints with
+  `--json`, so the two never differ. Plain ASCII, at most 100 columns (`cli_help::WIDTH`), no
+  colour, no paging; the same on every platform but for the rows a platform does not offer.
+- **`--json`** (ruling 3): every member `help` answered (`usage`, `global_options`,
+  `command_options`, `compatibility_notes`, `commands`) unchanged, `--require-session` in
+  `global_options` included, and the new `list`: per entry `name`, `module` (`core`, `debugging`,
+  `authoring`, `rescue`, or `own` for an own command without a row), `help`, `usage`, `params` (each
+  `name`, `form`, `type`, `required`, `repeat`, `default`, `note`, `written`), `writes`,
+  `irreversible`, `runtime` (the table's; `null` for an own command without a row), `spellings`
+  (the row's name first), `replaces`, and for an own command `options`, its lines of
+  `command_options`. A line with `--via` keeps its envelope, with the same data.
+- **The sentences** (ruling 4): a row's is its `help`, read from the table this build embeds; the 34
+  own commands without a row (the inventory's commands that no offered row names, serves or
+  replaces) and `serve`, the CLI module's resident mode, have one each in `OWN_WITHOUT_ROW`, written
+  from what each command's code does; the internal self-test and the commands that refuse every
+  line or only echo say so ("Internal self-test: …", "Retired: …", "Reserved: …", "Refuses every
+  line …").
+- **The refusal that named a contract file** (ruling 6): the developer text of a row's refused words
+  (`cli_module::USAGE`) says "actinglab help lists the operations", and the rescue module's
+  (`lab-rescue`'s `rescue::USAGE`) "actinglab help lists the rows of module rescue", where both
+  named `contracts/lab-operations.json`. No refusal's code changes.
+
+**What a person sees.** Before, `actinglab help` printed `lab_operation_completed` and five rows of
+counts (`usage                actinglab [global-options] <command> [args]`, `global_options
+[18 items]`, `command_options      {27 members}`, …). After, `actinglab help` and the bare
+`actinglab` begin `usage: actinglab [<global options>] <command words> [<parameters>]`, list `--json
+print the one JSON line of the answer instead of this text` among the global options, then under
+`Core module:` lines such as `status [<instance>] [options]   Reads an overview of the Runtime and
+every instance, one block per`, under `Debugging module:` `tap --instance <instance> <x> <y>` with
+its sentence below it from column 34, and last `serve --stdio [--front mcp]     For programs:
+answers each JSON line {op, params} on stdin with`. `actinglab tap --help` (or `actinglab help
+tap`) prints `actinglab tap --instance <instance> <x> <y>`, `Taps one point of an instance's screen
+through the Runtime.`, `Module: debugging. Writes: yes. Irreversible: no. Runtime: required,
+refused while it is stopped.` and a line per parameter (`<x>` `integer, required`). `actinglab lab
+--help` lists `lab watch [options]   (row watch) Waits for the next batch of Runtime ledger events
+…`. `actinglab status --help` prints the detail of `status`; `actinglab status help` still asks
+`status` about the instance `help`.
+
+**Settled where the rulings left it open** (the implementer's; for the coordinator to confirm).
+(a) One entry of the list is its words and short parameters from column 2 and its sentence from
+column 34, wrapped at 100 columns, so an entry takes two or three lines: a sentence of up to 160
+bytes fits no single line of 100 columns. (b) The short form gives the positionals and the required
+options and `[options]` for the rest; the detail gives every parameter. (c) An own command a row
+replaces is no entry of its own: `help <its words>` describes the row ("Replaces: …"), which is how
+the survey's census gives 34 own commands without a row. (d) An own command without a row has no
+table facts: `writes`, `irreversible` and `runtime` are `null` in `list`, and its detail says they
+are not recorded; its parameters are its usage line in `OWN_WITHOUT_ROW` and, where `help` has them,
+its `command_options` lines, since the map from command to read list stays in the test build
+(ruling 8). (e) `serve` is in the static table, the 35th entry: the CLI module's command, not one of
+the inventory. (f) `<group> help` is read only for actinglab's own groups of one word; `help
+<words>` and `<words> --help` take any group's words. (g) A `--via` line that asks for help keeps
+`--via` and `--json`, so MCP's actinglab child would get the envelope of `help`'s data. (h) The
+rescue module's usage text changed with the module's, for the same reason.
+
+**Interface.** None moves: no table schema change, no new outcome code, no request, ledger or
+configuration shape; no dispatch arm (the inventory, the README's count and LAB-5B5's census are
+unchanged). `ledger` 7, `runtime-client` 6, `actingd-config` 28, `package` 8 and
+`runtime-outcomes` 1 unchanged.
+
+**Rollback.** Nothing is persisted: a build before this one prints `help` as JSON or counts and
+refuses `--help` again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CLIHELP-1 | `actinglab help` and the bare `actinglab` without `--json` | the text for people | CLI-HELP | actinglab | `since` 0.12.55; plain ASCII, at most 100 columns |
+| CLIHELP-2 | `help <command words>`, `<command words> --help`, `<own group> help` | command lines answered, refused before | CLI-HELP | actinglab | `since` 0.12.55; `--help` runs nothing |
+| CLIHELP-3 | `help`'s member `list`; `help <words>`'s `command`, or `group` and `members` | `help`'s answer members | CLI-HELP | actinglab | `since` 0.12.55; every member before unchanged |
+| CLIHELP-4 | `cli_help::OWN_WITHOUT_ROW`, one sentence per own command without a row | product table | CLI-HELP | — | 35 entries: the inventory's 34 and `serve` |
+
+Tests (apps gate row "#434 CLI-HELP"; the table this build embeds, the command inventory, neutral
+aliases and a scripted Runtime that answers nothing):
+`gate_434_cli_help::cli_help_the_list_has_every_offered_row_and_own_command_once`,
+`cli_help_the_detail_of_each_kind_by_help_and_by_the_flag`,
+`cli_help_groups_the_bare_line_and_a_flagged_line_that_runs_nothing`,
+`cli_help_json_keeps_todays_members_and_adds_the_list` and
+`cli_help_the_refusals_that_are_gone_and_status_help_unchanged`. No existing test changes: the tests
+that pin today's members (`help_lists_capture_backend_short_alias`,
+`help_lists_resource_declaration_options`, `help_lists_required_external_authoring_metadata` and
+`help_documents_recognize_target_shared_output_shape` in `tests/mod.rs`, which read `help_data`;
+`gate_434_lab5f`'s listing of `help`'s `commands` and `command_options`; `gate_434_lab2b`'s `help`
+without a member `outcome`; `gate_rv1`'s `command_options` of `resource verify`) pass unchanged, and
+LAB-5B5's `help --frobnicate x` is still refused naming the flag. None pinned a refusal this slice
+removes or the people's rendering of `help`.
+
+### 1.314 Slice R-6b (contracts only): a run the scheduler started can be stopped, and settles as a stop (Workflow #429 A.2 contract point 2 and the slice row R-6, board #429 6535257381; R-6's first slice refused a policy run until `ledger` 8, §1.302 "Left for later slices"; R-8's "close this task" needs it for its second step, §1.308; the coordinator's eight rulings of 11-11, not Alice's words; read on main `385bb500`; coordinator work order `rd-1111/brief-r6b-contract.md`)
+
+[runtime-interface.md](runtime-interface.md) (the row `StopInstanceRun`),
+[policy-suspension.md](policy-suspension.md) (the new "A stopped run", and its opening),
+[scheduling/README.md](scheduling/README.md) ("Settlement Feedback And Eligibility Age", "Runtime
+Enforcement", "Clock-slot records", "Capped spending order", "No-progress guard"),
+[runtime-fact-store.md](runtime-fact-store.md) (the settlement facts),
+[lab-two-entries.md](lab-two-entries.md) (the `ui` entry's row of `StopInstanceRun`),
+[lab-operations.json](lab-operations.json) (the row `task stop`, its `notes`) and
+[component-interfaces.md](component-interfaces.md) (the new "Planned: Workflow #429 R-6b") are the
+contract. The number 1.314 is the coordinator's: §1.310 to §1.313 are held for four code slices
+open the same day.
+
+**R-6b itself.** Contracts only: no code, no test, no schema file, no gate row, no CI file, no
+configuration key, no outcome code and no live revision raised. Every rule it adds is marked
+"(R-6b, not built yet)" or written in a section that says so. The outcome catalog's descriptions,
+the code's comments, the `help` line of the row `task stop`, `component-interfaces.json` and the
+tests are the code slice's. The text names no game.
+
+**Why.** R-6's first slice (0.12.53, §1.302) stops a client's direct run only: a run the scheduler
+started is refused (`scheduled_contained_task_not_client_cancellable`, `run_origin` `policy`),
+because `policy.execution_recorded` of `ledger` 7 has no legal form for a scheduled run that ends
+neither as a success, nor as a counted failure, nor as a condition. On production nearly every run
+is the scheduler's, so the console's "close this task" and the Lab's `task stop` stop almost
+nothing a person wants stopped; today only a pause of the whole account does. 0.12.55 raises
+`ledger` to 8 anyway (S168-LB1a), one way, so the stop of a scheduled run takes the same revision.
+
+**The rulings** (11-11, the coordinator's, not Alice's words), as the contract writes them:
+(1) `StopInstanceRun` stops a scheduled run from every counter that sends it today (the Lab's
+`task stop`, the console, an agent through the Lab's tool) exactly as a direct run: asked at its
+next checkpoint, reset by the Runtime with the run's lease before its terminal, the same wait,
+`settled` and `reset`; a run the Runtime started for itself stays refused with `run_origin` `host`;
+(2) it settles as an interruption, neither a success nor a failure: no failure count, streak,
+backoff, ladder, suspension of a sensitive task, owed rerun or condition, counted under the routine
+summary's `interruptions`; (3) what the scheduler does next is the trigger's business, not the
+stop's, said per trigger below; (4) the smallest legal form of the record in `ledger` 8, with what
+every reader does with it; (5) a restart between the stop and the settlement; (6) a failed reset as
+for a direct run; (7) what a person sees, and every text that says a policy run is refused until
+`ledger` 8; (8) the interfaces.
+
+**The form, and why it is the smallest** (ruling 4; [policy-suspension.md](policy-suspension.md),
+"A stopped run"). Three forms were weighed:
+
+- *A failure with one more optional member* (an interruption flag): every member of a failure
+  (the two classes, the streak, the escalation streak, the disposition, the retry, the sensitivity,
+  the performance context) would need a value that means nothing for a stop, and every reader that
+  takes a `failed` result as a failure (the task snapshot's `failed`, the settlement fold's streak,
+  `failures_through`, the ledger's recovery check, the frame retention, `actingd suspended`) would
+  go on reading it as one unless taught otherwise, with nothing to say where.
+- *A failure read as a stop by its code*, no shape change: the record's check would have to admit
+  a failure with no count and a sensitive task's failure without a pause, the same readers would be
+  wrong by default, and the tools of the release before would show every stop as a failure.
+- *A third result kind*, `{"kind": "stopped", "outcome", "runtime_ms"}` (chosen; the spelling is
+  proposed, question 1): two members, each with a meaning for a stop (its cause, the run's time),
+  and none of a failure's; every reader that matches on the kind must decide what a stop is, and
+  the compiler names each one.
+
+Nothing but the revisions moves: SQLite format 2, `actingcommand.event.v3`, the record types, the
+tables, the indexes, every view's type list and the record's other members stay as they are. The
+record's stored severity is its outcome's category, as for every result-bearing record. `ledger`
+moves because a reader of revision 7 cannot decode the kind; `runtime-client` moves with it,
+because every event query page carries the record's result (difference (f)).
+
+**What a stopped run leaves, per trigger** (ruling 3; each "(R-6b, not built yet)"):
+
+| What | After a stop |
+|---|---|
+| a clock slot's occurrence O | served: O is served by the pair's first admitted dispatch after it ("Clock-slot records"), so the stopped dispatch served O at its admission and the next evaluation does not dispatch the same O; no clock-slot record. The records allow the coordinator's wish as they are: nothing is built for it |
+| the stopped task's `dependency_completed` with `since_own_run` (it is the successor) | due again ("its latest run did not succeed"): dispatched again once its cooldown, counted from its dispatch, has passed and its trigger holds |
+| a successor's `dependency_completed` on the stopped task (it is the predecessor) | not triggered: the predecessor's terminal state is `cancelled`, which `terminal_states` of `succeeded` or `failed` does not accept; a successor that lists `cancelled`, a word the catalog format already has, is triggered; no chain handover, which needs a success |
+| `fact_time_reached` with `once_per_reading` | not served (serving needs a success): true again, dispatched again after its cooldown |
+| a pool reading, a `resource_projection` | unchanged: a stopped run publishes no reading, as a failed one, so the pool keeps its last reading until the next reading or its expiry; what the run spent before the stop is real and shows only then |
+| the task's cooldown | from the dispatch, as for every run: no end starts a cooldown (difference (a)) |
+| the no-progress guard | not held: the guard its admission armed holds only a guarded dispatch that succeeded |
+| a capped episode | the stopped consumer was dispatched in its round (`last_dispatched_unix_ms`): the plan counts its whole consumption, the round does not list it again and never passes it; the head after it is checked against the pool's last reading, which the stop did not renew; the episode ends or goes on by its own rule |
+| the Runtime's own reruns its dispatch served (an immediate rerun's round, an owed rerun, a remedy retry or request) | end with it (proposed, question 3) |
+| a fact refresh read | stopped as any policy run; not one of its failures in a row, no failure backoff; its demand stays, and its `min_interval_ms` counts from its dispatch |
+
+**Where the contract differs from the rulings or completes them**, each reported to the
+coordinator:
+
+- (a) Ruling 3, the cooldown: the evaluator counts every cooldown from the pair's last dispatch
+  (`last_dispatched_unix_ms`, its admission; "Task Execution Fields"; `evaluator.rs`,
+  `cooldown_until`), never from an end, so "the cooldown runs from the stop as from any end" has no
+  end to follow. The contract keeps the cooldown from the dispatch (question 5).
+- (b) Ruling 3, the guard: every admission arms the pair's guard, the stopped one's too; the guard
+  holds only a guarded dispatch that succeeded, so a stopped pair is not held. The effect is the
+  ruling's; "not armed" is not.
+- (c) Ruling 3, the clock slot: allowed by the records as they are (the table above).
+- (d) Ruling 5: the stop's own records do not name the run. `command.received` and
+  `command.validated` carry the stop's request, the instance, the action `runtime_action` and an
+  empty audit input, and a stop answered from the instance's latest stopped run writes the same
+  `command.validated`. With a terminal, the terminal is enough: on a scheduled run only the stop
+  asks `ClientRequested` (`CancelContainedTask` refuses a scheduled run), so `contained_task_cancelled`
+  on a scheduled run's `task.failed` is a stop's, and the run settles `stopped` from it. Without a
+  terminal the ledger cannot tell, and the run settles as interrupted, as today (question 2).
+- (e) Ruling 7: `CancelContainedTask` (MCP `ac_stop_run`, actinglab `run stop`) keeps refusing a
+  scheduled run with `scheduled_contained_task_not_client_cancellable` (without `run_origin`),
+  unchanged, so the code stays for a host run in `StopInstanceRun` and for every scheduled run in a
+  client's own cancel. The token `policy` of the vocabulary `run_origin` stays registered, no longer
+  produced by the stop.
+- (f) Ruling 8: `runtime-client` moves too. An event query page carries the record's
+  `policy_result` (codes only in the public projection's `policy_execution_outcome`, whole in a full
+  read), which a client of revision 6 cannot decode; R-6b joins the planned 7 of S168-LB1a, whose
+  console the release already pairs.
+- (g) Ruling 1: a policy run's control enters the run registry only after its package's preparation
+  (`run_scheduled_contained_task`: `prepare_scheduled_package`, then `begin_contained_run`), while
+  its activity `policy_run` shows from the preparation; a stop sent then is refused
+  `contained_task_cancellation_identity_missing` (question 8). A direct run is registered before its
+  lease.
+- (h) Ruling 1: for a policy run `settled: true` means, as for a direct run, that the run left the
+  registry (its terminal and lease end written); its `policy.execution_recorded` follows on the run's
+  worker, so a read right after the answer may not hold it yet.
+- (i) Ruling 2: a stop takes precedence over two settings that could reach it: a
+  `scheduling.rerun.condition_codes` that names `contained_task_cancelled` does not make it a
+  condition, and a `recovery_ladder.triggers` that names it starts no ladder (the defaults name it in
+  neither). The scheduled cancel branch notes no ladder trigger and computes no failure identity for
+  a stopped run.
+- (j) Rulings 2 and 4, readers the rulings do not name: the task snapshot (`terminal_state`
+  `cancelled`, the evaluator's existing word, which the host never projected before), the
+  settlement facts and the snapshot's `last_duration_ms` and `failure_streak` (question 7), the
+  failure count of the pair's later runs (`failures_through`), the frame retention's match of a
+  settlement with its terminal, `actingd suspended`, `ac_diagnose` and the client's run summary of a
+  fixture run.
+- (k) Ruling 4, the routine summary: nothing to build. R-12 already counts a scheduled run's failure
+  terminal with `contained_task_cancelled` as an interruption (`RunEnd::of_terminal`, §1.264).
+- (l) Ruling 6: a policy run's failed lease end may hand its instance to a ladder today (when a
+  trigger names its terminal's code); a stopped run's, after a failed reset, never does. The fence holds the instance, its pairs wait with
+  `dispatch_resource_fenced`, and a self-check lifts it, as §1.302 says for a direct run.
+- (m) A stop that loses the race to the run's deadline or to a pause's drain keeps the run's own
+  end (an ordinary failure, `contained_task_deadline_exceeded`, or a condition,
+  `contained_task_paused`) and answers `reset: not_needed`, as for a direct run.
+- (n) Ruling 7, the texts that say a policy run is refused until `ledger` 8. Rewritten here:
+  [runtime-interface.md](runtime-interface.md) (the row `StopInstanceRun`),
+  [lab-operations.json](lab-operations.json) (the row `task stop`, its `notes`) and
+  [lab-two-entries.md](lab-two-entries.md) (the `ui` entry's row). Kept as the record of 0.12.53:
+  §1.302 (its title, "Why not a policy run", "Left for later slices", "What an operator sees").
+  For the code slice: the row `task stop`'s `help` ("a scheduled run ... is refused"), the comments
+  of `crates/runtime-host/src/host/stop_instance_run.rs` (the module's description) and of
+  `contained_task.rs` (`stop_refused_origin`), and the catalog's descriptions of
+  `scheduled_contained_task_not_client_cancellable`, of the key `run_origin` and of its vocabulary.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R6B-1 | `StopInstanceRun` of a policy run, a fact refresh read included | behaviour of an R-0 kind (no shape change) | R-6b | the host (`stop_target`; `stop_refused_origin` refuses a host run only) | asked `ClientRequested` at its next checkpoint, as a direct run; the same wait, `settled` and `reset`; a host run (a startup package, a ladder rung, an idle action's rest) stays refused with `run_origin` `host` |
+| R6B-2 | the Runtime's reset of a stopped policy run | behaviour | R-6b | the host (the cancel branch of `execute_contained_task_with_lease`, `reset_stopped_run`) | for a scheduled run too, with the run's lease, before its terminal; a failed reset fences that instance only (#419), its lease ends as a failed run's and hands the instance to no ladder; the fence's failure is the success code's cause |
+| R6B-3 | `policy.execution_recorded` result kind `stopped` `{outcome, runtime_ms}` | ledger shape (`ledger` 8, shared); wire shape in the event reads (`runtime-client` 7, shared) | R-6b | actingcommand-contract (`PolicyExecutionOutcome`, planned `Stopped`; its check; the public projection) | proposed spelling; `outcome` the terminal outcome's top node, codes only in the projection; the check asks only that it is a code; its severity its outcome's category |
+| R6B-4 | the live settlement of a stopped run | behaviour (policy) | R-6b | runtime-host, the policy lane and `record_policy_dispatch_outcome_under_gate` (planned input `PolicyExecutionInput::Stopped`) | the terminal `task.failed` with `contained_task_cancelled`, as every scheduled cancel; no failure identity, no condition decision, no runtime-budget rewrite, no ladder trigger |
+| R6B-5 | the decision memory of a stopped record | behaviour (policy) | R-6b | runtime-host, `PolicyControlState::commit_paced_execution` | live and replay alike: no streak, escalation, backoff, retry, pause or owed rerun; the counts stay taken and the runtime counts (question 4); the Runtime's own reruns it served end (question 3) |
+| R6B-6 | the task snapshot, the settlement fold and the settlement facts | behaviour (projection) | R-6b | runtime-host, `task_runtime_snapshots_of`, `fold_settlements_by`, `failures_through` | `terminal_state` `cancelled` with its `completed_window`; `last_duration_ms`, `failure_streak` and the four facts of the pair's latest success or failure (question 7); a later run's failure count counts on from them |
+| R6B-7 | the restart's settlement of a stopped run from its terminal | behaviour (the start's reconciliation and the reconciliation of an abandoned run); ledger rule (`ledger` 8) | R-6b | runtime-host `policy_outcome.rs`; ledger `storage.rs` (the recovery of a scheduled settlement) | the ledger accepts `stopped` from a `task.failed` with `contained_task_cancelled`, `runtime_ms` measured as a failure's, from no other terminal; a run with no terminal settles as interrupted, as today (question 2) |
+| R6B-8 | the other readers | behaviour | R-6b | ledger `retention.rs`; runtime-host `suspension_report.rs`; lab-ops `diagnose.rs`; runtime-client `summarize_run` | a stopped record matches its `task.failed` terminal; no stopped run is listed as a failure or a pause; the fixture run summary reads it beside its terminal |
+| R6B-9 | the texts of (n) left to the code | text (`runtime-outcomes` 1, descriptions only; the operation table's `help`) | R-6b | — | no code, key or vocabulary is added; the token `policy` of `run_origin` stays registered |
+| R6B-10 | the declarations | `ledger` [3, 8] and `runtime-client` [3, 7], joined or raised | R-6b | `distribution/windows/component-interfaces.json` | one raise for the release, as below |
+
+**Questions for the coordinator, each with the answer the contract proposes.**
+
+1. *The kind's spelling.* Proposed: `stopped` (`PolicyExecutionOutcome::Stopped`,
+   `PolicyExecutionInput::Stopped`). `interrupted` is taken in the code by the interrupted
+   settlement (`policy_settlement_interrupted`, `settled_as_interrupted`,
+   `is_interrupted_settlement`), which is a counted failure. The routine summary's column stays
+   `interruptions`.
+2. *A restart with no terminal.* Proposed: the interrupted settlement, as today (difference (d)):
+   the case is an abrupt end between the stop's request and the run's next checkpoint (a deploy's
+   drain lets the stopped run reach its checkpoint first), and the restart lifts the pair's first
+   interrupted settlement. Alternative: the stop's `command.validated` names the run (the run's
+   `task_id` and `run_id` links) and the recovery settles it `stopped`; the run views and the
+   client's run summary would then meet a run-linked record of another request and must learn to
+   skip it.
+3. *The Runtime's own reruns the stopped run served.* Proposed: they end with it: an immediate
+   rerun's round ends as at `policy_retry_round_ended`, an owed rerun is removed, a remedy retry
+   closes its round as a failed retry does but without a failure, and a provider's request is used;
+   by the record, so replay agrees; the pair then waits for its own trigger and cooldown. Without
+   it, a stopped immediate or owed rerun is offered again at the next evaluation, past its
+   cooldown and promoted, and the stop is undone within a cycle. Against: the letter of ruling 3.
+4. *Counts and runtime.* Proposed: the counts the admission took stay taken (the occurrence was
+   served, as ruling 3 wants for a clock slot), the run's runtime counts in the task's and the
+   activity's windows as a success's, and it is never re-judged as over its runtime budget.
+   Alternative: a refund as a condition gives, which lets a task limited to one run a day run again
+   the same day.
+5. *The cooldown.* Proposed: from the dispatch, as for every run (difference (a)); a task whose
+   stopped run outlasted its cooldown may be dispatched at the next evaluation while its trigger
+   holds, which a closing row (R-8) or a pause prevents. Alternative: a cooldown from the stop, for
+   stops only, a new input of the evaluator.
+6. *The terminal, and what the run views show.* Proposed: the `task.failed` with
+   `contained_task_cancelled` that every scheduled cancel writes, so `actingctl runs`, `ac_runs` and
+   the console's run list show the run `failed` with that code and its settlement `stopped`.
+   Alternative: a `task.cancelled`, as a direct run's, shown `cancelled`; the start's reconciliation
+   (`policy_run_terminal_conflict` today), the ledger's recovery, the retention and the run summary
+   would then need a third terminal of a scheduled run.
+7. *The settlement facts and the snapshot's last duration and streak.* Proposed: a stopped run is
+   no settlement for them (they keep the pair's latest success or failure; a cut-short duration is
+   no cost), while `terminal_state` shows `cancelled`. Alternative: `last_outcome` `stopped`, a
+   third value of a string fact that a catalog may compare.
+8. *A stop during the policy run's preparation* (difference (g)). Proposed: the code slice
+   registers a policy run's control when its activity begins, before its package's preparation, as
+   a direct run's is registered before its lease, and the run ends at its first checkpoint; if that
+   is not cheap, the refusal stays and the console sends the stop again.
+
+**The coordinator's answers (2026-11-11, on reading this contract; the coordinator's, not Alice's
+words).** The differences (a) to (n) above are accepted as written, and every answer the contract
+proposes stands: each "(proposed)" in the texts of this slice reads as settled, and the code slice
+drops the mark where it builds the rule. On the questions:
+
+1. As proposed: `stopped`.
+2. As proposed: a restart with no terminal settles the run as interrupted, as today. The stop's
+   own records do not learn to name the run.
+3. As proposed: the Runtime's own reruns the stopped dispatch served end with it, by the record,
+   so that replay agrees. A person's stop is not undone by a rerun the Runtime owes itself; the
+   pair then waits for its own trigger and cooldown.
+4. As proposed: the counts stay taken and the runtime counts; no refund, no runtime-budget
+   rewrite.
+5. As proposed: the cooldown counts from the dispatch. The code slice says plainly where a person
+   reads it (the row `StopInstanceRun` of runtime-interface.md and the `help` of the row
+   `task stop`) that a stop ends this run only: a task whose trigger still holds is dispatched
+   again once its cooldown has passed, at the next evaluation when the stopped run outlasted it,
+   and a closing row (R-8) or a pause keeps it from running. A cooldown from the stop is not
+   built; if use shows the need, it is a slice of its own.
+6. As proposed: the terminal stays `task.failed` with `contained_task_cancelled`, and this slice
+   changes no run view; the console words such a run as stopped, from its code.
+7. As proposed.
+8. As proposed: the code slice registers a policy run's control before its package's preparation.
+   If the code shows that this cannot be done without changing how a failed preparation ends, the
+   refusal stays, the register says so, and the console sends the stop again once.
+
+The code slice is built as the two the contract offers, R-6b1 (the form, its check, every reader
+and the ledger's recovery rule) and then R-6b2 (the stop and the settlement that write it), in the
+same release.
+
+**The code slice.**
+
+| Slice | Repository | Size | What | Depends on | Interfaces |
+|---|---|---|---|---|---|
+| R-6b | Runtime | L (about four work orders: the form and its check; the stop and the live settlement; the decision memory and the projections; the restart, the other readers, the texts and the tests) | R6B-1 to R6B-10 | this contract and the coordinator's answers, questions 2, 3, 4, 6 and 8 before it starts (each changes what it builds); main with R-8 (`385bb500`, there); no code of S168-LB1a, LAB-6 or S168-5b (it shares their revisions and `component-interfaces.json` only) | `ledger` [3, 8], `runtime-client` [3, 7]: joined when S168-LB1a (or LAB-6, S168-5b) merged first, raised when R-6b merges first; `package`, `actingd-config` do not move |
+
+It may be split in two of the same release: R-6b1, the form, its check, every reader and the
+ledger's recovery rule (nothing writes the form; it takes the revisions), and R-6b2, the stop and
+the settlement that write it. No heavy computation is needed.
+
+**Interfaces** ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #429
+R-6b"). `ledger` 8 and `runtime-client` 7, shared: when S168-LB1a merged first, R-6b joins both and
+raises nothing; when R-6b merges first, it raises `ledger` to [3, 8] and `runtime-client` to [3, 7],
+and S168-LB1a (and LAB-6, S168-5b, for `ledger`) join them; one raise for the release.
+`package` does not move (no pack or bundle member), `actingd-config` does not move (no key; the two
+settings a stop takes precedence over keep their shapes and values), and `runtime-outcomes` stays 1
+(no code; three descriptions change within it).
+
+**Identity.** A ledger with no stopped record reads, replays, projects and decides byte for byte as
+before; a catalog and a pack are untouched.
+
+**Tests that pin today's refusal** (the code slice changes them, the ruling changing what they
+pin): `runtime-host`'s `gate_429_r6::r6_a_host_run_and_a_policy_run_are_refused_with_their_origin_and_nothing_is_cancelled`
+(its policy half) and `gate_429_r8::r8_closing_a_task_then_stopping_its_run` (its policy half: the
+second step now stops the scheduled run); `actinglab-architecture`'s
+`the_runtime_declares_each_v0120_interface_revision_once` moves to the ranges it declares. Its work
+order names its new tests; the contract proposes one each for: a stopped policy run (its reset on
+its lease, its terminal, its `stopped` record, no streak, backoff, pause, ladder, condition or owed
+rerun, an interruption in the routine summary); a sensitive task's stopped run, not paused; the
+replay of a stopped record at a start; the restart from its terminal; a restart with no terminal;
+a failed reset that fences only its instance and starts no ladder; the clock occurrence served; a
+stopped capped consumer; the snapshot's `cancelled`; a host run still refused.
+
+**What changes live** (the code slice, 0.12.55). A scheduled run can be stopped from the console's
+"close this task" (R-8's second step now acts on it), from actinglab `task stop` and from an agent
+through the Lab's tool: it ends at its next checkpoint, the Runtime resets the device with the run's
+lease (its record shows one `InputReset` before its lease's release), and the stop answers
+`settled` and `reset` as for a direct run. The run's terminal is `task.failed` with
+`contained_task_cancelled`, its settlement `stopped`: nothing counts as a failure, nothing retries,
+backs off, pauses or enters a ladder, no rerun is owed, and the routine summary counts it under
+`interruptions`. A host run, and every scheduled run through `ac_stop_run` and `run stop`, stay
+refused. Tools and a console of revision 6 cannot read an event page that holds a stopped record,
+so the console of the release is deployed with it.
+
+**Rollback.** Going back below `ledger` 8 is refused by the Rp.max rule once the Runtime of the
+release has run, whether or not a stop was recorded (the same for every slice of revision 8). The
+way back is a later build or a fresh state root; there is no migration, and the configuration needs
+nothing. A console of `runtime-client` 6 cannot read event pages that hold a stopped record.
+
+**Rollback of this slice.** Nothing to roll back: text only.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -13461,7 +14189,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`, `device.screen_off_timeout_ms` (per instance, a bound handset only, with a lifetime; §1.59 RD5-2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-5b |
 | `session.remedy.choices` (one per scope: instance, server or game; §1.110 B15-6) | instance | yes | #411 B15 R6 |
 | `session.dispatch.parameter.<name>` (an overlay of a run's snapshots only, never stored; the prefix `session.dispatch.` is refused to publishers; §1.110 B15-7) | — (never stored) | — | #411 B15 R5 |
-| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 256 rows, 1024 from S168-LB1a, not built yet, §1.309; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
+| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 1024 rows since S168-LB1a, 0.12.55, §1.309, §1.311, 256 before it; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).

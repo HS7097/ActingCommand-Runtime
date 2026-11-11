@@ -6,6 +6,7 @@ use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::codes::SchedulingRuleHostCode;
+use crate::fact_store::LeftOutRecordLists;
 use crate::policy_host::InstanceOccupancy;
 use crate::{PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
@@ -1217,6 +1218,7 @@ impl HostShared {
             resources,
             missing_instance_facts,
             unknown_offset_tasks,
+            left_out_lists,
         ) = {
             let _outcome_gate = lock(
                 &self.policy_outcome_gate,
@@ -1248,8 +1250,8 @@ impl HostShared {
                 #[cfg(test)]
                 PolicyCycleClock::Fixed { time, monotonic_ms } => (time, monotonic_ms),
             };
-            let (facts, resources, missing_instance_facts, unknown_offset_tasks) = self
-                .project_authoritative_policy_inputs_with_gaps_under_gate(
+            let (facts, resources, missing_instance_facts, unknown_offset_tasks, left_out_lists) =
+                self.project_authoritative_policy_inputs_with_gaps_under_gate(
                     &mut policy,
                     HostLocation::EvaluatePolicyCycle,
                     &outcome_keys,
@@ -1265,8 +1267,14 @@ impl HostShared {
                 resources,
                 missing_instance_facts,
                 unknown_offset_tasks,
+                left_out_lists,
             )
         };
+        // Workflow #428 S168-LB1a (`contracts/instance-fact-store.md`, "Left out of the
+        // projection"): each record list the projection left out for its rows is recorded once
+        // after a start, and its key raises no fact refresh demand on the instances it applies to.
+        self.report_left_out_record_lists(&left_out_lists)?;
+        let left_out = left_out_facts(&left_out_lists);
         // Workflow #429 R-2 (A.1 契约 1): the shared run limits in effect as this cycle starts,
         // read before the policy and controller locks; a run already admitted is not cut.
         let run_limits = self.shared_run_limits()?;
@@ -1371,6 +1379,7 @@ impl HostShared {
                         bindings: &self.fact_refresh_bindings,
                         instance_facts_loaded_at_unix_ms: self.instance_facts_loaded_at_unix_ms,
                         idle_closed: &idle_closed,
+                        left_out: &left_out,
                     },
                     remedy: &remedy_context,
                     random_delay: &random_delay_context,
@@ -1570,7 +1579,7 @@ impl HostShared {
         outcome_keys: &PolicyOutcomeKeySnapshot,
         as_of_ledger_position: Option<u64>,
     ) -> RuntimeHostResult<(EvaluationFacts, EvaluationResources)> {
-        let (facts, resources, _, _) = self
+        let (facts, resources, _, _, _) = self
             .project_authoritative_policy_inputs_with_gaps_under_gate(
                 policy,
                 operation,
@@ -1588,7 +1597,8 @@ impl HostShared {
     /// (Workflow #308 slice 4a-2). `offsets_at_unix_ms` is the evaluation instant: an offset
     /// whose TTL has elapsed by then is not passed; without it every active offset is.
     /// `eligibility_as_of_unix_ms` is the evaluation instant whose memory-only eligibility
-    /// ages are projected (Workflow #308 slice 5b); without it none are.
+    /// ages are projected (Workflow #308 slice 5b); without it none are. Workflow #428 S168-LB1a:
+    /// and the record lists the projection left out for their rows.
     /// The caller holds `policy` and then `fact_write_gate` (Workflow #191 L1 lock order).
     pub(super) fn project_authoritative_policy_inputs_with_gaps_under_gate(
         &self,
@@ -1603,6 +1613,7 @@ impl HostShared {
         EvaluationResources,
         MissingPolicyInstanceFacts,
         UnknownPriorityOffsetTasks,
+        LeftOutRecordLists,
     )> {
         let operation: Location = operation.into();
         self.synchronize_fact_store_under_gate()?;
@@ -1958,13 +1969,18 @@ impl HostShared {
         } else {
             static_resources
         };
-        let facts =
-            fact_projection.overlay_policy_facts(&base_facts, &resources, ledger_position)?;
+        // Workflow #428 S168-LB1a: with the record lists the projection left out for their rows.
+        let (facts, left_out) = fact_projection.overlay_policy_facts_with_left_out(
+            &base_facts,
+            &resources,
+            ledger_position,
+        )?;
         Ok((
             facts,
             resources,
             missing_instance_facts,
             unknown_offset_tasks,
+            left_out,
         ))
     }
 
@@ -2397,7 +2413,7 @@ impl HostShared {
                 )?;
                 // The eligibility ages are projected as of the intent's evaluation instant, as
                 // that evaluation projected them (Workflow #308 slice 5b).
-                let (current_facts, current_resources, _, _) = self
+                let (current_facts, current_resources, _, _, _) = self
                     .project_authoritative_policy_inputs_with_gaps_under_gate(
                         &mut policy,
                         HostLocation::AdmitPolicyDispatch,
@@ -3787,4 +3803,67 @@ fn runtime_policy_seed(
     let mut seed = [0_u8; 8];
     seed.copy_from_slice(&digest[..8]);
     Ok(u64::from_be_bytes(seed))
+}
+
+/// Workflow #428 S168-LB1a (`contracts/instance-fact-store.md`, "Left out of the projection"): the
+/// keys the projection left out, per instance alias they apply to, as the evaluation reads them.
+fn left_out_facts(lists: &LeftOutRecordLists) -> actingcommand_policy::LeftOutFacts {
+    let mut left_out = actingcommand_policy::LeftOutFacts::default();
+    for list in lists {
+        for instance in &list.instances {
+            left_out.insert(instance, &list.fact_key);
+        }
+    }
+    left_out
+}
+
+impl HostShared {
+    /// Workflow #428 S168-LB1a (`contracts/instance-fact-store.md`, "Left out of the
+    /// projection"; the coordinator's answer 3 of register §1.309): one Warning `runtime.failed`
+    /// `policy_fact_rows_exceeded` (`fact_key`, `count` the record's rows) under the system links
+    /// for each record list the projection left out for its rows, the first time this start left
+    /// that record out, and none after it; also handed to the daemon's log. What was warned of is
+    /// kept in the policy host's memory only, so a restart warns once more. A failed append fails
+    /// the cycle as every ledger write does.
+    fn report_left_out_record_lists(&self, lists: &LeftOutRecordLists) -> RuntimeHostResult<()> {
+        if lists.is_empty() {
+            return Ok(());
+        }
+        let due = {
+            let mut policy = lock(self.policy()?, HostLocation::ProjectPolicyFacts)?;
+            lists
+                .iter()
+                .filter(|list| {
+                    policy.note_rows_exceeded_warning(&list.scope, &list.fact_key, list.event_id)
+                })
+                .collect::<Vec<_>>()
+        };
+        for list in due {
+            let outcome = Outcome::new(crate::codes::PolicyFactRowsCode::Exceeded)
+                .operation(HostLocation::ProjectPolicyFacts)
+                .fact_key(list.fact_key.as_str())
+                .count(u32::try_from(list.rows).unwrap_or(u32::MAX));
+            self.append_event_raw(
+                EventSeverity::Warning,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                self.events.system_links()?,
+                RuntimePayloadDraft::failed(
+                    DiagnosticCode::RuntimeDiagnostic,
+                    EffectDisposition::NotPerformed,
+                    outcome.clone(),
+                    DiagnosticDetailDraft::new(
+                        "policy_fact_projection",
+                        RuntimeLifecycleFailureStage::PolicyDriver.location(),
+                        "runtime_host",
+                        HostLocation::ProjectPolicyFacts.as_str(),
+                    ),
+                    AuditInput::new(),
+                ),
+            )?;
+            self.fatal.report_warning(&outcome);
+        }
+        Ok(())
+    }
 }

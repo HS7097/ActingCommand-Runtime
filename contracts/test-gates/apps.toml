@@ -1501,3 +1501,15 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_429_r8::r8_pack_schedule_rows_reach_their_requests",
 ]
 incident = ["#429 R-8"]
+
+# Workflow #434 CLI-HELP (0.12.55; register §1.313; brief rd-1111/brief-cli-help.md; contracts/lab-two-entries.md §9.1 and §9.3, "Help"): help's list holds every row this build offers (the rescue rows only on Windows, no row it does not offer) and every own command without a row, each once with a sentence that is not empty, the rows' read from the operation table this build embeds; those own commands are the inventory's commands no offered row names, serves or replaces (34) and serve; the text for people prints each entry once with its sentence and every global option but the retired --require-session with its phrase, plain ASCII of at most 100 columns; frame, pause, app launch (as session app launch), tap and remedy set by help <words> and by <words> --help give the same text, with the instance as the row's note says, the sentence, the three facts and a line per parameter; lab help, lab --help and help lab list the group's commands, and so do package, control, session, run and record; the bare line prints the list; --help on a line with other flags runs nothing, no connection reaching a scripted Runtime; --json help keeps every member it answered before, unchanged, and adds the list as data; --help, help <words>, <words> --help and <group> help answer, status help still names the instance help, an unknown word after help is refused as a read list refuses one, and the module's refusal names actinglab help
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_help::cli_help_the_list_has_every_offered_row_and_own_command_once",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_help::cli_help_the_detail_of_each_kind_by_help_and_by_the_flag",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_help::cli_help_groups_the_bare_line_and_a_flagged_line_that_runs_nothing",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_help::cli_help_json_keeps_todays_members_and_adds_the_list",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_help::cli_help_the_refusals_that_are_gone_and_status_help_unchanged",
+]
+incident = ["#434 CLI-HELP"]

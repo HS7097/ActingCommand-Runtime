@@ -837,3 +837,13 @@ tests = [
     "actingcommand-runtime-client::lib::client::gate_407_gpu1c::official_ocr_reads_directml_and_whole_model_fallback_evidence",
 ]
 incident = ["#407 GPU-1 C"]
+
+# Workflow #428 S168-LB1a (0.12.55; register §1.309 rows LB1-1, LB1-2 and LB1-6, §1.311; brief rd-1111/brief-s168-lb1a.md; contracts/instance-fact-store.md, "List reading facts", "Row bound", and "The frame bound with long lists"): a record_list fact holds up to 1024 rows, MAX_FACT_RECORD_LIST_ROWS, equal to the kernel's MAX_LIST_READING_ROWS, while MAX_FACT_RECORDS stays 256; a record of 257 and of 1024 rows is accepted by the record's own check, an observation's write check, the structural check of a decoded fact.published, a snapshot's and a view's check, and 1025 rows are fact_record_limit_exceeded at each; an observation, a snapshot and a view of 257 records are still refused; InstanceFactSnapshot without key_prefix serializes byte for byte as before and an earlier request decodes, a key_prefix round-trips, an empty or over-long one is invalid_fact_key, and records_total is absent unless answered
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::fact::gate_428_s168_lb1a::lb1a_a_record_list_of_up_to_1024_rows_is_read_by_every_reader",
+    "actingcommand-contract::lib::fact::gate_428_s168_lb1a::lb1a_the_records_of_an_observation_a_snapshot_and_a_view_stay_256",
+    "actingcommand-contract::lib::fact::gate_428_s168_lb1a::lb1a_the_instance_fact_read_names_its_new_members_only_when_used",
+]
+incident = ["#428 S168-LB1a"]

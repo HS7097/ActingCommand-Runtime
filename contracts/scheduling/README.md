@@ -1723,6 +1723,11 @@ projects carries what earlier runs of that task on that instance settled:
   for `last_duration_ms`, `last_outcome`, `failure_streak` and
   `completed_at_unix_ms`), and saturate at the evaluator's input bounds
   (86,400,000 ms and 10,000), while the facts keep the exact values.
+- **A stopped run** (Workflow #429 R-6b, not built yet; [../policy-suspension.md](../policy-suspension.md),
+  "A stopped run") settles as neither a success nor a failure: its pair's snapshot shows it as
+  `terminal_state` `cancelled` with its `completed_window`, and `last_duration_ms` and
+  `failure_streak` stay those of the pair's latest success or failure, so a `dependency_completed`
+  is true after it only where its `terminal_states` names `cancelled`.
 
 `eligible_since_unix_ms` is the eligibility age the evaluator turns into
 `aging_ms = now - eligible_since_unix_ms`. The host keeps it in memory only
@@ -1875,7 +1880,7 @@ transaction state.
 
 The evaluator pins the selected activity profile in every dispatch intent. Runtime owns activity sampling, budget counters, retry state, and failure escalation; callers cannot supply remaining-budget values. Admission and execution ledger events record the selected profile, sample seed, activity window, cadence, cumulative task and activity budget receipts, and classified outcome.
 
-Recoverable failures receive a positive, bounded backoff. Only repeated failures with the same failure code, failure identity and failure class share a consecutive-failure streak, and sensitive or severe failures are never automatically restarted. A failure records its `outcome` (whose category is the record's severity) and, for a scheduled `linear_steps` or (Workflow #390 EXEC-3) page-graph task, its `failure_identity`, which is rerun at once and lifted by a package update (`../policy-suspension.md`). Goal-missed, feasibility-red, and drift-predicted signals are informational planning facts: they do not consume failure tax, advance a failure streak, or pause execution.
+Recoverable failures receive a positive, bounded backoff. Only repeated failures with the same failure code, failure identity and failure class share a consecutive-failure streak, and sensitive or severe failures are never automatically restarted. A failure records its `outcome` (whose category is the record's severity) and, for a scheduled `linear_steps` or (Workflow #390 EXEC-3) page-graph task, its `failure_identity`, which is rerun at once and lifted by a package update (`../policy-suspension.md`). Goal-missed, feasibility-red, and drift-predicted signals are informational planning facts: they do not consume failure tax, advance a failure streak, or pause execution. A run a `StopInstanceRun` stopped (Workflow #429 R-6b, not built yet; [../policy-suspension.md](../policy-suspension.md), "A stopped run") receives none of the failure handling above: no backoff, streak, escalation, pause or ladder, no condition and no owed rerun, and the Runtime's own reruns its dispatch served end with it (proposed).
 
 ### Optional run-count bounds
 
@@ -1928,7 +1933,7 @@ The catalog contains the effective DST offset instead of consulting a hidden tim
 
 A due clock occurrence that is not dispatched leaves one trace (Workflow #372). The trace is a `policy.planning_signal_observed` record of kind `goal_missed` whose severity is its code's category (`warning` for a refused or superseded slot, `info` for a deferred, owed or expired one): like every planning signal it consumes no failure tax, advances no failure streak, pauses nothing and wakes no agent. `actingd suspended` lists the records with their settled fate (`../policy-suspension.md`), and MCP `ac_diagnose` shows up to 10 of an instance's.
 
-- **Came due, served, owed.** An occurrence O came due for a (task, instance) pair when an evaluation ranks the pair as a candidate (its trigger is true) and O is its due occurrence. A pair whose trigger is false did not come due and leaves nothing: a follower after a failed head or after its group's reset, an occurrence outside its own `timeline_active` window, a true `feedback_stop`. O is served by the pair's first admitted dispatch after O. A selected dispatch is owed when its O lies before the start of the activity window it is selected in; it is a first run when the pair had no dispatch.
+- **Came due, served, owed.** An occurrence O came due for a (task, instance) pair when an evaluation ranks the pair as a candidate (its trigger is true) and O is its due occurrence. A pair whose trigger is false did not come due and leaves nothing: a follower after a failed head or after its group's reset, an occurrence outside its own `timeline_active` window, a true `feedback_stop`. O is served by the pair's first admitted dispatch after O. A selected dispatch is owed when its O lies before the start of the activity window it is selected in; it is a first run when the pair had no dispatch. A dispatch whose run a `StopInstanceRun` stopped (Workflow #429 R-6b, not built yet) served its O as every admitted dispatch does, so the stop does not make O due again.
 - **Codes.** `clock_slot_refused` (warning): a persistent gate refused a due O. `clock_slot_deferred` (info): a transient gate held it back. `clock_slot_owed` (info): the first evaluation that selects the pair for an owed O. `clock_slot_expired` (info) and `clock_slot_superseded` (warning): an unserved O lost to its clock's `missed` grace or to a later occurrence (Workflow #372 K4, "Lost occurrences" below). A pair with a dispatch in flight gets no record.
 
 | gate | codes | recorded as | when |
@@ -2250,6 +2255,12 @@ without a valuation is untouched.
   with the hold the round gives it otherwise (`capped_not_head`, or
   `capped_would_cross_hard_line` when the plan skips it). A more urgent tier, and a business
   candidate of a higher `B ÷ E`, go first as always.
+- **A stopped consumer** (Workflow #429 R-6b, not built yet): a consumer whose run a
+  `StopInstanceRun` stopped was dispatched in its round (its `last_dispatched_unix_ms`), so the
+  plan counts its whole consumption and the round does not list it again; what it spent before
+  the stop shows only from the pool's next reading, since a stopped run, as a failed one,
+  publishes none ([../resource-readings.md](../resource-readings.md)), and until then the head
+  after it is checked against the last reading.
 - **Only what can be dispatched now** (SS-2h fix 1; Alice, 17:37: 「只加入现在空闲且能被调度/执行的
   任务进入排序」). A round lists only the candidates of the evaluation, so every condition the policy
   judges before the order holds for each when it is listed. The gates judged after it, the reserve
@@ -2406,15 +2417,16 @@ Once run counts are optional ("Optional run-count bounds") they no longer stop a
 
 - **The basis.** The basis of a dispatch is the pools, stocks, remaining counts and completion times its admission was decided on, as the evaluation that chose the dispatch held them (after the resets, "Runtime Enforcement"). The trigger is read again part by part as that evaluation read it, and the parts that made it true count: every child of a true `all`, the first true child of an `any` in its order, and below a `not` every fact of the negated predicate. Of those parts: each `resource.` or `inventory.` fact (the families recognition writes, [resource-readings.md](../resource-readings.md)) a `fact` or `record_deadline` names, and a fact reference's ("Fact references"); each fact a `fact_time_reached` names, whatever its family; and the reading, capacity and comparand facts of each pool a `resource_projection` projects ("Pool fact references"). Beside them, the reading and capacity facts of each pool the task reserves, which the reserve gate reads at every admission ("Task Reserves"). A fact of another family (a lock, a health flag, a session value), the feedback stop and a pool the task only consumes or produces are no basis. Each reading is the value present above confidence 0, or none. A dispatch decided by a `clock`, a `timeline_active`, an `outcome` or a `dependency_completed` alone (a clock beside a lock; an `any` whose due clock comes first), or one whose trigger is not true as captured (an immediate rerun, a remedy request), has no basis and no guard: those are edges of their own. A basis of more than 32 keys arms none.
 - **Armed.** The Runtime captures the basis of each new dispatch intent as the evaluation that chose it read its facts, and arms the pair's guard when that intent is admitted, replacing the pair's earlier one. Memory only: no ledger record, state file or snapshot carries it.
-- **Released.** At every evaluated cycle, before the evaluation, a guard one of whose basis keys has a reading whose value differs from the admission's reading (a reading where the admission had none counts) is released, and stays released: a later reading of the old value does not arm it again. Only values are compared: a newer reading of the same value, such as a fact refresh that reads the same stock again, is no progress, and a key a reset cleared, which reads nothing, releases nothing.
-- **Held.** A (task, instance) pair whose guard is armed, whose own latest run (its own last result, which no reset clears, "Reset exclusions and the task's own last result") is the guarded dispatch and **succeeded**, and whose catalog generation is the one that dispatch pinned, is deferred with `policy_no_progress` (info) {`basis_readings` one record per basis key: `fact_key`, and the admission's reading as `reading_value` (its canonical JSON, at most 128 bytes) or `reading_digest` (its SHA-256 when longer) with `observed_at_unix_ms`, nothing more when the key had no reading; `served_by_dispatch_unix_ms` the run's dispatch}, with **no wake**: a reading wakes the scheduler. The bound is 32 records, about 13 KiB at most; real rules name a handful of keys.
+- **Released.** At every evaluated cycle, before the evaluation, a guard one of whose basis keys has a reading whose value differs from the admission's reading (a reading where the admission had none counts) is released, and stays released: a later reading of the old value does not arm it again. Only values are compared: a newer reading of the same value, such as a fact refresh that reads the same stock again, is no progress, and a key a reset cleared, which reads nothing, releases nothing. **Released by another cause** (SS-4b, since 0.12.55, register §1.310): at the evaluation that would hold the pair (below), its trigger is read again part by part as at capture, as it is true now, which gives the basis keys of the trigger as it is true now (with the reserve gate's keys, as at capture). When that basis is empty (the trigger is true now by a `clock`, a `timeline_active`, an `outcome` or a `dependency_completed` alone, a clock slot for example), or holds a key the armed guard's basis does not hold, the pair is due for another cause: it is **not held**, and its guard is released and stays released, as a changed reading releases it; the pair's next admitted dispatch arms a new guard on the basis of that dispatch.
+- **Held.** A (task, instance) pair whose guard is armed, whose own latest run (its own last result, which no reset clears, "Reset exclusions and the task's own last result") is the guarded dispatch and **succeeded**, whose catalog generation is the one that dispatch pinned, and which is due **for the cause the guard served** (every key of the basis of its trigger as it is true now, read as under "Released by another cause", is a key of the guard's basis, and, as above, none of them reads another value) is deferred with `policy_no_progress` (info) {`basis_readings` one record per basis key: `fact_key`, and the admission's reading as `reading_value` (its canonical JSON, at most 128 bytes) or `reading_digest` (its SHA-256 when longer) with `observed_at_unix_ms`, nothing more when the key had no reading; `served_by_dispatch_unix_ms` the run's dispatch}, with **no wake**: a reading wakes the scheduler. The bound is 32 records, about 13 KiB at most; real rules name a handful of keys. An operator therefore sees `policy_no_progress` on a pair only while the pair is due for the cause its guarded run was admitted on; once it is due for another (a new completion time, a count, a clock slot), it is a candidate again and its decision reads as any other.
+- **Why a new cause is not held** (SS-4b). The guard stops a run that changed nothing from being repeated for the same reason; a cause it did not serve is no repetition. Nor does it reopen the loop the guard exists for: a package that spends nothing, a broken reading or a game that does not respond leaves the same basis keys with the same readings, so the pair is still held after one more run, a clock beside its reading in an `all` included; a new cause gets one run, and that run arms its own guard.
 - **Where it sits.** After the trigger, the feedback stop and the task cooldown, before placement, so a held pair is not a candidate: the net-benefit gate ("Net benefit within a tier"; judged and unjudged pairs alike) and the Runtime's deferrals ([`scheduling-blackout.md`](../scheduling-blackout.md), "Order of the deferrals") never see it, and its decision ends with `policy_no_progress`, which `ac_schedule`, the not-run explanation and the idle plan read ("Why A Candidate Does Not Run"; the idle plan counts it neither due nor as a wake of its own). A trigger that is Unknown still raises its fact refresh demand ("Fact Refresh"), so the reading that releases the guard can come.
-- **Failures are unchanged.** A run that failed or was cancelled is never held: its retry, backoff and escalation (`on_failure`) apply as before. An immediate rerun, a remedy request or retry and an owed rerun are never held either. The guard only covers "succeeded but no progress".
+- **Failures are unchanged.** A run that failed or was cancelled is never held: its retry, backoff and escalation (`on_failure`) apply as before. An immediate rerun, a remedy request or retry and an owed rerun are never held either. The guard only covers "succeeded but no progress". A run a `StopInstanceRun` stopped (Workflow #429 R-6b, not built yet) is not held either: its admission armed the pair's guard as every admission does, and the guard holds only a guarded dispatch that succeeded.
 - **Self-read probes** ("Self-read fact probe"). A probe run is admitted on no reading; the reading its run publishes (for example `remaining = 0`) is a reading where there was none and releases the guard, and the known value then decides as usual. A probe run that published nothing is spent for its period by the probe itself; after the next reset the probe would admit the task again, but no reading came since its admission, so the guard holds it with `policy_no_progress`, its key named with no admission reading, until a reading comes.
-- **Chains.** A held head is not dispatched, so a successor whose trigger waits for the head's next terminal is not triggered either; the chain waits with its head.
+- **Chains.** A head held for the cause its guard served is not dispatched, so a successor whose trigger waits for the head's next terminal is not triggered either; the chain waits with its head. A head due for another cause (a clock slot, a completion time its guarded run was not admitted on) is not held: it runs, and its chain follows it. Before SS-4b a head held for one cause waited through every later cause, a clock slot included, until a reading of its basis changed, which only its own chain might have read.
 - **Pauses.** The guard queues nothing and counts nothing: a paused instance dispatches nothing (its candidates wait under the pause as before), and once resumed each pair is held or not by its own guard.
 - **Configuration.** `scheduling.no_progress.enabled` (default `true`), also per instance ([`runtime-config.md`](../runtime-config.md), "No-progress guard"); read at every evaluated cycle. Off on an instance, the evaluation of its pairs is the one before SS-4, the Runtime captures nothing for it and forgets its guards, so turning it off and on releases them. A Runtime start begins with no guard (each pair may run once more before its guard is armed again), and so does a new catalog generation for the pairs it decides.
-- **Entry point.** The policy crate's `evaluate_with_no_progress` takes the armed guards (`NoProgressGuards`) beside the instance holds; `NoProgressMemory` is the Runtime's memory (`capture`, `admit`, `observe`, `guards`). With no guard the evaluation is `evaluate_with_instance_holds`'s, byte for byte.
+- **Entry point.** The policy crate's `evaluate_with_no_progress` takes the armed guards (`NoProgressGuards`) beside the instance holds; `NoProgressMemory` is the Runtime's memory (`capture`, `admit`, `observe`, `guards`, and since SS-4b `forget_released`, which the Runtime calls after every evaluation with the guards it passed, so that a guard the evaluation released for another cause is gone). With no guard the evaluation is `evaluate_with_instance_holds`'s, byte for byte, and a pair held for its served cause decides as before SS-4b.
 
 ## Runtime Boundary
 
@@ -2581,12 +2593,12 @@ the switch.
 
 ## Record lists and the projection
 
-Workflow #428 S168-LB1a, not built yet ([v012-register.md](../v012-register.md) §1.309; the
-coordinator's ruling 2 of 11-11, not Alice's words; #419). Until it, the store's facts enter the
-evaluation whatever their rows, and the evaluator refuses the whole input when one record list
-holds more than 256 rows: the evaluation is skipped for every instance (`policy_evaluation_skipped`
+Workflow #428 S168-LB1a, since 0.12.55 ([v012-register.md](../v012-register.md) §1.309, §1.311;
+the coordinator's ruling 2 of 11-11, not Alice's words; #419). Before it, the store's facts
+entered the evaluation whatever their rows, and the evaluator refuses the whole input when one
+record list holds more than 256 rows: the evaluation is skipped for every instance (`policy_evaluation_skipped`
 above), and after `escalate_after` skips in a row it records `policy_evaluation_awaiting_person`.
-The store's row bound was 256 too, so no such record could exist; from S168-LB1a it is 1024
+The store's row bound was 256 too, so no such record could exist; since S168-LB1a it is 1024
 ([instance-fact-store.md](../instance-fact-store.md), "List reading facts", "Row bound"), and one
 long list must not stop the scheduler for every instance.
 
@@ -2600,16 +2612,18 @@ long list must not stop the scheduler for every instance.
   "A run's consumption read from a fact") and a fact the selection document declares
   ([selection-policy.md](../selection-policy.md),
   "Scheduling consumer"). So such a predicate never compiles and never reads Unknown at
-  evaluation. Until S168-LB1a such a catalog compiles and its predicate reads the list record as
-  any record list; S168-LB1a's report says whether a catalog on the resource repositories' `main`
-  names one. A timeline event's prefixes name keys to invalidate, not to read, and are not
+  evaluation. Before S168-LB1a such a catalog compiled and its predicate read the list record as
+  any record list; S168-LB1a read the four resource repositories' `main` before it built the
+  refusal and found no catalog that names one (register §1.311). A timeline event's prefixes name keys to invalidate, not to read, and are not
   refused.
 - **Another long record list stays one instance's.** A record list of more than 256 rows, the
   policy's own bound, is left out for the instances its scope applies to. The host records the
-  warning `policy_fact_rows_exceeded` (a proposed name) once for each such record after a start,
+  warning `policy_fact_rows_exceeded` (since 0.12.55) once for each such record after a start,
   not on every decision; a predicate that reads it is Unknown for those instances and the key
-  raises no fact refresh demand, since a reading cannot shorten a list
-  ([instance-fact-store.md](../instance-fact-store.md), "Left out of the projection"); every
+  raises no fact refresh demand, since a reading cannot shorten a list: the predicate reads
+  `fact_missing` and its task keeps `trigger_unknown` (or `feedback_stop_unknown`) with no
+  `fact_refresh_*` reason ([instance-fact-store.md](../instance-fact-store.md), "Left out of the
+  projection"); every
   other instance and key evaluate as before. The evaluator's
   bound and the schema's `maxItems` (`v2/common.schema.json`, a predicate's `record_list` value)
   stay 256.
@@ -2618,7 +2632,9 @@ long list must not stop the scheduler for every instance.
   the same and the evaluation's `facts` and its `fact_snapshot_id` no longer hold the record. The
   id is compared between an evaluation and its admission inside one running Runtime
   (`policy_facts_stale`), and a deploy restarts the Runtime, so no id is compared across builds;
-  S168-LB1a confirms that no reader recomputes a persisted one.
+  S168-LB1a confirmed that no reader recomputes a persisted one: the id is computed only by the
+  projection, at an evaluation and at an admission, and the ledger compares two persisted
+  dispatch records' ids only with each other (register §1.311).
 
 ## Forward Planning And Maintenance
 
@@ -2653,7 +2669,7 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Pool valuation base weight / gap weight | 0..=1,000,000 / 1..=1,000,000 milli |
 | A task's fixed value (SCHED-C1a, since 0.12.52) | 1..=9,007,199,254,740,991 milli |
 | A consumption's fallback, and a usable amount read from a fact (SCHED-C1f1, since 0.12.54) | 1..=9,007,199,254,740,991, at most a constant capacity |
-| Rows of a record list in the evaluation's input, and of a predicate's `record_list` value | 256 (S168-LB1a, not built yet: the projection leaves a longer record out, "Record lists and the projection") |
+| Rows of a record list in the evaluation's input, and of a predicate's `record_list` value | 256 (since S168-LB1a, 0.12.55, the projection leaves a longer record out, "Record lists and the projection") |
 
 Loop budgets are mandatory in V1; in V2 each run-count bound is optional (SS-3, "Optional run-count bounds"). Arrays and strings that exceed their limit reject the entire catalog. Duplicate identifiers, duplicate object keys, and unbounded recursive input are invalid.
 

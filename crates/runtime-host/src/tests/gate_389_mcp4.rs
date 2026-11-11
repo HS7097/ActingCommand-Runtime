@@ -44,6 +44,7 @@ fn start(config: RuntimeHostConfig) -> RuntimeHost {
 fn instance_fact_read(client: &TestClient, instance: &str) -> RuntimeRequest {
     client.request(RuntimeOperation::InstanceFactSnapshot {
         instance: instance.to_owned(),
+        key_prefix: None,
     })
 }
 
@@ -106,7 +107,10 @@ fn mcp4_an_instance_fact_read_answers_the_instance_s_facts_and_appends_nothing()
         receipt.outcome().code().as_str(),
         "request_instance_fact_snapshot_completed"
     );
-    let Some(RuntimeResult::InstanceFactSnapshot { snapshot, source }) = receipt.result() else {
+    let Some(RuntimeResult::InstanceFactSnapshot {
+        snapshot, source, ..
+    }) = receipt.result()
+    else {
         panic!(
             "expected an instance fact snapshot, got {:?}",
             receipt.result()

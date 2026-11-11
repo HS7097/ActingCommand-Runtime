@@ -1039,7 +1039,7 @@
       "new": "#429 R-6 (StopInstanceRun)",
       "slice": "R-6",
       "status": "planned",
-      "notes": "#429 R-6 first slice: a client's direct run only; a policy run and a host run are refused with run_origin (policy until ledger 8); requests add Status, the read that resolves <inst>"
+      "notes": "#429 R-6 first slice: a client's direct run only; a policy run and a host run are refused with run_origin (policy until #429 R-6b, not built yet, register 1.314, with ledger 8; the help line changes with it); requests add Status, the read that resolves <inst>"
     },
     {
       "name": "pack-schedule",

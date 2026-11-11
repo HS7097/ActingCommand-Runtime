@@ -1274,7 +1274,7 @@ fn validate_consumption_fact(
     let fallback_at = format!("{amount}/{fallback}");
     match &effect.amount {
         Some(EffectAmount::Fact(form)) => {
-            validate_identifier(
+            validate_read_fact_key(
                 map,
                 &format!("{amount}/{fact_key}"),
                 &form.fact_key,
@@ -1308,7 +1308,7 @@ fn validate_consumption_fact(
                         }
                     }
                     member if member == fact_key => match value.as_str() {
-                        Some(key) => validate_identifier(map, &at, key, descriptor, diagnostics),
+                        Some(key) => validate_read_fact_key(map, &at, key, descriptor, diagnostics),
                         None => diagnostics.push(map.diagnostic(
                             CatalogDiagnosticCode::TypeMismatch,
                             at,
@@ -1587,7 +1587,7 @@ fn validate_predicate_node(
                 descriptor,
                 diagnostics,
             );
-            validate_identifier(
+            validate_read_fact_key(
                 map,
                 &format!("{path}/fact_key"),
                 fact_key,
@@ -1642,7 +1642,7 @@ fn validate_predicate_node(
                 descriptor,
                 diagnostics,
             );
-            validate_identifier(
+            validate_read_fact_key(
                 map,
                 &format!("{path}/fact_key"),
                 fact_key,
@@ -1948,7 +1948,7 @@ fn validate_reference_members(
             descriptor,
         ));
     }
-    validate_identifier(
+    validate_read_fact_key(
         map,
         &format!("{member}/fact_key"),
         &reference.fact_key,
@@ -2337,7 +2337,7 @@ fn validate_pools(
             ));
         }
         match &pool.observation {
-            ObservationRef::Fact { fact_key } => validate_identifier(
+            ObservationRef::Fact { fact_key } => validate_read_fact_key(
                 map,
                 &format!("{path}/observation/fact_key"),
                 fact_key,
@@ -3175,6 +3175,31 @@ fn validate_load_profile(
             CatalogDiagnosticCode::LimitExceeded,
             path,
             "weighted load components cannot exceed 1000",
+            descriptor,
+        ));
+    }
+}
+
+/// #428 S168-LB1a (since 0.12.55; `contracts/scheduling/README.md`, "Record lists and the
+/// projection"): a member that names a fact key to read, a bounded identifier never under
+/// `inventory.list.`. That prefix holds list readings, a select or judge step's input, which the
+/// scheduler's projection leaves out; a member that names one is `type_mismatch` at its key, so no
+/// predicate meets the gap at evaluation.
+fn validate_read_fact_key(
+    map: &SourceMap,
+    path: &str,
+    value: &str,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    validate_identifier(map, path, value, descriptor, diagnostics);
+    if actingcommand_contract::is_list_reading_key(value) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::TypeMismatch,
+            path,
+            format!(
+                "`{value}` holds a list reading, a selection's input the scheduler never reads"
+            ),
             descriptor,
         ));
     }

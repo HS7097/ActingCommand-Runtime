@@ -8,6 +8,12 @@
 //! runs read) is pinned to a ledger position and carries a snapshot id derived from it. Neither
 //! goes on the wire (`contracts/ledger-observer.md` §13): this read builds an `InstanceFactView`
 //! from the store's records directly, and the source names the ledger's committed head instead.
+//!
+//! Workflow #428 S168-LB1a (since 0.12.55, `runtime-client` 7; `contracts/instance-fact-store.md`,
+//! "The frame bound with long lists"): a request's `key_prefix` keeps only the records whose key
+//! starts with it before the view is built and measured against the frame, and the answer then
+//! carries `records_total`, the instance's records before the filter. A request without it is
+//! answered as before.
 
 use super::*;
 use crate::codes::{HostCode, HostLocation};
@@ -15,13 +21,15 @@ use actingcommand_contract::InstanceFactView;
 
 impl HostShared {
     /// The facts of the registered instance `instance_alias`: its own records, and those of the
-    /// server and game the configuration binds it to (none when it binds none). An alias the
-    /// registry does not hold is refused `instance_unknown`; an answer larger than one IPC frame
-    /// is refused `instance_fact_snapshot_too_large_for_frame` instead of failing the frame write.
+    /// server and game the configuration binds it to (none when it binds none), only those whose
+    /// key starts with `key_prefix` when it is given. An alias the registry does not hold is
+    /// refused `instance_unknown`; an answer larger than one IPC frame is refused
+    /// `instance_fact_snapshot_too_large_for_frame` instead of failing the frame write.
     pub(super) fn instance_fact_snapshot_read(
         &self,
         request: &RuntimeRequest,
         instance_alias: &str,
+        key_prefix: Option<&str>,
     ) -> Result<OperationSuccess, RequestFailure> {
         self.resolve_instance(instance_alias)?;
         // The configured server and game, read and released before the fact gate.
@@ -33,8 +41,8 @@ impl HostShared {
                     .find(|identity| identity.instance_id == instance_alias)
                     .map(|identity| (identity.server_id.to_owned(), identity.game_id.to_owned()))
             });
-        let (snapshot, source) = self.observe_runtime_state(|| {
-            self.instance_fact_view(instance_alias, shared)
+        let ((snapshot, total), source) = self.observe_runtime_state(|| {
+            self.instance_fact_view(instance_alias, shared, key_prefix)
                 .map_err(|error| {
                     if error.is_fatal() {
                         RequestFailure::poison_without_terminal(error)
@@ -46,6 +54,7 @@ impl HostShared {
         let result = RuntimeResult::InstanceFactSnapshot {
             snapshot: Box::new(snapshot),
             source,
+            records_total: key_prefix.map(|_| u32::try_from(total).unwrap_or(u32::MAX)),
         };
         let reply_bytes = RuntimeReceipt::success(
             request,
@@ -81,23 +90,30 @@ impl HostShared {
     }
 
     /// The instance's records under the fact write gate, after the store caught up with the
-    /// ledger, as every fact read does. Nothing is appended.
+    /// ledger, as every fact read does, and how many there were before `key_prefix` kept those
+    /// whose key starts with it. Nothing is appended.
     fn instance_fact_view(
         &self,
         instance_alias: &str,
         shared: Option<(String, String)>,
-    ) -> RuntimeHostResult<InstanceFactView> {
+        key_prefix: Option<&str>,
+    ) -> RuntimeHostResult<(InstanceFactView, usize)> {
         let _gate = lock(
             &self.fact_write_gate,
             HostLocation::ReadInstanceFactSnapshot,
         )?;
         self.synchronize_fact_store_under_gate()?;
-        let records = lock(&self.facts, HostLocation::ReadInstanceFactSnapshot)?.instance_records(
-            instance_alias,
-            shared
-                .as_ref()
-                .map(|(server_id, game_id)| (server_id.as_str(), game_id.as_str())),
-        );
+        let mut records = lock(&self.facts, HostLocation::ReadInstanceFactSnapshot)?
+            .instance_records(
+                instance_alias,
+                shared
+                    .as_ref()
+                    .map(|(server_id, game_id)| (server_id.as_str(), game_id.as_str())),
+            );
+        let total = records.len();
+        if let Some(prefix) = key_prefix {
+            records.retain(|record| record.key.starts_with(prefix));
+        }
         let (server_id, game_id) = shared.unzip();
         let view = InstanceFactView {
             instance_alias: instance_alias.to_owned(),
@@ -112,6 +128,6 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeHalted,
             )
         })?;
-        Ok(view)
+        Ok((view, total))
     }
 }

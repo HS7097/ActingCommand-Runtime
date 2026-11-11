@@ -167,6 +167,8 @@ use user_config_store::write_user_config;
 #[cfg(test)]
 use zip::{ZipWriter, write::FileOptions};
 
+// Workflow #434 CLI-HELP: `help` for people, and the lines that ask for it.
+mod cli_help;
 mod cli_information;
 // Workflow #434 LAB-2: the CLI module (short words from the operation table, output for people,
 // `--json`, `serve --stdio`).
@@ -259,7 +261,12 @@ fn main() -> ExitCode {
     if via_line {
         return envelope_main(invocation);
     }
+    // Workflow #434 CLI-HELP: `help` without `--json` prints its text for people.
+    let help = cli_help::for_people(&invocation);
     let (exit, json) = own_line::answer(invocation);
+    if help && let Some(text) = cli_help::people(&exit) {
+        return cli_module::print_text(&text, &exit);
+    }
     cli_module::print(&exit, json)
 }
 

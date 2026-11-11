@@ -21516,6 +21516,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "policy_fact_rows_exceeded": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.55",
+      "description": "Workflow #428 S168-LB1a: the scheduler's fact projection left out an inline record list (fact_key) of more rows (count) than a policy evaluation reads (256), for every instance its scope applies to: a catalog predicate that reads the key is Unknown there, and the key raises no fact refresh demand. The evaluation of every instance goes on. Recorded once for each such record after a start (a Warning runtime.failed record), never on a decision.",
+      "common_causes": "A publisher wrote a record list longer than 256 rows under a key a catalog reads; the fact store holds record lists of up to 1024 rows since 0.12.55.",
+      "handling": "Keep a list the scheduler reads at 256 rows or fewer, or read it in a select step's selection document instead; a list reading under inventory.list. is never the scheduler's."
+    },
     "priority_offset_unknown_task": {
       "category": "warning",
       "ladder_class": "none",

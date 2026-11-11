@@ -69,3 +69,7 @@ mod gate_357_db2;
 // Workflow #428 S168-5a.
 #[cfg(test)]
 mod gate_428_s168_5a;
+
+// Workflow #428 S168-LB1b.
+#[cfg(test)]
+mod gate_428_s168_lb1b;

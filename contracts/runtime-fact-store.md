@@ -447,6 +447,11 @@ the backend self-check facts (source `device-proxy` or `capture`).
   - `task.<catalog_task_id>.completed_at_unix_ms` (`integer`): the settlement
     time.
 
+  A stopped run (Workflow #429 R-6b, not built yet; `policy-suspension.md`,
+  "A stopped run") is no settlement for these four (proposed): they keep
+  describing the pair's latest run that succeeded or failed, and
+  `last_outcome` keeps its two values.
+
   The host records them right after `policy.execution_recorded` and its
   `policy.dispatch_completed` are appended (live settlement, the replayed
   completion of an already recorded execution, and the reconciliation trigger),

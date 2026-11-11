@@ -572,7 +572,8 @@ recovery reserves it again. ED-2 adds no key.
 `scheduling.no_progress.enabled` (default `true`, settable) turns the no-progress guard on
 ([scheduling/README.md](scheduling/README.md), "No-progress guard"): a (task, instance) pair whose
 latest run succeeded and none of whose basis facts has read a value other than at its admission
-since waits, `policy_no_progress`, until one has. It is also per instance,
+since waits, `policy_no_progress`, until one has, while it is due for the cause that run was
+admitted on (SS-4b, since 0.12.55: due for another cause, it is not held). It is also per instance,
 `instance.<instance id>.scheduling.no_progress.enabled`, in the file the entry's
 `scheduling.no_progress.enabled` member, settable, default `section:scheduling.no_progress.enabled`;
 `EffectiveConfig::no_progress_enabled(instance_id)` returns the value in effect, the instance's own

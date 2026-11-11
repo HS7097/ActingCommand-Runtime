@@ -290,6 +290,13 @@ pub enum ValueRef {
         /// refuses it as the contract says (`type_mismatch`), not the decoder.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fallback_column: Option<String>,
+        /// Workflow #428 S168-LB1b (contracts/selection-policy.md, "Lower bound of a list
+        /// maximum"): a declared `integer` column of the same table, other than `value_column`,
+        /// the bound the table's maker gives a key whose value is not known. With it the read is
+        /// exact M, at least L, or Unknown only when nothing is known of the class. Left out, it
+        /// is not written, so a document without it keeps its canonical bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lower_bound_column: Option<String>,
     },
 }
 
@@ -1220,6 +1227,7 @@ impl<'a> Scope<'a> {
                 lists,
                 empty,
                 fallback_column,
+                lower_bound_column,
             } => {
                 let mismatch = |member: &str| {
                     SelectionError::new(
@@ -1247,6 +1255,17 @@ impl<'a> Scope<'a> {
                     .ok_or_else(|| dangling("value_column"))?;
                 if !matches!(column, ValueType::Integer) {
                     return Err(mismatch("value_column"));
+                }
+                // Workflow #428 S168-LB1b: the bound is another declared integer column of the
+                // same table.
+                if let Some(bound_column) = lower_bound_column {
+                    let bound = table
+                        .columns
+                        .get(bound_column)
+                        .ok_or_else(|| dangling("lower_bound_column"))?;
+                    if bound_column == value_column || !matches!(bound, ValueType::Integer) {
+                        return Err(mismatch("lower_bound_column"));
+                    }
                 }
                 self.check_pins(table, pins, owner)?;
                 self.check_lists(lists, owner)?;

@@ -147,4 +147,10 @@ mod tests {
     // #428 SCHED-C1f1 (0.12.54; register §1.303): a run's consumption read from a fact, with a
     // fallback, resolved once per evaluation and read by every reader of the consumption.
     mod gate_sched_c1f1;
+    // #428 SS-4b (0.12.55; register §1.310): a no-progress guard holds its pair only while the
+    // pair is due for the cause the guard served.
+    mod gate_ss4b;
+    // #428 S168-LB1a (0.12.55; register §1.309 LB1-4, §1.311): a catalog that names a key under
+    // `inventory.list.` to read is refused at compile.
+    mod gate_428_s168_lb1a;
 }

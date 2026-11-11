@@ -97,7 +97,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `nemu_app_index_source`; revision-3 to revision-5 ledgers are still read, so [3, 6], one way.
 ///   Workflow #404 FS-3 (0.12.43, register §1.284) raises `max` to 7: the select confirmations
 ///   `tracked` and `track_lost`; revision-3 to revision-6 ledgers are still read, so [3, 7], one
-///   way.
+///   way. Workflow #428 S168-LB1a (0.12.55, register §1.309, §1.311) raises `max` to 8: a
+///   `fact.published` `record_list` record of 257 to 1024 rows; revision-3 to revision-7 ledgers
+///   are still read, so [3, 8], one way.
 /// - `package` 3: the one `package` bump of v0.12.0 (register §6); only bundle index v4 is read.
 ///   Workflow #411 B15 R1 (register §1.111) raises `max` to 4 in v0.12.3: a pack's `remedy` and
 ///   `provides`; a revision-3 pack is still read. Workflow #406 T3 (register §1.137) raises it to
@@ -110,7 +112,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   select step's `confirm: "track"` and `track_px` to revision 7, no second raise. Workflow #428
 ///   S168-4 and S168-5a (0.12.50, register §1.291) raise it to 8: a task operation's effect
 ///   `read_list` and a selection document's value source `table_max_over_list`; a pack without
-///   them keeps its revision and a document without the source its bytes, so [3, 8].
+///   them keeps its revision and a document without the source its bytes, so [3, 8]. Workflow
+///   #428 S168-LB1b (0.12.55, register §1.312) raises it to 9: `table_max_over_list`'s optional
+///   member `lower_bound_column`; a document without it keeps its bytes, so [3, 9].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -124,15 +128,18 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   as before, so [3, 5]. Workflow #407 PERF-READ (0.12.41, register §1.280) raises `max` to 6:
 ///   the `PerformanceStatus` answer's members `memory` and `vision`, which a reader whose `max` is
 ///   below 6 refuses (the status denies unknown members); no request changes and every earlier
-///   request is answered as before, so [3, 6].
+///   request is answered as before, so [3, 6]. Workflow #428 S168-LB1a (0.12.55, register §1.309,
+///   §1.311) raises `max` to 7: an `InstanceFactSnapshot` view with a record list of 257 to 1024
+///   rows, the request's optional `key_prefix` and the answer's optional `records_total`; a
+///   request without the member is answered as before, so [3, 7].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 28]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
-    ("ledger", [3, 7]),
-    ("package", [3, 8]),
-    ("runtime-client", [3, 6]),
+    ("ledger", [3, 8]),
+    ("package", [3, 9]),
+    ("runtime-client", [3, 7]),
     ("runtime-outcomes", [1, 1]),
 ];
 

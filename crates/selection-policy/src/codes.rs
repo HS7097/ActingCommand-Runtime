@@ -60,7 +60,11 @@ actingcommand_contract::outcome_codes! {
         /// Info. Workflow #378 A2-P.
         TieBreakUnknown => "tie_break_unknown": info / none,
         /// Info. Workflow #428 S168-5a (keys `table_id`, `table_column`, `fact_keys`, `count`,
-        /// optional `maximum`, `maximum_identity`, `unknown_reason`): what one list maximum read.
+        /// optional `maximum`, `maximum_identity`, `unknown_reason`, and from S168-LB1b `bound`,
+        /// `unknown_count`, `lower_bound`, `lower_bound_identity`): what one list maximum read.
         SelectionTableListMax => "selection_table_list_max": info / none,
+        /// Info. Workflow #428 S168-LB1b (keys `rule_id`, `count`): a list maximum read as a
+        /// lower bound settled a gate or a term of the decision.
+        SelectionDecidedOnLowerBound => "selection_decided_on_lower_bound": info / none,
     }
 }
