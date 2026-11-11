@@ -506,7 +506,7 @@ impl RuntimeOperationKind {
             Self::RoutineSummary => Some(ReceiptCode::RoutineSummaryCompleted.code()),
             // Workflow #429 R-6 (register §1.302).
             Self::StopInstanceRun => Some(ReceiptCode::StopInstanceRunCompleted.code()),
-            // Workflow #429 R-8 (register §1.306).
+            // Workflow #429 R-8 (register §1.308).
             Self::EditPackSchedule => Some(ReceiptCode::EditPackScheduleCompleted.code()),
             Self::PackScheduleView => Some(ReceiptCode::PackScheduleViewCompleted.code()),
             // Workflow #429 R-7a: registered with the shapes; R-7b first answers completed.

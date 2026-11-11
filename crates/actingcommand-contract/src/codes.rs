@@ -201,7 +201,7 @@ crate::outcome_codes! {
         RoutineSummaryCompleted => "request_routine_summary_completed": success / none,
         // Workflow #429 R-6 (register §1.302): a stop first answers completed.
         StopInstanceRunCompleted => "request_stop_instance_run_completed": success / none,
-        // Workflow #429 R-8 (register §1.306): the pack schedule's edit and its read first
+        // Workflow #429 R-8 (register §1.308): the pack schedule's edit and its read first
         // answer completed.
         EditPackScheduleCompleted => "request_edit_pack_schedule_completed": success / none,
         PackScheduleViewCompleted => "request_pack_schedule_view_completed": success / none,

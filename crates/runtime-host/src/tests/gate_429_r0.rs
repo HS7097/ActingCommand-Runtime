@@ -8,7 +8,7 @@
 // §1.239, since 0.12.36) gives `ConfigureSettings.expected_version` its behaviour, so that case
 // left this test (`gate_387_d1b`, `r4_t*`); so does `RoutineSummary` with R-12 (register §1.264,
 // since 0.12.38; `gate_429_r12`), `StopInstanceRun` with R-6 (register §1.302; `gate_429_r6`),
-// and `EditPackSchedule` with R-8 (register §1.306; `gate_429_r8`), which also gives R-0c's
+// and `EditPackSchedule` with R-8 (register §1.308; `gate_429_r8`), which also gives R-0c's
 // `PackScheduleView` its behaviour, so this file's test of that read left with it.
 
 use super::gate_383_ao4q::ledger_head;

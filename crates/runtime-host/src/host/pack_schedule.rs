@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #429 R-8 (register §1.306; `contracts/runtime-interface.md`, "Workbench request
+//! Workflow #429 R-8 (register §1.308; `contracts/runtime-interface.md`, "Workbench request
 //! kinds", the rows `EditPackSchedule` and `PackScheduleView`; `contracts/instance-fact-store.md`,
 //! "Pack schedule facts"): a task package switched on or off for one instance.
 //!

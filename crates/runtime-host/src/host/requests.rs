@@ -769,7 +769,7 @@ impl HostShared {
                 *run_request_id,
                 *wait_ms,
             ),
-            // Workflow #429 R-8 (register §1.306): one package's rows of one scope's pack schedule
+            // Workflow #429 R-8 (register §1.308): one package's rows of one scope's pack schedule
             // list replaced under the fact write gate, compared with `expected_version` when the
             // request names one.
             RuntimeOperation::EditPackSchedule {
@@ -800,7 +800,7 @@ impl HostShared {
                     failure_outcome: None,
                 })
                 .map_err(|error| RequestFailure::request(error, RuntimeReceiptState::Denied, None)),
-            // Workflow #429 R-8 (register §1.306): one instance's pack schedule per package, read
+            // Workflow #429 R-8 (register §1.308): one instance's pack schedule per package, read
             // from memory; it records nothing.
             RuntimeOperation::PackScheduleView { instance_alias } => {
                 self.pack_schedule_view(instance_alias)

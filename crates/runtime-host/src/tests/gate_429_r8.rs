@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #429 R-8 (register §1.306; contracts/instance-fact-store.md, "Pack schedule facts";
+// Workflow #429 R-8 (register §1.308; contracts/instance-fact-store.md, "Pack schedule facts";
 // contracts/runtime-interface.md, "Workbench request kinds", the rows EditPackSchedule and
 // PackScheduleView; contracts/scheduling-blackout.md, "Order of the deferrals"; coordinator work
 // order rd-1111/brief-r8.md): a task package switched on or off for one instance. Through the

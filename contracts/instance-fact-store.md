@@ -631,7 +631,7 @@ Workflow #386 slice SR-11 (scheduling model v1.4.2 §6.1). A person or an agent 
 state and not as a one-off command, during which periods a task package may be scheduled on an
 instance. The state is stored in this store as one record of the `session.` family per scope.
 
-**Status.** Built by Workflow #429 R-8 (register §1.306, since 0.12.55), which implements
+**Status.** Built by Workflow #429 R-8 (register §1.308, since 0.12.55), which implements
 SR-11 with #429 A.7.1: the key's family and origins, the rows' rule, the per-package layering,
 the deferral at position 5, `EditPackSchedule` and `PackScheduleView`. Left for later slices:
 the standard package's default layer (item 2 below; Workflow #429 R-9, until which that layer
@@ -688,7 +688,7 @@ writer: a write goes through a running actingd.
 
 **Which row applies.** For instance `I`, task package `P` and time `t`, each package is
 resolved on its own (Workflow #429 R-0c, the coordinator's decision of 2026-10-29 on #429 item
-4, register §1.216 R0C-5; built by R-8, register §1.306): instance over server over game over the
+4, register §1.216 R0C-5; built by R-8, register §1.308): instance over server over game over the
 pack's default row, per package, never per record. A layer that holds no row of `P` decides
 nothing for `P`, so an instance record that names only package `A` leaves every other package to
 the server, game and pack default layers, and `EditPackSchedule` replaces only `P`'s rows in its

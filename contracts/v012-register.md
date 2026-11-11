@@ -12794,9 +12794,9 @@ register included; so this note does not spell them. They are left for a later s
 **Interface.** None raised ([component-interfaces.md](component-interfaces.md)): nothing a reader
 or writer of any interface sees changes.
 
-### 1.306 Slice R-8 (0.12.55): a task package switched on or off for one instance (Workflow #429 SR-11 with A.7.1 points 1 to 7, board #429 6535257887, and the slice row R-8; the console's task list (UI-3f1) says single tasks cannot be switched yet, and both requests answered `not_implemented` since 0.12.30; the coordinator's decision of 11-11 on which packages the view lists, not Alice's words; coordinator work order `rd-1111/brief-r8.md`, read on main `a62434a4`)
+### 1.308 Slice R-8 (0.12.55): a task package switched on or off for one instance (Workflow #429 SR-11 with A.7.1 points 1 to 7, board #429 6535257887, and the slice row R-8; the console's task list (UI-3f1) says single tasks cannot be switched yet, and both requests answered `not_implemented` since 0.12.30; the coordinator's decision of 11-11 on which packages the view lists, not Alice's words; coordinator work order `rd-1111/brief-r8.md`, read on main `a62434a4`)
 
-The number 1.306 is this slice's: on its base 1.305 was free but held by NEUT-1, which merged with
+The number 1.308 is this slice's: on its base 1.305 was free but held by NEUT-1, which merged with
 it the same day (SCHED-C1f1 writes under §1.303); main `e5efe44e` is merged into the branch. The
 coordinator renumbers it if another open slice takes it first. [instance-fact-store.md](instance-fact-store.md) ("Pack schedule facts") is the contract;
 [runtime-interface.md](runtime-interface.md) ("Workbench request kinds", the rows `EditPackSchedule`

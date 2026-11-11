@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #429 R-8 (register §1.306; contracts/lab-operations.json, the rows `pack-schedule` and
+// Workflow #429 R-8 (register §1.308; contracts/lab-operations.json, the rows `pack-schedule` and
 // `pack-schedule set`; coordinator work order rd-1111/brief-r8.md): the Lab's two core rows of the
 // pack schedule reach their requests, as the neighbouring core rows reach theirs (`gate_429_r6`).
 // - `r8_pack_schedule_rows_reach_their_requests`: both rows are offered with their one sentence
