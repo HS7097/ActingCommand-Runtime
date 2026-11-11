@@ -8903,6 +8903,93 @@ defaults and names completed (S3), when `offset` and `max_bytes` beside `out` ar
 
 **LAB-5C rollback** (to the release before it). Nothing persisted: code and the table's text.
 
+#### Slice LAB-5B2 (0.12.52): each strict command's flag list is one constant, held equal to its row
+
+Coordinator work order `rd-1108/arch-013/brief-lab5b2.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` (§1 "Who parses what today", §3 kind T3), read against
+main `af7e2557`, where LAB-5A had completed the rows. The contract is
+[lab-two-entries.md](lab-two-entries.md) §9.1; the table is [lab-operations.json](lab-operations.json).
+The rule of the slice: no command line changes what it accepts, refuses or prints. Since LAB-5A
+the table governs these rows only in `serve --stdio` (and LAB-5's MCP): on the command line their
+own command parses them; until this slice nothing tied the row to the list the command checks.
+
+**The four kinds** (`apps/actinglab/src/cli_module/own_flags.rs`, built for the tests only). Every
+planned row of the debugging and authoring modules (each row actinglab offers there, and `record
+draft`) is in exactly one:
+
+| Kind | Constant | Rows | Its own test |
+|---|---|---|---|
+| strict | `STRICT_ROWS` | 31: `tap`, `swipe`, `long-tap`, `key`, `text`, `observe`, `do`, `ensure`, `wait`, `watch`, `signatures register\|match\|retire`, `unpin`, `record mark`, `record stop`, `package check\|preflight\|loading\|fmt\|edit`, `resource catalog\|validate\|verify\|restore`, `standard-pack check\|compose`, `scheduling compile\|timeline`, `regression`, `replay`: the own command checks its flags against lists in code | this slice |
+| lenient | `LENIENT_ROWS` | 24: `touch-probe`, `recover`, `tap-target`, `navigate`, `debug-package`, `export-evidence`, `recognize-artifact`, `record start\|status\|candidates\|amend\|step`, `package validate\|inspect\|bundle`, `resource compile-maa`, `operation validate\|inspect\|explain`, `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`: the own command ignores a flag it does not read | B3 gives each a read list |
+| table-driven | `TABLE_DRIVEN_ROWS` | 6: `run start`, `run stop`, `reset`, `drill` (the CLI module serves them itself), `user-config`, `user-config set` (their own command is given only the row's declared positionals, `engine::Line::Declared`) | B1 |
+| no command | `NO_COMMAND_ROWS` | `record draft` (MCP's `ac_binding_draft` until LAB-5 builds its command) | LAB-5 |
+
+The survey's 31 and 24 are main's, row for row. It placed neither `user-config` row (they never
+had `params_more`, so they were in neither list); this slice puts them under table-driven.
+
+**The constants** (each the one list its command's check uses; made `pub(crate)` where the register
+reads it; no list changed a flag):
+
+| # | Rows | File (`apps/actinglab/src/`) | Constant | Before |
+|---|---|---|---|---|
+| L5B2-1 | `tap`, `swipe`, `long-tap`; `key`, `text` | `commands/device_commands.rs` | `DIRECT_TOUCH_FLAGS`, `DIRECT_INPUT_FLAGS` (both empty) | `FlagArgs::reject_flags(command)`, which refused every flag; it now takes the command's list, `reject_flags(command, accepted)`, and refuses every flag outside it with the same text (`flag_args.rs`) |
+| L5B2-2 | `observe`, `do`, `ensure`, `wait` | `lab2_cli.rs` | `LAB2_EVERY_PATH_READS` and each path's `Lab2Path` (`OBSERVE_PATHS`, `DO_PATHS`, `ENSURE_PATHS`, `WAIT_PATHS`), unchanged; `verb_reads` (tests only) gives a verb's union | already constants |
+| L5B2-3 | `watch` | `runtime_debug.rs` | `WATCH_QUERY_FLAGS`, `WATCH_CURSOR_FLAGS` (new) | the cursor flags were a `matches!` arm and, again, a literal in `watch_options` (the capability listing, the same JSON) |
+| L5B2-4 | `unpin` | `runtime_debug.rs` | `UNPIN_FLAGS` | a local array |
+| L5B2-5 | `signatures register\|match\|retire` | `signature_cli.rs` | `DEFINITION`, `LIFECYCLE`, `REGISTRATION`, `MATCH_FLAGS` through `options`, unchanged | already constants |
+| L5B2-6 | `record mark`, `record stop` | `commands/session_record.rs` | `RECORD_MARK_SHORTCUT_FLAGS`, `RECORD_MARK_REQUEST_FLAGS` (new), `RECORD_STOP_FLAGS` | mark's four other flags were a `matches!` arm |
+| L5B2-7 | `package check`, `package preflight` | `package_cli.rs` | `CHECK_FLAGS`, `PREFLIGHT_FLAGS` | a comparison, a `matches!` arm |
+| L5B2-8 | `package loading` | `package_build.rs` | `LOADING_FLAGS`, `LOADING_SWITCHES` (new) | its two switches were a local array |
+| L5B2-9 | `package fmt`, `package edit` | `package_tool.rs` | `FMT_FLAGS`, `EDIT_FLAGS` | already constants |
+| L5B2-10 | `resource catalog`, `validate`, `verify`, `restore` | `resource_runtime_support.rs`, `resource_declarations.rs`, `resource_verify.rs`, `resource_restore.rs` | `CATALOG_FLAGS`, `VALIDATE_FLAGS`, `FLAGS`, `RESTORE_FLAGS` | `matches!` arms; `verify`'s was a constant |
+| L5B2-11 | `standard-pack check`, `compose` | `standard_pack_cli.rs` | `CHECK_FLAGS`, `COMPOSE_FLAGS` | a comparison, a local array |
+| L5B2-12 | `scheduling compile`, `timeline` | `scheduling_cli.rs` | `COMPILE_FLAGS`, `TIMELINE_FLAGS` | two local arrays |
+| L5B2-13 | `regression`, `replay` | `recognition_regression.rs`, `replay_cli.rs` | `REGRESSION_FLAGS`, `REPLAY_FLAGS` | `matches!` arms |
+
+**The register.** `cli_module::own_flags::accepted(row)` answers for exactly the strict rows: the
+command's options and switches (`--name-with-dashes`), read from the constants above (for the four
+verbs whose flags depend on the path the command line takes, the union of their paths' lists),
+the flags it reads in place of a positional the row declares (`do --target`, read as `do`'s
+`<target>` by `target_argument`), and the positionals it checks, least and most: `tap` 2, `swipe`
+5, `long-tap` 3, `key` 1, `text` at least 1, exactly none for the others, and no count for `observe`,
+`do`, `ensure`, `wait` (each reads its first positional, if any, as its target or page),
+`package preflight`, `resource catalog` and `resource validate`. Which flags take no value the
+lists do not say; the register says it beside them: `LAB2_SWITCHES` (read with `FlagArgs::bool`)
+and `RECORD_MARK_SWITCHES` (read with `record_flag_switch`) in `own_flags.rs`, `record stop
+--dry-run`, `package fmt --check`, and `package loading`'s `LOADING_SWITCHES` from its code. Some
+lists hold actinglab's global options (`--instance`, `--verbose` and `--dry-run` in the four
+verbs', `--instance`, `--game`, `--server` and `--dry-run` in `record stop`'s), which actinglab's
+parser takes before the command sees its flags; they stay, as the rule of the slice keeps every
+list as it was.
+
+**Corrections of the table (work order point 5).** None: on main the 31 rows declare exactly what
+their commands accept, in both directions, and their positionals fit the counts the commands check.
+
+**Tests.** New: apps row "#434 LAB-5B2": `gate_434_lab5b2::strict_rows_match_their_commands` (for
+each strict row, in both directions: every option and switch the row declares, but actinglab's
+global options, is an option or a switch of its command; every flag of the command is declared by
+the row in the same form, a global option in any form, `do --target` as its positional; the row's
+positionals, the instance not among them since the command line hands it on as `--instance`, fit
+the least the command checks and its most where it checks one; a failure names the row, the flag
+and the direction) and `gate_434_lab5b2::every_debugging_and_authoring_row_has_one_kind` (every
+planned row of the two modules in exactly one kind, each kind listing only such rows, once, and
+the register answering for exactly the strict rows); actinglab's binary tests, the embedded table
+and the code's constants only, no Runtime, device, file or clock. No existing test is changed;
+`lab_ops_table_complete` and `gate_434_lab5a` are untouched.
+
+**Interface.** None raised. No row, type, member, code, key or location is added; the table is
+unchanged.
+
+**Left to other slices.** B1: the table-driven rows (the names `core_ops` and the rescue module read
+by literal name, the rescue module's installer and agent lists). B3: the 24 lenient commands, each
+to get a read list a test holds equal to its row, which also checks the positionals of the
+commands that count none. C, E, F, G as their work orders say.
+
+**What LAB-5B2 changes live.** Nothing: every command line accepts, refuses and prints as before,
+and `serve --stdio` answers as before.
+
+**LAB-5B2 rollback** (to the release before it). Nothing persisted: code only.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

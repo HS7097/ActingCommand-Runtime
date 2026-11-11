@@ -95,6 +95,9 @@ struct RegressionArgs {
     evidence: Vec<PathBuf>,
 }
 
+/// Workflow #434 LAB-5B2: the flags `recognition-regression` takes.
+pub(crate) const REGRESSION_FLAGS: [&str; 4] = ["--state-root", "--evidence", "--package", "--zip"];
+
 impl RegressionArgs {
     fn parse(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Self> {
         flags.expect_positionals("recognition-regression", 0)?;
@@ -119,12 +122,11 @@ impl RegressionArgs {
                 &[],
             ));
         }
-        if let Some(name) = flags.flags.keys().find(|name| {
-            !matches!(
-                name.as_str(),
-                "--state-root" | "--evidence" | "--package" | "--zip"
-            )
-        }) {
+        if let Some(name) = flags
+            .flags
+            .keys()
+            .find(|name| !REGRESSION_FLAGS.contains(&name.as_str()))
+        {
             return Err(CliError::usage(format!(
                 "recognition-regression does not accept {name}"
             )));

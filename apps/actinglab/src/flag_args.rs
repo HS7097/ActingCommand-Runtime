@@ -98,11 +98,19 @@ impl FlagArgs {
         self.required(name).map(PathBuf::from)
     }
 
-    pub(super) fn reject_flags(&self, command: &str) -> CliOutcome<()> {
-        if self.flags.is_empty() {
+    /// Refuses every flag outside `accepted`, the command's flag list (Workflow #434 LAB-5B2: the
+    /// one constant its row is held equal to). Every caller's list is empty: it takes positional
+    /// arguments only.
+    pub(super) fn reject_flags(&self, command: &str, accepted: &[&str]) -> CliOutcome<()> {
+        let names = self
+            .flags
+            .keys()
+            .filter(|name| !accepted.contains(&name.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if names.is_empty() {
             return Ok(());
         }
-        let names = self.flags.keys().cloned().collect::<Vec<_>>();
         Err(CliError::usage(format!(
             "{command} takes positional arguments only; unexpected flags: {}",
             names.join(", ")

@@ -10,7 +10,9 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 /// The flags of `package loading` (Workflow #407 LOAD-1).
-const LOADING_FLAGS: [&str; 4] = ["--root-file", "--packs-root", "--write", "--check"];
+pub(crate) const LOADING_FLAGS: [&str; 4] = ["--root-file", "--packs-root", "--write", "--check"];
+/// Workflow #434 LAB-5B2: the flags of `package loading` that take no value.
+pub(crate) const LOADING_SWITCHES: [&str; 2] = ["--write", "--check"];
 
 /// Workflow #288 A2b: `package bundle --applications <file> --packs-root <directory> --out
 /// <directory>`, with `--source-repository` and `--source-commit` together or not at all; it
@@ -106,7 +108,7 @@ pub(super) fn run_loading(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
             )));
         }
     }
-    for flag in ["--write", "--check"] {
+    for flag in LOADING_SWITCHES {
         if flags.flags.contains_key(flag) && !flags.bool(flag) {
             return Err(CliError::usage(format!("{flag} takes no value")));
         }

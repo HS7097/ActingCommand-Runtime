@@ -22,23 +22,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+/// Workflow #434 LAB-5B2: the flags `resource restore` takes.
+pub(crate) const RESTORE_FLAGS: [&str; 10] = [
+    "--repo",
+    "--state-root",
+    "--request-id",
+    "--through-sequence",
+    "--zip",
+    "--package",
+    "--task-id",
+    "--entry-page",
+    "--target-page",
+    "--goal",
+];
+
 pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse_values(args)?;
     flags.expect_positionals("resource restore", 0)?;
     for (name, values) in &flags.flags {
-        if !matches!(
-            name.as_str(),
-            "--repo"
-                | "--state-root"
-                | "--request-id"
-                | "--through-sequence"
-                | "--zip"
-                | "--package"
-                | "--task-id"
-                | "--entry-page"
-                | "--target-page"
-                | "--goal"
-        ) || (values.len() != 1 && !matches!(name.as_str(), "--request-id" | "--target-page"))
+        if !RESTORE_FLAGS.contains(&name.as_str())
+            || (values.len() != 1 && !matches!(name.as_str(), "--request-id" | "--target-page"))
         {
             return Err(CliError::usage(
                 "resource restore has an unknown or repeated flag",
