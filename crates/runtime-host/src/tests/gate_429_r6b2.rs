@@ -60,8 +60,27 @@ const GATE_WAIT: Duration = Duration::from_secs(30);
 
 // ---- The fixture.
 
-/// A host on a manual clock with the policy instance X and another instance, and X's scheduled
-/// run of the neutral package admitted under `sources`.
+/// The policy's facts for the fixture's two registered instances, whose aliases the host requires
+/// the configured identities to be (`validate_policy_input_authority`): X as `policy_facts` names
+/// it, and the other instance with X's static identity under its own alias, unavailable to the
+/// policy. The catalog's task is X's alone; the other instance's run is a direct one
+/// (`gate_419_iso2::scheduled` and `gate_419_iso5a::fixture` configure their Y so).
+fn two_instance_facts() -> EvaluationFacts {
+    let mut facts = policy_facts();
+    let mut other = facts.instances[0].clone();
+    other.instance_id = OTHER.to_owned();
+    other.available = false;
+    facts.instances.push(other);
+    facts
+}
+
+/// The configured policy inputs of a host with both instances registered.
+fn two_instance_inputs() -> PolicyInputSnapshot {
+    PolicyInputSnapshot::new(two_instance_facts(), policy_resources())
+}
+
+/// A host on a manual clock with the policy instance X and another instance, both the policy's
+/// configured identities, and X's scheduled run of the neutral package admitted under `sources`.
 struct Fixture {
     root: TempDir,
     host: RuntimeHost,
@@ -87,6 +106,7 @@ impl Fixture {
         let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
         let mut host_config = config(&root)
             .with_runtime_clock(clock.clone())
+            .with_policy_inputs(two_instance_inputs())
             .with_scheduled_procedures(["procedure.observe".to_owned()]);
         if let Some(manifest) = manifest {
             host_config = host_config.with_config_manifest(manifest);
@@ -103,9 +123,31 @@ impl Fixture {
             .expect("the host's zone");
         host.activate_policy_catalog(sources)
             .expect("activate the catalog");
-        let (_, intent, reasons) =
-            evaluated_policy_dispatch_at(&host, PolicyTrigger::FactsChanged, POLICY_NOW_UNIX_MS, 7);
-        assert_eq!(intent.instance_id, X_ALIAS);
+        let cycle = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &two_instance_facts(),
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS,
+                    monotonic_ms: POLICY_NOW_UNIX_MS,
+                },
+                7,
+                PolicyTrigger::FactsChanged,
+            )
+            .expect("evaluate policy dispatch");
+        let evaluation = cycle.evaluation.as_ref().expect("policy evaluation");
+        let intent = evaluation
+            .dispatch_intents
+            .iter()
+            .find(|intent| intent.instance_id == X_ALIAS)
+            .unwrap_or_else(|| panic!("X's dispatch intent: {evaluation:#?}"))
+            .clone();
+        let reasons = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .expect("dispatch reason chain")
+            .clone();
         assert_eq!(intent.task_id, TASK);
         record_policy_approval(&host, &intent);
         let request = ContainedTaskRequest::new(x_package).expect("the scheduled request");
@@ -700,7 +742,9 @@ fn r6b2_the_restart_settles_a_stopped_run_from_its_terminal_and_one_without_as_i
 
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_RESTART_UNIX_MS, 0));
     let host = RuntimeHost::start(
-        config(&root).with_runtime_clock(clock.clone()),
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_policy_inputs(two_instance_inputs()),
         Arc::new(FakeProvider::from_entries([
             (X_ALIAS.to_owned(), x, Arc::new(FakeState::default())),
             (OTHER.to_owned(), y, Arc::new(FakeState::default())),
