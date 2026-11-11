@@ -9,6 +9,283 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.53
+
+本版是 v0.12.52 之后合并的 9 个 PR：合并列车 #1592 带进的 #429 R-6 第一片（#1586）、#434 LAB-5B4（#1587）、#428 SCHED-C1b（#1588）、SCHED-C1c（#1589）和
+#421 INST-5b（#1590），以及 #428 SCHED-C1d（#1593）、SCHED-C1f（只有契约，#1594）、COV-1（#1595）和 #434 LAB-5B5（#1596）。先说部署：接口声明都不变
+（`actingd-config` 仍是 [5, 27]，`package` 仍是 [3, 8]，账本仍是 [3, 7]），部署不用带 `--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；v0.12.52 的安装工具装本版
+照常；装上以后安装工具允许退回 v0.12.52，不用带标志，**但有排程文件写了 `trigger_line` 并生效以后，要先换上不写它的排程文件、让本版启用那一代，再退**（见下面的退回）。
+没有新键，也没有去掉的键；默认值文件只改了一处：`ledger_observer.tag.workbench_patterns` 的默认列表多一项 `host.capped_episodes`（**配置文件自己写了这个列表的，要自己
+加上这一项**，见下面的封顶消耗顺序）；`config.subsystems` 多一行常开的 `pool_trigger_line`。运行上要知道的是这几处：
+
+- **以前悄悄接受的 actinglab 命令行，现在会被拒**（#434 LAB-5B4、LAB-5B5，登记 §1.287 的 “Slice LAB-5B4” 和 “Slice LAB-5B5”；`contracts/lab-two-entries.md`
+  §9.3）。actinglab 的自带命令一开头就照各自的读取清单解析整行（`apps/actinglab/src/flag_args.rs` 83 `parse_reading`、122 `parse_switches`、147
+  `refuse_unread_positionals`），有意只改三件事：
+  - **命令不读的参数被拒**，以前是略过；
+  - **开关不再吞掉后面的词**：开关后面的词只有是 `true` 或 `false` 才算它的值，别的词留在原处，当位置词或下一个参数读；
+  - **命令不读的位置词被拒**；带值的选项落在行尾没有值，拒成 `value_missing`。
+  - 拒法和 CLI 模块拒一行多余的短词相同（`apps/actinglab/src/cli_module.rs` 248 `refused_word`）：`validation_failed`，文字 `<命令>: unknown <词>`（或
+    `value_missing`），细节 `{argument, argument_problem}`；actinglab 自己那一行退出码 1，开发者那一行 `ERROR actinglab: …`，和 `watch --frobnicate` 一样；带 `--via` 的行
+    退出码 2。都在命令读写任何东西、连 Runtime、建会话目录或取帧之前。actinglab 的全局选项（`--instance`、`--game`、`--server`、`--dry-run`、`--verbose`、`--json` 等）
+    照旧在行里任何位置都收；旧的路由参数 `--via-daemon`、`--local`、`--state-dir` 照旧在原来拒的地方按名拒。
+  - **LAB-5B4 的 28 条命令**（三条都适用；每条读的选项、开关、位置词，和一个以前悄悄接受、现在被拒的例子）：
+    - `touch-probe`：什么都不读（`--touch-backend` 照旧拒）。例：`touch-probe --instnace neutral.b`。
+    - `recover`（`recover <实例>`、`session recover`）：选项 `--seed`、`--fresh-delay-ms`、`--pack`、`--pack-root`、`--pages`、`--navigation`、`--env-task`、
+      `--scene`、`--to`、`--max-actions`、`--step-timeout-ms`、`--poll-ms`、`--startup-max-rounds`、`--startup-interval-ms`、`--startup-login-file`；开关
+      `--stale-capture`、`--startup-login`、`--capture`、`--diagnose`、`--require-fresh`；不读位置词。例：`session recover --capture --instnace neutral.b`。
+    - `tap-target`：选项 `--target`、`--seed`、`--scene`、`--package`、`--zip`；开关 `--allow-destructive`、`--require-fresh`；位置词 `<target>`。例：
+      `tap-target ui/ok --sede 7`。
+    - `navigate`：选项 `--to`、`--step-timeout-ms`、`--poll-ms`、`--seed`、`--scene`、`--package`、`--zip`；开关 `--allow-destructive`、`--require-fresh`。例：
+      `navigate --to home extra`。
+    - `lab debug-package`：`--package`、`--zip`。例：`lab debug-package --package p --frobnicate`。`lab export-evidence`：`--package`、`--zip`、`--out`、`--outcome`。
+      例：`lab export-evidence --package p --out e.zip --outcom failure`。`recognize-artifact`：`--request`。例：`recognize-artifact --request r.json extra`。
+    - `record start`：选项 `--state-dir`、`--task-id`、`--locale`、`--template-threshold`、`--metric`、`--holder`、`--lease-holder`、`--record-id`、`--lease-id`；开关
+      `--force`。例：`record start neutral.b --task-id t`（以前别名被略过，录制开在默认实例上）。`record status`：`--state-dir`。例：`record status neutral.b`。
+      `record candidates`：`--state-dir`、`--step-id`；位置词 `<step-id>`。例：`record candidates s1 s2`。
+    - `record amend`：选项 `--state-dir`、`--from-drift-diagnostics`、`--step-id`、`--id`、`--candidate-index`、`--auto-candidate`、`--region`、`--threshold`、
+      `--contrast-frame`、`--negative-frame`、`--metric`、`--from`、`--to`、`--click`；开关 `--color-check`、`--no-color-check`、`--clear-threshold`、`--destructive`、
+      `--non-destructive`；位置词 `<step-id>`。例：`record amend --from-drift-diagnostics d.json --holder h`（`--holder`、`--lease-holder`、`--lease-id` 以前被放过、从不读）。
+    - `record step`：选项 `--state-dir`、`--kind`、`--step-id`、`--id`、`--region`、`--threshold`、`--frame`、`--source-frame`、`--artifact-dir`、`--fresh-delay-ms`、
+      `--contrast-frame`、`--negative-frame`、`--metric`、`--from`、`--to`、`--click`、`--swipe`、`--drag`、`--long-press`、`--long-tap`、`--duration-ms`；开关
+      `--color-check`、`--capture`、`--current-frame`、`--require-fresh`、`--destructive`。例：`record step --kind anchor --id a --frame f.png --colour-check`。
+    - `package validate`、`package inspect`：`--zip`。例：`package validate --zip p.zip --strict`、`package inspect --zip p.zip --detail full`。`package bundle`：
+      `--applications`、`--packs-root`、`--out`、`--source-repository`、`--source-commit`、`--maintenance`、`--pages`、`--interrupts`、`--navigation`、`--schedule`、
+      `--display-layout`、`--loading`。例：`package bundle --applications a.json --packs-root packs --out o --layout l.json`。
+    - `resource compile-maa`：选项 `--repo`、`--maa-tasks`、`--task`；开关 `--facts`。例：`resource compile-maa --repo r --maa-tasks m --tasks t`。
+    - `operation validate`：`--repo`、`--operation-dir`；`operation inspect`、`operation explain`：`--operation-dir`。例：`operation validate --repo r --operation-dir d extra`、
+      `operation inspect --operation-dir d --out x`、`operation explain --operation-dir d extra`。
+    - `recognize`：选项 `--target`、`--scene`、`--package`、`--zip`；开关 `--require-fresh`。例：`recognize --target t --scene f.png --zip p.zip --threshold 0.9`。
+      `detect-page`：选项 `--scene`、`--package`、`--zip`；开关 `--check-pages`、`--require-fresh`。例：`detect-page --scene f.png --zip p.zip --all`。`current-page`：选项
+      `--scene`、`--package`、`--zip`；开关 `--require-fresh`。例：`current-page --scene f.png --zip p.zip extra`。`is-visible`：选项 `--target`、`--scene`、`--package`、
+      `--zip`；开关 `--require-fresh`；位置词 `<target>`。例：`is-visible t1 t2 --scene f.png --zip p.zip`。`locate`：选项 `--template`、`--metric`、`--scene`、
+      `--fresh-delay-ms`；开关 `--capture`、`--require-fresh`；位置词 `<template>`。例：`locate t.png --scene f.png --region 0,0,9,9`。
+    - `run list`：什么都不读。例：`run list --limit 5`。`capture`（`session capture`）：选项 `--out`、`--fresh-delay-ms`；开关 `--diagnose`、`--record`、`--require-fresh`；
+      位置词只认 `diagnose`。例：`capture diagnostics --out f.png`（以前别的词被略过，照样取一帧）。`lab receipt`：`--req`；位置词 `<req_id>`。例：
+      `lab receipt --req r1 --limit 5`。`lab evidence`：`--id`；位置词 `<evidence_id>`。例：`lab evidence --id e1 --run r1`。
+  - **LAB-5B4 只改开关和位置词两条的严格命令**：`observe` 的开关（`--capture`、`--preview`、`--record`、`--pretty` 等）只收 `true`/`false`，不读位置词，例：
+    `observe --capture neutral.b`（以前 `neutral.b` 被当成 `--capture` 的值，`--capture` 于是为假；现在因位置词被拒，指定实例写 `--instance neutral.b`）；`do` 同样的开关，
+    第二个位置词被拒（读 `<target>`），例：`do --capture el1 el2`；`ensure`、`wait` 同样，各读 `<page>`，例：`wait --capture --page home extra`；`record mark`、`record stop`
+    的开关只收 `true`/`false`，剩下的词由它们自己的位置词检查拒（以前也拒，现在换成位置词的理由），例：`record mark --close-step word`；`package fmt` 的 `--check`、
+    `package loading` 的 `--write`、`--check` 只收 `true`/`false`，例：`package fmt --package d --check yes`（以前 `--check` 读成假，文件被真的改写）；`package preflight`、
+    `resource catalog`、`resource validate` 不读位置词，例：`resource validate --repo r extra`。
+  - **LAB-5B5 的 38 条命令**（登记的普查：命令清单 100 条里，59 条本来就会拒，38 条这一片收掉，3 条 `lab arbitrator`、`control export`、`operation run` 本来每一行都拒、
+    原样不动，没有由操作表驱动的；读取清单是各命令旁边的产品常量，如 `cli_information.rs` 的 `HELP_READS`）：
+    - `help`、`version`、`paths`、`capabilities`、`doctor`、`lab vendor-stdio-selftest`：什么都不读。例：`help list`、`version --short`、`paths --all`、
+      `capabilities --command observe`、`doctor --fix`、`lab vendor-stdio-selftest --trace`。（全局的 `--version` 写在哪里都照旧只印版本。）
+    - `list`：位置词 `<kind>`。例：`list targets extra`。`explain`：位置词 `<run-id>`。例：`explain --run r1`（以前把这个参数当成运行号）。`user-config get`：位置词
+      `<key>`；`user-config set`：`<key>`、`<value>`。例：`user-config get adb_path extra`、`user-config set adb_path p extra`。
+    - `detect`：选项 `--resource-root`、`--game`、`--instance`、`--server`、`--task`、`--scene`、`--fresh-delay-ms`；开关 `--require-fresh`、`--dry-run`。例：
+      `detect --task t --sceen f.png`。`env resolve`：选项是这四个范围参数加 `--task`、`--path`、`--value`、`--key`；位置词 `<input>`。例：`env resolve --task t --keys k`。
+      `env status`：四个范围参数加 `--task`。例：`env status --task t extra`。
+    - `stream`（`session stream`）：选项 `--max-frames`、`--interval-ms`、`--fresh-delay-ms`、`--instance`、`--input-relay`、`--interactive-input`、`--input-event`、
+      `--relay-event`；开关 `--dry-run`、`--require-fresh`；位置词只认开头的 `check`，带 `--input-relay` 或 `--interactive-input` 时其后的词都归转发的那个动作（`tap`、
+      `swipe`、`long-tap`、`key`、`text`，由动作自己核个数）。例：`stream --max-frame 5`、`stream extra`。
+    - `lab run`：`--package`、`--zip`、`--out`（旧路由参数和 12 个执行覆盖参数照旧拒）。例：`lab run --zip p.zip --out o.zip --timeout-ms 5`。`lab validate`：`--zip`。
+      例：`lab validate --zip p.zip --strict`。`lab replay-evidence`：`--zip`、`--expected-sha256`。例：`lab replay-evidence --zip e.zip --expected-sha256 h extra`。
+      `package run`：`--zip`、`--out`。例：`package run --zip p.zip --task t`。
+    - `session status`（`lab status`）：开关 `--diagnostics`。例：`lab status --diagnostic`。`session throat-policy`、`session capture-policy`、`session record-policy`、
+      `session self-heal-policy`、`session contract`、`session api`：什么都不读（旧路由参数照旧拒）。例：`session contract --format md`。`session transport`：`--endpoint`；
+      位置词 `<action>`（`plan`、`check`）。例：`session transport check --endpoint 127.0.0.1:1 --timeout 5`。
+    - `session monitor-policy status`、`clear`：`--instance`，动作之后不读位置词。例：`session monitor-policy clear --all`。`session monitor-policy set`：选项 `--instance`、
+      `--interval-ms`、`--expect`、`--to`、`--scene`；开关 `--recover`、`--capture`（旧路由参数和 `--max-iterations` 照旧拒）。例：`session monitor-policy set --capture
+      --holder h`。`session instance`：动作之后不读位置词（`app` 把其余的词交给 `session app`）。例：`session instance list extra`。`session app`（`session instance app`）：
+      `--instance`；开关 `--record`（旧路由参数、`--package` 照旧拒）。例：`session app launch --wait-ms 5`。
+    - `control inspect`：`--control`。例：`control inspect --controls c`。`control verify`：`--candidate`、`--candidate-id`。例：`control verify --candidate c.json
+      --candidate-id i --click`。`control probe-click`：`--effect`、`--expect-before`、`--expect-after`。例：`control probe-click --effect navigation_only --expect-befor p`
+      （以前拒的理由是缺保护条件，不是拼错的参数）。`control diff`：`--candidate`、`--stable`。例：`control diff --candidate a --stable b --ignore-order`。
+    - `run open`：位置词 `<run-id>`。例：`run open r1 r2`。`run export`：`--out`；位置词 `<run-id>`。例：`run export r1 --out o.zip --format zip`。`report export`：
+      `--out`；开关 `--last-error`。例：`report export --last-error --out r.zip --since 1d`。
+  - **LAB-5B5 点名的两种旧写法**：`stream tap 10 20 --input-relay`（转发开关写在行尾，以前把第一个位置词当成动作）现在拒成 `value_missing`；`--input-relay` 写在别的参数
+    前面，或者把动作写成它的值（`stream --input-relay tap 10 20`），照旧。`session monitor-policy set` 带 `--request-timeout-ms`、`--lease-holder`、`--holder`、`--lease-id`
+    的，以前存监控参数时被放过、从不读，现在拒（和 LAB-5B4 对 `record amend --from-drift-diagnostics` 那三个参数一样）。另有两处以前把行尾的选项当成 `true`、现在拒成
+    `value_missing`：`control inspect --control`、`env resolve --task t --path`。
+  - **从拒变成收的**：开关后面跟着命令自己的位置词，`do --capture <目标>`、`ensure --capture <页面>`、`wait --capture <页面>`、`tap-target --allow-destructive <目标>`
+    （以前开关把这个词吞成值，整行被拒或走了别的路；现在走取帧那条路，用这个目标或页面，LAB-5B4）；`stream --require-fresh check`（以前 `check` 被当成开关的值，跑的是
+    Runtime 的序列；现在做检查，带 `--require-fresh`，LAB-5B5）。
+  - **`serve --stdio` 和 MCP 看到的不变**：`serve` 只把一行声明过的参数交给命令，而每一个都在那条命令的读取清单上，开关只交参数名本身；MCP 的 actinglab 子进程
+    （`--via mcp`）给 `record start`、`record status` 的只有清单上的参数，给 `observe`、`do` 的只有开关本身，`session app <动作> --instance <别名>` 也在清单上。两片的测试各有
+    一条核这件事。
+  - **我们自己的调用方都不受影响**：合并前两次只读摸底（资源仓、监控台的仓、Runtime 自己的子进程和 MCP、总览的工具包；LAB-5B4 的命令 78 处调用，LAB-5B5 的 38 条命令
+    30 处调用，其中 29 处是契约里的示例），没有一处会被拒。仓外的脚本若靠被略过的参数，现在会明确报错，按上面的清单改。
+- **停掉一次运行**（#429 R-6 第一片，登记 §1.302；`contracts/runtime-interface.md` 的 `StopInstanceRun` 一行，表 `contracts/lab-operations.json` 的 `task stop`）。
+  - `actinglab task stop <实例> <请求号> [--wait <时长>]`（核心行，也能经 `serve --stdio` 调；`crates/lab-ops/src/core_ops.rs` 841 起）发 `StopInstanceRun`，能停的是
+    客户端直接发起的运行（`RunContainedTask`：actinglab `run start`、MCP `ac_run_pack`）：运行在下一个检查点停，以 `contained_task_cancelled` 结束；结束前、租约放掉前，Runtime
+    在运行自己的线程上用运行自己的租约做一次输入复位（一条挂在这次运行名下的 `InputReset`），发停止的客户端断不断开都一样，运行的客户端不再欠一次复位
+    （`crates/runtime-host/src/host/stop_instance_run.rs` 52–100，`contained_task.rs` 的取消分支）。在例行统计里它算一次中断，不算失败，不升梯、不欠重跑、不占次数。
+  - **还停不了的**：调度器派的运行和 Runtime 自己的运行（启动包、恢复阶梯的一级）拒成 `scheduled_contained_task_not_client_cancellable`，带 `run_origin`（`policy` 或
+    `host`）和运行的 `request_id`，什么都不取消（`stop_instance_run.rs` 290–301）；这类运行照旧要暂停这一台（或用玩家占用）来停。调度运行要等 `ledger` 8 才有
+    「中断」的记法。这一台既没在跑、也不是最近停过的那个请求号，拒成 `contained_task_cancellation_identity_missing`（带 `request_id`）。每次拒绝都入账（`command.rejected`）。
+  - **回答**：`InstanceRunStopped {stopped: {request_id, settled, reset?}}`，成功码是新的 `request_stop_instance_run_completed`。等到运行结束是 `settled: true` 和 `reset`：
+    `done`；`failed`（复位失败：只围栏这一台，租约按失败的运行收尾，成功码的原因里挂 `instance_resources_fenced`，自检可解）；`not_needed`（运行在看到停止之前自己结束了，
+    或者被期限、暂停先结束了）。等满 `wait_ms` 还没结束是 `settled: false`、没有 `reset`，停止照旧有效。不带 `--wait` 就是 `wait_ms` 0，马上答。再发同一个停止，从这一台
+    「最近一次被停的运行」读结果（只在内存里，每台一条，重启就没了）。`ac_stop_run` 和 actinglab `run stop`（客户端自己的取消加复位）不变。
+  - 监控台的「关闭这个任务」用的就是这个请求，但现有的监控台版本还没把它接上，按钮照旧灰着（见下面的配对）。
+- **封顶消耗顺序：触发线、花不掉的线、活过重启的回合**（#428 SCHED-C1c、SCHED-C1d，登记 §1.299 的 “Slice SCHED-C1c” 和 “Slice SCHED-C1d”；
+  `contracts/scheduling/README.md` 的 “Pool lines”、“Capped spending order”，`contracts/standard-pack-schedule.md` 的 “A redundant trigger”）。
+  - **池可以写 `trigger_line`**（只在 V2，和 `stop_line`、`hard_line` 一起写才收，要求 0 ≤ 硬线 < 停线 ≤ 触发线 ≤ 上限；写法和两条线相同；`crates/policy/src/schema.rs`
+    1186，检查在 `validation.rs` 2211 起）：读数到了触发线就开始封顶回合，读数 ≤ 停线且 < 触发线时这一回合花完（`crates/policy/src/evaluator/capped.rs` 415–427）；
+    不写就是上限，行为、序列化和目录哈希都和以前一样。`schedule.json` 里有池写它的，要在 `requires` 里写 `pool_trigger_line`，否则在第一个写它的池处拒成
+    `schedule_invalid`（`crates/policy/src/compose.rs` 1378–1385）；旧版 Runtime 不认这个子系统。池写了触发线时，`capped_spend` 和 `pool_line_held` 多带 `trigger_line`。
+  - **线花不掉时告警** `pool_lines_unspendable`（warning；`pool_id`、`pool_capacity`、`stop_line`、`hard_line`、`least_consumption`）：有估值的池在某一台上，每个参加判定的
+    消耗者跑一次都比「上限减硬线」消耗得多时，读数到了触发线也不开始回合（进行中的回合等着），这些候选以这个理由推迟，`ScheduleExplanation` 和不运行的说明里看得到；以前是
+    开始一回合又立刻以 `capped_round_empty` 结束。编译器分辨得出时，目录也带同码的编译告警，进 `config.catalog_warnings` 和总览（`validation.rs` 2395 `unspendable_lines`）。
+  - **旧触发的提示** `standard_pack_line_trigger_redundant`（warning）：池已经写了两条线和估值块，规则的触发里经 `all` 还要求「读数 ≥ 容量事实减余量」，
+    `actinglab standard-pack check` 和 `package bundle --schedule` 在 `warnings` 里报它（排在 SS-4 那条之后；`compose.rs` 546 `redundant_triggers`）。只是提示，规则照旧
+    组合、运行；工作台不记它。
+  - **回合活过重启**（SCHED-C1d）：回合存成带标签的程序事实 `host.capped_episodes`（Runtime 范围的记录列表：写入者的启动锚点一行，每个回合一行，后面跟它的消费者行和成员行；
+    `crates/runtime-host/src/host/capped_episodes.rs`）。评估过的一轮里回合变了才记一次；启动时在第一次评估之前读回（`crates/runtime-host/src/host.rs` 2535–2539，在
+    `host.idle_state` 之后）。只有写它的那次启动正是上一次完整结算的启动才留（`host.idle_state` 的锚点规则，`capped_episodes.rs` 279–283）；读不回、不合规矩、过期的整份丢，
+    实例没登记或池在现行目录里没有估值块的只丢那一回合，各记一条 Warning `capped_state_failed`（`operation` `load_capped_episodes`；事实库拒收一次记录是
+    `store_capped_episodes`，回合留在内存里，下次变化再记），启动照常。新一代目录不再一律结束回合：这个池在这台上的消费者（各自的身份、每次消耗 ⌈C/1000⌉、是否限量）没变，
+    回合就接着走；容量、读数或线所读的事实给不出值时，进行中的回合等着（候选以 `pool_line_held` `capped_cap_unknown` 挂住），值回来再走或照规矩结束。生产上自 11-11 起
+    有一台实例的一个池有估值（v0.12.52 上线后放置的排程文件），本版上线后那一台的回合就记成这条事实；别的实例没有池有估值，没有回合。
+  - **部署时要核一处**：`ledger_observer.tag.workbench_patterns` 的默认列表多了 `host.capped_episodes`（`crates/ledger/src/global/capture.rs` 45–61，
+    `distribution/windows/actingd.defaults.json` 431）。**配置文件自己写了这个列表的，要把这一项加上**，否则这条事实不带标签，启动时找不到，回合照旧活不过重启（不报错，和
+    SCHED-C1d 之前一样）。看法：`actingctl status --config` 里 `config.parameters.ledger_observer` 的 `ledger_observer.tag.workbench_patterns` 那一行，`source` 是 `default`、
+    值 14 项、末尾是 `host.capped_episodes` 就对；`source` 是 `explicit` 而值里没有它，就要改配置文件。部署前 `install update plan --preview` 的 `defaults_diff` 里这一行的
+    `source` 是 `file`，也说明配置文件自己写了它。`config.selection` 里随包默认值文件的摘要随之改变。
+- **目录里的值是谁写的；随链的规则**（#428 SCHED-C1b、COV-1，登记 §1.299 的 “Slice SCHED-C1b” 和 “Slice COV-1”；`contracts/standard-pack-schedule.md` 的
+  “Provenance”、“The scheduler workbench”、“Coverage”）。
+  - 生效的组合一代里有规则写固定值、或池声明估值块时，工作台在记编译告警的同一处、同一时刻记程序事实 `config.catalog_provenance`
+    （`crates/runtime-host/src/host/standard_pack_schedule.rs` 821 起）：先是计数行 `{game, kind, origin, count}`（`kind` 是 `fixed_value` 或 `valuation`，`origin` 是 `pack`
+    或 `model`），再是逐个的 id 行；最多 256 行，放不下时先裁 id 行、再裁计数行，末行 `{counts_omitted, ids_omitted}` 写明各缺多少。出处变了才记，每次启动后第一次检查再记一次；
+    没有这类值的一代不记，从有变没有时记一条空的；没有自己的账本记录。
+  - `actingctl overview` 和 `ac_overview` 的 `catalog` 块随之多一个成员 `benefit_provenance {fixed_value {pack, model}, valuation {pack, model}, items [{game, kind,
+    origin, id}]}`（计数是各游戏的合计，被裁时带 `items_omitted`、`counts_omitted`；`crates/lab-ops/src/overview.rs` 727 起）。没有这条事实（旧版写的状态根）或事实为空时
+    没有这个成员，目录块逐字节照旧。MCP 超预算时先裁 `catalog.benefit_provenance.items`（留 `items_truncated: true`），再裁 `catalog.compile_warnings.items`。
+  - `actinglab standard-pack check` 和 `package bundle --schedule`：一条参加判定、没写产出、消耗和固定值的规则，触发经 `all` 依赖另一条规则的成功（`dependency_completed` 只认
+    `succeeded`、带 `since_own_run: true`），被依赖的那条带值或者自己也随链（一路往上走，每条只走一次），而且触发里每条链接指向的都是参加判定的规则，就算「随链」：
+    `benefit_coverage` 多一项 `follower`（为 0 时不出现），回答多一个 `benefit_followers [{task_id, rides_with}]`（`rides_with` 是走到头的那条带值规则，没有随链规则时不出现；
+    `crates/policy/src/compose.rs` 236–262、792 起，`crates/resource-tooling/src/api.rs` 148–152），它们不再算没声明，也不再各报一条 `standard_pack_benefit_undeclared`。
+    没有随链规则的文件，回答逐字节照旧。这只是工具对文件的静态读法：组合、启用和决定都不变。
+- **`actinglab instance add` 重启前后多挂一份全局暂停**（#421 INST-5b，登记 §1.300 的 “INST-5b”；`contracts/install-cli.md` 的 “No moment unpaused” 和 “Ways out of a
+  kept hold”）。
+  - 挂住各实例之后、关 Runtime 之前，再挂一份全局暂停，理由就是这次 hold 的理由 `lab-instance-<毫秒>`（`crates/lab-rescue/src/install/hold.rs` 359 起）；已经有任何人的全局
+    暂停时不挂，那一份的理由和修订都不动。Runtime 把它落盘，启动时在任何实例做事之前恢复，所以新实例从新 Runtime 就绪起一直有暂停挡着，直到它自己的 `instance.added`
+    暂停挂上，这时才先交还这份全局暂停、再交还 hold 的实例暂停（`release` 一步写 `global_resumed: true`）。INST-5 留下的那段空窗没了。
+  - **失败留下的怎么解**：新实例暂停不上时以 `post_check_failed` 收尾，`hold` `kept: true`，全局暂停和 hold 的实例暂停都留着，`next` 给出 `pause_added`、`release_hold`、
+    `actingctl_release_hold`、`actingctl_resume` 和 `actingctl_resume_global`。先暂停新实例（`pause_added`，除非它的账号已经可以跑），再用救急模块自己的
+    `release-hold <理由>`：它交还这份全局暂停和 hold 的实例暂停，别的不碰。`actingctl install release-hold` 不管全局暂停，用它的话之后再 `actingctl resume --state-root <s>`。
+    设全局暂停时 Runtime 不答拒成 `runtime_not_running`，拒绝则拒成 `runtime_stop_failed`，都在磁盘上有任何改动之前，已挂的暂停当场交还。
+  - **生产照旧手工加实例**，到 LAB-7 为止。
+- **一场消耗多少可以从事实读，只写了契约**（#428 SCHED-C1f，登记 §1.303）：`consumes` 的 `amount` 写成 `{"type": "fact", "fact_key": …, "fallback": …}` 的规矩已经写好、
+  已裁定，每条都标着 “not built yet”，代码片 SCHED-C1f1 还没做；本版的 Runtime 不认这种写法。
+- **LAB-3 的运维规矩到 LAB-7 前照旧：生产照旧用 `actingctl install` 部署**，不对生产根用 Lab 救急模块的 `deploy`、`rollback`、`place`、`config replace`、
+  `instance add`。`crates/lab-rescue/src/install/` 里 `actingctl install` 走的 `plan.rs`、`update.rs`、`undo.rs`、`place.rs`、`status.rs`、`programs.rs` 和钉住它们的
+  `gate_434_lab3.rs` 自 v0.12.51 没改；`deploy.rs`、`hold.rs`、`runtime.rs` 改了，新分支只在救急模块发起、而且 hold 要全局暂停时走（`deploy.rs` 229
+  `rescue && hold::global_of(&step.intent)`）：`actingctl install` 的 `--hold` 解析恒为 `global: false`（`hold.rs` 99–104），它写的意图、证据和日志不多任何成员
+  （`hold.rs` 331–333、421）。
+
+配置：接口修订都不变，按代码和 `contracts/component-interfaces.md` 核过。`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md`
+自 v0.12.52 都没改：`actingd-config` [5, 27]、`install-selection` [1, 1]、`install-control` [0, 1]、`ledger` [3, 7]、`runtime-client` [3, 6]、`package` [3, 8]、
+`runtime-outcomes` [1, 1]。
+
+- 不升 `ledger`：`crates/ledger` 只改了默认标签列表这个常量（`capture.rs` 45–61，13 项变 14 项）。`host.capped_episodes` 和 `config.catalog_provenance` 都是已有记录
+  `runtime.fact_recorded` 的新键（前者带标签，有它的索引行，和 `host.idle_state`、`host.agent_wake` 加进来时一样）；R-6 写的是已有的命令、输入、租约和任务记录和已有的动作；
+  新码都在已有的记录里，读者对码只核拼写（`component-interfaces.md` 136）；SQLite 格式 2、`actingcommand.event.v3`、表、索引和视图都没变。INST-5b 的安装器自己不写账本记录，
+  日志仍是 `actingcommand.install-operation.v1`，只在 `instance add` 的 `config_replace` 日志里多几个成员。
+- 不升 `runtime-client`：`crates/runtime-client` 自 v0.12.52 没改；`StopInstanceRun` 和 `InstanceRunStopped` 是 R-0 早就登记的形状，契约只多一个造回执的函数
+  （`crates/actingcommand-contract/src/runtime.rs` 6013–6036）和这个请求种类的成功码。不升 `package`：池的 `trigger_line` 和 `schedule.json` 的成员由 `requires` 把关
+  （和 §1.289、§1.299 一样）。不升 `actingd-config`：没有新键，只是已有列表键的默认值多一项（和 AGT-1a 加 `host.agent_wake` 一样）。`runtime-outcomes` 仍是 1：成功码、键和词表
+  都在这一修订里追加。操作表的格式名不变：`task stop` 一行开放（`reserved` → `planned`，多一句 `help`，请求多 `Status`），`task run` 的片号改标 R-18。
+- 配置键：没有新键，也没有去掉的键。`crates/runtime-config` 只改了测试里的默认标签清单；`actingd.defaults.json` 只多 `host.capped_episodes` 这一项；示例配置没改；`apps/actingd`
+  只在 `config/manifest.rs` 209–217 加了 `config.subsystems` 的常开行 `pool_trigger_line`（`contracts/actingd-check-config.md`、`contracts/runtime-config.md` 各添一句）。
+- 结果码：目录从 3903 个码变成 3907 个码，位置从 1748 个变成 1750 个，仍是 29 个分片，键从 623 个变成 626 个，词表从 218 个变成 219 个，没有退役的码。新码 4 个（都待定稿，
+  since 0.12.53）：`request_stop_instance_run_completed`（contract，success，ladder `none`）、`standard_pack_line_trigger_redundant`（contract，warning，
+  `declaration_error`）、`pool_lines_unspendable`（policy，warning，`none`）和 `capped_state_failed`（runtime-host，warning，`none`）。新位置 2 个：`load_capped_episodes`、
+  `store_capped_episodes`（runtime-host）。新键 3 个：`run_origin`（词表 `run_origin`：`policy`、`host`）、`trigger_line` 和 `least_consumption`（都是 `integer`）；新词表 1 个
+  `run_origin`；前缀 `capped_` 也归 runtime-host。改了的：`scheduled_contained_task_not_client_cancellable` 多一个可选键 `run_origin`，`capped_spend` 和 `pool_line_held`
+  各多一个可选键 `trigger_line`，说明随之改；`contained_task_cancellation_identity_missing` 的说明多一句 R-6 的拒法；键 `capped_episode` 的说明和词表 `pool_line_hold` 里
+  `capped_cap_unknown` 的说明随 SCHED-C1d 改了。本版的发布文件是空的：没有新定稿或退役的条目。
+- 程序文件：workspace 仍是 39 个成员，`Cargo.toml`、`Cargo.lock` 自 v0.12.52 都没改，没有新的依赖。`.github/`、`ci/`、`tools/`、`ratchet/` 自 v0.12.52 都没改，两个包的文件
+  清单和 v0.12.52 一样。不稳定表照旧是 FLK-08 和 FLK-10 两条，这几片都没有动它。`apps/actingctl` 只改了 `ac_overview` 的工具说明（多写 `benefit_provenance` 和它的裁法），
+  `apps/mcp-entry` 没改，MCP 工具仍是 41 个；actinglab 仍是 100 条命令、45 个顶层分派臂；救急模块提供的行仍是 30 行。
+
+升级与退回（安装工具的代码 `crates/lab-rescue/src/install/` 里 `plan.rs`、`update.rs`、`undo.rs` 自 v0.12.51 没改，就是 v0.12.48 到 v0.12.52 说明核过的那份，下面这三份的行号
+也是它的；`deploy.rs` 本版因 INST-5b 多了几段，行号是本版的）：
+
+- **v0.12.52 的安装工具装本版，不用任何单向标志。** 两边的声明逐字相同：`ledger` [3, 7] 的 `previous_max_in_next` 和 `one_way`（7 不大于 7）都过（`plan.rs` 288–301），
+  计划里没有 `ledger_verify`（915）；`next_max_in_installer`、`installer_meets_previous`、`installer_meets_next`（302–331）、`bundle_max_in_next`（332–355：目标仍是 [3, 8]）
+  和 `installer_knows_keys`（359–376，没有新键）都和装 v0.12.52 时一样；`next_check_config`（902–914）：本版的 check-config 收现行配置，它的报告只多一行常开的子系统，计划里比的
+  摘要（outcome、目录计划、批准、note 的码、各游戏的包数；`programs.rs` 125–160）不含子系统，排程文件不写 `trigger_line` 时目录计划也和 v0.12.52 的相同。计划的
+  `defaults_diff` 多一行 `ledger_observer.tag.workbench_patterns`（`plan.rs` 574–598），只是列出，不拒。
+- **退回 v0.12.52：安装工具允许，不用标志。** 接口边两边相同、都过（`rollback_edges`，`plan.rs` 383–403，不带单向确认）；退回时 `next_check_config` 不算接口边（1030–1036）。
+  部署的自动回退（`deploy.rs` 763–825 的 `rollback_gate`，813 `accept_ledger_one_way: false`）和 `install undo`（`undo.rs` 338、388）走同一组边和同一个回退门（`update.rs`
+  383–505）：本版写的记录没有新形状，新码都在已有的记录里，v0.12.52 的读者只核拼写。部署时新版的部署后检查不过的话，apply 会自动退回它替换的版本，也就是 v0.12.52。
+- **退回以后 v0.12.52 在启动时读到的**：
+  - **SCHED-C1c**：还没有排程文件写 `trigger_line` 之前，没有要撤的。**写了并生效以后**，v0.12.52 的读者不认池的 `trigger_line`（`unknown_field`），也不认
+    `pool_trigger_line` 这个子系统（组合时 `schedule_requires_missing`），而它启动时要编译派单和决定记忆点名的每一代目录（§1.225 的退回更正），带这个成员的那一代它编译不过。
+    所以先放一个不写它的排程文件，等本版启用了一代不带它的目录，再退（登记 §1.299 的 “SCHED-C1c rollback”）。
+  - **SCHED-C1d**：没有要撤的。v0.12.52 不读也不记 `host.capped_episodes`，每个池都从没有回合开始，和以前一样；最后那条记录留在账本里。它的启动完成结算、挪了启动锚点，所以之后
+    本版（或更新的）再启动时，按锚点规则那条记录过期，整份丢掉，记一条 Warning `capped_state_failed`（`operation` `load_capped_episodes`），再记一条没有回合的事实
+    （`capped_episodes.rs` 279–283、337）。
+  - **INST-5b**：落盘的东西没有改形状，v0.12.52 读带 `global`、`own_pauses.global` 的日志时略过这些成员。但 v0.12.52 的 `release-hold` 只交还 hold 的实例暂停（它的
+    `crates/lab-rescue/src/install/` 里没有全局暂停的设与解），本版 `instance add` 挂下、还留着的全局暂停 `lab-instance-<毫秒>` 它不管：用 `actingctl resume --state-root <s>`
+    解除。生产在 LAB-7 前不用 `instance add`，眼下碰不到。
+  - **LAB-5B4、LAB-5B5**：什么都没落盘；退回后那 66 条命令又会略过不认识的参数。**R-6**：`StopInstanceRun` 又拒成 `not_implemented`，`task stop` 不再提供；停掉的运行只记在
+    内存里，没有要撤的；直接运行照旧用 `run stop` 和客户端的复位停。**SCHED-C1b**：`config.catalog_provenance` 是已有形状的事实记录，旧版照常读、启动时不载入（`config.`
+    每次重新观察），总览里没有这个成员。**COV-1**：没有新文件、账本或配置形状，没有要撤的。
+- 配对：
+  - **v0.12.52 的安装工具装本版**：照常，不带标志，见上面。部署本版跑的是 v0.12.52 的安装工具。
+  - **部署工具包的命令行，本版都照旧收**：它跑的全是 `actingctl install` 的 `release stage --root --dir --facts --expect-tag --expect-commit`、`guards --root --for stop
+    --hold --known-pause …`、`update plan --root --build [--preview]`、`update apply --root --build --plan --stop --hold --known-pause … --start --detach`、`status --root
+    [--operation]`、`release-hold --root --reason`，部署本版时跑的是在线的 v0.12.52 的安装工具。这些不是 actinglab 的自带命令，LAB-5B4、LAB-5B5 不管它们，actingctl 的
+    命令行代码本版没改；`actingctl install` 的代码见上面 LAB-3 那一条，`gate_434_lab3.rs` 照旧逐条钉住。**答法变了的只有内容上的一处**：预览和计划的 `defaults_diff`
+    多一行 `ledger_observer.tag.workbench_patterns`（v0.12.52 那次是空的），工具包只把它打印出来，不据此拒；`edges`、`steps`、`check_config`、`extra` 的形状不变。工具包另用
+    新版 actinglab 跑的 `--json standard-pack check --root <游戏根>`，同下。
+  - **热放置工具包的命令行，本版都照旧收**：actinglab 两行，`--json standard-pack check --root <游戏根>`（S7；旧轮次的脚本里是不带 `--json` 的同一行）是核心行，
+    由它自己的参数表把关（只收 `--root`、不收位置词；`apps/actinglab/src/standard_pack_cli.rs` 23、52–58，自 v0.12.52 没改），不在 LAB-5B4、LAB-5B5 改的命令里；
+    `--json standard-pack compose --root <包根> --instance <别名>=<游戏>/<区服> … --out <新目录>`（制包的严格行，`standard_pack_cli.rs` 26、71–77）也一样。actingctl 的
+    `status`、`status --config`、`pause --instance <别名> --reason <理由> --drain-timeout-ms <毫秒>`、`resume --instance <别名>`、`schedule --instance <别名>`、
+    `overview --root <根> --instance <别名> --sections catalog`（都带 `--state-root`）：命令行代码没改。**没有一条命令行在本版上被拒。** 答的内容上能看到的：
+    `standard-pack check` 可能多 `benefit_coverage.follower`、`benefit_followers`（工具包不读），`standard_pack_benefit_undeclared` 变少，以及新警告
+    `standard_pack_line_trigger_redundant`：**热放置工具包的 S7 把它不认识的警告码当失败**，所以在哪个 `schedule.json` 给写了两条线的池加估值块、又留着旧的容量阈值之前，
+    要把这个码加进工具包的已知警告，或者同一次改动里去掉旧阈值。`overview --sections catalog` 的目录块在生效一代有固定值或估值块时多 `benefit_provenance`（工具包读的
+    `catalog_id`、`catalog_hash`、`approval_id` 等不变）；`status --config` 的 `config.subsystems` 多一行、标签列表多一项（工具包只读来源为 instruction 的条目和
+    `standard_packs.check_interval_ms`）；`schedule --instance` 只有在有估值的池上才可能出现新理由。
+  - **控制台 UI**（最新发版 UI v0.12.15 的提交是 `bb0fd1c7`；UI 的 main 已到 `e0016bb5`，多 13 个提交、还没发版；两者都把 Runtime crate 钉在 `d06910c6`，即 v0.12.47，
+    `Cargo.toml` 39–44；`crates/acui-setup/component-interfaces.json` 和它跑的 actingctl、安装器命令所在的文件自 v0.12.15 没改）：本版的声明、线上请求和账本形状都和 v0.12.52
+    一样，控制台对本版照常。它会遇到：
+    - `StopInstanceRun` 现在有答了，但两个版本都不发它：「关闭这个任务」一直灰着，说明写的仍是「这个 Runtime 不实现 `StopInstanceRun`」
+      （`crates/acui-app/src/workbench/rescue.rs` 202–203、281–292、416–423，两版相同）。UI 接上它以后，停得了手动运行，调度运行会带 `run_origin` 被拒。
+    - INST-5b 的全局暂停 `lab-instance-<毫秒>`：main 已把 `instance` 加进 Lab 救急一类（`crates/acui-app/src/ledger/resume.rs` 72–73、134–145），这种暂停不给恢复，只说明是
+      Lab 救急操作挂的；v0.12.15 还没有这一类（同一文件 53–59），会给恢复按钮。生产在 LAB-7 前不用 `instance add`，眼下碰不到。
+    - 账本里的新码（`request_stop_instance_run_completed`、`capped_state_failed`、`pool_lines_unspendable`）和新键 `run_origin` 不在它钉的 v0.12.47 码目录里：它钉的账本 crate
+      只核拼写、读得了，控制台照原样显示码名、不配说明。
+    - 建模工具 acmodel 跑的 `--json resource validate --repo <仓> --changed-path <文件>`（`model/src/acmodel/export/validator.py` 85）只带 `resource validate` 读的参数、没有
+      位置词（`apps/actinglab/src/resource_declarations.rs` 58–71），照旧收。
+
+运行上的变化：
+
+- 部署本身不改变调度的决定：没有排程文件写 `trigger_line`，不写它的池照旧到上限才开始回合，现有的包运行结果不变；`config.subsystems` 多一行，默认标签列表多一项。
+  生产上已有估值的那一个池（11-11 起，一台实例）多的是：回合从此记成 `host.capped_episodes`、活过重启；新一代目录里它的消费者没变时回合接着走；读数给不出值时
+  回合等着，不再结束。
+- actinglab 的 66 条自带命令不再略过不认识的参数和词，靠被略过的参数的脚本会明确报错；`serve --stdio`、MCP 和我们自己的调用方都不受影响。
+- 手动发起的运行可以用 `actinglab task stop` 停下，Runtime 自己复位；调度运行和 Runtime 自己的运行照旧靠暂停来停。
+- 生效一代有固定值时，总览的目录块说明每个值是谁写的；`standard-pack check` 把随链的规则单列，「没声明收益」的告警变少。
+
+本版合并的 PR：
+
+- #1586 R-6 第一片（#429，登记 §1.302；经列车 #1592）：`StopInstanceRun` 的处理（新文件 `crates/runtime-host/src/host/stop_instance_run.rs`）、运行自己的复位、Lab 的核心行
+  `task stop`；主机门行 `#429 R-6` 的 6 个测试（`gate_429_r6`）和 actinglab 的 1 个，改造把这个请求钉成「没实现」的 2 个测试（`gate_429_r0` 的 1 个、契约的成功码普查）。
+  新码 1 个、新键 1 个和它的词表，不升任何接口修订。
+- #1587 LAB-5B4（#434；经列车 #1592）：读取清单成为产品代码，28 条命令照清单解析，开关和位置词的规矩；apps 门行 `#434 LAB-5B4` 的 6 个测试（`gate_434_lab5b4`），改造
+  LAB-5B2 的 2 个、LAB-5B3 的 3 个、LAB-5A 的 1 个测试；`golden_protocol.rs` 的 `detect_page_failure` 用例去掉 `detect-page` 从来不读的三个参数，期望输出不变，金样没有重录。
+  没有新码。
+- #1588 SCHED-C1b（#428；经列车 #1592）：`config.catalog_provenance` 和总览的 `catalog.benefit_provenance`；宿主 2 个、总览 2 个测试（门行 `#428 SCHED-C1b`）；没有改现有测试。
+- #1589 SCHED-C1c（#428；经列车 #1592）：池的触发线、`pool_lines_unspendable`、`standard_pack_line_trigger_redundant`、子系统行 `pool_trigger_line`；策略门行
+  `#428 SCHED-C1c` 的 5 个测试（`gate_sched_c1c`）；没有改现有测试，金样没有重录。新码 2 个、新键 2 个，不升任何接口修订。
+- #1590 INST-5b（#421；经列车 #1592）：`instance add` 跨重启的全局暂停；apps 门行 `#421 INST-5b` 的 4 个测试（`gate_421_inst5`），夹具的假 Runtime 多全局的暂停和恢复；没有改
+  现有测试。
+- #1593 SCHED-C1d（#428）：`host.capped_episodes`（`crates/policy/src/evaluator/capped/kept.rs`、`crates/runtime-host/src/host/capped_episodes.rs`）、按消费者认回合、读数未知时
+  等待；策略 5 个、宿主 4 个测试（门行 `#428 SCHED-C1d`，`gate_sched_c1d`）；改造 `ledger_observer_tests` 的默认标签清单（多一项，和 AGT-1a 同类）。新码 1 个、新位置 2 个，
+  不升任何接口修订。
+- #1594 SCHED-C1f（#428，登记 §1.303）：只有契约，每条新规矩标着 “not built yet”；代码片 SCHED-C1f1 排在 SCHED-C1d、SCHED-C1e 之后。没有代码和测试。
+- #1595 COV-1（#428）：覆盖统计的 `follower` 和 `benefit_followers`；门行 `#428 COV-1` 的 4 个测试（`gate_cov1`），改造 6 个整结构比对覆盖统计的测试（各加 `follower: 0`）。
+  没有新码。
+- #1596 LAB-5B5（#434）：其余 38 条自带命令的读取清单、`stream` 转发的写法；apps 门行 `#434 LAB-5B5` 的 6 个测试（`gate_434_lab5b5`），`gate_434_lab5b4` 的 3 个辅助函数改成
+  同模块可见，断言没动。没有新码。
+
 ## v0.12.52
 
 本版是 v0.12.51 之后合并的 16 个 PR：#71 FLK-11（#1570）和 FLK-12（#1575）；#428 CI-OCR-1（#1567）、VIS-LOAD-1（#1572）、SCHED-C1（契约，#1582）和
