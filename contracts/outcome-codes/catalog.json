@@ -3669,7 +3669,10 @@
           "description": "Workflow #428 S168-4: two positions of a read_list step's list read the same business ID; the list writes nothing."
         },
         "list_rows_exceeded": {
-          "description": "Workflow #428 S168-4: a read_list step's list showed a 257th position, more rows than one fact holds; the scan stopped there and the list writes nothing."
+          "description": "Workflow #428 S168-4: a read_list step's list showed more positions than one fact holds; the scan stopped there and the list writes nothing. Since 0.12.55 (Workflow #428 S168-LB1a) a fact holds 1024 rows, so at the 1025th position; before it, 256, at the 257th."
+        },
+        "list_bytes_exceeded": {
+          "description": "Workflow #428 S168-LB1a (since 0.12.55): a read_list step's list was read whole, within the row bound, but its record is larger than one observation holds (512 KiB); nothing is cut to fit, the list writes nothing and the key's earlier record stays."
         }
       }
     },

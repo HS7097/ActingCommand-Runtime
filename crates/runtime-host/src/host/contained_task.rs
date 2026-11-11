@@ -24,8 +24,8 @@ use actingcommand_contract::{
 };
 use actingcommand_execution_kernel::{
     CaptureGeometrySessionRef, ContainedTaskGuardEvaluation, DesignatedEffectCap,
-    ExecutionKernelCode, FrameOwner, ListReadingDeclaration, ListReadingRows,
-    ResourceAdjustmentResult, ResourceReadingValue, Scene, StepPacing,
+    ExecutionKernelCode, FrameOwner, ListReadingDeclaration, ListReadingMiss, ListReadingRows,
+    ResourceAdjustmentResult, ResourceReadingProblem, ResourceReadingValue, Scene, StepPacing,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -309,7 +309,7 @@ pub(super) struct JoinedListReading {
 /// its detector names the entry task and the operation, its snapshot the run, the frame and the
 /// operation. `None` for a lifetime the fact record cannot hold.
 fn list_reading_fact_record(
-    readings: &ContainedTaskResourceReadings,
+    writer: ListRecordWriter<'_>,
     joined: &JoinedListReading,
     observed_at_unix_ms: u64,
     run_text: &str,
@@ -318,7 +318,7 @@ fn list_reading_fact_record(
     let declaration = &joined.declaration;
     Some(FactRecord {
         scope: FactScope::Instance {
-            instance_id: readings.instance_alias.clone(),
+            instance_id: writer.instance_alias.to_owned(),
         },
         key: declaration.fact_key.clone(),
         content: FactContent::Inline {
@@ -335,7 +335,7 @@ fn list_reading_fact_record(
         source_detector: format!(
             "{}{}/{}",
             actingcommand_contract::LIST_READING_DETECTOR_PREFIX,
-            readings.task_label,
+            writer.task_label,
             declaration.operation_id
         ),
         source_snapshot_id: actingcommand_contract::list_reading_snapshot_id(
@@ -344,9 +344,71 @@ fn list_reading_fact_record(
             &declaration.operation_id,
         ),
         schema_version: "fact.v1".to_owned(),
-        resource_bundle_hash: readings.resource_bundle_hash.clone(),
+        resource_bundle_hash: writer.resource_bundle_hash.to_owned(),
         invalidate_on: Vec::new(),
     })
+}
+
+/// Workflow #428 S168-LB1a: what names the writer of a list's record: the run's instance alias,
+/// its entry task and its package's `resource_bundle_hash`, as the run's end publishes it.
+#[derive(Clone, Copy)]
+struct ListRecordWriter<'a> {
+    instance_alias: &'a str,
+    task_label: &'a str,
+    resource_bundle_hash: &'a str,
+}
+
+impl<'a> ListRecordWriter<'a> {
+    fn of(readings: &'a ContainedTaskResourceReadings) -> Self {
+        Self {
+            instance_alias: &readings.instance_alias,
+            task_label: &readings.task_label,
+            resource_bundle_hash: &readings.resource_bundle_hash,
+        }
+    }
+}
+
+/// Workflow #428 S168-LB1a (LB1-5b; `contracts/resource-readings.md`, "List readings", "Rows"):
+/// whether one list read whole, published as `record`, is larger than one observation holds
+/// (`MAX_FACT_OBSERVATION_BYTES`, 512 KiB), measured on the observation's encoding as its check
+/// measures it. Such a list is a miss of the list, `list_bytes_exceeded`; a record that does not
+/// encode is left to the publication's check, which refuses it as before.
+pub(crate) fn list_record_over_observation_bytes(record: &FactRecord) -> bool {
+    #[cfg(test)]
+    if let Some(limit) = list_observation_bytes_for_test(&record.key) {
+        return serde_json::to_vec(&actingcommand_contract::FactObservation {
+            records: vec![record.clone()],
+        })
+        .is_ok_and(|bytes| bytes.len() > limit);
+    }
+    serde_json::to_vec(&actingcommand_contract::FactObservation {
+        records: vec![record.clone()],
+    })
+    .is_ok_and(|bytes| bytes.len() > actingcommand_contract::MAX_FACT_OBSERVATION_BYTES)
+}
+
+#[cfg(test)]
+static LIST_OBSERVATION_BYTES_FOR_TEST: std::sync::Mutex<BTreeMap<String, usize>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// Workflow #428 S168-LB1a, test builds only: from now on a list of `fact_key` is measured
+/// against `limit` bytes instead of the observation's 512 KiB, so a run of the fake device's small
+/// list meets the bound. Keyed by the fact key, so a test of another key is untouched.
+#[cfg(test)]
+pub(crate) fn set_list_observation_bytes_for_test(fact_key: &str, limit: usize) {
+    LIST_OBSERVATION_BYTES_FOR_TEST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(fact_key.to_owned(), limit);
+}
+
+#[cfg(test)]
+fn list_observation_bytes_for_test(fact_key: &str) -> Option<usize> {
+    LIST_OBSERVATION_BYTES_FOR_TEST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(fact_key)
+        .copied()
 }
 
 /// Workflow #335 S5b: the instance fact of one reading. The scope is the run's instance, the
@@ -1579,6 +1641,9 @@ pub(super) struct RuntimeContainedTask<'a> {
     list_end_frame: Option<(SystemTime, IssuedFrameId)>,
     /// Workflow #428 S168-4: the lists the run's steps read whole, accepted before `Finalizing`.
     taken_list_readings: Vec<JoinedListReading>,
+    /// Workflow #428 S168-LB1a: the admitted package's `resource_bundle_hash`, which a list's
+    /// record names; a list is measured on that record when its step ends.
+    list_bundle_hash: String,
     /// Workflow #384 D2-S3: the admitted package's entry task id.
     entry_task_label: String,
     /// Workflow #384 D2-S3: the operation and the ledger sequence of the `task.step_finished` of
@@ -2214,6 +2279,31 @@ fn task_geometry_request_failure(
 }
 
 impl RuntimeContainedTask<'_> {
+    /// Workflow #428 S168-LB1a (LB1-5b): whether the list `joined`, read whole, is larger than one
+    /// observation holds, measured on the record the run's end would publish for it: its instance,
+    /// entry task and package, the run, the frame its end check passed on and that frame's capture
+    /// time.
+    fn list_over_observation_bytes(
+        &self,
+        joined: &JoinedListReading,
+    ) -> Result<bool, RequestFailure> {
+        let run_text = resource_reading_identifier_text(self.run_id.transport())?;
+        let frame_text = resource_reading_identifier_text(joined.frame_id.transport())?;
+        let writer = ListRecordWriter {
+            instance_alias: self.instance_alias,
+            task_label: &self.entry_task_label,
+            resource_bundle_hash: &self.list_bundle_hash,
+        };
+        Ok(list_reading_fact_record(
+            writer,
+            joined,
+            reading_unix_ms(joined.captured_at)?,
+            &run_text,
+            &frame_text,
+        )
+        .is_some_and(|record| list_record_over_observation_bytes(&record)))
+    }
+
     /// Workflow #384 D2-S4: runs the run's own package: for its requested key set when the run
     /// is a fact refresh, otherwise whole.
     pub(super) fn run_main(
@@ -6167,12 +6257,27 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 HostCode::ContainedTaskResourceReadingFrameMismatch,
                             ));
                         }
-                        self.taken_list_readings.push(JoinedListReading {
+                        let joined = JoinedListReading {
                             captured_at,
                             frame_id,
                             declaration,
                             list,
-                        });
+                        };
+                        // Workflow #428 S168-LB1a (LB1-5b): a list read whole whose record is
+                        // over the observation's bytes is a miss of the list, written at once on
+                        // the frame its end check passed on, the step's last viewport; the run
+                        // settles as without it and the key's earlier record stays.
+                        if self.list_over_observation_bytes(&joined)? {
+                            let miss = ListReadingMiss {
+                                problem: ResourceReadingProblem::ListBytesExceeded,
+                                count: u32::try_from(joined.list.rows.len()).unwrap_or(u32::MAX),
+                            };
+                            let recorded = self
+                                .diagnostic_list_miss(frame_id, miss.outcome(&joined.declaration));
+                            self.diagnostic_frame = None;
+                            return recorded;
+                        }
+                        self.taken_list_readings.push(joined);
                         Ok(())
                     }
                     Err(miss) => {
@@ -8106,6 +8211,7 @@ impl HostShared {
             taken_resource_readings: Vec::new(),
             list_end_frame: None,
             taken_list_readings: Vec::new(),
+            list_bundle_hash: resource_reading_bundle_hash(prepared.package_label()),
             entry_task_label: prepared.task_label().to_owned(),
             last_step_finished: None,
             adjustment_confirmations: Vec::new(),
@@ -11169,7 +11275,7 @@ impl HostShared {
             let frame_text = resource_reading_identifier_text(joined.frame_id.transport())?;
             let observed_at_unix_ms = reading_unix_ms(joined.captured_at)?;
             let record = list_reading_fact_record(
-                &readings,
+                ListRecordWriter::of(&readings),
                 joined,
                 observed_at_unix_ms,
                 &run_text,

@@ -304,8 +304,9 @@ use contained_task::{
 #[cfg(test)]
 pub(crate) use contained_task::{
     ContainedTaskCheckpointIdentity, ContainedTaskCheckpointPoint,
-    ContainedTaskCheckpointTestControl, require_contained_task_sampling_run_seed,
-    resource_reading_bundle_hash,
+    ContainedTaskCheckpointTestControl, list_record_over_observation_bytes,
+    require_contained_task_sampling_run_seed, resource_reading_bundle_hash,
+    set_list_observation_bytes_for_test,
 };
 #[cfg(test)]
 use contained_task::{ContainedTaskCheckpointTestHook, ContainedTaskTerminalDraft};

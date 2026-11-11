@@ -381,9 +381,10 @@ impl HostShared {
             }
             // Workflow #389 MCP-4 (register W2): one instance's facts, a general read that
             // records nothing.
-            RuntimeOperation::InstanceFactSnapshot { instance } => {
-                self.instance_fact_snapshot_read(request, instance)
-            }
+            RuntimeOperation::InstanceFactSnapshot {
+                instance,
+                key_prefix,
+            } => self.instance_fact_snapshot_read(request, instance, key_prefix.as_deref()),
             RuntimeOperation::ConfigureMonitor {
                 instance_alias,
                 policy,

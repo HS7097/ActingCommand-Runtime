@@ -802,7 +802,8 @@ pub(super) fn gate(
                 task_work.state = SchedulingDecisionState::Deferred;
                 task_work.reasons.push(unknown_reason(&gap));
                 if refreshing && !suggestions.is_empty() {
-                    let keys = fact_refresh::predicate_keys(&suggestions, instance);
+                    let keys =
+                        fact_refresh::predicate_keys(&suggestions, instance, context.left_out);
                     if !keys.is_empty() {
                         // The rank it lends the reader: its catalog rank before the score stage,
                         // with its manual offset (D2 model §3.4).

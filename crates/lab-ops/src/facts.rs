@@ -161,16 +161,22 @@ pub fn read(client: &RuntimeClient, request: &FactsRequest) -> Result<Value, Fai
                 })?
                 .instance_alias()
                 .to_owned();
-            let (mut snapshot, source) = client
-                .instance_fact_snapshot(&alias)
+            // Workflow #428 S168-LB1a (`runtime-client` 7): the Runtime keeps the prefix's records
+            // before it builds and measures the view, and answers the instance's records before
+            // the filter as `records_total`.
+            let read = client
+                .instance_fact_snapshot_by_prefix(&alias, key_prefix.as_deref())
                 .map_err(Failure::Runtime)?;
-            let total = snapshot.records.len();
+            let mut snapshot = read.snapshot;
+            let total = read.records_total.map_or(snapshot.records.len(), |total| {
+                usize::try_from(total).unwrap_or(usize::MAX)
+            });
             snapshot
                 .records
                 .retain(|record| kept(key_prefix.as_deref(), &record.key));
             let answered = snapshot.records.len();
             (
-                source.sampled_completed_at_unix_ms,
+                read.source.sampled_completed_at_unix_ms,
                 "snapshot",
                 encode(&snapshot)?,
                 total,

@@ -278,7 +278,7 @@ the host writes it under `inventory.list.<name>` at the run's successful end. Th
 from the decision layer's:
 
 - **Whole or not at all.** A list is written only when every position was read; an unread
-  position, a repeated key or more than 1024 positions (S168-LB1a, not built yet; until it 256;
+  position, a repeated key or more than 1024 positions (since S168-LB1a, 0.12.55; 256 before it;
   [resource-readings.md](resource-readings.md), "Rows") writes nothing (no partial list, no
   truncation, no empty list), and the previous record stays until its expiry. That is what makes
   `absent` sound: a key with no row in a usable list reading was not on the list. A list never
@@ -738,7 +738,7 @@ chooser:
 - A document that declares a record list is refused at catalog compile with
   `type_mismatch`: record lists stay unusable to the scheduler, and `keyed_fact`
   is for in-task documents only.
-- From S168-LB1a (not built yet; [v012-register.md](v012-register.md) §1.309) the instance's
+- Since S168-LB1a (0.12.55; [v012-register.md](v012-register.md) §1.309, §1.311) the instance's
   projection holds no record under `inventory.list.`
   ([instance-fact-store.md](instance-fact-store.md), "Projection into the evaluation"), and a
   document that declares a fact under that prefix, of any type, is refused at catalog compile

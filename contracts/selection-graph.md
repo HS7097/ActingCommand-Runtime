@@ -927,8 +927,8 @@ The same scan session reads a list for a `read_list` step (Workflow #428 S168-4,
 policy, no early stop, no `Return`, no `Confirm` and no tap. Its scan failures end the run as
 here, with the stage `read_list`; a position it could not read is a miss of the list, not a
 failure. It stops on the viewport that reads one position more than a list may hold, the miss
-`list_rows_exceeded`: the 1025th from S168-LB1a (not built yet; [v012-register.md](v012-register.md)
-§1.309), the 257th until it. The scan's own bounds above do not move, so with at most 128
+`list_rows_exceeded`: the 1025th since S168-LB1a (0.12.55; [v012-register.md](v012-register.md)
+§1.309, §1.311), the 257th before it. The scan's own bounds above do not move, so with at most 128
 viewports a list reaches 1024 rows only when each advance brings about 8 new positions
 ([resource-readings.md](resource-readings.md), "Rows").
 

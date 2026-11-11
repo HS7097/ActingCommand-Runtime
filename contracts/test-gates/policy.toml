@@ -1299,3 +1299,12 @@ tests = [
     "actingcommand-policy::lib::source::tests::table_list_max_validation",
 ]
 incident = ["#428 S168-5a"]
+
+# Workflow #428 S168-LB1a (0.12.55; register §1.309 row LB1-4, §1.311; brief rd-1111/brief-s168-lb1a.md; contracts/scheduling/README.md, "Record lists and the projection"): on the neutral example catalog declared V2, a member that names a key under inventory.list. to read is refused type_mismatch at its key, one case per place: a fact predicate, a record_deadline predicate, a fact reference, a pool's ledger key, a pool's fact reference (capacity), a consumption read from a fact and a fact the selection document declares (/facts/0/fact_key); the same member of another key is not refused there; a timeline event that invalidates inventory.list. compiles, and so does the example
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_428_s168_lb1a::lb1a_a_catalog_that_names_a_list_key_to_read_is_refused_at_its_key",
+    "actingcommand-policy::lib::tests::gate_428_s168_lb1a::lb1a_a_timeline_prefix_under_the_list_prefix_is_not_refused",
+]
+incident = ["#428 S168-LB1a"]

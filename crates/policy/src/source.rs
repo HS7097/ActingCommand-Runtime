@@ -160,6 +160,22 @@ pub(crate) fn parse_selection_document(
             ),
         ));
     }
+    // #428 S168-LB1a (since 0.12.55; `contracts/scheduling/README.md`, "Record lists and the
+    // projection"): a key under `inventory.list.` holds a list reading, which the scheduler's
+    // projection leaves out; a document that declares one is refused at its `fact_key`.
+    if let Some(index) = parsed
+        .value
+        .facts
+        .iter()
+        .position(|fact| actingcommand_contract::is_list_reading_key(&fact.fact_key))
+    {
+        return Err(Box::new(parsed.source_map.diagnostic(
+            CatalogDiagnosticCode::TypeMismatch,
+            format!("/facts/{index}/fact_key"),
+            "a key under inventory.list. holds a list reading, which the scheduler never reads",
+            None,
+        )));
+    }
     Ok(parsed.value)
 }
 

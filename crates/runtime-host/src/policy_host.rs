@@ -58,7 +58,7 @@ use actingcommand_policy::{
     MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, NoProgressMemory, PolicyEvaluation,
     REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement,
     RunSlots, SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
-    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_instance_lines,
+    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_left_out_facts,
     instance_valued_pool_ids, plan_remedies,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
@@ -320,6 +320,9 @@ pub(crate) struct FactRefreshContext<'a> {
     /// IDLE-1P (#405): the instances the idle action closed, or is closing, as the cycle starts,
     /// by alias; their fact refresh waits for their next wake unless a candidate needs it now.
     pub(crate) idle_closed: &'a BTreeMap<String, actingcommand_policy::IdleClosed>,
+    /// #428 S168-LB1a: the keys the cycle's projection left out for each instance for their
+    /// record list's rows; they raise no fact refresh demand there.
+    pub(crate) left_out: &'a actingcommand_policy::LeftOutFacts,
 }
 
 /// Workflow #369 W-1: what keeps a policy dispatch from an instance as a cycle starts. Policy
@@ -1275,6 +1278,11 @@ pub(crate) struct PolicyHost {
     /// SCHED-C1d: what `host.capped_episodes` holds of `capped`, and the start anchor it is
     /// recorded under.
     capped_kept: CappedKept,
+    /// #428 S168-LB1a (`contracts/instance-fact-store.md`, "Left out of the projection"): per fact
+    /// identity, the record (the event that published it) whose `policy_fact_rows_exceeded` this
+    /// start recorded. Memory only, nothing on disk: a restart warns once more.
+    rows_exceeded_warned:
+        BTreeMap<(actingcommand_contract::FactScope, String), actingcommand_contract::EventId>,
 }
 
 /// SCHED-C1d (register §1.299 SC1-11): what the host recorded of the capped episodes as
@@ -1762,6 +1770,7 @@ impl PolicyHost {
             no_progress: NoProgressMemory::default(),
             capped: CappedMemory::default(),
             capped_kept: CappedKept::default(),
+            rows_exceeded_warned: BTreeMap::new(),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -2955,6 +2964,21 @@ impl PolicyHost {
             .unwrap_or_default()
     }
 
+    /// #428 S168-LB1a (`contracts/instance-fact-store.md`, "Left out of the projection"): whether
+    /// the record `event_id` of (`scope`, `fact_key`), which the projection left out for its rows,
+    /// is still to be warned of in this start, noting it as warned. A record of the key published
+    /// later is another record and is warned of once more.
+    pub(crate) fn note_rows_exceeded_warning(
+        &mut self,
+        scope: &actingcommand_contract::FactScope,
+        fact_key: &str,
+        event_id: actingcommand_contract::EventId,
+    ) -> bool {
+        self.rows_exceeded_warned
+            .insert((scope.clone(), fact_key.to_owned()), event_id)
+            != Some(event_id)
+    }
+
     /// SCHED-C1d: the capped episodes `host.capped_episodes` does not hold yet, with the anchor
     /// to record them under; `None` when it holds them as they are (a cycle that changed no
     /// episode records nothing).
@@ -3160,8 +3184,10 @@ impl PolicyHost {
         let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
         // #428 SCHED-C1e (register §1.299 SC1-12): with the lines each instance's
-        // `scheduling.pool_lines` in effect gives its pools as the cycle starts.
-        let evaluation = evaluate_with_instance_lines::<RuntimeHostError>(
+        // `scheduling.pool_lines` in effect gives its pools as the cycle starts; #428 S168-LB1a:
+        // with the keys the projection left out for their record list's rows.
+        let left_out = fact_refresh.left_out;
+        let evaluation = evaluate_with_left_out_facts::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
@@ -3179,6 +3205,7 @@ impl PolicyHost {
             &no_progress_guards,
             &mut capped,
             pool_lines,
+            left_out,
             |task, _instance_id, page_id| {
                 Ok(crate::host::chain_entry_holds_page(
                     procedure_manifest,

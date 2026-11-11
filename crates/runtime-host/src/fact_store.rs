@@ -35,6 +35,22 @@ type FactIdentity = (FactScope, String);
 type InvalidationIdentity = (FactScope, String, String, EventId);
 type HistoricalInvalidationIdentity = (FactIdentity, String);
 
+/// Workflow #428 S168-LB1a (since 0.12.55; `contracts/instance-fact-store.md`, "Left out of the
+/// projection"): one inline record list the scheduler's projection left out for its rows, more than
+/// the evaluation reads (`actingcommand_policy::MAX_OBSERVED_RECORD_LIST_ROWS`): its identity, its
+/// rows, the record (the event that published it) and the instances its scope applies to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LeftOutRecordList {
+    pub(crate) scope: FactScope,
+    pub(crate) fact_key: String,
+    pub(crate) rows: usize,
+    pub(crate) event_id: EventId,
+    pub(crate) instances: Vec<String>,
+}
+
+/// The record lists one projection left out, in store order.
+pub(crate) type LeftOutRecordLists = Vec<LeftOutRecordList>;
+
 /// Workflow #422 LN-2 (`contracts/ledger-observer.md` §11.1, §11.5): the index key prefixes of
 /// the instance store's tagged state, its facts and its instances' input boundaries.
 pub(crate) const TAGGED_STATE_PREFIXES: [&str; 2] = ["instance_facts/", "input_boundary/"];
@@ -1589,6 +1605,18 @@ impl InstanceFactStore {
         resources: &EvaluationResources,
         ledger_position: u64,
     ) -> RuntimeHostResult<EvaluationFacts> {
+        self.overlay_policy_facts_with_left_out(facts, resources, ledger_position)
+            .map(|(facts, _)| facts)
+    }
+
+    /// `overlay_policy_facts` with the record lists the projection left out for their rows
+    /// (Workflow #428 S168-LB1a, `contracts/instance-fact-store.md`, "Left out of the projection").
+    pub(crate) fn overlay_policy_facts_with_left_out(
+        &self,
+        facts: &EvaluationFacts,
+        resources: &EvaluationResources,
+        ledger_position: u64,
+    ) -> RuntimeHostResult<(EvaluationFacts, LeftOutRecordLists)> {
         self.overlay_policy_facts_with_disposition(
             facts,
             resources,
@@ -1611,6 +1639,7 @@ impl InstanceFactStore {
             PolicyFactConflictDisposition::RejectCaller,
             ContractLocation::ProjectPolicyForward,
         )
+        .map(|(facts, _)| facts)
     }
 
     fn overlay_policy_facts_with_disposition(
@@ -1620,7 +1649,7 @@ impl InstanceFactStore {
         ledger_position: u64,
         conflict_disposition: PolicyFactConflictDisposition,
         operation: impl Into<Location>,
-    ) -> RuntimeHostResult<EvaluationFacts> {
+    ) -> RuntimeHostResult<(EvaluationFacts, LeftOutRecordLists)> {
         let operation: Location = operation.into();
         // Workflow #308 RT-S1a: a resource target policy is written only by its formal entry
         // into the store; neither the configuration nor a forward caller may supply one.
@@ -1647,25 +1676,48 @@ impl InstanceFactStore {
             .map(|fact| policy_fact_identity(&fact.scope, &fact.fact_key))
             .collect::<BTreeSet<_>>();
         let mut selected = BTreeMap::<FactIdentity, &StoredFact>::new();
+        let mut left_out = LeftOutRecordLists::new();
         for stored in self.active.values() {
             // The instance projection consumes the policy instance keys, the priority
             // offset projection the offset keys and the expected-duration projection (SCH-M
-            // ED-2) the run-duration samples; none of them is an ordinary fact.
+            // ED-2) the run-duration samples; none of them is an ordinary fact. Workflow #428
+            // S168-LB1a: a list reading is a selection's input, never the scheduler's.
             if is_policy_instance_fact_key(&stored.record.key)
                 || priority_offset_task_id(&stored.record.key).is_some()
                 || stored.record.key == crate::run_duration::RUN_DURATION_FACT_KEY
+                || actingcommand_contract::is_list_reading_key(&stored.record.key)
             {
                 continue;
             }
-            if contexts
+            let applies = contexts
                 .iter()
-                .any(|context| stored.record.scope.matches(context))
-            {
-                selected.insert(
-                    (stored.record.scope.clone(), stored.record.key.clone()),
-                    stored,
-                );
+                .filter(|context| stored.record.scope.matches(context))
+                .map(|context| context.instance_id.as_str())
+                .collect::<Vec<_>>();
+            if applies.is_empty() {
+                continue;
             }
+            // Workflow #428 S168-LB1a (#419): a record list of more rows than the evaluation
+            // reads is left out for every instance its scope applies to, so the evaluation never
+            // refuses its whole input for one long list.
+            if let FactContent::Inline {
+                value: ContractFactValue::RecordList(rows),
+            } = &stored.record.content
+                && rows.len() > actingcommand_policy::MAX_OBSERVED_RECORD_LIST_ROWS
+            {
+                left_out.push(LeftOutRecordList {
+                    scope: stored.record.scope.clone(),
+                    fact_key: stored.record.key.clone(),
+                    rows: rows.len(),
+                    event_id: stored.event_id,
+                    instances: applies.into_iter().map(str::to_owned).collect(),
+                });
+                continue;
+            }
+            selected.insert(
+                (stored.record.scope.clone(), stored.record.key.clone()),
+                stored,
+            );
         }
         for (identity, stored) in &selected {
             let scope = policy_scope(&identity.0);
@@ -1752,7 +1804,7 @@ impl InstanceFactStore {
             &authority_revisions,
             &offset_identity,
         )?;
-        Ok(projected)
+        Ok((projected, left_out))
     }
 
     /// Every active priority offset record whose scope applies to at least one of

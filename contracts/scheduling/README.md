@@ -2581,12 +2581,12 @@ the switch.
 
 ## Record lists and the projection
 
-Workflow #428 S168-LB1a, not built yet ([v012-register.md](../v012-register.md) §1.309; the
-coordinator's ruling 2 of 11-11, not Alice's words; #419). Until it, the store's facts enter the
-evaluation whatever their rows, and the evaluator refuses the whole input when one record list
-holds more than 256 rows: the evaluation is skipped for every instance (`policy_evaluation_skipped`
+Workflow #428 S168-LB1a, since 0.12.55 ([v012-register.md](../v012-register.md) §1.309, §1.311;
+the coordinator's ruling 2 of 11-11, not Alice's words; #419). Before it, the store's facts
+entered the evaluation whatever their rows, and the evaluator refuses the whole input when one
+record list holds more than 256 rows: the evaluation is skipped for every instance (`policy_evaluation_skipped`
 above), and after `escalate_after` skips in a row it records `policy_evaluation_awaiting_person`.
-The store's row bound was 256 too, so no such record could exist; from S168-LB1a it is 1024
+The store's row bound was 256 too, so no such record could exist; since S168-LB1a it is 1024
 ([instance-fact-store.md](../instance-fact-store.md), "List reading facts", "Row bound"), and one
 long list must not stop the scheduler for every instance.
 
@@ -2600,16 +2600,18 @@ long list must not stop the scheduler for every instance.
   "A run's consumption read from a fact") and a fact the selection document declares
   ([selection-policy.md](../selection-policy.md),
   "Scheduling consumer"). So such a predicate never compiles and never reads Unknown at
-  evaluation. Until S168-LB1a such a catalog compiles and its predicate reads the list record as
-  any record list; S168-LB1a's report says whether a catalog on the resource repositories' `main`
-  names one. A timeline event's prefixes name keys to invalidate, not to read, and are not
+  evaluation. Before S168-LB1a such a catalog compiled and its predicate read the list record as
+  any record list; S168-LB1a read the four resource repositories' `main` before it built the
+  refusal and found no catalog that names one (register §1.311). A timeline event's prefixes name keys to invalidate, not to read, and are not
   refused.
 - **Another long record list stays one instance's.** A record list of more than 256 rows, the
   policy's own bound, is left out for the instances its scope applies to. The host records the
-  warning `policy_fact_rows_exceeded` (a proposed name) once for each such record after a start,
+  warning `policy_fact_rows_exceeded` (since 0.12.55) once for each such record after a start,
   not on every decision; a predicate that reads it is Unknown for those instances and the key
-  raises no fact refresh demand, since a reading cannot shorten a list
-  ([instance-fact-store.md](../instance-fact-store.md), "Left out of the projection"); every
+  raises no fact refresh demand, since a reading cannot shorten a list: the predicate reads
+  `fact_missing` and its task keeps `trigger_unknown` (or `feedback_stop_unknown`) with no
+  `fact_refresh_*` reason ([instance-fact-store.md](../instance-fact-store.md), "Left out of the
+  projection"); every
   other instance and key evaluate as before. The evaluator's
   bound and the schema's `maxItems` (`v2/common.schema.json`, a predicate's `record_list` value)
   stay 256.
@@ -2618,7 +2620,9 @@ long list must not stop the scheduler for every instance.
   the same and the evaluation's `facts` and its `fact_snapshot_id` no longer hold the record. The
   id is compared between an evaluation and its admission inside one running Runtime
   (`policy_facts_stale`), and a deploy restarts the Runtime, so no id is compared across builds;
-  S168-LB1a confirms that no reader recomputes a persisted one.
+  S168-LB1a confirmed that no reader recomputes a persisted one: the id is computed only by the
+  projection, at an evaluation and at an admission, and the ledger compares two persisted
+  dispatch records' ids only with each other (register §1.311).
 
 ## Forward Planning And Maintenance
 
@@ -2653,7 +2657,7 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Pool valuation base weight / gap weight | 0..=1,000,000 / 1..=1,000,000 milli |
 | A task's fixed value (SCHED-C1a, since 0.12.52) | 1..=9,007,199,254,740,991 milli |
 | A consumption's fallback, and a usable amount read from a fact (SCHED-C1f1, since 0.12.54) | 1..=9,007,199,254,740,991, at most a constant capacity |
-| Rows of a record list in the evaluation's input, and of a predicate's `record_list` value | 256 (S168-LB1a, not built yet: the projection leaves a longer record out, "Record lists and the projection") |
+| Rows of a record list in the evaluation's input, and of a predicate's `record_list` value | 256 (since S168-LB1a, 0.12.55, the projection leaves a longer record out, "Record lists and the projection") |
 
 Loop budgets are mandatory in V1; in V2 each run-count bound is optional (SS-3, "Optional run-count bounds"). Arrays and strings that exceed their limit reject the entire catalog. Duplicate identifiers, duplicate object keys, and unbounded recursive input are invalid.
 

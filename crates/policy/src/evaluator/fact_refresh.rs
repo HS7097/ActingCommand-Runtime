@@ -33,11 +33,11 @@ use actingcommand_selection_policy::UnknownReason;
 
 use super::{
     DecisionReason, DetectionSuggestion, EligibilityState, EvaluationFacts, EvaluationTime,
-    HostView, InstanceSnapshot, ObservedFact, PlacementCandidate, PolicyEvaluationError,
-    PolicyEvaluationResult, RankRecord, ResourceLoad, SchedulingDecisionState, TaskRank,
-    TaskRuntimeSnapshot, TaskWork, TieKey, UnknownReasonToken, activity_window_at,
-    deterministic_tie_breaker, min_wake, reason, reason_with, select_activity_profile,
-    snapshot_expected_runtime, unknown_token,
+    HostView, InstanceSnapshot, LeftOutFacts, ObservedFact, PlacementCandidate,
+    PolicyEvaluationError, PolicyEvaluationResult, RankRecord, ResourceLoad,
+    SchedulingDecisionState, TaskRank, TaskRuntimeSnapshot, TaskWork, TieKey, UnknownReasonToken,
+    activity_window_at, deterministic_tie_breaker, min_wake, reason, reason_with,
+    select_activity_profile, snapshot_expected_runtime, unknown_token,
 };
 use crate::codes::{PolicyCode, RefreshLimit};
 use crate::{
@@ -289,10 +289,13 @@ pub(super) struct PlanContext<'a> {
 
 /// The unknown realistic keys an undecided catalog predicate read in the scope of exactly
 /// `instance` (model §3.3, "目录谓词"): a server or game scope cannot be refreshed by a reading,
-/// and a key outside the realistic families is an instruction nobody gave.
+/// and a key outside the realistic families is an instruction nobody gave. #428 S168-LB1a: nor is
+/// a key the Runtime's projection left out for the instance (`left_out`), whose record list holds
+/// more rows than the evaluation reads: a reading cannot shorten it.
 pub(super) fn predicate_keys(
     suggestions: &[DetectionSuggestion],
     instance: &InstanceSnapshot,
+    left_out: &LeftOutFacts,
 ) -> Vec<RefreshKey> {
     let mut seen = BTreeSet::new();
     suggestions
@@ -301,6 +304,7 @@ pub(super) fn predicate_keys(
             matches!(&suggestion.scope, ScopeSelector::Instance { instance_id }
                 if *instance_id == instance.instance_id)
         })
+        .filter(|suggestion| !left_out.covers(&instance.instance_id, &suggestion.fact_key))
         .filter_map(|suggestion| {
             let unknown_reason = suggestion_unknown_reason(suggestion)?;
             (super::is_realistic(&suggestion.fact_key, unknown_reason)
