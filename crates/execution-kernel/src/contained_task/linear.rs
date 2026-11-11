@@ -33,9 +33,9 @@ use super::{
     MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock,
     PageCandidates, PageObservation, PostAdmissionOcrCollector, PreparedContainedTask,
     RecheckedInput, SampleRetries, StepPacing, TaskControl, TaskOperation, TaskProgram,
-    budget_elapsed_since, budget_now, budget_observation_now, is_geometry_change, pace_pause,
-    paced_step, resolve_page_reference, runtime_touch_choice, sample_budget_invalid, selection,
-    step_point_draw,
+    budget_elapsed_since, budget_now, budget_observation_now, invariant_broken, is_geometry_change,
+    pace_pause, paced_step, resolve_page_reference, runtime_touch_choice, sample_budget_invalid,
+    selection, step_point_draw,
 };
 use crate::RunOperationPolicy;
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
@@ -968,10 +968,11 @@ impl PreparedContainedTask {
         plan: &LinearPlan,
         mut run: LinearRun,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        // Workflow #428 DIAG-SI: an admitted plan always has a first step.
         let first = plan
             .steps
             .first()
-            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+            .ok_or_else(|| invariant_broken(|outcome| outcome))?;
         // An application entry captures nothing before its effect (R24): no frame, no wait.
         let mut observation = match &first.from {
             LinearFrom::Any => None,
@@ -1045,8 +1046,8 @@ impl PreparedContainedTask {
         // optional operation writes nothing. The next operation follows from the page that
         // passed, never from a comparison with the target page. Without an optional operation
         // every operation runs in order and `dispatched` is the operation index.
-        let state_invalid =
-            || ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code());
+        // Workflow #428 DIAG-SI: the cursor's own bookkeeping, a Runtime-internal invariant.
+        let state_invalid = || invariant_broken(|outcome| outcome);
         let mut current = 0;
         let mut dispatched = 0_u32;
         let mut handled = BTreeSet::new();
@@ -1106,7 +1107,14 @@ impl PreparedContainedTask {
                             handled.clear();
                             optional_run.next
                         }
-                        None => return Err(state_invalid().into()),
+                        None => {
+                            return Err(invariant_broken(|outcome| {
+                                outcome
+                                    .pack_operation_id(operation.id.as_str())
+                                    .page_id(reached.page_label.as_str())
+                            })
+                            .into());
+                        }
                     }
                 }
             };
@@ -1286,10 +1294,12 @@ impl PreparedContainedTask {
             }
             // The retry decision (§5.5): the gate first, then this step's own page. The gate is
             // the intermediate page, or every candidate (Workflow #339 §3.5).
+            // Workflow #428 DIAG-SI: admission gives an application entry no retry.
             let LinearFrom::Page(own_page) = &step.from else {
-                return Err(
-                    ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()).into(),
-                );
+                return Err(invariant_broken(|outcome| {
+                    outcome.pack_operation_id(operation.id.as_str())
+                })
+                .into());
             };
             self.linear_retry_delay(runtime, run, retry_interval)?;
             let decision_started = budget_now(runtime, pace);
@@ -1837,10 +1847,11 @@ impl PreparedContainedTask {
         let purpose = LinearWaitPurpose::AfterInput;
         let deadline = run.timing.deadline();
         let game = self.control.game.as_str();
+        // Workflow #428 DIAG-SI: a wait set always holds its skip target.
         let skip_target = *candidates
             .pages
             .last()
-            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+            .ok_or_else(|| invariant_broken(|outcome| outcome))?;
         let settle = candidates.settle;
         // #385 P-k (performance model v1.4.2 §5.1, §5.3): the wait's budget and its settle are
         // budget time; `seen` is a budget instant.

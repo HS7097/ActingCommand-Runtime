@@ -2664,6 +2664,14 @@
     "consumption_source": {
       "type": "vocab:consumption_source",
       "description": "Where the amount of a task's consumption of a pool read from a fact comes from in an evaluation: the fact's usable record of the instance, or the entry's fallback (#428 SCHED-C1f1, contracts/scheduling/README.md \"A run's consumption read from a fact\")."
+    },
+    "state_problem": {
+      "type": "vocab:state_problem",
+      "description": "Which kind of invalid state contained_task_state_invalid ended a contained task's run with (#428 DIAG-SI, since 0.12.55)."
+    },
+    "phase_id": {
+      "type": "id",
+      "description": "The declared id of a stage of a phased route (a task's phases[].id): the stage the run was in (#428 DIAG-SI, since 0.12.55)."
     }
   },
   "vocabularies": {
@@ -9123,6 +9131,28 @@
         },
         "host": {
           "description": "A run the Runtime starts for itself: a startup package or a recovery ladder rung; a pause or a person's hold stops it."
+        }
+      }
+    },
+    "state_problem": {
+      "description": "Which kind of invalid state ended a contained task's run with contained_task_state_invalid, the code's value state_problem (Workflow #428 DIAG-SI, register 1.320, since 0.12.55). The kernel and the host emit the code at many places; each gives its kind and, where it knows them, the page (page_id), the operation (pack_operation_id) and the stage (phase_id).",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/outcome/vocabulary.rs",
+        "enum": "StateProblem"
+      },
+      "tokens": {
+        "no_move_from_page": {
+          "description": "No operation of the stage the run is in (of the package, for a route without stages) leaves the page the run observes, and the page is no target and no error page of the package: an authoring error of the package. page_id names the page and phase_id the stage."
+        },
+        "transition_refused": {
+          "description": "The run's state machine refused a transition the kernel asked of it in its state (run_transition_invalid inside the kernel): a Runtime-internal fault."
+        },
+        "runtime_invariant": {
+          "description": "A Runtime-internal invariant broke: a value that cannot be absent was absent, an arithmetic that cannot fail failed, or an answer that is never given was given (a pacing factor below 1000, a confirmation that held a step that is no wait step, a Lab operation's own bookkeeping)."
+        },
+        "held_state_unusable": {
+          "description": "A state the run's layers or a package registry hold is not one the host can use: the run's navigation or interrupt state, a layer package the run admitted, or a registry's return-home entry without a listed package."
         }
       }
     }

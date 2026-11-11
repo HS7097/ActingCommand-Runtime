@@ -34,10 +34,11 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::error::spelled;
 use actingcommand_contract::codes::{ContractLocation, DeviceSelfCheckFailure, SharedCode};
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Outcome, StateProblem};
 use actingcommand_contract::{
     SchedulingEffectCondition, TaskEntryRecoveryRole, TaskTimingBudgetOrigin,
 };
+use actingcommand_execution_kernel::ContainedTaskError;
 pub(super) use actingcommand_execution_kernel::MAX_PREREQUISITE_DEPTH;
 use actingcommand_execution_kernel::{MAX_GATED_STEPS, PrerequisiteChain};
 
@@ -166,12 +167,21 @@ impl HostShared {
         let Some(package_id) = registry.return_home_package(server) else {
             return Ok(None);
         };
+        // Workflow #428 DIAG-SI: the registry names a return-home package it lists no directory
+        // for, a state the registry holds that the host cannot use.
         let path = registry.package_path(package_id).map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                SharedCode::ContainedTaskStateInvalid,
-                HostLocation::ResolvePrerequisiteChain,
-                RuntimeErrorCode::RuntimeHalted,
-            ))
+            RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    SharedCode::ContainedTaskStateInvalid,
+                    HostLocation::ResolvePrerequisiteChain,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| {
+                    outcome
+                        .state_problem(StateProblem::HeldStateUnusable)
+                        .package_id(package_id)
+                }),
+            )
         })?;
         let binding = ContainedTaskRecoveryBinding::new(path.to_string_lossy()).map_err(|_| {
             prerequisite_refusal(
@@ -559,14 +569,42 @@ fn fail_gate(
     gate: &Gate,
     error: ContainedTaskRunError<RequestFailure>,
 ) -> ContainedTaskRunError<RequestFailure> {
-    let code = match &error {
-        ContainedTaskRunError::Task(error) => error.code().as_str(),
+    let outcome = match &error {
+        ContainedTaskRunError::Task(error) => layer_failure_outcome(error),
         ContainedTaskRunError::Boundary(failure)
-        | ContainedTaskRunError::NonfatalOperation(failure) => failure.error.code(),
+        | ContainedTaskRunError::NonfatalOperation(failure) => {
+            Outcome::relayed(failure.error.code())
+        }
     };
-    match record_closed(runtime, &gate.open, code) {
+    match record_closed(runtime, &gate.open, outcome) {
         Ok(()) => error,
         Err(failure) => ContainedTaskRunError::Boundary(failure),
+    }
+}
+
+/// Workflow #428 DIAG-SI (register §1.320): the outcome of a layer's task failure as its gate's
+/// records carry it (`EntryRecoveryFailed`, `EntryTargetDisposition { FailClosed }`): a
+/// `contained_task_state_invalid` keeps the values that say what was invalid (`state_problem`
+/// and the page, operation and stage it names), every other code is its code alone, as before.
+pub(super) fn layer_failure_outcome(error: &ContainedTaskError) -> Outcome {
+    layer_state_values(error).unwrap_or_else(|| Outcome::relayed(error.code().as_str()))
+}
+
+/// Workflow #428 DIAG-SI: the values of a layer's `contained_task_state_invalid`, `None` for any
+/// other failure and for one without values.
+pub(super) fn layer_state_values(error: &ContainedTaskError) -> Option<Outcome> {
+    (error.has_values() && error.code().as_str() == SharedCode::ContainedTaskStateInvalid.as_str())
+        .then(|| error.outcome())
+}
+
+/// Workflow #428 DIAG-SI: a layer's task failure carried out as its code alone, as before, or, for
+/// a `contained_task_state_invalid` with values, as that code with its values.
+fn layer_task_failure(error: &ContainedTaskError) -> ContainedTaskRunError<RequestFailure> {
+    match layer_state_values(error) {
+        Some(outcome) => {
+            ContainedTaskRunError::task_with_outcome(SharedCode::ContainedTaskStateInvalid, outcome)
+        }
+        None => ContainedTaskRunError::task(error.code().as_str()),
     }
 }
 
@@ -605,9 +643,9 @@ fn close_open(
             }
         }
         ContainedTaskRunError::Task(error) => {
-            match record_closed(runtime, open, error.code().as_str()) {
+            match record_closed(runtime, open, layer_failure_outcome(&error)) {
                 Ok(()) if keep_task_error => ContainedTaskRunError::Task(error),
-                Ok(()) => ContainedTaskRunError::task(error.code().as_str()),
+                Ok(()) => layer_task_failure(&error),
                 Err(failure) => ContainedTaskRunError::Boundary(failure),
             }
         }
@@ -628,13 +666,13 @@ fn close_open(
             }
         }
         ContainedTaskRunError::NonfatalOperation(failure) => {
-            match record_closed(runtime, open, failure.error.code()) {
+            match record_closed(runtime, open, Outcome::relayed(failure.error.code())) {
                 Ok(()) => ContainedTaskRunError::NonfatalOperation(failure),
                 Err(record) => ContainedTaskRunError::Boundary(record),
             }
         }
         ContainedTaskRunError::Boundary(failure) => {
-            match record_closed(runtime, open, failure.error.code()) {
+            match record_closed(runtime, open, Outcome::relayed(failure.error.code())) {
                 Ok(()) => ContainedTaskRunError::Boundary(failure),
                 Err(record) => ContainedTaskRunError::Boundary(record),
             }
@@ -647,10 +685,10 @@ fn close_open(
 fn record_closed(
     runtime: &RuntimeContainedTask<'_>,
     open: &[(String, TaskEntryRecoveryRole)],
-    code: &str,
+    outcome: Outcome,
 ) -> Result<(), RequestFailure> {
-    // Ledger revision 3: the gate's failure is each fact's outcome, the code it relays.
-    let outcome = actingcommand_contract::outcome::Outcome::relayed(code);
+    // Ledger revision 3: the gate's failure is each fact's outcome, the code it relays (Workflow
+    // #428 DIAG-SI: with the values of a layer's `contained_task_state_invalid`).
     for (package_label, role) in open.iter().rev() {
         runtime.record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
             package_label: Some(package_label.clone()),

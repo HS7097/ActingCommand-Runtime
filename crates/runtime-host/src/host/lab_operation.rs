@@ -8,7 +8,7 @@ use super::online_observation::{
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::{RuntimeContractCode, SharedCode};
-use actingcommand_contract::outcome::{Code, Outcome};
+use actingcommand_contract::outcome::{Code, Outcome, StateProblem};
 use actingcommand_contract::page_projection::{FrameIdentity, FrameKind, PageProjection};
 use actingcommand_contract::{
     ContainedLabOperationRequest, ContainedLabOperationResult, ContainedObservationEvidence,
@@ -1498,6 +1498,22 @@ fn lab_declared_state_failure(code: impl Into<Code>) -> RequestFailure {
     )
 }
 
+/// Workflow #428 DIAG-SI (register §1.320): [`lab_declared_state_failure`] of
+/// `contained_task_state_invalid`, naming its kind: the Lab operation's own attempt and frame
+/// bookkeeping is the Runtime's, so a break of it is `state_problem` `runtime_invariant`.
+fn lab_declared_state_invalid() -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(
+            SharedCode::ContainedTaskStateInvalid,
+            ContractLocation::RunContainedTask,
+            RuntimeErrorCode::BackendOperationFailed,
+        )
+        .with_outcome_values(|outcome| outcome.state_problem(StateProblem::RuntimeInvariant)),
+        RuntimeReceiptState::Failed,
+        None,
+    )
+}
+
 /// The request a Lab operation serves: its request, instance and connection.
 #[derive(Clone, Copy)]
 struct LabOperationContext<'a> {
@@ -1706,7 +1722,7 @@ impl LabOperationRuntime<'_> {
         action
             .validate()
             .map_err(|_| lab_declared_state_failure(HostCode::ContainedTaskEffectInvalid))?;
-        let invalid = || lab_declared_state_failure(SharedCode::ContainedTaskStateInvalid);
+        let invalid = lab_declared_state_invalid;
         let attempt = u32::try_from(self.attempts.len())
             .ok()
             .and_then(|count| count.checked_add(1))
@@ -1768,7 +1784,7 @@ impl LabOperationRuntime<'_> {
         frame: Option<InputFrameContext>,
     ) -> Result<(), RequestFailure> {
         self.clock_read()?;
-        let invalid = || lab_declared_state_failure(SharedCode::ContainedTaskStateInvalid);
+        let invalid = lab_declared_state_invalid;
         let index = self.attempts.len().checked_sub(1).ok_or_else(invalid)?;
         let prepared_sequence = self
             .prepared_artifact
@@ -2052,9 +2068,10 @@ impl ContainedTaskRuntime for LabOperationRuntime<'_> {
         self.clock_read()?;
         match trace {
             ContainedTaskTrace::StepStarted { .. } => {
-                self.started_attempts = self.started_attempts.checked_add(1).ok_or_else(|| {
-                    lab_declared_state_failure(SharedCode::ContainedTaskStateInvalid)
-                })?;
+                self.started_attempts = self
+                    .started_attempts
+                    .checked_add(1)
+                    .ok_or_else(lab_declared_state_invalid)?;
                 self.after_input = false;
                 if self.started_attempts == 1 {
                     self.recheck_from = Some(self.frames.len());

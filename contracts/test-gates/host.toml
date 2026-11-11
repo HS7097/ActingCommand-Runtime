@@ -3529,3 +3529,11 @@ tests = [
     "actingcommand-runtime-client::lib::client::run_summary_stopped_tests::r6b1_s1_the_run_summary_reads_a_stopped_record_beside_its_failed_terminal",
 ]
 incident = ["#429 R-6b1"]
+
+# Workflow #428 DIAG-SI (0.12.55; register §1.320; brief rd-1111/brief-diag-si.md): a phased prerequisite package on a page outside its entry page set that its first stage has no operation from ends its layer and the run with contained_task_state_invalid as before (receipt failed, category error, no input), and the layer's entry_recovery_failed, the gate's fail-closed entry_target_disposition and the run's terminal carry state_problem no_move_from_page, page_id and phase_id
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_428_diag_si::diag_si_a_prerequisite_layer_without_a_move_names_the_page_and_the_stage_in_its_records",
+]
+incident = ["#428 DIAG-SI"]

@@ -4,13 +4,14 @@
 
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation, ProgramProblem};
 use crate::{
-    ExecutionBundleError, ExternallyVerifiedBundle, InputFrameContext, ObservedFrame, RunDirective,
-    RunFailureObservation, RunFailureStage, RunOperationCandidate, RunOperationFailureDecision,
-    RunOperationPolicy, RunPause, RunPauseReason, RunStateConfig, RunStateMachine, RunTerminal,
-    decide_run_operation_failure, select_run_operation,
+    ExecutionBundleError, ExternallyVerifiedBundle, InputFrameContext, ObservedFrame,
+    RunDecisionError, RunDecisionKind, RunDirective, RunFailureObservation, RunFailureStage,
+    RunOperationCandidate, RunOperationFailureDecision, RunOperationPolicy, RunPause,
+    RunPauseReason, RunStateConfig, RunStateMachine, RunTerminal, decide_run_operation_failure,
+    select_run_operation,
 };
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Outcome};
+use actingcommand_contract::outcome::{Code, Outcome, StateProblem};
 use actingcommand_contract::{
     ApplicationLifecycleAction, DesignatedEffectReach, EffectiveOperationTiming,
     EffectiveTaskTiming, EffectiveTimingSource, EffectiveTimingValue, InputAction,
@@ -189,6 +190,9 @@ mod gate_411_bt_b5;
 // Workflow #428 NAV-L1 (register §1.319): a phased layer enters at its entry page's stage.
 #[cfg(test)]
 mod gate_428_nav_l1;
+// Workflow #428 DIAG-SI (register §1.320): `contained_task_state_invalid` says what was invalid.
+#[cfg(test)]
+mod gate_428_diag_si;
 // Workflow #396 REC-6.
 #[cfg(test)]
 mod value_test_tests;
@@ -696,6 +700,70 @@ fn sample_budget_invalid(
     error.with_values(match pack_operation_id {
         Some(pack_operation_id) => outcome.pack_operation_id(pack_operation_id),
         None => outcome,
+    })
+}
+
+/// Workflow #428 DIAG-SI (register §1.320): `contained_task_state_invalid` naming its kind,
+/// `problem` (`state_problem`), with the locating values `values` adds where the place knows them
+/// (`page_id`, `pack_operation_id`, `phase_id`). The code, its category and how the run ends are
+/// unchanged; only the values are new.
+fn state_invalid(
+    problem: StateProblem,
+    values: impl FnOnce(Outcome) -> Outcome,
+) -> ContainedTaskError {
+    ContainedTaskError::valued(SharedCode::ContainedTaskStateInvalid.code(), |outcome| {
+        values(outcome.state_problem(problem))
+    })
+}
+
+/// Workflow #428 DIAG-SI: a Runtime-internal invariant broke, with the values `values` adds.
+fn invariant_broken(values: impl FnOnce(Outcome) -> Outcome) -> ContainedTaskError {
+    state_invalid(StateProblem::RuntimeInvariant, values)
+}
+
+/// Workflow #428 DIAG-SI: [`invariant_broken`] with its developer detail `detail`, as the place
+/// wrote it before.
+fn invariant_detailed(detail: &str, values: impl FnOnce(Outcome) -> Outcome) -> ContainedTaskError {
+    let code = SharedCode::ContainedTaskStateInvalid.code();
+    ContainedTaskError::with_detail(code, detail).with_values(values(
+        Outcome::new(code).state_problem(StateProblem::RuntimeInvariant),
+    ))
+}
+
+/// Workflow #428 DIAG-SI: the kind of invalid state a refusal of the run's state machine is, by
+/// the kind the machine gives it ([`RunDecisionKind`]), never by its message.
+fn decision_problem(error: &RunDecisionError) -> StateProblem {
+    match error.kind() {
+        RunDecisionKind::NoOperationFromPage => StateProblem::NoMoveFromPage,
+        RunDecisionKind::TransitionRefused => StateProblem::TransitionRefused,
+        RunDecisionKind::Invalid | RunDecisionKind::CandidatesExhausted => {
+            StateProblem::RuntimeInvariant
+        }
+    }
+}
+
+/// Workflow #428 DIAG-SI: the run's state machine refused `error`: `contained_task_state_invalid`
+/// with the kind of the refusal, the operation the kernel named (`pack_operation_id`, when it
+/// named one) and the page (`page_id`) and the stage (`phase_id`, a phased route's) the machine
+/// is on.
+fn machine_refusal(
+    error: &RunDecisionError,
+    machine: &RunStateMachine,
+    operation_id: Option<&str>,
+) -> ContainedTaskError {
+    state_invalid(decision_problem(error), |outcome| {
+        let outcome = match operation_id {
+            Some(operation_id) => outcome.pack_operation_id(operation_id),
+            None => outcome,
+        };
+        let outcome = match machine.current_page() {
+            Some(page) => outcome.page_id(page),
+            None => outcome,
+        };
+        match machine.phase_evidence(None) {
+            Some(phase) => outcome.phase_id(phase.id),
+            None => outcome,
+        }
     })
 }
 
@@ -2935,14 +3003,15 @@ fn wall_deadline_now<R: ContainedTaskRuntime>(
 }
 
 /// #385 P-k (§5.6 item 2): the run's budget clock from a `step_pacing()` answer `pacing` on. A
-/// factor below 1000 is never used: the run ends with `contained_task_state_invalid`.
+/// factor below 1000 is never used: the run ends with `contained_task_state_invalid`
+/// (Workflow #428 DIAG-SI: `runtime_invariant`, an answer the Runtime never gives).
 fn paced_step<R: ContainedTaskRuntime>(
     runtime: &mut R,
     pace: PaceClock,
     pacing: StepPacing,
 ) -> Result<PaceClock, ContainedTaskError> {
     pace.at_step(pacing.factor_milli, || runtime.monotonic_now())
-        .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))
+        .ok_or_else(|| invariant_broken(|outcome| outcome))
 }
 
 /// Workflow #373 NAV-6: a frame of an entry check, the page of the entry it matched or the scene
@@ -5046,8 +5115,9 @@ impl PreparedContainedTask {
                     .collect(),
             );
         }
+        // Workflow #428 DIAG-SI: each refusal of the run's state machine below names its kind.
         let mut machine = RunStateMachine::new(config, 0)
-            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+            .map_err(|error| state_invalid(decision_problem(&error), |outcome| outcome))?;
         // Workflow #373 NAV-3b: a phased route enters at the stage its matched entry page starts.
         // Workflow #428 NAV-L1: so does a layer the host runs for another package's entry (entry
         // `BoundRecovery`) whose first observed page is one of the package's entry pages; on any
@@ -5058,9 +5128,9 @@ impl PreparedContainedTask {
                 .zip(observation.as_ref())
                 .and_then(|(entry_pages, observed)| entry_pages.phase_of(&observed.page_label))
         {
-            machine.start_at_phase(phase).map_err(|_| {
-                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
-            })?;
+            machine
+                .start_at_phase(phase)
+                .map_err(|error| machine_refusal(&error, &machine, None))?;
         }
         machine
             .observe_page(
@@ -5068,13 +5138,13 @@ impl PreparedContainedTask {
                     .as_ref()
                     .map(|observed| observed.page_label.clone()),
             )
-            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+            .map_err(|error| machine_refusal(&error, &machine, None))?;
         // #411 B20: an entry page that the stage the run starts at lists in its `end_pages` ends
         // the run there before any step; `next_directive` then answers the Completed end.
         if self.program.phases.is_some() && required_entry.is_some() {
-            machine.end_on_entry_page().map_err(|_| {
-                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
-            })?;
+            machine
+                .end_on_entry_page()
+                .map_err(|error| machine_refusal(&error, &machine, None))?;
         }
         // #412 Lab B-3 (design §2.1 point 5): a declared operation's run compares no steps.
         let mut stability_tracker = StabilityTracker {
@@ -5135,9 +5205,7 @@ impl PreparedContainedTask {
                     })?;
                 machine
                     .initial_application_directive(candidate)
-                    .map_err(|_| {
-                        ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
-                    })?
+                    .map_err(|error| machine_refusal(&error, &machine, Some(candidate.id())))?
             } else {
                 // Workflow #390 EXEC-1: the execution-owned transition dispatches the page's
                 // candidates in order; one whose `when` does not hold on the frame is withdrawn
@@ -5170,9 +5238,7 @@ impl PreparedContainedTask {
                                 .as_ref()
                                 .map(|observed| observed.page_label.clone()),
                         )
-                        .map_err(|_| {
-                            ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
-                        })?;
+                        .map_err(|error| machine_refusal(&error, &machine, None))?;
                 }
                 RunDirective::ExecuteOperation {
                     operation_id,
@@ -5272,10 +5338,8 @@ impl PreparedContainedTask {
                                 .map_err(ContainedTaskRunError::Boundary)?;
                             machine
                                 .operation_read_in_place(&operation_id, last.page_label.clone())
-                                .map_err(|_| {
-                                    ContainedTaskError::new(
-                                        SharedCode::ContainedTaskStateInvalid.code(),
-                                    )
+                                .map_err(|error| {
+                                    machine_refusal(&error, &machine, Some(operation_id.as_str()))
                                 })?;
                             observation = Some(last);
                             break;
@@ -5785,10 +5849,8 @@ impl PreparedContainedTask {
                         effected.map_err(ContainedTaskRunError::Boundary)?;
                         machine
                             .operation_effect_completed(&operation_id)
-                            .map_err(|_| {
-                                ContainedTaskError::new(
-                                    SharedCode::ContainedTaskStateInvalid.code(),
-                                )
+                            .map_err(|error| {
+                                machine_refusal(&error, &machine, Some(operation_id.as_str()))
                             })?;
                         // ACT-1 (§1.6): the settled path reads frames in place of the blind
                         // wait, and the wait's boundary stays, empty. ACT-4: the frame that
@@ -5975,9 +6037,9 @@ impl PreparedContainedTask {
                             ),
                             // #411 B36/B19 (A35-S3): only a wait step holds on its own page.
                             PostconditionResolution::Held { .. } => {
-                                return Err(ContainedTaskError::new(
-                                    SharedCode::ContainedTaskStateInvalid.code(),
-                                )
+                                return Err(invariant_broken(|outcome| {
+                                    outcome.pack_operation_id(operation_id.as_str())
+                                })
                                 .into());
                             }
                         };
@@ -6120,10 +6182,11 @@ impl PreparedContainedTask {
                                                 trigger,
                                             ) => {
                                                 machine.operation_needs_recovery(trigger).map_err(
-                                                    |_| {
-                                                        ContainedTaskError::new(
-                                                            SharedCode::ContainedTaskStateInvalid
-                                                                .code(),
+                                                    |error| {
+                                                        machine_refusal(
+                                                            &error,
+                                                            &machine,
+                                                            Some(operation_id.as_str()),
                                                         )
                                                     },
                                                 )?;
@@ -6143,9 +6206,9 @@ impl PreparedContainedTask {
                                                 .into());
                                             }
                                             RunOperationFailureDecision::Retry { .. } => {
-                                                return Err(ContainedTaskError::new(
-                                                    SharedCode::ContainedTaskStateInvalid.code(),
-                                                )
+                                                return Err(invariant_broken(|outcome| {
+                                                    outcome.pack_operation_id(operation_id.as_str())
+                                                })
                                                 .into());
                                             }
                                         }
@@ -6191,9 +6254,9 @@ impl PreparedContainedTask {
                                     // #411 B36/B19 (A35-S3): only a wait step holds on its own
                                     // page.
                                     PostconditionResolution::Held { .. } => {
-                                        return Err(ContainedTaskError::new(
-                                            SharedCode::ContainedTaskStateInvalid.code(),
-                                        )
+                                        return Err(invariant_broken(|outcome| {
+                                            outcome.pack_operation_id(operation_id.as_str())
+                                        })
                                         .into());
                                     }
                                 }
@@ -6207,10 +6270,8 @@ impl PreparedContainedTask {
                                     failed_observation.as_ref(),
                                 )?;
                                 recovery_timing = timing_failure;
-                                machine.operation_needs_recovery(trigger).map_err(|_| {
-                                    ContainedTaskError::new(
-                                        SharedCode::ContainedTaskStateInvalid.code(),
-                                    )
+                                machine.operation_needs_recovery(trigger).map_err(|error| {
+                                    machine_refusal(&error, &machine, Some(operation_id.as_str()))
                                 })?;
                                 break;
                             }
@@ -6262,11 +6323,12 @@ impl PreparedContainedTask {
                         }
                     }
                 }
-                RunDirective::Continue { .. } => {
-                    return Err(ContainedTaskError::new(
-                        SharedCode::ContainedTaskStateInvalid.code(),
-                    )
-                    .into());
+                // Workflow #428 DIAG-SI: the transition answers `Continue` only to a confirmed
+                // step, never as a next directive.
+                RunDirective::Continue { current_page } => {
+                    return Err(
+                        invariant_broken(|outcome| outcome.page_id(current_page.as_str())).into(),
+                    );
                 }
                 RunDirective::Terminal(RunTerminal::Completed { current_page }) => {
                     // #411 B16 part 1: an operation's keyed cap ended the run on its page.
@@ -6335,7 +6397,11 @@ impl PreparedContainedTask {
             // Every observation a step completes on carries its sample while a declaration is
             // in force; one without it is a Runtime-internal invariant (Workflow #387 D1c-F).
             let sample = observation.stability_sample.clone().ok_or_else(|| {
-                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
+                invariant_broken(|outcome| {
+                    outcome
+                        .pack_operation_id(operation_label)
+                        .page_id(observation.page_label.as_str())
+                })
             })?;
             let transition = stability_tracker.propose(sample, declaration, step_index)?;
             let (trace, terminal_reason) = match &transition {
@@ -6385,7 +6451,7 @@ impl PreparedContainedTask {
             .map_err(ContainedTaskRunError::Boundary)?;
         machine
             .operation_succeeded(operation_label, Some(observation.page_label.clone()))
-            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+            .map_err(|error| machine_refusal(&error, machine, Some(operation_label)))?;
         if let Some(reason) = terminal_reason {
             runtime
                 .record(ContainedTaskTrace::StabilityTerminal {
@@ -6467,7 +6533,7 @@ impl PreparedContainedTask {
             .map_err(ContainedTaskRunError::Boundary)?;
         machine
             .operation_ended_keyed(operation_label, page_label.clone())
-            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+            .map_err(|error| machine_refusal(&error, machine, Some(operation_label)))?;
         self.finish_success_with_key(
             runtime,
             ocr_collector,
@@ -6737,9 +6803,11 @@ impl PreparedContainedTask {
             (Some(key), None) => Some(key),
             (None, key) => key,
             (Some(_), Some(_)) => {
-                return Err(
-                    ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()).into(),
-                );
+                return Err(invariant_broken(|outcome| match final_page.as_deref() {
+                    Some(page) => outcome.page_id(page),
+                    None => outcome,
+                })
+                .into());
             }
         };
         // Workflow #384 D2-S2 (model §3.5): the readings of every handed-off frame are joined
@@ -7992,7 +8060,7 @@ impl PreparedContainedTask {
         let handed_over = budget_now(runtime, pace);
         let earlier = |instant: Instant| {
             instant.checked_sub(spent).ok_or_else(|| {
-                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
+                invariant_broken(|outcome| outcome.pack_operation_id(operation.id.as_str()))
             })
         };
         let mut started = earlier(handed_over)?;
@@ -11354,10 +11422,16 @@ impl TaskOperation {
         after_page: Option<String>,
         stage: RunFailureStage,
     ) -> Result<RunOperationFailureDecision, ContainedTaskError> {
+        // Workflow #428 DIAG-SI: a refused failure observation or decision names its kind and the
+        // operation.
+        let refused = |error: RunDecisionError| {
+            state_invalid(decision_problem(&error), |outcome| {
+                outcome.pack_operation_id(self.id.as_str())
+            })
+        };
         let observation = RunFailureObservation::new(&self.id, attempt, reason, after_page, stage)
-            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
-        decide_run_operation_failure(policy, observation)
-            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))
+            .map_err(refused)?;
+        decide_run_operation_failure(policy, observation).map_err(refused)
     }
 
     fn destination_pages(&self) -> Result<Vec<String>, ContainedTaskError> {

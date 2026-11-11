@@ -37,6 +37,7 @@
 use super::{
     ContainedTaskError, ContainedTaskGuardEvaluation, ContainedTaskRunError, ContainedTaskRuntime,
     ContainedTaskTrace, PageObservation, PreparedContainedTask, TaskOperation, TaskProgram,
+    machine_refusal,
 };
 use crate::codes::ExecutionKernelCode;
 use crate::{OperationRunCap, RunDecisionError, RunDirective, RunMaxRunsEnd, RunStateMachine};
@@ -434,7 +435,9 @@ impl PreparedContainedTask {
     /// passed over). #411 A45: a page the package declares as an error page, from which no
     /// operation leaves, ends the run with `contained_task_error_page_reached`, before any input
     /// from it, as a step that reached it does. Any other refused decision is
-    /// `contained_task_state_invalid`, as before.
+    /// `contained_task_state_invalid`, as before; Workflow #428 DIAG-SI (register §1.320): it names
+    /// the kind the transition gives the refusal (`state_problem`: `no_move_from_page` when no
+    /// operation of the stage leaves the page, with `page_id` and, in a phased route, `phase_id`).
     pub(super) fn candidate_directive<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -470,11 +473,7 @@ impl PreparedContainedTask {
                 )
                 .into());
             }
-            Err(_) => {
-                return Err(
-                    ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()).into(),
-                );
-            }
+            Err(error) => return Err(machine_refusal(&error, machine, None).into()),
         };
         let operation_id = match directive {
             RunDirective::ExecuteOperation {
@@ -500,7 +499,7 @@ impl PreparedContainedTask {
         }
         machine
             .operation_withdrawn(&operation_id)
-            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+            .map_err(|error| machine_refusal(&error, machine, Some(operation_id.as_str())))?;
         Ok(None)
     }
 
@@ -563,7 +562,7 @@ impl PreparedContainedTask {
             .map_err(ContainedTaskRunError::Boundary)?;
         machine
             .operation_passed_over(operation_id, page_label.to_owned())
-            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+            .map_err(|error| machine_refusal(&error, machine, Some(operation_id)))?;
         Ok(())
     }
 }
