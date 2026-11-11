@@ -405,6 +405,28 @@ its architecture test are unchanged ([3, 8] and [3, 7]).
   `request_stop_instance_run_completed` change within it. `install-selection`, `install-control`,
   `install-cli`, `install-root`, `player-hold` and `tools-layout`: untouched.
 
+### Planned: Workflow #437 MAPP (device groups; [device-group.md](device-group.md), [v012-register.md](v012-register.md) §1.323)
+
+Planned row, **not in force** (MAPP, not built yet): main at `e2b5590f` declares `actingd-config`
+[5, 28], and MAPP-C, which writes the row, raises nothing. The first code slice (MAPP-1) turns it
+on. When another slice takes 29 first, the row takes the next free revision with the same meaning.
+
+| Interface | Rev | Meaning | Anchor | Slice |
+|---|---|---|---|---|
+| `actingd-config` | 29 | revision 28 plus the optional member `device_group` of an `instances[]` entry (a name of 1 to 64 bytes under the alias rules, read at assembly, not settable; manifest row `instance.<instance id>.device_group`) and check-config's report member `device_group` on the row of an entry that names it ([device-group.md](device-group.md), "The configuration form"). Entries with one value are one device group. A group of several is refused at assembly unless its members name one device by one key, are no handset or fixture, have different `application_id`s, each declare a `startup_package`, and turn on no device-level action that slice 1 refuses (`device_group_config_invalid`, proposed). From the same build, two entries outside one group that name one device are refused (`undeclared_shared_device`). Additive: a build before it refuses a file that names the member, because the entry denies unknown members (`config_decode_failed`); a file that does not name it keeps its revision, so the Runtime still reads revisions 5 to 28 and declares [5, 29]. The console and the installer, the other two parties of the negotiation, follow in the UI repository | `apps/actingd/src/config.rs`, `InstanceConfig` (planned `device_group`); `apps/actingd/src/check_config.rs`; `distribution/windows/component-interfaces.json` | MAPP-1 |
+
+- **Not moved (proved in [device-group.md](device-group.md), "Interfaces").**
+  - `ledger`: every record a group of several writes has an existing shape. That covers the reason
+    `device_group_waiting` with its values, the switch's `ApplicationLifecycle` records, the phase
+    `startup_package_scheduled`, the startup run's chain, and the failed settlement with
+    `application_switch_failed`. The reader only spells codes and value words; `EventLinks` keep
+    `instance_id` alone.
+  - `runtime-client`: `Status` and every request keep their shape. The group in `Status` is
+    proposed for the console slice.
+  - `runtime-outcomes`: stays 1, with the proposed codes and vocabularies added within it.
+  - `package`, `install-selection`, `install-control`, `install-cli`, `install-root`,
+    `player-hold` and `tools-layout`: untouched.
+
 ## Bump rule
 
 - A revision rises when a peer that speaks the previous revision can no longer

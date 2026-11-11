@@ -1676,6 +1676,30 @@ MCP `ac_config_set` (observer tier, as every key but the backends); the console.
 ("Console tiers" below). No `actingd-config` step: the entry's member is unchanged, and an
 instruction row is no file shape.
 
+## Device groups (Workflow #437 MAPP, not built yet)
+
+The contract is [device-group.md](device-group.md). What it changes in this mechanism
+(MAPP, not built yet):
+
+- **The entry's member `device_group`** (`actingd-config` 29, planned) is a file member read at
+  assembly, not a key of the key table and not settable. The manifest reports it as the row
+  `instance.<instance id>.device_group` (section `instance`, not settable, read at assembly), only
+  for an entry that names it. Its `ui_tier` row (read only) is the code slice's.
+- **Keys a member of a group of several may not turn on**, refused at assembly
+  (`device_group_config_invalid`, `device_action_unsupported`, proposed):
+  `instance.<id>.start_emulator` `true`; `idle.action` in effect other than `none`, the instance's
+  or the section's (the defaults file's `close_app` included, so a member names `none`); and a ladder
+  profile in effect whose rungs hold `emulator_restart` (the member's `recovery_ladder_profile`,
+  else its kind's profile, else the section's `rungs`).
+- **Instructions.** The whole-instance check applies the same rule to the values in effect, so an
+  instruction that would break it is `config_value_invalid` with `config_value_problem`
+  `section_check` on the key, and the configuration in effect stays. The keys concerned are
+  `instance.<id>.start_emulator`, `instance.<id>.idle.action`, the section's `idle.action` while a
+  member takes it, `instance.<id>.recovery_ladder_profile`, and `recovery_ladder.rungs`,
+  `recovery_ladder.profiles` and `recovery_ladder.kind_profiles` where a member climbs by them.
+- **A group of one is unchanged:** none of these rules applies to it, and no key, default or row
+  changes for it.
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |

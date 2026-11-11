@@ -1625,6 +1625,16 @@ written. 114-A freezes the shapes, the index keys and every vocabulary of the re
 read `ScheduleHistory`, and writes nothing: until 114-B, this table is still not written to the
 ledger.
 
+**A member that waits for another member of its device** (Workflow #437 MAPP, not built yet;
+[device-group.md](../device-group.md), "One pick per device per round"). In a device group of
+several, a candidate of a member that does not get the device because another member has it is
+deferred with `device_group_waiting` (proposed; info; `instance_id` the alias, `alias` the member
+that has the device, `device_group_wait` `selected`, `held`, `player_hold` or `fenced`, optional
+`task_id` and `holder_kind`) and no wake of its own. This takes the place of
+`instance_already_selected`, `dispatch_instance_held` or a control gate's code, which a candidate
+of a lone instance gets, and a member's own holder or gate keeps its own code. It is the `why` of
+the member's not-running row while it waits. In a group of one it never occurs.
+
 Besides the deferrals, one reason ends a decision after admission: a dispatch that was admitted
 but has not started is withdrawn when its task package is unloaded, and its decision record and
 reason chain end with `pack_registry_dispatch_withdrawn` (info; `package_id`, optional
@@ -2540,6 +2550,17 @@ finishes and is settled there whatever the switch says afterwards.
   to actingd's host handle, so the host is released and closed, and its close joins the
   workers: a run a worker took finishes and is settled, one still queued is refused
   (`runtime_stopping`) and settled as interrupted, as above.
+- **Device groups (Workflow #437 MAPP, not built yet; [device-group.md](../device-group.md)).**
+  Several instances on one device are one device group. The group is derived from the
+  configuration at assembly and never stored.
+  - A group has one lane: one scheduler state (one lease, one queue, one cooldown), keyed by the
+    group's device key, and one worker. The in-flight registration of any member's run holds the
+    device for every member.
+  - A round selects at most one dispatch per device, among the due candidates of all its members,
+    in the one ranking order the round already has.
+  - Before a member's run, the switch brings that member's application to the front ("The switch
+    before a run" there).
+  - A group of one is today's lane, unchanged.
 
 ## Evaluation failures
 

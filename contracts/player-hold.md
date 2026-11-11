@@ -8,6 +8,18 @@ rows and ruling 116's five pauses are untouched by it. Alice's rulings 134 (no c
 the drain, no reserved shape for one) and 135 (every formal channel may end a hold; the
 channel is only recorded in `source`) bind this contract.
 
+(Workflow #437 MAPP, not built yet; [device-group.md](device-group.md), "Pause and hold".) In a
+device group of several, a hold on one member holds the device for the whole group:
+
+- the acquire drains the device's holder, whichever member's work it is;
+- while held, no member is dispatched (the others wait with `device_group_waiting` `player_hold`,
+  proposed);
+- a second hold on another member of the group is `player_hold_already_held`;
+- the release's startup package goes through the switch.
+
+The hold's state and records stay the holding member's, in today's shapes. A group of one is
+unchanged.
+
 **Slices.** R-7a freezes the shapes, the codes and the pure functions of the contract crate,
 and the client's methods with their settlement: Runtime 0.12.35 answers both requests
 `not_implemented` (Denied, recording nothing, as R-0's kinds; [runtime-interface.md](runtime-interface.md),
