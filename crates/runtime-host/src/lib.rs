@@ -48,6 +48,8 @@ mod owner_unlock;
 pub use owner_unlock::{OwnerUnlockFailure, OwnerUnlockReceipt};
 mod pack_admission;
 pub use pack_admission::pack_admission_notes;
+// Workflow #429 R-8: a task package switched on or off for one instance (`session.pack.schedule`).
+mod pack_schedule;
 mod performance;
 mod performance_control;
 mod planning;

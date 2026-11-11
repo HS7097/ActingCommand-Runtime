@@ -40,7 +40,7 @@ use crate::{
     packs, perf_preset, remedy, routine_summary, run_evidence, run_list, run_show, schedule,
     scheduling, shutdown, targets, wait, wake_test,
 };
-use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::codes::{ContractLocation, ReceiptCode};
 use actingcommand_contract::outcome::{Code, Detail, Outcome};
 use actingcommand_contract::{
     ContainedTaskRecoveryBinding, ContainedTaskRequest, MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
@@ -801,6 +801,8 @@ fn served(
             reported(&queued, ActingctlCode::AgentWakeTestQueued)
         }
         "task stop" => task_stop(params, client)?,
+        "pack-schedule" => pack_schedule_view(params, client)?,
+        "pack-schedule set" => pack_schedule_set(params, client)?,
         "run start" => run_start(params, client)?,
         "run stop" => run_stop(params, client, completed_code)?,
         "reset" => {
@@ -860,6 +862,95 @@ pub fn stop_target(params: &Map<String, Value>) -> Result<(RequestId, Duration),
         .map_err(|_| usage("<request>", ArgumentProblem::NotRecognised))?;
     let wait = duration(params, "wait")?.unwrap_or(Duration::ZERO);
     Ok((request_id, wait))
+}
+
+/// Workflow #429 R-8: `pack-schedule <inst>`, `PackScheduleView`: each scope's pack schedule list
+/// version and, per task package of the instance's tasks, whether it is schedulable now and which
+/// layer decided, beside the read's success code; a refusal is the client's failure.
+fn pack_schedule_view(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit, Exit> {
+    let alias = alias_of(client, required_text(params, "instance")?)?;
+    let view = client
+        .pack_schedule_view(&alias)
+        .map_err(|error| client_failed(&error))?;
+    let members = serde_json::to_value(view)
+        .map(|value| cli_line::members(value, RESULT_MEMBER))
+        .map_err(|error| output_failed(&error))?;
+    Ok(cli_line::success(
+        members,
+        &Outcome::new(ReceiptCode::PackScheduleViewCompleted),
+    ))
+}
+
+/// Workflow #429 R-8: `pack-schedule set <scope> <package_id> --rows <json> [--expected-version]`,
+/// `EditPackSchedule`: one package's rows of one scope's list replaced (`--rows []` withdraws
+/// them), compared with the list's version when one is given (`0`: the scope has no list yet).
+/// The answer is the edit (the list's version after it, the next `--expected-version`, and its
+/// event) beside the edit's success code; a refusal is the refused receipt beside its outcome.
+fn pack_schedule_set(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit, Exit> {
+    let scope = match pack_schedule_scope(required_text(params, "scope")?)? {
+        ScheduleScope::Instance(selector) => actingcommand_contract::FactScope::Instance {
+            instance_id: alias_of(client, selector)?,
+        },
+        ScheduleScope::Server(server_id) => actingcommand_contract::FactScope::Server {
+            server_id: server_id.to_owned(),
+        },
+        ScheduleScope::Game(game_id) => actingcommand_contract::FactScope::Game {
+            game_id: game_id.to_owned(),
+        },
+    };
+    let package_id = required_text(params, "package_id")?;
+    let rows = pack_schedule_rows(params)?;
+    let expected_version = unsigned(params, "expected_version")?;
+    let edited = match client.edit_pack_schedule(scope, package_id, rows, expected_version) {
+        Ok(edited) => edited,
+        Err(error) => return receipt_refused(error),
+    };
+    let members = serde_json::to_value(edited)
+        .map(|value| cli_line::members(value, RESULT_MEMBER))
+        .map_err(|error| output_failed(&error))?;
+    Ok(cli_line::success(
+        members,
+        &Outcome::new(ReceiptCode::EditPackScheduleCompleted),
+    ))
+}
+
+/// Workflow #429 R-8: the scope `pack-schedule set` names, one word: `instance:<inst>` (an alias,
+/// an `instance_id` or an ADB port, resolved by one status read), `server:<server id>` or
+/// `game:<game id>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleScope<'a> {
+    Instance(&'a str),
+    Server(&'a str),
+    Game(&'a str),
+}
+
+/// Workflow #429 R-8: the scope word of `pack-schedule set`, the same from the command line's
+/// words and from a `serve --stdio` line; another word, or one that names nothing after its kind,
+/// is refused as `<scope>` `not_recognised`.
+pub fn pack_schedule_scope(word: &str) -> Result<ScheduleScope<'_>, Exit> {
+    let refused = || usage("<scope>", ArgumentProblem::NotRecognised);
+    let (kind, name) = word.split_once(':').ok_or_else(refused)?;
+    if name.is_empty() {
+        return Err(refused());
+    }
+    match kind {
+        "instance" => Ok(ScheduleScope::Instance(name)),
+        "server" => Ok(ScheduleScope::Server(name)),
+        "game" => Ok(ScheduleScope::Game(name)),
+        _ => Err(refused()),
+    }
+}
+
+/// Workflow #429 R-8: the rows `pack-schedule set` writes (`--rows`, a JSON list of
+/// `{from_unix_ms, until_unix_ms?, schedulable}`; without `until_unix_ms` a row is open-ended); a
+/// list of another shape is refused as `--rows` `wrong_type`. The Runtime checks the periods.
+pub fn pack_schedule_rows(
+    params: &Map<String, Value>,
+) -> Result<Vec<actingcommand_contract::PackScheduleEditRow>, Exit> {
+    let rows = params
+        .get("rows")
+        .ok_or_else(|| usage("--rows", ArgumentProblem::Required))?;
+    serde_json::from_value(rows.clone()).map_err(|_| usage("--rows", ArgumentProblem::WrongType))
 }
 
 /// `run start <inst> <package> [--recovery] [--deadline] [--wait]` (actingctl's `task-run`): the

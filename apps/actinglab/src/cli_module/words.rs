@@ -56,10 +56,11 @@ use actingcommand_lab_ops::table::{
 use serde_json::{Map, Value};
 
 /// The slices whose operations this program serves: the core rows LAB-1 and LAB-1b moved into
-/// `lab-ops`, the rows of LAB-2, and since Workflow #429 R-6 its row `task stop`. The rescue
-/// module's rows are those `crates/lab-rescue` serves (Workflow #434 LAB-3: [`rescue_served`]); a
-/// reserved row comes with the slice that opens it.
-pub(crate) const BUILT_SLICES: [&str; 4] = ["LAB-1", "LAB-1b", "LAB-2", "R-6"];
+/// `lab-ops`, the rows of LAB-2, since Workflow #429 R-6 its row `task stop`, and since Workflow
+/// #429 R-8 its rows `pack-schedule` and `pack-schedule set`. The rescue module's rows are those
+/// `crates/lab-rescue` serves (Workflow #434 LAB-3: [`rescue_served`]); a reserved row comes with
+/// the slice that opens it.
+pub(crate) const BUILT_SLICES: [&str; 5] = ["LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8"];
 
 /// Workflow #434 LAB-3: whether the rescue module serves the rescue row `name` (on Windows, where
 /// it runs); its rows of a source command not built yet, and LAB-5's, are not offered.

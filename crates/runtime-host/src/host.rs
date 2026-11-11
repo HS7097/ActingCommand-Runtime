@@ -225,6 +225,8 @@ mod navigation;
 mod observation;
 mod online_observation;
 mod package_debug;
+// Workflow #429 R-8: `EditPackSchedule` and `PackScheduleView`.
+mod pack_schedule;
 mod performance;
 mod planning;
 mod policy_catalog;

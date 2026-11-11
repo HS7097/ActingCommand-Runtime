@@ -4113,8 +4113,9 @@ pub enum RuntimeOperation {
         request_id: RequestId,
         wait_ms: u64,
     },
-    /// Replaces the rows of one package in one scope's `session.pack.schedule` list (R-8);
-    /// with `expected_version`, only while the list's version is that one.
+    /// Replaces the rows of one package in one scope's `session.pack.schedule` list (R-8, built
+    /// since 0.12.55); with `expected_version`, only while the list's version is that one (`0`:
+    /// while the scope has no list). The host checks the rows (`session_pack_schedule_invalid`).
     EditPackSchedule {
         scope: crate::FactScope,
         package_id: String,
@@ -4145,7 +4146,8 @@ pub enum RuntimeOperation {
     /// Workflow #429 R-0c (register §1.216, since 0.12.30; `runtime-client` 3): reads, for one
     /// instance, each scope's pack schedule list version and, per package, whether it is
     /// schedulable now and which layer decided (R-8; `workbench.rs`, `PackScheduleView`). A
-    /// general read that records nothing; until R-8 the host refuses it `not_implemented`.
+    /// general read that records nothing; before 0.12.55 (R-8) the host refused it
+    /// `not_implemented`.
     PackScheduleView {
         instance_alias: String,
     },
@@ -4331,6 +4333,8 @@ impl RuntimeOperation {
             Self::RoutineSummary { instance, .. } => {
                 instance.as_deref().map_or(Ok(()), validate_instance_alias)
             }
+            // Workflow #429 R-8: the host checks the rows and the package (the runtime-host code
+            // `session_pack_schedule_invalid`), as it checks a published list of the key.
             Self::EditPackSchedule { scope, .. } => match scope {
                 crate::FactScope::Instance { instance_id } => validate_instance_alias(instance_id),
                 crate::FactScope::Server { .. } | crate::FactScope::Game { .. } => Ok(()),

@@ -1047,38 +1047,40 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
+      "help": "Reads whether each task package of an instance may be scheduled now, the layer and row that decide it, and each scope's list version.",
       "output": "the pack schedule view (PackScheduleViewed)",
       "writes": false,
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["PackScheduleView"],
+      "requests": ["PackScheduleView", "Status"],
       "source": [],
       "new": "#429 R-8 (PackScheduleView; runtime-interface.md plans pack-schedule)",
       "slice": "R-8",
-      "status": "reserved",
-      "opens_with": "R-8"
+      "status": "planned",
+      "notes": "#429 R-8: requests add Status, the read that resolves <inst>"
     },
     {
       "name": "pack-schedule set",
       "module": "core",
       "params": [
-        {"name": "scope", "form": "positional", "type": "scope", "required": true},
+        {"name": "scope", "form": "positional", "type": "scope", "required": true, "note": "instance:<inst>, server:<server id> or game:<game id>"},
         {"name": "package_id", "form": "positional", "type": "string", "required": true},
-        {"name": "rows", "form": "option", "type": "json", "required": true},
-        {"name": "expected_version", "form": "option", "type": "integer", "required": false}
+        {"name": "rows", "form": "option", "type": "json", "required": true, "note": "a list of {from_unix_ms, until_unix_ms?, schedulable}; [] withdraws the package's rows of the scope"},
+        {"name": "expected_version", "form": "option", "type": "integer", "required": false, "note": "the scope's list version from pack-schedule; 0 while the scope has no list; absent: compare nothing"}
       ],
+      "help": "Replaces one task package's schedule rows in one scope's list, the rows that open or close it for scheduling there.",
       "output": "the edit (PackScheduleEdited)",
       "writes": true,
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["EditPackSchedule"],
+      "requests": ["EditPackSchedule", "Status"],
       "source": [],
       "new": "#429 R-8 (EditPackSchedule; runtime-interface.md plans pack-schedule set)",
       "slice": "R-8",
-      "status": "reserved",
-      "opens_with": "R-8"
+      "status": "planned",
+      "notes": "#429 R-8: requests add Status, the read that resolves an instance scope's <inst>; a run in progress is not stopped"
     },
     {
       "name": "crash-log",

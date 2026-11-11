@@ -12999,6 +12999,138 @@ Tests (apps gate row "#434 CLI-IN"): `gate_434_cli_in::cli_in_the_flag_reaches_t
 Runtime). No existing test changes: LAB-2's and LAB-5B2's to LAB-5B5's pin no `--instance` refusal
 on a module row, and LAB-5A's `runs --instance <x> <y>` keeps its refusal.
 
+### 1.308 Slice R-8 (0.12.55): a task package switched on or off for one instance (Workflow #429 SR-11 with A.7.1 points 1 to 7, board #429 6535257887, and the slice row R-8; the console's task list (UI-3f1) says single tasks cannot be switched yet, and both requests answered `not_implemented` since 0.12.30; the coordinator's decision of 11-11 on which packages the view lists, not Alice's words; coordinator work order `rd-1111/brief-r8.md`, read on main `a62434a4`)
+
+The number 1.308 is this slice's: on its base 1.305 was free but held by NEUT-1, which merged with
+it the same day (SCHED-C1f1 writes under §1.303); main `e5efe44e` is merged into the branch. The
+coordinator renumbers it if another open slice takes it first. [instance-fact-store.md](instance-fact-store.md) ("Pack schedule facts") is the contract;
+[runtime-interface.md](runtime-interface.md) ("Workbench request kinds", the rows `EditPackSchedule`
+and `PackScheduleView`), [scheduling-blackout.md](scheduling-blackout.md) ("Order of the
+deferrals", position 5), [lab-operations.json](lab-operations.json) (the rows `pack-schedule` and
+`pack-schedule set`) and [lab-two-entries.md](lab-two-entries.md) (the `ui` list, the type `scope`)
+follow it. No wire shape, configuration key, ledger shape or interface revision is new: the
+requests and answers are R-0c's and R-0d's (§1.216, §1.217), the client's methods R-0c's, the
+record an ordinary `fact.published` of the `session.` key, the three codes SR-0's; two success
+codes are (R8-6).
+
+**What.**
+
+- **The family** (`crates/actingcommand-contract/src/fact.rs`, `fact_key_family`):
+  `session.pack.schedule` is `FactKeyFamily::PackSchedule`, a general instruction
+  (`FactKeyFamily::interface_class`) with the origin exception: `(agent, adapter)`, `(user, ui)` and
+  `(cli, cli)` may publish it, the `fact.published` keeps the writer's origin, and an observation
+  that mixes it with another family's key is `fact_origin_mixed` (`RuntimeRequest::validate`).
+- **The rows' rule** (`crates/runtime-host/src/pack_schedule.rs`, `read_rows`, `check_record`,
+  `edit_rows`, `replace_rows`): `{package_id, from_unix_ms, until_unix_ms?, schedulable}`, the package
+  1 to 256 bytes without a control character (the key table's bound of its `name` value); a period
+  that ends at or before it starts, rows of one package that overlap (an open-ended row overlaps
+  everything of its package after its start), another shape or more rows than the bound are
+  `session_pack_schedule_invalid` with `fact_key` and `field`, non-fatal, before the fact write
+  gate, nothing appended (`HostShared::publish_facts`, beside the remedy choices' rule).
+- **The layering** (`pack_schedule::resolve`): per package, the most specific layer (instance,
+  server, game) that holds a row of it decides, with its row that covers the instant, else
+  schedulable (`none`); `below` is the same resolution without the deciding layer; the next change
+  is the deciding row's end, or the deciding layer's next row's start. **The pack default layer is
+  not built** (R-9): `pack_default` is the one named place R-9 fills; until then it decides nothing
+  and no `source` is `pack_default`.
+- **The deferral** (`crates/runtime-host/src/policy_host.rs`, `PolicyHost::evaluate`, with
+  `pack_schedule::CycleSchedule`): position 5, after the blackout (4) and UPD-1 (4a), before the
+  owed rerun's pacing (6): a candidate of a closed package is `pack_schedule_closed` (`package_id`,
+  `next_eligible_unix_ms` the covering row's end, absent for an open-ended row), its wake that end.
+  The records are read from the evaluation's facts, where the projection already overlays them as
+  ordinary instance facts: they are in `combined_policy_snapshot_id` and in the admission's
+  instance view, so a record written between an evaluation and its admission is
+  `policy_facts_stale`, and without any record the identity and every decision are as before (no
+  hashed input changes, nothing defers, nothing is reported). Each catalog task's package is the
+  remedy table's (`crate::remedy::BuiltTable::task_packages`, the same metadata-only scan, built at
+  the first evaluation of each catalog). A row of a package no task of the catalog uses is reported
+  once per evaluated cycle as `pack_schedule_unknown_package`, and a record the evaluation cannot
+  read as `session_pack_schedule_invalid`, each as one extra decision of the task id
+  `session.pack.schedule` with no instance (as a priority offset's unknown task), and has no effect.
+- **The edit** (`crates/runtime-host/src/host/pack_schedule.rs`, `HostShared::edit_pack_schedule`):
+  the request's rows checked first; then in one hold of the fact write gate
+  (`HostShared::publish_facts_under_gate`, the part of `publish_facts` after the gate, split out
+  for it): the scope's list read, its version (the `fact.published` sequence, `0` without a record)
+  compared with `expected_version` (absent compares nothing; a mismatch is
+  `fact_observation_version_conflict` with `fact_key` and `current_version`), the package's rows
+  replaced (the other packages' rows kept in their order; an expired list keeps none), the whole
+  list checked and published as one `fact.published` (`pack-schedule:<sha256>` as its snapshot id,
+  no expiry), the receipt's terminal; `rows: []` withdraws the package's rows. Running work is not
+  stopped.
+- **The view** (`HostShared::pack_schedule_view`): one entry per task package that a task of the
+  active catalog covering the instance runs, in package id order, with `schedulable`, `source`,
+  `row`, `next_change_unix_ms` and `below`, and each scope's version (instance, then the server and
+  game the policy inputs give it); read from memory, recording nothing; an unknown alias is
+  `instance_unknown`.
+- **The Lab's rows** (`crates/lab-ops/src/core_ops.rs`, `pack_schedule_view`, `pack_schedule_set`,
+  `pack_schedule_scope`, `pack_schedule_rows`): `pack-schedule <inst>` and `pack-schedule set
+  <scope> <package_id> --rows <json> [--expected-version <n>]` are offered (`help`, `planned`,
+  requests add `Status`, actinglab's `BUILT_SLICES` names R-8), served as the neighbouring core
+  rows are; the scope word is `instance:<inst>`, `server:<id>` or `game:<id>`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R8-1 | `FactKeyFamily::PackSchedule` (`session.pack.schedule`) | a key family with the origin exception (contract code, no wire shape) | R-8 | the three counters | the contract's `fact_key_family` doc named SR-11's family as joining with its slice |
+| R8-2 | `session.pack.schedule` rows with optional `until_unix_ms` | the key's value (an existing `session.` record list; `ledger` unchanged) | R-8 | the three counters, `EditPackSchedule` | an open-ended row (#429 A.7.1 point 2) |
+| R8-3 | `EditPackSchedule {scope, package_id, rows, expected_version?}` → `PackScheduleEdited {edited: {version, event_id}}` | behaviour of an R-0 kind (`runtime-client` unchanged) | R-8 | the Lab's row, the console | a compare-and-swap of one package's rows of one scope |
+| R8-4 | `PackScheduleView {instance_alias}` → `PackScheduleViewed {view}` | behaviour of an R-0c kind, `below` R-0d's | R-8 | the Lab's row, the console | the package list: every package of the instance's tasks (the coordinator's decision of 11-11) |
+| R8-5 | `pack_schedule_closed`, `pack_schedule_unknown_package` (policy), `session_pack_schedule_invalid` (runtime-host) | SR-0's codes, first emitted (policy's `SchedulingRulePolicyCode` now public for the host) | R-8 | the host | values as registered; descriptions name the edit and the warning |
+| R8-6 | `request_edit_pack_schedule_completed`, `request_pack_schedule_view_completed` | new success codes (contract, `ReceiptCode`) in `runtime-outcomes` 1 (additive, as §1.264 and §1.302 added theirs) | R-8 | the host | `since` 0.12.55; Workflow #378 A4's one success code per completing kind |
+| R8-7 | the Lab's rows `pack-schedule`, `pack-schedule set` | operation table rows opened (`reserved` → `planned`, `help`, requests add `Status`; notes on the three parameters of `set`) | R-8 | — | the type `scope` is written one word (`lab-two-entries.md` §9.1) |
+
+**Settled here** (the plan left them open; each the slice's, the coordinator may change them):
+the view lists every package of the instance's tasks (the coordinator's decision of 11-11, the
+brief's); a task's package is read from the remedy table's metadata-only scan of its bound
+package (in composer mode as in configured mode), so a task whose package cannot be read has no
+package and is neither deferred nor listed; the cycle's reports are decisions of the task id
+`session.pack.schedule` (no task names them); a stored list that cannot be read decides nothing
+and is reported (an edit of its scope is refused `field` `""`), and an expired list holds no row;
+an edit's refusal points into the request (`/package_id`, `/rows`, `/rows/<n>…`); an instance
+scope's alias is not checked against the registry at an edit (as a published list's is not),
+while the view refuses an unknown alias; the Lab's scope word.
+
+**Left for later slices.** R-9: the standard package's default layer (`pack_default`, a `source`
+`pack_default`, a risk package closed by default, never a recognition maintenance package). R-10:
+a package's parameters (`session.pack.parameters`, its own family). A row boundary is judged at
+the evaluation, not again at admission (a record written meanwhile is, as `policy_facts_stale`).
+
+**Interface.** None raised ([component-interfaces.md](component-interfaces.md)): `runtime-client`,
+`ledger`, `actingd-config` and `package` do not move (the requests, answers and client methods are
+R-0c's, the record an existing `fact.published`); `runtime-outcomes` stays 1 (two success codes
+added within the revision).
+
+**What an operator sees after deploy.** Nothing changes until a list is written: no production
+host has a `session.pack.schedule` record, so every identity and decision stays as it was.
+`actinglab pack-schedule <inst>` (and the console's task list) shows each package of the
+instance's tasks as schedulable with source `none` and each scope's version `0`. `actinglab
+pack-schedule set instance:<inst> <package_id> --rows '[{"from_unix_ms":<now>,"schedulable":false}]'`
+closes one package on one instance: its candidates show `pack_schedule_closed` in `actingctl
+schedule` from the next evaluation, a run in progress finishes, and `--rows '[]'` reopens it. The
+ledger shows one `fact.published` of the key per edit, with the writer's origin.
+
+**Rollback** (below 0.12.55): both requests are refused `not_implemented` again and the Lab's two
+rows are not offered; a stored `session.pack.schedule` record stays in the ledger as an ordinary
+`session.` record that nothing reads, and the key is again instance information, which only an
+agent may publish. To lift every closing before rolling back, write `rows: []` for each package
+(or publish an empty list per scope), or leave the records: an older build ignores them.
+
+Tests (host gate rows "#429 R-8"): `gate_429_r8::r8_the_three_origins_may_write_and_a_mixed_observation_is_refused`,
+`r8_each_refused_row_appends_nothing`,
+`r8_an_instance_record_of_one_package_leaves_another_to_the_server_and_game_layers`,
+`r8_an_edit_compares_the_scope_list_version`,
+`r8_a_closed_package_is_deferred_after_a_blackout_and_wakes_at_the_row_end`,
+`r8_a_record_written_after_an_evaluation_refuses_its_admission_as_stale`,
+`r8_without_a_record_the_identity_and_every_decision_are_unchanged`,
+`r8_the_view_lists_the_instance_packages_and_an_unknown_package_is_reported_once` and
+`r8_closing_a_task_then_stopping_its_run` (the host, a manual clock, a fake device, neutral
+packages), and actinglab's `gate_429_r8::r8_pack_schedule_rows_reach_their_requests` (apps gate).
+Three existing tests pinned the requests as not built and change with them:
+`gate_429_r0::r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effect` no
+longer sends `EditPackSchedule`; `gate_429_r0::r0c_pack_schedule_view_answers_not_implemented_with_no_effect`
+is removed with its gate row (R-0c's `PackScheduleView` now answers); and the contract's
+`a4_each_request_kind_that_completes_has_its_own_success_code` no longer lists the two kinds among
+those that never complete. No golden changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

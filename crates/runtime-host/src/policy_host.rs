@@ -2278,6 +2278,17 @@ impl PolicyHost {
         self.active.clone()
     }
 
+    /// Workflow #429 R-8: the task package each task of the active catalog runs, by task id, as
+    /// the remedy table built for that catalog read it; `None` while no evaluation under it built
+    /// one (or without an active catalog).
+    pub(crate) fn task_packages(&self) -> Option<BTreeMap<String, String>> {
+        let active = self.active.as_ref()?;
+        self.remedies
+            .table()
+            .filter(|table| table.catalog_hash() == active.generation.catalog_hash())
+            .map(|table| table.task_packages().clone())
+    }
+
     pub(crate) fn active_loaded_at(
         &self,
         ledger: &GlobalLedger,
@@ -3124,6 +3135,17 @@ impl PolicyHost {
         // is left eligible and unselected.
         let instance_holds =
             crate::application_update::instance_holds(&update_pending, &store_tasks);
+        // Workflow #429 R-8 (`scheduling-blackout.md`, "Order of the deferrals", position 5;
+        // `instance-fact-store.md`, "Pack schedule facts"): each instance's pack schedule as this
+        // evaluation's facts hold it, and the package each catalog task runs as the remedy table
+        // read it. Without a `session.pack.schedule` record it defers and reports nothing.
+        let pack_schedule = crate::pack_schedule::CycleSchedule::new(
+            facts,
+            self.remedies
+                .table()
+                .map(crate::remedy::BuiltTable::task_packages),
+            time.unix_ms,
+        );
         // SS-4 (register §1.231; `scheduling/README.md`, "No-progress guard"): an instance with
         // the guard off keeps none, and every guard a basis reading of another value released is
         // gone; the armed ones hold their pairs in this evaluation.
@@ -3203,6 +3225,12 @@ impl PolicyHost {
                         &intent.instance_id,
                         refresh,
                     ));
+                }
+                // Workflow #429 R-8 (position 5, after `pack_registry_not_loaded`, which #389 U-3
+                // adds): the instance's pack schedule closes the package the candidate's task
+                // runs; it wakes when the covering row ends.
+                if let Some(closed) = pack_schedule.deferral(intent, refresh) {
+                    return Ok(closed);
                 }
                 // Workflow #386 SR-2b-2 (`scheduling-blackout.md`, "Order of the deferrals",
                 // position 6): an owed rerun waits for the instance's pacing stage.
@@ -3462,6 +3490,9 @@ impl PolicyHost {
         }
         self.remedies
             .finish_evaluation(remedy_active, remedy_signals);
+        // Workflow #429 R-8: a row of a package no catalog task uses, and a pack schedule record
+        // this evaluation could not read, each reported once (a decision of no instance).
+        evaluation.decisions.extend(pack_schedule.into_notes());
         let requested_recompute = directive.kind;
         Ok(PolicyCycle {
             directive,

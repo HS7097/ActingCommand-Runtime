@@ -31,6 +31,11 @@ pub const RESOURCE_TARGETS_FACT_KEY: &str = "session.resource_targets";
 pub const REMEDY_CHOICES_FACT_KEY: &str = "session.remedy.choices";
 /// Workflow #411 B15 R6: the prefix of a remedy choice record's `source_snapshot_id`.
 pub const REMEDY_CHOICES_SNAPSHOT_PREFIX: &str = "remedy-choices:";
+/// Workflow #429 R-8 (`contracts/instance-fact-store.md`, "Pack schedule facts"; SR-11): one
+/// scope's pack schedule, one inline record-list fact per scope (instance, server or game), whose
+/// rows say during which periods a task package may be scheduled; written by a person, an agent or
+/// the operator and checked by the Runtime's row rule.
+pub const PACK_SCHEDULE_FACT_KEY: &str = "session.pack.schedule";
 
 /// The `<task_id>` of a `session.task.<task_id>.priority_offset` key; `None` for any other key.
 /// The task identifier's own charset is checked by the Runtime when the offset is published.
@@ -49,14 +54,16 @@ pub fn priority_offset_fact_key(task_id: &str) -> String {
 /// A `PublishFact` or `PublishFacts` request belongs to the interface block of its keys'
 /// family (`FactKeyFamily::interface_class`); `RuntimeRequest::validate` already refuses an
 /// observation that mixes keys of two families (`fact_origin_mixed`). The scheduling rules'
-/// pack schedule (SR-11) and feature lock (SR-5a) families join this function with their
-/// slices.
+/// pack schedule family (SR-11) joined it with Workflow #429 R-8; the feature lock family (SR-5a)
+/// joins it with its slice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FactKeyFamily {
     /// `session.task.<task_id>.priority_offset`, a manual priority offset.
     PriorityOffset,
     /// Workflow #411 B15 R6: `session.remedy.choices`, an instance's remedy choices.
     RemedyChoices,
+    /// Workflow #429 R-8: `session.pack.schedule`, a scope's pack schedule (SR-11).
+    PackSchedule,
     /// Every other key: the instance information an agent or a person writes.
     InstanceInformation,
 }
@@ -66,7 +73,10 @@ impl FactKeyFamily {
     /// (`(agent, adapter)`), a person (`(user, ui)`) or the operator (`(cli, cli)`) may write it,
     /// and its `fact.published` event keeps the writer's origin.
     pub const fn takes_origin_exception(self) -> bool {
-        matches!(self, Self::PriorityOffset | Self::RemedyChoices)
+        matches!(
+            self,
+            Self::PriorityOffset | Self::RemedyChoices | Self::PackSchedule
+        )
     }
 }
 
@@ -76,6 +86,8 @@ pub fn fact_key_family(key: &str) -> FactKeyFamily {
         FactKeyFamily::PriorityOffset
     } else if key == REMEDY_CHOICES_FACT_KEY {
         FactKeyFamily::RemedyChoices
+    } else if key == PACK_SCHEDULE_FACT_KEY {
+        FactKeyFamily::PackSchedule
     } else {
         FactKeyFamily::InstanceInformation
     }
