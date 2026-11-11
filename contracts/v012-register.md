@@ -8990,6 +8990,68 @@ and `serve --stdio` answers as before.
 
 **LAB-5B2 rollback** (to the release before it). Nothing persisted: code only.
 
+#### Slice LAB-5G4a (0.12.52): `serve --stdio --front mcp` records `Lab-MCP`; `serve` refuses values that begin with `--`
+
+Coordinator work order `rd-1108/arch-013/brief-lab5g4a.md`, after the read-only survey
+`rd-1108/arch-013/lab5g-step0-survey.md` (§2, on `5041d952`); the coordinator's rulings on board
+#434: 6769399787 points 9 and 10 (an option only `serve --stdio` takes says that the front end is
+MCP; the child then records `Lab-MCP` and binds on the wire as today's `--via mcp` child does,
+until LAB-6; the variable's rule does not change) and 6775192250 point 16 (`serve` refuses values
+that begin with `--`). On main `4116cbf4`, with LAB-5C (#1573) merged in before the tests. The
+contract is [lab-two-entries.md](lab-two-entries.md) §4.2, §4.3 and §8.2. G4a of the survey's
+§10: nothing starts `serve` with the option until the MCP server's children (G4b).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G4a-1 | `serve --stdio --front mcp` (`cli_module::serve::front`, `serve::Front`) | behaviour | LAB-5G4a | the MCP server's children (G4b) | without `--front` the words after `serve` are checked as before, byte for byte (only `--stdio`; its refusals and their texts, `serve::stdio_only`); with it, `--stdio` once and `--front mcp` once, in either order. Another value (`--front ui`: `argument` `ui`), the option twice and the option without `--stdio` (`argument` `--front`), and any other word, are `actingctl_usage_invalid` `unknown`, as `serve` refuses an unknown word; the option without a value is `value_missing` (deviation (a)). With the option, `ACTINGCOMMAND_INITIATOR` set to anything, an empty value too, is `actingctl_usage_invalid` with `variable` `ACTINGCOMMAND_INITIATOR`, before the installation and initiator check and before the loop. Each refusal is the one line `{outcome}`, exit 1, with its developer line, as `serve`'s refusals are. No other command and no row's words take the option |
+| L5G4a-2 | the process's initiator under the option | behaviour | LAB-5G4a | — | the loop (`serve::serve_as`) hands the front end to `cli_module::answer`. A row actinglab's own command serves runs with its invocation's `via` set to `mcp` (`engine::line`), as the line of MCP's `--via mcp` child sets it, so `cli_module::recording_initiator` gives `Lab-MCP` on each step and mark the command adds (`record start\|mark\|step\|stop\|amend`, and `--record` where a row passes it); a rescue row (Windows) is answered with `Initiator::LabMcp` (`cli_module::rescue::answer`), so its journal carries `Lab-MCP`. The line stays the CLI module's (`own_line::exit`): the envelope is printed only on `main`'s path for a command line with `--via`. `recording_initiator` and `Initiator::of_lab_process` are main's: `ACTINGCOMMAND_INITIATOR=Lab-MCP` stays refused (§4.2) |
+| L5G4a-3 | the binding under the option | behaviour | LAB-5G4a | — | `serve::main` sets `CHANNEL_VIA` to `mcp` (`serve::Front::via`) before the loop, so `lab_client_config` gives every connection actinglab's own commands open the configuration of MCP's `--via mcp` child: the Lab channel, `via` `mcp`, the envelope (Lab, Lab) (deviation (b)). Without the option it stays unset, as on main |
+| L5G4a-4 | a value that begins with `--` (`cli_module::words::from_json`, `not_a_flag`) | behaviour | LAB-5G4a | — | for each member a row declares, after its type is checked: a string that begins with `--`, or a list holding one (a `repeat` parameter, a `list<string>`, a `json` list), is `actingctl_usage_invalid` with the member as `argument` and `argument_problem` `not_recognised`, answered as a line, and the loop goes on. Numbers, booleans, objects and strings that begin with one dash pass. It holds for every row whichever code serves it (`core_ops`, the rescue module, actinglab's own commands), since the loop reads the line before any of them. The command line (`words::parse`) does not change |
+
+**The problem chosen** (the work order asks which and why): `not_recognised`, "text that is none
+of the spellings or forms it may take", which main gives text of a form its parameter does not
+take (the command line's words for a word outside an `enum`; the operation layer for `gap --why`
+with a control character). The value is a string, so `wrong_type` ("not of the type it must
+have") would say something untrue, and it is given, so `value_missing`, which the command line
+answers when a word that begins with `--` follows an option (LAB-5A fix 1), would too; today's
+MCP server refuses the same value with the same problem (`apps/actingctl/src/mcp/lab.rs`,
+`not_a_flag`), so a client of the new server sees what it sees today.
+
+**Tests.** New: apps row "#434 LAB-5G4a": `gate_434_lab5g4a::serve_front_mcp_records_lab_mcp` and
+`gate_434_lab5g4a::serve_refuses_values_that_begin_with_two_dashes` (actinglab's binary tests; an
+empty configuration and a recording folder in a temporary folder; no Runtime, no device, no clock,
+no sleep). The loop is driven with a front end through `serve::serve_as`; `serve::serve`, which
+LAB-2's and LAB-2b's tests drive, is now that loop without one, compiled for tests only. No
+existing test changed.
+
+**Interface.** None raised: `Lab-MCP` is already one of the recording's and the journal's words
+(§4.1); no code, key, location, record or vocabulary token is added, and `actingctl_usage_invalid`
+with `argument`, `argument_problem` and `variable` is main's.
+
+**Where LAB-5G4a differs from its work order's letter.**
+
+- (a) The option without a value is refused `value_missing`, the module's problem for a flag
+  without its value; the work order names no problem for it. The option is taken before or after
+  `--stdio`.
+- (b) "The connection the process binds": the core rows `lab-ops` serves connect through
+  `lab_ops::front::client_config` as without the option (the Lab channel, no `via`). Today's
+  `--via mcp` child serves none of them (its command line is actinglab's own), so it binds no such
+  connection to copy, and the MCP server serves them in its own process (the survey's §2).
+- (c) Found, not changed: a rescue row run with `--detach` under the option starts its detached
+  run with `ACTINGCOMMAND_INITIATOR=Lab-MCP` (`rescue::detach`, `install::host::detach_with_wmi`
+  give a detached run the initiator through the variable), which that run refuses by §4.2's rule;
+  the caller gets `detached: true` and the run's log the refusal. The same holds wherever the rescue
+  module runs with `Lab-MCP`, as the survey plans for the MCP server's own process (`deploy` and
+  `rollback` detached through MCP, §5). How a detached run carries `Lab-MCP` is for the server's
+  slices; nothing starts `serve --front mcp` yet.
+
+**What LAB-5G4a changes live.** Nothing a person or a client sees: nothing starts `serve` with
+`--front mcp` yet. `serve --stdio` refuses a string value that begins with `--`, which before
+reached the row's command as a flag. The command line and today's MCP server do not change.
+
+**LAB-5G4a rollback** (to the release before it). Nothing persisted that an older build cannot
+read: a recording or journal written under the option carries `Lab-MCP`, one of the six words.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

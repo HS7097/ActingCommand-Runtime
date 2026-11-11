@@ -1358,3 +1358,12 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5c::material_out_writes_the_whole_material",
 ]
 incident = ["#434 LAB-5C"]
+
+# Workflow #434 LAB-5G4a (0.12.52; register §1.287, "Slice LAB-5G4a"; brief rd-1108/arch-013/brief-lab5g4a.md; contracts/lab-two-entries.md §4.2, §4.3 and §8.2): serve --stdio takes --front mcp beside --stdio, in either order, and refuses another value, the option twice and the option without --stdio (actingctl_usage_invalid, the word, unknown) and the option with ACTINGCOMMAND_INITIATOR set to anything (actingctl_usage_invalid, variable), while without the option its words are checked as before; a recording step added through the loop under the option carries Lab-MCP and is answered with the loop's line, never the envelope, and without it Lab-CLI and the two words the variable may name; the client configuration under the option equals MCP's --via mcp child's (the Lab channel, via mcp) and without it has no via; serve refuses a string value beginning with --, alone and inside a list, on a row actinglab's own command serves and on a row the CLI module serves (actingctl_usage_invalid, the parameter, not_recognised) and answers the next line, and takes a string beginning with one dash and a negative number as the command line does
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g4a::serve_front_mcp_records_lab_mcp",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g4a::serve_refuses_values_that_begin_with_two_dashes",
+]
+incident = ["#434 LAB-5G4a"]
