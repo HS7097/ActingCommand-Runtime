@@ -217,6 +217,17 @@
       },
       "additionalProperties": false
     },
+    "consumptionFact": {
+      "description": "#428 SCHED-C1f1 (since 0.12.54; ../README.md \"A run's consumption read from a fact\"): one run's amount of a consumes entry's pool read at each evaluation from the fact fact_key in the scope of the instance the evaluation decides for, a usable record's integer (current, at a confidence above 0, in 1..=2^53-1 and at most a constant capacity), else fallback. It names no scope and no offset; at most a constant capacity, the fallback; refused on a produces entry and beside expected_amount_milli. A schedule.json that writes one names consumption_fact in requires.",
+      "type": "object",
+      "required": ["type", "fact_key", "fallback"],
+      "properties": {
+        "type": { "const": "fact" },
+        "fact_key": { "$ref": "#/$defs/identifier" },
+        "fallback": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      },
+      "additionalProperties": false
+    },
     "clockSource": {
       "oneOf": [
         {
@@ -487,10 +498,11 @@
         "pool_id": { "$ref": "#/$defs/itemId" },
         "direction": { "enum": ["consume", "produce"] },
         "amount": {
-          "description": "A positive integer in real units, or (SS-2b) the marker \"pending\": the quantity is not known yet. A pending amount changes nothing but a judged task's net benefit, which it makes unknown.",
+          "description": "A positive integer in real units, or (SS-2b) the marker \"pending\": the quantity is not known yet. A pending amount changes nothing but a judged task's net benefit, which it makes unknown. #428 SCHED-C1f1 (since 0.12.54): on a consumes entry only, one run's amount read from a fact with a fallback (consumptionFact).",
           "oneOf": [
             { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
-            { "const": "pending" }
+            { "const": "pending" },
+            { "$ref": "#/$defs/consumptionFact" }
           ]
         },
         "expected_amount_milli": {

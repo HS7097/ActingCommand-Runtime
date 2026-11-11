@@ -118,6 +118,10 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
             .as_ref()
             .map(|report| report.benefit_followers.clone())
             .unwrap_or_default();
+        // #428 SCHED-C1f1: the consumptions read from a fact, absent without `--schedule`.
+        let consumption_facts = schedule
+            .as_ref()
+            .map(|report| report.consumption_facts.clone());
         Ok(PackageBundleResponse {
             status: "written".to_string(),
             out: out.display().to_string(),
@@ -126,6 +130,7 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
             benefit_coverage: schedule.as_ref().map(|report| report.benefit_coverage),
             benefit_provenance: schedule.map(|report| report.benefit_provenance),
             benefit_followers,
+            consumption_facts,
         })
     })
     .map_err(|mut error| {

@@ -95,10 +95,11 @@ use super::benefit::{
 };
 use super::tie_break::TieKey;
 use super::{
-    DecisionReason, EvaluationFacts, InstanceSnapshot, PlacementCandidate, PlacementContext,
-    PolicyEvaluationError, PolicyEvaluationResult, SchedulingDecisionState, TaskWork,
-    UnknownReasonToken, live_pool_unknown_reason, pool_bound, project_pool_value, reason_with,
-    scope_matches_identity, scope_matches_instance, unknown_token,
+    Amounts, ConsumptionAmounts, DecisionReason, EvaluationFacts, InstanceSnapshot,
+    PlacementCandidate, PlacementContext, PolicyEvaluationError, PolicyEvaluationResult,
+    SchedulingDecisionState, TaskWork, UnknownReasonToken, live_pool_unknown_reason, pool_bound,
+    project_pool_value, reason_with, scope_matches_identity, scope_matches_instance, unknown_token,
+    with_values,
 };
 use crate::codes::{LinesSource, PolicyCode, PoolLineHold};
 use crate::{
@@ -232,7 +233,10 @@ struct Episode {
 }
 
 /// SCHED-C1d: one consumer of an episode's pool on its instance, as the consumers key reads it:
-/// its task id, its `⌈C/1000⌉` and whether it is marked `benefit_limited`.
+/// its task id, its `⌈C/1000⌉` and whether it is marked `benefit_limited`. SCHED-C1f1 (register
+/// §1.303 SC1F-3, ruling 2): `⌈C/1000⌉` is the declared consumption, an amount read from a fact at
+/// its fallback, never the value read: a changed reading keeps the episode, a changed fallback
+/// ends it as a changed constant does.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ConsumerKey {
     task_id: String,
@@ -244,7 +248,11 @@ impl ConsumerKey {
     fn of(consumer: &Consumer<'_>, pool_id: &str) -> PolicyEvaluationResult<Self> {
         Ok(Self {
             task_id: consumer.task.id.clone(),
-            consumed: crate::resource_targets::declared_consumption(consumer.task, pool_id)?,
+            consumed: crate::resource_targets::consumption(
+                consumer.task,
+                pool_id,
+                Amounts::Declared,
+            )?,
             limited: consumer.task.is_benefit_limited(),
         })
     }
@@ -346,12 +354,14 @@ impl Round {
     /// `dispatched` in the round is planned with its consumption; while the accumulated reading is
     /// not spent, one whose run would end below the hard line is skipped (with what the pool would
     /// hold after it) and any other planned. Indices into `order`, in plan order. With nothing
-    /// passed or dispatched it is the plan the round began with.
+    /// passed or dispatched it is the plan the round began with. SCHED-C1f1 (register §1.303
+    /// SC1F-3, ruling 2): each member's consumption is the one in effect at this evaluation
+    /// (`amounts`), not the one its order was frozen with.
     fn plan(
         &self,
         lines: Lines,
-        dispatched: &BTreeSet<usize>,
-        assumed: &BTreeSet<usize>,
+        (dispatched, assumed): (&BTreeSet<usize>, &BTreeSet<usize>),
+        amounts: &MemberAmounts,
     ) -> (Vec<usize>, Vec<(usize, i128)>) {
         let mut planned = Vec::new();
         let mut skipped = Vec::new();
@@ -360,15 +370,16 @@ impl Round {
             if self.passed.contains_key(&index) || assumed.contains(&index) {
                 continue;
             }
+            let consumed = i128::from(member.in_effect(amounts));
             if dispatched.contains(&index) {
                 planned.push(index);
-                reading -= i128::from(member.consumed);
+                reading -= consumed;
                 continue;
             }
             if lines.spent(reading) {
                 break;
             }
-            let after = reading - i128::from(member.consumed);
+            let after = reading - consumed;
             if after < i128::from(lines.hard) {
                 skipped.push((index, after));
                 continue;
@@ -384,8 +395,22 @@ impl Round {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Member {
     task_id: String,
-    /// `⌈C/1000⌉`, the consumption the reading is planned with.
+    /// `⌈C/1000⌉`, the consumption the order was frozen with. SCHED-C1f1 (register §1.303 SC1F-3):
+    /// kept as the row of `host.capped_episodes` keeps it; the plan and the checks read the
+    /// amount in effect ([`Member::in_effect`]).
     consumed: u64,
+}
+
+/// SCHED-C1f1 (register §1.303 SC1F-3): each consumer's `⌈C/1000⌉` of the pool on the instance
+/// at this evaluation, by task id, every amount read from a fact in effect.
+type MemberAmounts = BTreeMap<String, u64>;
+
+impl Member {
+    /// The member's consumption in effect at this evaluation; the one its order was frozen with
+    /// when it is no consumer now (a member's consumer ended the episode if it was dropped).
+    fn in_effect(&self, amounts: &MemberAmounts) -> u64 {
+        amounts.get(&self.task_id).copied().unwrap_or(self.consumed)
+    }
 }
 
 /// A judged candidate whose net benefit is known, as the benefit gate judged it.
@@ -602,6 +627,23 @@ pub(super) fn plan(
                 continue;
             }
             considered.insert(key.clone());
+            // SCHED-C1f1 (register §1.303 SC1F-4): a hold of a candidate whose consumption of the
+            // pool is read from a fact names that consumption and where it comes from.
+            let for_task = |task_id: &str, reason: DecisionReason| {
+                with_values(
+                    reason,
+                    context
+                        .amounts
+                        .values(task_id, &instance.instance_id, &pool.id),
+                )
+            };
+            // SCHED-C1f1 (SC1F-3, ruling 2): each consumer's consumption in effect on the instance,
+            // which the round's plan and checks read.
+            let in_effect = member_amounts(
+                &consumers,
+                &pool.id,
+                context.amounts.on(&instance.instance_id),
+            )?;
             let lines = match lines(context, facts, instance, pool)? {
                 Ok(lines) => lines,
                 // SCHED-C1d: an episode under way waits on an unknown value: its judged candidates
@@ -613,8 +655,8 @@ pub(super) fn plan(
                     ..
                 }) if memory.episodes.contains_key(&key) => {
                     let hold = unknown_lines_reason(&pool.id, fact_key.as_deref(), unknown_reason);
-                    for (index, _, _) in candidates.values() {
-                        decided[*index].held(hold.clone());
+                    for (&task_id, (index, _, _)) in &candidates {
+                        decided[*index].held(for_task(task_id, hold.clone()));
                     }
                     continue;
                 }
@@ -645,8 +687,8 @@ pub(super) fn plan(
                         )),
                     };
                     if let Some(hold) = hold {
-                        for (index, _, _) in candidates.values() {
-                            decided[*index].normal_hold(&hold);
+                        for (&task_id, (index, _, _)) in &candidates {
+                            decided[*index].normal_hold(&for_task(task_id, hold.clone()));
                         }
                     }
                     continue;
@@ -654,12 +696,13 @@ pub(super) fn plan(
             };
             // SCHED-C1c ("A pool its lines cannot spend"): at or above the trigger line, lines
             // under which no consumer's run fits from the cap begin no episode (one under way
-            // waits), and the pool's judged candidates are held with the warning.
+            // waits), and the pool's judged candidates are held with the warning. SCHED-C1f1: by
+            // each consumer's consumption in effect; the warning names the least one's.
             if lines.at_trigger()
-                && let Some(least) = least_consumption(&consumers, &pool.id)?
+                && let Some((least, least_task)) = least_consumption(&consumers, &in_effect)
                 && least > lines.room()
             {
-                let reason = unspendable_reason(&pool.id, lines, least);
+                let reason = for_task(least_task, unspendable_reason(&pool.id, lines, least));
                 for (index, _, _) in candidates.values() {
                     decided[*index].held(reason.clone());
                 }
@@ -669,7 +712,7 @@ pub(super) fn plan(
                 context,
                 memory,
                 &key,
-                lines,
+                (lines, &in_effect),
                 &candidates,
                 work,
                 &consumers,
@@ -677,18 +720,22 @@ pub(super) fn plan(
             )?;
             let Some(view) = in_round else {
                 // Below the cap (SCHED-C1c: the trigger line), or the episode ended: the hard line
-                // holds a run that would cross it.
-                for (index, _, term) in candidates.values() {
+                // holds a run that would cross it (SCHED-C1f1: by its consumption in effect, which
+                // its judgement read).
+                for (&task_id, (index, _, term)) in &candidates {
                     let after = lines.reading - i128::from(units(term.consumed_milli)?);
                     if after < i128::from(lines.hard) {
-                        decided[*index].normal_hold(&hard_line_reason(&pool.id, lines, after));
+                        decided[*index].normal_hold(&for_task(
+                            task_id,
+                            hard_line_reason(&pool.id, lines, after),
+                        ));
                     }
                 }
                 continue;
             };
             let offered = view.decide(
                 (&pool.id, instance),
-                lines,
+                (lines, &in_effect, context.amounts),
                 ranked,
                 &candidates,
                 &mut decided,
@@ -798,7 +845,9 @@ struct Consumer<'a> {
     task: &'a TaskSpec,
 }
 
-/// The consumers of `pool` on `instance`, by task id.
+/// The consumers of `pool` on `instance`, by task id. SCHED-C1f1 (register §1.303, "Who reads
+/// it" item 5): a task whose entry reads its amount from a fact declares a consumption whatever
+/// the value read (its fallback is at least 1).
 fn consumers<'a>(
     context: &PlacementContext<'a>,
     instance: &InstanceSnapshot,
@@ -812,11 +861,29 @@ fn consumers<'a>(
         {
             continue;
         }
-        if crate::resource_targets::declared_consumption_milli(task, &pool.id)? > 0 {
+        if crate::resource_targets::consumption_milli(task, &pool.id, Amounts::Declared)? > 0 {
             found.push(Consumer { task });
         }
     }
     Ok(found)
+}
+
+/// SCHED-C1f1 (register §1.303 SC1F-3): each of `consumers`' `⌈C/1000⌉` of `pool_id` as
+/// `amounts` reads it (in effect on the instance), by task id.
+fn member_amounts(
+    consumers: &[Consumer<'_>],
+    pool_id: &str,
+    amounts: Amounts<'_>,
+) -> PolicyEvaluationResult<MemberAmounts> {
+    consumers
+        .iter()
+        .map(|consumer| {
+            Ok((
+                consumer.task.id.clone(),
+                crate::resource_targets::consumption(consumer.task, pool_id, amounts)?,
+            ))
+        })
+        .collect()
 }
 
 /// `⌈C/1000⌉`, the whole units a consumption in thousandths reads.
@@ -883,7 +950,8 @@ fn lines(
     };
     let capacity = reading.bound.capacity();
     // The consumption the reading does not show yet: every task dispatched on the instance at or
-    // after the reading's observation (the reserve gate's step 3).
+    // after the reading's observation (the reserve gate's step 3); SCHED-C1f1: each by its own
+    // amount in effect on the instance.
     let mut unshown = 0_i128;
     for state in &facts.tasks {
         if state.instance_id != instance.instance_id
@@ -894,8 +962,10 @@ fn lines(
             continue;
         }
         if let Some((_, task)) = context.tasks.get(state.task_id.as_str()) {
-            unshown += i128::from(crate::resource_targets::declared_consumption(
-                task, &pool.id,
+            unshown += i128::from(crate::resource_targets::consumption(
+                task,
+                &pool.id,
+                context.amounts.on(&instance.instance_id),
             )?);
         }
     }
@@ -1013,12 +1083,14 @@ type PairCandidates<'a, 'b> = BTreeMap<&'b str, (usize, &'b Known<'a>, &'b Consu
 
 /// The transitions of one pair's episode at the evaluation (module doc): `None` when the pool is
 /// not in a capped round now (below the cap, or the episode ended), else the round to decide by.
+/// SCHED-C1f1 (register §1.303 SC1F-3): the round's plan and the head's check read each member's
+/// consumption in effect (`in_effect`); its frozen order stays.
 #[allow(clippy::too_many_arguments)]
 fn step<'m>(
     context: &PlacementContext<'_>,
     memory: &'m mut CappedMemory,
     key: &(String, String),
-    lines: Lines,
+    (lines, in_effect): (Lines, &MemberAmounts),
     candidates: &PairCandidates<'_, '_>,
     work: &mut [TaskWork],
     consumers: &[Consumer<'_>],
@@ -1073,7 +1145,7 @@ fn step<'m>(
         };
         if episode.round.is_none() {
             let number = episode.rounds + 1;
-            match start_round(candidates, lines, number, now)? {
+            match start_round(candidates, (lines, in_effect), number, now)? {
                 Some(round) => {
                     episode.rounds = number;
                     episode.round = Some(round);
@@ -1098,7 +1170,16 @@ fn step<'m>(
                     memory.episodes.remove(key);
                     for consumer in consumers {
                         if let Some(entry) = work_entry(work, &consumer.task.id, instance) {
-                            entry.reasons.push(reason.clone());
+                            // SCHED-C1f1 (SC1F-4): with the consumer's consumption of the pool
+                            // when it is read from a fact.
+                            entry.reasons.push(with_values(
+                                reason.clone(),
+                                context.amounts.values(
+                                    &consumer.task.id,
+                                    &instance.instance_id,
+                                    &key.1,
+                                ),
+                            ));
                         }
                     }
                     return Ok(None);
@@ -1113,7 +1194,7 @@ fn step<'m>(
         }
         let dispatched = dispatched_of(round);
         let remaining = round
-            .plan(lines, &dispatched, &BTreeSet::new())
+            .plan(lines, (&dispatched, &BTreeSet::new()), in_effect)
             .0
             .into_iter()
             .filter(|index| !dispatched.contains(index))
@@ -1132,8 +1213,10 @@ fn step<'m>(
             .iter()
             .find(|index| candidates.contains_key(round.order[**index].task_id.as_str()))
         {
+            // SCHED-C1f1: by the head's consumption in effect, the amount its run is judged by.
             Some(head) => {
-                lines.reading - i128::from(round.order[*head].consumed) < i128::from(lines.hard)
+                lines.reading - i128::from(round.order[*head].in_effect(in_effect))
+                    < i128::from(lines.hard)
             }
             None => !candidates.is_empty(),
         };
@@ -1154,7 +1237,7 @@ fn step<'m>(
     } else {
         dispatched_of(round)
     };
-    let (planned, skipped) = round.plan(lines, &dispatched, &BTreeSet::new());
+    let (planned, skipped) = round.plan(lines, (&dispatched, &BTreeSet::new()), in_effect);
     let remaining = planned
         .into_iter()
         .filter(|index| !dispatched.contains(index))
@@ -1170,10 +1253,11 @@ fn step<'m>(
 }
 
 /// A new round (module doc): its frozen order of the listed candidates and its plan from the
-/// reading; `None` when it lists or plans nothing.
+/// reading; `None` when it lists or plans nothing. SCHED-C1f1: each listed by its consumption in
+/// effect at the round's start, as its judgement read it, which its member keeps.
 fn start_round(
     candidates: &PairCandidates<'_, '_>,
-    lines: Lines,
+    (lines, in_effect): (Lines, &MemberAmounts),
     number: u64,
     now: u64,
 ) -> PolicyEvaluationResult<Option<Round>> {
@@ -1230,7 +1314,7 @@ fn start_round(
         offered: Vec::new(),
     };
     if round
-        .plan(lines, &BTreeSet::new(), &BTreeSet::new())
+        .plan(lines, (&BTreeSet::new(), &BTreeSet::new()), in_effect)
         .0
         .is_empty()
     {
@@ -1241,12 +1325,15 @@ fn start_round(
 
 impl RoundView<'_> {
     /// The dispositions of one capped pair's candidates and the reasons of its consumers that are
-    /// no candidates (module doc).
+    /// no candidates (module doc). SCHED-C1f1 (register §1.303 SC1F-3, SC1F-4): the block's fit
+    /// and the plan of its fallbacks read each member's consumption in effect (`in_effect`), and
+    /// every reason given to a task whose consumption of the pool is read from a fact names it
+    /// (`amounts`).
     #[allow(clippy::too_many_arguments)]
     fn decide(
         &self,
         (pool_id, instance): (&str, &InstanceSnapshot),
-        lines: Lines,
+        (lines, in_effect, amounts): (Lines, &MemberAmounts, &ConsumptionAmounts),
         ranked: &[PlacementCandidate],
         candidates: &PairCandidates<'_, '_>,
         decided: &mut [Decided],
@@ -1254,6 +1341,12 @@ impl RoundView<'_> {
         consumers: &[Consumer<'_>],
     ) -> PolicyEvaluationResult<Vec<usize>> {
         let overflow = || PolicyEvaluationError::overflow("a capped head's benefit overflowed");
+        let for_task = |task_id: &str, reason: DecisionReason| {
+            with_values(
+                reason,
+                amounts.values(task_id, &instance.instance_id, pool_id),
+            )
+        };
         let order: &[Member] = match self.state {
             Some(round) => &round.order,
             None => &[],
@@ -1275,7 +1368,9 @@ impl RoundView<'_> {
                         continue;
                     }
                     // As the head, it would end the round.
-                    if lines.reading - i128::from(member.consumed) < i128::from(lines.hard) {
+                    if lines.reading - i128::from(member.in_effect(in_effect))
+                        < i128::from(lines.hard)
+                    {
                         break 'groups;
                     }
                     block.push((index, fallback));
@@ -1287,7 +1382,7 @@ impl RoundView<'_> {
                 assumed.extend(block.iter().map(|(index, _)| *index));
                 fallback = true;
                 group = round
-                    .plan(lines, &self.dispatched, &assumed)
+                    .plan(lines, (&self.dispatched, &assumed), in_effect)
                     .0
                     .into_iter()
                     .filter(|index| !self.dispatched.contains(index))
@@ -1297,8 +1392,8 @@ impl RoundView<'_> {
         let head = block
             .first()
             .map(|(index, _)| order[*index].task_id.as_str());
-        for (task_id, (index, known, term)) in candidates {
-            let at = order.iter().position(|member| member.task_id == *task_id);
+        for (&task_id, (index, known, term)) in candidates {
+            let at = order.iter().position(|member| member.task_id == task_id);
             // Its hold when the round does not try it now.
             let held = match at {
                 Some(at) => Some(self.member_hold(at, pool_id, lines, head)),
@@ -1306,7 +1401,8 @@ impl RoundView<'_> {
                     Some(self.reason(PoolLineHold::CappedLimitedSpent, pool_id, lines, None, None))
                 }
                 None => None,
-            };
+            }
+            .map(|held| for_task(task_id, held));
             let place = at.and_then(|at| block.iter().position(|(member, _)| *member == at));
             if let Some(position) = place {
                 // B = V − W·(c − a), a = min(c, max(0, r − S)): only the part below the stop line
@@ -1336,7 +1432,10 @@ impl RoundView<'_> {
                         CappedSlot {
                             pool_id: pool_id.to_owned(),
                             position,
-                            spend: spend_reason(pool_id, lines, self.episode, self.round, rank),
+                            spend: for_task(
+                                task_id,
+                                spend_reason(pool_id, lines, self.episode, self.round, rank),
+                            ),
                             lead: None,
                             wait: held.filter(|_| block[position].1),
                             wake_unix_ms: None,
@@ -1349,12 +1448,9 @@ impl RoundView<'_> {
                 Some(held) => decided[*index].held(held),
                 // Listed after the order was frozen, or of no value without the pool's cost:
                 // held only if it would pass.
-                None => decided[*index].normal_hold(&self.reason(
-                    PoolLineHold::CappedNotHead,
-                    pool_id,
-                    lines,
-                    None,
-                    head,
+                None => decided[*index].normal_hold(&for_task(
+                    task_id,
+                    self.reason(PoolLineHold::CappedNotHead, pool_id, lines, None, head),
                 )),
             }
         }
@@ -1374,9 +1470,10 @@ impl RoundView<'_> {
                 .reasons
                 .last()
                 .and_then(|reason| reason.outcome.code().registered());
-            entry
-                .reasons
-                .push(self.not_dispatchable(pool_id, lines, gate));
+            entry.reasons.push(for_task(
+                &consumer.task.id,
+                self.not_dispatchable(pool_id, lines, gate),
+            ));
         }
         Ok(block.into_iter().map(|(index, _)| index).collect())
     }
@@ -1637,18 +1734,22 @@ fn unspendable_reason(pool_id: &str, lines: Lines, least: u64) -> DecisionReason
     )
 }
 
-/// SCHED-C1c: the least `⌈C/1000⌉` of one run among a pool's `consumers` (each by its declared
-/// consumption of `pool_id`, candidate or not); `None` without a consumer.
-fn least_consumption(
-    consumers: &[Consumer<'_>],
-    pool_id: &str,
-) -> PolicyEvaluationResult<Option<u64>> {
-    let mut least = None::<u64>;
+/// SCHED-C1c: the least `⌈C/1000⌉` of one run among a pool's `consumers` (candidate or not), with
+/// the consumer that gives it, the first by task id among equal ones; `None` without a consumer.
+/// SCHED-C1f1 (register §1.303, "Who reads it" item 3): each by its consumption in effect on the
+/// instance (`in_effect`).
+fn least_consumption<'a>(
+    consumers: &'a [Consumer<'_>],
+    in_effect: &MemberAmounts,
+) -> Option<(u64, &'a str)> {
+    let mut least = None::<(u64, &str)>;
     for consumer in consumers {
-        let consumed = crate::resource_targets::declared_consumption(consumer.task, pool_id)?;
-        least = Some(least.map_or(consumed, |least| least.min(consumed)));
+        let consumed = in_effect.get(&consumer.task.id).copied().unwrap_or(0);
+        if least.is_none_or(|(known, _)| consumed < known) {
+            least = Some((consumed, consumer.task.id.as_str()));
+        }
     }
-    Ok(least)
+    least
 }
 
 /// SS-2h: `capped_not_head` for a block candidate behind the block's dispatched one (`head`).

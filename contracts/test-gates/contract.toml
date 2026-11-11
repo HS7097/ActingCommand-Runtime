@@ -514,6 +514,7 @@ tests = [
     "actingcommand-actinglab-architecture::workspace_guards::c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral",
     "actingcommand-actinglab-architecture::workspace_guards::r2f_product_and_authoring_paths_have_no_builtin_game_identity",
     "actingcommand-actinglab-architecture::workspace_guards::r35_the_contained_task_request_carries_no_application_identity",
+    "actingcommand-actinglab-architecture::workspace_guards::neut1_source_and_test_trees_name_no_real_game",
 ]
 incident = []
 

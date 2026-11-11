@@ -356,6 +356,141 @@ fn r2f_product_and_authoring_paths_have_no_builtin_game_identity() {
     );
 }
 
+/// Workflow #434 NEUT-1: the names of real games, of their publishers and of an application
+/// channel that no file of the product's source and test trees may hold, in any ASCII case and
+/// inside a longer word too. Tests and fixtures name a game `fixture-game-a` (`-b`, `-c`), a
+/// server `s1` (`s2`, `s3`) and an application `com.example.fixture.a`.
+const NEUT1_FORBIDDEN_WORDS: &[&str] = &[
+    "arknights",
+    "azurlane",
+    "azur_lane",
+    "azur lane",
+    "bluearchive",
+    "blue_archive",
+    "blue archive",
+    "girlsfrontline",
+    "girls_frontline",
+    "exilium",
+    "yostar",
+    "hypergryph",
+    "bilibili",
+];
+
+/// The trees NEUT-1 walks: every file under them, whatever its kind, code, fixture, golden,
+/// contract, configuration, script or workflow.
+const NEUT1_TREES: &[&str] = &[
+    ".github",
+    "apps",
+    "ci",
+    "contracts",
+    "crates",
+    "distribution",
+    "providers",
+    "ratchet",
+    "scripts",
+    "tests",
+    "tools",
+];
+
+/// The files whose words cannot be renamed, each with its reason. An entry whose file is gone or
+/// no longer holds one of the words fails the guard, so the list cannot outlive its reason.
+const NEUT1_ALLOW_LIST: &[(&str, &str)] = &[
+    (
+        "tools/actinglab-architecture/src/lib.rs",
+        "the C2 and R2-F guards' own word lists and the counterexamples their unit tests feed them",
+    ),
+    (
+        "tools/actinglab-architecture/tests/workspace_guards.rs",
+        "this guard's own word list and its counterexample",
+    ),
+];
+
+/// Each line of `bytes` that holds one of [`NEUT1_FORBIDDEN_WORDS`], as `path:line names word`.
+fn neut1_findings(display: &str, bytes: &[u8]) -> Vec<String> {
+    let lower = bytes.to_ascii_lowercase();
+    let mut findings = Vec::new();
+    for (index, line) in lower.split(|byte| *byte == b'\n').enumerate() {
+        for word in NEUT1_FORBIDDEN_WORDS {
+            if line
+                .windows(word.len())
+                .any(|window| window == word.as_bytes())
+            {
+                findings.push(format!("{display}:{} names `{word}`", index + 1));
+            }
+        }
+    }
+    findings
+}
+
+fn collect_every_file(root: &Path, files: &mut Vec<PathBuf>) {
+    let entries =
+        fs::read_dir(root).unwrap_or_else(|error| panic!("read {}: {error}", root.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|error| panic!("read {} entry: {error}", root.display()));
+        let path = entry.path();
+        if path.is_dir() {
+            collect_every_file(&path, files);
+        } else {
+            files.push(path);
+        }
+    }
+}
+
+#[test]
+fn neut1_source_and_test_trees_name_no_real_game() {
+    // The matcher itself: any case, inside a longer word, on the line it is on.
+    assert_eq!(
+        neut1_findings(
+            "counterexample.rs",
+            b"const ID: &str = \"fixture-game-a\";\nconst APP: &str = \"com.YoStar.app\";\n"
+        ),
+        ["counterexample.rs:2 names `yostar`"]
+    );
+
+    let root = workspace_root();
+    let mut files = Vec::new();
+    for tree in NEUT1_TREES {
+        collect_every_file(&root.join(tree), &mut files);
+    }
+    files.sort();
+    assert!(!files.is_empty(), "NEUT-1 found no file to read");
+
+    let mut violations = Vec::new();
+    let mut allowed_with_words = BTreeSet::new();
+    for path in files {
+        let display = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let bytes =
+            fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let findings = neut1_findings(&display, &bytes);
+        if NEUT1_ALLOW_LIST.iter().any(|(file, _)| *file == display) {
+            if !findings.is_empty() {
+                allowed_with_words.insert(display);
+            }
+            continue;
+        }
+        violations.extend(findings);
+    }
+    for (file, reason) in NEUT1_ALLOW_LIST {
+        if !allowed_with_words.contains(*file) {
+            violations.push(format!(
+                "allow-list entry {file} ({reason}) is gone or holds none of the words"
+            ));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "NEUT-1: a file of the product's source and test trees names a real game; use the \
+         neutral fixture values (game fixture-game-a, server s1, application \
+         com.example.fixture.a):\n{}",
+        violations.join("\n")
+    );
+}
+
 fn collect_generic_runtime_files(root: &Path, files: &mut Vec<PathBuf>) {
     let entries =
         fs::read_dir(root).unwrap_or_else(|error| panic!("read {}: {error}", root.display()));

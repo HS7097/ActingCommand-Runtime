@@ -2640,6 +2640,14 @@
     "lines_source": {
       "type": "vocab:lines_source",
       "description": "Where the lines of a pool in effect on an instance come from: the instance's own instance.<instance id>.scheduling.pool_lines, the catalog's lines, or the defaults (#428 SCHED-C1e, contracts/scheduling/README.md \"Lines for one instance\")."
+    },
+    "consumption": {
+      "type": "integer",
+      "description": "One run's consumption of a pool by a task in an evaluation, in whole units of the pool (the ⌈C/1000⌉ the decision reads), when the task's consumption of the pool is read from a fact: the fact's usable value, or the entry's fallback (#428 SCHED-C1f1, contracts/scheduling/README.md \"A run's consumption read from a fact\")."
+    },
+    "consumption_source": {
+      "type": "vocab:consumption_source",
+      "description": "Where the amount of a task's consumption of a pool read from a fact comes from in an evaluation: the fact's usable record of the instance, or the entry's fallback (#428 SCHED-C1f1, contracts/scheduling/README.md \"A run's consumption read from a fact\")."
     }
   },
   "vocabularies": {
@@ -3888,6 +3896,18 @@
         },
         "default": {
           "description": "Neither the instance nor the catalog gives the pool lines: the stop line is the capacity, the hard line 0 and the trigger line the capacity."
+        }
+      }
+    },
+    "consumption_source": {
+      "description": "Where the amount of a task's consumption of a pool read from a fact comes from in an evaluation, a value of pool_line_held, capped_spend, resource_reserve_insufficient and pool_lines_unspendable, beside consumption, whenever the reason's task's consumption of its pool is read from a fact (#428 SCHED-C1f1, contracts/scheduling/README.md \"A run's consumption read from a fact\"). A constant consumption carries neither.",
+      "review": "pending",
+      "tokens": {
+        "fact": {
+          "description": "The value of the fact's usable record in the instance's scope: present at a confidence above 0, not past its own expiry, not invalidated by a reset since, an integer in 1..=2^53-1 and at most a constant capacity of the pool."
+        },
+        "fallback": {
+          "description": "The entry's fallback: the instance holds no usable record of the fact (none, expired, invalidated by a reset, or present but not usable, which consumption_fact_unusable says)."
         }
       }
     },
@@ -9646,6 +9666,9 @@
     "consecutive_": [
       "execution-kernel",
       "ledger-forensics"
+    ],
+    "consumption_": [
+      "policy"
     ],
     "contained_": [
       "contract",

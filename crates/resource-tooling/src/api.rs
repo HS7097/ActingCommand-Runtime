@@ -150,6 +150,11 @@ pub struct StandardPackCheckResponse {
     /// rides_with}`, in file order. Absent when there is none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub benefit_followers: Vec<actingcommand_policy::BenefitFollower>,
+    /// #428 SCHED-C1f1 (register §1.303 SC1F-7): with `schedule.json`, each `consumes` entry
+    /// whose amount is read from a fact, `{rule_id, pool_id, fact_key, fallback}`, in file order,
+    /// empty when none. Absent without `schedule.json`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumption_facts: Option<Vec<actingcommand_policy::ConsumptionFactRule>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -187,6 +192,11 @@ pub struct PackageBundleResponse {
     /// rides_with}`, in file order. Absent when there is none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub benefit_followers: Vec<actingcommand_policy::BenefitFollower>,
+    /// #428 SCHED-C1f1 (register §1.303 SC1F-7): with `--schedule`, each `consumes` entry whose
+    /// amount is read from a fact, `{rule_id, pool_id, fact_key, fallback}`, in file order, empty
+    /// when none. Absent without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumption_facts: Option<Vec<actingcommand_policy::ConsumptionFactRule>>,
 }
 
 #[derive(Debug, Clone)]

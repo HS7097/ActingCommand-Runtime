@@ -112,7 +112,7 @@ and (SCHED-C1c, since 0.12.53) a pool that writes `trigger_line`
 `requires` does not name its subsystem, `schedule_invalid` at the first such member in file order
 (rules, then pools; for example `/rules/0/fixed_value_milli`, `/pools/0/trigger_line`).
 
-SCHED-C1f (register §1.303, not built yet). A rule whose `consumes` entry writes its `amount` as a
+SCHED-C1f (register §1.303; SCHED-C1f1, since 0.12.54). A rule whose `consumes` entry writes its `amount` as a
 fact ("A run's consumption read from a fact" below) requires `consumption_fact`, alike: the composer
 refuses a file that writes one while `requires` does not name it, `schedule_invalid` at the first
 such `amount` in file order (for example `/rules/0/consumes/0/amount`).
@@ -153,7 +153,7 @@ composer fills; a `resource.` or `inventory.` key; a place in the trigger outsid
 
 ### A run's consumption read from a fact
 
-SCHED-C1f (register §1.303, not built yet; the coordinator's work order of 11-11 and the
+SCHED-C1f (register §1.303; SCHED-C1f1, since 0.12.54; the coordinator's work order of 11-11 and the
 coordinator's rulings of 11-11 14:5x on its nine questions, with this draft's names, not Alice's
 words; [scheduling/README.md](scheduling/README.md), "A run's consumption read from a fact"). A consumer whose one run's amount of a pool is a state of the account (what the
 player fields), which its pack reads at each run and writes as an instance fact, writes that amount
@@ -174,7 +174,9 @@ as the fact it reads, with the amount a run is judged by until the fact exists:
   quantity, so the rule is *complete* when every pool it touches has a valuation, as with a
   constant `amount`.
 - **The tools** ("Tools") answer, per game, `consumption_facts`: one `{rule_id, pool_id, fact_key,
-  fallback}` per entry with the form, in file order (the file's ids), empty when none. Nothing
+  fallback}` per entry with the form, in file order (the file's ids), empty when none (SCHED-C1f1:
+  of the rules not held, the ones composed and so checked by the compiler, as the coverage counts
+  them; absent from an answer without `schedule.json`). Nothing
   checks the key against the rule's package (the coordinator's ruling 4; a later hint can be added
   without a shape change): a key that no run writes leaves every decision on its fallback, which
   the decisions show (`consumption_source` `fallback`).
@@ -421,7 +423,7 @@ each game root that holds `schedule.json`, that file's bytes, the root as
    `resource_projection`'s `value` is one, `pool_lines` when a pool writes `stop_line` or
    `hard_line`, SCHED-C1c (0.12.53) and SCHED-C1a (0.12.52): `pool_trigger_line` when one writes
    `trigger_line` and `benefit_fixed_value` when a rule writes `fixed_value_milli` or a pool
-   `valuation_origin`, SCHED-C1f (not built yet): `consumption_fact` when a rule's `consumes`
+   `valuation_origin`, SCHED-C1f1 (0.12.54): `consumption_fact` when a rule's `consumes`
    entry writes its `amount` as a fact,
    `reset_exclusions` when a timeline event writes
    `excludes_fact_prefixes`, `fact_unknown_probe` when a rule's `fact` predicate writes
@@ -538,7 +540,7 @@ warnings; `standard-pack compose` and the Runtime's workbench do not.
   below). SCHED-C1a (register §1.299, since 0.12.52): `benefit_coverage` also answers
   `fixed_value`, and both answer `benefit_provenance` ("Provenance" above). SCHED-C1c (since
   0.12.53): `warnings` ends with one `standard_pack_line_trigger_redundant` per rule and pool ("A
-  redundant trigger" below). SCHED-C1f (register §1.303, not built yet): both answer
+  redundant trigger" below). SCHED-C1f (register §1.303; SCHED-C1f1, since 0.12.54): both answer
   `consumption_facts`, the rules whose consumption is read from a fact ("A run's consumption read
   from a fact" above).
 - **A redundant trigger** (SCHED-C1c, register §1.299, since 0.12.53; the coordinator's point 12;

@@ -79,7 +79,7 @@
           "any_of_total": 0,
           "matched": true,
           "message": "page matched",
-          "page": "arknights/home",
+          "page": "fixture-game-a/home",
           "targets": [
             {
               "id": "home_anchor",
@@ -94,7 +94,7 @@
           "any_of_total": 0,
           "matched": false,
           "message": "required target failed: target_anchor",
-          "page": "arknights/target",
+          "page": "fixture-game-a/target",
           "targets": [
             {
               "id": "target_anchor",
@@ -117,7 +117,7 @@
         "schema_version": "actingcommand.outcome.v1",
         "values": {}
       },
-      "page": "arknights/home",
+      "page": "fixture-game-a/home",
       "projection_source": {
         "durable": false,
         "kind": "isolated_offline",
@@ -179,7 +179,7 @@
           "any_of_total": 0,
           "matched": true,
           "message": "page matched",
-          "page": "arknights/home",
+          "page": "fixture-game-a/home",
           "targets": [
             {
               "id": "home_anchor",
@@ -194,7 +194,7 @@
           "any_of_total": 0,
           "matched": false,
           "message": "required target failed: target_anchor",
-          "page": "arknights/target",
+          "page": "fixture-game-a/target",
           "targets": [
             {
               "id": "target_anchor",
@@ -212,7 +212,7 @@
         "schema_version": "actingcommand.outcome.v1",
         "values": {}
       },
-      "page": "arknights/home",
+      "page": "fixture-game-a/home",
       "standby": false
     }
   },
@@ -416,7 +416,7 @@
     "exit_code": 0,
     "line": {
       "executed": false,
-      "from": "arknights/home",
+      "from": "fixture-game-a/home",
       "instance": "default",
       "ledger": {
         "reason": "isolated_offline_projection",
@@ -439,7 +439,7 @@
       "route": [
         {
           "action_id": "<ACTION_ID>",
-          "from_page": "arknights/home",
+          "from_page": "fixture-game-a/home",
           "id": "home_to_target",
           "input": {
             "point": {
@@ -455,12 +455,12 @@
             "type": "tap"
           },
           "source": null,
-          "to_page": "arknights/target"
+          "to_page": "fixture-game-a/target"
         }
       ],
       "safety_gate": "navigation_only_default",
       "status": "planned",
-      "to": "arknights/target",
+      "to": "fixture-game-a/target",
       "trace_record_count": 3
     }
   },
@@ -473,7 +473,7 @@
         "blocked_error": {
           "blocked_by": [],
           "code": "validation_failed",
-          "message": "no navigation route from 'arknights/home' to 'arknights/missing'"
+          "message": "no navigation route from 'fixture-game-a/home' to 'fixture-game-a/missing'"
         },
         "command": "navigate",
         "details": null,
@@ -493,7 +493,7 @@
         "state": "failed",
         "trace_record_count": 2
       },
-      "message": "no navigation route from 'arknights/home' to 'arknights/missing'",
+      "message": "no navigation route from 'fixture-game-a/home' to 'fixture-game-a/missing'",
       "outcome": {
         "category": "error",
         "code": "validation_failed",
@@ -591,13 +591,13 @@
       "control": {
         "entry_task_id": "task",
         "execution_mode": "recognize_only",
-        "game": "arknights",
+        "game": "fixture-game-a",
         "package_id": "golden.task",
         "resolution": {
           "height": 9,
           "width": 16
         },
-        "server": "cn"
+        "server": "s1"
       },
       "entry_count": 6,
       "outcome": {
@@ -611,8 +611,8 @@
         "navigation": null,
         "operation": "resources/operations/task/task.json",
         "operation_count": 1,
-        "pack": "resources/recognition/arknights.cn.pack.json",
-        "pages": "resources/recognition/arknights.cn.pages.json",
+        "pack": "resources/recognition/fixture-game-a.s1.pack.json",
+        "pages": "resources/recognition/fixture-game-a.s1.pages.json",
         "recognition_unsupported_target_count": 0,
         "recognition_unsupported_targets": [],
         "resource_root": "resources"
@@ -1876,7 +1876,7 @@
                     "audit": {},
                     "fact": {
                       "candidate_pages": [
-                        "arknights/home"
+                        "fixture-game-a/home"
                       ],
                       "frame_height": 9,
                       "frame_width": 16,
@@ -1976,14 +1976,14 @@
                     "audit": {},
                     "fact": {
                       "candidate_pages": [
-                        "arknights/home"
+                        "fixture-game-a/home"
                       ],
                       "candidate_scores": {
                         "omitted": 0,
                         "pages": [
                           {
                             "best_score_milli": 1000,
-                            "page_id": "arknights/home",
+                            "page_id": "fixture-game-a/home",
                             "passed": true
                           }
                         ]
@@ -1991,7 +1991,7 @@
                       "frame_height": 9,
                       "frame_width": 16,
                       "kind": "recognition_completed",
-                      "matched_page": "arknights/home",
+                      "matched_page": "fixture-game-a/home",
                       "targets": [
                         {
                           "passed": true,
@@ -2448,7 +2448,7 @@
                     "audit": {},
                     "fact": {
                       "executed_steps": 0,
-                      "final_page": "arknights/home",
+                      "final_page": "fixture-game-a/home",
                       "kind": "terminal_committed",
                       "task_result": "success",
                       "task_timing": {
@@ -3709,7 +3709,7 @@
                                 "status": {
                                   "state": "observed"
                                 },
-                                "successful_returned_bytes": 786,
+                                "successful_returned_bytes": 791,
                                 "total_us": "<MICROSECONDS>"
                               },
                               "framing": {
@@ -3869,13 +3869,13 @@
                                   },
                                   "record_index": 6,
                                   "result": "ok",
-                                  "returned_bytes": 256
+                                  "returned_bytes": 261
                                 },
                                 "max_us": "<MICROSECONDS>",
                                 "status": {
                                   "state": "observed"
                                 },
-                                "successful_returned_bytes": 2482,
+                                "successful_returned_bytes": 2487,
                                 "total_us": "<MICROSECONDS>"
                               },
                               "framing": {
@@ -4116,7 +4116,7 @@
           "request_id": "<REQUEST_ID>",
           "result": {
             "executed_steps": 0,
-            "final_page": "arknights/home",
+            "final_page": "fixture-game-a/home",
             "kind": "contained_task_completed",
             "response_deadline_monotonic_ms": "<TIME>",
             "run_id": "<RUN_ID>",
@@ -4155,7 +4155,7 @@
     "line": {
       "detector_id": "detect_resolution",
       "detector_version": "1",
-      "game_id": "arknights",
+      "game_id": "fixture-game-a",
       "instance": "fixture:5555",
       "instance_id": "<IID>",
       "ledger": {
@@ -4188,17 +4188,17 @@
         },
         "detector_id": "detect_resolution",
         "detector_version": "1",
-        "game_id": "arknights",
+        "game_id": "fixture-game-a",
         "generated_at_unix_ms": "<TIME>",
         "instance_id": "<IID>",
-        "resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+        "resource_pack_hash": "1d72a141423664282998b866f0efd69054e144d176b27f9ec2ddd95de7283a86",
         "resource_pack_id": "golden-pack",
         "schema_version": "env-detect-result.v1",
-        "server_id": "cn"
+        "server_id": "s1"
       },
       "result_path": "<PATH>",
       "schema_version": "env-detect-command.v1",
-      "server_id": "cn",
+      "server_id": "s1",
       "status": "detected",
       "steps": [],
       "steps_executed": false,
@@ -4303,12 +4303,12 @@
           "detections": [],
           "detector_id": "detect_resolution",
           "detector_version": "1",
-          "game_id": "arknights",
+          "game_id": "fixture-game-a",
           "instance_id": "<IID>",
           "reason": "missing_result",
           "recommended_action": "run_detect",
           "result_path": "<PATH>",
-          "server_id": "cn",
+          "server_id": "s1",
           "status": "needs_detection",
           "task": "detect_resolution"
         },
@@ -4361,13 +4361,13 @@
         },
         "detector_id": "detect_resolution",
         "detector_version": "1",
-        "game_id": "arknights",
+        "game_id": "fixture-game-a",
         "generated_at_unix_ms": "<TIME>",
         "instance_id": "<IID>",
-        "resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+        "resource_pack_hash": "1d72a141423664282998b866f0efd69054e144d176b27f9ec2ddd95de7283a86",
         "resource_pack_id": "golden-pack",
         "schema_version": "env-detect-result.v1",
-        "server_id": "cn"
+        "server_id": "s1"
       },
       "result_path": "<PATH>",
       "schema_version": "env-status-command.v1",
@@ -4395,14 +4395,14 @@
         "detector_id": "detect_resolution",
         "detector_version": "2",
         "error": "env detection result detector is stale: result detect_resolution@1 command detect_resolution@2",
-        "game_id": "arknights",
+        "game_id": "fixture-game-a",
         "instance_id": "<IID>",
         "reason": "detector_mismatch",
         "recommended_action": "run_detect",
         "result_generated_at_unix_ms": "<TIME>",
         "result_path": "<PATH>",
-        "result_resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
-        "server_id": "cn",
+        "result_resource_pack_hash": "1d72a141423664282998b866f0efd69054e144d176b27f9ec2ddd95de7283a86",
+        "server_id": "s1",
         "source_result": "detect_resolution@<TIME>",
         "status": "needs_detection",
         "task": "detect_resolution"
@@ -4426,13 +4426,13 @@
         },
         "detector_id": "detect_resolution",
         "detector_version": "1",
-        "game_id": "arknights",
+        "game_id": "fixture-game-a",
         "generated_at_unix_ms": "<TIME>",
         "instance_id": "<IID>",
-        "resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+        "resource_pack_hash": "1d72a141423664282998b866f0efd69054e144d176b27f9ec2ddd95de7283a86",
         "resource_pack_id": "golden-pack",
         "schema_version": "env-detect-result.v1",
-        "server_id": "cn"
+        "server_id": "s1"
       },
       "result_path": "<PATH>",
       "schema_version": "env-status-command.v1",
@@ -4465,7 +4465,7 @@
       },
       "frame_path": "observe.png",
       "observation": {
-        "content_sha256": "dc3d1ee0d15324db3a2880782932cfc5199ae40bc157b0b3e953df249feade12",
+        "content_sha256": "3acf5335520805ad2d7c48978eafaeb32ffdd0360c31462d588dce6090d5777e",
         "elements": [],
         "frame": {
           "height": 1,
@@ -4485,7 +4485,7 @@
         },
         "omitted_count": 4,
         "output_truncated": true,
-        "page": "arknights/home",
+        "page": "fixture-game-a/home",
         "page_window_completeness": "unknown",
         "schema_version": "actingcommand.page-projection.v1",
         "standby": false,
@@ -4498,7 +4498,7 @@
         "schema_version": "actingcommand.outcome.v1",
         "values": {}
       },
-      "page": "arknights/home",
+      "page": "fixture-game-a/home",
       "projection_schema_version": "actingcommand.projection.v0.1",
       "req_id": "<REQ_ID>",
       "state": "observed",
@@ -4612,7 +4612,7 @@
             "any_of_total": 0,
             "matched": true,
             "message": "page matched",
-            "page": "arknights/home",
+            "page": "fixture-game-a/home",
             "targets": [
               {
                 "id": "home_anchor",
@@ -4627,7 +4627,7 @@
             "any_of_total": 0,
             "matched": false,
             "message": "required target failed: target_anchor",
-            "page": "arknights/target",
+            "page": "fixture-game-a/target",
             "targets": [
               {
                 "id": "target_anchor",
@@ -4639,7 +4639,7 @@
           }
         ],
         "matched": true,
-        "page": "arknights/home",
+        "page": "fixture-game-a/home",
         "standby": false
       },
       "outcome": {
@@ -4648,7 +4648,7 @@
         "schema_version": "actingcommand.outcome.v1",
         "values": {}
       },
-      "page": "arknights/home",
+      "page": "fixture-game-a/home",
       "projection_schema_version": "actingcommand.projection.v0.1",
       "reco_id": "<RECO_ID>",
       "req_id": "<REQ_ID>",
@@ -4666,7 +4666,7 @@
         "error": "resource_drift",
         "hint": "observe-current-page-and-refresh-resource-or-target",
         "req_id": "<REQ_ID>",
-        "state": "arknights/target",
+        "state": "fixture-game-a/target",
         "suspicion": {
           "actual": "color failed",
           "expected": "home_button",
