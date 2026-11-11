@@ -13380,6 +13380,256 @@ words).** The differences (a) to (i) above are accepted as written. On the quest
 
 **Rollback of this slice.** Nothing to roll back: text only.
 
+### 1.314 Slice R-6b (contracts only): a run the scheduler started can be stopped, and settles as a stop (Workflow #429 A.2 contract point 2 and the slice row R-6, board #429 6535257381; R-6's first slice refused a policy run until `ledger` 8, §1.302 "Left for later slices"; R-8's "close this task" needs it for its second step, §1.308; the coordinator's eight rulings of 11-11, not Alice's words; read on main `385bb500`; coordinator work order `rd-1111/brief-r6b-contract.md`)
+
+[runtime-interface.md](runtime-interface.md) (the row `StopInstanceRun`),
+[policy-suspension.md](policy-suspension.md) (the new "A stopped run", and its opening),
+[scheduling/README.md](scheduling/README.md) ("Settlement Feedback And Eligibility Age", "Runtime
+Enforcement", "Clock-slot records", "Capped spending order", "No-progress guard"),
+[runtime-fact-store.md](runtime-fact-store.md) (the settlement facts),
+[lab-two-entries.md](lab-two-entries.md) (the `ui` entry's row of `StopInstanceRun`),
+[lab-operations.json](lab-operations.json) (the row `task stop`, its `notes`) and
+[component-interfaces.md](component-interfaces.md) (the new "Planned: Workflow #429 R-6b") are the
+contract. The number 1.314 is the coordinator's: §1.310 to §1.313 are held for four code slices
+open the same day.
+
+**R-6b itself.** Contracts only: no code, no test, no schema file, no gate row, no CI file, no
+configuration key, no outcome code and no live revision raised. Every rule it adds is marked
+"(R-6b, not built yet)" or written in a section that says so. The outcome catalog's descriptions,
+the code's comments, the `help` line of the row `task stop`, `component-interfaces.json` and the
+tests are the code slice's. The text names no game.
+
+**Why.** R-6's first slice (0.12.53, §1.302) stops a client's direct run only: a run the scheduler
+started is refused (`scheduled_contained_task_not_client_cancellable`, `run_origin` `policy`),
+because `policy.execution_recorded` of `ledger` 7 has no legal form for a scheduled run that ends
+neither as a success, nor as a counted failure, nor as a condition. On production nearly every run
+is the scheduler's, so the console's "close this task" and the Lab's `task stop` stop almost
+nothing a person wants stopped; today only a pause of the whole account does. 0.12.55 raises
+`ledger` to 8 anyway (S168-LB1a), one way, so the stop of a scheduled run takes the same revision.
+
+**The rulings** (11-11, the coordinator's, not Alice's words), as the contract writes them:
+(1) `StopInstanceRun` stops a scheduled run from every counter that sends it today (the Lab's
+`task stop`, the console, an agent through the Lab's tool) exactly as a direct run: asked at its
+next checkpoint, reset by the Runtime with the run's lease before its terminal, the same wait,
+`settled` and `reset`; a run the Runtime started for itself stays refused with `run_origin` `host`;
+(2) it settles as an interruption, neither a success nor a failure: no failure count, streak,
+backoff, ladder, suspension of a sensitive task, owed rerun or condition, counted under the routine
+summary's `interruptions`; (3) what the scheduler does next is the trigger's business, not the
+stop's, said per trigger below; (4) the smallest legal form of the record in `ledger` 8, with what
+every reader does with it; (5) a restart between the stop and the settlement; (6) a failed reset as
+for a direct run; (7) what a person sees, and every text that says a policy run is refused until
+`ledger` 8; (8) the interfaces.
+
+**The form, and why it is the smallest** (ruling 4; [policy-suspension.md](policy-suspension.md),
+"A stopped run"). Three forms were weighed:
+
+- *A failure with one more optional member* (an interruption flag): every member of a failure
+  (the two classes, the streak, the escalation streak, the disposition, the retry, the sensitivity,
+  the performance context) would need a value that means nothing for a stop, and every reader that
+  takes a `failed` result as a failure (the task snapshot's `failed`, the settlement fold's streak,
+  `failures_through`, the ledger's recovery check, the frame retention, `actingd suspended`) would
+  go on reading it as one unless taught otherwise, with nothing to say where.
+- *A failure read as a stop by its code*, no shape change: the record's check would have to admit
+  a failure with no count and a sensitive task's failure without a pause, the same readers would be
+  wrong by default, and the tools of the release before would show every stop as a failure.
+- *A third result kind*, `{"kind": "stopped", "outcome", "runtime_ms"}` (chosen; the spelling is
+  proposed, question 1): two members, each with a meaning for a stop (its cause, the run's time),
+  and none of a failure's; every reader that matches on the kind must decide what a stop is, and
+  the compiler names each one.
+
+Nothing but the revisions moves: SQLite format 2, `actingcommand.event.v3`, the record types, the
+tables, the indexes, every view's type list and the record's other members stay as they are. The
+record's stored severity is its outcome's category, as for every result-bearing record. `ledger`
+moves because a reader of revision 7 cannot decode the kind; `runtime-client` moves with it,
+because every event query page carries the record's result (difference (f)).
+
+**What a stopped run leaves, per trigger** (ruling 3; each "(R-6b, not built yet)"):
+
+| What | After a stop |
+|---|---|
+| a clock slot's occurrence O | served: O is served by the pair's first admitted dispatch after it ("Clock-slot records"), so the stopped dispatch served O at its admission and the next evaluation does not dispatch the same O; no clock-slot record. The records allow the coordinator's wish as they are: nothing is built for it |
+| the stopped task's `dependency_completed` with `since_own_run` (it is the successor) | due again ("its latest run did not succeed"): dispatched again once its cooldown, counted from its dispatch, has passed and its trigger holds |
+| a successor's `dependency_completed` on the stopped task (it is the predecessor) | not triggered: the predecessor's terminal state is `cancelled`, which `terminal_states` of `succeeded` or `failed` does not accept; a successor that lists `cancelled`, a word the catalog format already has, is triggered; no chain handover, which needs a success |
+| `fact_time_reached` with `once_per_reading` | not served (serving needs a success): true again, dispatched again after its cooldown |
+| a pool reading, a `resource_projection` | unchanged: a stopped run publishes no reading, as a failed one, so the pool keeps its last reading until the next reading or its expiry; what the run spent before the stop is real and shows only then |
+| the task's cooldown | from the dispatch, as for every run: no end starts a cooldown (difference (a)) |
+| the no-progress guard | not held: the guard its admission armed holds only a guarded dispatch that succeeded |
+| a capped episode | the stopped consumer was dispatched in its round (`last_dispatched_unix_ms`): the plan counts its whole consumption, the round does not list it again and never passes it; the head after it is checked against the pool's last reading, which the stop did not renew; the episode ends or goes on by its own rule |
+| the Runtime's own reruns its dispatch served (an immediate rerun's round, an owed rerun, a remedy retry or request) | end with it (proposed, question 3) |
+| a fact refresh read | stopped as any policy run; not one of its failures in a row, no failure backoff; its demand stays, and its `min_interval_ms` counts from its dispatch |
+
+**Where the contract differs from the rulings or completes them**, each reported to the
+coordinator:
+
+- (a) Ruling 3, the cooldown: the evaluator counts every cooldown from the pair's last dispatch
+  (`last_dispatched_unix_ms`, its admission; "Task Execution Fields"; `evaluator.rs`,
+  `cooldown_until`), never from an end, so "the cooldown runs from the stop as from any end" has no
+  end to follow. The contract keeps the cooldown from the dispatch (question 5).
+- (b) Ruling 3, the guard: every admission arms the pair's guard, the stopped one's too; the guard
+  holds only a guarded dispatch that succeeded, so a stopped pair is not held. The effect is the
+  ruling's; "not armed" is not.
+- (c) Ruling 3, the clock slot: allowed by the records as they are (the table above).
+- (d) Ruling 5: the stop's own records do not name the run. `command.received` and
+  `command.validated` carry the stop's request, the instance, the action `runtime_action` and an
+  empty audit input, and a stop answered from the instance's latest stopped run writes the same
+  `command.validated`. With a terminal, the terminal is enough: on a scheduled run only the stop
+  asks `ClientRequested` (`CancelContainedTask` refuses a scheduled run), so `contained_task_cancelled`
+  on a scheduled run's `task.failed` is a stop's, and the run settles `stopped` from it. Without a
+  terminal the ledger cannot tell, and the run settles as interrupted, as today (question 2).
+- (e) Ruling 7: `CancelContainedTask` (MCP `ac_stop_run`, actinglab `run stop`) keeps refusing a
+  scheduled run with `scheduled_contained_task_not_client_cancellable` (without `run_origin`),
+  unchanged, so the code stays for a host run in `StopInstanceRun` and for every scheduled run in a
+  client's own cancel. The token `policy` of the vocabulary `run_origin` stays registered, no longer
+  produced by the stop.
+- (f) Ruling 8: `runtime-client` moves too. An event query page carries the record's
+  `policy_result` (codes only in the public projection's `policy_execution_outcome`, whole in a full
+  read), which a client of revision 6 cannot decode; R-6b joins the planned 7 of S168-LB1a, whose
+  console the release already pairs.
+- (g) Ruling 1: a policy run's control enters the run registry only after its package's preparation
+  (`run_scheduled_contained_task`: `prepare_scheduled_package`, then `begin_contained_run`), while
+  its activity `policy_run` shows from the preparation; a stop sent then is refused
+  `contained_task_cancellation_identity_missing` (question 8). A direct run is registered before its
+  lease.
+- (h) Ruling 1: for a policy run `settled: true` means, as for a direct run, that the run left the
+  registry (its terminal and lease end written); its `policy.execution_recorded` follows on the run's
+  worker, so a read right after the answer may not hold it yet.
+- (i) Ruling 2: a stop takes precedence over two settings that could reach it: a
+  `scheduling.rerun.condition_codes` that names `contained_task_cancelled` does not make it a
+  condition, and a `recovery_ladder.triggers` that names it starts no ladder (the defaults name it in
+  neither). The scheduled cancel branch notes no ladder trigger and computes no failure identity for
+  a stopped run.
+- (j) Rulings 2 and 4, readers the rulings do not name: the task snapshot (`terminal_state`
+  `cancelled`, the evaluator's existing word, which the host never projected before), the
+  settlement facts and the snapshot's `last_duration_ms` and `failure_streak` (question 7), the
+  failure count of the pair's later runs (`failures_through`), the frame retention's match of a
+  settlement with its terminal, `actingd suspended`, `ac_diagnose` and the client's run summary of a
+  fixture run.
+- (k) Ruling 4, the routine summary: nothing to build. R-12 already counts a scheduled run's failure
+  terminal with `contained_task_cancelled` as an interruption (`RunEnd::of_terminal`, §1.264).
+- (l) Ruling 6: a policy run's failed lease end may hand its instance to a ladder today (when a
+  trigger names its terminal's code); a stopped run's, after a failed reset, never does. The fence holds the instance, its pairs wait with
+  `dispatch_resource_fenced`, and a self-check lifts it, as §1.302 says for a direct run.
+- (m) A stop that loses the race to the run's deadline or to a pause's drain keeps the run's own
+  end (an ordinary failure, `contained_task_deadline_exceeded`, or a condition,
+  `contained_task_paused`) and answers `reset: not_needed`, as for a direct run.
+- (n) Ruling 7, the texts that say a policy run is refused until `ledger` 8. Rewritten here:
+  [runtime-interface.md](runtime-interface.md) (the row `StopInstanceRun`),
+  [lab-operations.json](lab-operations.json) (the row `task stop`, its `notes`) and
+  [lab-two-entries.md](lab-two-entries.md) (the `ui` entry's row). Kept as the record of 0.12.53:
+  §1.302 (its title, "Why not a policy run", "Left for later slices", "What an operator sees").
+  For the code slice: the row `task stop`'s `help` ("a scheduled run ... is refused"), the comments
+  of `crates/runtime-host/src/host/stop_instance_run.rs` (the module's description) and of
+  `contained_task.rs` (`stop_refused_origin`), and the catalog's descriptions of
+  `scheduled_contained_task_not_client_cancellable`, of the key `run_origin` and of its vocabulary.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R6B-1 | `StopInstanceRun` of a policy run, a fact refresh read included | behaviour of an R-0 kind (no shape change) | R-6b | the host (`stop_target`; `stop_refused_origin` refuses a host run only) | asked `ClientRequested` at its next checkpoint, as a direct run; the same wait, `settled` and `reset`; a host run (a startup package, a ladder rung, an idle action's rest) stays refused with `run_origin` `host` |
+| R6B-2 | the Runtime's reset of a stopped policy run | behaviour | R-6b | the host (the cancel branch of `execute_contained_task_with_lease`, `reset_stopped_run`) | for a scheduled run too, with the run's lease, before its terminal; a failed reset fences that instance only (#419), its lease ends as a failed run's and hands the instance to no ladder; the fence's failure is the success code's cause |
+| R6B-3 | `policy.execution_recorded` result kind `stopped` `{outcome, runtime_ms}` | ledger shape (`ledger` 8, shared); wire shape in the event reads (`runtime-client` 7, shared) | R-6b | actingcommand-contract (`PolicyExecutionOutcome`, planned `Stopped`; its check; the public projection) | proposed spelling; `outcome` the terminal outcome's top node, codes only in the projection; the check asks only that it is a code; its severity its outcome's category |
+| R6B-4 | the live settlement of a stopped run | behaviour (policy) | R-6b | runtime-host, the policy lane and `record_policy_dispatch_outcome_under_gate` (planned input `PolicyExecutionInput::Stopped`) | the terminal `task.failed` with `contained_task_cancelled`, as every scheduled cancel; no failure identity, no condition decision, no runtime-budget rewrite, no ladder trigger |
+| R6B-5 | the decision memory of a stopped record | behaviour (policy) | R-6b | runtime-host, `PolicyControlState::commit_paced_execution` | live and replay alike: no streak, escalation, backoff, retry, pause or owed rerun; the counts stay taken and the runtime counts (question 4); the Runtime's own reruns it served end (question 3) |
+| R6B-6 | the task snapshot, the settlement fold and the settlement facts | behaviour (projection) | R-6b | runtime-host, `task_runtime_snapshots_of`, `fold_settlements_by`, `failures_through` | `terminal_state` `cancelled` with its `completed_window`; `last_duration_ms`, `failure_streak` and the four facts of the pair's latest success or failure (question 7); a later run's failure count counts on from them |
+| R6B-7 | the restart's settlement of a stopped run from its terminal | behaviour (the start's reconciliation and the reconciliation of an abandoned run); ledger rule (`ledger` 8) | R-6b | runtime-host `policy_outcome.rs`; ledger `storage.rs` (the recovery of a scheduled settlement) | the ledger accepts `stopped` from a `task.failed` with `contained_task_cancelled`, `runtime_ms` measured as a failure's, from no other terminal; a run with no terminal settles as interrupted, as today (question 2) |
+| R6B-8 | the other readers | behaviour | R-6b | ledger `retention.rs`; runtime-host `suspension_report.rs`; lab-ops `diagnose.rs`; runtime-client `summarize_run` | a stopped record matches its `task.failed` terminal; no stopped run is listed as a failure or a pause; the fixture run summary reads it beside its terminal |
+| R6B-9 | the texts of (n) left to the code | text (`runtime-outcomes` 1, descriptions only; the operation table's `help`) | R-6b | — | no code, key or vocabulary is added; the token `policy` of `run_origin` stays registered |
+| R6B-10 | the declarations | `ledger` [3, 8] and `runtime-client` [3, 7], joined or raised | R-6b | `distribution/windows/component-interfaces.json` | one raise for the release, as below |
+
+**Questions for the coordinator, each with the answer the contract proposes.**
+
+1. *The kind's spelling.* Proposed: `stopped` (`PolicyExecutionOutcome::Stopped`,
+   `PolicyExecutionInput::Stopped`). `interrupted` is taken in the code by the interrupted
+   settlement (`policy_settlement_interrupted`, `settled_as_interrupted`,
+   `is_interrupted_settlement`), which is a counted failure. The routine summary's column stays
+   `interruptions`.
+2. *A restart with no terminal.* Proposed: the interrupted settlement, as today (difference (d)):
+   the case is an abrupt end between the stop's request and the run's next checkpoint (a deploy's
+   drain lets the stopped run reach its checkpoint first), and the restart lifts the pair's first
+   interrupted settlement. Alternative: the stop's `command.validated` names the run (the run's
+   `task_id` and `run_id` links) and the recovery settles it `stopped`; the run views and the
+   client's run summary would then meet a run-linked record of another request and must learn to
+   skip it.
+3. *The Runtime's own reruns the stopped run served.* Proposed: they end with it: an immediate
+   rerun's round ends as at `policy_retry_round_ended`, an owed rerun is removed, a remedy retry
+   closes its round as a failed retry does but without a failure, and a provider's request is used;
+   by the record, so replay agrees; the pair then waits for its own trigger and cooldown. Without
+   it, a stopped immediate or owed rerun is offered again at the next evaluation, past its
+   cooldown and promoted, and the stop is undone within a cycle. Against: the letter of ruling 3.
+4. *Counts and runtime.* Proposed: the counts the admission took stay taken (the occurrence was
+   served, as ruling 3 wants for a clock slot), the run's runtime counts in the task's and the
+   activity's windows as a success's, and it is never re-judged as over its runtime budget.
+   Alternative: a refund as a condition gives, which lets a task limited to one run a day run again
+   the same day.
+5. *The cooldown.* Proposed: from the dispatch, as for every run (difference (a)); a task whose
+   stopped run outlasted its cooldown may be dispatched at the next evaluation while its trigger
+   holds, which a closing row (R-8) or a pause prevents. Alternative: a cooldown from the stop, for
+   stops only, a new input of the evaluator.
+6. *The terminal, and what the run views show.* Proposed: the `task.failed` with
+   `contained_task_cancelled` that every scheduled cancel writes, so `actingctl runs`, `ac_runs` and
+   the console's run list show the run `failed` with that code and its settlement `stopped`.
+   Alternative: a `task.cancelled`, as a direct run's, shown `cancelled`; the start's reconciliation
+   (`policy_run_terminal_conflict` today), the ledger's recovery, the retention and the run summary
+   would then need a third terminal of a scheduled run.
+7. *The settlement facts and the snapshot's last duration and streak.* Proposed: a stopped run is
+   no settlement for them (they keep the pair's latest success or failure; a cut-short duration is
+   no cost), while `terminal_state` shows `cancelled`. Alternative: `last_outcome` `stopped`, a
+   third value of a string fact that a catalog may compare.
+8. *A stop during the policy run's preparation* (difference (g)). Proposed: the code slice
+   registers a policy run's control when its activity begins, before its package's preparation, as
+   a direct run's is registered before its lease, and the run ends at its first checkpoint; if that
+   is not cheap, the refusal stays and the console sends the stop again.
+
+**The code slice.**
+
+| Slice | Repository | Size | What | Depends on | Interfaces |
+|---|---|---|---|---|---|
+| R-6b | Runtime | L (about four work orders: the form and its check; the stop and the live settlement; the decision memory and the projections; the restart, the other readers, the texts and the tests) | R6B-1 to R6B-10 | this contract and the coordinator's answers, questions 2, 3, 4, 6 and 8 before it starts (each changes what it builds); main with R-8 (`385bb500`, there); no code of S168-LB1a, LAB-6 or S168-5b (it shares their revisions and `component-interfaces.json` only) | `ledger` [3, 8], `runtime-client` [3, 7]: joined when S168-LB1a (or LAB-6, S168-5b) merged first, raised when R-6b merges first; `package`, `actingd-config` do not move |
+
+It may be split in two of the same release: R-6b1, the form, its check, every reader and the
+ledger's recovery rule (nothing writes the form; it takes the revisions), and R-6b2, the stop and
+the settlement that write it. No heavy computation is needed.
+
+**Interfaces** ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #429
+R-6b"). `ledger` 8 and `runtime-client` 7, shared: when S168-LB1a merged first, R-6b joins both and
+raises nothing; when R-6b merges first, it raises `ledger` to [3, 8] and `runtime-client` to [3, 7],
+and S168-LB1a (and LAB-6, S168-5b, for `ledger`) join them; one raise for the release.
+`package` does not move (no pack or bundle member), `actingd-config` does not move (no key; the two
+settings a stop takes precedence over keep their shapes and values), and `runtime-outcomes` stays 1
+(no code; three descriptions change within it).
+
+**Identity.** A ledger with no stopped record reads, replays, projects and decides byte for byte as
+before; a catalog and a pack are untouched.
+
+**Tests that pin today's refusal** (the code slice changes them, the ruling changing what they
+pin): `runtime-host`'s `gate_429_r6::r6_a_host_run_and_a_policy_run_are_refused_with_their_origin_and_nothing_is_cancelled`
+(its policy half) and `gate_429_r8::r8_closing_a_task_then_stopping_its_run` (its policy half: the
+second step now stops the scheduled run); `actinglab-architecture`'s
+`the_runtime_declares_each_v0120_interface_revision_once` moves to the ranges it declares. Its work
+order names its new tests; the contract proposes one each for: a stopped policy run (its reset on
+its lease, its terminal, its `stopped` record, no streak, backoff, pause, ladder, condition or owed
+rerun, an interruption in the routine summary); a sensitive task's stopped run, not paused; the
+replay of a stopped record at a start; the restart from its terminal; a restart with no terminal;
+a failed reset that fences only its instance and starts no ladder; the clock occurrence served; a
+stopped capped consumer; the snapshot's `cancelled`; a host run still refused.
+
+**What changes live** (the code slice, 0.12.55). A scheduled run can be stopped from the console's
+"close this task" (R-8's second step now acts on it), from actinglab `task stop` and from an agent
+through the Lab's tool: it ends at its next checkpoint, the Runtime resets the device with the run's
+lease (its record shows one `InputReset` before its lease's release), and the stop answers
+`settled` and `reset` as for a direct run. The run's terminal is `task.failed` with
+`contained_task_cancelled`, its settlement `stopped`: nothing counts as a failure, nothing retries,
+backs off, pauses or enters a ladder, no rerun is owed, and the routine summary counts it under
+`interruptions`. A host run, and every scheduled run through `ac_stop_run` and `run stop`, stay
+refused. Tools and a console of revision 6 cannot read an event page that holds a stopped record,
+so the console of the release is deployed with it.
+
+**Rollback.** Going back below `ledger` 8 is refused by the Rp.max rule once the Runtime of the
+release has run, whether or not a stop was recorded (the same for every slice of revision 8). The
+way back is a later build or a fresh state root; there is no migration, and the configuration needs
+nothing. A console of `runtime-client` 6 cannot read event pages that hold a stopped record.
+
+**Rollback of this slice.** Nothing to roll back: text only.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
