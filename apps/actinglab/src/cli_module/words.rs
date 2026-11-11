@@ -25,7 +25,8 @@
 //!   - on a row of [`COMPLETED_ROWS`], an option LAB-5A declared takes no word that begins with
 //!     `--` as its value, as the further flag it was took none.
 //!
-//!   `serve --stdio` refuses every member a row does not declare.
+//!   `serve --stdio` refuses every member a row does not declare, and (Workflow #434 LAB-5G4a)
+//!   every string value, or string in a list, that begins with `--` ([`from_json`]).
 //! - Types: `integer` a JSON number, `unsigned` a JSON number from 0 to 2^64 − 1, `decimal` a
 //!   decimal number kept as written, `boolean` true or false, `json` the JSON value,
 //!   `list<string>` comma-separated words, `duration` a number with `ms`, `s`, `m` or `h`, kept as
@@ -311,12 +312,31 @@ pub(crate) fn from_json(table: &OperationTable, line: &str) -> Result<Call, Outc
             Some(param) => checked(param, value, member)?,
             None => return Err(usage(Some(member.as_str()), ArgumentProblem::Unknown)),
         }
+        // Workflow #434 LAB-5G4a: and so is a value the command line of its row would read as a
+        // flag, for every row.
+        not_a_flag(value, member)?;
     }
     required(operation, &params)?;
     Ok(Call {
         name: operation.name.clone(),
         params,
     })
+}
+
+/// Workflow #434 LAB-5G4a: a `serve` parameter whose value is a string that begins with `--`, or
+/// a list holding one, is refused (`not_recognised`, the parameter as `argument`, as today's MCP
+/// server refuses it): the command line `serve` builds for its row would read it as a flag.
+/// Numbers, booleans, objects and strings that begin with one dash pass.
+fn not_a_flag(value: &Value, member: &str) -> Result<(), Outcome> {
+    let flag = |value: &Value| value.as_str().is_some_and(|text| text.starts_with("--"));
+    let found = match value {
+        Value::Array(items) => items.iter().any(flag),
+        other => flag(other),
+    };
+    if found {
+        return Err(usage(Some(member), ArgumentProblem::NotRecognised));
+    }
+    Ok(())
 }
 
 /// The members of `params` the row does not declare: on the command line, the global options, a

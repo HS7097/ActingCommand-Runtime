@@ -82,6 +82,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
         {"name": "sections", "form": "option", "type": "list<string>", "required": false, "note": "the overview's block names, as ac_overview's; absent: all"}
       ],
+      "help": "Reads an overview of the Runtime and every instance, one block per section; the install, watchdog and configuration blocks need no Runtime.",
       "output": "the overview object: one block per section; the install, watchdog and configuration generation blocks are read without the Runtime",
       "writes": false,
       "irreversible": false,
@@ -101,6 +102,7 @@
         {"name": "config", "form": "switch", "type": "boolean", "required": false, "note": "the configuration facts; exactly one of instance, program and config"},
         {"name": "prefix", "form": "option", "type": "string", "required": false, "note": "only keys under this prefix; with instance or program"}
       ],
+      "help": "Reads the Runtime's facts of one instance, of the program or of the configuration, recording nothing.",
       "output": "a fact snapshot (one instance, the program or the configuration); the configuration's with config_version",
       "writes": false,
       "irreversible": false,
@@ -117,6 +119,7 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"}
       ],
+      "help": "Explains why each task did not run, per instance, from the latest policy evaluation since the Runtime started.",
       "output": "the latest evaluation's not-run explanation",
       "writes": false,
       "irreversible": false,
@@ -137,6 +140,7 @@
         {"name": "day", "form": "switch", "type": "boolean", "required": false, "note": "day buckets"},
         {"name": "since", "form": "option", "type": "integer", "required": false, "note": "the revision of the previous page (since_revision)"}
       ],
+      "help": "Reads the routine summary's health statistics per instance and task from the Runtime's memory, never a count of runs allowed.",
       "output": "the routine summary page",
       "writes": false,
       "irreversible": false,
@@ -173,6 +177,7 @@
         {"name": "detail", "form": "option", "type": "enum:brief|summary|payload", "required": false, "default": "brief", "note": "brief rows; summary adds the outcome a record carries; payload adds the projected payload"},
         {"name": "wait_s", "form": "option", "type": "integer", "required": false, "default": "0", "note": "seconds to wait for rows while the first page is empty, 0 to 20"}
       ],
+      "help": "Reads one page of the Runtime's ledger events, oldest first, with the cursor that continues it.",
       "output": "an event page with its next cursor",
       "writes": false,
       "irreversible": false,
@@ -197,6 +202,7 @@
         {"name": "limit", "form": "option", "type": "integer", "required": false, "default": "20", "note": "1 to 100"},
         {"name": "cursor", "form": "option", "type": "string", "required": false}
       ],
+      "help": "Lists the contained runs, manual and scheduled, first recorded in a time window, newest first, one row per run.",
       "output": "the run list",
       "writes": false,
       "irreversible": false,
@@ -213,6 +219,7 @@
       "params": [
         {"name": "id", "form": "positional", "type": "run_ref", "required": true, "note": "on the command line also --id <id>, in place of the positional"}
       ],
+      "help": "Reads one run's status in full from its ledger events; run evidence pages what it did step by step.",
       "output": "one run: its receipt, state and steps",
       "writes": false,
       "irreversible": false,
@@ -233,6 +240,7 @@
         {"name": "from_step", "form": "option", "type": "integer", "required": false, "default": "0"},
         {"name": "limit", "form": "option", "type": "integer", "required": false, "note": "1 to 100; default 20, 100 with detail summary"}
       ],
+      "help": "Reads what one run did, step by step, from its own ledger events: each step's page, targets, action and frames.",
       "output": "the run's evidence: steps, frames and their material references",
       "writes": false,
       "irreversible": false,
@@ -252,6 +260,7 @@
         {"name": "max_bytes", "form": "option", "type": "integer", "required": false},
         {"name": "out", "form": "option", "type": "dir", "required": false, "note": "write the whole material into this directory as <sha256 hex>.<extension> and answer {path, sha256, size}; not with offset or max_bytes; absent: the text slice"}
       ],
+      "help": "Reads one material that a materials ref of events or run evidence names, once the Runtime has verified it.",
       "output": "one bounded slice of a material; with out, the file the whole material was written to",
       "writes": false,
       "irreversible": false,
@@ -272,6 +281,7 @@
         {"name": "since", "form": "option", "type": "duration", "required": false},
         {"name": "since_unix_ms", "form": "option", "type": "unsigned", "required": false, "note": "absolute window start, unix ms, at most 7 days back (absent: 24 hours back); not with since: both name the window's start (--since-unix-ms to the operation layer), which refuses the second as repeated"}
       ],
+      "help": "Reports what went wrong in a time window, on one instance or on all: failed or open runs, error events and the suspended report.",
       "output": "the diagnosis (its pages and the actingd suspended report, a local child)",
       "writes": false,
       "irreversible": false,
@@ -288,6 +298,7 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"}
       ],
+      "help": "Reads what one instance can target and the resource target policy it holds now, as the Runtime reports them.",
       "output": "the resource target view",
       "writes": false,
       "irreversible": false,
@@ -308,6 +319,7 @@
         {"name": "targets", "form": "option", "type": "json", "required": false, "note": "the targets inline, a JSON list, instead of a file; exactly one of file and targets"},
         {"name": "valid_days", "form": "option", "type": "integer", "required": false, "note": "with targets"}
       ],
+      "help": "Applies a resource target policy to one instance through the Runtime and answers what it applied; a refusal names where and why.",
       "output": "the applied table (ResourceTargetsApplied)",
       "writes": true,
       "irreversible": false,
@@ -348,6 +360,7 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"}
       ],
+      "help": "Reads the remedy choice records that apply to one instance, most specific first, and which one is in effect.",
       "output": "the remedy choices in effect",
       "writes": false,
       "irreversible": false,
@@ -367,6 +380,7 @@
         {"name": "file", "form": "positional", "type": "file", "required": false, "note": "a rows file; exactly one of file and rows (none is refused as <file> required, both as --rows conflicting)"},
         {"name": "rows", "form": "option", "type": "json", "required": false, "required_in": ["mcp"], "note": "the rows themselves instead of a file (--rows takes the rows, a rows file is the positional file): a JSON list of row objects whose members are strings, bounded as a rows file is (larger: --rows out_of_range); text that is not JSON is refused by the words as --rows wrong_type, where a file whose content is not JSON is --rows unusable; JSON of another shape is --rows wrong_type; exactly one of file and rows"}
       ],
+      "help": "Writes the whole remedy choice list of one scope as a new record; an empty list withdraws it.",
       "output": "the published record",
       "writes": true,
       "irreversible": false,
@@ -383,6 +397,7 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
+      "help": "Republishes one instance's own remedy record unchanged as a new observation, which lifts a remedy stop.",
       "output": "the published record",
       "writes": true,
       "irreversible": false,
@@ -401,6 +416,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": true},
         {"name": "out", "form": "option", "type": "path", "required": false, "note": "also write the frame there"}
       ],
+      "help": "Captures one frame of one instance now, read only, and answers its material ref, size and coordinate system.",
       "output": "one frame: its reference, size and coordinate system, and the file written",
       "writes": false,
       "irreversible": false,
@@ -420,6 +436,7 @@
         {"name": "count", "form": "option", "type": "integer", "required": false, "note": "CLI short form -n"},
         {"name": "interval", "form": "option", "type": "duration", "required": false}
       ],
+      "help": "Captures a short sequence of frames of one instance through the Runtime, read only.",
       "output": "a frame sequence",
       "writes": false,
       "irreversible": false,
@@ -435,6 +452,7 @@
       "name": "discover",
       "module": "core",
       "params": [],
+      "help": "Discovers the emulator instances on this machine through the Runtime and answers what it found.",
       "output": "the discovery result",
       "writes": false,
       "irreversible": false,
@@ -454,6 +472,7 @@
         {"name": "reason", "form": "option", "type": "string", "required": false, "required_in": ["mcp"], "note": "CLI short form -r"},
         {"name": "drain", "form": "option", "type": "duration", "required": false, "default": "300s"}
       ],
+      "help": "Pauses scheduling on one instance or everywhere until resume lifts it; an instance pause drains the runs in flight there.",
       "output": "the pause state",
       "writes": true,
       "irreversible": false,
@@ -472,6 +491,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
         {"name": "expect", "form": "option", "type": "json", "required": false, "required_in": ["mcp"], "note": "the pause the resume lifts, as read from status"}
       ],
+      "help": "Lifts the scheduling pause of one instance or of everywhere and answers the Runtime's result.",
       "output": "the pause state",
       "writes": true,
       "irreversible": false,
@@ -487,6 +507,7 @@
       "name": "config",
       "module": "core",
       "params": [],
+      "help": "Reads the settings in effect with their source, and the config_version the next settings change expects.",
       "output": "the settings in effect with their source, and config_version",
       "writes": false,
       "irreversible": false,
@@ -505,6 +526,7 @@
         {"name": "changes", "form": "positional", "type": "key_value", "required": true, "repeat": true, "note": "KEY=VALUE, a key of the key table"},
         {"name": "expected_version", "form": "option", "type": "integer", "required": false}
       ],
+      "help": "Changes settings the Runtime may change while it runs, all of them or none, and records every change.",
       "output": "the changed settings and config_version",
       "writes": true,
       "irreversible": false,
@@ -523,6 +545,7 @@
         {"name": "keys", "form": "positional", "type": "key", "required": true, "repeat": true},
         {"name": "expected_version", "form": "option", "type": "integer", "required": false}
       ],
+      "help": "Returns settings to their configuration file values while the Runtime runs, all of them or none.",
       "output": "the changed settings and config_version",
       "writes": true,
       "irreversible": false,
@@ -538,6 +561,7 @@
       "name": "preset",
       "module": "core",
       "params": [],
+      "help": "Reads the performance preset in effect and the settings it is made of, each with its source.",
       "output": "the performance preset in effect",
       "writes": false,
       "irreversible": false,
@@ -554,6 +578,7 @@
       "params": [
         {"name": "name", "form": "positional", "type": "string", "required": true, "note": "a preset of performance.presets"}
       ],
+      "help": "Applies a named performance preset, changing the settings it is made of, and answers the new config_version.",
       "output": "the preset and config_version",
       "writes": true,
       "irreversible": false,
@@ -573,6 +598,7 @@
         {"name": "expect", "form": "option", "type": "string", "required": false},
         {"name": "recover", "form": "option", "type": "boolean", "required": false}
       ],
+      "help": "Sets the Runtime's monitor policy of one instance, a periodic check of its page, and answers its monitor status.",
       "output": "the monitor policy",
       "writes": true,
       "irreversible": false,
@@ -590,6 +616,7 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
+      "help": "Clears the Runtime's monitor policy of one instance, so that nothing checks its page, and answers its monitor status.",
       "output": "the monitor policy",
       "writes": true,
       "irreversible": false,
@@ -609,6 +636,7 @@
         {"name": "ms", "form": "positional", "type": "integer", "required": true},
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"}
       ],
+      "help": "Publishes a scheduling priority offset for one task on one instance or, without one, on every instance when they share one scope.",
       "output": "the published record",
       "writes": true,
       "irreversible": false,
@@ -626,6 +654,7 @@
       "params": [
         {"name": "file", "form": "positional", "type": "file", "required": true}
       ],
+      "help": "Publishes the fact records of an observation file through the Runtime and answers the event id.",
       "output": "the published records",
       "writes": true,
       "irreversible": false,
@@ -644,6 +673,7 @@
         {"name": "artifact", "form": "option", "type": "string", "required": false, "note": "one of artifact, run"},
         {"name": "run", "form": "option", "type": "string", "required": false, "note": "a run_id (run_<32 hex>); one of artifact and run"}
       ],
+      "help": "Records that one evidence frame or one run was read; the frame cleaner may then remove those frames at any age.",
       "output": "the confirmation record",
       "writes": true,
       "irreversible": false,
@@ -661,6 +691,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": true},
         {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
       ],
+      "help": "Starts one instance's emulator through the Runtime and answers the receipt.",
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
@@ -679,6 +710,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": true},
         {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
       ],
+      "help": "Stops one instance's emulator through the Runtime, ending whatever runs on it, and answers the receipt.",
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
@@ -698,6 +730,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": true},
         {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
       ],
+      "help": "Restarts one instance's emulator through the Runtime, ending whatever runs on it, and answers the receipt.",
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
@@ -716,6 +749,7 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
+      "help": "Reconnects one instance and runs its self-check through the Runtime now; a check that does not pass answers as a failure.",
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
@@ -733,6 +767,7 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
+      "help": "Launches the application the Runtime configures for one instance.",
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
@@ -750,6 +785,7 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
+      "help": "Restarts the application the Runtime configures for one instance, ending what runs in it.",
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
@@ -768,6 +804,7 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
+      "help": "Stops the application the Runtime configures for one instance, ending what runs in it.",
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
@@ -786,6 +823,7 @@
       "params": [
         {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
       ],
+      "help": "Asks the running Runtime to shut down in order and answers the receipt.",
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
@@ -804,6 +842,7 @@
         {"name": "channel", "form": "positional", "type": "string", "required": true, "note": "a registered agent channel"},
         {"name": "instance", "form": "option", "type": "instance", "required": false}
       ],
+      "help": "Queues a test wake through the Runtime to one registered agent channel and answers the queued wake.",
       "output": "the queued test",
       "writes": true,
       "irreversible": false,
@@ -822,6 +861,7 @@
         {"name": "capability", "form": "option", "type": "string", "required": true, "note": "one line, at most 120 characters"},
         {"name": "why", "form": "option", "type": "string", "required": true, "note": "one line, at most 500 characters"}
       ],
+      "help": "Records a capability that no operation offered in this user's local log, which is never sent anywhere.",
       "output": "the recorded gap",
       "writes": true,
       "irreversible": false,
@@ -836,6 +876,7 @@
       "name": "devices",
       "module": "core",
       "params": [],
+      "help": "Lists the devices the installation's adb sees now, with their handles and bound aliases; no row names a serial.",
       "output": "the device list, from the installation's adb",
       "writes": false,
       "irreversible": false,
@@ -853,6 +894,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "the instance's alias: devices takes no instance_id and no ADB port"},
         {"name": "handle", "form": "positional", "type": "string", "required": true, "note": "a device handle from devices, for example usb:7"}
       ],
+      "help": "Binds an adb device to a handset instance in the state root's private binding file; it takes effect at the Runtime's next start.",
       "output": "the binding written to the state root's private binding file",
       "writes": true,
       "irreversible": false,
@@ -870,6 +912,7 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "the instance's alias: devices takes no instance_id and no ADB port"}
       ],
+      "help": "Removes a handset instance's device binding from the private binding file; it takes effect at the Runtime's next start.",
       "output": "the binding removed",
       "writes": true,
       "irreversible": false,
@@ -888,6 +931,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance"},
         {"name": "role", "form": "option", "type": "enum:procedure|startup|resource_package", "required": false, "note": "only the rows of this role; absent: every role"}
       ],
+      "help": "Lists the packages the selected configuration binds, per instance and for the installation, read from disk without the Runtime.",
       "output": "the packages of the selected configuration",
       "writes": false,
       "irreversible": false,
@@ -907,6 +951,7 @@
         {"name": "owner", "form": "option", "type": "string", "required": false, "note": "the list: only codes of this owner; not with code (conflicting)"},
         {"name": "limit", "form": "option", "type": "integer", "required": false, "default": "20", "note": "the list's page, 1 to 100; not with code (conflicting)"}
       ],
+      "help": "Reads one outcome code's catalog entry, or one page of the code list, from the catalog this build embeds.",
       "output": "the code's catalog entry",
       "writes": false,
       "irreversible": false,
@@ -1065,6 +1110,7 @@
         {"name": "deadline", "form": "option", "type": "duration", "required": false},
         {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
       ],
+      "help": "Runs one task package on one instance through the Runtime and answers the run's receipt, which names its request_id.",
       "output": "the run's receipt (its request_id), and its end with wait",
       "writes": true,
       "irreversible": false,
@@ -1083,6 +1129,7 @@
         {"name": "id", "form": "positional", "type": "request_id", "required": true},
         {"name": "cancel_only", "form": "switch", "type": "boolean", "required": false, "note": "stop without the reset"}
       ],
+      "help": "Stops one manual run and resets its instance, lifting touches still held; the screen stays where it is.",
       "output": "the stop and the reset",
       "writes": true,
       "irreversible": false,
@@ -1100,6 +1147,7 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
+      "help": "Resets one instance's input through the Runtime, lifting any touch still held, and answers the receipt.",
       "output": "the receipt",
       "writes": true,
       "irreversible": false,
@@ -1119,6 +1167,7 @@
         {"name": "x", "form": "positional", "type": "integer", "required": true},
         {"name": "y", "form": "positional", "type": "integer", "required": true}
       ],
+      "help": "Taps one point of an instance's screen through the Runtime.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1140,6 +1189,7 @@
         {"name": "y2", "form": "positional", "type": "integer", "required": true},
         {"name": "duration_ms", "form": "positional", "type": "integer", "required": true}
       ],
+      "help": "Swipes from one point of an instance's screen to another through the Runtime.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1159,6 +1209,7 @@
         {"name": "y", "form": "positional", "type": "integer", "required": true},
         {"name": "duration_ms", "form": "positional", "type": "integer", "required": true}
       ],
+      "help": "Presses and holds one point of an instance's screen through the Runtime.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1176,6 +1227,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": true},
         {"name": "key", "form": "positional", "type": "string", "required": true, "note": "back, home, menu, enter, escape or a key code"}
       ],
+      "help": "Sends one key press to an instance through the Runtime.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1193,6 +1245,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": true},
         {"name": "text", "form": "positional", "type": "string", "required": true, "repeat": true, "note": "the words are joined with one space"}
       ],
+      "help": "Sends a text as input to an instance through the Runtime.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1209,6 +1262,7 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true}
       ],
+      "help": "Opens the Runtime's input proxy of an instance and closes it again without touching the screen, to see that input works.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1248,6 +1302,7 @@
         {"name": "game", "form": "option", "type": "string", "required": false, "note": "actinglab's global --game; LAB-5B3"},
         {"name": "server", "form": "option", "type": "string", "required": false, "note": "actinglab's global --server; LAB-5B3"}
       ],
+      "help": "Brings an instance back toward a page: detects its current page and presses the recovery route, or only plans it offline.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1288,6 +1343,7 @@
         {"name": "verbose", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --verbose"},
         {"name": "pretty", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Acts once on an instance through the Runtime and answers the action and its after frame; offline it plans the action on a saved scene.",
       "output": "as today's command: the action and its after frame",
       "writes": true,
       "irreversible": false,
@@ -1320,6 +1376,7 @@
         {"name": "verbose", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --verbose"},
         {"name": "pretty", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Routes an instance from its current page to a requested page through guarded actions; offline it plans the route on a saved scene.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1348,6 +1405,7 @@
         {"name": "verbose", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --verbose"},
         {"name": "pretty", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Waits until an instance shows a page, or until a target is stable, and answers what it observed.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1372,6 +1430,7 @@
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"}
       ],
+      "help": "Recognizes one target of a package on an instance's current frame and taps it through the Runtime.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1398,6 +1457,7 @@
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"}
       ],
+      "help": "Navigates an instance to a page along the package's navigation graph, pressing each route through the Runtime.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1415,6 +1475,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": true},
         {"name": "device", "form": "switch", "type": "boolean", "required": false, "note": "a drill on the device; absent: plan"}
       ],
+      "help": "Asks the Runtime for a drill of one instance's stuck-recovery ladder, recorded and tagged as a drill.",
       "output": "the drill's receipt",
       "writes": true,
       "irreversible": false,
@@ -1453,6 +1514,7 @@
         {"name": "wait_ms", "form": "option", "type": "integer", "required": false, "default": "1000"},
         {"name": "max_events", "form": "option", "type": "integer", "required": false, "default": "64"}
       ],
+      "help": "Waits for the next batch of Runtime ledger events that match a filter and answers it with the cursor that continues it.",
       "output": "the subscribed events, batch by batch",
       "writes": false,
       "irreversible": false,
@@ -1482,6 +1544,7 @@
         {"name": "resource_phase", "form": "option", "type": "string", "required": false},
         {"name": "quiescence", "form": "option", "type": "string", "required": false}
       ],
+      "help": "Registers a diagnostic signature in the Runtime's catalog, which matches ledger events by code, type and severity.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1502,6 +1565,7 @@
         {"name": "limit", "form": "option", "type": "integer", "required": false},
         {"name": "cursor", "form": "option", "type": "string", "required": false, "note": "a JSON cursor of at most 4096 bytes"}
       ],
+      "help": "Matches the registered diagnostic signatures against the events of a state root's ledger, one page at a time.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1521,6 +1585,7 @@
         {"name": "registration_event_id", "form": "option", "type": "string", "required": false},
         {"name": "registration_sequence", "form": "option", "type": "unsigned", "required": false}
       ],
+      "help": "Retires one registered diagnostic signature from the Runtime's catalog by its registration.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1539,6 +1604,7 @@
         {"name": "pin_sequence", "form": "option", "type": "unsigned", "required": true},
         {"name": "pin_event_id", "form": "option", "type": "string", "required": true}
       ],
+      "help": "Releases one Lab pin of an artifact through the Runtime; nothing is deleted.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1556,6 +1622,7 @@
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"}
       ],
+      "help": "Loads a package into a Runtime debug session and answers its debug summary, the terminal receipt and the Lab events.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1576,6 +1643,7 @@
         {"name": "out", "form": "option", "type": "path", "required": true},
         {"name": "outcome", "form": "option", "type": "enum:success|failure|cancelled", "required": false, "default": "success"}
       ],
+      "help": "Debugs a package in a Runtime debug session and exports its evidence as an archive, with the summary and the Lab events.",
       "output": "as today's command: the copy written",
       "writes": true,
       "irreversible": false,
@@ -1593,6 +1661,7 @@
       "params": [
         {"name": "request", "form": "option", "type": "file", "required": true, "note": "a saved-artifact OCR request, at most 65536 bytes"}
       ],
+      "help": "Runs the Runtime's text recognition on a saved artifact that a request file describes.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1609,6 +1678,7 @@
       "params": [
         {"name": "key", "form": "positional", "type": "key", "required": false, "note": "absent: the whole file"}
       ],
+      "help": "Reads actinglab's own user configuration file, its adb path and its instances' devices, or one key of it.",
       "output": "actinglab's own user configuration file (its adb path, its instances' devices), or one key of it",
       "writes": false,
       "irreversible": false,
@@ -1627,6 +1697,7 @@
         {"name": "key", "form": "positional", "type": "key", "required": true},
         {"name": "value", "form": "positional", "type": "string", "required": true}
       ],
+      "help": "Writes one key of actinglab's own user configuration file and answers the key, the value and the file.",
       "output": "the key and the value written, and the file",
       "writes": true,
       "irreversible": false,
@@ -1731,6 +1802,7 @@
         {"name": "verbose", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --verbose"},
         {"name": "pretty", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Detects the current page and its targets with a package, on saved scenes offline or on frames the Runtime captures.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1759,6 +1831,7 @@
         {"name": "template_threshold", "form": "option", "type": "decimal", "required": false, "note": "a number 0 to 1"},
         {"name": "metric", "form": "option", "type": "enum:ccoeff_normed|ccorr_normed", "required": false}
       ],
+      "help": "Starts a recording session and its Lab recording for one task, kept in actinglab's state files.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1814,6 +1887,7 @@
         {"name": "duration_ms", "form": "option", "type": "integer", "required": false},
         {"name": "brake_corner", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"}
       ],
+      "help": "Adds marks, a click, samples or a transition to a recorded step and self-tests every mark on the step's frames.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1831,6 +1905,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance (global --instance)"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
+      "help": "Reads the recording session and the steps of its Lab recording.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1858,6 +1933,7 @@
         {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
+      "help": "Stops the recording session and generates its linear-steps package, with the binding parts record draft takes.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1876,6 +1952,7 @@
         {"name": "step_id", "form": "option", "type": "string", "required": true, "note": "also the first positional"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
+      "help": "Lists the recognition candidates of one recorded step, to choose from when amending it.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -1911,6 +1988,7 @@
         {"name": "negative_frame", "form": "option", "type": "file", "required": false, "note": "LAB-5B3: read when contrast_frame is absent"},
         {"name": "metric", "form": "option", "type": "enum:ccorr_normed|ccoeff_normed", "required": false, "default": "ccorr_normed", "note": "LAB-5B3: the backtest of a resource step's frame"}
       ],
+      "help": "Amends one step of the active recording, or applies drift diagnostics to it.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1953,6 +2031,7 @@
         {"name": "metric", "form": "option", "type": "enum:ccorr_normed|ccoeff_normed", "required": false, "default": "ccorr_normed", "note": "LAB-5B3: the backtest of an anchor, color probe or verify template's frame"},
         {"name": "duration_ms", "form": "option", "type": "integer", "required": false, "note": "LAB-5B3: an operation's swipe or drag (default 500) or long press (default 700)"}
       ],
+      "help": "Records one step of the active recording from a frame: a target region, a click, a swipe or a long press.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1970,6 +2049,7 @@
         {"name": "record_stop", "form": "option", "type": "json", "required": false, "note": "an ac_record_stop answer with its lab parts; one of record_stop and record_stop_export"},
         {"name": "record_stop_export", "form": "option", "type": "json", "required": false, "note": "{path, sha256}: an exported ac_record_stop answer, read only from MCP's export directory and only when its sha256 matches; one of record_stop and record_stop_export"}
       ],
+      "help": "Turns a record stop answer into a binding draft, with package preflight and a check-config of the draft; changes nothing.",
       "output": "the binding draft: preflight and the actingd check-config child",
       "writes": false,
       "irreversible": false,
@@ -1987,6 +2067,7 @@
       "params": [
         {"name": "package", "form": "option", "type": "path", "required": true}
       ],
+      "help": "Checks one task package offline with the Runtime's own structural admission and answers its warnings.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2004,6 +2085,7 @@
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"}
       ],
+      "help": "Loads one package with every file and asset and prepares its entry task, executing nothing.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2020,6 +2102,7 @@
       "params": [
         {"name": "zip", "form": "option", "type": "file", "required": true}
       ],
+      "help": "Validates the format of one published package archive offline.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2036,6 +2119,7 @@
       "params": [
         {"name": "zip", "form": "option", "type": "file", "required": true}
       ],
+      "help": "Validates one published package archive offline and lists its entries.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2063,6 +2147,7 @@
         {"name": "display_layout", "form": "option", "type": "file", "required": false},
         {"name": "loading", "form": "option", "type": "file", "required": false}
       ],
+      "help": "Lays out a bundle of standard packs from an applications file and a packs directory in a new directory, checking its root files.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -2082,6 +2167,7 @@
         {"name": "write", "form": "switch", "type": "boolean", "required": false},
         {"name": "check", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Copies the loading pages of a root file into every pack, or checks that each pack's copy is current.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -2099,6 +2185,7 @@
         {"name": "package", "form": "option", "type": "dir", "required": true},
         {"name": "check", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Rewrites the JSON files of a package's content directory in canonical form, or checks that they are.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -2120,6 +2207,7 @@
         {"name": "replace", "form": "option", "type": "string", "required": false, "note": "a JSON pointer"},
         {"name": "value", "form": "option", "type": "string", "required": false, "note": "one JSON value, as text"}
       ],
+      "help": "Applies JSON pointer edits to the files of a package's content directory.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -2178,6 +2266,7 @@
         {"name": "catalog_server", "form": "option", "type": "string", "required": true},
         {"name": "field", "form": "option", "type": "string", "required": false, "default": "business_id"}
       ],
+      "help": "Compiles one business identity catalog of a resource repository offline and answers its compile result.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2196,6 +2285,7 @@
         {"name": "changed_path", "form": "option", "type": "string", "required": false, "repeat": true},
         {"name": "changed_paths_file", "form": "option", "type": "file", "required": false}
       ],
+      "help": "Validates the declarations of a resource repository, or only those its changed paths touch.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2217,6 +2307,7 @@
         {"name": "commit", "form": "option", "type": "string", "required": false, "note": "40 hex, must be HEAD"},
         {"name": "base", "form": "option", "type": "string", "required": false}
       ],
+      "help": "Checks one commit of a resource repository as its CI does, with this build's checks, and writes a report bound to the commit.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2242,6 +2333,7 @@
         {"name": "target_page", "form": "option", "type": "string", "required": false, "repeat": true},
         {"name": "goal", "form": "option", "type": "string", "required": false}
       ],
+      "help": "Restores an authoring draft into a new repository from the Lab operations a state root's ledger recorded.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -2261,6 +2353,7 @@
         {"name": "facts", "form": "switch", "type": "boolean", "required": false},
         {"name": "task", "form": "option", "type": "string", "required": false, "repeat": true, "note": "more than one only with facts"}
       ],
+      "help": "Compiles a directory of external task files into one resolved task graph and answers its counts, one task or tasks' facts.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -2293,6 +2386,7 @@
       "params": [
         {"name": "root", "form": "option", "type": "dir", "required": true, "note": "a game's package root, not the installation's"}
       ],
+      "help": "Checks an installed root of standard packs as package bundle checks one, and lists packs whose entry pages are missing.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2311,6 +2405,7 @@
         {"name": "instance", "form": "option", "type": "string", "required": true, "repeat": true, "note": "<alias>=<game>/<server>, once per bound instance; not the instance type: a binding"},
         {"name": "out", "form": "option", "type": "dir", "required": true}
       ],
+      "help": "Composes the schedule rules of the bound instances' standard packs as the Runtime does, into a new directory.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -2331,6 +2426,7 @@
         {"name": "timeline", "form": "option", "type": "file", "required": true},
         {"name": "selection", "form": "option", "type": "file", "required": false}
       ],
+      "help": "Compiles the scheduling catalog from its task, pool, activity and timeline files, offline.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2357,6 +2453,7 @@
         {"name": "server_id", "form": "option", "type": "string", "required": true},
         {"name": "game_id", "form": "option", "type": "string", "required": true}
       ],
+      "help": "Inspects the scheduling timeline from the catalog files as it stands for one instance at one moment, offline.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2374,6 +2471,7 @@
         {"name": "repo", "form": "option", "type": "dir", "required": true},
         {"name": "operation_dir", "form": "option", "type": "dir", "required": true}
       ],
+      "help": "Validates one operation directory of a resource repository against the repository's declarations.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2390,6 +2488,7 @@
       "params": [
         {"name": "operation_dir", "form": "option", "type": "dir", "required": true}
       ],
+      "help": "Checks one operation directory on its own, without a repository, and answers its report.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2406,6 +2505,7 @@
       "params": [
         {"name": "operation_dir", "form": "option", "type": "dir", "required": true}
       ],
+      "help": "Checks one operation directory as operation inspect does and answers the same report, marked explain.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2425,6 +2525,7 @@
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"}
       ],
+      "help": "Replays the frames a run's ledger kept through a new package's recognition and compares each target with the run's original record.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2448,6 +2549,7 @@
         {"name": "seed", "form": "option", "type": "unsigned", "required": false},
         {"name": "standard_pack_root", "form": "option", "type": "dir", "required": false}
       ],
+      "help": "Replays a package offline over a directory of frames in file-name order, or one select step's scan over them.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2468,6 +2570,7 @@
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
         {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Recognizes one target of a package on a saved frame or on a frame the Runtime captures.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2489,6 +2592,7 @@
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
         {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Detects which page of a package a saved or captured frame shows, or checks the package's page set.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2509,6 +2613,7 @@
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
         {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Answers the page of a package that a saved or captured frame shows, by the same detection as detect-page.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2530,6 +2635,7 @@
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
         {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Answers whether one target of a package is visible on a saved or captured frame.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2553,6 +2659,7 @@
         {"name": "fresh_delay_ms", "form": "option", "type": "integer", "required": false, "default": "160"},
         {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Finds a template image on a saved or captured frame and answers where it matched best, with its score.",
       "output": "as today's command",
       "writes": false,
       "irreversible": false,
@@ -2588,6 +2695,7 @@
       "name": "up",
       "module": "rescue",
       "params": [],
+      "help": "Starts the Runtime of this root and answers its pid, its ready time and the checks run after the start.",
       "output": "the start: the Runtime's pid, its ready time and the post-start checks",
       "writes": true,
       "irreversible": false,
@@ -2603,6 +2711,7 @@
       "name": "restart",
       "module": "rescue",
       "params": [],
+      "help": "Stops the Runtime of this root and starts it again.",
       "output": "the stop and the start",
       "writes": true,
       "irreversible": false,
@@ -2620,6 +2729,7 @@
       "params": [
         {"name": "reason", "form": "option", "type": "string", "required": false, "note": "the hold's reason; CLI short form -r"}
       ],
+      "help": "Stops the Runtime of this root formally, under a hold of its own; every pause found is kept and listed.",
       "output": "the formal stop with its hold; every pause found is kept and listed",
       "writes": true,
       "irreversible": false,
@@ -2637,6 +2747,7 @@
       "params": [
         {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait until the Runtime is alive, for example 240s"}
       ],
+      "help": "Reads the watchdog's status of this root and whether its Runtime is alive.",
       "output": "the watchdog's status and whether the Runtime is alive",
       "writes": false,
       "irreversible": false,
@@ -2657,6 +2768,7 @@
         {"name": "plan", "form": "switch", "type": "boolean", "required": false, "note": "only the plan, read only (install update plan --preview)"},
         {"name": "detach", "form": "switch", "type": "boolean", "required": false, "note": "answer the operation id at once"}
       ],
+      "help": "Deploys a release or a kept build: stages, plans, stops under a hold, applies, starts, checks alive and releases the hold.",
       "output": "the operation id and each step's result: stage, plan, stop with hold, apply, start, alive, release",
       "writes": true,
       "irreversible": true,
@@ -2676,6 +2788,7 @@
         {"name": "plan", "form": "switch", "type": "boolean", "required": false, "note": "only the plan"},
         {"name": "detach", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Rolls the live build of this root back to an earlier kept build and answers each step's result.",
       "output": "the operation id and each step's result",
       "writes": true,
       "irreversible": true,
@@ -2728,6 +2841,7 @@
       "params": [
         {"name": "op", "form": "positional", "type": "operation_id", "required": true}
       ],
+      "help": "Undoes one installer operation of this root by its journal.",
       "output": "the undo's steps",
       "writes": true,
       "irreversible": true,
@@ -2746,6 +2860,7 @@
         {"name": "op", "form": "positional", "type": "operation_id", "required": false, "note": "absent: the installation's state; on the command line also --op <op>, in place of the positional, or the installer's own --operation <op>"},
         {"name": "check_rollback", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Reads the installation's state of this root, or one installer operation's progress.",
       "output": "the installation's state, or one operation's progress",
       "writes": false,
       "irreversible": false,
@@ -2763,6 +2878,7 @@
       "params": [
         {"name": "op", "form": "positional", "type": "operation_id", "required": true}
       ],
+      "help": "Resumes an interrupted installer operation of this root from its journal.",
       "output": "the resumed operation's steps",
       "writes": true,
       "irreversible": false,
@@ -2778,6 +2894,7 @@
       "name": "leftovers",
       "module": "rescue",
       "params": [],
+      "help": "Lists the files installer operations kept in this root instead of deleting them.",
       "output": "the leftovers listed",
       "writes": false,
       "irreversible": false,
@@ -2795,6 +2912,7 @@
       "params": [
         {"name": "for", "form": "option", "type": "enum:stop|start", "required": true}
       ],
+      "help": "Evaluates the guards an installer operation would note now and lists each with its result; none refuses.",
       "output": "every guard row with its result; nothing refuses",
       "writes": false,
       "irreversible": false,
@@ -2812,6 +2930,7 @@
       "params": [
         {"name": "reason", "form": "positional", "type": "string", "required": true, "note": "a hold of the rescue module (lab-<operation>-<ms>, or down's --reason)"}
       ],
+      "help": "Hands back the pauses of a hold the rescue module set, by its reason; any other hold is refused and nothing resumes.",
       "output": "the pauses handed back: only the operation's own hold",
       "writes": true,
       "irreversible": false,
@@ -2852,6 +2971,7 @@
         {"name": "expect_tag", "form": "option", "type": "string", "required": false},
         {"name": "expect_commit", "form": "option", "type": "string", "required": false}
       ],
+      "help": "Verifies a downloaded release directory against its manifests and facts, changing nothing.",
       "output": "the verified release",
       "writes": false,
       "irreversible": false,
@@ -2873,6 +2993,7 @@
         {"name": "expect_commit", "form": "option", "type": "string", "required": false},
         {"name": "local_build", "form": "switch", "type": "boolean", "required": false}
       ],
+      "help": "Verifies a downloaded release directory and keeps it as a build of this root, ready for deploy.",
       "output": "the kept build",
       "writes": true,
       "irreversible": false,
@@ -2888,6 +3009,7 @@
       "name": "adopt",
       "module": "rescue",
       "params": [],
+      "help": "Takes a root that scripts installed under the installer: verifies the live build, keeps a copy of it and writes the state.",
       "output": "the adopted root's state",
       "writes": true,
       "irreversible": false,
@@ -2922,6 +3044,7 @@
         {"name": "file", "form": "positional", "type": "file", "required": true, "note": "the candidate configuration"},
         {"name": "sha", "form": "option", "type": "sha256", "required": false, "note": "the candidate's expected SHA-256"}
       ],
+      "help": "Replaces the Runtime's configuration file after check-config, keeping the replaced file, and restarts the Runtime under a hold.",
       "output": "the operation id, the backup kept and each step's result; never the file's content",
       "writes": true,
       "irreversible": true,
@@ -2939,6 +3062,7 @@
       "params": [
         {"name": "backup", "form": "positional", "type": "file", "required": true, "note": "a kept previous configuration"}
       ],
+      "help": "Puts a kept configuration file back in place as config replace does, restarting the Runtime under a hold.",
       "output": "the operation id and each step's result",
       "writes": true,
       "irreversible": true,
@@ -3124,6 +3248,7 @@
         {"name": "facts", "form": "option", "type": "file", "required": false},
         {"name": "plan", "form": "switch", "type": "boolean", "required": false, "note": "only the plan, the facts and the guard rows, read only"}
       ],
+      "help": "Places a bundle of standard packs into this root, holding the instances it concerns while they are idle.",
       "output": "the operation id and each step's result",
       "writes": true,
       "irreversible": true,
@@ -3175,6 +3300,7 @@
       "name": "unlock",
       "module": "rescue",
       "params": [],
+      "help": "Releases the Runtime's owner lock of this root with the live build's unlock-owner, recording the initiator.",
       "output": "the owner.unlock record",
       "writes": true,
       "irreversible": true,
@@ -3192,6 +3318,7 @@
       "params": [
         {"name": "file", "form": "positional", "type": "file", "required": false, "note": "absent: the selected configuration"}
       ],
+      "help": "Runs the live build's check-config of this root's configuration and answers its report.",
       "output": "the check-config report",
       "writes": false,
       "irreversible": false,
@@ -3207,6 +3334,7 @@
       "name": "ledger verify",
       "module": "rescue",
       "params": [],
+      "help": "Runs the live build's ledger verification on this root's configuration and answers its report.",
       "output": "the verify report",
       "writes": false,
       "irreversible": false,
@@ -3222,6 +3350,7 @@
       "name": "watchdog install",
       "module": "rescue",
       "params": [],
+      "help": "Registers the watchdog's scheduled task for this root.",
       "output": "the scheduled task registered or removed",
       "writes": true,
       "irreversible": false,
@@ -3237,6 +3366,7 @@
       "name": "watchdog uninstall",
       "module": "rescue",
       "params": [],
+      "help": "Removes the watchdog's scheduled task of this root.",
       "output": "the scheduled task registered or removed",
       "writes": true,
       "irreversible": false,
@@ -3260,6 +3390,7 @@
         {"name": "dsh_node", "form": "option", "type": "file", "required": false},
         {"name": "restore", "form": "option", "type": "enum:on|off", "required": false}
       ],
+      "help": "Registers an agent channel through which the Runtime forwards wakes to one client session.",
       "output": "as today's command (agent-forward.md)",
       "writes": true,
       "irreversible": false,
@@ -3277,6 +3408,7 @@
       "params": [
         {"name": "name", "form": "option", "type": "string", "required": true}
       ],
+      "help": "Removes a registered agent channel from the registry in this root's state.",
       "output": "as today's command (agent-forward.md)",
       "writes": true,
       "irreversible": false,
@@ -3292,6 +3424,7 @@
       "name": "agent list",
       "module": "rescue",
       "params": [],
+      "help": "Lists the registered agent channels.",
       "output": "as today's command (agent-forward.md)",
       "writes": false,
       "irreversible": false,
@@ -3309,6 +3442,7 @@
       "params": [
         {"name": "action", "form": "positional", "type": "enum:start|end", "required": true}
       ],
+      "help": "Stores or ends a channel session's record from the client's session start or end hook; prints nothing when it succeeds.",
       "output": "as today's command (agent-forward.md)",
       "writes": true,
       "irreversible": false,
@@ -3326,6 +3460,7 @@
       "params": [
         {"name": "name", "form": "option", "type": "string", "required": true}
       ],
+      "help": "Stores the record of a running session under its registered channel, from inside that session.",
       "output": "as today's command (agent-forward.md)",
       "writes": true,
       "irreversible": false,
@@ -3341,6 +3476,7 @@
       "name": "agent notice",
       "module": "rescue",
       "params": [],
+      "help": "Prints the license text of the adapted source that the agent channels use.",
       "output": "as today's command (agent-forward.md)",
       "writes": true,
       "irreversible": false,
@@ -3358,6 +3494,7 @@
       "params": [
         {"name": "client", "form": "option", "type": "string", "required": true, "note": "a client of install-cli.md, The MCP entry"}
       ],
+      "help": "Prints the MCP registration snippet for one client without writing any client file.",
       "output": "the registration snippet; no client file written; no tier",
       "writes": false,
       "irreversible": false,
@@ -3374,6 +3511,7 @@
       "params": [
         {"name": "all", "form": "switch", "type": "boolean", "required": false, "note": "also the stale ones"}
       ],
+      "help": "Lists the installed MCP entries and their status.",
       "output": "the MCP entries' status",
       "writes": false,
       "irreversible": false,

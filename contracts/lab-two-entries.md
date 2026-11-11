@@ -200,12 +200,17 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 ### 4.2 How a process picks its word
 
 - `actinglab-mcp.exe`: `Lab-MCP`. `actingwatch.exe`: `Lab-看门狗`. The console binds `ui`.
-- `actinglab.exe` (the CLI and `serve`): `Lab-CLI`, unless the environment variable
-  `ACTINGCOMMAND_INITIATOR` names `Lab-制包` or `Lab-救急`. The UI sets it for every Lab process it
-  starts: `Lab-制包` for its workbench's `serve`, `Lab-救急` for every other one.
+- `actinglab.exe` (the CLI, and `serve` without `--front`): `Lab-CLI`, unless the environment
+  variable `ACTINGCOMMAND_INITIATOR` names `Lab-制包` or `Lab-救急`. The UI sets it for every Lab
+  process it starts: `Lab-制包` for its workbench's `serve`, `Lab-救急` for every other one.
 - Any other value of the variable, `UI`, `Lab-MCP` and `Lab-看门狗` included, is
   `actingctl_usage_invalid` with `variable` `ACTINGCOMMAND_INITIATOR` (the code moves to actinglab
   with LAB-7, section 12), and nothing is sent or written.
+- `actinglab.exe serve --stdio --front mcp` (LAB-5G4a; the option, section 8.2): `Lab-MCP`, the
+  word of the MCP server whose child it is. With the option the variable, set to anything, is
+  refused before the loop starts (`actingctl_usage_invalid` with `variable`
+  `ACTINGCOMMAND_INITIATOR`): the two would name different words, and the MCP server removes the
+  variable for its children. No other command and no operation's command line takes the option.
 - Like the channel, it is a declaration, not authentication.
 
 ### 4.3 Where it is recorded
@@ -236,9 +241,11 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 - **Recordings.** Each mark and step of a Lab recording carries `initiator` (#350 option B, design
   §3.4); a step that reaches the device is also in G14. LAB-2 writes it (open point 6, the
   coordinator's ruling): the word of section 4.2 for `actinglab.exe` (`Lab-CLI`, or `Lab-制包` /
-  `Lab-救急` from `ACTINGCOMMAND_INITIATOR`), and `Lab-MCP` (section 4.1) when MCP's actinglab
-  child runs the command (`--via mcp`, LAB-2 fix 1), carried by the recording lock and written on
-  each step and mark the command adds ([lab-recording.md](lab-recording.md), "recording.json").
+  `Lab-救急` from `ACTINGCOMMAND_INITIATOR`; `Lab-MCP` for `serve --stdio --front mcp`, LAB-5G4a,
+  whose loop runs actinglab's own commands as MCP's actinglab child runs them), and `Lab-MCP`
+  (section 4.1) when MCP's actinglab child runs the command (`--via mcp`, LAB-2 fix 1), carried by
+  the recording lock and written on each step and mark the command adds
+  ([lab-recording.md](lab-recording.md), "recording.json").
   The recording format changes directly: a recording without it does not decode.
 - **The watchdog.** Its starts stay recorded in its own files as today. A request it sends beyond
   `Health` carries `Lab-看门狗`; today it sends none.
@@ -357,6 +364,27 @@ answers the line its `--json` answers (section 9.3): the CLI module's line, for 
 actinglab's own command serves too since LAB-2b (open point 10, done), and `status` and `run show`
 from their core rows.
 
+- **`--front mcp`** (LAB-5G4a; the coordinator's rulings, board #434 6769399787 points 9 and
+  10). The MCP server starts its children as `actinglab serve --stdio --front mcp`, an option
+  only `serve --stdio` takes; `mcp` is its one value. Another value, the option twice, or the
+  option without `--stdio` is refused as `serve` refuses an unknown word
+  (`actingctl_usage_invalid`, the word as `argument`, `unknown`; the option without a value
+  `value_missing`), and so is the option with `ACTINGCOMMAND_INITIATOR` set (section 4.2), before
+  the loop starts. With it the process's initiator is `Lab-MCP`: on each step and mark
+  actinglab's own commands add to a recording (section 4.3) and in a rescue row's journal. The
+  connections actinglab's own commands open bind as MCP's `--via mcp` child's do, the Lab channel
+  with `via` `mcp` and the envelope (Lab, Lab), until LAB-6 replaces `via` with the initiator;
+  the core rows `lab-ops` serves, which that child never serves, connect as without the option.
+  The lines stay `serve`'s (each operation's `--json` line), never the envelope a `--via` line
+  prints. Without the option nothing changes.
+- **Values that begin with `--`** (LAB-5G4a; board #434 6775192250 point 16). `serve` builds a
+  command line for the command that serves a row, and a string beginning with `--` would reach
+  that command's parser as a flag. So a parameter whose value is a string that begins with `--`,
+  or a list holding such a string, is refused before anything runs, for every row whichever code
+  serves it: `actingctl_usage_invalid` with the parameter as `argument` and `not_recognised`, as
+  a line, and the loop goes on. Numbers, booleans and strings that begin with one dash are taken
+  as before. The command line does not change (there a word that begins with `--` is a flag).
+
 ### 8.3 The authoring option
 
 - `lab_module_authoring` (optional boolean, absent `false`) stays in the configuration file and
@@ -399,6 +427,7 @@ LAB-5 the MCP tools, and LAB-1's test `lab_ops_table_complete` reads the file it
 | `module` | `core`, `debugging`, `authoring` or `rescue` |
 | `params` | each `{name, form, type, required, repeat?, default?, required_in?, note?}`; `form` is `positional`, `option` or `switch`; an option's CLI flag is `--` and the name with `_` as `-`, its MCP argument the name; positionals keep their order; `required_in` (LAB-5A) lists the front ends (the ids of the `modules` rows of role `front_end`) in which the parameter is required although the row does not require it (today only `mcp`, on `resume`'s `expect`, `pause`'s `reason` and, since LAB-5C, `remedy set`'s `rows`; nothing reads it yet, and the CLI and `serve` do not change); what the schema cannot state (a one-of rule, a value given as a positional or as a flag, a joint or exclusive group, flag sets that depend on a path or a kind) is in the parameter's `note`, and the code enforces it |
 | `params_more` | when present: the source command whose further flags carry over unchanged under the same naming rule. Since LAB-5A only a row no program offers yet has it (a rescue row whose source command is not built); every offered row declares all of its parameters (section 9.2) |
+| `help` | optional (LAB-5E): what the operation does, in one sentence of the row's own, shared by the command line's help and the MCP tool's description; written on its own line directly before the row's `output`. English, ASCII, 1 to 160 bytes, one line; one sentence or two short ones, beginning with a verb in the third person ("Reads…", "Pauses…", "Lists…"); it says what the operation does and on what and, where a caller must know it to use the row at all, what comes back or what to call next. No rule every row shares (budgets, handles, exports, cursors, what `irreversible` means: those are the MCP server's instructions), no MCP tool name (`ac_…`; a row is named by its words), no game word, no path of a machine, nothing the row's parameters already say. Every offered row has one (section 9.2); a row no program offers (reserved, or planned and not served) has none yet. No command prints it yet |
 | `output` | what the operation answers; the CLI's `--json` line, the MCP result and the serve answer are the same JSON |
 | `writes` | whether it changes anything; MCP's `readOnlyHint` is its negation |
 | `irreversible` | section 5; MCP's `destructiveHint` is `irreversible` or `disruptive` |
@@ -439,7 +468,12 @@ another); no offered row carries `params_more` (only a planned rescue row may, w
 command is not built: the test checks that in `crates/lab-ops`, and actinglab's `gate_434_lab5a`,
 which knows which rows actinglab offers, that no offered row has it); every `required_in` names
 front ends, on a parameter the row does not require; a `disruptive` row writes and is not
-irreversible.
+irreversible. Since LAB-5E also: every `help` is ASCII, 1 to 160 bytes on one line (no control
+character), names no MCP tool (`ac_`), and no two rows share one; every offered row has one:
+every row actinglab offers and every planned row of slice LAB-5, which LAB-5's MCP server offers
+itself (actinglab's `gate_434_lab5e`, which knows which rows actinglab offers). The neutrality
+guard's test reads the table line by line, each `help` on its own line, so a game word in a
+sentence fails that test.
 
 ### 9.3 Defaults and output (LAB-1, LAB-2)
 
