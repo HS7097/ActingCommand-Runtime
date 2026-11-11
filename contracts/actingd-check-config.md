@@ -378,6 +378,13 @@ The members of `report`:
       lines", "The trigger line"); a `schedule.json` whose pool writes it
       requires it beside `pool_lines`, so it is composed only by a Runtime that
       names this row.
+    - `consumption_fact` (#428 SCHED-C1f1, since 0.12.54, register §1.303):
+      always on (`config_subsystem_always_on`). The Runtime reads a `consumes`
+      entry's `amount` written as a fact with a fallback, one run's amount read
+      at each evaluation from the instance's fact
+      ([scheduling/README.md](scheduling/README.md), "A run's consumption read
+      from a fact"); a `schedule.json` whose rule writes one requires it, so it
+      is composed only by a Runtime that names this row.
     - `reset_exclusions` (Workflow #411 P19, since 0.12.25): always on
       (`config_subsystem_always_on`). The Runtime reads a timeline event's
       `excludes_fact_prefixes`, and its resets never clear a task's own last

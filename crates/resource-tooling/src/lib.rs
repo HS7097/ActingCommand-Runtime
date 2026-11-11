@@ -81,6 +81,11 @@ mod gate_sched_c1a;
 #[cfg(test)]
 mod gate_cov1;
 
+// #428 SCHED-C1f1 (register §1.303 SC1F-7): standard-pack check lists the consumptions read from
+// a fact, each with its key and fallback, and counts such a rule's entry as a declared quantity.
+#[cfg(test)]
+mod gate_sched_c1f1;
+
 // Workflow #428 CFL-2: standard-pack check names a target whose chain differs from its shared
 // read, with and without `pages.json`.
 #[cfg(test)]

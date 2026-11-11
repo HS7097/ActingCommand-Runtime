@@ -776,4 +776,9 @@ outcome_keys! {
     // ---- #428 SCHED-C1e (lines given for one instance, contracts/scheduling/README.md "Lines
     // for one instance"): where a pool's lines in effect come from. ----
     lines_source: vocab(lines_source),
+    // ---- #428 SCHED-C1f1 (a run's consumption read from a fact, contracts/scheduling/README.md
+    // "A run's consumption read from a fact"): begin ----
+    consumption: integer,
+    consumption_source: vocab(consumption_source),
+    // ---- #428 SCHED-C1f1: end ----
 }

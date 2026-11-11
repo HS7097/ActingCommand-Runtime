@@ -36,7 +36,7 @@ use actingcommand_contract::{
 };
 use actingcommand_policy::{
     BenefitCoverage, BenefitFollower, BenefitProvenance, ComposedGame, ComposedProcedure,
-    StandardPackBinding, StandardPackComposeFailure, StandardPackComposeInput,
+    ConsumptionFactRule, StandardPackBinding, StandardPackComposeFailure, StandardPackComposeInput,
     StandardPackComposition, StandardPackGameFiles, compose_standard_pack_rules,
 };
 use serde::Serialize;
@@ -109,12 +109,15 @@ pub(crate) fn check_schedule(
 /// capacity threshold the capped spending order repeats, and the game's judged rules' coverage
 /// (complete, pending, undeclared; SS-2c: and the rules declared maintenance); SCHED-C1a (register
 /// §1.299): and who wrote the game's fixed values and valuation blocks; #428 COV-1 (register
-/// §1.299): and the game's chain followers, each with the rule it rides with, in file order.
+/// §1.299): and the game's chain followers, each with the rule it rides with, in file order;
+/// #428 SCHED-C1f1 (register §1.303 SC1F-7): and the game's consumptions read from a fact, each
+/// with its key and fallback, in file order.
 pub(crate) struct ScheduleReport {
     pub(crate) warnings: Vec<Outcome>,
     pub(crate) benefit_coverage: BenefitCoverage,
     pub(crate) benefit_provenance: BenefitProvenance,
     pub(crate) benefit_followers: Vec<BenefitFollower>,
+    pub(crate) consumption_facts: Vec<ConsumptionFactRule>,
 }
 
 /// Checks `schedule` (the bytes of the game root's `schedule.json` at `path`) against the game
@@ -158,11 +161,19 @@ pub(crate) fn report_schedule(
         .find(|(game_id, _)| game_id == game)
         .map(|(_, followers)| followers.clone())
         .unwrap_or_default();
+    // #428 SCHED-C1f1: the game's consumptions read from a fact, as the composer reports them.
+    let consumption_facts = composition
+        .consumption_facts()
+        .iter()
+        .find(|(game_id, _)| game_id == game)
+        .map(|(_, rules)| rules.clone())
+        .unwrap_or_default();
     Ok(ScheduleReport {
         warnings,
         benefit_coverage,
         benefit_provenance,
         benefit_followers,
+        consumption_facts,
     })
 }
 
