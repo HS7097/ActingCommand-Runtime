@@ -781,6 +781,9 @@ pub(super) struct FakeRuntime {
     /// Workflow #421 INST-5: the aliases the next start that comes ready registers, unpaused (the
     /// instances a configuration it starts with gained); none by default.
     pub(super) registers_at_start: RefCell<Vec<String>>,
+    /// Workflow #421 INST-5b: every status read of the running Runtime: how many calls `calls`
+    /// listed then, and the reason of the global pause it showed.
+    pub(super) status_reads: RefCell<Vec<(usize, Option<String>)>>,
 }
 
 impl FakeRuntime {
@@ -816,6 +819,7 @@ impl FakeRuntime {
             catalog: RefCell::new(None),
             catalogs: RefCell::new(VecDeque::new()),
             registers_at_start: RefCell::new(Vec::new()),
+            status_reads: RefCell::new(Vec::new()),
         }
     }
 
@@ -991,6 +995,14 @@ impl RuntimeLink for FakeRuntime {
                 instance.queued_requests = 1;
             }
         }
+        let global = self
+            .global_pause
+            .borrow()
+            .as_ref()
+            .map(|pause| pause.reason.as_str().to_owned());
+        self.status_reads
+            .borrow_mut()
+            .push((self.calls.borrow().len(), global));
         Ok(Some(RuntimeSeen {
             owner_epoch: owner.epoch,
             pid: owner.pid,
@@ -1089,6 +1101,42 @@ impl RuntimeLink for FakeRuntime {
             return Err(refused());
         }
         instance.pause = None;
+        Ok(())
+    }
+
+    /// Workflow #421 INST-5b: a global pause already in effect refuses, as the Runtime's
+    /// `scheduling_already_paused` does.
+    fn pause_global(
+        &self,
+        _state_root: &Path,
+        reason: &SchedulingPauseReason,
+        _drain_timeout_ms: u64,
+    ) -> Result<u64, Outcome> {
+        if !self.running.get() || self.global_pause.borrow().is_some() {
+            return Err(refused());
+        }
+        self.calls
+            .borrow_mut()
+            .push(format!("global pause {reason}"));
+        self.pause_global_as(reason.as_str());
+        Ok(self.revisions.get())
+    }
+
+    fn resume_global(
+        &self,
+        _state_root: &Path,
+        owner_epoch: &str,
+        revision: u64,
+    ) -> Result<(), Outcome> {
+        if !self.running.get() || self.owner.borrow().epoch != owner_epoch {
+            return Err(refused());
+        }
+        self.calls.borrow_mut().push("global resume".to_owned());
+        let mut global = self.global_pause.borrow_mut();
+        if global.as_ref().map(|pause| pause.revision) != Some(revision) {
+            return Err(refused());
+        }
+        *global = None;
         Ok(())
     }
 

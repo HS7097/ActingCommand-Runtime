@@ -335,8 +335,10 @@ Alice's answer 4. From LAB-3, in the rescue module:
 - **"Only the operation's own hold"** (§5), as LAB-3 fix 1 and 2 build it
   ([install-cli.md](install-cli.md), "The Lab's rescue module"): `release-hold <reason>` hands back
   only a hold that a journal of the module in this root recorded in its pause step, only the
-  instances that step paused, each while its pause shows that reason, in any owner epoch (the
-  Runtime's restore numbers the pauses anew, so the revision does not survive a restart); any
+  instances that step paused (and the global pause it set, `instance add`'s only: Workflow #421
+  INST-5b, install-cli.md, "Instances, the first slice"), each while its pause shows that reason,
+  in any owner epoch (the Runtime's restore numbers the pauses anew, so the revision does not
+  survive a restart); any
   other reason refuses `hold_not_owned` and nothing is resumed; `down` refuses a reason an
   instance already shows and never adopts a pause; every composite that releases follows the same
   rule; a refusal after the module paused something and before anything changed on disk hands its
