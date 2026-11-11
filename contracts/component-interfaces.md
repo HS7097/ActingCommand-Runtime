@@ -298,7 +298,7 @@ Also planned by the same design (§5.2), outside the rows above:
   them when R-15c builds it, inside revision 1. `install-cli` stays 1 too: the rescue module's
   operation kinds `config_replace` and `pack_place` are operations a UI of revision 1 never starts.
 
-#428 S168-LB1a ([v012-register.md](v012-register.md) §1.306; "Planned: Workflow #428 S168-LB1"
+#428 S168-LB1a ([v012-register.md](v012-register.md) §1.309; "Planned: Workflow #428 S168-LB1"
 below; the coordinator's ruling 4 of 11-11, not Alice's words) takes `runtime-client` 7 and
 `ledger` 8. The planned `runtime-client` 7 and `ledger` 8 rows of LAB-6 above join those
 revisions when LAB-6 ships in the same Runtime release as S168-LB1a, and take the next free
@@ -335,7 +335,7 @@ declares them.
   `runtime-outcomes`: new codes in the catalog only. `install-selection`, `install-control`,
   `install-cli`, `install-root`, `player-hold` and `tools-layout`: untouched.
 
-#428 S168-LB1 ([v012-register.md](v012-register.md) §1.306; "Planned: Workflow #428 S168-LB1"
+#428 S168-LB1 ([v012-register.md](v012-register.md) §1.309; "Planned: Workflow #428 S168-LB1"
 below; the coordinator's rulings 4 and 10 of 11-11, not Alice's words): S168-LB1a takes `ledger`
 8 and S168-LB1b `package` 9. The planned `package` 9 and `ledger` 8 rows of S168-5b above join
 those revisions when S168-5b ships in the same Runtime release as the slice that takes them, and
@@ -343,7 +343,7 @@ take the next free revisions when it ships in another; their meaning is unchange
 than 256 rows travels in the `InstanceFactSnapshot` answer only from `runtime-client` 7 (S168-LB1a),
 so the bullet "Not moved" above holds for lists of at most 256 rows.
 
-### Planned: Workflow #428 S168-LB1 (S168-LB1a and S168-LB1b; [v012-register.md](v012-register.md) §1.306)
+### Planned: Workflow #428 S168-LB1 (S168-LB1a and S168-LB1b; [v012-register.md](v012-register.md) §1.309)
 
 Planned rows, **not in force**: no build declares them. Main at `e5efe44e` declares `ledger`
 [3, 7], `runtime-client` [3, 6] and `package` [3, 8]. S168-LB1, which writes these rows, raises

@@ -2581,7 +2581,7 @@ the switch.
 
 ## Record lists and the projection
 
-Workflow #428 S168-LB1a, not built yet ([v012-register.md](../v012-register.md) §1.306; the
+Workflow #428 S168-LB1a, not built yet ([v012-register.md](../v012-register.md) §1.309; the
 coordinator's ruling 2 of 11-11, not Alice's words; #419). Until it, the store's facts enter the
 evaluation whatever their rows, and the evaluator refuses the whole input when one record list
 holds more than 256 rows: the evaluation is skipped for every instance (`policy_evaluation_skipped`

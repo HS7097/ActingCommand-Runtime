@@ -12794,7 +12794,7 @@ register included; so this note does not spell them. They are left for a later s
 **Interface.** None raised ([component-interfaces.md](component-interfaces.md)): nothing a reader
 or writer of any interface sees changes.
 
-### 1.306 Workflow #428 S168-LB1 (contracts only): a list longer than 256 rows can be read, and one entry without a value no longer empties its group (a customer-view audit of 11-11 found both defects in what the S168 slices built, and the coordinator confirmed them; the coordinator's rulings 1 to 10 of 11-11, not Alice's words; read on main `a62434a4`, with the read-only survey `rd-1111/survey-s168-lb1.md`; coordinator work order `rd-1111/brief-s168-lb1-contract.md`)
+### 1.309 Workflow #428 S168-LB1 (contracts only): a list longer than 256 rows can be read, and one entry without a value no longer empties its group (a customer-view audit of 11-11 found both defects in what the S168 slices built, and the coordinator confirmed them; the coordinator's rulings 1 to 10 of 11-11, not Alice's words; read on main `a62434a4`, with the read-only survey `rd-1111/survey-s168-lb1.md`; coordinator work order `rd-1111/brief-s168-lb1-contract.md`)
 
 [resource-readings.md](resource-readings.md) ("List readings": the miss table, the new "Rows",
 "Staleness"), [instance-fact-store.md](instance-fact-store.md) ("List reading facts" with the new
@@ -12807,7 +12807,7 @@ list", the new "Lower bound of a list maximum", "Scheduling consumer"),
 "Bounds") and [component-interfaces.md](component-interfaces.md) (the new "Planned: Workflow #428
 S168-LB1" and the sentences under the planned rows of #434 and of 168) are the contract. The
 section was written on `a62434a4` as §1.305; NEUT-1 took that number and merged first, so with
-main `e5efe44e` merged in it is 1.306, the next free number there (SCHED-C1f1 merged its rows
+main `e5efe44e` merged in it is 1.309, the next free number there (SCHED-C1f1 merged its rows
 under §1.303); the coordinator renumbers it if another open slice takes it first (R-8 takes one
 too).
 
@@ -13109,7 +13109,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`, `device.screen_off_timeout_ms` (per instance, a bound handset only, with a lifetime; §1.59 RD5-2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-5b |
 | `session.remedy.choices` (one per scope: instance, server or game; §1.110 B15-6) | instance | yes | #411 B15 R6 |
 | `session.dispatch.parameter.<name>` (an overlay of a run's snapshots only, never stored; the prefix `session.dispatch.` is refused to publishers; §1.110 B15-7) | — (never stored) | — | #411 B15 R5 |
-| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 256 rows, 1024 from S168-LB1a, not built yet, §1.306; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
+| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 256 rows, 1024 from S168-LB1a, not built yet, §1.309; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).

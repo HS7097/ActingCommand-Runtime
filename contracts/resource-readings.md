@@ -734,7 +734,7 @@ they do not both pass where the list does not show.
 
 ### Rows (S168-LB1a, not built yet)
 
-Workflow #428 S168-LB1 ([v012-register.md](v012-register.md) §1.306; the coordinator's ruling 1
+Workflow #428 S168-LB1 ([v012-register.md](v012-register.md) §1.309; the coordinator's ruling 1
 of 11-11, not Alice's words). Until S168-LB1a a list holds at most 256 rows, and a roster or a list
 of holdings longer than that is never written: the run succeeds, warns `list_rows_exceeded` and
 publishes nothing, so a selection that reads the list has nothing. From S168-LB1a:
@@ -758,13 +758,13 @@ publishes nothing, so a selection that reads the list has nothing. From S168-LB1
   (`selection_scan_bounds_exceeded`).
 - **The observation's bytes stay.** One list is one observation of at most 512 KiB (section
   Publication), each row at most 64 fields, each string at most 1024 bytes. Measured on the
-  serialized record by the read-only survey of 11-11 (register §1.306): a row of the key and 3
+  serialized record by the read-only survey of 11-11 (register §1.309): a row of the key and 3
   short columns takes about 170 bytes, of the key and 8 about 356 bytes, of the key and 63 about
   2.6 KB, so 512 KiB hold about 3,079, 1,470 and 203 such rows. 1024 rows fit up to about the key
   and 8 short columns; a wider list meets the byte bound first. Today that fails its run at
   publication (`contained_task_resource_reading_rejected`), as a list of the key and 63 columns
   does near 200 rows. From S168-LB1a it is a miss of the list, as a list over the row bound is
-  (`list_bytes_exceeded` above; the coordinator's answer to question 4 of §1.306): the run settles
+  (`list_bytes_exceeded` above; the coordinator's answer to question 4 of §1.309): the run settles
   as without the list, the previous record stays, and the warning says so at every run. A list
   that grows with its account must not start failing its run one day.
 - **One instance's whole read stays within one frame.** All of an instance's records together
