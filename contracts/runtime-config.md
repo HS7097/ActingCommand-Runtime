@@ -43,7 +43,10 @@ arrive with their slices (D1c `recovery_ladder` and `host_claims`, AO-1, P-c, SR
   (`recovery_ladder_device_bounds`) and (#402 HS-1, since 0.12.39) the backends each kind of
   device has, by the device layer's own rule (`backend_kind_rules`, `CheckContext::with_backends`;
   a context nobody fills in has no backend on any kind, so it refuses every backend in effect
-  rather than pass one unchecked). A section's broken rule refuses a start or `check-config`
+  rather than pass one unchecked); #428 SCHED-C1e (since 0.12.54): for an instruction only, the
+  pools the active catalog generation gives each instance with a declared valuation
+  (`CheckContext::with_valued_pools`; a context without them asks nothing of an instance's
+  `scheduling.pool_lines` pools, so a start's restore keeps such a value). A section's broken rule refuses a start or `check-config`
   with the section's own code; the same values sent by an instruction are refused as
   `config_value_invalid` with the same `config_key` and `config_value_problem`.
 
@@ -116,6 +119,9 @@ fixture's neither), so a fixture reports no row of either; settable since #402 H
 ([v012-register.md](v012-register.md) §1.270, same release): an instruction that changes them
 switches the instance's device backends first ("Switching an instance's backends" below). Their
 whole-instance check is part of the per-instance section's (see "Backends" below).
+#428 SCHED-C1e's row ([v012-register.md](v012-register.md) §1.299 SC1-12; since 0.12.54): the
+per-instance `scheduling.pool_lines` (object, default `none`, settable; "Pool lines for one
+instance" below), reported only for an instance whose entry names it or an instruction sets it.
 A manifest key the table does not have fails
 the start (`config_key_unknown`). The manifest lists the exact keys in row order
 (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
@@ -574,6 +580,38 @@ or the section's. The host reads it for every instance of the snapshot at every 
 cycle, so an instruction takes effect at the next one. `false` on an instance: the evaluation of
 its pairs is the one before SS-4, the guard captures nothing for it and forgets what it kept for
 it, so turning the key off and on again releases every guard of the instance.
+
+**Pool lines for one instance (#428 SCHED-C1e, register §1.299 SC1-12; `actingd-config` revision
+28; since 0.12.54).** `instance.<instance id>.scheduling.pool_lines`, in the file the entry's
+`scheduling.pool_lines` member (object, default `none`, settable), gives one instance its own lines
+of its pools ([scheduling/README.md](scheduling/README.md), "Lines for one instance"): an object
+of at most 32 members, each named by a pool id as the instance's `schedule.json` writes it (a
+composed copy's id without `@<alias>`; in catalog mode the catalog's id, by the identifier rule:
+1 to 128 bytes, a lowercase ASCII letter or digit first, then lowercase ASCII letters, digits,
+`.`, `_`, `:` and `-`), each `{"stop_line", "hard_line", "trigger_line"?}`, every line an integer
+in `0..=9007199254740991` or `{"type": "fact", "fact_key", "offset"}` (a fact key by the same
+identifier rule, an offset within ±9007199254740991, no other member), a reference read in the
+pool's scope. For a pool it names, on that instance, the set replaces the catalog's lines whole (a
+`trigger_line` it does not write is the capacity); every other pool and instance keeps the
+catalog's lines. `EffectiveConfig::pool_lines(instance_id)` returns the set in effect; the host
+reads it for every instance of the snapshot at every evaluated policy cycle and hands it to the
+evaluation, so an instruction takes effect at the next one, and a change ends no capped episode.
+The instance's whole-instance check refuses, `config_value_invalid` with the instance's key and the
+JSON pointer into the value of what breaks the rule (`/<pool id>`, `/<pool id>/<line>`,
+`/<pool id>/<line>/<member>`): a value, a pool's value, a line or a reference of another shape or
+with another member (`wrong_type`); a pool beyond the 32nd, a member that is no pool identifier, a
+constant, an offset or a fact key outside its range (`out_of_range`); a set without both lines, at
+the one missing, and `H < S ≤ T` broken between two constants or two references to one fact, at
+the hard line or the trigger line (`section_check`). A start and `check-config` refuse the file's
+value the same way. Only an instruction also asks the active catalog generation: each pool the
+request's value names must be one the generation gives the instance with a declared valuation,
+else `config_value_invalid` (`section_check`, pointing at the pool); the host fills the check
+context with those pools before the request is checked (`CheckContext::with_valued_pools`), as it
+fills the backends. A start's restore, `check-config` and a change of another key do not ask it,
+so a value whose pool a later generation no longer gives the instance is kept and changes nothing
+while the pool is absent. Channels: the Lab's `config set` and `config clear`, MCP `ac_config_set`
+(observer tier, as every key but the backends), the console (no tier row: hidden until the UI
+repository adds one).
 
 **Per-instance lanes (Workflow #427-A; `actingd-config` revision 19).**
 `scheduling.parallel.enabled` (default `true` since 0.12.31, Workflow #429 R-2 and Alice's ruling
@@ -1096,10 +1134,12 @@ member; a file that names neither keeps its revision.
 
 | Key | Type | Default (`actingd.defaults.json`) | Settable |
 |---|---|---|---|
-| `idle.action` | one of `none` (nothing ever happens), `close_app` (the game's application is stopped inside the emulator), `stop_emulator` (the instance's sessions are closed and its emulator is stopped) | `close_app` | yes |
+| `idle.action` | one of `none` (nothing ever happens), `close_app` (the game's application is stopped inside the emulator), `stop_emulator` (the instance's sessions are closed and its emulator is stopped), and since 0.12.54 `auto` (IDLE-2: one tier by the gap to the next task, below) | `close_app` | yes |
 | `idle.min_gap_ms` | milliseconds `60000..=86400000`, the least time to the scheduler's next due task for the instance before the action runs | `1800000` | yes |
 | `idle.close_app_wake_lead_ms` | milliseconds `0..=3600000`, how long before the next due task an instance whose application was closed is brought back (the startup package); the default covers a game's cold start (80 to 141 s in production on 10-27; #405 IDLE-1P, it was `60000`) | `300000` | yes |
 | `idle.stop_emulator_wake_lead_ms` | milliseconds `0..=3600000`, how long before the next due task an instance whose emulator was stopped is brought back (the emulator's boot and the startup package) | `300000` | yes |
+| `idle.return_home_min_gap_ms` | IDLE-2, since 0.12.54: milliseconds `60000..=86400000`, under `auto` the least gap to the next task at which the instance rests at home; a starting value to be measured | `600000` | yes |
+| `idle.stop_emulator_min_gap_ms` | IDLE-2, since 0.12.54: milliseconds `60000..=86400000`, under `auto` the least gap to the next task at which the instance's emulator is stopped; a starting value to be measured | `7200000` | yes |
 
 A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
 `range_max` for the milliseconds) at start, in `check-config` and in `ConfigureSettings`; a value
@@ -1108,7 +1148,67 @@ effect: each wake lead is shorter than `idle.min_gap_ms` (`section_check` on the
 an instance whose action in effect is `stop_emulator` is one whose emulator the Runtime starts
 (`instance.<id>.start_emulator` true; `section_check` on `instance.<id>.idle.action`), since its
 wake starts the emulator through that configured start. The rows are those of
-`config.parameters.idle` and, per instance, `config.parameters.instance`.
+`config.parameters.idle` and, per instance, `config.parameters.instance`. IDLE-2 (since 0.12.54):
+while the action in effect is `auto` (the section's, or an instance's), the whole-section check also
+holds `idle.return_home_min_gap_ms` ≤ `idle.min_gap_ms` ≤ `idle.stop_emulator_min_gap_ms`
+(`section_check` on `return_home_min_gap_ms` when it is above the gap, on
+`stop_emulator_min_gap_ms` when it is below); another action's thresholds are range-checked only.
+`auto` needs no `start_emulator`: on an instance without it the tier stops at `close_app` (below),
+which is no error. Both thresholds' defaults are starting values, to be measured on an
+experimental instance; the wake leads' defaults and `idle.action`'s default (`close_app`) do not
+change. `actingd check-config` lists both keys with the others, and `config.parameters.idle` and
+`config.parameters.instance` carry their rows. `actingd-config` revision 28
+([component-interfaces.md](component-interfaces.md)) adds the value and the two keys: a build
+before IDLE-2 refuses a file that names any of them.
+
+`auto` (IDLE-2, since 0.12.54; Alice's words of 11-11: 「根据任务间隔时间自动选择是关闭模拟器还是关闭应用还是回到主页面」;
+the coordinator's rulings on Workflow #386, comment 6787682270). When the idle check finds an
+instance free on every condition below but the gap (no lease, no queued request, no keyless
+work, no pause, player hold, blackout or fence, its emulator running, a plan made after its last
+work with nothing due), it reads the gap `g` to the instance's next work in that plan (its next
+task's wake or its fact-refresh reading, the earlier, as `idle.min_gap_ms` reads it) and takes one
+tier, directly, a gap of exactly a threshold taking the tier that starts there:
+
+| Gap `g` | Tier |
+|---|---|
+| below `idle.return_home_min_gap_ms` | nothing |
+| from `idle.return_home_min_gap_ms`, below `idle.min_gap_ms` | a rest at home, once per idle stretch |
+| from `idle.min_gap_ms`, below `idle.stop_emulator_min_gap_ms` | `close_app`, exactly as above, with its wake |
+| from `idle.stop_emulator_min_gap_ms`, or no next work | `stop_emulator`, exactly as above, with its wake; `close_app` on an instance whose emulator the Runtime does not start (`start_emulator` off) |
+
+An instance without a startup package never closes or stops (one `instance_idle_action_unsupported`
+with `idle_action` `auto` and `member` `startup_package`, as for the other actions), but it may
+still rest: a rest needs no way back. A rest runs the return-home package the game's standard pack
+declares for the instance's server (`bundle.json`'s maintenance entry whose `uses` holds
+`return_home`, read as the stuck-recovery ladder and the prerequisite chain read it; no new
+declaration in any resource repository; the game and the server are the instance's policy
+identity's, as `close_app`'s application is) as a host run of its own on the idle action's
+emulator-control claim, its response deadline `idle.return_home_min_gap_ms` (at most a task's
+longest), so it ends before the next task is due. It is one `instance_idle_action` (`operation`
+`run_idle_action`, `idle_action` `return_home`, `next_occurrence_unix_ms` the next due time; no
+`at_unix_ms`, no wake follows). Whatever its end, the instance is rested for this idle stretch: it
+owes no wake, has no row in `host.idle_state`, and rests no more until work holds it (a lease, a
+queued request, keyless work), which ends the stretch as it ends an idle one; a later plan with a
+longer gap takes a higher tier from it as from a free instance. A rest's failure is recorded as any
+host run's failure (its task records, and its failure record under the instance and the rest's
+causation, category `run_idle_action`), enters no
+stuck-recovery ladder, owes no wake, is not tried again in the same stretch, and stops neither the
+instance nor the Runtime (#419). A game root that declares no return-home package for the server
+(or an instance whose policy identity names none): no rest runs, one
+`instance_idle_action_unsupported` (`idle_action` `return_home`, `member` `maintenance`, `operation`
+`run_idle_action`) per start and instance, and the higher tiers are unaffected. While a scheduling
+pause, a player hold, a blackout or a resource fence holds the instance, no rest runs, as no
+action does. `host.idle_state` holds the tier taken (`close_app` or `stop_emulator`), never `auto`;
+under `auto` "the action in effect changed", which wakes an idle instance at once, means that the
+tier it took is no longer one `auto` allows on it (`stop_emulator` once its emulator start is off,
+either tier once its startup package is gone), not that the configured word differs, so a restart
+that restores a closed application under `auto` does not wake it at once. A start that cannot read
+what the action left treats an `auto` instance as closed after the highest tier it can take. An
+instance whose application is closed is not raised to a stopped emulator by a later, longer gap
+(this release; its wake only moves earlier). What a person sees while an instance rests: in
+`actingctl status` and the overview, the instance's key held by the Runtime's claim and the
+return-home package's run, as for a startup package's run; then the instance free with its
+application open, no closed row and no wake.
 
 When (the Runtime host, `host/idle.rs`): at every policy cycle, right after its evaluation and
 before actingd admits its dispatches, and between cycles every second of the lease sweep, the idle
@@ -1607,7 +1707,7 @@ All changes or none:
 | (#402 HS-1, since 0.12.39; first, before any key is looked at) a request that names a backend key (`instance.<instance id>.touch_backend` or `.capture_backend`) names only the backend keys of that one instance, one or both, so that all of it or none of it is one switch of one device | `config_value_invalid` (`backend_switch_not_alone`), naming the first key that is not one of them: another key, or another instance's backend key |
 | the key is in the key table (a per-instance key of a configured instance); a key whose default is `none` counts whether or not the file writes it, once its instance (a per-instance key) or its section (an exact key) is in the configuration (Workflow #429 R-1, since 0.12.31) | `config_key_unknown` |
 | the key is settable | `config_key_not_settable` |
-| the value has the key's type and range, and is one an instruction may set (not `performance.pacing.mode` `full`, Workflow #429 R-2, since 0.12.31: `out_of_range`); no key is named twice; the changed sections pass their whole-section check (#402 HS-1: an instance's backends, "Backends" above; Workflow #429 R-3, since 0.12.39: an instance's `start_emulator`, "Starting an instance's emulator" above) | `config_value_invalid` (`config_value_problem`: `wrong_type`, `out_of_range`, `repeated_key`, `section_check`, `backend_kind_unsupported`, `backend_pair_required`, `discovery_binding_required`; `range_min`, `range_max` for a bounded key) |
+| the value has the key's type and range, and is one an instruction may set (not `performance.pacing.mode` `full`, Workflow #429 R-2, since 0.12.31: `out_of_range`); no key is named twice; the changed sections pass their whole-section check (#402 HS-1: an instance's backends, "Backends" above; Workflow #429 R-3, since 0.12.39: an instance's `start_emulator`, "Starting an instance's emulator" above; #428 SCHED-C1e, since 0.12.54: an instance's `scheduling.pool_lines`, and the pools a value of it names are pools the active generation gives the instance with a declared valuation, "Pool lines for one instance" above) | `config_value_invalid` (`config_value_problem`: `wrong_type`, `out_of_range`, `repeated_key`, `section_check`, `backend_kind_unsupported`, `backend_pair_required`, `discovery_binding_required`; `range_min`, `range_max` for a bounded key) |
 
 #402 HS-2 (since 0.12.39): a request that passes these checks and changes an instance's backends
 in effect switches the device first and commits only once the new backends opened, with

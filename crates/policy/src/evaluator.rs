@@ -60,8 +60,8 @@ pub use blackout::{
     day_boundary_fit, next_blackout_start,
 };
 pub use capped::{
-    CappedMemory, CappedRestore, CappedStateProblem, KeptConsumer, KeptEpisode, KeptMember,
-    KeptRound,
+    CappedMemory, CappedRestore, CappedStateProblem, InstanceLineSet, InstancePoolLines,
+    KeptConsumer, KeptEpisode, KeptMember, KeptRound, instance_valued_pool_ids,
 };
 pub use chain_handover::{ChainEntryHolds, ChainHandoverInputs, RestingPage};
 pub(crate) use expected_runtime::snapshot_expected_runtime;
@@ -1108,6 +1108,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         &InstanceHolds::default(),
         &NoProgressGuards::default(),
         &mut CappedMemory::default(),
+        &InstancePoolLines::default(),
         eligibility,
     )
 }
@@ -1144,6 +1145,7 @@ pub fn evaluate_with_fact_refresh<E: From<PolicyEvaluationError>>(
         &InstanceHolds::default(),
         &NoProgressGuards::default(),
         &mut CappedMemory::default(),
+        &InstancePoolLines::default(),
         eligibility,
     )
 }
@@ -1186,6 +1188,7 @@ pub fn evaluate_with_remedies<E: From<PolicyEvaluationError>>(
         &InstanceHolds::default(),
         &NoProgressGuards::default(),
         &mut CappedMemory::default(),
+        &InstancePoolLines::default(),
         eligibility,
     )
 }
@@ -1411,7 +1414,8 @@ pub fn evaluate_with_no_progress<E: From<PolicyEvaluationError>>(
 /// pool below its hard line. Every other entry point evaluates with an empty memory. SCHED-C1d
 /// (register §1.299): the Runtime keeps the memory across a start ([`CappedMemory::kept`],
 /// [`CappedMemory::restore`]). A catalog without a valued pool evaluates as
-/// `evaluate_with_no_progress` does, byte for byte.
+/// `evaluate_with_no_progress` does, byte for byte. SCHED-C1e: no instance sets lines here
+/// ([`evaluate_with_instance_lines`] with none).
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_with_capped_spending<E: From<PolicyEvaluationError>>(
     catalog: &CompiledCatalog,
@@ -1428,6 +1432,54 @@ pub fn evaluate_with_capped_spending<E: From<PolicyEvaluationError>>(
     instance_holds: &InstanceHolds,
     no_progress: &NoProgressGuards,
     capped: &mut CappedMemory,
+    entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    evaluate_with_instance_lines(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        fact_refresh,
+        remedies,
+        chain_handover,
+        run_slots,
+        owed_reruns,
+        instance_holds,
+        no_progress,
+        capped,
+        &InstancePoolLines::default(),
+        entry_holds,
+        eligibility,
+    )
+}
+
+/// SCHED-C1e (register §1.299 SC1-12; `contracts/scheduling/README.md`, "Lines for one
+/// instance"): `evaluate_with_capped_spending` with the lines each instance's
+/// `scheduling.pool_lines` gives its pools ([`InstancePoolLines`]), which the Runtime reads from
+/// the configuration in effect at every evaluated cycle. For a pool an instance's set names, on
+/// that instance, the set replaces the catalog's lines whole; every other pool and instance keeps
+/// the catalog's lines, or the defaults. With no set the evaluation is the one
+/// `evaluate_with_capped_spending` gives.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_with_instance_lines<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    fact_refresh: &FactRefreshInputs,
+    remedies: &RemedyPlan,
+    chain_handover: &ChainHandoverInputs,
+    run_slots: &RunSlots,
+    owed_reruns: &OwedReruns,
+    instance_holds: &InstanceHolds,
+    no_progress: &NoProgressGuards,
+    capped: &mut CappedMemory,
+    instance_lines: &InstancePoolLines,
     mut entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
     eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
@@ -1447,6 +1499,7 @@ pub fn evaluate_with_capped_spending<E: From<PolicyEvaluationError>>(
         instance_holds,
         no_progress,
         capped,
+        instance_lines,
         eligibility,
     )
 }
@@ -1467,6 +1520,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     instance_holds: &InstanceHolds,
     no_progress: &NoProgressGuards,
     capped: &mut CappedMemory,
+    instance_lines: &InstancePoolLines,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
@@ -1583,6 +1637,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         facts,
         timeline_events: &timeline_events,
         turns: &turns,
+        instance_lines,
     };
     let mut work = Vec::new();
     let mut candidates = Vec::new();
@@ -3317,6 +3372,10 @@ struct PlacementContext<'a> {
     /// SS-2f: each instance's most recent policy dispatch, which orders the business tier across
     /// instances.
     turns: &'a InstanceTurns<'a>,
+    /// SCHED-C1e (register §1.299 SC1-12): the lines each instance's `scheduling.pool_lines`
+    /// gives its pools, read before the catalog's ([`capped`]); none outside the Runtime's
+    /// cycle.
+    instance_lines: &'a InstancePoolLines,
 }
 
 impl PlacementContext<'_> {

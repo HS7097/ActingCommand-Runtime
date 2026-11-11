@@ -274,7 +274,9 @@ pub(super) struct ActingdConfigFile {
     /// (`idle.*`), each member optional; the defaults file holds every default.
     // Interface anchor `actingd-config` revision 12 (contracts/component-interfaces.md): a Runtime
     // before IDLE-1 refuses a file that names the section, because the file denies unknown
-    // members; a file that does not name it keeps its revision.
+    // members; a file that does not name it keeps its revision. Revision 28 (IDLE-2): the value
+    // `auto` of `idle.action` and the members `return_home_min_gap_ms` and
+    // `stop_emulator_min_gap_ms`, which a Runtime before IDLE-2 refuses.
     #[serde(default)]
     idle: Option<actingcommand_runtime_config::IdleFile>,
     /// Workflow #392 DA-4b-D (Alice's ruling 69): where the declared safe areas live and the
@@ -1121,7 +1123,8 @@ struct InstanceConfig {
     /// IDLE-1: the instance's own idle keys (`instance.<id>.idle.*`); a member it leaves out is
     /// the `idle` section's.
     // Interface anchor `actingd-config` revision 12: a Runtime before IDLE-1 refuses an entry
-    // that names it, because the entry denies unknown members.
+    // that names it, because the entry denies unknown members. Revision 28 (IDLE-2): the same
+    // for the entry's `idle.action` `auto` and its two new members.
     #[serde(default)]
     idle: Option<actingcommand_runtime_config::IdleFile>,
     /// Workflow #392 DA-4b-D: the device model the instance declares

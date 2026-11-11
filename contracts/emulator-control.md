@@ -1447,6 +1447,12 @@ the configured starts; the watch ends with the host.
   starts nothing and records the same skip, and the instance owes the wake again, kept closed (not
   woken) with its wake at the time it was woken. The first idle check after the resume queues the
   wake as before. A `close_app` wake, which starts no emulator, is unchanged.
+  IDLE-2 (since 0.12.54): under `idle.action` `auto` the idle stop is the tier a gap of at least
+  `idle.stop_emulator_min_gap_ms` (or no next task) takes, on an instance whose emulator the
+  Runtime starts; it is this same Stop, held and woken as above, and `idle_action` names
+  `stop_emulator`, never `auto`. `auto`'s other tiers start or stop no emulator: `close_app`,
+  and a rest at home (the game's declared return-home package run once on the idle action's
+  claim, a host run outside the stuck-recovery ladder whose failure climbs no rung).
   Workflow #429 R-3 (since 0.12.39): the wake's configured start is the instance's
   `start_emulator` in effect at the wake. Off (an instruction turned it off together with the
   action, which `stop_emulator` otherwise needs), the wake records its `instance_idle_action` but

@@ -30,7 +30,7 @@ use actingcommand_contract::{
 };
 use actingcommand_runtime_config::{
     AppliedSettings, CheckContext, EffectiveConfig, InstructionStamp, LadderConfig, LadderProfile,
-    RestoreNote, STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS, instance_key,
+    PoolLineValue, RestoreNote, STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS, instance_key,
 };
 
 /// Workflow #432 AGT-1b: an instruction that changes `agent_wake.rules` names no alias that is no
@@ -55,6 +55,21 @@ fn refuse_wake_rule_aliases(
                 actingcommand_runtime_config::ConfigValueProblem::InstanceUnknown,
             )
         })
+}
+
+/// #428 SCHED-C1e: one line of an instance's `scheduling.pool_lines` as the evaluation reads it, in
+/// the same two forms as a catalog line (a reference names no scope: it reads the pool's).
+fn policy_pool_line(line: PoolLineValue) -> actingcommand_policy::PoolLine {
+    match line {
+        PoolLineValue::Constant(value) => actingcommand_policy::PoolLine::Constant(value),
+        PoolLineValue::Fact { fact_key, offset } => {
+            actingcommand_policy::PoolLine::Fact(actingcommand_policy::FactReference {
+                fact_key,
+                offset,
+                scope: None,
+            })
+        }
+    }
 }
 
 impl HostShared {
@@ -195,7 +210,11 @@ impl HostShared {
             EventAction::RuntimeAction,
             None,
         )?;
-        let context = self.config_check()?;
+        // #428 SCHED-C1e: an instruction's pool lines name only pools the active generation gives
+        // the instance with a declared valuation; a start's restore asks no such thing.
+        let context = self
+            .config_check()?
+            .with_valued_pools(self.valued_pools_context()?);
         let gate = lock(
             &self.config_override_gate,
             ConfigHostLocation::ConfigureSettings,
@@ -1183,6 +1202,94 @@ impl HostShared {
             enabled.insert((*alias).to_owned(), on);
         }
         Ok(enabled)
+    }
+
+    /// #428 SCHED-C1e (register §1.299 SC1-12; `contracts/scheduling/README.md`, "Lines for one
+    /// instance"): the lines `instance.<instance id>.scheduling.pool_lines` in effect gives the
+    /// pools of each instance `aliases` name (`EffectiveConfig::pool_lines` by its registry id; an
+    /// alias the registry does not hold names no key of its own), by alias, read at every
+    /// authoritative policy cycle and handed to the evaluation. The key is checked whenever the
+    /// configuration is loaded or changed, so a value that cannot be read here is a halt, as a
+    /// random delay key's is.
+    pub(super) fn pool_lines_context(
+        &self,
+        aliases: &[&str],
+        operation: HostLocation,
+    ) -> RuntimeHostResult<actingcommand_policy::InstancePoolLines> {
+        let ids = lock(&self.registered_instances, operation)?
+            .values()
+            .map(|instance| {
+                (
+                    instance.instance_alias.clone(),
+                    crate::failure_identity::identifier_text(&instance.instance_id),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let mut lines = actingcommand_policy::InstancePoolLines::default();
+        for alias in aliases {
+            let id = ids.get(*alias).map_or(*alias, String::as_str);
+            for (pool_id, set) in config.pool_lines(id).map_err(remedy_config_failure)? {
+                lines.insert(
+                    alias,
+                    &pool_id,
+                    actingcommand_policy::InstanceLineSet {
+                        stop_line: policy_pool_line(set.stop_line),
+                        hard_line: policy_pool_line(set.hard_line),
+                        trigger_line: set.trigger_line.map(policy_pool_line),
+                    },
+                );
+            }
+        }
+        Ok(lines)
+    }
+
+    /// #428 SCHED-C1e (`contracts/scheduling/README.md`, "Lines for one instance", *Checks*): per
+    /// registry id, the pools the active catalog generation gives each instance of the policy
+    /// inputs with a declared valuation, each by the id its `scheduling.pool_lines` names it by;
+    /// filled into the check context of a `ConfigureSettings` as the backends are, so an
+    /// instruction names only those (`config_value_invalid`, `section_check`). An instance of the
+    /// inputs the registry does not hold is named by its alias, as its keys are; without an active
+    /// generation each instance has none.
+    pub(super) fn valued_pools_context(
+        &self,
+    ) -> RuntimeHostResult<BTreeMap<String, BTreeSet<String>>> {
+        let identities = lock(&self.policy_inputs, ConfigHostLocation::ConfigureSettings)?
+            .as_ref()
+            .map(|inputs| {
+                inputs
+                    .instance_identities()
+                    .map(|identity| {
+                        (
+                            identity.instance_id.to_owned(),
+                            identity.server_id.to_owned(),
+                            identity.game_id.to_owned(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let ids = lock(
+            &self.registered_instances,
+            ConfigHostLocation::ConfigureSettings,
+        )?
+        .values()
+        .map(|instance| {
+            (
+                instance.instance_alias.clone(),
+                crate::failure_identity::identifier_text(&instance.instance_id),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+        let policy = lock(self.policy()?, ConfigHostLocation::ConfigureSettings)?;
+        Ok(identities
+            .into_iter()
+            .map(|(alias, server_id, game_id)| {
+                let pools = policy.instance_valued_pools(&alias, &server_id, &game_id);
+                let id = ids.get(&alias).cloned().unwrap_or(alias);
+                (id, pools)
+            })
+            .collect())
     }
 
     /// Workflow #386 SR-4a2 (SCH-M §3.2 D-1, D-4, D-6): the blackout keys in effect for the

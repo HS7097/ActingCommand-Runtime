@@ -11867,6 +11867,97 @@ Composing, activating and deciding are unchanged.
 
 **COV-1 rollback.** Nothing to undo: no file, ledger or configuration shape is new.
 
+#### Slice SCHED-C1e (0.12.54): a pool's lines given for one instance
+
+Coordinator work order `rd-1111/brief-sched-c1e.md`; on SCHED-C1d's branch at `5dd645a2` (PR
+#1593), with main `6e773d47` merged in once that PR had merged. The contract is [scheduling/README.md](scheduling/README.md) ("Pool lines" with "Lines for one
+instance", "Capped spending order" with "Episodes survive") and
+[runtime-config.md](runtime-config.md), row SC1-12 above and the coordinator's answers 3, 5 and 8
+(not Alice's words; Alice, 11-09 17:42: 「这个红线会随着时间由外部修改」). The text names no game,
+resource or value: the tests' ids are neutral.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| C1E-1 | `instance.<instance id>.scheduling.pool_lines` (object, at most 32 pools, each `{stop_line, hard_line, trigger_line?}` in the two forms of a catalog line), its `config.parameters.instance` row (object, default `none`, settable, `reader` SCHED-C1e, `since` 0.12.54), the entry member `InstanceSchedulingFile::pool_lines`; `scheduling::INSTANCE_POOL_LINES`, `MAX_POOL_LINES_POOLS`, `PoolLineValue`, `InstancePoolLineSet`, `EffectiveConfig::pool_lines` (SC1-12) | configuration key | SCHED-C1e | the file; `ConfigureSettings` (the Lab's `config set` and `config clear`, MCP `ac_config_set`, the console) | `crates/runtime-config/src/scheduling.rs` `instance_pool_lines`, `pool_lines_of`; `instance.rs` (the row, `check_instance`): `wrong_type`, `out_of_range` and `section_check` with the JSON pointer of what breaks the rule in the value |
+| C1E-2 | the instruction's pools: `CheckContext::valued_pools`, `CheckContext::with_valued_pools`; `EffectiveConfig::apply` asks them of each `scheduling.pool_lines` the request sets | behaviour (configuration check) | SCHED-C1e | the host: `valued_pools_context` (the policy inputs' instances, the active generation's valued pools by `instance_valued_pool_ids`) filled in by `configure_settings` only | `config_value_invalid` (`section_check`) for the instance's key, pointer `/<pool id>`; no new code, token or problem; a start's restore, `check-config` and another key's change do not ask |
+| C1E-3 | `InstanceLineSet`, `InstancePoolLines`, `instance_valued_pool_ids`, `evaluate_with_instance_lines` (`crates/policy/src/evaluator/capped.rs`, `evaluator.rs`); `capped::lines` reads the instance's set of the pool first, whole, then the catalog's lines, then the defaults | policy crate API; behaviour (evaluation) | SCHED-C1e | the host: `pool_lines_context` (`host/runtime_config.rs`) at every evaluated cycle into `PolicyEvaluationContext::pool_lines` (`policy_dispatch.rs`, `policy_host.rs`) | a set names the pool by its file id: the catalog pool of that id, or the instance's copy `<id>@<alias>`; `S ≤ cap`, `T ≤ cap` as before (`lines_invalid`); every other entry point evaluates with no set |
+| C1E-4 | the key `lines_source` (`vocab:lines_source`), the vocabulary `lines_source` (`instance`, `catalog`, `default`; `LinesSource`), optional on `pool_line_held`, `capped_spend` and `pool_lines_unspendable` (SC1-12) | outcome catalog additions (policy) | SCHED-C1e | the policy evaluator | on every reason that carries the lines (`stop_line`, `hard_line`), with ` lines_source=<word>` at the end of its developer text |
+| C1E-5 | `actingd-config` [5, 28] | interface revision | SCHED-C1e | — | `distribution/windows/component-interfaces.json`; [component-interfaces.md](component-interfaces.md), revision 28 |
+
+**Tests.** New: policy rows "#428 SCHED-C1e", `actingcommand-policy::lib::tests::gate_sched_c1e`
+tests 1 to 4 (`sched_c1e_t1_an_instance_set_comes_before_the_catalog_for_that_instance_only`,
+`sched_c1e_t2_a_change_ends_no_episode_and_clearing_returns_to_the_catalog`,
+`sched_c1e_t3_lines_source_names_where_the_lines_come_from`,
+`sched_c1e_t4_without_a_set_every_decision_is_as_before_but_the_new_value`), on fakes with a fixed
+clock, no sleep and no thread; host rows "#428 SCHED-C1e",
+`actingcommand-runtime-config::lib::gate_sched_c1e` tests C1 to C5
+(`sched_c1e_c1_the_key_is_read_from_the_file_and_set_and_cleared_by_an_instruction`,
+`sched_c1e_c2_each_refusal_of_the_section_check_names_the_key_and_its_problem`,
+`sched_c1e_c3_an_instruction_names_only_the_valued_pools_the_generation_gives_the_instance`,
+`sched_c1e_c4_the_restore_at_start_keeps_a_value_whose_pool_it_cannot_check`,
+`sched_c1e_c5_a_configuration_without_the_key_has_no_row_of_it`) and
+`actingcommand-runtime-host::lib::tests::gate_sched_c1e::sched_c1e_h1_an_instruction_sets_an_instances_lines_and_a_restart_keeps_them`
+(a Runtime on fakes started again on the same state root). Changed, because the contract raises
+the revision range it pins: the `actingd-config` row of `V0120` in
+`tools/actinglab-architecture/tests/component_interfaces.rs` ([5, 27] to [5, 28]), which
+`the_runtime_declares_each_v0120_interface_revision_once` and
+`the_exact_sha_build_validates_every_declared_interface` read. No other existing test changed: none
+pins the instance section's rows, and the existing tests read the capped reasons by value, so the
+added `lines_source` changes none of their assertions. No golden re-recorded: no golden file holds
+a capped reason, and the example catalog's golden hashes are asserted unchanged (test 4).
+
+**Interface.** `actingd-config` 28 (a new member of an `instances[]` entry; a file that does not
+name it keeps its revision, so [5, 28]), released together with a console whose range reaches 28.
+None of `ledger`, `runtime-client`, `package` or `runtime-outcomes`: an instruction row is no file
+or record shape (`host.config_overrides` keeps its rows), and `lines_source` is an optional value
+of existing decision reasons the record reader only spells.
+
+**Where SCHED-C1e reads the contract.**
+
+- (a) "A member that is no pool identifier": the catalog's identifier rule (1 to 128 bytes, a
+  lowercase ASCII letter or digit first, then lowercase ASCII letters, digits, `.`, `_`, `:` and
+  `-`), so a member never carries `@<alias>`; the evaluation takes a set for the catalog pool of
+  that id or for the instance's copy `<id>@<alias>`.
+- (b) The problems: another shape (a value, a pool's value, a line or a reference, an unknown
+  member, a `type` other than `fact`) is `wrong_type`; a 33rd pool, a member that is no pool
+  identifier, a constant, an offset or a fact key outside its range are `out_of_range`; a set
+  without both lines (at the line missing) and `H < S ≤ T` broken where the values tell (at the
+  hard line for `H < S`, at the trigger line for `S ≤ T` and `H < T`) are `section_check`; each with
+  the JSON pointer of what breaks the rule in the value.
+- (c) "The developer text names the pool": the refusal's JSON pointer into the value (`/<pool id>`,
+  `ConfigFailure::pointer`), as a remedy row's; no outcome value is added.
+- (d) The pools are asked only of the `scheduling.pool_lines` values a request sets, so a change of
+  another key, or of another instance's lines, never refuses a value set before.
+- (e) `lines_source` is on every reason that carries the lines: `capped_spend`,
+  `pool_lines_unspendable` and `pool_line_held` `would_cross_hard_line`, `lines_invalid` and the
+  round's holds (`capped_not_dispatchable`, `capped_limited_spent`, `capped_would_cross_hard_line`,
+  `capped_not_head` of a member the round does not try); the holds without lines
+  (`capped_cap_unknown`, `capped_round_empty`, the `capped_not_head` of a block candidate behind
+  its dispatched head) carry none. It is optional in the catalog, so a record of 0.12.53 reads as
+  before.
+- (f) A pool that writes no lines and that no set names is `default`; one whose catalog writes them
+  `catalog`; a set `instance`, whatever its lines' form.
+- (g) The console's tier: none (hidden); the UI repository adds one if it wants.
+- (h) The contract text: "(SCHED-C1, not built yet)" and "(SCHED-C1e, not built yet)" became
+  "SCHED-C1e, since 0.12.54" where this slice builds the sentence (`lines_source`, lines for one
+  instance, a change of the instance's lines), and the "later" line of "Pool lines" names
+  SCHED-C1e.
+
+**What SCHED-C1e changes live.** Nothing until a person or an agent sets an instance's lines: no
+configuration names the key. Every reason that carries a valued pool's lines gains `lines_source`
+(since 2026-11-11 one production pool is valued, on the one instance whose stop under ruling 116
+was lifted for a trial that day, so its reasons carry `catalog` from the first evaluated cycle of
+this build). With a set, that instance's pool
+spends by its lines from the next evaluated cycle; the set survives restarts and generations
+until cleared.
+
+**SCHED-C1e rollback** (to the build before it). Clear every instance's `scheduling.pool_lines`
+first (`config clear`): a build before it does not have the key, so its start drops a restored
+instruction value of it (`config_override_dropped`) and the pool takes the catalog's lines; a
+configuration file that names the member is refused by it (`actingd-config` 27, the entry denies
+unknown members), so remove the member from the file before the rollback. The ledger needs
+nothing.
+
 ### 1.300 Slice INST-5, first slice (0.12.52): the Lab's rescue module adds an emulator instance, committed as a configuration replacement (Workflow #421; the desktop program's "add account / device" button is disabled with the words "wait for the Runtime's support; edit the configuration file by hand for now", and adding an instance today means editing two places of the file and restarting; the read-only survey of 11-11 found that a first version fits today's interface revisions; the coordinator's ruling of 11-11, not Alice's words, that the new instance starts paused; coordinator work order `rd-1111/brief-inst5.md`, read on main `c0edc8b2`)
 
 [install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh root" ("Instances,
@@ -12441,6 +12532,120 @@ After: a build without it refuses the entry at its reader (`type_mismatch` at `a
 name `consumption_fact`, so its composer refuses such a `schedule.json` (`schedule_requires_missing`);
 first replace the form by a constant `amount` and let this build activate a generation without it,
 as §1.289's rollback says for SS-2h's.
+
+### 1.304 Slice IDLE-2 (0.12.54): `idle.action` `auto` takes the idle action by the gap to the next task (Workflow #386; Alice's words of 11-11: 「原本我考虑的是在调度器上线后。根据任务间隔时间自动选择是关闭模拟器还是关闭应用还是回到主页面」; the coordinator's rulings on #386, comment 6787682270, not Alice's words; the read-only survey `rd-1111/idle2-step0-result.txt`; coordinator work order `rd-1111/brief-idle2.md`)
+
+[runtime-config.md](runtime-config.md) ("The `idle` section", the `auto` paragraph and its table)
+is the contract; [emulator-control.md](emulator-control.md) ("Idle stop (IDLE-1)"),
+[player-hold.md](player-hold.md) (the fences table), [runtime-fact-store.md](runtime-fact-store.md)
+(`host.idle_state`) and [component-interfaces.md](component-interfaces.md) (`actingd-config` 28)
+follow it.
+
+**What.**
+
+- **The value `auto`** (`crates/runtime-config/src/idle.rs`, `IdleAction::Auto`, which carries the
+  two thresholds in effect, `AutoGaps`) of `idle.action`, section and per instance. With `auto` in
+  effect, the planner (`crates/runtime-host/src/idle_action.rs`, `decide` and `auto_tier`) reads,
+  at an idle check that finds the instance free on today's conditions, the gap to the instance's
+  next work in the plan (its next task or its fact-refresh reading, the earlier, the quantity
+  `idle.min_gap_ms` is compared with today) and takes one tier, directly: below
+  `idle.return_home_min_gap_ms` nothing, then a rest at home, from `idle.min_gap_ms` `close_app`,
+  from `idle.stop_emulator_min_gap_ms` or with no next work `stop_emulator`; a gap of exactly a
+  threshold takes the tier that starts there. The tier is capped by what the instance can be
+  brought back from (`IdleView::auto_cap`): `close_app` without its configured emulator start
+  (no error), a rest without a startup package (its `instance_idle_action_unsupported` once, with
+  `idle_action` `auto`, as for the other actions). `close_app` and `stop_emulator` are exactly
+  IDLE-1's actions and wakes.
+- **The rest** (`crates/runtime-host/src/host/idle.rs`, `carry_out_idle_rest`): on the idle
+  action's emulator-control claim, checked once more on the key as an action is, the return-home
+  package the game's standard pack declares for the instance's server (`ladder_return_home`, the
+  registry read of the ladder and the prerequisite chain; the game and the server of the
+  instance's policy identity, as `close_app`'s application) runs as a host run of its own
+  (`HostPackageRun::IdleReturnHome`, through `run_package_on_key`, outside the ladder), its response
+  deadline `idle.return_home_min_gap_ms` in effect (at most a task's longest). A completed run is one
+  `instance_idle_action` (`run_idle_action`, `idle_action` `return_home`); a failed one is the host
+  run's failure record (category `run_idle_action`) and nothing more; whatever its end the planner
+  makes the instance `Rested` once the key is released: no wake, no row in `host.idle_state`, no
+  second rest before work. A game that declares no return-home package for the server (or no
+  policy identity) gets one `instance_idle_action_unsupported` per start and instance (`idle_action`
+  `return_home`, `member` `maintenance`, `operation` `run_idle_action`) and no run.
+- **The switch and the start** (`idle_action.rs`, `wake`; `host/idle.rs`, `restore_idle_state`):
+  under `auto` an idle instance is switched only when `auto` no longer allows the tier it took
+  (`IdleView::auto_allows`), so a closed application restored under `auto` is not woken at once; a
+  start that cannot read what the action left restores an `auto` instance closed after the highest
+  tier it can take. `host.idle_state` holds the tier, never `auto`.
+- **The keys** `idle.return_home_min_gap_ms` (default `600000`) and `idle.stop_emulator_min_gap_ms`
+  (default `7200000`), milliseconds `60000..=86400000`, section and per instance, settable, read at
+  every idle check; both defaults are starting values to be measured. While `auto` is in effect the
+  whole-section check holds `return_home_min_gap_ms` ≤ `min_gap_ms` ≤ `stop_emulator_min_gap_ms`
+  (`section_check` on the key that breaks it). The defaults file, `config.parameters.idle` and the
+  per-instance rows carry them, and `actingd check-config` lists them.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| IDLE2-1 | `idle.action` value `auto` (section and `instance.<id>.idle.action`) | new word of a closed vocabulary | IDLE-2 | the file, an instruction | `actingd-config` 28; the default stays `close_app` |
+| IDLE2-2 | `idle.return_home_min_gap_ms`, `idle.stop_emulator_min_gap_ms` and their per-instance keys | new keys (`reader` IDLE-2, `since` 0.12.54) | IDLE-2 | the defaults file | `actingd-config` 28; `INSTANCE_ROWS` 4 → 6 |
+| IDLE2-3 | `instance_idle_action` with `idle_action` `return_home` | new value of a name-typed key | IDLE-2 | the host | no registration (`idle_action` is `name`), the key's description says it |
+| IDLE2-4 | `instance_idle_action_unsupported` with `idle_action` `auto` or `return_home`, `member` `maintenance` | new values of name-typed keys | IDLE-2 | the host | no new code (#420 S4); once per start and instance for `return_home` |
+
+**Settled where the rulings left it open.** (a) The gap counts the fact-refresh reading as
+`idle.min_gap_ms` does today, so `auto`'s `close_app` tier is exactly today's `close_app`. (b) The
+rest's game and server are the policy identity's (as `close_app`'s), so an instance without a
+startup package can rest. (c) A rest's claim that could not be queued, and a rest that met no
+declared package, count as the stretch's rest (no retry before work); one that met a pause or a
+queued request on its key is not carried out and the instance is active again. (d) The rest's
+warning reuses `instance_idle_action_unsupported` with `member` `maintenance`. (e) A rest's adb
+probe failure is `startup_package_adb_not_ready`, as for the other host package run outside the
+ladder. (f) A tier `auto` no longer allows is the startup package gone (either tier) or the emulator
+start off (`stop_emulator`).
+
+**Not built as ruled (ruling 3, the coordinator's).** "回主页门槛要大于这个包的时限，配置检查里核": the
+configuration check cannot read a package's own time limit, and the configured limit of a registry
+return-home package (`recovery_ladder` `rungs[return_home].configured_package_deadline_ms`,
+default `1800000`) is above the default `idle.return_home_min_gap_ms` (`600000`) and at `min_gap_ms`,
+so checking it would refuse `auto` with every default. Instead the rest's run takes
+`idle.return_home_min_gap_ms` as its response deadline, which keeps the ruling's aim (a rest ends
+before the next task is due). The coordinator accepted the deadline in place of the check on
+2026-11-11 (not Alice's words), so no check is owed.
+
+**Not in this slice** (ruling 5): an instance whose application is closed is not raised to a stopped
+emulator by a later, longer gap; the wake leads' defaults do not change; `idle.action`'s default
+stays `close_app`.
+
+**Interface.** `actingd-config` [5, 27] → [5, 28] (additive: a build before IDLE-2 refuses a file
+that names `auto` or either key; a file that names none keeps its revision). SCHED-C1e (§1.299,
+row SC1-12) joins the same revision in the same release with its own part. `ledger` 7 (no new
+record shape; `host.idle_state` never holds `auto`), `runtime-client` 6, `package` 8 and
+`runtime-outcomes` 1 unchanged.
+
+**What changes live.** Nothing until a configuration names `auto`: the default stays `close_app`,
+and `none`, `close_app` and `stop_emulator` behave as before. With `auto`, an instance with a gap of
+10 to 30 minutes runs its game's return-home package once and stays open, 30 minutes to 2 hours
+closes its application, longer (or no next task) stops its emulator (on an instance the Runtime
+starts); `actingctl status` and the overview show the rest as the Runtime's claim and the package's
+run, then the instance free.
+
+**Rollback** (below 0.12.54): a build before this one refuses a file that writes `auto` or either
+key (`actingd-config` 27), so set `idle.action` (section and every instance) back to `close_app`,
+`stop_emulator` or `none` and remove `return_home_min_gap_ms` and `stop_emulator_min_gap_ms` from
+the file, then roll back. `host.idle_state` holds only `close_app` or `stop_emulator`, which every
+build reads; a rested instance has no row.
+
+Tests (host gate rows "#386 IDLE-2 auto"): `gate_idle2_auto::idle2_auto_a_each_tier_is_taken_at_its_gap_and_nothing_below_the_first`,
+`idle2_auto_b_without_its_emulator_start_the_tier_stops_at_close_app_and_no_next_wake_stops_the_emulator`,
+`idle2_auto_c_a_rest_runs_once_per_stretch_and_a_later_longer_gap_closes_the_application`,
+`idle2_auto_d_a_failed_rest_is_not_retried_in_its_stretch`,
+`idle2_auto_e_no_rest_and_no_action_while_a_pause_a_player_hold_or_a_fence_holds_the_instance` and
+`idle2_auto_f_a_closed_application_restored_under_auto_is_not_woken_at_once` (the planner, manual
+clock); `gate_idle2_auto_host::idle2_auto_g_a_rest_runs_the_declared_return_home_package_once_and_records_it`,
+`idle2_auto_h_a_failed_rest_is_recorded_climbs_no_ladder_and_is_not_retried`,
+`idle2_auto_i_without_a_declared_return_home_package_no_rest_runs_and_one_warning_says_so` and
+`idle2_auto_j_a_restart_keeps_the_tier_taken_and_does_not_wake_it_at_once` (the host, a fake device,
+a neutral standard-pack root); `idle2_auto_tests::idle2_auto_c1_the_word_and_the_two_keys_parse_with_their_defaults_and_per_instance_values`,
+`idle2_auto_c2_each_range_and_each_whole_section_refusal` and
+`idle2_auto_c3_a_file_without_them_keeps_today_s_behaviour` (the configuration). No existing IDLE
+test changes. One existing test pins the revision step: `actinglab-architecture`'s
+`the_runtime_declares_each_v0120_interface_revision_once` now pins `actingd-config` [5, 28].
 
 ### 1.305 Slice NEUT-1 (0.12.54): the core's tests and fixtures name no real game (Workflow #434; Alice's hard constraint of 10-10 that the program itself is game-neutral, in code, contracts, configuration, code tables and tests, with game content only in the resource repositories; coordinator work order `rd-1111/brief-neut1.md`, read on main `ae15bb5f`)
 

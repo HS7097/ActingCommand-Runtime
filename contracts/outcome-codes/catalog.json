@@ -2305,7 +2305,7 @@
     },
     "idle_action": {
       "type": "name",
-      "description": "An instance's idle action (IDLE-1): close_app or stop_emulator, as idle.action spells it."
+      "description": "An instance's idle action (IDLE-1): close_app or stop_emulator, as idle.action spells it. IDLE-2: auto in an instance_idle_action_unsupported of the action in effect; return_home for a rest at home, the tier auto takes first (never a value of idle.action); every other record names the tier taken, never auto."
     },
     "display_problem": {
       "type": "vocab:display_problem",
@@ -2636,6 +2636,10 @@
     "least_consumption": {
       "type": "integer",
       "description": "The least consumption of one run, in whole units of the pool, among a pool's judged consumers on an instance, by their declared consumption (#428 SCHED-C1c, contracts/scheduling/README.md \"A pool its lines cannot spend\")."
+    },
+    "lines_source": {
+      "type": "vocab:lines_source",
+      "description": "Where the lines of a pool in effect on an instance come from: the instance's own instance.<instance id>.scheduling.pool_lines, the catalog's lines, or the defaults (#428 SCHED-C1e, contracts/scheduling/README.md \"Lines for one instance\")."
     }
   },
   "vocabularies": {
@@ -3869,6 +3873,21 @@
         },
         "lines_invalid": {
           "description": "The lines read at the evaluation break their rules: the stop line not above the hard line, or a line above the capacity or below 0 (stop_line, hard_line, pool_capacity)."
+        }
+      }
+    },
+    "lines_source": {
+      "description": "Where the lines of a pool in effect on an instance come from, a value of pool_line_held (on each hold that carries the lines), capped_spend and pool_lines_unspendable (#428 SCHED-C1e, contracts/scheduling/README.md \"Lines for one instance\"). An instance's set replaces the catalog's lines of the pool whole; the catalog's lines stay every other instance's.",
+      "review": "pending",
+      "tokens": {
+        "instance": {
+          "description": "The instance's own instance.<instance id>.scheduling.pool_lines names the pool: its stop line, hard line and trigger line (the capacity when the set writes none, not the catalog's)."
+        },
+        "catalog": {
+          "description": "The catalog's lines of the pool (its stop_line and hard_line, and its trigger_line when it writes one): no set of the instance names it."
+        },
+        "default": {
+          "description": "Neither the instance nor the catalog gives the pool lines: the stop line is the capacity, the hard line 0 and the trigger line the capacity."
         }
       }
     },

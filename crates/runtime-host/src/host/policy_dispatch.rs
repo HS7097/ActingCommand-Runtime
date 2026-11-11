@@ -1322,6 +1322,10 @@ impl HostShared {
         // starts.
         let no_progress_context =
             self.no_progress_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
+        // #428 SCHED-C1e (register §1.299 SC1-12): each instance's own pool lines in effect as
+        // this cycle starts.
+        let pool_lines_context =
+            self.pool_lines_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
         // Workflow #411 B41: the page each instance rests on as this cycle starts.
         let chain_handover = self.chain_handover_inputs(&facts.instances)?;
         // Workflow #386 SR-4a2: the blackout keys in effect as this cycle starts.
@@ -1379,6 +1383,7 @@ impl HostShared {
                     },
                     max_concurrent_runs: run_limits.max_concurrent_runs,
                     no_progress_enabled: &no_progress_context,
+                    pool_lines: &pool_lines_context,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {

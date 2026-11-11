@@ -3083,7 +3083,9 @@ actingcommand_contract::outcome_codes! {
         /// `idle_action` (`close_app` or `stop_emulator`), `next_occurrence_unix_ms` (the next
         /// due time the scheduler gave, when it gave one), `at_unix_ms` (the planned wake, when
         /// there is one) and, for `close_app`, `application_id`. A `device_state_observed` record
-        /// under the instance and the same report line.
+        /// under the instance and the same report line. IDLE-2: under `auto` `idle_action` is the
+        /// tier taken, never `auto`; `return_home` (with `run_idle_action`) is a rest at home,
+        /// which owes no wake.
         Taken => "instance_idle_action": info / none,
         /// Warning (Fail Loud). The instance's idle action in effect cannot work, because the
         /// instance cannot be brought back after it: `member` names what its `instances[]` entry
@@ -3091,7 +3093,9 @@ actingcommand_contract::outcome_codes! {
         /// action never runs on it; reported once per action in effect, at the first idle check
         /// that finds it (`operation` `check_idle_instances`). Keys `alias`, `idle_action`,
         /// `member`. A `device_state_observed` record under the instance and the same report
-        /// line.
+        /// line. IDLE-2: `idle_action` `return_home`, `member` `maintenance` (`operation`
+        /// `run_idle_action`): the game declares no return-home package for the instance's
+        /// server, so no rest runs; once per start and instance.
         Unsupported => "instance_idle_action_unsupported": warning / none,
     }
 }
