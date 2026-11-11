@@ -13380,6 +13380,90 @@ words).** The differences (a) to (i) above are accepted as written. On the quest
 
 **Rollback of this slice.** Nothing to roll back: text only.
 
+### 1.319 Slice NAV-L1 (0.12.55): a phased route run as a layer enters at the stage its entry page starts (Workflow #428; a production run of 11-11 failed as a layer where the offline regression of the same package was green; the coordinator's ruling of 11-11, not Alice's words: one rule for every run of a phased route; coordinator work order `rd-1111/brief-nav-l1.md`, read on main `385bb500`)
+
+[README.md](README.md) ("Entry page sets", the sentence on the stage a phased route enters at)
+is the contract. 1.319 is the coordinator's number for this slice, appended after 1.309 on main
+`385bb500`; the numbers between belong to other slices. No persisted ledger shape, wire shape,
+configuration key, outcome code, vocabulary or package member is new or changed.
+
+**What happened.** A navigation package that other packages name as their prerequisite package
+was changed from one stage to two: a first stage that receives finished items (three operations,
+from three pages; its target the panel page with a free slot) and a second stage that opens a list
+(one operation from the panel page with a free slot, one from the panel page with every slot busy).
+Its entry page set holds three panel pages. Run as a prerequisite layer on the panel page with
+every slot busy, it failed at once with `contained_task_state_invalid`: the dependent package's
+entry preflight recorded `entry_recovery_failed` for it and ended `fail_closed`. That page starts
+an operation of the second stage only; the first stage has no operation from it and does not list
+it as a target. The package's offline regression on the same scene was green, because the offline
+simulation runs a package as an ordinary run, which enters at the stage its matched entry page
+starts (Workflow #373 NAV-3b), here the second.
+
+**Cause** (confirmed in the code on main `385bb500`). `run_with_collector`
+(`crates/execution-kernel/src/contained_task.rs`) took the run's required entry only when the run
+was `ContainedTaskEntry::Ordinary` and no declared operation's run, and called
+`RunStateMachine::start_at_phase` only with it. A layer (`run_as_prerequisite`,
+`run_entry_recovery`, `run_as_host_layer`, each entered as `ContainedTaskEntry::BoundRecovery`;
+the host passes nothing else) therefore always started at the first stage, whatever page it first
+observed. On a page from which the first stage has no operation, `RunStateMachine::next_directive`
+(`crates/execution-kernel/src/run.rs`) found none (`run_decision_invalid`, "no operation can
+continue from page"), and `candidate_directive` (`contained_task/candidates.rs`) turned that, on a
+page that is no error page, into the bare `contained_task_state_invalid`. What value that code
+should carry is another slice's.
+
+**The rule.** When the first page a run of a phased route observes is one of the package's entry
+pages, the run enters at the stage that page starts, whether it is an ordinary run or a layer the
+host runs for another package's entry: a prerequisite package, a navigation edge, a shared
+interrupt's handler, the configured return-home package (`run_as_prerequisite`), a request's own
+entry recovery package (`run_entry_recovery`), a step of a navigation recovery chain
+(`run_as_host_layer`). A layer whose first page is no entry page of the package starts at the
+first stage, as before. Nothing else of a layer changes: it still accepts any page of the package
+as its first page, waits for one as long as before (the page wait, not the entry wait of an
+ordinary run), and keeps its limits and codes; the host's own entry recognition before and after
+it is unchanged. In the code the stage entry reads the package's entry pages and the stage each
+starts (`RequiredEntryPages::phase_of`) for every run but a declared operation's, while the entry
+wait and the entry end below keep the required entry of an ordinary run (`run_with_collector`). An
+ordinary run, a declared operation's run, a route without stages and a phased route with a single
+entry page (which starts the first stage) decide byte for byte as before.
+
+**The entry end (#411 B20).** `end_on_entry_page` is still called only with an ordinary run's
+required entry. A layer has no gap there: a package whose stage lists `end_pages` is refused as
+every kind of layer before it runs (`scheduling_outcome_incompatibility`, reason
+`phase_end_pages`, read by `is_prerequisite_compatible` and `is_entry_recovery_compatible`), so no
+stage of a layer has an end page. Nothing is built for it.
+
+**What a package author can rely on after deploy.** A phased package run as a layer enters where
+its own run, and its offline simulation, enter: on an entry page of a later stage it starts at that
+stage, so a stage need not hold a move from every entry page, and an offline regression of the
+package from an entry page shows the operations its layer runs from that page. A layer on a page of
+the package outside its entry page set still starts at the first stage, which needs a move from
+that page.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): no record,
+member, code, key, vocabulary or package member.
+
+**Rollback** (below 0.12.55). Nothing is persisted: an earlier build starts every layer at the
+first stage again, and a package whose first stage has no move from an entry page of a later stage
+fails there as a layer with `contained_task_state_invalid`, as in the incident.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NAVL1-1 | the stage a phased layer enters at (`run_with_collector`, `RequiredEntryPages::phase_of`) | rule (no shape; corrects [README.md](README.md), "Entry page sets") | NAV-L1 | — | `since` 0.12.55; a layer off its entry pages starts at the first stage; a declared operation's run is unchanged |
+
+Tests (exec gate row "#428 NAV-L1", `gate_428_nav_l1`; synthetic packages on the kernel's scripted
+runtime; every layer case runs through `run_as_prerequisite`, `run_entry_recovery` and
+`run_as_host_layer`; a two-stage route whose entry page set holds a panel page that starts the
+first stage and one that starts the second):
+`nav_l1_t1_a_layer_enters_at_the_stage_its_first_entry_page_starts` (on the second stage's entry
+page the layer runs that stage's one operation and ends on its target, with no step of the first
+stage; on the first stage's entry page it runs the first stage, then the second);
+`nav_l1_t2_an_ordinary_run_and_a_layer_run_the_same_operations_from_each_entry_page` (from each
+entry page the ordinary run and each layer run the same operations of the same stages in the same
+order, and end on the same page after as many steps); `nav_l1_t3_a_layer_off_the_entry_pages_starts_at_the_first_stage`
+(on a page of the package outside the set the layer starts at the first stage, as before); and
+`nav_l1_t4_a_route_without_stages_and_a_single_entry_page_run_as_a_layer_as_before`. No existing
+test changed: main had no test that ran a phased route as a layer.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

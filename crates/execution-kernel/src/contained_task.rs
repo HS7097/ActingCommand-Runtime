@@ -186,6 +186,9 @@ mod gate_390_out2;
 // #411 B5/B14/B20/B24, slice BT-B5 (exec keys 120 to 124): stage end pages and entry pages.
 #[cfg(test)]
 mod gate_411_bt_b5;
+// Workflow #428 NAV-L1 (register §1.319): a phased layer enters at its entry page's stage.
+#[cfg(test)]
+mod gate_428_nav_l1;
 // Workflow #396 REC-6.
 #[cfg(test)]
 mod value_test_tests;
@@ -5046,13 +5049,14 @@ impl PreparedContainedTask {
         let mut machine = RunStateMachine::new(config, 0)
             .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         // Workflow #373 NAV-3b: a phased route enters at the stage its matched entry page starts.
+        // Workflow #428 NAV-L1: so does a layer the host runs for another package's entry (entry
+        // `BoundRecovery`) whose first observed page is one of the package's entry pages; on any
+        // other page it starts at the first stage. It waits for its first page as before.
+        let stage_entry = self.entry_page.as_ref().filter(|_| declared.is_none());
         if self.program.phases.is_some()
-            && let Some(phase) =
-                required_entry
-                    .zip(observation.as_ref())
-                    .and_then(|(required_entry, observed)| {
-                        required_entry.phase_of(&observed.page_label)
-                    })
+            && let Some(phase) = stage_entry
+                .zip(observation.as_ref())
+                .and_then(|(entry_pages, observed)| entry_pages.phase_of(&observed.page_label))
         {
             machine.start_at_phase(phase).map_err(|_| {
                 ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())

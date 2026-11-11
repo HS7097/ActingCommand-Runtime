@@ -2880,3 +2880,14 @@ tests = [
     "actingcommand-ppocr-onnx-json-provider::lib::gate_428_vis_load1::vis_load1_inference_past_the_timeout_still_fails_with_its_timeout",
 ]
 incident = ["#428 VIS-LOAD-1"]
+
+# Workflow #428 NAV-L1 (0.12.55; register §1.319; brief rd-1111/brief-nav-l1.md; contracts/README.md, "Entry page sets"): a phased route run as a layer of another package's entry (run_as_prerequisite, run_entry_recovery, run_as_host_layer, entry BoundRecovery) whose first observed page is one of its entry pages enters at the stage that page starts, as an ordinary run does (NAV-3b): first observing the entry page of the second stage it runs that stage's operation alone and ends on its target, first observing that of the first stage it runs the first stage and then the second; an ordinary run from each entry page runs the same operations of the same stages in the same order, with the same end, as each layer; a layer whose first page is a page of the package but no entry page starts at the first stage, and a route without stages and a phased route with a single entry page run as a layer as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_nav_l1::nav_l1_t1_a_layer_enters_at_the_stage_its_first_entry_page_starts",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_nav_l1::nav_l1_t2_an_ordinary_run_and_a_layer_run_the_same_operations_from_each_entry_page",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_nav_l1::nav_l1_t3_a_layer_off_the_entry_pages_starts_at_the_first_stage",
+    "actingcommand-execution-kernel::lib::contained_task::gate_428_nav_l1::nav_l1_t4_a_route_without_stages_and_a_single_entry_page_run_as_a_layer_as_before",
+]
+incident = ["#428 NAV-L1"]
