@@ -802,6 +802,16 @@ tests = [
     "actingcommand-policy::lib::tests::gate_ss4::ss4_t7b_a_refresh_that_publishes_the_same_value_does_not_release_the_guard",
 ]
 incident = ["#386 SS-4"]
+# #428 SS-4b (the coordinator's ruling of 11-11, rd-1111 brief-ss4b-guard-cause tests 1 to 4; contracts/scheduling/README.md, "No-progress guard"; register §1.310; since 0.12.55): a guard holds its pair only while the pair is due for the cause it served, the trigger read part by part as at capture and as it is true now; a chain head armed on its first completion time is dispatched when its second completion time comes (and the new dispatch arms a guard on that time) and at its next clock slot (arming none), is not due with neither, and is held when the first time is read again with the same time; a pair due on a stock reading, alone or beside a clock in an all, is held at every later evaluation and occurrence; a pair due for a subset of its basis is held, one due for a key outside it is released though another task takes the instance, and the release stays when the served cause is due again, where the guard as armed would hold; with the guard off or no guard the evaluation equals evaluate_with_instance_holds's byte for byte
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss4b::ss4b_t1_the_incident_shape_runs_at_a_new_completion_time_and_at_the_next_clock_slot",
+    "actingcommand-policy::lib::tests::gate_ss4b::ss4b_t2_a_run_without_progress_is_still_held_beside_a_due_clock",
+    "actingcommand-policy::lib::tests::gate_ss4b::ss4b_t3_a_subset_of_the_basis_holds_and_a_key_outside_it_releases_for_good",
+    "actingcommand-policy::lib::tests::gate_ss4b::ss4b_t4_with_the_guard_off_or_no_guard_the_evaluation_is_as_before",
+]
+incident = ["#428 SS-4b"]
 # Workflow #386 SR-3 (frozen scheduling model v1.4.2 §2.4 items 3-4, rows T10 and T11; M-PKG v1.1 §3.4, §5.2): the first preparation that refuses a task package with a suspend code suspends it by its package_id, with its content hash; every task bound to it, on every instance, is deferred with pack_admission_suspended and not prepared again, while another task package dispatches; a changed content hash or another build lifts it and the package is tried once, and the same refusal suspends it again
 [[gate]]
 key = "48"

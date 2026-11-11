@@ -81,6 +81,7 @@ pub use fact_refresh::{
     FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, FactRefreshSettings, IdleClosed,
     InstanceHold, fact_refresh_task,
 };
+use no_progress::Decision as NoProgressDecision;
 pub use no_progress::{
     BasisReading, MAX_NO_PROGRESS_BASIS_KEYS, NoProgressBasis, NoProgressGuard, NoProgressGuards,
     NoProgressMemory,
@@ -1920,24 +1921,36 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                                     })
                                 })
                                 .transpose()?;
+                            let cooling = cooldown_until.is_some_and(|until| time.unix_ms < until);
                             // SS-4: a pair whose latest successful run made no progress waits for a
                             // reading of another value, past its cooldown and before placement;
-                            // the Runtime's own reruns and requests are never held.
-                            let no_progress_hold = if immediate_retry
+                            // the Runtime's own reruns and requests are never held. SS-4b
+                            // (register §1.310): only while it is due for the cause its guard
+                            // served, its trigger read as it is true now; the evaluation that
+                            // would hold it, past the cooldown, releases the guard otherwise.
+                            let no_progress_hold = if cooling
+                                || immediate_retry
                                 || remedy_override.is_some()
                                 || owed_rerun.is_some()
                             {
                                 None
                             } else {
                                 no_progress.hold(
-                                    &task.id,
+                                    task,
                                     &instance.instance_id,
-                                    last_result,
-                                    facts,
+                                    &NoProgressDecision {
+                                        task_state: last_result,
+                                        scope: &decision_scope,
+                                        facts,
+                                        pool_specs: &pool_specs,
+                                        pool_values: &pool_values,
+                                        time,
+                                        timeline_events: &timeline_events,
+                                    },
                                     catalog.catalog_hash(),
-                                )
+                                )?
                             };
-                            if cooldown_until.is_some_and(|until| time.unix_ms < until) {
+                            if cooling {
                                 task_work.state = SchedulingDecisionState::Deferred;
                                 task_work.reasons.push(reason(
                                     PolicyCode::TaskCooldownActive,

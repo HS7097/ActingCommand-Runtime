@@ -29,12 +29,21 @@
 //!   with no reading now (a reset cleared it) releases nothing.
 //! - **Held.** A pair whose guard is armed, whose latest run is the guarded dispatch and
 //!   succeeded, and whose catalog generation is the one the dispatch pinned is deferred with
-//!   `policy_no_progress` and no wake ([`NoProgressGuards`]). A run that failed or was cancelled
-//!   is never held: failures keep their retry and escalation path.
+//!   `policy_no_progress` and no wake ([`NoProgressGuards`]), while it is due for the cause the
+//!   guard served (SS-4b, register §1.310): the basis keys of its trigger as it is true now, read
+//!   part by part as at capture with its reserve gate's, are all keys of the guard's basis. A
+//!   run that failed or was cancelled is never held: failures keep their retry and escalation
+//!   path.
+//! - **Released by another cause** (SS-4b). A pair that would be held, whose trigger is true now
+//!   by no basis key (a clock, a timeline, an outcome or a dependency alone) or by a key the
+//!   guard's basis does not hold, is due for another cause: it is not held, and the evaluation
+//!   releases its guard; the Runtime forgets it ([`NoProgressMemory::forget_released`]), so it
+//!   stays released as a reading of another value releases it.
 //!
 //! Memory only: nothing here enters a snapshot, a decision identity, a ledger record or a state
 //! file, and a start begins with none.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::outcome::{LIST_MAX_ITEMS, Outcome, Record};
@@ -96,10 +105,13 @@ pub struct NoProgressGuard {
 
 /// SS-4: the armed guards one evaluation applies, by (task id, instance alias). The Runtime passes
 /// them when it evaluates a cycle ([`super::evaluate_with_no_progress`]); every other entry point
-/// has none, and with none the evaluation is the one before SS-4.
+/// has none, and with none the evaluation is the one before SS-4. SS-4b: the evaluation notes
+/// here each pair whose guard it released because the pair was due for another cause, for the
+/// Runtime's memory ([`NoProgressMemory::forget_released`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NoProgressGuards {
     guards: BTreeMap<(String, String), NoProgressGuard>,
+    released: RefCell<BTreeSet<(String, String)>>,
 }
 
 impl NoProgressGuards {
@@ -119,37 +131,69 @@ impl NoProgressGuards {
         self.guards.len()
     }
 
-    /// The reason `task_id` on `instance_id` is held, when its guard holds it: the guard's
-    /// catalog generation is `catalog_hash`, the pair's latest run (`last_result`, its own last
-    /// result, which no reset clears) is the guarded dispatch and succeeded, and no basis key of
-    /// `facts` (the facts as the resets leave them) reads a value other than at admission.
+    /// The reason `task` on `instance_id` is held, when its guard holds it: the guard's catalog
+    /// generation is `catalog_hash`, the pair's latest run (`decision.task_state`, its own last
+    /// result, which no reset clears) is the guarded dispatch and succeeded, no basis key of
+    /// `decision.facts` (the facts as the resets leave them) reads a value other than at
+    /// admission, and (SS-4b) the pair is due for the cause the guard served (`serves`). A pair
+    /// due for another cause is not held, and its guard is noted as released.
     pub(super) fn hold(
         &self,
-        task_id: &str,
+        task: &TaskSpec,
         instance_id: &str,
-        last_result: Option<&TaskRuntimeSnapshot>,
-        facts: &EvaluationFacts,
+        decision: &Decision<'_>,
         catalog_hash: &str,
-    ) -> Option<DecisionReason> {
+    ) -> PolicyEvaluationResult<Option<DecisionReason>> {
         if self.guards.is_empty() {
-            return None;
+            return Ok(None);
         }
-        let guard = self
-            .guards
-            .get(&(task_id.to_owned(), instance_id.to_owned()))?;
-        let guarded_run = last_result.is_some_and(|state| {
+        let pair = (task.id.clone(), instance_id.to_owned());
+        let Some(guard) = self.guards.get(&pair) else {
+            return Ok(None);
+        };
+        let guarded_run = decision.task_state.is_some_and(|state| {
             state.terminal_state == Some(TaskTerminalState::Succeeded)
                 && state.last_dispatched_unix_ms == Some(guard.dispatched_at_unix_ms)
         });
         if guard.basis.catalog_hash != catalog_hash
             || !guarded_run
             || guard.basis.readings.is_empty()
-            || changed(&guard.basis.readings, facts)
+            || changed(&guard.basis.readings, decision.facts)
         {
-            return None;
+            return Ok(None);
         }
-        Some(no_progress_reason(guard))
+        if !serves(guard, task, decision)? {
+            self.released.borrow_mut().insert(pair);
+            return Ok(None);
+        }
+        Ok(Some(no_progress_reason(guard)))
     }
+}
+
+/// SS-4b (register §1.310; `contracts/scheduling/README.md`, "No-progress guard"): whether the
+/// pair `decision` reads is due for the cause `guard` served. Its trigger is read part by part as
+/// at capture (`basis_keys`, the reserve gate's keys beside them), as it is true now: the pair
+/// is due for the served cause when that gives at least one key and every key it gives is a key
+/// of the guard's basis. No key (a trigger true by a clock, a timeline, an outcome or a
+/// dependency alone), or a key the basis does not hold, is another cause.
+fn serves(
+    guard: &NoProgressGuard,
+    task: &TaskSpec,
+    decision: &Decision<'_>,
+) -> PolicyEvaluationResult<bool> {
+    // The hold is reached only while the trigger is true as this same reading reads it; a trigger
+    // the reading did not find true would be held as before.
+    let Some(keys) = basis_keys(decision, task)? else {
+        return Ok(true);
+    };
+    Ok(!keys.is_empty()
+        && keys.iter().all(|(scope, fact_key)| {
+            guard
+                .basis
+                .readings
+                .iter()
+                .any(|reading| reading.scope == *scope && reading.fact_key == *fact_key)
+        }))
 }
 
 /// SS-4: the Runtime's memory of the guard, per (task id, instance alias): the basis of the
@@ -211,14 +255,15 @@ impl NoProgressMemory {
             else {
                 continue;
             };
+            let scope = ScopeSelector::Instance {
+                instance_id: intent.instance_id.clone(),
+            };
             let context = Decision {
                 // Workflow #411 P19: the task's own last result, as the evaluation reads it.
                 task_state: facts.tasks.iter().find(|state| {
                     state.task_id == intent.task_id && state.instance_id == intent.instance_id
                 }),
-                scope: ScopeSelector::Instance {
-                    instance_id: intent.instance_id.clone(),
-                },
+                scope: &scope,
                 facts: &effective,
                 pool_specs: &pool_specs,
                 pool_values: &pool_values,
@@ -311,10 +356,24 @@ impl NoProgressMemory {
         Ok(())
     }
 
+    /// SS-4b (register §1.310): forgets every guard the evaluation given `guards` (as
+    /// [`Self::guards`] gave them) released because its pair was due for a cause the guard did
+    /// not serve. Like a reading of another value, that releases it for good: a later evaluation
+    /// at which only the served cause is due does not hold the pair by it again, and the pair's
+    /// next admitted dispatch arms a new guard. A guard armed since `guards` were taken is kept.
+    pub fn forget_released(&mut self, guards: &NoProgressGuards) {
+        for pair in guards.released.borrow().iter() {
+            if self.armed.get(pair) == guards.guards.get(pair) {
+                self.armed.remove(pair);
+            }
+        }
+    }
+
     /// The armed guards, for the evaluation.
     pub fn guards(&self) -> NoProgressGuards {
         NoProgressGuards {
             guards: self.armed.clone(),
+            released: RefCell::default(),
         }
     }
 
@@ -350,15 +409,17 @@ fn current_reading<'a>(
 }
 
 /// SS-4: what the evaluation that chose a dispatch read its trigger with, to evaluate each part
-/// of it again exactly as it did.
-struct Decision<'a> {
-    task_state: Option<&'a TaskRuntimeSnapshot>,
-    scope: ScopeSelector,
-    facts: &'a EvaluationFacts,
-    pool_specs: &'a BTreeMap<&'a str, &'a PoolSpec>,
-    pool_values: &'a BTreeMap<&'a str, PoolReading<'a>>,
-    time: EvaluationTime,
-    timeline_events: &'a BTreeMap<&'a str, &'a TimelineEvent>,
+/// of it again exactly as it did. SS-4b: also what the evaluation that would hold a pair reads its
+/// trigger with (`NoProgressGuards::hold`): the pair's own last result, its instance's scope,
+/// the facts as the resets leave them, the pools and their values, the time and the timeline.
+pub(super) struct Decision<'a> {
+    pub(super) task_state: Option<&'a TaskRuntimeSnapshot>,
+    pub(super) scope: &'a ScopeSelector,
+    pub(super) facts: &'a EvaluationFacts,
+    pub(super) pool_specs: &'a BTreeMap<&'a str, &'a PoolSpec>,
+    pub(super) pool_values: &'a BTreeMap<&'a str, PoolReading<'a>>,
+    pub(super) time: EvaluationTime,
+    pub(super) timeline_events: &'a BTreeMap<&'a str, &'a TimelineEvent>,
 }
 
 impl Decision<'_> {
@@ -367,7 +428,7 @@ impl Decision<'_> {
         Ok(evaluate_predicate(
             predicate,
             self.task_state,
-            &self.scope,
+            self.scope,
             self.facts,
             self.pool_specs,
             self.pool_values,
