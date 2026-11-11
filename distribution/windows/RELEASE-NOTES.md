@@ -137,8 +137,8 @@ and artifact names bind the complete source SHA.
     `host.idle_state` 之后）。只有写它的那次启动正是上一次完整结算的启动才留（`host.idle_state` 的锚点规则，`capped_episodes.rs` 279–283）；读不回、不合规矩、过期的整份丢，
     实例没登记或池在现行目录里没有估值块的只丢那一回合，各记一条 Warning `capped_state_failed`（`operation` `load_capped_episodes`；事实库拒收一次记录是
     `store_capped_episodes`，回合留在内存里，下次变化再记），启动照常。新一代目录不再一律结束回合：这个池在这台上的消费者（各自的身份、每次消耗 ⌈C/1000⌉、是否限量）没变，
-    回合就接着走；容量、读数或线所读的事实给不出值时，进行中的回合等着（候选以 `pool_line_held` `capped_cap_unknown` 挂住），值回来再走或照规矩结束。生产上还没有池有估值，
-    所以眼下不会有回合，也不会记这条事实。
+    回合就接着走；容量、读数或线所读的事实给不出值时，进行中的回合等着（候选以 `pool_line_held` `capped_cap_unknown` 挂住），值回来再走或照规矩结束。生产上自 11-11 起
+    有一台实例的一个池有估值（v0.12.52 上线后放置的排程文件），本版上线后那一台的回合就记成这条事实；别的实例没有池有估值，没有回合。
   - **部署时要核一处**：`ledger_observer.tag.workbench_patterns` 的默认列表多了 `host.capped_episodes`（`crates/ledger/src/global/capture.rs` 45–61，
     `distribution/windows/actingd.defaults.json` 431）。**配置文件自己写了这个列表的，要把这一项加上**，否则这条事实不带标签，启动时找不到，回合照旧活不过重启（不报错，和
     SCHED-C1d 之前一样）。看法：`actingctl status --config` 里 `config.parameters.ledger_observer` 的 `ledger_observer.tag.workbench_patterns` 那一行，`source` 是 `default`、
@@ -257,7 +257,9 @@ and artifact names bind the complete source SHA.
 
 运行上的变化：
 
-- 部署本身不改变调度的决定：还没有池有估值、没有排程文件写 `trigger_line`，现有的包运行结果不变；`config.subsystems` 多一行，默认标签列表多一项。
+- 部署本身不改变调度的决定：没有排程文件写 `trigger_line`，不写它的池照旧到上限才开始回合，现有的包运行结果不变；`config.subsystems` 多一行，默认标签列表多一项。
+  生产上已有估值的那一个池（11-11 起，一台实例）多的是：回合从此记成 `host.capped_episodes`、活过重启；新一代目录里它的消费者没变时回合接着走；读数给不出值时
+  回合等着，不再结束。
 - actinglab 的 66 条自带命令不再略过不认识的参数和词，靠被略过的参数的脚本会明确报错；`serve --stdio`、MCP 和我们自己的调用方都不受影响。
 - 手动发起的运行可以用 `actinglab task stop` 停下，Runtime 自己复位；调度运行和 Runtime 自己的运行照旧靠暂停来停。
 - 生效一代有固定值时，总览的目录块说明每个值是谁写的；`standard-pack check` 把随链的规则单列，「没声明收益」的告警变少。
