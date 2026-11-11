@@ -11235,6 +11235,18 @@ changes): `gate_421_inst5::inst5_the_added_instance_is_registered_and_paused_aft
 `config replace` and `config restore` run the same code as before through the shared commit
 (`rescue::commit`), with no `instance_add` input and the same steps, members and outcomes.
 
+**Fix round 1** (coordinator brief `rd-1111/brief-inst5-fix1.md`; main `d70edfb9` merged in). The
+outcome guard's G3 refuses a `json!` key named `code`, `reason`, `category`, `operation`, `stage`
+or `boundary`, or ending `_code`, `_reason`, `_operation` or `_stage`; the result of the step
+`pause_added` (`reason`, six places) and `added` (`pause_reason`) were such keys. Both are now
+serde records whose reason is the name type `SchedulingPauseReason`, as the hold's records keep a
+reason (`install::hold`: `PauseRecord`, `HoldReport`, `ReleaseEvidence`): `rescue::PauseAddedResult`
+and `install::instance_add::AddedRecord`, made JSON by `install::hold::record_value` (now
+`pub(crate)`); `Added` carries the reason it records. Every member keeps its name, place and value
+(the step's `alias`, `reason`, `set`, `runtime`, `registered`, `already_paused`, `drained`;
+`added.pause_reason` and the journal input's), so no reader, test or text changes, and the guard's
+allow list is not touched.
+
 ### 5.1 Capacity of `config.parameters`
 
 `config.parameters` is one runtime fact whose `record_list` holds at most 256 rows (M387 §5.9,

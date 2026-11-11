@@ -147,8 +147,9 @@ struct PausesRecord<'a> {
     instances: Vec<PauseRecord<'a>>,
 }
 
-/// A record as JSON: these records hold only names and numbers, which always serialize.
-fn record_value(record: impl Serialize) -> Value {
+/// A record as JSON: these records hold only names and numbers, which always serialize (Workflow
+/// #421 INST-5 fix 1: and those of `instance add`).
+pub(crate) fn record_value(record: impl Serialize) -> Value {
     serde_json::to_value(record).unwrap_or(Value::Null)
 }
 

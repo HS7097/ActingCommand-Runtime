@@ -47,6 +47,7 @@ use actingcommand_contract::{
     BundleIndex, IdentifierIssuer, STANDARD_PACK_BUNDLE_FILE, SchedulingPauseReason,
     validate_instance_alias,
 };
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -156,28 +157,44 @@ impl Asked {
     }
 }
 
-/// What the command added: what was asked, the minted id and the alias whose policy row gave the
-/// host and the capabilities.
+/// What the command added: what was asked, the minted id, the alias whose policy row gave the
+/// host and the capabilities, and the reason the instance is paused with ([`PAUSE_REASON`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Added {
     pub(crate) asked: Asked,
     pub(crate) instance_id: String,
     pub(crate) capabilities_from: String,
+    pub(crate) pause_reason: SchedulingPauseReason,
+}
+
+/// Workflow #421 INST-5 fix 1: [`Added`] as a record, its pause reason the name type as the hold's
+/// records keep a reason (`super::hold`).
+#[derive(Serialize)]
+struct AddedRecord<'a> {
+    alias: &'a str,
+    instance_id: &'a str,
+    game: &'a str,
+    server: &'a str,
+    instance_index: u16,
+    touch_backend: &'a str,
+    capture_backend: &'a str,
+    capabilities_from: &'a str,
+    pause_reason: &'a SchedulingPauseReason,
 }
 
 impl Added {
     /// As the journal (`inputs.instance_add`) and the answer (`added`) record it.
     pub(crate) fn value(&self) -> Value {
-        json!({
-            "alias": self.asked.alias,
-            "instance_id": self.instance_id,
-            "game": self.asked.game,
-            "server": self.asked.server,
-            "instance_index": self.asked.mumu_index,
-            "touch_backend": self.asked.touch_backend,
-            "capture_backend": self.asked.capture_backend,
-            "capabilities_from": self.capabilities_from,
-            "pause_reason": PAUSE_REASON,
+        super::hold::record_value(AddedRecord {
+            alias: &self.asked.alias,
+            instance_id: &self.instance_id,
+            game: &self.asked.game,
+            server: &self.asked.server,
+            instance_index: self.asked.mumu_index,
+            touch_backend: &self.asked.touch_backend,
+            capture_backend: &self.asked.capture_backend,
+            capabilities_from: &self.capabilities_from,
+            pause_reason: &self.pause_reason,
         })
     }
 }
@@ -268,6 +285,7 @@ pub(crate) fn compose(
         asked: asked.clone(),
         instance_id,
         capabilities_from: capabilities_from.to_owned(),
+        pause_reason: pause_reason()?,
     };
     let entry = json!({
         "alias": asked.alias,

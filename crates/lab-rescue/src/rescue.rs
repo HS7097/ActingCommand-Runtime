@@ -52,13 +52,14 @@ use crate::codes::{
 };
 use crate::install::deploy::{self, HoldStart};
 use crate::install::files;
-use crate::install::hold::{HoldInputs, OwnedHold};
+use crate::install::hold::{self, HoldInputs, OwnedHold};
 use crate::install::host::{Host, SystemHost};
 use crate::install::journal::{self, Operation, StepKind};
 use crate::install::lock::WriterLock;
 use crate::install::manifest::Half;
 use crate::install::plan::{self, Loaded};
 use crate::install::programs::{self, Deadline};
+use crate::install::runtime::Drained;
 use crate::install::state::{KindLocation, Paths};
 use crate::install::{self, Answer, Face, config_swap, instance_add, place};
 use crate::runtime_start::{self, Mode};
@@ -66,6 +67,7 @@ use actingcommand_contract::SchedulingPauseReason;
 use actingcommand_contract::outcome::{Category, CauseRelation, Outcome, OutcomeEnvelope};
 use actingcommand_lab_ops::initiator::Initiator;
 use actingcommand_lab_ops::locate::Location;
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -1447,6 +1449,45 @@ struct PausedAdded {
     refusal: Option<Outcome>,
 }
 
+/// Workflow #421 INST-5 fix 1: the result of the step `pause_added`: the alias, the reason the
+/// instance was paused with (or already shows), the name type as the hold's records keep a reason
+/// (`install::hold`), whether this step set the pause, and what kept it from being set or what its
+/// drain did.
+#[derive(Serialize)]
+struct PauseAddedResult<'a> {
+    alias: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'a SchedulingPauseReason>,
+    set: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registered: Option<bool>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    already_paused: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    drained: Option<Drained>,
+}
+
+impl<'a> PauseAddedResult<'a> {
+    /// The pause of `alias` not set, with `reason` when it is known.
+    fn unset(alias: &'a str, reason: Option<&'a SchedulingPauseReason>) -> Self {
+        Self {
+            alias,
+            reason,
+            set: false,
+            runtime: None,
+            registered: None,
+            already_paused: false,
+            drained: None,
+        }
+    }
+
+    fn value(&self) -> Value {
+        hold::record_value(self)
+    }
+}
+
 /// Workflow #421 INST-5 (the coordinator's ruling of 11-11): the added instance paused with its
 /// own reason (`instance.added`) on the Runtime that started with it, drained as every pause is,
 /// before the hold is handed back; one already paused (by anyone) is left as it is. Not
@@ -1471,35 +1512,43 @@ fn pause_added(context: &Context<'_>, loaded: &Loaded, alias: &str) -> PausedAdd
     let reason = match instance_add::pause_reason() {
         Ok(reason) => reason,
         Err(cause) => {
-            return failed(Some(cause), json!({"alias": alias, "set": false}));
+            return failed(Some(cause), PauseAddedResult::unset(alias, None).value());
         }
     };
+    let unset = PauseAddedResult::unset(alias, Some(&reason));
     let runtime = context.host.runtime();
     let seen = match runtime.status(&loaded.state_root) {
         Ok(Some(seen)) => seen,
         Ok(None) => {
-            return failed(
-                None,
-                json!({"alias": alias, "reason": reason, "set": false, "runtime": "not_running"}),
-            );
+            let result = PauseAddedResult {
+                runtime: Some("not_running"),
+                ..unset
+            };
+            return failed(None, result.value());
         }
         Err(cause) => {
-            return failed(
-                Some(cause),
-                json!({"alias": alias, "reason": reason, "set": false, "runtime": "status_unreadable"}),
-            );
+            let result = PauseAddedResult {
+                runtime: Some("status_unreadable"),
+                ..unset
+            };
+            return failed(Some(cause), result.value());
         }
     };
     let Some(instance) = seen.instance(alias) else {
-        return failed(
-            None,
-            json!({"alias": alias, "reason": reason, "set": false, "registered": false}),
-        );
+        let result = PauseAddedResult {
+            registered: Some(false),
+            ..unset
+        };
+        return failed(None, result.value());
     };
     if let Some(pause) = &instance.pause {
+        let result = PauseAddedResult {
+            already_paused: true,
+            ..PauseAddedResult::unset(alias, Some(&pause.reason))
+        };
         return PausedAdded {
             outcome: install::done(ADD).alias(alias.to_owned()),
-            result: json!({"alias": alias, "reason": pause.reason, "set": false, "already_paused": true}),
+            result: result.value(),
             refusal: None,
         };
     }
@@ -1509,16 +1558,19 @@ fn pause_added(context: &Context<'_>, loaded: &Loaded, alias: &str) -> PausedAdd
         &reason,
         loaded.settings.stop_drain_timeout_ms,
     ) {
-        Ok(drained) => PausedAdded {
-            outcome: install::done(ADD).alias(alias.to_owned()),
-            result: json!({"alias": alias, "reason": reason, "set": true,
-                "drained": {"finished": drained.finished, "cancelled": drained.cancelled}}),
-            refusal: None,
-        },
-        Err(cause) => failed(
-            Some(cause),
-            json!({"alias": alias, "reason": reason, "set": false}),
-        ),
+        Ok(drained) => {
+            let result = PauseAddedResult {
+                set: true,
+                drained: Some(drained),
+                ..unset
+            };
+            PausedAdded {
+                outcome: install::done(ADD).alias(alias.to_owned()),
+                result: result.value(),
+                refusal: None,
+            }
+        }
+        Err(cause) => failed(Some(cause), unset.value()),
     }
 }
 
