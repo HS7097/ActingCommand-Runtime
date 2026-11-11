@@ -67,6 +67,7 @@
 use crate::budget::Budget;
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::front::Connection;
 use crate::instance_selector::{self, SelectorMiss};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, RawSource};
@@ -79,6 +80,7 @@ use actingcommand_contract::{
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde_json::{Map, Value, json};
+use std::convert::identity;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Read;
@@ -1311,10 +1313,15 @@ pub fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, Outcome> {
 /// stdout (Workflow #378 A5): the overview with `runtime_overview_reported`, or `{outcome}` with
 /// the failure (a flag failure's developer line adds the usage) and exit 1.
 pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
+    dispatch_on(arguments, Connection::per_call())
+}
+
+/// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
+pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != "overview" {
         return None;
     }
-    Some(match run(arguments) {
+    Some(match run(arguments, connection) {
         Ok(members) => cli_line::success(
             members,
             &Outcome::new(ActingctlCode::RuntimeOverviewReported),
@@ -1326,7 +1333,7 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     })
 }
 
-fn run(arguments: &[OsString]) -> Result<Map<String, Value>, Failure> {
+fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Map<String, Value>, Failure> {
     let (state_root, root, request) = parse(arguments)?;
     let deadline = Instant::now() + CLI_READ_BUDGET;
     let (program_root, install_root) = install_roots(root.as_deref()).map_err(Failure::Install)?;
@@ -1336,9 +1343,9 @@ fn run(arguments: &[OsString]) -> Result<Map<String, Value>, Failure> {
         state_root: Some(&state_root),
     };
     let detail = cli_line::detail().unwrap_or(Detail::Full);
-    let client = RuntimeClient::connect(crate::front::client_config(&state_root));
+    let client = connection.reach(&state_root, identity);
     let connection = match &client {
-        Ok(client) => Ok(client),
+        Ok(client) => Ok(&**client),
         Err(error) => Err(daemon_error(error, &state_root, detail)),
     };
     let envelope = |outcome: &Outcome| cli_line::outcome_value(outcome, detail);

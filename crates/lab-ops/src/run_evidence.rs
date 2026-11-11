@@ -41,6 +41,7 @@
 use crate::budget::{self, Budget};
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem, RunState};
+use crate::front::Connection;
 use crate::material_export;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{CodeStr, Outcome, RawSource};
@@ -53,6 +54,7 @@ use actingcommand_runtime_client::{
     ContainedRunState, RunKey, RunStatusMode, RuntimeClient, RuntimeClientError,
 };
 use serde_json::{Map, Value, json};
+use std::convert::identity;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -765,10 +767,15 @@ fn action_value(
 /// on stdout (Workflow #378 A5): the evidence with `run_evidence_reported`, or `{outcome}` with
 /// the failure (an argument failure's developer line adds the usage) and exit 1.
 pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
+    dispatch_on(arguments, Connection::per_call())
+}
+
+/// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
+pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND || arguments.get(1)?.to_str()? != ACTION {
         return None;
     }
-    Some(match run(&arguments[2..]) {
+    Some(match run(&arguments[2..], connection) {
         Ok(result) => cli_line::success(result, &Outcome::new(ActingctlCode::RunEvidenceReported)),
         Err(failure @ Failure::Argument { .. }) => {
             cli_line::failure(&failure.outcome(), Some(USAGE))
@@ -777,9 +784,10 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     })
 }
 
-fn run(arguments: &[OsString]) -> Result<Map<String, Value>, Failure> {
+fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Map<String, Value>, Failure> {
     let (state_root, request) = parse(arguments)?;
-    let client = RuntimeClient::connect(crate::front::client_config(state_root))
+    let client = connection
+        .reach(state_root, identity)
         .map_err(Failure::Runtime)?;
     let evidence = read(&client, &request, Instant::now() + CLI_READ_BUDGET)?;
     Ok(cli_line::members(
