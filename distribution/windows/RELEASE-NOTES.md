@@ -9,6 +9,221 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.52
+
+本版是 v0.12.51 之后合并的 16 个 PR：#71 FLK-11（#1570）和 FLK-12（#1575）；#428 CI-OCR-1（#1567）、VIS-LOAD-1（#1572）、SCHED-C1（契约，#1582）和
+SCHED-C1a（#1585）；#434 LAB-5A（#1569）、LAB-5D（#1568）、LAB-5C（#1573）、LAB-5B2（#1574）、LAB-5G4a 与 LAB-5E（合并列车 #1580，带着 #1577、#1578）、
+LAB-5G1（#1579）、LAB-5B3（#1581）和 LAB-5F（#1576）；#419 ISO-START-1（#1583）；#421 INST-5 第一片（#1584）。先说部署：接口声明都不变（`package` 仍是
+[3, 8]，账本仍是 [3, 7]），部署不用带 `--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；v0.12.51 的安装工具装本版照常；装上以后安装工具允许
+退回 v0.12.51，不用带标志，**但有排程文件写了固定值并生效以后，要先换上不写固定值的排程文件、让本版启用那一代，再退**（见下面的退回）。没有新键，默认值文件
+没改，`config.subsystems` 多一行常开的 `benefit_fixed_value`。运行上要知道的是这几处：
+
+- **`schedule.json` 可以给规则写固定值**（SCHED-C1a，登记 §1.299 的 “Slice SCHED-C1a”；`contracts/scheduling/README.md` 的 “Fixed values written in the
+  pack”，`contracts/standard-pack-schedule.md`）。
+  - 参加收益判定的规则写 `fixed_value_milli`，组合时成为 V2 任务成员 `benefit_fixed_value_milli`（1 到 2^53−1，只有 V2 有，要求 `benefit_judged`；
+    `crates/policy/src/schema.rs` 416，编译期检查在 `validation.rs` 540 起）。它就是这条规则的已知收益：没有消耗时净收益就是这个值，有消耗时减去所消耗的
+    池的成本；判定从这个值起算，不读 `produces`（`crates/policy/src/evaluator/benefit.rs` 393 起）。所消耗的池照旧要有估值、可再生池照旧要有读数，否则照旧
+    是收益未知、不派。封顶轮里照旧按「值 ÷ 消耗」排，封顶的排法没变。
+  - 池可以写包里声明的常数估值，出处用 `valuation_origin` 标（不写就是包里手写，`"model"` 是模型导出）；规则的出处是 `fixed_value_origin`。出处只在
+    `schedule.json` 里，不进合成后的目录：只差出处的两个文件，目录哈希和规则摘要相同。
+  - 净收益来自固定值的每个决定，第一条理由是 `benefit_fixed_value`（info；`benefit_milli`、`fixed_value_milli`、`expected_duration_ms`，`benefit.rs` 858
+    起），胜出者的 `rank_breakdown` 末尾带 ` fixed_value_milli=<V>`。
+  - 拒绝：V1 里写是 `unknown_field`，越界是 `limit_exceeded`，没有 `benefit_judged` 是 `missing_required_field`，和有价池上的 `produces` 或
+    `benefit_realization: true` 同时写是新码 `fixed_value_conflict`（error）；`schedule.json` 写了这些成员却没在 `requires` 里写 `benefit_fixed_value`、
+    写在维护类规则上、规则自己写任务成员、出处写错，都在那个成员处拒成 `schedule_invalid`（读者 `crates/actingcommand-contract/src/standard_pack_schedule.rs`
+    333–409，`crates/policy/src/compose.rs` 1032–1048、1133–1150）。
+  - **包不写这些成员，什么都不变**：不带它们的目录，哈希、规则摘要和决定都和以前一样。写了的排程文件要在 `requires` 里写 `benefit_fixed_value`，也就要本版或
+    更新的 Runtime：更旧的 Runtime 不认这个子系统，组合时在 `requires` 处拒成 `schedule_requires_missing`（组合器这一步，`compose.rs` 1151–1165）。
+    `config.subsystems` 多一行常开的 `benefit_fixed_value`（`apps/actingd/src/config/manifest.rs` 199–208）。
+  - `actinglab standard-pack check` 和 `package bundle --schedule` 的回答，`benefit_coverage` 多一项 `fixed_value`（写了固定值的规则数），另多一个成员
+    `benefit_provenance`（`fixed_value` 和 `valuation` 各分 `pack`、`model`，按文件顺序列 id；没有 `schedule.json` 时没有；
+    `crates/resource-tooling/src/api.rs` 142–147）。
+- **启动时一对（任务、实例）的结算事实被拒，不再让整个 Runtime 起不来**（ISO-START-1，登记 §1.301；`contracts/runtime-fact-store.md` 的 “Settlement
+  facts”）。每次启动都为每一对重推四条结算事实；以前走的是运行中的那条路，任何一次拒绝都致命，所以一对过期的事实（UNSET-2 退回的那条边，§1.296）会让所有实例
+  都起不来。现在逐对分三种（`crates/runtime-host/src/host/runtime_facts.rs` 974–1044）：
+  - **过期**（`runtime_fact_stale`：库里已有同一个键、观测时刻不早于这次结算的记录）：这一对不再写，记一条 Warning `runtime.failed`
+    `policy_settlement_facts_skipped`（`failure_code` `runtime_fact_stale`，带任务、实例别名、事实键和观测时刻，原因链接带库里那条的 `observed_at_unix_ms`；
+    1064–1118），什么都不暂停，启动继续。
+  - **只关这一对的别的拒绝**（值放不下 `policy_settlement_fact_overflow`、键不合法 `invalid_runtime_fact_key`、库满 `runtime_fact_capacity_exceeded` 等）：
+    同一条 Warning，`failure_code` 是那个码；这一对的实例由启动时现成的那种暂停挂住，理由 `policy_settlement_facts_skipped`，排在
+    `hold_unsettled_dispatches` 之后（`crates/runtime-host/src/host.rs` 2535–2538，`runtime_facts.rs` 1127–1136）；已经暂停着的实例保留原来的暂停，其它实例
+    照常起。`actingctl status` 和 `ac_overview` 显示这个暂停，看过之后用 `actingctl resume` 解除；下次启动还遇到同样的拒绝会再挂。
+  - **不属于哪一对的故障**（账本写不进、锁、库和账本对不上，或一条记录提交之后才报的失败）：照旧致命，启动失败（990–996、1032–1036）。
+  - 平常什么都不变：每对的事实照旧推导，没有新记录。Warning 也写进 actingd 的日志（`WARN actingd:` 行）。运行中的结算照旧是任何拒绝都致命。
+- **Lab 救急模块的 `actinglab instance add`**（INST-5 第一片，登记 §1.300；`contracts/install-cli.md` 的 “Instances, the first slice” 和 “The Lab's rescue
+  module”）：`actinglab instance add <别名> --game <g> --server <s> --mumu-index <n> --touch-backend <b> --capture-backend <b>`，六个参数都必填、都没有默认值，
+  也能经 `serve --stdio` 调（`crates/lab-rescue/src/rescue.rs` 101、1409 起）。
+  - 它在配置的 `instances` 和 `policy.facts.instances` 两处一起加上这个实例（新铸 `instance_id`）。写之前先拒：别名已有、模拟器序号已被绑、标准包根里没有这个
+    游戏的 `bundle.json` 或包里没有这个区服、配置里没有可抄宿主和能力的策略行（都是 `instance_invalid`）；没有 Runtime 在跑时拒 `runtime_not_running`
+    （`install/instance_add.rs` 227 起、408 起）。
+  - 候选配置写在现文件旁边（`actingd.config.json.new-<毫秒>.part`），走 `config replace` 那条提交路：check-config → 挂住所有没暂停的实例
+    （`lab-instance-<毫秒>`）→ 关 → 换（旧文件留成 `actingd.config.json.prev-<毫秒>`）→ 起 → 起后检查，一份 `config_replace` 日志（输入 `instance_add`）。
+  - 起来以后、放开挂起之前，新实例用它自己的理由 `instance.added` 暂停（`rescue.rs` 1496 起）；放开时只交还这次自己挂的，所以新实例一直停着，等人在监控台或用
+    `actingctl resume --state-root <s> --instance <别名>` 解除；之前的每个暂停都原样。
+  - 登记写明的一段不受控：新 Runtime 就绪到新实例被暂停之间（起后检查加一次状态读取），新实例没有暂停。暂停不上时以 `post_check_failed` 收尾、挂起留着，
+    `next.pause_added` 给出手动暂停的命令。
+  - **生产照旧手工加实例**，到 LAB-7 为止：救急模块的组合操作在 LAB-7 之前不在生产根上用。
+- **Lab：操作表是命令行、`serve --stdio` 和以后的 MCP 工具共用的一份**（#434 LAB-5A 到 LAB-5G1，登记 §1.287 的各个 “Slice LAB-5…”；
+  `contracts/lab-two-entries.md` §8.3、§9；表 `contracts/lab-operations.json`）。
+  - actinglab 提供的每一行都写全了自己的参数（LAB-5A：71 行、455 个参数，新类型 `unsigned`、`decimal`、`run_ref`，新成员 `required_in`、`disruptive`）；
+    严格命令的选项表、宽松命令读的参数都由测试和它的行对齐（LAB-5B2、LAB-5B3）；今天只有 MCP 收的参数也成了行的参数（LAB-5C）；每行多一句 `help`
+    （LAB-5E，138 行；`crates/lab-ops/src/table.rs` 176，本版还没有命令把它印出来）。表的格式名仍是 `actingcommand.lab-operations.v1`；仓外用严格解析读这张表
+    的，升钉时要认这些成员和类型。
+  - **制包开关只决定列不列，从不拒绝调用**（LAB-5F；`crates/lab-ops/src/locate.rs` 151–186，`apps/actinglab/src/cli_module/authoring.rs` 103–175）：安装根里
+    选中的配置写 `lab_module_authoring: true`（生产就是），或者不在任何安装根里，制包的 34 行在 `help`、`list commands`、`capabilities` 里列出；缺、`null`、
+    `false` 就不列，但照样能跑；配置读不出时也不列，并在开发者那一行写一次 `WARN actinglab: …`。`standard-pack check` 改成核心行，哪里都列、都能跑（救急模块的
+    `place` 和 `actingctl install pack place` 拿它做事后检查）。
+  - `serve --stdio --front mcp` 记 `Lab-MCP`（LAB-5G4a；`apps/actinglab/src/cli_module/serve.rs` 61、129）：带上它，这个进程往录制里加的步骤和标记、救急行的
+    日志都记发起者 `Lab-MCP`，连接和今天 MCP 的 `--via mcp` 子进程一样；同时设了 `ACTINGCOMMAND_INITIATOR` 就拒。现在没有东西这样启动 `serve`。
+  - 回答的预算归调用方（LAB-5D，`crates/lab-ops/src/budget.rs`），核心行的服务代码搬进操作层（LAB-5G1，`crates/lab-ops/src/core_ops.rs`）：命令行和
+    `serve --stdio` 不给预算，照旧整份打印；今天的 MCP 服务器逐字节照旧。
+  - **本版的命令行收什么、拒什么，除下面这几处都和 v0.12.51 一样**（按各小节的 “What … changes live” 核过；LAB-5B2、LAB-5B3、LAB-5D、LAB-5E、LAB-5G1
+    在命令行上什么都不变）：
+    - LAB-5A（`apps/actinglab/src/cli_module/words.rs` 106、124）：原来拒、现在收的 `op status --check-rollback <op>` 和 `release stage --local-build <dir>`；
+      原来收、现在拒的两种不常见写法：LAB-5A 补全的 15 个核心和救急行上，选项后面跟一个 `--` 开头的词当它的值（`runs --task-prefix --cursor …`、
+      `gap --why "--…"`，`value_missing`），以及引擎行上不带值的全局选项后面跟没声明的选项（`watch --run-root --x`）。原来拒、现在也拒只是码或文字变了的：缺
+      必填参数由词法先拒（核心和救急行 `actingctl_usage_invalid`，actinglab 自己的命令 `validation_failed`，`argument_problem` `required`）；`regression` 带全局
+      选项缺参数从 `offline_device_scope_forbidden` 变成 `validation_failed`；`signatures register|match|retire`、`unpin` 带 `--dry-run` 缺参数或带没声明的
+      选项、`export-evidence --dry-run` 不带 `--out`，从 `dry_run_unsupported` 变成 `validation_failed`。核心行的整数按数值转写（`--limit 05` 交成 `5`）。
+    - LAB-5C：命令行多出这些选项（`serve --stdio` 同样收）：`events` 的 `--view`、`--since-unix-ms`、`--until-unix-ms`、`--through-sequence`、
+      `--event-type`、`--exclude-event-types`、`--fact-key`、`--min-severity`、`--max-severity`、`--origin-module`、`--task-id`、`--correlation-id`、
+      `--detail`、`--wait-s`；`diagnose --since-unix-ms`；`codes --prefix|--owner|--limit`；`packs --role`；`remedy set --rows <json>`（和规则文件二选一：
+      都不给照旧拒，都给拒成 `--rows` `conflicting`，超过规则文件的上限拒成 `out_of_range`，都在发请求之前，`words.rs` 146）；`material --out <dir>`。不带新
+      选项的命令行答法照旧。
+    - `serve --stdio`：拒行里没声明的参数（LAB-5A）；拒以 `--` 开头的字符串值（`actingctl_usage_invalid`，`argument_problem` `not_recognised`，LAB-5G4a，
+      `words.rs` 328）；收 `recover` 的 `env_task`、`game`、`server`，`record step` 的 `metric`、`duration_ms`，`record amend` 的 `metric`、`negative_frame`
+      （LAB-5B3）；多认 `--front mcp`。
+    - LAB-5F 只改列出：没有写这个键的安装根上，帮助里不列制包命令，调用照样走到命令。
+- **模型加载后的头一次 OCR**（VIS-LOAD-1，登记 §1.298；`contracts/vision-model-folders.md` 的 “Startup and first use”）。要先检测的请求，以前检测模型是在
+  请求的期限起算之后才第一次加载，冷进程里「加载加检测」超过 `timeout_ms` 时，识别还没开始就报超时（`PPOCR recognizer could not start before the
+  configured timeout`）。现在请求先定走哪条路，要检测而检测模型还没建的先建好，然后才起算期限（`providers/ppocr-onnx-json/src/lib.rs` 1466–1484）：
+  `timeout_ms` 只限推理。所以每次启动以后、每个 Lab 进程里头一次要检测的请求，不再因为检测模型还在加载而失败。加载失败照旧报加载自己的错，推理超时照旧是原来的
+  码和文字；包的 `timeout_ms` 和它的范围（1 到 60 000）没变，运行级的上限也没变。
+- **LAB-3 的运维规矩到 LAB-7 前照旧：生产照旧用 `actingctl install` 部署**，不对生产根用 Lab 救急模块的 `deploy`、`rollback`、`place`、`config replace`，
+  也不用本版新加的 `instance add`。`crates/lab-rescue/src/install/` 里 `actingctl install` 走的 `plan.rs`、`update.rs`、`deploy.rs`、`undo.rs`、`place.rs`
+  和钉住它们的 `gate_434_lab3.rs` 自 v0.12.51 没改；改的是救急模块的 `rescue.rs`、只有它调用的 `config_swap.rs`、`hold.rs`（一个函数改成 `pub(crate)`）和
+  新文件 `instance_add.rs`。
+
+配置：接口修订都不变，按代码和 `contracts/component-interfaces.md` 核过。`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md`
+自 v0.12.51 都没改：`actingd-config` [5, 27]、`install-selection` [1, 1]、`install-control` [0, 1]、`ledger` [3, 7]、`runtime-client` [3, 6]、`package` [3, 8]、
+`runtime-outcomes` [1, 1]。
+
+- 不升 `ledger`：`crates/ledger` 自 v0.12.51 没改。ISO-START-1 写的是已有的 `runtime.failed` 记录（一个新码）和已有的暂停行（`host.scheduling_pause`，理由是名字），
+  `benefit_fixed_value` 是决定理由里的一个新码，读者对码只核拼写（`component-interfaces.md` 136）；SQLite 格式 2、`actingcommand.event.v3`、表、索引和视图都
+  没变。INST-5 的安装器自己不写账本记录，日志仍是 `actingcommand.install-operation.v1`，多一种已有形式的输入。
+- 不升 `runtime-client`：`crates/runtime-client` 自 v0.12.51 没改，没有新的请求种类或成员。不升 `package`：包的格式没变，SCHED-C1a 的目录成员和
+  `schedule.json` 成员由 `requires` 把关（和 §1.289 一样）。不升 `actingd-config`：配置的形状没变，INST-5 写的是已有成员。`install-cli` 修订 1 收下实例
+  命令，不升。操作表的格式名不变，只加了可选成员和类型。
+- 配置键：没有新键，也没有去掉的键。`crates/runtime-config`、`actingd.defaults.json` 和 `actingd.config.example.json` 自 v0.12.51 都没改；`apps/actingd` 只在
+  `config/manifest.rs` 加了 `config.subsystems` 的常开行 `benefit_fixed_value`（`contracts/actingd-check-config.md` 和 `contracts/runtime-config.md` 各添一句）。
+- 结果码：目录从 3900 个码变成 3903 个码，位置仍是 1748 个，仍是 29 个分片，没有退役的码。新码 3 个（都待定稿，since 0.12.52）：
+  `policy_settlement_facts_skipped`（runtime-host，warning，ladder `none`）、`benefit_fixed_value`（policy，info，`none`）和 `fixed_value_conflict`（policy，
+  error，`none`）。新键 1 个：`fixed_value_milli`（`integer`）；新前缀 1 个：`fixed_value_`（policy）；没有新位置、新词。改了的 2 个：`install_command_refused`
+  多带两个已有的键 `server`、`instance_index`（INST-5 的 `instance_invalid`），说明随之改；`runtime_fact_stale` 多一个可选值 `observed_at_unix_ms`（只作
+  `policy_settlement_facts_skipped` 的原因链接），说明随之改。LAB-5F 首轮改过的 `lab_command_option_disabled` 已恢复原样，和 v0.12.51 相同。本版的发布文件是
+  空的：没有新定稿或退役的条目。
+- 程序文件：workspace 仍是 39 个成员，`Cargo.toml`、`Cargo.lock` 自 v0.12.51 都没改，没有新的依赖。`.github/` 只改了
+  `.github/workflows/windows-remote-build.yml`：构建作业现有的工具测试那一步多跑一个脚本测试（CI-OCR-1 的 `Test-MaterializeVisionRoot.ps1`，不联网）；`ci/`、
+  `tools/`、`ratchet/` 自 v0.12.51 都没改，两个包的文件清单和 v0.12.51 一样（CI-OCR-1 的脚本和工具登记是仓里的文件，不进包）。不稳定表照旧是 FLK-08 和 FLK-10
+  两条：FLK-11、FLK-12 是测试自己的问题，已在原因上修掉，不进表。`apps/actingctl` 只改了 `src/mcp/`（LAB-5D 把裁剪和导出的代码搬去 `crates/lab-ops`，回答
+  逐字节照旧），`apps/mcp-entry` 没改，MCP 工具仍是 41 个；actinglab 仍是 100 条命令、45 个顶层分派臂；救急模块提供的行从 29 行变成 30 行（`instance add`）。
+
+升级与退回（安装工具的代码 `crates/lab-rescue/src/install/` 里 `plan.rs`、`update.rs`、`deploy.rs`、`undo.rs` 自 v0.12.51 没改，就是 v0.12.48 到 v0.12.51 说明核过
+的那份，下面的行号也是它的）：
+
+- **v0.12.51 的安装工具装本版，不用任何单向标志。** 两边的声明逐字相同：`ledger` [3, 7] 的 `previous_max_in_next` 和 `one_way`（7 不大于 7）都过
+  （`plan.rs` 288–301），计划里没有 `ledger_verify`（915）；`next_max_in_installer`、`installer_meets_previous`、`installer_meets_next`（302–331）、
+  `bundle_max_in_next`（332–355：目标仍是 [3, 8]；生产根的登记不记范围，每个游戏根只给 `pack_declaration_unknown` 警告）和 `installer_knows_keys`
+  （359–376，没有新键）都和装 v0.12.51 时一样；`next_check_config`（902–914）：本版的 check-config 收现行配置，它的报告只多一行常开的子系统，计划里比的摘要
+  （outcome、目录计划、批准、note 的码、各游戏的包数；`crates/lab-rescue/src/install/programs.rs` 129–160、251–280）不含子系统；排程文件不写固定值时目录计划
+  也和 v0.12.51 的相同。
+- **退回 v0.12.51：安装工具允许，不用标志。** 接口边两边相同、都过；退回时 `next_check_config` 不算接口边（`plan.rs` 1030–1036）。部署的自动回退
+  （`deploy.rs` 778）和 `install undo`（`undo.rs` 388）都是 `accept_ledger_one_way: false`，和 `rollback` 走同一组边（`rollback_edges`，`plan.rs` 383–403）和
+  同一个回退门（`update.rs` 383–505）：本版写的记录没有新形状，新码都在已有的记录里，v0.12.51 的读者只核拼写。部署时新版的部署后检查不过的话，apply 会自动退回
+  它替换的版本，也就是 v0.12.51（`deploy.rs` 717–790）。
+- **退回以后 v0.12.51 在启动时读到的**：
+  - **SCHED-C1a**：还没有包写固定值之前，没有要撤的。**有排程文件写了 `fixed_value_milli` 并生效以后**，v0.12.51 的读者不认任务成员
+    `benefit_fixed_value_milli`（`unknown_field`），也不认 `benefit_fixed_value` 这个子系统（组合时 `schedule_requires_missing`），而它启动时要编译派单和决定
+    记忆点名的每一代目录（§1.225 的退回更正），带这个成员的那一代它编译不过。所以先放一个不写这些成员的排程文件，等本版启用了一代不带它们的目录，再退（登记
+    §1.299 的 “SCHED-C1a rollback”）。
+  - **ISO-START-1**：被拒的一对在 v0.12.51 的启动时又是致命的（任何拒绝都致命，`runtime_fact_stale` 也是）。本版落盘的、理由为
+    `policy_settlement_facts_skipped` 的暂停，v0.12.51 照普通实例暂停恢复，人看过以后解除；新记录对它是一个不处理的码。暂停理由是名字，v0.12.51 和本版用的是
+    同一份校验（`crates/actingcommand-contract/src/runtime.rs` 2260–2272，自 v0.12.51 没改）。
+  - **INST-5**：落盘的东西没有改形状。加了实例的配置两处都写了，v0.12.51 照样收；新实例的 `instance.added` 暂停每次启动照样恢复，等人解除；v0.12.51 的安装工具
+    照旧读 `config_replace` 日志（`inputs` 是自由的 JSON）。只撤这个实例的话用 `config restore <备份>`：它按撤回前的配置和暂停判起后检查，会以
+    `post_check_failed` 收尾、挂起留着，再用 `release-hold <它的理由>` 交还（登记 §1.300 的 “Rollback”）。
+  - **LAB-5F**：之前的构建不读这个键，所有行都列出来。LAB-5A、LAB-5C 新收的写法和选项，在 v0.12.51 的 actinglab 上照旧拒；带 `Lab-MCP` 的录制和日志旧版读得了
+    （六个发起者词之一）。VIS-LOAD-1：头一次要检测的请求又要从自己的 `timeout_ms` 里付检测模型的加载。
+- 配对：
+  - **v0.12.51 的安装工具装本版**：照常，不带标志，见上面。部署本版跑的是 v0.12.51 的安装工具。
+  - **部署工具包的命令行对本版的根答得一样**：它的 `actingctl install` 那几行（`release stage`、`guards --for stop`、`update plan [--preview]`、
+    `update apply … --start --detach`、`status [--operation]`、`release-hold`）跑的是在线的安装工具，`actingctl install` 的代码自 v0.12.51 没改，
+    `crates/lab-rescue/src/install/gate_434_lab3.rs` 416–692 照旧逐条钉住；预览的 `check_config` 摘要不含子系统那一行，工具包读的 `edges`、`steps`、
+    `check_config`、`extra`、`defaults_diff` 等成员的形状不变（接口边的结果见上面）。工具包拿新版 actinglab 跑的 `--json standard-pack check --root <游戏根>`：这一行 LAB-5F 以后是核心行，
+    仍由 actinglab 自己的命令服务、印 CLI 模块的行（`apps/actinglab/src/standard_pack_cli.rs` 47–65，`cli_module/own_line.rs` 114–135 没改），工具包读的
+    `outcome`、`status`、`pack_count`、`warnings` 的 `code`、`root_files` 都不变；回答多出的 `benefit_provenance`（有 `schedule.json` 时）和
+    `benefit_coverage.fixed_value`（今天的包都是 0），工具包不读。
+  - **热放置工具包的命令行对本版的根答得一样**：它跑的 actinglab 两行，`--json standard-pack check --root <游戏根>`（同上）和 `--json standard-pack compose
+    --root <包根> --instance <别名>=<游戏>/<区服> … --out <新目录>`（制包行，LAB-5F 以后不论键怎样都照样服务；回答的成员和 v0.12.51 一样，读的 `status`、
+    `games`、`tasks`、`pools`、`profiles`、`events`、`manifest`、`rules_digest`、`warnings` 不变，不写固定值的排程文件合成的目录哈希和规则摘要也不变）；
+    actingctl 的 `status`、`status --config`、`pause`、`resume`、`schedule --instance`、`overview --instance … --sections catalog`：actingctl 的命令行代码自
+    v0.12.51 没改，`crates/lab-ops` 里搬动的读法在命令行上不给预算、整份打印（LAB-5D、LAB-5G1）。**没有一条命令行在本版上答得不一样。** 内容上能看到的只有：
+    `status --config` 的 `config.subsystems` 多一行（工具包只读来源为 instruction 的条目和 `standard_packs.check_interval_ms`），状态里可能出现新的暂停理由。
+  - **控制台 UI**（最新发版 UI v0.12.15 的提交是 `bb0fd1c7`；UI 的 main 已到 `affa0bfb`，多 8 个提交、还没发版；两者都把 Runtime crate 钉在 `d06910c6`，即
+    v0.12.47，`Cargo.toml` 39–44；`crates/acui-setup/component-interfaces.json` 自 v0.12.15 没改，声明 `actingd-config` [5, 27]、`ledger` [3, 7]、
+    `runtime-client` [3, 5]、`runtime-outcomes` [1, 1]）：本版的声明、线上请求和账本形状都和 v0.12.51 一样，控制台对本版照常。它跑的 actingctl 命令
+    （`crates/acui-app/src/workbench/tools.rs` 383、415）和安装器的命令（`crates/acui-setup/src/lifecycle.rs` 81、207、220）都没变，这两份文件自 v0.12.15 没改。
+    它会遇到：
+    - 新的实例暂停理由 `policy_settlement_facts_skipped`（ISO-START-1）和 `instance.added`（INST-5）：UI v0.12.15（`crates/acui-app/src/ledger/resume.rs`
+      53–61）和 main（同一文件 107–118）都把它们当别的工具挂的暂停，给恢复按钮，和两片的用意一致（看过以后解除）。
+    - INST-5 挂的 `lab-instance-<毫秒>`（`rescue.rs` 511–512、1436）：main 的 Lab 救急一类只认 `config`、`deploy`、`down`、`place`、`restore`、`rollback`
+      （`resume.rs` 54），没有 `instance`，v0.12.15 还没有这一类，所以这种挂起在控制台上也给恢复按钮；`instance add` 以 `post_check_failed` 收尾、挂起留着时也是
+      这样。生产在 LAB-7 前不用 `instance add`，眼下碰不到；UI 仓要把 `instance` 加进这张表。
+    - 账本里的新码（`policy_settlement_facts_skipped`、`benefit_fixed_value`）不在它钉的 v0.12.47 码目录里：它钉的账本 crate 只核拼写、读得了，控制台照原样显示
+      码名、不配说明（`crates/acui-rows/src/outcome.rs` 160–176）。
+    - UI 仓不读操作表（它依赖的 Runtime crate 里没有 `crates/lab-ops`）；建模工具 acmodel 跑的 `--json resource validate`（`model/src/acmodel/export/validator.py`）
+      本版没改。
+
+运行上的变化：
+
+- 部署本身不改变调度的决定：还没有包写固定值，现有的包运行结果不变；`config.subsystems` 多一行。
+- 启动时某一对的结算事实被拒，只影响那一对：过期的只记一条 Warning，别的拒绝只停那一台；账本或库的故障照旧让启动失败。
+- 启动以后、每个 Lab 进程里头一次要检测的 OCR，不再被检测模型的加载吃掉时限。
+- Lab 的命令行只有上面列的几处收拒变了；救急模块多一条 `instance add`（生产不用）；MCP 和 actingctl 的答法照旧。
+
+本版合并的 PR：
+
+- #1570 FLK-11（#71）：「阶梯档运行中途崩溃」那条宿主测试，子进程的屏障只等到一帧的「工件已核验」就让父进程杀它，而帧留存视图只认带留存钉的帧；改成两条都在才算
+  存下过一帧。只改测试，不进不稳定表，没有新码。
+- #1575 FLK-12（#71）：导航那条宿主测试（`gate_373_nav5` 的 N5-8）等回执只等 10 秒，而运行自己的期限是 60 秒；改成运行的期限再加 10 秒。只改测试，不进不稳定表。
+- #1567 CI-OCR-1（#428，登记 §1.297）：脚本 `scripts/windows-tools/Materialize-VisionRoot.ps1` 照工具登记填好或核对一个 CPU 用的识别根目录，给资源仓的 CI 真跑
+  OCR；登记里 `ppocrv6-medium-onnx` 改成 `Ready`，ONNX Runtime 那一项多两份许可文件的钉值；构建作业多跑它的测试脚本（7 个用例，不联网）。部署出去的 Runtime
+  没有任何变化，0.12.52 是头一个带它们的版本。
+- #1572 VIS-LOAD-1（#428，登记 §1.298）：OCR 引擎的请求路径（`read_request`）先建好路线要的会话再起算期限。新门行 `#428 VIS-LOAD-1` 的 2 个测试
+  （`gate_428_vis_load1`）。没有新码，不升任何接口修订。
+- #1569 LAB-5A（#434，登记 §1.287）：操作表补全 71 行，三种类型、两个成员，actinglab 的词法和路由按表；新门行 `#434 LAB-5A` 的 2 个测试（actinglab 和救急模块各一），
+  `lab_ops_table_complete` 多查几项，改造 `gate_434_lab2::cli_short_words_parse`。
+- #1568 LAB-5D（#434）：`crates/lab-ops/src/budget.rs`，七个会裁的读、四个会导出的读搬进操作层；新门行 `#434 LAB-5D` 的 3 个测试（`gate_434_lab5d`）。
+- #1573 LAB-5C（#434）：上面列的新参数；`remedy::dispatch_rows`；新门行 `#434 LAB-5C` 的 3 个测试（`gate_434_lab5c`）。
+- #1574 LAB-5B2（#434）：31 个严格命令的选项表各成一个常量；新门行 `#434 LAB-5B2` 的 2 个测试（`gate_434_lab5b2`）。
+- #1580 合并列车（#434）：LAB-5G4a（#1577，`serve --stdio --front mcp`、拒以 `--` 开头的值；新门行的 2 个测试 `gate_434_lab5g4a`）和 LAB-5E（#1578，每行一句
+  `help`；新门行的 1 个测试 `gate_434_lab5e`，`lab_ops_table_complete` 多查说明的形式）。
+- #1579 LAB-5G1（#434）：核心行的服务代码搬进 `crates/lab-ops/src/core_ops.rs`，连接由调用方给（`lab_ops::front::Connection`）；新门行 `#434 LAB-5G1` 的 2 个测试
+  （`gate_434_lab5g1`）。
+- #1581 LAB-5B3（#434）：24 个宽松命令各有一张只在测试构建里的读取清单，表补 `recover`、`record step`、`record amend` 的 4 处参数；新门行 `#434 LAB-5B3` 的 3 个
+  测试（`gate_434_lab5b3`）。
+- #1576 LAB-5F（#434）：`lab_ops::locate::authoring_module`、`cli_module::authoring` 的列出规则，`standard-pack check` 归核心模块；新门行 `#434 LAB-5F` 的 2 个
+  测试（`gate_434_lab5f`），改造 `gate_434_lab5a` 的 1 个和 `gate_434_lab5b2` 的 2 个测试（那一行换了模块）。
+- #1582 SCHED-C1（#428，登记 §1.299）：只有契约（排程契约、标准包排程契约和登记），每条新规矩标着由哪一片来做；没有代码和测试。
+- #1585 SCHED-C1a（#428，登记 §1.299 的 “Slice SCHED-C1a”）：固定值的任务成员、判定、理由、编译期拒绝、`schedule.json` 成员、子系统行和工具的出处回答；两条
+  `#428 SCHED-C1a` 门行的 9 个测试（策略 8 个 `gate_sched_c1a`、资源工具 1 个），改造 5 个整结构比对覆盖统计的测试（各加 `fixed_value: 0`），金样没有重录。新码 2 个、新键 1 个、
+  新前缀 1 个，不升任何接口修订。
+- #1583 ISO-START-1（#419，登记 §1.301）：启动时逐对分三种的结算事实写法和暂停；主机门行 `#419 ISO-START-1` 的 3 个测试（`gate_419_iso_start1`）。新码 1 个，
+  `runtime_fact_stale` 多一个可选值，不升任何接口修订。
+- #1584 INST-5 第一片（#421，登记 §1.300）：救急模块的 `instance add`（新文件 `crates/lab-rescue/src/install/instance_add.rs`），`config replace`、
+  `config restore` 和它共用一段提交代码；apps 门行 `#421 INST-5` 的 6 个测试（`gate_421_inst5`），夹具多一个默认为空的开关。`install_command_refused` 多带两个
+  已有的键，不升任何接口修订。
+
 ## v0.12.51
 
 本版是 v0.12.50 之后合并的 3 个 PR：#71 FLK-10（#1563）、#428 RD-BUDGET-1（#1565）和 #428 UNSET-2（#1564）。先说部署：接口声明都不变（`package` 仍是
