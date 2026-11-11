@@ -1049,9 +1049,9 @@ task that writes it enters the score stage); the benefit gate never reads it.
   SS-2f's turns across instances, then `B ÷ E` compared exactly (`B·E' > B'·E`), then `affinity`
   and the tie-break of "Ties and chain heads"; the zero tier last. A static candidate's `B` is `V`,
   or `V` less its consumption's cost; a dynamic one's is its modelled sum. In a capped round both
-  kinds are listed and frozen by `V ÷ C` alike. They compare because the pack writes its fixed
-  values and its constant valuations in the one value unit of its game, the unit its model's
-  prices use (`B` of two games is never compared: "Turns across instances").
+  kinds are listed and frozen by `V ÷ C` alike. They compare because there is one unit per game,
+  the unit of its valuations, in which the pack writes its fixed values and its constant valuations
+  (`B` of two games is never compared: "Turns across instances").
 - **Refused at compile time** (point 4), each at its pointer: in a V1 document the member is
   `unknown_field`; a value that is no integer `type_mismatch`, one outside `1..=9007199254740991`
   `limit_exceeded`; without `benefit_judged: true`, `missing_required_field` at `benefit_judged`.
@@ -1908,7 +1908,9 @@ Alice's words; none is built yet.
   or the pool's judged consumers are held with `lines_invalid` (which then also carries
   `trigger_line`); its refusals and its subsystem are above. Below the trigger line, while no
   episode is under way, the pool is "below the cap" for the rules above: full price, and the hard
-  line held.
+  line held. A trigger line one costliest run above the stop line makes the pool spend whenever it
+  is that far above its stop line, without ever reaching its capacity; that choice is data the pack
+  or a person sets, not the Runtime's.
 - **Lines for one instance** (point 8; Alice, 11-09 17:42: 「这个红线会随着时间由外部修改」). A person
   or an agent sets one instance's lines of a pool while the Runtime runs through the Lab's
   `config set`, and clears them with `config clear` (the rows of
@@ -1929,9 +1931,16 @@ Alice's words; none is built yet.
     (`section_check`, `wrong_type`, `out_of_range`), a value of another shape, a member that is no
     pool identifier, a set without both lines, and `H < S ≤ T` broken where it can tell (two
     constants, or two references to one fact by their offsets). The capacity is read, so
-    `S ≤ cap` and `T ≤ cap` are checked at each evaluation (`lines_invalid`). A named pool that the
-    active generation does not give the instance, or gives without a declared valuation, changes
-    nothing (register §1.299, open question 5).
+    `S ≤ cap` and `T ≤ cap` are checked at each evaluation (`lines_invalid`). An instruction that
+    names a pool the active generation does not give the instance, or gives without a declared
+    valuation, is refused with the existing `config_value_invalid` and its problem `section_check`
+    (`config_key` the instance's key; the developer text names the pool): the host fills the
+    section check's context with the instance's valued pools of the active generation, as it fills
+    the backends, so no new code or token is added. A restore at start keeps such a value (its
+    context holds no pools), and a value whose pool a later generation no longer gives the instance
+    changes nothing while the pool is absent (the coordinator's answer 5 of 11-11, register §1.299).
+  - *Tier.* MCP's `ac_config_set` sets the key at the tier of every key but the backends (the
+    coordinator's answer 8).
   - *Lasting.* An instruction value is restored at every start ("Restore at start" there) and is no
     part of the catalog: it holds across restarts and catalog generations until it is cleared.
   - *Episodes.* A change ends no episode: the lines are read at the next evaluation, and the episode

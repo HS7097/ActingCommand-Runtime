@@ -10626,7 +10626,8 @@ no game, resource or value.
 15:50: 「我们的这个数据建模它本身也是一个打分器，只不过它是产出的是离线数据，这个用来解决当前已经固定的。」;
 15:57, of the present benefit rule:
 「要是阻碍运行或者是不符合预期的话，就直接按照新的方法重写一遍就行。能跑就暂时可以先不用动它」; 17:42, of
-the lines: 「这个红线会随着时间由外部修改」. The trigger at the cap is point 2 of the ten points the
+the lines: 「这个红线会随着时间由外部修改」; 11-07 (6706630435), of the planned red line:
+「不让资源达到上限，但是保留一些资源用于某些限时的，收益高的任务」. The trigger at the cap is point 2 of the ten points the
 coordinator wrote down from her approval of 17:48 (6735960127), and the old triggers point 9.
 
 **Why.** Every one of the four resource repositories' 237 schedule rules has empty `produces` and
@@ -10714,40 +10715,39 @@ draft's, for the coordinator's review), each with its section:
 | SCHED-C1b | Runtime | S | SC1-7 | SCHED-C1a | none (as §1.290) |
 | SCHED-C1c | Runtime | M | SC1-8 to SC1-10 and `pool_trigger_line` | this contract | none |
 | SCHED-C1d | Runtime | M | SC1-11 | SCHED-C1c (the episode's rule reads `T`) | none: a file only the Runtime writes and reads; a rollback's build ignores it, and the next start of this one drops it (owner epoch) |
-| SCHED-C1e | Runtime | M | SC1-12: the key and its section check in `runtime-config`, the host's read at every evaluated cycle into the evaluation, `capped::lines` reading an instance's set first, `lines_source`; `runtime-config.md` rows | SCHED-C1c | `actingd-config` by one (a new member of an `instances[]` entry), once per release |
+| SCHED-C1e | Runtime | M | SC1-12: the key and its section check in `runtime-config` (the instance's valued pools of the active generation in its context), the host's read at every evaluated cycle into the evaluation, `capped::lines` reading an instance's set first, `lines_source`; `runtime-config.md` rows | SCHED-C1c | `actingd-config` by one (a new member of an `instances[]` entry), once, released together with the console's matching range |
 
 Order: SCHED-C1a first, since it is what lets a game's daily rules run once ruling 116's stop is
 lifted; SCHED-C1b beside or after it; SCHED-C1c before a pack writes a valuation with lines, so that
 a pool stuck at its cap is a warning from the first day; SCHED-C1d before capped episodes matter in
 production; SCHED-C1e last. None needs a heavy computation.
 
-**Open questions for the coordinator** (each with this draft's recommendation; the PR body has the
-same list).
+**The coordinator's answers of 11-11** (the coordinator's, not Alice's words; to the draft's eight
+open questions, the draft accepted as written).
 
-1. *The value unit of a game.* Fixed values and the pack's valuations compare with modelled `B`
-   only in one unit. Recommendation: the research channel names each game's unit now (its model's
-   price unit where one exists) and the pack writes in it, so an export can replace values one by
-   one.
-2. *Where episodes are kept.* The Runtime writes no state file of evaluation memory today: its
-   restored state is tagged value records in the ledger database (ledger-observer.md §11.1; the
-   policy host's decision memory), and its files are the owner lock, the legacy monitor journal and
-   the catalog store's generations. Recommendation: the new file in the existing `policy/` state
-   directory, as written; the alternative, a tagged value record beside the decision memory,
-   raises `ledger`.
-3. *Per-instance lines as a configuration key*, replacing design §4.3. Recommendation: as written;
-   it raises `actingd-config` by one, and the console reaches it through the same `config set`.
-4. *An origin's default.* Recommendation: absent is the pack, as written; the UI repository's
-   `bindings apply` writes `"model"` (with PRICE-4b and RL-R).
-5. *A per-instance line for a pool the active generation does not give the instance.*
-   Recommendation: refuse it at the instruction (the host fills the section check's context with
-   the instance's valued pools of the active generation, as it fills the backends), keep it at a
-   restore, and let it change nothing while the pool is absent.
-6. *`value_milli`.* Recommendation: leave it, the score stage's term; the V2 JSON schema does not
-   list it though the reader accepts it, which a later cleanup settles.
-7. *The class of each of the 136 judged rules* is not in the findings. Recommendation: the resource
-   side lists each judged rule's class per game before writing values, the smallest game first.
-8. *MCP tier of `scheduling.pool_lines`.* Recommendation: the tier of every key but the backends, as
-   agents are to move the lines (Alice, 17:42).
+1. *Value unit per game:* the research channel names each game's unit (its model's price unit where
+   one exists) and the pack writes fixed values and constant valuations in it; the resource side
+   states the unit and who named it beside the game's `schedule.json`, and this contract says only
+   "one unit per game, the unit of its valuations".
+2. *Where episodes are kept:* the new file `policy/capped-episodes.json`, as written; not the
+   ledger.
+3. *Per-instance lines:* the configuration key through `ConfigureSettings`, as written, replacing
+   design §4.3; SCHED-C1e raises `actingd-config` once and is released together with the console's
+   matching range.
+4. *Origin default:* absent means the pack, as written.
+5. *A line for a pool the active generation does not give the instance:* refused at the
+   instruction (`config_value_invalid` with its existing problem `section_check`; no new code or
+   token), kept at a restore, and changes nothing while the pool is absent.
+6. *`value_milli`:* left as it is.
+7. *The class of each judged rule:* the research channel lists it per game in the rule tables it is
+   writing now; nothing for this contract.
+8. *MCP tier of `scheduling.pool_lines`:* the tier of every key but the backends.
+
+The coordinator also added two sentences: the consumer row of "What a resource repository writes"
+(a `W` with `W·c ≥ V` keeps a consumer for capped rounds; one with `V > W·c` spends the reserve
+below the stop line, still held by the hard line, with Alice's words of 11-07, 6706630435), and
+"The trigger line" (a trigger line one costliest run above the stop line spends without reaching
+the capacity, data the pack or a person sets).
 
 **What changes live.** Nothing until a slice is built and deployed, and then nothing until a
 `schedule.json` writes the members or a person or an agent sets an instance's lines, except
