@@ -206,6 +206,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // SCHED-C1c (register §1.299): this build reads a pool's `trigger_line` (the reading at
+        // which a capped episode begins, the capacity without one); a `schedule.json` whose pool
+        // writes it requires it beside `pool_lines`, so an older Runtime refuses the file instead
+        // of starting the pool's episodes at its capacity.
+        subsystem(
+            "pool_trigger_line",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // Workflow #411 P19: this build reads a timeline event's `excludes_fact_prefixes`, and its
         // resets keep a task's own last result for the task's own edges; a `schedule.json` whose
         // event writes the member requires it, so an older Runtime refuses the file instead of

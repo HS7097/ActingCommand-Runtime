@@ -321,6 +321,22 @@ that writes `benefit_fixed_value_milli` itself. Refused, each at its member:
 
 A task without the member serializes, hashes and decides exactly as before.
 
+SCHED-C1c (since 0.12.53; register §1.299; `../README.md`, "Pool lines", "The trigger line", "A
+pool its lines cannot spend"), V2 only: a pool that writes `stop_line` and `hard_line` may also
+carry `trigger_line`, in the same two forms, the reading at which a capped episode begins (absent,
+the capacity). A reference follows the capacity reference's rules at `trigger_line/…`; a constant
+above 9007199254740991 is `limit_exceeded` at the member; `pool_lines_invalid` at `trigger_line`
+when it is written without both other lines, above the capacity (a constant above a constant
+capacity, a reference to the capacity's fact with a larger offset) or below the stop line (two
+constants, two references to one fact); the rest is checked at each evaluation
+(`0 ≤ H < S ≤ T ≤ cap`). A V1 document that names it is refused as an unknown field at the member.
+A `schedule.json` whose pool writes it names `pool_trigger_line` in `requires`. A valued pool whose
+valid lines no judged consumer's run fits under from the capacity (every consumer's consumption
+above the capacity less the hard line, where the compiler can tell: a constant hard line against a
+constant capacity, or a hard line referencing the capacity's own fact) compiles with the warning
+`pool_lines_unspendable` at `hard_line`. A pool without the member serializes, hashes and decides
+exactly as before.
+
 SS-2g (since 0.12.34; register §1.232; `../README.md`, "Expected quantities (v2)"): a `consumes`
 entry may declare `expected_amount_milli` instead of `amount`, as a `produces` entry may: an
 integer in `0..=9007199254740991` thousandths of a unit per run, at most a constant capacity ×

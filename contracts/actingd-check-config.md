@@ -371,6 +371,13 @@ The members of `report`:
       the pack"); a `schedule.json` whose rule writes `fixed_value_milli` or
       whose pool writes `valuation_origin` requires it, so it is composed only
       by a Runtime that names this row.
+    - `pool_trigger_line` (#428 SCHED-C1c, since 0.12.53, register §1.299):
+      always on (`config_subsystem_always_on`). The Runtime reads a pool's
+      `trigger_line`, the reading at which its capped episode begins (the
+      capacity without one; [scheduling/README.md](scheduling/README.md), "Pool
+      lines", "The trigger line"); a `schedule.json` whose pool writes it
+      requires it beside `pool_lines`, so it is composed only by a Runtime that
+      names this row.
     - `reset_exclusions` (Workflow #411 P19, since 0.12.25): always on
       (`config_subsystem_always_on`). The Runtime reads a timeline event's
       `excludes_fact_prefixes`, and its resets never clear a task's own last

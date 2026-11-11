@@ -765,4 +765,9 @@ outcome_keys! {
     // ---- #428 SCHED-C1a (a rule's fixed value, contracts/scheduling/README.md "Fixed values
     // written in the pack"): the value `V` a judged candidate's net benefit was computed from. ----
     fixed_value_milli: integer,
+    // ---- #428 SCHED-C1c (a pool's trigger line, and a pool its lines cannot spend,
+    // contracts/scheduling/README.md "Pool lines"): begin ----
+    trigger_line: integer,
+    least_consumption: integer,
+    // ---- #428 SCHED-C1c: end ----
 }

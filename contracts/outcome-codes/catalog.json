@@ -2624,6 +2624,14 @@
     "fixed_value_milli": {
       "type": "integer",
       "description": "A task's fixed value V in milli of its game's value unit: the value of one run without the cost of the pools it consumes, written in its standard pack (the schedule.json rule member fixed_value_milli, the catalog's benefit_fixed_value_milli); a judged candidate's net benefit is V less the cost of what it consumes (#428 SCHED-C1a, contracts/scheduling/README.md \"Fixed values written in the pack\")."
+    },
+    "trigger_line": {
+      "type": "integer",
+      "description": "A pool's trigger line at the evaluation, in the pool's real units, when the pool writes one: a capped episode begins at a reading at or above it; without one the capacity (#428 SCHED-C1c, contracts/scheduling/README.md \"Pool lines\", \"The trigger line\")."
+    },
+    "least_consumption": {
+      "type": "integer",
+      "description": "The least consumption of one run, in whole units of the pool, among a pool's judged consumers on an instance, by their declared consumption (#428 SCHED-C1c, contracts/scheduling/README.md \"A pool its lines cannot spend\")."
     }
   },
   "vocabularies": {

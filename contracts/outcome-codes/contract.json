@@ -17458,6 +17458,24 @@
       "common_causes": "The rule's daily_limit was removed and its escalation_threshold kept at the old 1000.",
       "handling": "Lower the rule's on_failure.escalation_threshold to 2 or 3 in the same change that removes its daily_limit."
     },
+    "standard_pack_line_trigger_redundant": {
+      "category": "warning",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "task_id": "required",
+        "pool_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.53",
+      "description": "A judged rule of a standard-pack game root's schedule.json (task_id) consumes a pool of the file (pool_id) that writes both its stop_line and hard_line and a declared valuation block, and its trigger still requires, through all, the pool's reading (its resource_projection, or a fact on its reading key) compared greater_than_or_equal or greater_than with a fact reference to the pool's capacity fact: the old \"reading at least the capacity less a margin\" trigger, which the capped spending order now repeats, since it starts the pool's episode at its trigger line and spends it down to its stop line by itself (#428 SCHED-C1c, the coordinator's point 12 of 11-11; contracts/standard-pack-schedule.md \"A redundant trigger\", contracts/scheduling/README.md \"Old triggers on a capped pool\"). A hint only: the rule composes and runs as written, its threshold read as before. The policy composer finds it, once per rule and pool, in file order; actinglab standard-pack check and package bundle --schedule report it, after standard_pack_escalation_threshold_high; standard-pack compose and the Runtime's workbench do not.",
+      "common_causes": "The change that valued the pool and wrote its lines kept the rule's old capacity threshold.",
+      "handling": "Remove the threshold from the rule's trigger in the change that values the pool; keep it only on a pool without a valuation, where it is the only spending trigger."
+    },
     "standard_pack_root_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",

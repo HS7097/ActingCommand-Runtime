@@ -87,8 +87,9 @@ const INSTRUCTION_PREFIX: &str = "session.";
 /// A manual request (design `rd-1029/design-sch-state.md` §4.9): a task whose trigger requires
 /// an instruction, a `fact` or `fact_time_reached` predicate on a key of the `session.` family,
 /// reached from the trigger's root only through `all`. It runs because it was asked for, not by
-/// its net benefit.
-pub(super) fn manual_request(task: &TaskSpec) -> bool {
+/// its net benefit. SCHED-C1c (register §1.299): the compiler's check of a pool its lines cannot
+/// spend reads the capped order's consumers by it too.
+pub(crate) fn manual_request(task: &TaskSpec) -> bool {
     super::tie_break::required_conditions(&task.trigger)
         .into_iter()
         .any(|condition| match condition {

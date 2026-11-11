@@ -104,9 +104,11 @@ pub(crate) fn check_schedule(
 /// (register §1.227), one `standard_pack_priority_tier_mismatch` per rule whose declaration
 /// disagrees with its tier, then, SS-4 (register §1.231), one
 /// `standard_pack_escalation_threshold_high` per rule without a daily bound whose escalation
-/// threshold is above 10, and the game's judged rules' coverage (complete, pending, undeclared;
-/// SS-2c: and the rules declared maintenance); SCHED-C1a (register §1.299): and who wrote the
-/// game's fixed values and valuation blocks.
+/// threshold is above 10, then, SCHED-C1c (register §1.299), one
+/// `standard_pack_line_trigger_redundant` per judged rule and valued pool with lines whose old
+/// capacity threshold the capped spending order repeats, and the game's judged rules' coverage
+/// (complete, pending, undeclared; SS-2c: and the rules declared maintenance); SCHED-C1a (register
+/// §1.299): and who wrote the game's fixed values and valuation blocks.
 pub(crate) struct ScheduleReport {
     pub(crate) warnings: Vec<Outcome>,
     pub(crate) benefit_coverage: BenefitCoverage,
@@ -131,6 +133,9 @@ pub(crate) fn report_schedule(
     // SS-4 (register §1.231): the hint of a rule without a daily bound whose failures escalate
     // only after more than ten.
     warnings.extend(composition.escalation_warnings());
+    // SCHED-C1c (register §1.299): the hint of a rule whose old capacity threshold the capped
+    // spending order of its valued pool repeats.
+    warnings.extend(composition.redundant_trigger_warnings());
     let benefit_coverage = composition
         .benefit_coverage()
         .into_iter()

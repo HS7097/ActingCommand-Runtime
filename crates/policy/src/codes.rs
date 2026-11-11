@@ -287,12 +287,14 @@ actingcommand_contract::outcome_codes! {
         // "Pool lines", "Capped spending order"): begin ----
         /// Info. A dispatch the capped spending order chose: the head of its pool's frozen order
         /// on the instance (keys `pool_id`, `pool_capacity`, `stop_line`, `hard_line`,
-        /// `capped_episode`, `capped_round`, `capped_rank`, `pool_reading`).
+        /// `capped_episode`, `capped_round`, `capped_rank`, `pool_reading`; SCHED-C1c: optional
+        /// `trigger_line`, when the pool writes one).
         CappedSpend => "capped_spend": info / none,
         /// Info. A judged candidate a pool's lines hold back this round (keys `pool_line_hold`,
         /// `pool_id`; optional `pool_reading`, `pool_capacity`, `stop_line`, `hard_line`,
         /// `capped_episode`, `capped_round`, `amount_after`, `task_id`, `gate_code`, `fact_key`,
-        /// `unknown_reason`).
+        /// `unknown_reason`; SCHED-C1c: `trigger_line` on `lines_invalid` of a pool that writes
+        /// one).
         PoolLineHeld => "pool_line_held": info / none,
         /// Error (catalog compile diagnostic). A pool's `stop_line` and `hard_line` break their
         /// rules: one without the other, the stop line not above the hard line, or a line above
@@ -315,6 +317,18 @@ actingcommand_contract::outcome_codes! {
         /// `benefit_realization: true`: the task would have two values.
         FixedValueConflict => "fixed_value_conflict": error / none,
         // ---- SCHED-C1a: end ----
+        // ---- SCHED-C1c (a pool its lines cannot spend, `contracts/scheduling/README.md`, "Pool
+        // lines"): begin ----
+        /// Warning. A valued pool's lines cannot spend it on the instance: every judged consumer
+        /// of the pool there consumes more in one run than the pool's capacity less its hard
+        /// line, so no run can start from the capacity without leaving the pool below its hard
+        /// line. At or above the pool's trigger line no capped episode begins (one under way
+        /// waits) and its judged candidates are deferred (keys `pool_id`, `pool_capacity`,
+        /// `stop_line`, `hard_line`, `least_consumption` the least consumption among them). Also a
+        /// catalog compile diagnostic, a warning at the pool's `hard_line`, where the compiler can
+        /// tell; the catalog compiles.
+        PoolLinesUnspendable => "pool_lines_unspendable": warning / none,
+        // ---- SCHED-C1c: end ----
     }
 }
 
