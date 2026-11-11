@@ -307,7 +307,7 @@ replace.
   so the composed pool never carries it.
 - The tools answer `benefit_provenance` for each game ("Tools"): `{fixed_value: {pack: [rule ids],
   model: [rule ids]}, valuation: {pack: [pool ids], model: [pool ids]}}`, in file order.
-- (SCHED-C1b, register §1.299, since 0.12.52) The workbench holds the active generation's
+- (SCHED-C1b, register §1.299, since 0.12.53) The workbench holds the active generation's
   provenance, every game's, in the program fact
   `config.catalog_provenance` (runtime scope, re-observed; [runtime-config.md](runtime-config.md),
   "Facts", its row with the code): one count row `{game, kind, origin, count}` per game, kind
@@ -551,7 +551,7 @@ nothing.
   fact was cut ([runtime-interface.md](runtime-interface.md)). A warning the composer cannot place in a game's
   file (none so far) has no game, keeps its pointer in the composed document and is held in the
   fact only. Composing, activating and deciding do not depend on them.
-- **Provenance** (SCHED-C1b, register §1.299, since 0.12.52). After the same compositions the
+- **Provenance** (SCHED-C1b, register §1.299, since 0.12.53). After the same compositions the
   workbench also holds the active generation's provenance in `config.catalog_provenance`
   ("Provenance" above), with no record of its own: the `standard_pack_registered` record is
   unchanged.

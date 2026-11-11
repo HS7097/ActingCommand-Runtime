@@ -11189,7 +11189,7 @@ name `benefit_fixed_value`, so its composer refuses such a `schedule.json`
 decision memories name (§1.225's rollback correction), so first remove the members and let this
 build activate a generation without them, as §1.289's rollback says for SS-2h's.
 
-#### Slice SCHED-C1b (0.12.52): the workbench records where a catalog's values come from
+#### Slice SCHED-C1b (0.12.53): the workbench records where a catalog's values come from
 
 Coordinator work order `rd-1111/brief-sched-c1b.md`; on the SCHED-C1a branch
 `claude/428-sched-c1a-fixed-value` at `a6ca4160` (Runtime PR #1585), with main `4e1d9608` merged
@@ -11234,7 +11234,7 @@ presentation. No outcome code, outcome key or configuration key is new.
   registered in [runtime-interface.md](runtime-interface.md) and in the overview's cut order. The
   `ac_overview` tool description names the member and its cut.
 - (f) The contract text: "(SCHED-C1b, not built yet)" became "(SCHED-C1b, register §1.299, since
-  0.12.52)", and so did the mark "(SCHED-C1, register §1.299, not built yet)" of the workbench's
+  0.12.53)", and so did the mark "(SCHED-C1, register §1.299, not built yet)" of the workbench's
   "Provenance" bullet in "The scheduler workbench", the one other sentence naming the fact; no
   other mark changed.
 
