@@ -379,6 +379,11 @@ from their core rows.
   reads it. The decision is one function of the operation layer, `lab_ops::locate::authoring_module`,
   which every front end calls. Main has no cargo feature `authoring` yet: every build has the
   module.
+- **Which operations** (LAB-5F fix 1, the coordinator's ruling of 2026-11-11): exactly the rows of
+  module `authoring`. `standard-pack check`, which the rescue module's `place` runs as its
+  post-check (section 7), is a row of the core module: it is listed and served wherever the Lab
+  runs, whatever the key says, so that an installation without the authoring module still places
+  packages. `standard-pack compose` stays an authoring row.
 - `lab_module_debugging` retires (`actingd-config` 28): still accepted when a boolean, with no
   effect, noted with the caveat `config_key_retired` by the commands that read it, as
   `install.guard.blocked_windows` is. The debugging operations are always there.
@@ -460,10 +465,10 @@ irreversible.
 - The root is located from the program's own place (a slot's `…\runtime\actinglab.exe`, or a fixed
   entry); the state root comes from the selected configuration. No operation takes the
   installation's root or its state root as `--root` or `--state-root` (`new` names its new root).
-  Four offline authoring rows take options of those names that name something else, as their
-  consumers pass them (LAB-5A): `standard-pack check` and `standard-pack compose` take `--root`, a
-  game's package root, and `resource restore` and `regression` take `--state-root`, a Runtime state
-  root the offline command reads. One command line keeps a `--root` that is no parameter of its
+  Four offline rows take options of those names that name something else, as their consumers pass
+  them (LAB-5A): `standard-pack check` (a core row since LAB-5F fix 1) and the authoring row
+  `standard-pack compose` take `--root`, a game's package root, and the authoring rows `resource
+  restore` and `regression` take `--state-root`, a Runtime state root the offline command reads. One command line keeps a `--root` that is no parameter of its
   row (LAB-5A fix 1): `actinglab devices bind <alias> <handle> --root <r>` still hands it to the
   command, as before LAB-5A, which takes it only when the program runs outside an installed root;
   the row does not declare it, and `serve --stdio` refuses it.

@@ -17,10 +17,19 @@
 //   refusal names the configuration, or carries the failure that kept the option unknown. Outside
 //   any installation root they are listed and served. A row of each other module (`codes`, core;
 //   `user-config`, debugging; `op status`, rescue, on Windows) answers the same in every case.
+//   Fix 1 (rd-1108/arch-013/brief-lab5f-fix1.md; the coordinator's ruling of 2026-11-11):
+//   `standard-pack check` is a row of the core module, which the rescue module's `place` runs as
+//   its post-check: in every place, the key absent, `false` and a configuration that cannot be
+//   read included, it is listed (`help`, its options, `list commands`, `capabilities`) and its call
+//   reaches its command (its own refusal of a game folder with no root file); `standard-pack
+//   compose` is listed only where the module is installed and refused, writing nothing, where it
+//   is not.
 // - `lab5f_serve_answers_as_the_command_line`: `serve --stdio` answers an authoring row's call with
 //   the line the command line's `--json` prints, the refusal where the module is not installed and
 //   the command's own line where it is; the other modules' rows answer as before. `serve --stdio`
-//   lists nothing.
+//   lists nothing. Fix 1: `standard-pack check` answers the command line's line in every place,
+//   its command's own refusal; `standard-pack compose` the refusal where the module is not
+//   installed.
 // Fakes only: made-up roots in a temporary folder; no Runtime, no device, no clock, no sleep.
 
 use super::*;
@@ -187,7 +196,7 @@ fn lists(entries: &Value, command: &str) -> bool {
 
 /// The commands of the authoring rows, and the groups of `record`, that the listings leave out
 /// where the module is not installed.
-const AUTHORING_COMMANDS: [&str; 8] = [
+const AUTHORING_COMMANDS: [&str; 9] = [
     "package fmt",
     "record start",
     "session record start",
@@ -196,9 +205,11 @@ const AUTHORING_COMMANDS: [&str; 8] = [
     "observe --capture --record",
     "recognition-regression",
     "resource verify",
+    "standard-pack compose",
 ];
-/// Commands of the other modules, listed everywhere.
-const OTHER_COMMANDS: [&str; 8] = [
+/// Commands of the other modules, listed everywhere (fix 1: `standard-pack check`, a row of the
+/// core module since the coordinator's ruling of 2026-11-11).
+const OTHER_COMMANDS: [&str; 9] = [
     "tap",
     "do",
     "do --capture --record",
@@ -207,7 +218,18 @@ const OTHER_COMMANDS: [&str; 8] = [
     "lab validate",
     "run summary",
     "version",
+    "standard-pack check",
 ];
+/// Fix 1: the outcome `standard-pack check` answers for a game folder with no root file, its
+/// command's own refusal.
+const NO_ROOT_FILE: &str = "standard_pack_root_invalid";
+
+/// Fix 1: a game folder of a standard-pack root that holds no root file.
+fn empty_game_root(base: &Path) -> PathBuf {
+    let game = base.join("standard-packs").join("neutral");
+    fs::create_dir_all(&game).unwrap();
+    game
+}
 
 #[test]
 fn lab5f_authoring_rows_follow_the_installed_module() {
@@ -265,7 +287,7 @@ fn lab5f_authoring_rows_follow_the_installed_module() {
         for command in [
             "package fmt",
             "recognition-regression",
-            "standard-pack check",
+            "standard-pack compose",
         ] {
             assert_eq!(
                 help["command_options"].get(command).is_some(),
@@ -273,10 +295,13 @@ fn lab5f_authoring_rows_follow_the_installed_module() {
                 "{place:?}: help's options of {command}"
             );
         }
-        assert!(
-            help["command_options"].get("lab watch").is_some(),
-            "{place:?}"
-        );
+        // Fix 1: `standard-pack check` is the core module's, listed with its options everywhere.
+        for command in ["lab watch", "standard-pack check"] {
+            assert!(
+                help["command_options"].get(command).is_some(),
+                "{place:?}: help's options of {command}"
+            );
+        }
         for line in [
             &["--json", "list", "commands"][..],
             &["--json", "capabilities"][..],
@@ -296,6 +321,49 @@ fn lab5f_authoring_rows_follow_the_installed_module() {
             );
             assert_eq!(lists(commands, "record"), installed, "{place:?} {line:?}");
             assert!(lists(commands, "tap"), "{place:?} {line:?}");
+            // Fix 1.
+            assert!(lists(commands, "standard-pack check"), "{place:?} {line:?}");
+            assert_eq!(
+                lists(commands, "standard-pack compose"),
+                installed,
+                "{place:?} {line:?}"
+            );
+        }
+
+        // Fix 1: `standard-pack check`, a row of the core module, reaches its command in every
+        // place, the key absent, `false` and a configuration that cannot be read included: its
+        // command's own refusal of a game folder with no root file, never the module's.
+        let game = empty_game_root(temp.path());
+        let (code, answered) =
+            printed(&["--json", "standard-pack", "check", "--root", text_of(&game)]);
+        assert_eq!(code, 1, "{place:?}: {answered}");
+        assert_eq!(
+            answered["outcome"]["code"], NO_ROOT_FILE,
+            "{place:?}: {answered}"
+        );
+        // `standard-pack compose`, an authoring row, is refused where the module is not installed,
+        // before it writes; where it is, the call reaches its command.
+        let composed = temp.path().join("composed");
+        let (code, answered) = printed(&[
+            "--json",
+            "standard-pack",
+            "compose",
+            "--root",
+            text_of(&temp.path().join("standard-packs")),
+            "--instance",
+            "neutral.a=neutral/test",
+            "--out",
+            text_of(&composed),
+        ]);
+        if installed {
+            assert_ne!(
+                answered["outcome"]["code"], DISABLED,
+                "{place:?}: {answered}"
+            );
+        } else {
+            assert_eq!(code, 1, "{place:?}: {answered}");
+            assert_refused(place, "standard-pack compose", config.as_deref(), &answered);
+            assert!(!composed.exists(), "{place:?}: nothing written");
         }
 
         // A call on actinglab's own words: `package fmt` writes where the module is installed and
@@ -429,18 +497,28 @@ fn lab5f_serve_answers_as_the_command_line() {
         let (program, config) = made_up(temp.path(), place);
         let _place = authoring::test_place::set(program);
         let package = package(temp.path());
+        // Fix 1: `standard-pack check` (core) and `standard-pack compose` (authoring).
+        let game = empty_game_root(temp.path());
+        let packs = temp.path().join("standard-packs");
+        let composed = temp.path().join("composed");
         let input = format!(
-            "{}\n{}\n{}\n",
+            "{}\n{}\n{}\n{}\n{}\n",
             json!({"op": "package fmt", "params": {"package": text_of(&package), "check": true}}),
             json!({"op": "codes", "params": {"code": DISABLED}}),
             json!({"op": "user-config", "params": {}}),
+            json!({"op": "standard-pack check", "params": {"root": text_of(&game)}}),
+            json!({"op": "standard-pack compose", "params": {
+                "root": text_of(&packs),
+                "instance": ["neutral.a=neutral/test"],
+                "out": text_of(&composed),
+            }}),
         );
         let mut output = Vec::new();
         let mut developer = Vec::new();
         serve::serve(table, input.as_bytes(), &mut output, &mut developer).expect("the loop ends");
         let output = String::from_utf8(output).unwrap();
         let served = output.lines().collect::<Vec<_>>();
-        assert_eq!(served.len(), 3, "{place:?}: {output}");
+        assert_eq!(served.len(), 5, "{place:?}: {output}");
 
         // The authoring row: the line the command line's `--json` prints for the same call.
         let (code, line) = printed(&[
@@ -470,6 +548,40 @@ fn lab5f_serve_answers_as_the_command_line() {
             fs::read(package.join("data").join("compact.json")).unwrap(),
             COMPACT
         );
+
+        // Fix 1: `standard-pack check`, a row of the core module, answers in every place the line
+        // the command line's `--json` prints, its command's own refusal of a game folder with no
+        // root file.
+        let (code, line) = printed(&["--json", "standard-pack", "check", "--root", text_of(&game)]);
+        assert_eq!(
+            serde_json::from_str::<Value>(served[3]).unwrap(),
+            line,
+            "{place:?}"
+        );
+        assert_eq!(code, 1, "{place:?}: {line}");
+        assert_eq!(line["outcome"]["code"], NO_ROOT_FILE, "{place:?}: {line}");
+        // `standard-pack compose`, an authoring row, is refused where the module is not installed,
+        // as on the command line, and writes nothing.
+        let compose = serde_json::from_str::<Value>(served[4]).unwrap();
+        if place.installed() {
+            assert_ne!(compose["outcome"]["code"], DISABLED, "{place:?}: {compose}");
+        } else {
+            assert_refused(place, "standard-pack compose", config.as_deref(), &compose);
+            assert!(!composed.exists(), "{place:?}: nothing written");
+            let (code, line) = printed(&[
+                "--json",
+                "standard-pack",
+                "compose",
+                "--root",
+                text_of(&packs),
+                "--instance",
+                "neutral.a=neutral/test",
+                "--out",
+                text_of(&composed),
+            ]);
+            assert_eq!(code, 1, "{place:?}: {line}");
+            assert_eq!(compose, line, "{place:?}");
+        }
 
         // The other modules' rows answer as the command line does, in every place.
         for (served, words) in [

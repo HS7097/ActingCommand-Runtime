@@ -8990,6 +8990,15 @@ and `serve --stdio` answers as before.
 
 **LAB-5B2 rollback** (to the release before it). Nothing persisted: code only.
 
+**After LAB-5F fix 1** (the coordinator's ruling of 2026-11-11; "Slice LAB-5F" below):
+`standard-pack check` is a row of the core module. It left `STRICT_ROWS` (now 30) for a fifth list
+beside the four kinds, `CORE_STRICT_ROWS` (the core rows actinglab's own command serves that are
+held equal to their command as the strict rows are: `standard-pack check` alone; `app
+launch|restart|stop` are B1's), and `accepted` still answers for it from
+`standard_pack_cli::CHECK_FLAGS`. `strict_rows_match_their_commands` walks the strict rows, then
+that list; `every_debugging_and_authoring_row_has_one_kind` checks that its rows are planned core
+rows, each once, and that among the core rows the register answers for exactly these.
+
 #### Slice LAB-5F (0.12.52): the Lab reads the authoring option
 
 Coordinator work order `rd-1108/arch-013/brief-lab5f.md`, after the read-only survey
@@ -9004,26 +9013,37 @@ installed.
 | L5F-1 | what decides "installed": `lab_ops::locate::authoring_module()` and `authoring_module_from(program, process)`, answering `AuthoringModule::{Unrooted, Configured {config, installed}}` or the failure | behaviour, operation layer | LAB-5F | actinglab | public in `crates/lab-ops`, so that the later MCP server (G), another program, calls the same function. The places are `locate`'s (a root's selection, a kept build, a single-location root's `runtime\` or `tools\`; `locate_from` now shares `installed_place` and `selected_config` with it, unchanged in what it answers). Outside them: `Unrooted`, installed. Inside: the selected configuration's `lab_module_authoring` (`AUTHORING_KEY`, the key of `runtime-config`'s `lab_module`), read at each call: `true` installed; absent, `null` (as actingd reads it) or `false` not installed. A selection that cannot be read is the contract's install code; a configuration that cannot be read (or, under a selection, whose bytes are not those the selection names) `config_read_failed`, one that is no JSON object or whose key is not a boolean `config_decode_failed`, each with `path`, the failure as cause: not installed, never read as installed |
 | L5F-2 | where a call is refused: `cli_module::authoring::admit`, first in `crate::execute` | behaviour | LAB-5F | — | every authoring row is served by actinglab's own command (`engine::COMMANDS`), so one place covers actinglab's own words (`package check`, `record start`, `session record start`, `recognition-regression` and the rest), a row's short words (which `main`'s route gives to that command), `serve --stdio` (`engine::line`) and MCP's `--via` child. The command line is a row's when its command words begin with the words of one of the row's `source` entries `actinglab <words>` (the longest deciding). Refused before the command's own gates, so nothing is sent or written: `lab_command_option_disabled`, error, `operation` the row's name and `lab_option` `authoring` as the line's values; `details` repeat them and add `config_path` (key absent or `false`) or `cause` (the failure whole). Exit 1 on the line (`--json`, for people, `serve`); 2 on a `--via` line (`UsageValidation`). Core, debugging and rescue rows never meet it |
 | L5F-3 | where rows are not listed: `cli_module::authoring::listed_help` and `listed` | behaviour | LAB-5F | — | `help` (its `commands`, `command_options` and `compatibility_notes`), `list commands` and `capabilities`' `commands` leave out, where the module is not installed, every entry whose command words begin with an authoring row's own command, and a group one word shorter than one (`record`, `session record`). The other listings and `help_data()` itself are unchanged. `serve --stdio` lists nothing; actinglab has no other place that lists operations by module. `actingctl mcp-serve`'s `tools/list` lists by tier and is not changed (its author tools start actinglab, which refuses them) |
-| L5F-4 | the rows gated | — | LAB-5F | — | exactly the offered rows whose `module` is `authoring`: 35 (`observe`; `record start`, `mark`, `status`, `stop`, `candidates`, `amend`, `step`; `package check`, `preflight`, `validate`, `inspect`, `bundle`, `loading`, `fmt`, `edit`; `resource catalog`, `validate`, `verify`, `restore`, `compile-maa`; `standard-pack check`, `compose`; `scheduling compile`, `timeline`; `operation validate`, `inspect`, `explain`; `regression`; `replay`; `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`). `record draft` (LAB-5) and the four reserved rows are not offered |
+| L5F-4 | the rows gated | — | LAB-5F | — | exactly the offered rows whose `module` is `authoring`: 34 since fix 1 (`observe`; `record start`, `mark`, `status`, `stop`, `candidates`, `amend`, `step`; `package check`, `preflight`, `validate`, `inspect`, `bundle`, `loading`, `fmt`, `edit`; `resource catalog`, `validate`, `verify`, `restore`, `compile-maa`; `standard-pack compose`; `scheduling compile`, `timeline`; `operation validate`, `inspect`, `explain`; `regression`; `replay`; `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`). `record draft` (LAB-5) and the four reserved rows are not offered. `standard-pack check` is a core row since fix 1 (L5F-7), never gated |
 | L5F-5 | `lab_command_option_disabled` | outcome catalog | LAB-5F | actinglab | emitted for the first time; its values stay `operation` and `lab_option` (both required); its description, causes and handling say what §8.3 and the ruling say (before: the U-0 text, read from the Runtime's facts, both installed when neither is named) |
-| L5F-6 | contract text | contract | LAB-5F | — | §8.3, "Where the Lab runs" |
+| L5F-6 | contract text | contract | LAB-5F | — | §8.3, "Where the Lab runs"; fix 1: §8.3, "Which operations", and §9.3's four offline rows that take `--root` or `--state-root` (one core, three authoring) |
+| L5F-7 | `standard-pack check`'s `module`: `core` (was `authoring`) | contract table | LAB-5F fix 1 | — | the coordinator's ruling of 2026-11-11: an operation the Lab core needs, since the rescue module's `place` runs it as its post-check; nothing else of the row changes. What follows from it in the code: `core_ops::serves` leaves it to actinglab's own command, as it leaves `app launch\|restart\|stop` (else `serve --stdio` would hand it to `lab-ops`); `engine::COMMANDS` keeps its entry (its description names it among the core rows); the gate (`authoring::own_commands`) and the listings no longer take it, as they follow the table; LAB-5B2's register moves it to `own_flags::CORE_STRICT_ROWS`. `lab_ops_table_complete` (its `entries` stay `["lab"]`: it sends no request) and `lab_ops_core_rows_served_by_lab_ops` (slice `LAB-2`, not `LAB-1` or `LAB-1b`) are unaffected. Its command line `standard-pack check --root <dir>` and its short words accept, refuse and print what they do on main |
 
 **What an operator sees after deploy.** An installed Lab (inside the installation root) lists
 and serves the authoring operations only when the selected configuration says
 `lab_module_authoring: true`. With the key absent or `false`, recording, package and resource
 checks and the other authoring operations run through the installed actinglab (also by today's MCP
 author tools, which start it) are refused with `lab_command_option_disabled`, and `help` does not
-list them. To turn the module on, the selected configuration gets `"lab_module_authoring": true`
+list them; `standard-pack check`, a core row since fix 1, is listed and served, so that `place`'s
+post-check runs. To turn the module on, the selected configuration gets `"lab_module_authoring": true`
 (the installer's Lab page; until the rescue module's writers exist, through the configuration
 replace the deploy uses); it is read at the next call, no restart needed. An unpacked Tools
 package outside any root is unaffected.
 
-**A row of another module that needs the authoring module.** The rescue module's `place` (and
-`actingctl install pack place`, the same code) runs `<root>\tools\actinglab.exe --json
-standard-pack check --root <game root>` as its post-check; where that actinglab is inside a root
-whose configuration does not say `true`, the check is refused and `place` ends
-`post_check_failed`. It is not gated (the work order: list it, do not gate it). The debugging and
-core lines that add to a recording (`do --capture --record`, `capture --record`, `session app
+**`standard-pack check` is a row of the core module** (fix 1; the coordinator's ruling of
+2026-11-11). The rescue module's `place` (and `actingctl install pack place`, the same code,
+`crates/lab-rescue/src/install/place.rs`) runs `<root>\tools\actinglab.exe --json standard-pack
+check --root <game root>` as its post-check, and an installation without the authoring module must
+still place packages (§8.1: the authoring module is detachable, the rescue module part of the Lab
+core). So the row's `module` is `core` (L5F-7): it is always listed and served and never gated,
+whatever the key says, and 34 rows are gated (L5F-4); `standard-pack compose` stays an authoring
+row. `place.rs`'s post-check needs no change: its command line is that row's, which `admit`
+finds no authoring row for, so the check reaches its command wherever the root's key stands.
+Nothing else of the rescue or core module starts actinglab with an authoring row: the rescue
+module's other children are actingd (`unlock`) and, for `--detach`, its own rescue row run again;
+`lab-ops`' `app launch|restart|stop` run actinglab's `session app`, a core row's command (MCP's
+author tools, in actingctl's MCP front, start actinglab with authoring rows, as "What an operator
+sees after deploy" says). The debugging
+and core lines that add to a recording (`do --capture --record`, `capture --record`, `session app
 --record`) are not gated; they need a recording `record start` began.
 
 **Not in this slice** (main at the base): `lab_module_debugging` is still read by actingd and the
@@ -9039,10 +9059,28 @@ installation roots in a temporary folder, read through a test-only seam
 `cli_module::authoring::test_place`; no Runtime, no device, no clock, no sleep). No existing test
 changed, and none calls an authoring row inside a made-up root without the key: the in-crate
 tests and the integration tests run outside any root (`resource_production_retirement` names a
-root with a selection that does not read, and its lines are refused by the parser first).
+root with a selection that does not read, and its lines are refused by the parser first). Fix 1
+adds to both: in every place, the key absent, `false` and a configuration that cannot be read
+included, `standard-pack check` is listed (`help`'s commands and options, `list commands`,
+`capabilities`) and its call reaches its command, on the command line and in `serve --stdio`
+(its own `standard_pack_root_invalid` for a game folder with no root file, the same line on
+both); `standard-pack compose` is listed only where the module is installed and refused, writing
+nothing, where it is not (the case of `help`'s options that named `standard-pack check` among the
+authoring commands names `standard-pack compose`). Adapted by fix 1, since the row's module
+changes on purpose: `gate_434_lab5a::lab5a_rows_take_what_they_took` (the core rows actinglab's
+own command serves are `app launch|restart|stop` and now `standard-pack check`) and the two tests
+of `gate_434_lab5b2` (the fifth list, "After LAB-5F fix 1" under LAB-5B2 above).
 
 **Interface.** None raised: no request, key, schema or wire shape changes; no code, key, location
 or vocabulary token is added.
+
+**LAB-5F fix 1** (coordinator work order `rd-1108/arch-013/brief-lab5f-fix1.md`): main merged
+(LAB-5B2 #1574, LAB-5C #1573, VIS-LOAD-1 #1572), both sides kept in this register (main's
+subsections first), in `apps.toml`, in `tests/mod.rs` and in `cli_module.rs`; `standard-pack
+check` made a row of the core module (L5F-7), so 34 rows are gated (L5F-4); LAB-5B2's register
+given its fifth list; the texts corrected (§8.3, §9.3, this subsection, `apps.toml`'s rows of
+LAB-5B2 and LAB-5F). Fix 1 adds no row, code, key or interface, and no command line changes what
+it accepts, refuses or prints but by the gate, which no longer takes `standard-pack check`.
 
 **LAB-5F rollback** (to the release before it). Nothing persisted: the build before it does not
 read the key.
