@@ -14108,6 +14108,174 @@ nothing. A console of `runtime-client` 6 cannot read event pages that hold a sto
 
 **Rollback of this slice.** Nothing to roll back: text only.
 
+### 1.318 Slice CLI-COMP (0.12.55): Tab completes `actinglab`'s command lines in PowerShell and bash (Workflow #434; the customer-view audit of 2026-11-11 asked for a command line a person can use without the manual; the coordinator's eight rulings of the same day, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §2, on main `a62434a4`; coordinator work order `rd-1111/brief-cli-completion.md`, read on main `fed839c2`)
+
+The number is the coordinator's: §1.315 to §1.317 and §1.319 are open at the same time.
+[lab-two-entries.md](lab-two-entries.md) §9.3, "Completion", is the contract. No persisted shape,
+wire shape, request kind, configuration key, outcome code, ledger record or interface revision is
+new or changed; [lab-operations.json](lab-operations.json) is unchanged.
+
+**Why.** CLI-EV, CLI-IN and CLI-HELP (§1.306, §1.307, §1.313) fixed what the command line's words
+mean and what its help prints, but nothing completed them: a person typed every row's words,
+options and instance aliases from the help or from memory.
+
+**Turning it on** (ruling 1): two lines per shell, which a person adds; actinglab and the installer
+never edit a profile.
+
+- PowerShell (Windows PowerShell 5.1 and PowerShell 7): `actinglab completion powershell |
+  Out-String | Invoke-Expression` turns it on in the session; `Add-Content $PROFILE 'actinglab
+  completion powershell | Out-String | Invoke-Expression'` keeps it on in every new session.
+- bash: `source <(actinglab completion bash)` turns it on in the shell; `echo 'source <(actinglab
+  completion bash)' >> ~/.bashrc` keeps it on in every new shell.
+
+**What** (`apps/actinglab/src/cli_completion.rs`; `main`, `execute`, `OWN_COMMANDS`,
+`cli_help::OWN_WITHOUT_ROW`).
+
+- **The two commands** (rulings 1, 2 and 8). `completion powershell|bash` (`run_completion`, its
+  read list `COMPLETION_READS`: no flag, the shell) answers `{shell, script}`; without `--json`
+  `main` prints the script as it is (`cli_completion::for_people`, `script_text`). Its sentence:
+  "Prints the Tab completion script of PowerShell or bash, which a person loads from the shell's
+  profile; the script asks actinglab for each word's candidates." `__complete [--json] [--wait-ms
+  <ms>] <index> <:word>...` is the scripts' callback (`callback_line`, `callback_text`,
+  `run_callback`); its sentence says it is not for people: "Not for people: the completion
+  scripts' callback, which prints the candidates of the typed word at the index, one per line; it
+  runs and writes nothing."
+- **The scripts** (`cli_completion::POWERSHELL`, `BASH`, product constants; ruling 2 and the work
+  order's "Build"). Plain ASCII; they need only the shell and the program. Each registers for
+  `actinglab` and `actinglab.exe` (`Register-ArgumentCompleter -Native -CommandName`; `complete -o
+  default -F`), takes the words up to the one being completed (PowerShell: the command's elements
+  that begin before the cursor, a string constant by its value, and an empty word when the word
+  being completed is empty; bash: `COMP_WORDS` up to `COMP_CWORD`), and calls back the program
+  the line names, its first word as typed (`actinglab` on the path, or the path the person typed),
+  with the index of the last and every word quoted and in the word form. PowerShell quotes a
+  candidate that holds a character outside `[\w./\\:=+%-]` in single quotes.
+- **The word form** (`WORD_MARK`): `:` and the word with `%` written `%25`, `"` `%22`, a space
+  `%20` and a tab `%09`; the callback reads any `%` and two hex digits as that byte
+  (`decoded`). Windows PowerShell 5.1 hands a native program an empty word as nothing and a word
+  with a quote broken; a word of the form is never empty and holds no space and no quote, and it
+  never reads as one of actinglab's global options, `--help` or `--via` (none begins with `-`), so
+  it reaches the callback whole in every shell.
+- **The callback** (ruling 2). It reads its line itself: `main` answers a line whose first word is
+  `__complete` before anything else reads it (no option parse, no `--help`, no installation
+  check, no channel reporter), prints the candidates one per line and exits 0; with `--json` it
+  prints the own command's line `{candidates, outcome}`. A line that reaches the dispatch another
+  way (the word not first) answers the same candidates as data. A line it cannot read (no index,
+  a second one, a flag it does not read, a word without the mark, a wait that is no whole number
+  or has no value, a word that is no UTF-8), an index beyond the words or the program's own,
+  and words that begin no command give no candidate. Nothing on stderr, ever; a stdout that
+  refuses the text is left as it is.
+- **What completes** (ruling 3; `candidates`, `names`, `position`, `command_candidates`,
+  `row_candidates`, `RowLine`, `flags`). The command words are those `actinglab help` lists: each
+  offered row (the authoring rows where §8.3 lists them, as help's list does) by its name, by the
+  own command that serves it under other words and by each own command it replaces
+  (`cli_help::row_names`), and each own command without a row, but `__complete`. At each position,
+  the next words of every name the words so far begin, by prefix; actinglab's global options and
+  their values are skipped among the words; `help <words>` completes as the words. After a row's
+  own name: the row's options and switches, `--name` with `_` as `-`, one already on the line left
+  out unless its parameter repeats; after an option of type `enum:…`, or in a positional's place of
+  that type, its words; in a positional's place of another type nothing (the shell's own file
+  names); the global options the row's line takes: where the row hands actinglab's global options
+  to its command as written (`engine::as_written`) those a person gives, else `--json` and
+  `--help` (the CLI module refuses the others by name, §9.3); and `--instance` while the row's
+  positional instance is not given. After an own command without a row, or a row's other
+  spelling: the global options a person gives, nothing else (ruling 5: `own_flags` stays in the
+  test build). The global options a person gives are `help`'s (`cli_help::GLOBAL_OPTION_PHRASES`,
+  where the retired `--require-session` is not listed) but `--via` and the three no command reads
+  (`--instances`, `--profile`, `--quiet`).
+- **An instance** (rulings 3, 4 and 7; `instance_aliases`). Wherever a row's parameter is an
+  instance: its positional (where its command line takes one: never on the 20 rows actinglab's own
+  command serves under the row's name, whose note says "only --instance", register §1.307),
+  `--instance` before or after the row's words, and the instance option of `remedy set` and
+  `wake-test`. The aliases of the running Runtime, asked with `Status`, the read that resolves
+  `<instance>` today (`core_ops::alias_of` and the reads beside it), on one connection of the Lab
+  channel made as actinglab's own commands make theirs (`lab_client_config_via`) with one deadline
+  (`RuntimeClientConfig::with_deadline`) that ends the connect, the handshake (`Health`,
+  `BindChannel`) and the read. When no Runtime answers by then (none is located, none runs, it
+  answers no `Status` in time), the aliases of the selected configuration the offline rows read
+  (`lab_ops::packs::selected_config` and `packs::read`, as `packs` reads it, from the install root
+  this program runs from); none where neither reads. The Runtime is asked only at an instance's
+  place. The host answers `Health`, `BindChannel` and `Status` from memory and appends no ledger
+  record for any of them (`HostShared::control_plane_status`, `governance.rs` `bind_channel`), so
+  ruling 7's condition holds: no new request, no ledger record.
+- **The wait** (ruling 4). `--wait-ms <ms>`, a parameter of the callback, default 500
+  (`cli_completion::DEFAULT_WAIT_MS`); the scripts pass none. `0` asks no Runtime. No configuration
+  key.
+- **Not completed** (ruling 6): files, paths, directories, keys, ids, numbers, durations, JSON and
+  free text: the callback answers nothing there, and both scripts leave the word to the shell's
+  own file name completion (PowerShell's when a native completer returns nothing; bash's by
+  `complete -o default`).
+
+**Settled where the rulings left it open** (the implementer's; for the coordinator to confirm).
+(a) The callback's word is `__complete`, and it is left out of the command words a person is
+offered, though `help` lists it with its sentence. (b) The words reach the callback in the word
+form, not bare: PowerShell 5.1's native argument passing drops an empty word and breaks one with
+a quote, and a bare word could read as actinglab's own option. (c) The scripts call back the
+program the line names, its first word as typed. (d) The callback's index counts the program's
+word as 0, as bash's `COMP_CWORD` does, and its words end at the one being completed. (e) The
+candidates are sorted and given once; PowerShell quotes one that needs it, bash inserts each as
+it is. (f) After a row's own name a word that is no flag gets its positional's candidates (an
+instance's aliases, an enumeration's words) and, where no positional is left and nothing is typed,
+the row's flags; a flag gets the flags. (g) The global options after a row are those its line takes
+(see above), not all of them. (h) A row's other spellings (`session app launch`, `lab watch`)
+complete as own commands, by the coordinator's ruling 5. (i) A group's words followed by a flag
+(`lab --`) offer `--help`. (j) The wait's default is 500 milliseconds and `0` skips the Runtime;
+the subprocess test passes a longer wait so that a slow runner's handshake still fits. (k) A
+line that reaches the dispatch with the word not first answers the candidates as data (the
+dispatch arm the inventory counts), its global options already parsed. (l) The `completion`
+command and the callback are in LAB-5B5's group (a): the first refuses by its read list, the
+second reads every word of its line and answers one it cannot read with no candidate, ignoring
+none.
+
+**Censuses** (ruling 8; each moved with the two commands).
+
+- The dispatch: two arms in `execute` after `explain`; `OWN_COMMANDS` 32 → 34.
+- The command inventory `ratchet/actinglab_commands.json`: `dispatch_arm_count` 45 → 47,
+  `command_count` 100 → 102, `completion` and `__complete` after `explain` in both lists; the
+  README's count (both READMEs, the English and the Chinese, two places each) with it.
+- LAB-5B5's census (`cli_module::own_flags`, test build only): `REFUSING_COMMANDS` 59 → 61.
+- CLI-HELP's table of own commands without a row: `cli_help::OWN_WITHOUT_ROW` 35 → 37, each with
+  its sentence; its test's count, `gate_434_cli_help::cli_help_the_list_has_every_offered_row_and_own_command_once`,
+  34 → 36 (the two commands have no row either), and the CLI-HELP gate row's text with it. The
+  help's list holds both with their sentences.
+
+**What a person sees.** `actinglab pa<Tab>` offers the command words that begin so (`pause`,
+`packs`, `pack-schedule`, `package` and `paths` among them); `actinglab pause <Tab>` the running
+Runtime's aliases; `actinglab events --view <Tab>`
+`changes`, `errors`, `events`, `health`, `lab` and `observation`; `actinglab tap --<Tab>` the flags
+`tap`'s line takes, `--instance` among them; `actinglab run start <alias> <Tab>` file names. With
+the Runtime stopped, an alias comes from the selected configuration. A Tab never prints an error.
+
+**Interface.** None moves: `ledger` 7, `runtime-client` 6, `actingd-config` 28, `package` 8 and
+`runtime-outcomes` 1 unchanged; no request, no outcome code, no configuration key.
+
+**Rollback.** Nothing is persisted. A build before this one answers `completion` and `__complete`
+as unknown commands (exit 1, nothing on stdout the scripts read), so a loaded script then offers
+no candidate and the shell completes file names; removing the profile's line ends it.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CLICOMP-1 | `actinglab completion powershell\|bash` | own command, `{shell, script}`; the script as it is without `--json` | CLI-COMP | actinglab | `since` 0.12.55 |
+| CLICOMP-2 | `actinglab __complete [--json] [--wait-ms <ms>] <index> <:word>...` | own command not for people: candidates one per line, `{candidates}` with `--json`; exit 0 always, nothing on stderr | CLI-COMP | actinglab, the two scripts | `since` 0.12.55; the word form `:` with `%25`, `%22`, `%20`, `%09` |
+| CLICOMP-3 | `cli_completion::POWERSHELL`, `BASH` | product constants, plain ASCII | CLI-COMP | — | `Register-ArgumentCompleter -Native`; `complete -o default -F` |
+| CLICOMP-4 | `--wait-ms`, default 500 | a parameter of the callback (no configuration key) | CLI-COMP | — | `0` asks no Runtime |
+
+Tests (apps gate row "#434 CLI-COMP"; the table this build embeds, neutral aliases, a configuration
+in a temporary folder and the runtime client's scripted Runtime):
+`gate_434_cli_comp::cli_comp_command_words_by_prefix_at_each_position`,
+`cli_comp_a_row_s_flags_and_an_enumeration_s_words`,
+`cli_comp_instances_from_the_runtime_else_the_configuration`,
+`cli_comp_a_row_whose_instance_is_only_the_flag_offers_the_flag`,
+`cli_comp_anything_wrong_gives_no_candidate` and
+`cli_comp_the_scripts_are_ascii_and_pass_the_words_marked` (the bin's), and the integration test
+`completion_callback::completion_callback_prints_on_stdout_only_and_exits_zero` (the program run as
+a process: stdout only, exit 0, with an answering Runtime, a silent one, none, and lines it cannot
+read). That the embedded operation table does not read is not reachable in a test. The only
+existing test that changes is CLI-HELP's count above; the inventory guard
+`command_inventory_matches_checked_in_snapshot`, LAB-2's
+`consumer_command_lines_take_the_old_path_unchanged`, LAB-2b's `own_results_never_name_outcome`
+and LAB-5B5's `the_census_puts_every_inventory_word_in_one_group` read the moved censuses
+unchanged. No golden changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

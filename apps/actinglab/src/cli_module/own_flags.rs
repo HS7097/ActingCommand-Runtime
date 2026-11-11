@@ -413,8 +413,11 @@ pub(crate) const UNROWED_READS: [&FlagReads; 4] = [
 /// commands that already refused every flag and word they do not read: by a read list or a strict
 /// list (LAB-5B2, LAB-5B4), or by their own check (`schema`, whose words are the kind it names;
 /// `package dry-run`, `runtime reset|observe`, `run summary` and `session backend`, each against
-/// its own list; `record` and `session record`, whose actions are LAB-5B4's).
-pub(crate) const REFUSING_COMMANDS: [&str; 59] = [
+/// its own list; `record` and `session record`, whose actions are LAB-5B4's). Workflow #434
+/// CLI-COMP (register §1.318): `completion`, parsed by its read list, and `__complete`, the
+/// completion scripts' callback, which reads every word of its line (its options, the index, the
+/// typed words in their form) and answers a line it cannot read with no candidate, ignoring none.
+pub(crate) const REFUSING_COMMANDS: [&str; 61] = [
     "schema",
     "touch-probe",
     "tap",
@@ -474,6 +477,8 @@ pub(crate) const REFUSING_COMMANDS: [&str; 59] = [
     "session record",
     "run list",
     "run summary",
+    "completion",
+    "__complete",
 ];
 
 /// Workflow #434 LAB-5B5: group (b), the commands of the inventory the CLI module serves from the
