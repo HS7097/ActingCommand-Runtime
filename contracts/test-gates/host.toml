@@ -3418,3 +3418,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_419_iso_start1::iso_start1_a_store_that_cannot_be_written_still_fails_the_start",
 ]
 incident = ["#419 ISO-START-1"]
+
+# #428 SCHED-C1b (0.12.52; register §1.299, "Slice SCHED-C1b"; brief rd-1111/brief-sched-c1b.md; contracts/standard-pack-schedule.md, "Provenance" and "The scheduler workbench"): the workbench records config.catalog_provenance where and when it records config.catalog_warnings. A composed root with a fixed value the pack wrote, one marked fixed_value_origin model and a valuation block the pack declared: the fact holds count rows {game, kind, origin, count} per kind and origin and the id rows in file order, each under its origin, and the activation's standard_pack_registered record is RL-1b's member for member (no record of its own); the mark taken out (no digest changes): no new activation or registration, and the fact follows; a file without fixed values and valuation blocks: the next activation records the fact empty. A composition without such values records no config.catalog_provenance, also at the first check after a restart
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::sched_c1b_a_the_fact_holds_each_value_under_its_origin_and_follows_an_origin_change",
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::sched_c1b_b_a_generation_without_values_records_no_fact",
+]
+incident = ["#428 SCHED-C1b"]

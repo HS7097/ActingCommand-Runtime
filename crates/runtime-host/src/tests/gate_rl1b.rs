@@ -13,9 +13,11 @@ use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
-    CONFIG_CATALOG_WARNINGS_FACT_KEY, CatalogCompileWarning, ConfigCatalogWarnings,
-    ConfigParameter, ConfigParameterSource, FactScalar, RuntimeConfigManifest, RuntimeFactRecord,
-    RuntimeFactScope, RuntimeLifecyclePhase, RuntimePayload,
+    CONFIG_CATALOG_PROVENANCE_FACT_KEY, CONFIG_CATALOG_WARNINGS_FACT_KEY, CatalogCompileWarning,
+    CatalogProvenanceCount, CatalogProvenanceEntry, CatalogValueKind, CatalogValueOrigin,
+    ConfigCatalogProvenance, ConfigCatalogWarnings, ConfigParameter, ConfigParameterSource,
+    FactScalar, RuntimeConfigManifest, RuntimeFactRecord, RuntimeFactScope, RuntimeLifecyclePhase,
+    RuntimePayload,
 };
 use actingcommand_policy::{
     STANDARD_PACKS_CATALOG_ID, StandardPackBinding, StandardPackComposeInput,
@@ -1451,5 +1453,203 @@ fn cw1_e_after_a_restart_the_fact_holds_the_active_generation_s_warnings_again()
     assert_eq!(bench.events(EventType::CatalogActivated).len(), 1);
     assert_eq!(registrations(&bench, GAME_A).len(), 1);
     assert_eq!(held_warnings(&bench), lines_unvalued_in_a());
+    bench.close();
+}
+
+// ---------------------------------------------------------------------------------------------
+// #428 SCHED-C1b (register §1.299; coordinator work order rd-1111/brief-sched-c1b.md;
+// contracts/standard-pack-schedule.md, "Provenance"): the workbench records who wrote the active
+// generation's fixed values and valuations where and when it records its compile warnings
+// ---------------------------------------------------------------------------------------------
+
+/// A third rule of game A, on its own package.
+const RULE_3: &str = "fixture.third";
+const PACKAGE_3: &str = "fixture.third";
+
+/// [`schedule_a`] with three rules: rule 1 produces into pool A, whose valuation block the pack
+/// declared (no `valuation_origin`); rule 2 runs on a fixed value the pack wrote and rule 3 on
+/// one the model's export wrote, marked `"fixed_value_origin": "model"` when `marked`, neither
+/// producing anything; `requires` names `benefit_fixed_value`.
+fn schedule_a_fixed_values(marked: bool) -> Value {
+    let mut schedule = schedule_a(&[
+        (RULE_1, PACKAGE_1, 100),
+        (RULE_2, PACKAGE_2, 100),
+        (RULE_3, PACKAGE_3, 100),
+    ]);
+    schedule["requires"] = json!([actingcommand_policy::BENEFIT_FIXED_VALUE_SUBSYSTEM]);
+    schedule["rules"][1]["fixed_value_milli"] = json!(12_000);
+    schedule["rules"][2]["fixed_value_milli"] = json!(9_000);
+    if marked {
+        schedule["rules"][2]["fixed_value_origin"] = json!("model");
+    }
+    schedule
+}
+
+/// [`schedule_a`] with rule 1 alone and pool A without its valuation block: no fixed value and no
+/// declared valuation.
+fn schedule_a_without_values() -> Value {
+    let mut schedule = schedule_a(&[(RULE_1, PACKAGE_1, 100)]);
+    let pool = schedule["pools"][0].as_object_mut().expect("pool A");
+    pool.shift_remove("valuation");
+    schedule
+}
+
+/// The `config.catalog_provenance` fact the host holds now.
+fn catalog_provenance_fact(bench: &Bench) -> Option<RuntimeFactRecord> {
+    bench
+        .host
+        .runtime_fact_snapshot()
+        .expect("the runtime fact snapshot")
+        .records
+        .into_iter()
+        .find(|record| {
+            record.scope == RuntimeFactScope::Runtime
+                && record.key == CONFIG_CATALOG_PROVENANCE_FACT_KEY
+        })
+}
+
+/// The values `config.catalog_provenance` holds now, read back.
+fn held_provenance(bench: &Bench) -> ConfigCatalogProvenance {
+    let fact = catalog_provenance_fact(bench).expect("config.catalog_provenance is held");
+    ConfigCatalogProvenance::from_fact_record(&fact).expect("the fact reads back")
+}
+
+/// One value of game A: its kind, who wrote it and its rule's or pool's id.
+fn value_of_a(
+    kind: CatalogValueKind,
+    origin: CatalogValueOrigin,
+    id: &str,
+) -> CatalogProvenanceEntry {
+    CatalogProvenanceEntry {
+        game: GAME_A.to_owned(),
+        kind,
+        origin,
+        id: id.to_owned(),
+    }
+}
+
+/// The count row of game A's values of `kind` from `origin`.
+fn count_of_a(
+    kind: CatalogValueKind,
+    origin: CatalogValueOrigin,
+    count: u64,
+) -> CatalogProvenanceCount {
+    CatalogProvenanceCount {
+        game: GAME_A.to_owned(),
+        kind,
+        origin,
+        count,
+    }
+}
+
+/// SCHED-C1b test 1: a generation whose catalog holds a fixed value the pack wrote, one the
+/// model's export marked and a valuation block the pack declared. `config.catalog_provenance`
+/// holds each under its origin, one count row per kind and origin, then the ids in file order;
+/// the activation's `standard_pack_registered` record is RL-1b's, member for member (the fact
+/// has no record of its own). The model's mark taken out, only an origin changes, which changes
+/// no digest: no new activation, no new registration, and the fact follows, both fixed values
+/// now the pack's. A file without fixed values and valuation blocks: the next activation records
+/// the fact empty, as CW-1 records its fact once the active generation has no warning.
+#[test]
+fn sched_c1b_a_the_fact_holds_each_value_under_its_origin_and_follows_an_origin_change() {
+    use CatalogValueKind::{FixedValue, Valuation};
+    use CatalogValueOrigin::{Model, Pack};
+
+    let bench = Bench::new(&[BOUND_A], &[POOL_A], true, None);
+    let packages = [PACKAGE_1, PACKAGE_2, PACKAGE_3];
+    let marked = schedule_a_fixed_values(true);
+    bench.place(GAME_A, SERVER_A, &packages, Some(&marked));
+    bench.cycle(POLICY_NOW_UNIX_MS, 0);
+    assert_eq!(bench.active().catalog_id(), STANDARD_PACKS_CATALOG_ID);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 1);
+    let held = held_provenance(&bench);
+    assert_eq!(
+        held.counts,
+        [
+            count_of_a(FixedValue, Pack, 1),
+            count_of_a(FixedValue, Model, 1),
+            count_of_a(Valuation, Pack, 1),
+        ]
+    );
+    assert_eq!(
+        held.ids,
+        [
+            value_of_a(FixedValue, Pack, RULE_2),
+            value_of_a(FixedValue, Model, RULE_3),
+            value_of_a(Valuation, Pack, POOL_A),
+        ]
+    );
+    assert!(!held.is_cut(), "{held:?}");
+    let registered = registrations(&bench, GAME_A);
+    assert_eq!(registered.len(), 1, "{registered:#?}");
+    let sha = registered[0]
+        .value("schedule_sha256")
+        .and_then(Value::as_str)
+        .expect("schedule_sha256");
+    assert_eq!(
+        registered[0],
+        Outcome::new(HostCode::StandardPackRegistered)
+            .operation(HostLocation::StandardPackRegister)
+            .game(GAME_A)
+            .count(3_usize)
+            .schedule_sha256(sha)
+            .rules(3_usize)
+            .held(0_usize)
+            .unclassified(0_usize)
+    );
+
+    // Only an origin changes: the same catalog hash and rules digest.
+    let unmarked = schedule_a_fixed_values(false);
+    bench.place(GAME_A, SERVER_A, &packages, Some(&unmarked));
+    bench.cycle(POLICY_NOW_UNIX_MS, INTERVAL_MS);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 1);
+    assert_eq!(registrations(&bench, GAME_A).len(), 1);
+    let held = held_provenance(&bench);
+    assert_eq!(
+        held.counts,
+        [
+            count_of_a(FixedValue, Pack, 2),
+            count_of_a(Valuation, Pack, 1),
+        ]
+    );
+    assert_eq!(
+        held.ids,
+        [
+            value_of_a(FixedValue, Pack, RULE_2),
+            value_of_a(FixedValue, Pack, RULE_3),
+            value_of_a(Valuation, Pack, POOL_A),
+        ]
+    );
+
+    // Neither fixed values nor a valuation block: the fact is recorded empty.
+    let plain = schedule_a_without_values();
+    bench.place(GAME_A, SERVER_A, &[PACKAGE_1], Some(&plain));
+    bench.cycle(POLICY_NOW_UNIX_MS, 2 * INTERVAL_MS);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 2);
+    let fact = catalog_provenance_fact(&bench).expect("config.catalog_provenance stays recorded");
+    assert_eq!(fact.value, ContractFactValue::RecordList(Vec::new()));
+    assert!(held_provenance(&bench).is_empty());
+    bench.close();
+}
+
+/// SCHED-C1b test 2 (CW-1 test 2's rule for a composition without warnings): a composition
+/// without fixed values and valuation blocks records no `config.catalog_provenance`, at its
+/// activation and at the first check after a restart, so a Runtime whose catalogs never held
+/// such a value records nothing new.
+#[test]
+fn sched_c1b_b_a_generation_without_values_records_no_fact() {
+    let bench = Bench::new(&[BOUND_A], &[POOL_A], true, None);
+    let plain = schedule_a_without_values();
+    bench.place(GAME_A, SERVER_A, &[PACKAGE_1], Some(&plain));
+    bench.cycle(POLICY_NOW_UNIX_MS, 0);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 1);
+    assert!(catalog_provenance_fact(&bench).is_none());
+
+    // The restarted host evaluates at the fixture's restart instant, after every record of the
+    // first start (board #71, TCLOCK).
+    let bench = bench.restart(true);
+    bench.cycle(POLICY_RESTART_UNIX_MS, 0);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 1);
+    assert!(catalog_provenance_fact(&bench).is_none());
     bench.close();
 }

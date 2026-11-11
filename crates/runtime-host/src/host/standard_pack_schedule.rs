@@ -45,16 +45,19 @@ use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, Record};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, CONFIG_CATALOG_WARNINGS_FACT_KEY, ConfigCatalogWarnings,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    BundleIndex, BundleMaintenance, CONFIG_CATALOG_PROVENANCE_FACT_KEY,
+    CONFIG_CATALOG_WARNINGS_FACT_KEY, CatalogProvenanceEntry, CatalogValueKind, CatalogValueOrigin,
+    ConfigCatalogProvenance, ConfigCatalogWarnings, STANDARD_PACK_BUNDLE_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
     STANDARD_PACK_TABLES_DIRECTORY, StandardPackRoot, StandardPackRootBytes,
     read_standard_pack_root,
 };
 use actingcommand_policy::{
-    CompiledCatalog, STANDARD_PACK_OPERATION_ID, STANDARD_PACKS_CATALOG_ID, StandardPackBinding,
-    StandardPackCompileWarning, StandardPackComposeInput, StandardPackComposition,
-    StandardPackGameFiles, StandardPackRuleIssue, compose_standard_pack_rules,
+    BenefitProvenance, CompiledCatalog, STANDARD_PACK_OPERATION_ID, STANDARD_PACKS_CATALOG_ID,
+    StandardPackBinding, StandardPackCompileWarning, StandardPackComposeInput,
+    StandardPackComposition, StandardPackGameFiles, StandardPackRuleIssue,
+    compose_standard_pack_rules,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -295,6 +298,33 @@ impl CompositionRecord {
                 .collect(),
         }
     }
+}
+
+/// #428 SCHED-C1b: one game's provenance as the composer gives it, as the entries of
+/// `config.catalog_provenance`: the fixed values, then the valuations, each by the pack's hand,
+/// then by the model's export, each list in file order.
+fn provenance_entries(game: &str, provenance: &BenefitProvenance) -> Vec<CatalogProvenanceEntry> {
+    let kinds = [
+        (CatalogValueKind::FixedValue, &provenance.fixed_value),
+        (CatalogValueKind::Valuation, &provenance.valuation),
+    ];
+    let mut entries = Vec::new();
+    for (kind, origins) in kinds {
+        for (origin, ids) in [
+            (CatalogValueOrigin::Pack, &origins.pack),
+            (CatalogValueOrigin::Model, &origins.model),
+        ] {
+            for id in ids {
+                entries.push(CatalogProvenanceEntry {
+                    game: game.to_owned(),
+                    kind,
+                    origin,
+                    id: id.clone(),
+                });
+            }
+        }
+    }
+    entries
 }
 
 /// The refusal record of one issue of `game`'s `schedule.json` at `path`.
@@ -702,6 +732,8 @@ impl HostShared {
         }
         // #428 CW-1: the active generation's compile warnings, as the overview shows them.
         self.record_catalog_warnings(&composition)?;
+        // #428 SCHED-C1b: who wrote its fixed values and valuations, in the same place.
+        self.record_catalog_provenance(&composition)?;
         // Item 1 of the RL-1a review: a configured reading of a pool no composed game declares
         // is left out of the evaluation; it is recorded once per pool.
         let configured_pools = lock(&self.policy_inputs, HostLocation::ReadPolicyInputs)?
@@ -771,6 +803,37 @@ impl HostShared {
         {
             Some(stored) => stored.value == record.value,
             None => warnings.is_empty(),
+        };
+        if unchanged {
+            return Ok(());
+        }
+        self.record_config_fact(record)
+    }
+
+    /// #428 SCHED-C1b (register §1.299; `contracts/standard-pack-schedule.md`, "Provenance"):
+    /// records `config.catalog_provenance`, who wrote the fixed values and the valuation blocks of
+    /// `composition`, which the active generation holds, every game's, as the composer gives them
+    /// ([`StandardPackComposition::benefit_provenance`]). As `record_catalog_warnings` does:
+    /// after the same compositions, so also when only an origin changed (no digest changes),
+    /// nothing when the stored value is the same nor while the fact is absent and the composition
+    /// has no such value, and the fact recorded empty once the active generation has none. No
+    /// record of its own: the fact's `runtime.fact_recorded` is all the ledger gets.
+    fn record_catalog_provenance(
+        &self,
+        composition: &StandardPackComposition,
+    ) -> RuntimeHostResult<()> {
+        let entries = composition
+            .benefit_provenance()
+            .iter()
+            .flat_map(|(game, provenance)| provenance_entries(game, provenance))
+            .collect::<Vec<_>>();
+        let provenance = ConfigCatalogProvenance::of(&entries);
+        let record = provenance.to_fact_record(0, OriginModule::Policy);
+        let unchanged = match lock(&self.runtime_facts, HostLocation::StandardPackRead)?
+            .get(&RuntimeFactScope::Runtime, CONFIG_CATALOG_PROVENANCE_FACT_KEY)
+        {
+            Some(stored) => stored.value == record.value,
+            None => provenance.is_empty(),
         };
         if unchanged {
             return Ok(());

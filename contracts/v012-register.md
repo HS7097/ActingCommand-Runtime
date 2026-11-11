@@ -11061,6 +11061,64 @@ name `benefit_fixed_value`, so its composer refuses such a `schedule.json`
 decision memories name (§1.225's rollback correction), so first remove the members and let this
 build activate a generation without them, as §1.289's rollback says for SS-2h's.
 
+#### Slice SCHED-C1b (0.12.52): the workbench records where a catalog's values come from
+
+Coordinator work order `rd-1111/brief-sched-c1b.md`; on the SCHED-C1a branch
+`claude/428-sched-c1a-fixed-value` at `a6ca4160` (Runtime PR #1585). The contract is
+[standard-pack-schedule.md](standard-pack-schedule.md) ("Provenance", "The scheduler workbench"),
+row SC1-7 above, and CW-1's `config.catalog_warnings` (§1.290), whose shape, limits and place the
+fact follows. The text names no game, resource or value: the tests' ids are neutral.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| C1B-1 | the program fact `config.catalog_provenance` (runtime scope, untagged): `ConfigCatalogProvenance` of `CatalogProvenanceCount` and `CatalogProvenanceEntry` rows, `CatalogValueKind` (`fixed_value`, `valuation`), `CatalogValueOrigin` (`pack`, `model`), `CONFIG_CATALOG_PROVENANCE_FACT_KEY` (SC1-7) | new key of the `config.` family | SCHED-C1b | runtime-host workbench | `crates/actingcommand-contract/src/runtime_fact.rs`; written by `record_catalog_provenance` (`crates/runtime-host/src/host/standard_pack_schedule.rs`), called right after `record_catalog_warnings`, from the composer's `StandardPackComposition::benefit_provenance` (read, not changed); the cut row `{counts_omitted, ids_omitted}` last when rows were left out; no record of its own |
+| C1B-2 | `catalog.benefit_provenance {fixed_value {pack, model}, valuation {pack, model}, items [{game, kind, origin, id}], items_omitted?, counts_omitted?}` (SC1-7) | `actingctl overview` / `ac_overview` answer | SCHED-C1b | lab-ops overview | `crates/lab-ops/src/overview.rs` `benefit_provenance`, from `catalog_block`; absent without the fact or with nothing in it; the cut takes `catalog.benefit_provenance.items` just before `catalog.compile_warnings.items` |
+
+**Tests.** New: host rows "#428 SCHED-C1b",
+`actingcommand-runtime-host::lib::tests::gate_rl1b::sched_c1b_a_the_fact_holds_each_value_under_its_origin_and_follows_an_origin_change`
+and `gate_rl1b::sched_c1b_b_a_generation_without_values_records_no_fact`; apps rows "#428
+SCHED-C1b",
+`actingcommand-lab-ops::lib::overview::tests::sched_c1b_c_a_cut_fact_and_the_catalog_block_say_how_many_rows_are_missing`
+and `overview::tests::sched_c1b_d_the_catalog_block_shows_the_provenance_and_is_unchanged_without_the_fact`;
+on fakes with a manual clock, no sleep and no wait. No test adapted.
+
+**Interface.** None raised, as §1.290: a new key in the `config.` family of
+`runtime.fact_recorded` with the existing `RecordList` value, no member or word of a closed
+vocabulary the ledger reader checks; no request or answer shape of `runtime-client` changes (the
+fact travels in the existing `RuntimeFactSnapshot` answer); the overview's `catalog` block is
+presentation. No outcome code, outcome key or configuration key is new.
+
+**Where SCHED-C1b reads the contract.**
+
+- (a) "One count row per game, kind and origin" is one per combination that has a value, as CW-1
+  writes a count row only for a code a game has. A generation without any fixed value or declared
+  valuation therefore has no row, and the fact follows CW-1's rule for no warnings: not recorded
+  while absent, recorded empty once the active generation has none.
+- (b) The order: count rows by game, kind (`fixed_value` before `valuation`) and origin (`pack`
+  before `model`); the id rows in the same order, each list in the file order the composer gives.
+- (c) The cut row's members are `counts_omitted` and `ids_omitted`; the overview carries them as
+  `counts_omitted` and `items_omitted`, the names CW-1's member uses.
+- (d) The overview's counts are totals over every game; each game's values are in `items`.
+- (e) "The budget rules the overview's other catalog members follow": MCP cuts
+  `catalog.benefit_provenance.items` (leaving `items_truncated: true`) just before
+  `catalog.compile_warnings.items`, so a warning outlasts an informational list, then the block;
+  registered in [runtime-interface.md](runtime-interface.md) and in the overview's cut order. The
+  `ac_overview` tool description names the member and its cut.
+- (f) The contract text: "(SCHED-C1b, not built yet)" became "(SCHED-C1b, register §1.299, since
+  0.12.52)", and so did the mark "(SCHED-C1, register §1.299, not built yet)" of the workbench's
+  "Provenance" bullet in "The scheduler workbench", the one other sentence naming the fact; no
+  other mark changed.
+
+**What SCHED-C1b changes live.** Nothing until a `schedule.json` writes a fixed value or a
+valuation block: no fact is recorded and the overview's `catalog` block is unchanged. With one,
+the workbench records one `runtime.fact_recorded` of `config.catalog_provenance` when a
+composition's provenance differs from the one it holds, and again at the first check after each
+start (`config.` is re-observed). Composing, activating and deciding are unchanged.
+
+**SCHED-C1b rollback** (to the build before it). The ledger and the configuration need nothing:
+`config.catalog_provenance` is a fact record of an existing shape, which an earlier build reads as
+any other and does not load at its start; its overview shows no such member.
+
 ### 1.301 Slice ISO-START-1 (0.12.52): one pair's refused settlement fact no longer stops the start (#419; Alice's requirement on board #419 of 10-24: one emulator's fault must not bring down the whole Runtime; the debt the coordinator logged on 11-11, #421 6774483473 and #428 6770731970: isolate only that pair; the coordinator's ruling on the three cases, not Alice's words: coordinator work order `rd-1111/brief-iso-start-1.md`)
 
 [runtime-fact-store.md](runtime-fact-store.md) ("Settlement facts" and "Typed codes") and the
@@ -11260,6 +11318,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.catalog_warnings` (count and place rows of the active composed generation's compile warnings; §1.290 CW1-2) | workbench | no (`config.` is re-observed) | #428 CW-1 |
+| `config.catalog_provenance` (count and id rows of who wrote the active composed generation's fixed values and valuations; §1.299 SC1-7, C1B-1) | workbench | no (`config.` is re-observed) | #428 SCHED-C1b |
 | `config.parameters.touch` (a section fact of the `config.parameters.<section>` family, five rows; §1.136 T12-4) | workbench | no (`config.` is re-observed) | #406 T12 |
 | `config.parameters.emulator_control` (a section fact of the `config.parameters.<section>` family, one row; §1.158 A50-5) | workbench | no (`config.` is re-observed) | #411 A50 |
 | `config.parameters.execution` (a section fact of the `config.parameters.<section>` family, four rows since STILL-1; §1.177 B1-2, B1-3; §1.249 ST1-1) | workbench | no (`config.` is re-observed) | PERF-B1 |
