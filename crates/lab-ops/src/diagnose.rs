@@ -51,6 +51,7 @@ use crate::child::{self, Captured, ChildFailure};
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::events::{self, CursorBinding};
+use crate::front::Connection;
 use crate::instance_selector::{self, SelectorMiss};
 use crate::overview::Warning;
 use crate::packs;
@@ -73,6 +74,7 @@ use actingcommand_runtime_client::{
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::identity;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1784,10 +1786,15 @@ fn stderr_tail(stderr: &[u8]) -> String {
 /// stdout (Workflow #378 A5): the diagnosis with `runtime_diagnosis_reported`, or `{outcome}`
 /// with the failure (a flag failure's developer line adds the usage) and exit 1.
 pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
+    dispatch_on(arguments, Connection::per_call())
+}
+
+/// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
+pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != "diagnose" {
         return None;
     }
-    Some(match run(arguments) {
+    Some(match run(arguments, connection) {
         Ok(diagnosis) => cli_line::success(
             cli_line::members(diagnosis, "diagnosis"),
             &Outcome::new(ActingctlCode::RuntimeDiagnosisReported),
@@ -1799,12 +1806,13 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     })
 }
 
-fn run(arguments: &[OsString]) -> Result<Value, Failure> {
+fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Value, Failure> {
     let (state_root, root, request) = parse(arguments)?;
     let since_unix_ms = request.window(now_unix_ms()?)?;
     let deadline = Instant::now() + CLI_READ_BUDGET;
     let report = SuspensionReport::start(root.as_deref(), deadline);
-    let client = RuntimeClient::connect(crate::front::client_config(&state_root))
+    let client = connection
+        .reach(&state_root, identity)
         .map_err(Failure::Runtime)?;
     let (diagnosis, query) = read(
         &client,

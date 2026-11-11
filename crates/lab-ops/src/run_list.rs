@@ -14,6 +14,7 @@
 use crate::budget::{self, Budget};
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::front::Connection;
 use crate::instance_selector::{self, SelectorMiss};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{InstanceId, RuntimeControlPlaneStatus};
@@ -23,6 +24,7 @@ use actingcommand_runtime_client::{
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
+use std::convert::identity;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -539,10 +541,15 @@ fn row(run: &ListedContainedRun, status: Option<&RuntimeControlPlaneStatus>) -> 
 /// stdout (Workflow #378 A5): the run list with `run_list_reported`, or `{outcome}` with the
 /// failure (an argument failure's developer line adds the usage) and exit 1.
 pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
+    dispatch_on(arguments, Connection::per_call())
+}
+
+/// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
+pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != "runs" {
         return None;
     }
-    Some(match run(arguments) {
+    Some(match run(arguments, connection) {
         Ok(result) => cli_line::success(result, &Outcome::new(ActingctlCode::RunListReported)),
         Err(failure @ Failure::Argument { .. }) => {
             cli_line::failure(&failure.outcome(), Some(USAGE))
@@ -551,11 +558,12 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     })
 }
 
-fn run(arguments: &[OsString]) -> Result<Map<String, Value>, Failure> {
+fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Map<String, Value>, Failure> {
     let (state_root, request) = parse(arguments)?;
     let now_unix_ms = now_unix_ms()?;
     let deadline = Instant::now() + CLI_READ_BUDGET;
-    let client = RuntimeClient::connect(crate::front::client_config(state_root))
+    let client = connection
+        .reach(state_root, identity)
         .map_err(Failure::Runtime)?;
     let answer = read(&client, &request, now_unix_ms, deadline)?;
     let mut result = cli_line::members(answer.render(answer.row_count()), "runs");
