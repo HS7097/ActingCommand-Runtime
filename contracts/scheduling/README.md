@@ -1603,6 +1603,10 @@ and no decision reads it. The general read `ScheduleExplanation`
 are MCP-19b's: `actingctl schedule`, MCP `ac_schedule`, the `not_running` row of `ac_overview` and
 the `not_run` rows of `ac_diagnose`.
 
+(HELD, not built yet; Workflow #438) A row that keeps one `why` code of the held set past a
+configured time leaves one warning record, and its end one info record, while the table itself
+stays out of the ledger ("Held records" below).
+
 What the ledger keeps (Workflow #411 A26, since 0.12.5): only a round that dispatches records
 anything, in the reasons of its dispatch events ("Dispatch Decision Record" above). There each
 candidate the record lists carries `why` (that code), `decision_state` and `eligibility` as values
@@ -1954,6 +1958,157 @@ A due clock occurrence that is not dispatched leaves one trace (Workflow #372). 
   - A record is written only while the pair is live: its task is placed on the instance, and its trigger, evaluated with the evaluation's facts once every counted clock is counted due, is true. A follower whose head failed or a task outside its timeline window gets none. A pair that was never dispatched gets none either: R7's grace bounds its first run, and K2's owed record carries `first_run`. While the Runtime runs, the first evaluation after `O + grace_ms` or O′ comes within one cycle; after a Runtime gap, liveness reads the facts at the restart.
   - Each is written once per (pair, O), its `signal_id` `signal:clock_slot:<expired|superseded>:<hex>` with K2's digest, checked against the projection before it is written.
 - **Not recorded.** An occurrence a catalog skips by making its trigger false, and the occurrences of a pair that was never dispatched.
+
+## Held records (Workflow #438 HELD, not built yet)
+
+Written ahead of its code (contract slice HELD-C, [v012-register.md](../v012-register.md) §1.322;
+the coordinator's rulings of 11-12, not the owner's words). Every rule of this section is
+**(HELD, not built yet)**: the codes, keys and vocabularies it names are proposed, not
+registered. The first code slice is HELD-1 (Runtime 0.12.56), the wake kind HELD-2
+([agent-wake.md](../agent-wake.md)).
+
+A due task that a reason holds for hours and one held for minutes look the same in the not-run
+explanation, and an info reason never becomes more than info with time. A held record says once
+that a (task, instance) pair has been held past a configured time, and one more record says when
+that hold ended.
+
+- **Nothing but a record (HELD, not built yet).** A held record and its end change no decision:
+  they start no ladder, pause nothing, retry nothing, count toward no failure streak or tax, and
+  the pair is scheduled exactly as without them, as for every planning signal ("Runtime
+  Enforcement"). They are written after the evaluation and its explanation and read by no
+  decision; with the record off, every evaluation and intent is the same, and so is every other
+  record of the cycle.
+- **Held (HELD, not built yet).** At an evaluated cycle, a candidate row of the not-run
+  explanation ("Why A Candidate Does Not Run") is held when all of these hold:
+  1. its task is a catalog task: the fact refresh read (`FACT_REFRESH_TASK_ID`) is never held, its
+     waits are its own reasons in the candidates that wait for it;
+  2. the pair has no dispatch in flight (intent or admitted), as for the clock-slot records;
+  3. its `why` code is in the held set below (for a code whose class a value decides, with that
+     value), so its eligibility is `true` or `unknown`: no held code comes with `false`;
+  4. the instance's record is on and the evaluation time is at least its `since_unix_ms` plus the
+     threshold in effect for the instance ("The threshold" below).
+- **The held set (HELD, not built yet).** Closed: a code outside it is never held, and a slice that
+  adds a deferral code classes it here. The register's census (§1.322) gives every code a row can
+  carry with its reason.
+  - *Held, due* (eligibility `true`): `policy_no_progress`, `instance_unavailable`,
+    `heavy_scene_budget_exhausted`, `heavy_scene_budget_deferred`,
+    `policy_concurrent_runs_deferred`, `instance_already_selected`,
+    `policy_chain_handover_waiting`, `dispatch_instance_held` (whatever its `holder_kind`),
+    `application_update_pending`, `selection_input_unknown`, `decision_reason_missing`.
+  - *Held, undecidable* (eligibility `unknown`): `trigger_unknown`, `feedback_stop_unknown`.
+  - *Held, either* (by the row's eligibility): `fact_refresh_pending`, `fact_refresh_unresolved`,
+    `fact_refresh_exhausted`, `fact_refresh_unbound`.
+  - *Held by a value*: `benefit_unknown` with `benefit_gap` `reading_unknown`; `pool_line_held`
+    with `pool_line_hold` `capped_not_head` or `capped_cap_unknown`, and with
+    `capped_not_dispatchable` when its `gate_code` is itself held.
+  - Never held: what a person, the configuration or the values said (the control gates, a
+    suspension, a blackout and its quiet, the day boundary, a closed package, a remedy stopped for
+    a person, a spent budget, a closed activity window, a paused pair, a placement the
+    configuration refuses, a reserve, a benefit that is not positive or within its tolerance, lines
+    that cannot spend); what waits for a time the decision names (a cooldown, a score deferral, a
+    takeover cooldown, an interval, a backoff, a random delay, an owed rerun, a remedy round); and a
+    row that is not due (`trigger_false`, `feedback_stop_true`).
+- **The clock (HELD, not built yet).** The hold's start is the row's `since_unix_ms`, the table's
+  own: another `why` code starts another run, as it does there, and no second clock is kept. A
+  start of the Runtime begins with no table, so a hold does not span a restart. The record is
+  written at the first evaluated cycle at or after the start plus the threshold; the policy
+  driver's reconciliation evaluates at least every `policy_cadence.reconciliation_interval_ms`
+  (60 000 ms by default), so it comes within one interval. A deferred or skipped cycle leaves the
+  table as it was and writes nothing (a skipped evaluation has its own records, "Evaluation
+  failures").
+- **The threshold and the switch (HELD, not built yet).** `scheduling.task_held.enabled` (default
+  `true`) and `scheduling.task_held.after_ms` (default 1 800 000, from 60 000 to 86 400 000), each
+  also per instance and settable, read at every evaluated cycle
+  ([runtime-config.md](../runtime-config.md), "Held records"). The threshold is the floor alone:
+  no one rhythm exists for every pair (register §1.322). A lower threshold reports, at the next
+  evaluated cycle, every run already past it; a higher one withdraws nothing written. Off, an
+  instance writes no new held record, and the end of a hold already reported is still written,
+  so no reported hold is left without its end while the Runtime runs.
+- **The record (HELD, not built yet).** A `policy.planning_signal_observed` of kind `goal_missed`
+  (the clock-slot records' carrier), `instance_id` the alias, `task_id` the task, observed at the
+  evaluation time. Its `signal_id` is `signal:task_held:held:<hex>`, `<hex>` being the lowercase
+  SHA-256 of the UTF-8 bytes `task \0 alias \0 since`, the start in decimal ASCII; it is checked
+  against the planning-signal projection before it is written, so one hold is reported once,
+  across restarts too. Its outcome is `task_held` (warning, ladder class `none`) with:
+  - `task_id`, `alias`; `gate_code` the row's `why` code (the clock-slot records' key);
+    `held_state` (vocabulary `held_state`: `due` for eligibility `true`, `undecidable` for
+    `unknown`); `held_since_unix_ms` the start; `held_for_ms` the evaluation time less the start;
+    `held_after_ms` the threshold in effect;
+  - one `caused_by` link: the row's `why` outcome whole, with every value the reason carries, as
+    the evaluation gave it. What would release the hold is there as far as the reason says it (for
+    the no-progress guard `basis_readings` and `served_by_dispatch_unix_ms`; for an instance held
+    by a claim `holder_kind`; for a fact refresh wait `fact_key`, `package_id`, its own
+    `gate_code`); nothing is added that needs another observation. A reason without values
+    (`trigger_unknown`) gives a link without values.
+
+  For example, in full detail:
+
+  ```json
+  {"code":"task_held","category":"warning",
+   "values":{"task_id":"task.neutral.head","alias":"neutral-a","gate_code":"policy_no_progress",
+             "held_state":"due","held_since_unix_ms":1700000000000,"held_for_ms":1800000,
+             "held_after_ms":1800000},
+   "causes":[{"relation":"caused_by","code":"policy_no_progress","category":"info",
+              "values":{"basis_readings":[{"fact_key":"resource.neutral.amount",
+                                           "reading_value":"12","observed_at_unix_ms":1699999000000}],
+                        "served_by_dispatch_unix_ms":1699998000000}}]}
+  ```
+- **The end (HELD, not built yet).** A hold that was reported and has ended leaves one
+  `signal:task_held:ended:<hex>` record (the held record's `<hex>`), checked against the projection
+  as well, of outcome `task_held_ended` (info, ladder class `none`): `task_id`, `alias`, `gate_code`
+  the hold's code, `held_since_unix_ms`, `held_end` (vocabulary `held_end`) and `held_for_ms` the
+  time from the start to the evaluation that found it ended, absent for `restarted`. A hold that
+  was never reported leaves nothing. `held_end`:
+  - `selected`: the evaluation selected the pair's decision (whether its intent is then admitted
+    is the dispatch records');
+  - `why_changed`: the pair's row carries another `why` code, held or not: a trigger that turned
+    false, a package its pack schedule closed or a pause ends a hold this way, since the row stays
+    in the table with that code;
+  - `row_gone`: the instance has rows and none of the pair (the task left the catalog generation,
+    or its package left the composed catalog);
+  - `instance_gone`: the evaluation decided nothing for the instance (it left the snapshot);
+  - `restarted`: the hold was reported by an earlier run of the Runtime. Before a start records
+    its settlement anchor (`host.contained_settlement`, #405 N-2), it reads by the ledger's type
+    index the `policy.planning_signal_observed` records between the start record that anchor names
+    (the last start that completed its settlement; the ledger's first record when there is none)
+    and its own start record, the range the settlement of direct runs reads, and ends each held
+    record among them that has no end record. The projection answers only one `signal_id` at a
+    time, so it cannot list the open holds itself; the read covers the runs since the last settled
+    start and is exact, since a start that stopped before recording its anchor leaves the anchor
+    where it was. Counting begins again at the first evaluated cycle.
+- **How many (HELD, not built yet).** Two reports of one pair are at least one threshold apart (a
+  new run starts after the last one ended and must last the threshold again), so one pair writes
+  at most ⌈86 400 000 / `after_ms`⌉ held records a day and as many ends, 48 and 48 at the default,
+  plus one restart end per open hold at a start; an instance writes at most that times the pairs
+  placed on it. There is no cap: the bound holds by construction, and a wake rule coalesces an
+  instance's records into one message ([agent-wake.md](../agent-wake.md)). A pair that moves between
+  two held codes ends a reported hold (`why_changed`) and starts a new count at each change, so a
+  pair that changes codes faster than the threshold is never reported: a fact refresh wait moves
+  between `fact_refresh_unresolved` and `fact_refresh_pending` each time the instance's reader is
+  selected (register §1.322, question 2).
+- **What else it does (HELD, not built yet).** As every planning signal, a held record and its end
+  invalidate each active fact whose `invalidate_on` lists `policy.planning_signal_observed`, on any
+  instance (they have no instance link; "Clock-slot records", "Fact invalidation"). No fact the Runtime or a run
+  of a package writes lists that type; only a client's `PublishFacts` can. Having no such effect
+  would take a `ledger` revision (register §1.322).
+- **Where a person reads it (HELD, not built yet).** Without HELD-1's readers: the record is in the
+  errors view (warning and above) of `ac_events` and of an `ac_diagnose` without an instance; a
+  read filtered to an instance does not show it, since a planning signal has no instance link;
+  `actingd suspended` lists it nowhere; the `not_run` rows of `ac_diagnose` and `ac_schedule` show
+  the row's `since_unix_ms`. HELD-1 adds `held` to `actingd suspended` (the held records still open
+  or ended within 48 h of the ledger's latest event, newest first, at most 200, each with its end
+  when recorded), the instance's `held` rows to `ac_diagnose`, and `held_reported` on a `not_run`
+  row whose task and `since_unix_ms` an open held record names (actingctl joins them; no wire shape
+  changes). A mark on `ScheduleExplanation`'s own row is a later slice's (`runtime-client`).
+- **Two tasks that wait for each other (HELD, not built yet).** Not detected here; a later detector
+  reads a held head's basis keys from its link and a follower's `held_since_unix_ms` and
+  `gate_code`, and pairs them through the catalog generation the evaluation holds (the follower's
+  `dependency_completed` on the head, or a fact the head's package marks).
+- **The change-only history (HELD, not built yet).** The record reads the same table that 114-B
+  will copy (`policy.not_run_changed`, "Why A Candidate Does Not Run") and changes neither the
+  table nor its `since` rule, so 114-A's frozen shapes stay and 114-B is no harder to build; once
+  114-B writes, a held record's (alias, task, `held_since_unix_ms`) names the row of the history
+  whose `since_unix_ms` it equals.
 
 ## Fact-time wake (Workflow #405)
 
