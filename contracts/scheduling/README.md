@@ -270,6 +270,210 @@ the declaration-only parser checks wire types. Existing integer declarations ser
 identically when the new field is absent. A binary that does not understand the field
 rejects it, so a state lineage containing these declarations requires a compatible reader.
 
+## A run's consumption read from a fact (SCHED-C1f, not built yet)
+
+Register §1.303. The rules of this section are the coordinator's work order of 11-11 and the
+coordinator's rulings of 11-11 14:5x on the nine questions of §1.303, not Alice's words: the member
+names and the codes are this draft's, which the coordinator read, and the nine answers are the
+coordinator's rulings. What one run of some tasks consumes of a pool is a state of the
+account, not of the game: it depends on what the player fields and changes when they change it.
+The pack reads the real amount on the device and writes it as an instance fact each time it runs,
+and a line or threshold that belongs to the account is read from a fact, never written as a
+constant (Alice 10-26, as "Fact references" and "Pool fact references" cite it). Until this form a
+consumption could only be the constant `consumes[].amount`. A fact a task's own run writes cannot
+gate that task's first run (the coordinator's rule of 10-28, "Self-read fact probe"), so the form
+carries a fallback and the amount is never Unknown.
+
+- **The form** (SCHED-C1f, not built yet). In an `actingcommand.scheduling.v2` catalog the `amount`
+  of a `consumes` entry may be, instead of a positive integer, the object
+  `{"type": "fact", "fact_key": B, "fallback": F}`:
+
+  ```json
+  {"pool_id": "pool.neutral", "direction": "consume", "amount": {"type": "fact", "fact_key": "resource.neutral.per_run", "fallback": 3}, "observation_source": "self_reported", "confidence_milli": 1000}
+  ```
+
+  All three members are required. One run's amount is the integer B holds when the instance holds
+  a usable one ("Which reading is usable" below), else F, an integer in `1..=9007199254740991` that
+  the pack writes. Why this shape: `type` and `fact_key` are the existing fact reference's ("Fact
+  references"; schema `factReference`), so the format keeps one way of saying "read this fact" and
+  B follows `fact_key`'s identifier rule; it names no `scope`, as no reference of the format does
+  (each reads its own context's scope, here the candidate's instance); it has no `offset`, since
+  the fact holds the amount itself, while a reference's offset is a margin on a line (a cap less a
+  margin), and an amount plus a margin would be a number the catalog computes, which is the pack's
+  to write; and `fallback` is what a reference of CF-4 or CF-5 does not need, because a fact they
+  miss is asked of the fact refresh (a capacity) or makes a predicate false (a comparand), while
+  this fact is written by the task's own run, which a missing amount must not stop. A `produces`
+  entry takes no such form, and neither does `expected_amount_milli`.
+- **Refused**, each at its pointer: in a V1 document, `unknown_field` at `amount/type` (as a
+  reference of CF-4 and CF-5); a `type` other than `fact`, a `fact_key` that is no identifier and a
+  `fallback` that is no integer (an explicit `null` included), `type_mismatch` at the member; a
+  `fallback` outside `1..=9007199254740991`, `limit_exceeded` at `amount/fallback`; a `fallback`
+  above a constant capacity, `effect_incompatible` at the entry, as a constant `amount` above it (a
+  capacity read from a fact is not checked at compilation, "Pool fact references"); a missing
+  member, `missing_required_field`; `offset`, `scope` or any other member, `unknown_field` at it;
+  the form beside `expected_amount_milli`, `limit_exceeded` at the entry, as two quantities are;
+  the form on a `produces` entry, `effect_incompatible` at its `amount`; and a second entry of one
+  task on one pool that writes the form, `effect_incompatible` at its `amount`: one fact names a
+  run's amount of a pool (constant entries beside it add to it as before).
+- **The amount in effect.** At each evaluation, for each task whose `consumes` writes the form and
+  each instance its scope covers, the evaluation resolves each such entry once, from the instance
+  facts it already holds (the fact snapshot it pins): B in exactly that instance's scope, never a
+  server or game scope (an amount is the account's). That value, the fact's or F, is the entry's
+  amount for that instance in that evaluation, and the task's consumption of the pool is `C = Σ
+  amount × 1000 + Σ expected_amount_milli` ("Expected quantities (v2)") with it in place of a
+  constant. **One amount per evaluation of one instance:** every reader below reads that value, and
+  none reads B again. The amount is never Unknown: B raises no fact refresh demand ("Fact
+  Refresh"), gives no detection suggestion, and never makes a net benefit unknown ("Net benefit
+  within a tier").
+- **Which reading is usable** (the coordinator's ruling 1 of 11-11 14:5x, register §1.303 question
+  1: the record is read by every fact's rule, not as this draft proposed). The record of B in the
+  instance's scope that is current as every fact is: present at a confidence above 0, not past its
+  own `expires_at_unix_ms`, and not invalidated by a timeline reset since it was observed ("Runtime
+  Enforcement", with "Reset exclusions and the task's own last result"); its value an `integer` in
+  `1..=9007199254740991` and, against a constant capacity of the pool, at most that capacity. The
+  form has no `max_age_ms`: the pack states how long its reading holds by the validity it writes,
+  and keeps the key out of its resets (`excludes_fact_prefixes`) when the amount outlives a day.
+  - *Freshness and wakes, by the general rule.* A usable record bounds the
+    `facts_fresh_until_unix_ms` of every candidate whose evaluation read the amount by its
+    `expires_at_unix_ms` (an intent admitted past it is refused `policy_facts_stale`), and the
+    evaluation wakes one millisecond after that expiry, as after a pool's reading or a capacity read
+    from its fact ("Pool fact references"); a timeline reset that will invalidate the key caps a V2
+    candidate's freshness before its occurrence and wakes the evaluation at it, as for every
+    observation ("Runtime Enforcement"; [v2/README.md](v2/README.md)). The evaluation at that wake
+    finds the record expired or invalidated and reads F. F bounds no freshness and wakes nothing. A
+    new record wakes the scheduler as every fact publication does, and the next evaluation reads
+    it.
+  - *What was weighed.* The draft proposed the latest record whatever its age, its expiry or a
+    reset since. For it: the pack rewrites the value at every run, the setup it measures does not
+    end with a day or a reset, a wrong amount misjudges only the runs until the next one rewrites
+    it, and a reader that reads through a reset exists already, a task's own last result. Against
+    it, and ruled: one rule for facts, with no reader before the time-validity projection and no
+    second meaning of a record's expiry; with a fallback an expired reading costs nothing but one
+    run judged by F; and a value from long ago (the account changed by hand, the task not run
+    since) is not read as current.
+  - *No usable record because there is none, it expired, or a reset invalidated it*
+    (`fact_missing`, `fact_expired`): F, with no warning, exactly alike: it is the state the
+    fallback exists for (the first run, or a reading the pack let lapse), and the source below says
+    `fallback`.
+  - *A record that is present and current but not usable*: F, and the decision says so with the
+    new warning `consumption_fact_unusable` (warning; `task_id`, `pool_id`, `fact_key` B,
+    `unknown_reason` `fact_low_confidence` for a confidence of 0 or `type_mismatch` for a value of
+    another kind, a record list or an integer out of range, as CF-5 reads a capacity below 1
+    (ruling 5); `consumption` the `⌈C/1000⌉` the decision reads with F). It is the decision's first reason, before
+    `benefit_fixed_value`, so it never settles the decision; it is given once per decision and pool,
+    on every decision of that task on that instance in the evaluation. `fact_reference_unavailable`
+    is not reused: it is info and says that a predicate is false.
+- **Who reads it.** Each of these reads the amount in effect, and nothing else changes in it:
+  1. *The net benefit's cost term* ("Net benefit within a tier"): `consume(k,p)` is `C/1000`
+     exactly; "Fixed values written in the pack" reads the same `C` (`V − Σ_p C_p·W_p/(1000·Q_p)`);
+     the bound `ε` of "Within tolerance" reads the same `C`, and an amount read from a fact is an
+     integer, so it adds to no `m`.
+  2. *The pool's lines* ("Pool lines"): the reading `r`, which takes off the consumption its
+     reading does not show yet, each other task dispatched since by its own amount in effect; and
+     the hold at the hard line below the trigger line, `r − ⌈C/1000⌉ < H` (`would_cross_hard_line`,
+     `amount_after`).
+  3. *A pool its lines cannot spend* ("Pool lines"): the decision reason `pool_lines_unspendable`
+     reads each consumer's `⌈C/1000⌉` in effect on the instance (`least_consumption`). The compile
+     warning of the same code has no instance: it reads each consumer's declared consumption, F in
+     place of the fact's value (the amount an evaluation reads while B gives no usable reading;
+     ruling 8), so a fallback no consumer's run fits under is named in the file. A fact below F can make that
+     warning false for one instance; the decisions there read the fact and do not hold.
+  4. *The capped spending order* ("Capped spending order"): a round's listing (`V = S +
+     C·W/(1000·Q)` against `ε` without the pool's term), its order by `V ÷ C` frozen at its start,
+     the plan (a member skipped at `R − ⌈C/1000⌉ < H`, `R` falling by each planned or dispatched
+     member's consumption), the head's check before its dispatch, the head's `B = V − W·(c − a)`,
+     the block's fit above `H` and its fallbacks. What an episode under way and a frozen order do
+     with a changed amount is the next bullet.
+  5. *Who is a consumer* (the capped order's, the consumers key's and the warning's): a task whose
+     entry writes the form declares a consumption of the pool whatever the value read (F is at
+     least 1).
+  6. *The reserves* ("Task Reserves"): `after = projected − consumes`, the gate's steps 2 to 4 and
+     `amount_after`, and the selection fields `task.consumes.<pool>`, `task.after.<pool>` and
+     `task.reserve_gap.<pool>` ("Score-Assisted Priority").
+  7. *The spend values* (SS-6, [../remedies.md](../remedies.md), section 4): `spend_allowance` (the
+     gate's available amount less the consumption its step 3 counts), the gate's hold of an
+     allowance below the task's consumption, and `run_cap`, ⌊allowance ÷ one run's amount⌋, which
+     the run reads as `session.dispatch.schedule.run_cap`.
+  8. *The tie-break* ("Ties and chain heads"): a candidate's runs left, by `c`.
+  9. *Forward projection* ("Forward Planning And Maintenance", "Pool Projection"): it reads the
+     amount once, from the facts it starts from, and holds it across its horizon, as it holds a
+     capacity read from a fact ("Pool fact references"); a simulated run does not rewrite B, and an
+     amount read so is applied as a constant one is, with no evidence gap of its own.
+  10. *The compiler*: F is checked as a constant `amount` is (above), and SS-2d's requirements
+     ("Within tolerance", "No loop") count an entry with the form as a `consumes` entry.
+
+  Read by none of them, and unchanged: a regenerating pool's fullness urgency (the pool's fill),
+  the resource layer's `R` and every resource target (production only), the strategy report's rate
+  (production only), the no-progress guard (a pool the task only consumes is no basis, so a new
+  amount is no progress) and the fact refresh (above).
+- **An episode under way and a round's frozen order** (SCHED-C1d's "Episodes survive"; register
+  §1.303, question 2). An amount read from a fact changes between two evaluations without a new
+  catalog generation (a new reading, or a reading that lapses to F). The rule (the coordinator's
+  ruling 2 of 11-11 14:5x, as this draft proposed):
+  - *The consumers key holds what the catalog writes, not what the instance reads.* Each
+    consumer's `⌈C/1000⌉` in the key is its declared consumption, every fact-driven amount taken at
+    its F. A changed reading keeps the episode; a changed F ends it, as a changed constant does (the
+    consumers changed); a changed `fact_key` alone, or a constant replaced by the form with that
+    constant as its F, keeps it, and the next evaluation reads the new amount. The rows of
+    `host.capped_episodes` keep their shape: a consumer row's `consumed` is that declared
+    consumption.
+  - *A round keeps its order, and reads the amounts of now.* The order frozen at the round's start
+    (which consumers, in which place) stays until the round ends; every amount the round's plan and
+    checks read at an evaluation is the one in effect at that evaluation; the next round lists and
+    orders by the amounts then, as by the values then. A member row's `consumed` keeps the amount
+    the order was frozen with, which no rule reads once this is built.
+  - For: the pack rewrites B at each run, so a key that held the value read would end the episode
+    at every run that wrote another value, and the next episode's first round would list the
+    `benefit_limited` consumers again; a pack that replaces a constant by the form with the same F
+    ends no episode; B is meant to be written by the consumer's own run (the amount its pack read
+    at that run), so once a member ran in the round the amount in effect is the one its run read,
+    which is what the plan should count it by; and the
+    head's check and the block's fit read the amount the next run is judged by, so no run planned
+    with a smaller amount ends below `H`.
+  - Against: the plan is no longer fixed at the round's start (only its starting reading and its
+    order are): a changed amount can drop a planned member that no longer fits above `H`, or plan
+    one that was skipped; the key no longer tells what a consumer costs on the instance, so an
+    episode goes on while every amount changed (when then no consumer fits, `pool_lines_unspendable`
+    makes it wait, and a round that plans nothing ends it); and until the next round the frozen
+    order need not be the `V ÷ C` order of the amounts in effect, as it need not be when a value
+    changes.
+  - The coordinator's example, a round that keeps the amounts it froze while the next round reads
+    again, was weighed and not ruled: it counts a member that ran in the round by the amount from
+    before its run, and a frozen amount at the head's check could let a run end below `H`.
+- **What a person sees.**
+  - *Where the amount came from*, in the manner of `lines_source`: the values `consumption`
+    (`integer`, the `⌈C/1000⌉` of the reason's task for its pool in that evaluation) and
+    `consumption_source` (`fact`, the value read, or `fallback`) on `pool_line_held`, `capped_spend`,
+    `resource_reserve_insufficient` and `pool_lines_unspendable` (for this one, of the consumer that
+    gives `least_consumption`, the first by task id among equal ones), whenever that task's
+    consumption of that pool writes the form. A reason whose task's consumption is constant carries
+    neither, as before. The net benefit's reasons (`benefit_fixed_value`,
+    `policy_benefit_nonpositive`, `benefit_within_tolerance`, `rank_breakdown`) name no pool and
+    carry no source (ruling 6). So a dispatched candidate with no pool reason shows its amount's
+    source only through the tools' list and the fact itself (`ac_facts`), which the coordinator
+    accepts for the first build and may revisit after the trial.
+  - *The status read.* `ScheduleExplanation` shows them (`actingctl schedule`, `ac_schedule`,
+    `ac_overview`'s `not_running`, `ac_diagnose`'s `not_run`): a row's `why` is the full outcome
+    of its last reason, values included, and its `reasons` list the codes, the warning among them.
+    A dispatched candidate's reasons travel in its dispatch events' reason chain as every reason
+    does. No answer shape changes.
+  - *The tools.* `actinglab standard-pack check` and `package bundle --schedule` list every rule
+    whose amount is fact-driven, with its fact key and fallback
+    ([../standard-pack-schedule.md](../standard-pack-schedule.md), "A run's consumption read from a
+    fact").
+- **Capability.** A Runtime that reads the form reports the always-on subsystem
+  `consumption_fact` in `config.subsystems`
+  ([`actingd-check-config.md`](../actingd-check-config.md), its row with the code). A
+  `schedule.json` whose rule writes the form lists it in `requires`; the composer refuses the file
+  without it, so a Runtime that does not name the subsystem refuses the file
+  (`schedule_requires_missing`) instead of misreading it. An older Runtime given a catalog with the
+  form refuses it at its reader (`type_mismatch` at the entry's `amount`).
+- **Identity.** A catalog that does not write the form serializes, hashes and decides byte for
+  byte as before, and a composition without it keeps its rules digest. With it, the object is
+  hashed as written (a changed `fact_key` or `fallback` is a new catalog identity); the value read
+  is part of no catalog hash, rules digest or decision identity input: it comes from the fact
+  snapshot the evaluation already pins.
+
 ## Compatibility
 
 V1 rejects unknown fields and any schema version other than the exact supported value. A future schema revision is a new immutable contract and requires an explicit, separately tested translator before V1 input can be promoted. Readers must never reinterpret a V1 field under newer semantics, partially load a catalog, or invent defaults for missing data.
@@ -2397,6 +2601,7 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Pool valuation scale | 1..=9,007,199,254,740,991 |
 | Pool valuation base weight / gap weight | 0..=1,000,000 / 1..=1,000,000 milli |
 | A task's fixed value (SCHED-C1a, since 0.12.52) | 1..=9,007,199,254,740,991 milli |
+| A consumption's fallback, and a usable amount read from a fact (SCHED-C1f, not built yet) | 1..=9,007,199,254,740,991, at most a constant capacity |
 
 Loop budgets are mandatory in V1; in V2 each run-count bound is optional (SS-3, "Optional run-count bounds"). Arrays and strings that exceed their limit reject the entire catalog. Duplicate identifiers, duplicate object keys, and unbounded recursive input are invalid.
 
