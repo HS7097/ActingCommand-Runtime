@@ -545,7 +545,10 @@ sentence fails that test.
     report (section 4.3, "Recordings"), the same word the recording file holds.
 - **The CLI module's operations** (the bullets above: the line for people by default, `--json`
   printing the `cli_line` line, exit codes 0, 1 and 2) are the core rows that came from actingctl
-  (served by `crates/lab-ops`) and `run start`, `run stop`, `reset` and `drill`.
+  (served by `crates/lab-ops`) and `run start`, `run stop`, `reset` and `drill`. Since LAB-5G1
+  (register §1.287, "Slice LAB-5G1") the code that serves all of them from a row and its
+  parameters is `crates/lab-ops`' (`lab_ops::core_ops`), which actinglab calls with its place and a
+  connection made for each call.
   - **How actinglab tells them apart.** A command line whose words, `--json` taken out, begin with
     `serve` or with the name of such an operation is the CLI module's; so is one without `--via`
     whose words, actinglab's own global options before them taken out, are a core row's (LAB-2b

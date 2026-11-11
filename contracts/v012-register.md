@@ -9128,6 +9128,88 @@ yet but the table's tests.
 
 **LAB-5E rollback** (to the release before it). Nothing persisted: code and the table's text.
 
+#### Slice LAB-5G1 (0.12.52): the core rows' serving code moves into the operation layer and takes its connection from its caller
+
+Coordinator work order `rd-1108/arch-013/brief-lab5g1.md`, after the read-only survey
+`rd-1108/arch-013/lab5g-step0-survey.md` (§2 to §4); the coordinator's rulings on board #434
+(6775192250 points 1 and 4, 6769399787 point 10); on main `39c0c935` (LAB-5C). The rule of the slice:
+nothing a program prints or does changes. Every line of `actinglab` on the command line and in
+`serve --stdio` stays byte for byte; actingctl's lines too; today's MCP server
+(`apps/actingctl/src/mcp`) is not touched. **Cut as the work order says** (it passes about 2,000
+changed lines with the moved ones): this slice is the move, the connection input and actinglab's
+call; the budget, the cursor binding and the MCP front are a second slice (below).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G1-1 | `apps/actinglab/src/cli_module/core_ops.rs` moved whole to `crates/lab-ops/src/core_ops.rs` (own commit); `serves`, `answer`, `offline_words`, `handed_words`, `MaterialRead`, `material_read`, `material_written` public; `MORE_WORDS`, `further_flags`, `parse_duration` moved with it from `words.rs`, which reads them from there | moved code | LAB-5G1 | actinglab's CLI module | the mapping from a row and its parameters to the operation that serves it, for every row `core_ops` served: the 42 core rows but `app launch\|restart\|stop` (actinglab's own `session app`, unchanged) and `run start`, `run stop`, `reset`, `drill`. The same checks in the same order, the same functions called, the same words handed on |
+| L5G1-2 | `core_ops::Caller {place, unlocated, completed, connection}` and `core_ops::Place {state_root, root}` | new type | LAB-5G1 | actinglab (`cli_module::core_ops::caller`) | what stays the program's: `place`, asked for when a row needs it as before (`packs` its install root first, every row but `codes`, `gap`, `packs` its state root); `unlocated`, the developer text of a state root not located; `completed`, the code `lab_operation_completed`, the catalog owner `actinglab`'s, which only actinglab's registry emits (outcome guard G1) |
+| L5G1-3 | `lab_ops::front::Connection` (`Connect(Front)`: a connection made for the call as that front connects, `front::config`; `Kept(&RuntimeClient)`: the caller's), `Connection::per_call` (`Connect(current())`), `Connection::reach`, `Reached` (`Made`, `Kept`; `Deref` to the client, `into_client`), `front::config(front, state_root)` | new type | LAB-5G1 | `core_ops` | the connection input. Every row that reads the Runtime takes it, each of the three ways: the words of a command of `lab-ops` (`dispatch_on` of `overview`, `diagnose`, `events`, `run_list`, `run_evidence`, `remedy` with `dispatch_rows_on`, `routine_summary`, `perf_preset`, `evidence_read`, `observe_export`; each `dispatch` is its `dispatch_on` with `Connection::per_call()`, so actingctl is unchanged) and the parameters read on a client. `codes`, `gap`, `packs` and `devices` read no Runtime. A kept connection is used as it is: a detail `ACTINGCOMMAND_DETAIL` asks for is the caller's to set on it |
+
+**What stayed in actinglab, and why.** The place of the program (`cli_module/place.rs`: the root
+from its own place, the state root from the selected configuration or
+`ACTINGCOMMAND_RUNTIME_STATE_ROOT`), its developer text and `lab_operation_completed`: they are
+actinglab's, and are given as `Caller`. The words (`words.rs`: the short words, `serve`'s JSON,
+`offered`, the kept flags), the routing (`cli_module::route` and `answer`), the engine of
+actinglab's own commands (`engine.rs`, `own_line.rs`), `serve`'s loop and the printing.
+`cli_module::core_ops` is now a small module of `cli_module.rs`: `answer` calls the moved code
+with `caller()` (connected per call as the program in force, as before), and for LAB-5C's test it
+re-exports the names that test reads.
+
+**A row a kept connection does not serve as a connection made for the call does.** `shutdown
+--wait` closed its connection before it waited for the Runtime to end (`shutdown::wait`); on a kept
+connection it drops only a clone, and the caller's connection stays open while the wait reads the
+shutdown. Served so, not reconnected; the server's slice decides whether its front closes its
+connection first. **What one call leaves on a kept connection for the next:**
+
+- The client holds the connection for each whole exchange, so on a kept connection a long exchange
+  blocks every other call that shares it: `run start` until its receipt, `run stop` without
+  `--cancel-only` up to the longest deadline a run may have, and a `--wait` that expired and left
+  its worker waiting for the receipt on a clone of the connection.
+- A failed exchange leaves the connection answering that failure to every later call.
+- So a caller that keeps connections (the MCP server) gives each write its own connection and drops
+  a connection after a failure, as today's MCP server does (`apps/actingctl/src/mcp/operator.rs`,
+  `begin_write`; `runtime.rs`, `connect_fresh` and `failure`). With a connection made for each
+  call, which is all actinglab uses, none of this arises.
+
+**Left for the second slice** (the work order's cut): the budget (`Option<&Budget>` into `answer`
+and the steps of the eleven reads that shape, the line carrying `Fitted.exported` as a warning);
+the cursor binding (`CursorBinding` into `events` and `diagnose`'s errors page, actinglab passing a
+fresh one; `runs`' and `codes`' cursors bind to no session today, each carries its own position and
+query fingerprint, so a binding there would change what actinglab prints and takes: a ruling is
+needed); the MCP front (`Front::Mcp`: channel `mcp`, envelope (Cli, Cli), and the test that it
+equals the configuration `apps/actingctl/src/mcp/runtime.rs` builds). **Rows without answer
+shaping** (for the server's slice to bound): every row of `core_ops` but `status`, `diagnose`,
+`events`, `schedule`, `runs`, `run evidence`, `codes` (cut), `facts` (whose read `config` shares),
+`packs`, `remedy` (the read, MCP's `ac_remedy_get`; `remedy set|lift` have none) and `summary`
+(export). The second slice must also settle:
+
+- `Caller.completed`: the code `lab_operation_completed` is actinglab's own
+  (`apps/actinglab/src/codes.rs`), so another program cannot build it today; a registry decision.
+- A caller must refuse the members a row does not declare itself, as actinglab's words do; the
+  moved code does not refuse them on every row.
+- `status` answers `watchdog: null` unless the caller sets the watchdog block
+  (`overview::set_watchdog_block`), as actinglab does on Windows.
+- Relative paths in parameters resolve against the caller's current directory.
+
+**Tests.** New: apps row "#434 LAB-5G1" (`gate_434_lab5g1` in actinglab's binary tests, against the
+runtime client's scripted Runtime, `test_support::ScriptedRuntime`; no device, no clock, no sleep):
+`lab5g1_three_ways_serve_on_a_kept_connection` (`codes`, `events`, `resume`) and
+`lab5g1_debugging_rows_serve_on_a_kept_connection` (`run start` and `reset` refused by the Runtime,
+`run stop --cancel-only`, `drill`): the moved code on a kept connection answers the line and exit
+code the CLI module prints for the same words, the request and correlation ids each run issues
+masked; both connections carry the same requests after their handshake (`codes` none); no other
+connection is made. No existing test changed: `gate_434_lab5c` reads `core_ops::offline_words`,
+`handed_words`, `material_read`, `MaterialRead` and `material_written` through actinglab's
+`cli_module::core_ops` as before; `gate_434_lab2`, `gate_434_lab2b`, `gate_434_lab5a`,
+`gate_434_lab5d` and `lab_ops_table_complete` are untouched.
+
+**Interface.** None raised: nothing on the wire, in the ledger or in a file changes; no code, key,
+location or revision is added.
+
+**What LAB-5G1 changes live.** Nothing a person, a client or the Runtime sees.
+
+**LAB-5G1 rollback** (to the release before it). Nothing persisted: code only.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

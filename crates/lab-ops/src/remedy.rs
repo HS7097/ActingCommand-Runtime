@@ -27,6 +27,7 @@
 use crate::budget::{self, Budget, Fitted};
 use crate::cli_line;
 use crate::codes::ArgumentProblem;
+use crate::front::Connection;
 use crate::instance_selector::{self, SelectorMiss};
 use actingcommand_contract::codes::ReceiptCode;
 use actingcommand_contract::outcome::{Detail, Outcome};
@@ -328,6 +329,15 @@ struct Parsed {
 
 /// The `remedy` command, when it is the first word.
 pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit> {
+    dispatch_on(arguments, detail, Connection::per_call())
+}
+
+/// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
+pub fn dispatch_on(
+    arguments: &[OsString],
+    detail: Detail,
+    connection: Connection<'_>,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -335,7 +345,7 @@ pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit
         Ok(parsed) => parsed,
         Err(outcome) => return Some(cli_line::failure(&outcome, Some(USAGE))),
     };
-    Some(line(run(&parsed, None, detail)))
+    Some(line(run(&parsed, None, detail, connection)))
 }
 
 /// Workflow #434 LAB-5C: `remedy set` with the scope's whole list given inline, the JSON `rows`
@@ -349,6 +359,16 @@ pub fn dispatch_rows(
     arguments: &[OsString],
     rows: &Value,
     detail: Detail,
+) -> Option<cli_line::Exit> {
+    dispatch_rows_on(arguments, rows, detail, Connection::per_call())
+}
+
+/// Workflow #434 LAB-5G1: [`dispatch_rows`] on the caller's `connection`.
+pub fn dispatch_rows_on(
+    arguments: &[OsString],
+    rows: &Value,
+    detail: Detail,
+    connection: Connection<'_>,
 ) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
@@ -366,7 +386,7 @@ pub fn dispatch_rows(
             Some(USAGE),
         ));
     };
-    Some(line(run(&parsed, Some(rows), detail)))
+    Some(line(run(&parsed, Some(rows), detail, connection)))
 }
 
 /// The line of one run of the command: its answer beside its outcome, or why it ended.
@@ -488,18 +508,18 @@ fn run(
     parsed: &Parsed,
     inline: Option<Vec<BTreeMap<String, FactScalar>>>,
     detail: Detail,
+    connection: Connection<'_>,
 ) -> Result<(Value, Outcome), Ended> {
     let rows = match &parsed.rows {
         Some(path) => Some(read_rows(path).map_err(Ended::Usage)?),
         None => inline,
     };
-    let config = crate::front::client_config(&parsed.state_root);
-    let config = match detail {
-        Detail::Codes => config.with_detail(Detail::Codes),
-        Detail::Full => config,
-    };
-    let client =
-        RuntimeClient::connect(config).map_err(|error| Ended::Failure(Failure::Runtime(error)))?;
+    let client = connection
+        .reach(&parsed.state_root, |config| match detail {
+            Detail::Codes => config.with_detail(Detail::Codes),
+            Detail::Full => config,
+        })
+        .map_err(|error| Ended::Failure(Failure::Runtime(error)))?;
     let instance = parsed.instance.as_deref().unwrap_or_default();
     let (answer, code) = match parsed.action {
         GET => (

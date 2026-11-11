@@ -28,6 +28,7 @@
 
 use crate::cli_line;
 use crate::codes::ArgumentProblem;
+use crate::front::Connection;
 use actingcommand_contract::codes::ReceiptCode;
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
@@ -235,6 +236,15 @@ fn id_text(id: &impl serde::Serialize) -> String {
 
 /// The `evidence` command, when it is the first word.
 pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit> {
+    dispatch_on(arguments, detail, Connection::per_call())
+}
+
+/// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
+pub fn dispatch_on(
+    arguments: &[OsString],
+    detail: Detail,
+    connection: Connection<'_>,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -242,7 +252,7 @@ pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit
         Ok(parsed) => parsed,
         Err(outcome) => return Some(cli_line::failure(&outcome, Some(USAGE))),
     };
-    Some(match run(&state_root, target, detail) {
+    Some(match run(&state_root, target, detail, connection) {
         Ok((answer, warning)) => {
             let mut members = cli_line::members(answer, COMMAND);
             if let Some(warning) = warning {
@@ -349,13 +359,13 @@ fn run(
     state_root: &Path,
     target: Target,
     detail: Detail,
+    connection: Connection<'_>,
 ) -> Result<(Value, Option<Outcome>), Failure> {
-    let config = crate::front::client_config(state_root);
-    let config = match detail {
-        Detail::Codes => config.with_detail(Detail::Codes),
-        Detail::Full => config,
-    };
-    let client = RuntimeClient::connect(config)
+    let client = connection
+        .reach(state_root, |config| match detail {
+            Detail::Codes => config.with_detail(Detail::Codes),
+            Detail::Full => config,
+        })
         .and_then(|connection| connection.begin_interaction())
         .map_err(Failure::Runtime)?;
     client
