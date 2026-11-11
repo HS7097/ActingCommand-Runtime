@@ -450,6 +450,16 @@ tests = [
     "actingcommand-policy::lib::tests::gate_sched_c1d::sched_c1d_t5_without_an_episode_nothing_is_kept",
 ]
 incident = ["#428 SCHED-C1d"]
+# #428 SCHED-C1e (the coordinator's point 8 and answers 3, 5 and 8 of 11-11, not Alice's words; Alice, 11-09 17:42 「这个红线会随着时间由外部修改」; rd-1111 brief-sched-c1e; contracts/scheduling/README.md, "Pool lines", "Lines for one instance"; register §1.299 SC1-12; since 0.12.54): an instance's set of a pool's lines comes before the catalog's, for that instance only (A's set {150, 110, trigger 170} begins A's episode at 175 while B, at 112, keeps the catalog's hard line 104), the catalog's before the defaults (stop line the capacity, hard line 0), and a set without a trigger line begins at the capacity whatever the catalog's trigger line; the pools a set may name are the instance's copies' ids without @alias, valued; a change during an episode ends none and the next evaluation reads the new lines (rank 2 of round 1 under the new stop line, then round 2), and clearing returns to the catalog's (the episode spent at 115); lines_source (instance, catalog, default) on capped_spend, on pool_line_held (would_cross_hard_line; lines_invalid for a set's stop or trigger line above the capacity) and on pool_lines_unspendable; without a set, or with sets for another instance or pool only, the Runtime's entry gives evaluate_with_capped_spending's evaluation and memory exactly, the head's developer text ending with lines_source=catalog, and the example catalog keeps its golden identities
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_sched_c1e::sched_c1e_t1_an_instance_set_comes_before_the_catalog_for_that_instance_only",
+    "actingcommand-policy::lib::tests::gate_sched_c1e::sched_c1e_t2_a_change_ends_no_episode_and_clearing_returns_to_the_catalog",
+    "actingcommand-policy::lib::tests::gate_sched_c1e::sched_c1e_t3_lines_source_names_where_the_lines_come_from",
+    "actingcommand-policy::lib::tests::gate_sched_c1e::sched_c1e_t4_without_a_set_every_decision_is_as_before_but_the_new_value",
+]
+incident = ["#428 SCHED-C1e"]
 
 # The intent pins freshness, limits, catalog hash and ledger position
 [[gate]]

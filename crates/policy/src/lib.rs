@@ -139,4 +139,7 @@ mod tests {
     // #428 SCHED-C1d (0.12.53; register §1.299 SC1-11): a capped episode survives a start, a
     // generation with the same consumers and an unknown reading.
     mod gate_sched_c1d;
+    // #428 SCHED-C1e (0.12.54; register §1.299 SC1-12): a pool's lines given for one instance
+    // come before the catalog's, and every reason that carries the lines names their source.
+    mod gate_sched_c1e;
 }

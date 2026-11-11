@@ -58,8 +58,8 @@ use actingcommand_policy::{
     MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, NoProgressMemory, PolicyEvaluation,
     REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement,
     RunSlots, SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
-    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_capped_spending,
-    plan_remedies,
+    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_instance_lines,
+    instance_valued_pool_ids, plan_remedies,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
 use serde::{Deserialize, Serialize};
@@ -304,6 +304,10 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// SS-4 (register §1.231): `scheduling.no_progress.enabled` in effect for each instance of the
     /// snapshot, by alias, as the cycle starts; an instance it does not name is off.
     pub(crate) no_progress_enabled: &'a BTreeMap<String, bool>,
+    /// #428 SCHED-C1e (register §1.299 SC1-12): the lines each instance's
+    /// `scheduling.pool_lines` in effect gives its pools as the cycle starts, by alias; an
+    /// instance it does not name takes each pool's catalog lines.
+    pub(crate) pool_lines: &'a actingcommand_policy::InstancePoolLines,
 }
 
 /// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
@@ -2922,6 +2926,24 @@ impl PolicyHost {
         }
     }
 
+    /// #428 SCHED-C1e (register §1.299 SC1-12; `contracts/scheduling/README.md`, "Lines for one
+    /// instance", *Checks*): the pools the active generation gives the instance `instance_alias`
+    /// (of `server_id` and `game_id`) with a declared valuation, each by the id its
+    /// `scheduling.pool_lines` names it by; none without an active generation.
+    pub(crate) fn instance_valued_pools(
+        &self,
+        instance_alias: &str,
+        server_id: &str,
+        game_id: &str,
+    ) -> BTreeSet<String> {
+        self.active
+            .as_ref()
+            .map(|active| {
+                instance_valued_pool_ids(&active.compiled, instance_alias, server_id, game_id)
+            })
+            .unwrap_or_default()
+    }
+
     /// SCHED-C1d: the capped episodes `host.capped_episodes` does not hold yet, with the anchor
     /// to record them under; `None` when it holds them as they are (a cycle that changed no
     /// episode records nothing).
@@ -2993,6 +3015,7 @@ impl PolicyHost {
             rerun,
             max_concurrent_runs,
             no_progress_enabled,
+            pool_lines,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -3114,7 +3137,9 @@ impl PolicyHost {
         let mut capped = std::mem::take(&mut self.capped);
         let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
-        let evaluation = evaluate_with_capped_spending::<RuntimeHostError>(
+        // #428 SCHED-C1e (register §1.299 SC1-12): with the lines each instance's
+        // `scheduling.pool_lines` in effect gives its pools as the cycle starts.
+        let evaluation = evaluate_with_instance_lines::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
@@ -3131,6 +3156,7 @@ impl PolicyHost {
             &instance_holds,
             &no_progress_guards,
             &mut capped,
+            pool_lines,
             |task, _instance_id, page_id| {
                 Ok(crate::host::chain_entry_holds_page(
                     procedure_manifest,

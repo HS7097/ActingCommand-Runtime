@@ -43,7 +43,10 @@ arrive with their slices (D1c `recovery_ladder` and `host_claims`, AO-1, P-c, SR
   (`recovery_ladder_device_bounds`) and (#402 HS-1, since 0.12.39) the backends each kind of
   device has, by the device layer's own rule (`backend_kind_rules`, `CheckContext::with_backends`;
   a context nobody fills in has no backend on any kind, so it refuses every backend in effect
-  rather than pass one unchecked). A section's broken rule refuses a start or `check-config`
+  rather than pass one unchecked); #428 SCHED-C1e (since 0.12.54): for an instruction only, the
+  pools the active catalog generation gives each instance with a declared valuation
+  (`CheckContext::with_valued_pools`; a context without them asks nothing of an instance's
+  `scheduling.pool_lines` pools, so a start's restore keeps such a value). A section's broken rule refuses a start or `check-config`
   with the section's own code; the same values sent by an instruction are refused as
   `config_value_invalid` with the same `config_key` and `config_value_problem`.
 
@@ -116,6 +119,9 @@ fixture's neither), so a fixture reports no row of either; settable since #402 H
 ([v012-register.md](v012-register.md) §1.270, same release): an instruction that changes them
 switches the instance's device backends first ("Switching an instance's backends" below). Their
 whole-instance check is part of the per-instance section's (see "Backends" below).
+#428 SCHED-C1e's row ([v012-register.md](v012-register.md) §1.299 SC1-12; since 0.12.54): the
+per-instance `scheduling.pool_lines` (object, default `none`, settable; "Pool lines for one
+instance" below), reported only for an instance whose entry names it or an instruction sets it.
 A manifest key the table does not have fails
 the start (`config_key_unknown`). The manifest lists the exact keys in row order
 (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
@@ -574,6 +580,38 @@ or the section's. The host reads it for every instance of the snapshot at every 
 cycle, so an instruction takes effect at the next one. `false` on an instance: the evaluation of
 its pairs is the one before SS-4, the guard captures nothing for it and forgets what it kept for
 it, so turning the key off and on again releases every guard of the instance.
+
+**Pool lines for one instance (#428 SCHED-C1e, register §1.299 SC1-12; `actingd-config` revision
+28; since 0.12.54).** `instance.<instance id>.scheduling.pool_lines`, in the file the entry's
+`scheduling.pool_lines` member (object, default `none`, settable), gives one instance its own lines
+of its pools ([scheduling/README.md](scheduling/README.md), "Lines for one instance"): an object
+of at most 32 members, each named by a pool id as the instance's `schedule.json` writes it (a
+composed copy's id without `@<alias>`; in catalog mode the catalog's id, by the identifier rule:
+1 to 128 bytes, a lowercase ASCII letter or digit first, then lowercase ASCII letters, digits,
+`.`, `_`, `:` and `-`), each `{"stop_line", "hard_line", "trigger_line"?}`, every line an integer
+in `0..=9007199254740991` or `{"type": "fact", "fact_key", "offset"}` (a fact key by the same
+identifier rule, an offset within ±9007199254740991, no other member), a reference read in the
+pool's scope. For a pool it names, on that instance, the set replaces the catalog's lines whole (a
+`trigger_line` it does not write is the capacity); every other pool and instance keeps the
+catalog's lines. `EffectiveConfig::pool_lines(instance_id)` returns the set in effect; the host
+reads it for every instance of the snapshot at every evaluated policy cycle and hands it to the
+evaluation, so an instruction takes effect at the next one, and a change ends no capped episode.
+The instance's whole-instance check refuses, `config_value_invalid` with the instance's key and the
+JSON pointer into the value of what breaks the rule (`/<pool id>`, `/<pool id>/<line>`,
+`/<pool id>/<line>/<member>`): a value, a pool's value, a line or a reference of another shape or
+with another member (`wrong_type`); a pool beyond the 32nd, a member that is no pool identifier, a
+constant, an offset or a fact key outside its range (`out_of_range`); a set without both lines, at
+the one missing, and `H < S ≤ T` broken between two constants or two references to one fact, at
+the hard line or the trigger line (`section_check`). A start and `check-config` refuse the file's
+value the same way. Only an instruction also asks the active catalog generation: each pool the
+request's value names must be one the generation gives the instance with a declared valuation,
+else `config_value_invalid` (`section_check`, pointing at the pool); the host fills the check
+context with those pools before the request is checked (`CheckContext::with_valued_pools`), as it
+fills the backends. A start's restore, `check-config` and a change of another key do not ask it,
+so a value whose pool a later generation no longer gives the instance is kept and changes nothing
+while the pool is absent. Channels: the Lab's `config set` and `config clear`, MCP `ac_config_set`
+(observer tier, as every key but the backends), the console (no tier row: hidden until the UI
+repository adds one).
 
 **Per-instance lanes (Workflow #427-A; `actingd-config` revision 19).**
 `scheduling.parallel.enabled` (default `true` since 0.12.31, Workflow #429 R-2 and Alice's ruling
@@ -1607,7 +1645,7 @@ All changes or none:
 | (#402 HS-1, since 0.12.39; first, before any key is looked at) a request that names a backend key (`instance.<instance id>.touch_backend` or `.capture_backend`) names only the backend keys of that one instance, one or both, so that all of it or none of it is one switch of one device | `config_value_invalid` (`backend_switch_not_alone`), naming the first key that is not one of them: another key, or another instance's backend key |
 | the key is in the key table (a per-instance key of a configured instance); a key whose default is `none` counts whether or not the file writes it, once its instance (a per-instance key) or its section (an exact key) is in the configuration (Workflow #429 R-1, since 0.12.31) | `config_key_unknown` |
 | the key is settable | `config_key_not_settable` |
-| the value has the key's type and range, and is one an instruction may set (not `performance.pacing.mode` `full`, Workflow #429 R-2, since 0.12.31: `out_of_range`); no key is named twice; the changed sections pass their whole-section check (#402 HS-1: an instance's backends, "Backends" above; Workflow #429 R-3, since 0.12.39: an instance's `start_emulator`, "Starting an instance's emulator" above) | `config_value_invalid` (`config_value_problem`: `wrong_type`, `out_of_range`, `repeated_key`, `section_check`, `backend_kind_unsupported`, `backend_pair_required`, `discovery_binding_required`; `range_min`, `range_max` for a bounded key) |
+| the value has the key's type and range, and is one an instruction may set (not `performance.pacing.mode` `full`, Workflow #429 R-2, since 0.12.31: `out_of_range`); no key is named twice; the changed sections pass their whole-section check (#402 HS-1: an instance's backends, "Backends" above; Workflow #429 R-3, since 0.12.39: an instance's `start_emulator`, "Starting an instance's emulator" above; #428 SCHED-C1e, since 0.12.54: an instance's `scheduling.pool_lines`, and the pools a value of it names are pools the active generation gives the instance with a declared valuation, "Pool lines for one instance" above) | `config_value_invalid` (`config_value_problem`: `wrong_type`, `out_of_range`, `repeated_key`, `section_check`, `backend_kind_unsupported`, `backend_pair_required`, `discovery_binding_required`; `range_min`, `range_max` for a bounded key) |
 
 #402 HS-2 (since 0.12.39): a request that passes these checks and changes an instance's backends
 in effect switches the device first and commits only once the new backends opened, with

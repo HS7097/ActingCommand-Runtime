@@ -26,8 +26,8 @@ use crate::instance::BackendKindRules;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::{
-    BlackoutEntry, ExpectedRuntimeConfig, FactRefreshConfig, PackAdmissionConfig, RandomDelay,
-    RemedyConfig, SchedulingConfig,
+    BlackoutEntry, ExpectedRuntimeConfig, FactRefreshConfig, InstancePoolLineSet,
+    PackAdmissionConfig, RandomDelay, RemedyConfig, SchedulingConfig,
 };
 use crate::startup_discovery::StartupDiscoveryConfig;
 use crate::store_foreground::StoreForegroundConfig;
@@ -107,6 +107,13 @@ pub struct CheckContext {
     /// know the instances (actingd's check of the file, which refuses that value earlier with its
     /// own code) does not ask the rule.
     pub discovery_bound: Option<BTreeSet<String>>,
+    /// #428 SCHED-C1e (register §1.299 SC1-12): per registry id, the pools the active catalog
+    /// generation gives the instance with a declared valuation, each by the id its
+    /// `scheduling.pool_lines` names them by ([`Self::with_valued_pools`]); an instruction's
+    /// `scheduling.pool_lines` names only those (`config_value_invalid`, `section_check`). `None`
+    /// until the caller fills them in: a context that does not know the generation (a start's
+    /// restore, actingd's check of the file) does not ask the rule, so a start keeps such a value.
+    pub valued_pools: Option<BTreeMap<String, BTreeSet<String>>>,
 }
 
 impl CheckContext {
@@ -116,6 +123,16 @@ impl CheckContext {
             device,
             backends: BackendKindRules::NONE,
             discovery_bound: None,
+            valued_pools: None,
+        }
+    }
+
+    /// #428 SCHED-C1e: the context with, per registry id, the pools the active generation gives
+    /// the instance with a declared valuation; an instance it does not name has none.
+    pub fn with_valued_pools(self, pools: BTreeMap<String, BTreeSet<String>>) -> Self {
+        Self {
+            valued_pools: Some(pools),
+            ..self
         }
     }
 
@@ -770,6 +787,17 @@ impl EffectiveConfig {
         )
     }
 
+    /// #428 SCHED-C1e (register §1.299 SC1-12): the own pool lines of the instance whose registry
+    /// id is `instance_id`, by pool id, from `instance.<instance_id>.scheduling.pool_lines` in
+    /// effect; none when the configuration carries no value for it (each pool's catalog lines
+    /// are then in effect).
+    pub fn pool_lines(
+        &self,
+        instance_id: &str,
+    ) -> Result<BTreeMap<String, InstancePoolLineSet>, ConfigFailure> {
+        scheduling::instance_pool_lines(&|key: &str| self.value(key).cloned(), instance_id)
+    }
+
     /// IDLE-1: the `idle` section in effect, checked whole.
     pub fn idle_section(&self) -> Result<IdleConfig, ConfigFailure> {
         idle::section(&|key: &str| self.value_or_shipped(key))
@@ -894,6 +922,15 @@ impl EffectiveConfig {
         next.drop_unset_unwritten();
         next.check_sections(&sections, context)
             .map_err(ConfigFailure::into_instruction)?;
+        // #428 SCHED-C1e (`contracts/scheduling/README.md`, "Lines for one instance", *Checks*):
+        // an instance's pool lines this request sets name only pools the active generation gives
+        // the instance with a declared valuation, when the context knows them. A value set
+        // before, and a start's restore, are not asked again.
+        if let Some(valued) = &context.valued_pools {
+            for change in changes.iter().filter(|change| change.value.is_some()) {
+                check_valued_pools(&next, &change.key, valued)?;
+            }
+        }
         let settings = changes
             .iter()
             .map(|change| {
@@ -1429,6 +1466,36 @@ fn base_source(file_source: ConfigParameterSource) -> ConfigParameterSource {
         ConfigParameterSource::Default
         | ConfigParameterSource::Discovered
         | ConfigParameterSource::Instruction => ConfigParameterSource::Default,
+    }
+}
+
+/// #428 SCHED-C1e (`contracts/scheduling/README.md`, "Lines for one instance", *Checks*): when
+/// `key` is an instance's `scheduling.pool_lines`, each pool its value in `config` names is one of
+/// the pools `valued` gives that instance (by registry id; an instance it does not name has none);
+/// otherwise `config_value_invalid` (`section_check`) for the key, with the JSON pointer of the
+/// first such pool in the value (`/<pool id>`), which names it. Any other key passes.
+fn check_valued_pools(
+    config: &EffectiveConfig,
+    key: &str,
+    valued: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<(), ConfigFailure> {
+    let Some((row, Some(instance))) = find_row(key) else {
+        return Ok(());
+    };
+    if row.name != KeyName::PerInstance(scheduling::INSTANCE_POOL_LINES) {
+        return Ok(());
+    }
+    let given = valued.get(instance);
+    match config
+        .pool_lines(instance)?
+        .into_keys()
+        .find(|pool_id| !given.is_some_and(|pools| pools.contains(pool_id)))
+    {
+        Some(pool_id) => Err(
+            ConfigFailure::invalid_value(key, ConfigValueProblem::SectionCheck)
+                .with_pointer(format!("/{pool_id}")),
+        ),
+        None => Ok(()),
     }
 }
 

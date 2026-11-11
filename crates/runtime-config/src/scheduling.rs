@@ -44,6 +44,11 @@
 //! also per instance (`instance.<instance id>.scheduling.no_progress.enabled`, defaulting to the
 //! section's), whether the no-progress guard holds a pair whose latest successful run made no
 //! progress; read by the host at every evaluated policy cycle.
+//! #428 SCHED-C1e (register §1.299 SC1-12; `actingd-config` revision 28): each instance's own
+//! pool lines, `instance.<instance id>.scheduling.pool_lines` (no default, settable), parsed and
+//! checked here ([`InstancePoolLineSet`], [`PoolLineValue`]); the host reads them at every
+//! evaluated policy cycle and hands them to the evaluation, where an instance's set replaces the
+//! catalog's lines of that pool whole.
 //! BX-1 (Workflow #429, register §1.273, since 0.12.39): a blackout entry's parser and shape as a
 //! client surface ([`BlackoutListKey`], [`BlackoutEntry::parse`], [`BlackoutEntry::parse_list`],
 //! [`BlackoutEntry::to_json`], [`BlackoutEntry::list_json`]): the console builds and checks the
@@ -199,6 +204,17 @@ pub const EVALUATION_ESCALATE_AFTER: &str = "scheduling.evaluation.escalate_afte
 /// `false`: the evaluation is the one before SS-4. Also the member of an instance's own value
 /// (`instance.<instance id>.scheduling.no_progress.enabled`).
 pub const NO_PROGRESS_ENABLED: &str = "scheduling.no_progress.enabled";
+/// #428 SCHED-C1e (register §1.299 SC1-12; `actingd-config` revision 28;
+/// `contracts/scheduling/README.md`, "Lines for one instance"): the member of an instance's own
+/// pool lines (`instance.<instance id>.scheduling.pool_lines`; in the file the
+/// `scheduling.pool_lines` member of its `instances[]` entry): an object of at most
+/// [`MAX_POOL_LINES_POOLS`] members, each named by a pool id as the instance's `schedule.json`
+/// writes it, each `{"stop_line", "hard_line", "trigger_line"?}` in the two forms a catalog line
+/// has. No default: without it every pool of the instance takes the catalog's lines.
+pub const INSTANCE_POOL_LINES: &str = "scheduling.pool_lines";
+/// #428 SCHED-C1e: the most pools one instance's `scheduling.pool_lines` names. Schema, not a
+/// threshold.
+pub const MAX_POOL_LINES_POOLS: usize = 32;
 
 /// The longest random delay any key may name: one day (the coordinator's order for Workflow
 /// #405, 2026-10-14). Schema, not a threshold.
@@ -247,6 +263,20 @@ const CHOICE_PARAMETER_NAME: &str = "parameter";
 const CHOICE_VALUE: &str = "value";
 /// Workflow #411 B15 R3: the word no capability may be (model-b15 §4.1).
 const CAPABILITY_NEVER: &str = "none";
+/// #428 SCHED-C1e: a line's bound, the catalog's (`contracts/scheduling/README.md`, "Pool
+/// lines"): a constant in `0..=2^53−1`, a reference's offset in `−(2^53−1)..=2^53−1`. Schema.
+const MAX_POOL_LINE: i64 = 9_007_199_254_740_991;
+/// #428 SCHED-C1e: the longest pool id and fact key, the catalog's identifier bound. Schema.
+const MAX_POOL_LINE_ID_BYTES: usize = 128;
+/// #428 SCHED-C1e: the members of one pool's lines.
+const POOL_STOP_LINE: &str = "stop_line";
+const POOL_HARD_LINE: &str = "hard_line";
+const POOL_TRIGGER_LINE: &str = "trigger_line";
+/// #428 SCHED-C1e: the members of a line read from a fact, and the word of its `type`.
+const LINE_TYPE: &str = "type";
+const LINE_FACT_KEY: &str = "fact_key";
+const LINE_OFFSET: &str = "offset";
+const LINE_FACT: &str = "fact";
 
 macro_rules! file_struct {
     ($(#[$meta:meta])* $name:ident { $($member:ident),+ $(,)? }) => {
@@ -348,6 +378,12 @@ pub struct InstanceSchedulingFile {
     // because the entry denies unknown fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     no_progress: Option<NoProgressFile>,
+    // Interface anchor `actingd-config` revision 28 (contracts/component-interfaces.md; #428
+    // SCHED-C1e): the instance's own pool lines. A Runtime before SCHED-C1e refuses a file that
+    // names them, because the entry denies unknown fields; a file that does not keeps its
+    // revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pool_lines: Option<Value>,
 }
 
 file_struct!(RecognitionFile {
@@ -1563,6 +1599,245 @@ pub(crate) fn instance_no_progress_enabled(
         NO_PROGRESS_ENABLED.to_owned()
     };
     Reader { value }.boolean(&key)
+}
+
+/// #428 SCHED-C1e (register §1.299 SC1-12): one line of an instance's own pool lines, in the two
+/// forms a catalog line has (`contracts/scheduling/README.md`, "Pool lines"). The Runtime computes
+/// no line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolLineValue {
+    /// An integer in `0..=2^53−1`, the line itself.
+    Constant(u64),
+    /// `{"type": "fact", "fact_key": <key>, "offset": <integer>}`: the integer the fact `fact_key`
+    /// of the pool's own scope holds plus `offset`, read at each evaluation.
+    Fact { fact_key: String, offset: i64 },
+}
+
+/// #428 SCHED-C1e: one pool's lines given for one instance. It replaces the catalog's lines of
+/// the pool whole: without `trigger_line` the pool's trigger line is its capacity, not the
+/// catalog's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstancePoolLineSet {
+    pub stop_line: PoolLineValue,
+    pub hard_line: PoolLineValue,
+    pub trigger_line: Option<PoolLineValue>,
+}
+
+/// #428 SCHED-C1e (`contracts/scheduling/README.md`, "Lines for one instance", *Checks*): the
+/// pool lines of the instance whose registry id is `instance_id`, by pool id, from
+/// `instance.<instance_id>.scheduling.pool_lines` in effect; none when the configuration carries
+/// no value for it. A broken rule is `config_value_invalid` for the key, with the JSON pointer,
+/// into the key's value, of the pool (and member) it concerns ([`pool_lines_of`]). Whether the
+/// active generation gives the instance the pool with a declared valuation is the instruction's
+/// check ([`crate::CheckContext::with_valued_pools`]), not this one's: a start keeps such a value.
+pub(crate) fn instance_pool_lines(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+    instance_id: &str,
+) -> Result<BTreeMap<String, InstancePoolLineSet>, ConfigFailure> {
+    let key = instance_key(instance_id, INSTANCE_POOL_LINES);
+    match value(&key) {
+        None => Ok(BTreeMap::new()),
+        Some(FactScalar::String(text)) => match serde_json::from_str::<Value>(&text) {
+            Ok(lines) => pool_lines_of(&key, &lines),
+            Err(_) => Err(invalid(&key, ConfigValueProblem::WrongType)),
+        },
+        Some(_) => Err(invalid(&key, ConfigValueProblem::WrongType)),
+    }
+}
+
+/// #428 SCHED-C1e: the pool lines `value` gives, the value of the key `key`, by pool id. A broken
+/// rule is `config_value_invalid` for `key`, with the JSON pointer of the pool (`/<pool id>`) or of
+/// its member (`/<pool id>/<line>`, `/<pool id>/<line>/<member>`) in `value`:
+///
+/// - a value that is not an object, a pool's value that is not an object or names a member other
+///   than `stop_line`, `hard_line` and `trigger_line`, a line that is neither an integer nor an
+///   object, a reference that names a member other than `type`, `fact_key` and `offset` (a
+///   `scope` among them), whose `type` is not `fact`, whose `fact_key` is no string or whose
+///   `offset` is no integer: `wrong_type`;
+/// - a pool beyond the 32nd, a member that is no pool identifier, a constant outside
+///   `0..=9007199254740991`, an offset outside `−9007199254740991..=9007199254740991`, a fact key
+///   that is no identifier: `out_of_range`;
+/// - a pool without both lines (at the one missing), and `H < S ≤ T` broken where the values tell
+///   it (two constants, or two references to one fact by their offsets): `section_check`, at the
+///   hard line for `H < S`, at the trigger line for the rest.
+pub(crate) fn pool_lines_of(
+    key: &str,
+    value: &Value,
+) -> Result<BTreeMap<String, InstancePoolLineSet>, ConfigFailure> {
+    let refused =
+        |problem, pointer: String| ConfigFailure::invalid_value(key, problem).with_pointer(pointer);
+    let Value::Object(pools) = value else {
+        return Err(refused(ConfigValueProblem::WrongType, String::new()));
+    };
+    let mut lines = BTreeMap::new();
+    for (index, (pool_id, members)) in pools.iter().enumerate() {
+        let at = format!("/{}", pointer_token(pool_id));
+        if index >= MAX_POOL_LINES_POOLS || !pool_line_identifier(pool_id) {
+            return Err(refused(ConfigValueProblem::OutOfRange, at));
+        }
+        let Value::Object(members) = members else {
+            return Err(refused(ConfigValueProblem::WrongType, at));
+        };
+        if let Some(other) = members.keys().find(|member| {
+            ![POOL_STOP_LINE, POOL_HARD_LINE, POOL_TRIGGER_LINE].contains(&member.as_str())
+        }) {
+            return Err(refused(
+                ConfigValueProblem::WrongType,
+                format!("{at}/{}", pointer_token(other)),
+            ));
+        }
+        let line = |member: &str| {
+            members
+                .get(member)
+                .map(|line| pool_line(key, line, &format!("{at}/{member}")))
+                .transpose()
+        };
+        let stop = line(POOL_STOP_LINE)?;
+        let hard = line(POOL_HARD_LINE)?;
+        let trigger = line(POOL_TRIGGER_LINE)?;
+        let (Some(stop), Some(hard)) = (stop, hard) else {
+            let missing = if members.contains_key(POOL_STOP_LINE) {
+                POOL_HARD_LINE
+            } else {
+                POOL_STOP_LINE
+            };
+            return Err(refused(
+                ConfigValueProblem::SectionCheck,
+                format!("{at}/{missing}"),
+            ));
+        };
+        if comparable(&hard, &stop).is_some_and(|(hard, stop)| hard >= stop) {
+            return Err(refused(
+                ConfigValueProblem::SectionCheck,
+                format!("{at}/{POOL_HARD_LINE}"),
+            ));
+        }
+        if let Some(trigger) = &trigger
+            && (comparable(&stop, trigger).is_some_and(|(stop, trigger)| stop > trigger)
+                || comparable(&hard, trigger).is_some_and(|(hard, trigger)| hard >= trigger))
+        {
+            return Err(refused(
+                ConfigValueProblem::SectionCheck,
+                format!("{at}/{POOL_TRIGGER_LINE}"),
+            ));
+        }
+        lines.insert(
+            pool_id.clone(),
+            InstancePoolLineSet {
+                stop_line: stop,
+                hard_line: hard,
+                trigger_line: trigger,
+            },
+        );
+    }
+    Ok(lines)
+}
+
+/// #428 SCHED-C1e: one line `value` of the key `key`, at the JSON pointer `at` in its value, by the
+/// rules of [`pool_lines_of`].
+fn pool_line(key: &str, value: &Value, at: &str) -> Result<PoolLineValue, ConfigFailure> {
+    let refused =
+        |problem, pointer: String| ConfigFailure::invalid_value(key, problem).with_pointer(pointer);
+    match value {
+        Value::Number(number) => match number.as_i64() {
+            Some(line) if (0..=MAX_POOL_LINE).contains(&line) => {
+                Ok(PoolLineValue::Constant(line.unsigned_abs()))
+            }
+            Some(_) => Err(refused(ConfigValueProblem::OutOfRange, at.to_owned())),
+            None if number.as_u64().is_some() => {
+                Err(refused(ConfigValueProblem::OutOfRange, at.to_owned()))
+            }
+            None => Err(refused(ConfigValueProblem::WrongType, at.to_owned())),
+        },
+        Value::Object(members) => {
+            if let Some(other) = members
+                .keys()
+                .find(|member| ![LINE_TYPE, LINE_FACT_KEY, LINE_OFFSET].contains(&member.as_str()))
+            {
+                return Err(refused(
+                    ConfigValueProblem::WrongType,
+                    format!("{at}/{}", pointer_token(other)),
+                ));
+            }
+            if members.get(LINE_TYPE).and_then(Value::as_str) != Some(LINE_FACT) {
+                return Err(refused(
+                    ConfigValueProblem::WrongType,
+                    format!("{at}/{LINE_TYPE}"),
+                ));
+            }
+            let fact_key = match members.get(LINE_FACT_KEY) {
+                Some(Value::String(fact_key)) if pool_line_identifier(fact_key) => fact_key,
+                Some(Value::String(_)) => {
+                    return Err(refused(
+                        ConfigValueProblem::OutOfRange,
+                        format!("{at}/{LINE_FACT_KEY}"),
+                    ));
+                }
+                _ => {
+                    return Err(refused(
+                        ConfigValueProblem::WrongType,
+                        format!("{at}/{LINE_FACT_KEY}"),
+                    ));
+                }
+            };
+            let offset_at = format!("{at}/{LINE_OFFSET}");
+            let offset = match members.get(LINE_OFFSET) {
+                Some(Value::Number(number)) => match number.as_i64() {
+                    Some(offset) if (-MAX_POOL_LINE..=MAX_POOL_LINE).contains(&offset) => offset,
+                    Some(_) => return Err(refused(ConfigValueProblem::OutOfRange, offset_at)),
+                    None if number.as_u64().is_some() => {
+                        return Err(refused(ConfigValueProblem::OutOfRange, offset_at));
+                    }
+                    None => return Err(refused(ConfigValueProblem::WrongType, offset_at)),
+                },
+                _ => return Err(refused(ConfigValueProblem::WrongType, offset_at)),
+            };
+            Ok(PoolLineValue::Fact {
+                fact_key: fact_key.clone(),
+                offset,
+            })
+        }
+        _ => Err(refused(ConfigValueProblem::WrongType, at.to_owned())),
+    }
+}
+
+/// #428 SCHED-C1e: two lines whose order the values tell, as the compiler compares a pool's lines:
+/// two constants, or two references to one fact by their offsets.
+fn comparable(left: &PoolLineValue, right: &PoolLineValue) -> Option<(i128, i128)> {
+    match (left, right) {
+        (PoolLineValue::Constant(left), PoolLineValue::Constant(right)) => {
+            Some((i128::from(*left), i128::from(*right)))
+        }
+        (
+            PoolLineValue::Fact {
+                fact_key: left_key,
+                offset: left,
+            },
+            PoolLineValue::Fact {
+                fact_key: right_key,
+                offset: right,
+            },
+        ) if left_key == right_key => Some((i128::from(*left), i128::from(*right))),
+        _ => None,
+    }
+}
+
+/// #428 SCHED-C1e: a pool id or a fact key, by the catalog's identifier rule: 1 to 128 bytes, a
+/// lowercase ASCII letter or digit first, then lowercase ASCII letters, digits, `.`, `_`, `:` and
+/// `-`.
+fn pool_line_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_POOL_LINE_ID_BYTES
+        && value.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || (index > 0 && matches!(byte, b'.' | b'_' | b':' | b'-'))
+        })
+}
+
+/// One reference token of a JSON pointer (RFC 6901): `~` and `/` escaped.
+fn pointer_token(name: &str) -> String {
+    name.replace('~', "~0").replace('/', "~1")
 }
 
 /// Workflow #427-A: `scheduling.parallel.enabled` in effect.

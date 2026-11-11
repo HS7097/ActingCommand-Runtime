@@ -3451,3 +3451,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_sched_c1d::sched_c1d_h4_a_runtime_that_never_has_an_episode_records_no_fact",
 ]
 incident = ["#428 SCHED-C1d"]
+
+# #428 SCHED-C1e (0.12.54; register §1.299 SC1-12; brief rd-1111/brief-sched-c1e.md; contracts/scheduling/README.md, "Lines for one instance"; contracts/runtime-config.md, "Pool lines for one instance"): instance.<instance id>.scheduling.pool_lines is an object row in the instances[] entry's scheduling member, no default, settable, read by SCHED-C1e; the file names it for one instance (explicit, read back as its pools' lines) and an instruction sets it over no base and clears it; the section check refuses, config_value_invalid for the instance's key with the JSON pointer of what breaks the rule, a value of another shape, a pool's or a line's or a reference's member of another shape (wrong_type), a 33rd pool, a member that is no pool identifier, a constant, an offset or a fact key out of range (out_of_range), a set without both lines and H < S <= T broken between two constants or two references to one fact (section_check), at start and check-config too, and passes lines the values cannot order; with the active generation's valued pools in the context an instruction naming a pool the generation does not give the instance (or gives without a valuation) is refused section_check, a context without pools asks nothing and another key's change does not ask again; the restore at start keeps a value whose pool it cannot check; a configuration without the key has no row of it; through ConfigureSettings on a connection bound to cli the instruction records the instance's config.parameters.instance row (instruction) and its host.config_overrides row with channel cli, a pool of no valuation and a pool the catalog does not have are Denied config_value_invalid section_check with nothing changed, a later generation that no longer values the pool leaves the value in effect while a new instruction naming it is refused, and a restart restores the value
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::gate_sched_c1e::sched_c1e_c1_the_key_is_read_from_the_file_and_set_and_cleared_by_an_instruction",
+    "actingcommand-runtime-config::lib::gate_sched_c1e::sched_c1e_c2_each_refusal_of_the_section_check_names_the_key_and_its_problem",
+    "actingcommand-runtime-config::lib::gate_sched_c1e::sched_c1e_c3_an_instruction_names_only_the_valued_pools_the_generation_gives_the_instance",
+    "actingcommand-runtime-config::lib::gate_sched_c1e::sched_c1e_c4_the_restore_at_start_keeps_a_value_whose_pool_it_cannot_check",
+    "actingcommand-runtime-config::lib::gate_sched_c1e::sched_c1e_c5_a_configuration_without_the_key_has_no_row_of_it",
+    "actingcommand-runtime-host::lib::tests::gate_sched_c1e::sched_c1e_h1_an_instruction_sets_an_instances_lines_and_a_restart_keeps_them",
+]
+incident = ["#428 SCHED-C1e"]
