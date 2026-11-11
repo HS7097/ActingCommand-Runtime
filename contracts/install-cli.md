@@ -53,7 +53,8 @@ kept there too. The single-location kept files:
 - `<file>.rolledback-<ms>`: a file an undo moved aside;
 - `actingd.config.json.prev-<ms>`: a replaced configuration (INST-3);
 - `<name>.new-<ms>.part`: a file or folder an operation is staging; `<name>.abandoned-<ms>` when an
-  undo abandoned it;
+  undo abandoned it; the rescue module's `instance add` (INST-5) writes its candidate so before its
+  operation opens, `<ms>` the command's own milliseconds;
 - `install\current.json.finished-<ms>`: the marker of a finished operation.
 
 `<ms>` is the operation's Unix milliseconds (`op-<ms>`), so each kept name says which operation
@@ -673,6 +674,64 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
 - **Instances** (INST-5, on INST-R). `add` and `remove` write the candidate only; a commit
   follows. A minted `instance_id` is never reused; there is no default backend; no device serial
   is read or written (done, or the refusal `instance_invalid`).
+- **Instances, the first slice** (Workflow #421 INST-5, since 0.12.52; register §1.300; the
+  coordinator's work order of 11-11). Only the Lab's rescue module serves it, as `instance add
+  <alias> --game <g> --server <s> --mumu-index <n> --touch-backend <b> --capture-backend <b>`,
+  every parameter required and none with a default; it adds one emulator instance, bound by its
+  index. Not in this slice: `actingctl install instance add` and `instance remove`, INST-3's
+  candidate commands, a handset, and INST-R (the instance written in one place). It does not wait
+  for INST-3 and INST-R: it composes and commits the candidate itself, in one call.
+  - **Refused before anything is written**, each `instance_invalid`: an alias the configuration
+    has, an entry of `instances` or a row of `policy.facts.instances` (`alias`); an emulator index
+    an entry binds, `instance_index` (`alias`, `instance_index`, the entry's alias as `aliases`); a
+    game whose root under `standard_packs.root` holds no `bundle.json` the contract crate reads
+    (`game`, `path`, the read's failure as the cause; `config_key` `standard_packs.root` when the
+    configuration names no such root), or a server no pack of that bundle names (`game`,
+    `server`, `path`); a configuration without the list `instances` or `policy.facts.instances`,
+    or without a row there to take the host and the capabilities from (`config_key`). A
+    parameter missing or malformed is `actingctl_usage_invalid`. With no Runtime running it
+    refuses `runtime_not_running`: the new instance's pause needs the Runtime that starts with
+    it.
+  - **The candidate**: the selected configuration with the entry `{alias, instance_id,
+    instance_index, touch_backend, capture_backend}` appended to `instances` and the row
+    `{instance_id: <alias>, server_id, game_id, host_id, available: true,
+    capability_operation_ids, preferred_task_ids: []}` appended to `policy.facts.instances`, the
+    host and the capabilities those of a row of the same game and server, else of the same game,
+    else of the first row; both places, as the configuration's assembly requires until INST-R
+    (`policy_instance_set_mismatch`); every other member as it was, in its order, with the live
+    file's line ends. The `instance_id` is minted (`instance_<32 hex>`) and is none the live file
+    names and none a journal of the root recorded as added.
+  - **The commit** is `config replace`'s ("The Lab's rescue module"): the candidate, written
+    beside the live file as `actingd.config.json.new-<ms>.part` (`<ms>` the command's own
+    milliseconds) so that its relative paths resolve as the live file's, passes the live build's
+    check-config (`--install-root`; a refusal is `config_refused_by_target` with check-config's
+    outcome as its cause, whole); then the hold of every unpaused instance (`lab-instance-<ms>`,
+    every other pause kept), the close, the swap with the replaced file kept as
+    `actingd.config.json.prev-<ms>` (the candidate is the swap's own part, so nothing else is
+    staged), the start and its post-start checks: one journal of kind `config_replace` with the
+    initiator and the input `instance_add` (what was added, its `instance_id`, the pause reason).
+  - **The new instance starts paused** (the coordinator's ruling of 11-11, not Alice's words):
+    after the start, before `alive` and the release of the hold, it is paused with its own reason
+    `instance.added`, a pause reason name ([scheduling-pause.md](scheduling-pause.md):
+    `[a-z0-9_.-]`, 1 to 64 bytes), drained as every pause is; the release hands back only the
+    hold's own pauses, so it stays paused until a person lifts it (the console's resume, or
+    `actingctl resume --state-root <s> --instance <alias>`) when the account is ready. Not
+    registered by the started Runtime, or its pause refused: `post_check_failed` (`alias`,
+    `count` 1), the hold kept, and `next` names `pause_added`, the core pause as actingctl runs
+    it (`actingctl pause --state-root <s> --instance <alias> --reason instance.added`). An
+    operation that stops after the swap pauses it the same way while a Runtime answers. Between
+    the new Runtime's readiness and that pause the instance is not paused: a stopped Runtime takes
+    no pause of an alias it did not register, and INST-R's Runtime half is what can start it held.
+  - **Its answer**: `install_command_done` (`install_instance_add`, `install_operation_id`,
+    `alias`, `game`), the steps `check_config`, `swap`, `pause_added`, `alive` and `release`, the
+    `backup` and `added`. A candidate refused after it was written (by check-config, or a Runtime
+    gone) stays beside the live file, kept as every part: nothing deletes it, and `leftovers` lists
+    it.
+  - **Taking it back**: `config restore <backup>` puts the kept file back by the same path. Its
+    post-start checks judge against the configuration and the pauses from before the restore, so
+    the instance it removes shows as a `bindings` and a `pauses` failure: it ends
+    `post_check_failed` with its hold kept, the previous configuration running, and `release-hold
+    <its reason>` hands the hold back. `instance remove` (a later slice) is the clean way.
 - **Packs** (INST-4). Plan with the contract crate's own readers (`BundleIndex::validate`,
   `read_standard_pack_root`), the package interface edge, the delta per item and the
   Runtime-semantic rules (`pack_binding_broken`, `pack_maintenance_drift`, the caveat
@@ -805,8 +864,11 @@ the rescue face:
   comes from the bundle), waits until they are idle, places each item `.part` → `.old-<ms>` → in
   place (step `pack_item`), checks the bundle again and runs `<root>\tools\actinglab.exe
   standard-pack check` on the placed game root, releases and reads the schedule; `alive [--wait]`
-  is the watchdog's status of the root. `--detach` runs the module's own command again through the
-  WMI start with the same initiator. The download stays outside.
+  is the watchdog's status of the root; `instance add <alias> …` (Workflow #421 INST-5, first
+  slice; "Configuration, instances, packs and a fresh root", "Instances, the first slice") composes
+  the candidate and commits it as `config replace` does, with the new instance paused after the
+  start (step `pause_added`) before the release. `--detach` runs the module's own command again
+  through the WMI start with the same initiator. The download stays outside.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.
 - **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no
@@ -2226,7 +2288,7 @@ the fragment registers, names the command.
 |---|---|---|
 | `install_command_done` | success | `operation`; `installation_changed` on a mutating command (`false`: nothing to do); `install_operation_id`, `commit_sha`, `tag`, `plan_id`, `count`, `game`, `alias`, `path`, `pid`, `owner_epoch`, `log` as the command has them |
 | `install_caveat_noted` | warning | `operation`, `install_caveat`; `commit_sha`, `count`, `game`, `package_id`, `config_key`, `path` as the caveat has them |
-| `install_command_refused` | error | `operation`, `install_refusal`; `release_checks`, `rollback_gate_parts`, `ledger_sequence`, `install_guards`, `plan_id`, `install_operation_id`, `commit_sha`, `path`, `pid`, `count`, `files`, `game`, `package_id`, `alias`, `aliases`, `config_key`, `hold_reason` (LAB-3) as the reason has them |
+| `install_command_refused` | error | `operation`, `install_refusal`; `release_checks`, `rollback_gate_parts`, `ledger_sequence`, `install_guards`, `plan_id`, `install_operation_id`, `commit_sha`, `path`, `pid`, `count`, `files`, `game`, `package_id`, `alias`, `aliases`, `config_key`, `hold_reason` (LAB-3), `server` and `instance_index` (INST-5) as the reason has them |
 | `install_operation_interrupted` | fatal | `operation`, `install_operation_id`: a step failed after a change on disk; the journal names `resume` and `undo`, and until one runs the root cannot run normally |
 | `watchdog_installer_unfinished` | warning | `install_operation_id` when known: the watchdog's decision row 7a″, also the cause of `start_runtime_refused` |
 | `check_config_install_root_invalid` (actingd) | error | `path`: `--install-root` names no install root |
@@ -2252,6 +2314,9 @@ the fragment registers, names the command.
   `guard_failed` (`install_guards`); `install_refusal` `hold_not_owned` (fix 1; `hold_reason`,
   `count`, `aliases`), which only the rescue module answers; `install_command_refused` takes the
   existing key `hold_reason`.
+- **Workflow #421 INST-5** (since 0.12.52; "Instances, the first slice"): `install_command_refused`
+  takes the existing keys `server` and `instance_index` (`instance_invalid`); no code, location,
+  key or word is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

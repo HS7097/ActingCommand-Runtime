@@ -253,8 +253,10 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 ## 5 Irreversible operations
 
 - **The list** is the table's `irreversible: true` rows: `deploy`, `rollback`, `convert`, `clean`,
-  `undo`, `config replace`, `config restore`, `config file commit`, `place`, `pack remove`,
-  `pack restore`, `unlock`, `kept clear` and `resource import-mpe` (the last two reserved).
+  `undo`, `config replace`, `config restore`, `config file commit`, `instance add` (Workflow #421
+  INST-5: its first slice commits the configuration it composes, as `config replace` does),
+  `place`, `pack remove`, `pack restore`, `unlock`, `kept clear` and `resource import-mpe` (the
+  last two reserved).
 - **The rule:** record the initiator (section 4.3), nothing more. No parameter, no second
   confirmation, no plan id carried back by the caller. A plan id is still computed and journalled,
   and an operation still applies only the plan it computed under the writer lock. MCP marks these
@@ -310,7 +312,9 @@ Alice's answer 4. From LAB-3, in the rescue module:
   alive, release; never prints the file); `place <bundle.zip>` (plan, pause the instances bound to
   the bundle's games, wait until idle, place, re-run, `standard-pack check`, wait for the new
   composition, resume, check the schedule; the games come from the bundle, no game is named in
-  code); `alive [--wait]`. The download stays outside the Lab.
+  code); `alive [--wait]`; and (Workflow #421 INST-5, first slice) `instance add <alias>` (compose
+  the candidate, then `config replace`'s steps with the new instance paused after the start,
+  before the release). The download stays outside the Lab.
 - **Without `--root` and `--state-root`:** every rescue operation acts on the root of the
   `actinglab.exe` that runs it (section 9.3); `new <root>` names the new root. A rehearsal on
   another root runs that root's own program.
@@ -321,10 +325,12 @@ Alice's answer 4. From LAB-3, in the rescue module:
   `install`, `start`, `restart`, `mcp-entry` and `agent-channel` from, unchanged, until LAB-7;
   actinglab runs from `<root>\tools\` until LAB-7 moves it, and the default location takes both;
   a row whose source command is not built yet (`convert`, `clean`, `new`, `prepare`,
-  `config file …`, `instance add` and `remove`, `pack remove` and `restore`) is not offered
-  until the slice that builds the source; until LAB-6 the module's requests to a running Runtime
-  go on the CLI channel, as `actingctl install`'s do, since the Runtime refuses a pause, a resume
-  and a shutdown from a Lab envelope until LAB-6 deletes those origin gates (§2.4).
+  `config file …`, `instance remove`, `pack remove` and `restore`) is not offered until the
+  slice that builds the source (Workflow #421 INST-5 opened `instance add` with the module's own
+  command first, [install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh
+  root"); until LAB-6 the module's requests to a running Runtime go on the CLI channel, as
+  `actingctl install`'s do, since the Runtime refuses a pause, a resume and a shutdown from a Lab
+  envelope until LAB-6 deletes those origin gates (§2.4).
 - **"Only the operation's own hold"** (§5), as LAB-3 fix 1 and 2 build it
   ([install-cli.md](install-cli.md), "The Lab's rescue module"): `release-hold <reason>` hands back
   only a hold that a journal of the module in this root recorded in its pause step, only the
