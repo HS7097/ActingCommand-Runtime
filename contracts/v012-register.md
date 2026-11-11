@@ -12794,7 +12794,7 @@ register included; so this note does not spell them. They are left for a later s
 **Interface.** None raised ([component-interfaces.md](component-interfaces.md)): nothing a reader
 or writer of any interface sees changes.
 
-### 1.306 Slice CLI-IN (0.12.55): `--instance <alias>` names the instance on every command (Workflow #434; the audit of 2026-11-11, which found that the module's rows take the instance only as a positional and actinglab's own commands only as the global `--instance`; the coordinator's five rulings of the same day, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §3, on main `a62434a4`; coordinator work order `rd-1111/brief-cli-instance-flag.md`)
+### 1.307 Slice CLI-IN (0.12.55): `--instance <alias>` names the instance on every command (Workflow #434; the audit of 2026-11-11, which found that the module's rows take the instance only as a positional and actinglab's own commands only as the global `--instance`; the coordinator's five rulings of the same day, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §3, on main `a62434a4`; coordinator work order `rd-1111/brief-cli-instance-flag.md`)
 
 The number is the next free one on main `e5efe44e` (written on `a62434a4` as §1.305, which
 NEUT-1 took and merged first); the coordinator renumbers this section if another open slice

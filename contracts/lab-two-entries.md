@@ -505,7 +505,7 @@ sentence fails that test.
 ### 9.3 Defaults and output (LAB-1, LAB-2)
 
 - The instance is a positional (`<inst>`): an alias, an `instance_id` or an ADB port. **One
-  spelling for every command** (Workflow #434 CLI-IN, register §1.306; the coordinator's rulings of
+  spelling for every command** (Workflow #434 CLI-IN, register §1.307; the coordinator's rulings of
   2026-11-11, not Alice's words): on actinglab's command line a row that declares a positional
   instance also takes actinglab's global `--instance <inst>` in its place, after the row's words or
   before them (`actinglab pause --instance <inst>`, `actinglab --instance <inst> pause`), and the
