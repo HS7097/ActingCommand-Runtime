@@ -229,7 +229,7 @@ pub(crate) fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
             })
         })
         .collect::<Vec<_>>();
-    // Workflow #434 LAB-5F: the authoring module's commands only where it is installed.
+    // Workflow #434 LAB-5F: the authoring module's commands only where the option lists them.
     let commands = crate::cli_module::authoring::listed(command_capabilities())?;
     Ok(json!({
         "commands": commands,

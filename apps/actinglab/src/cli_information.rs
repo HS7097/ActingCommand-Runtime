@@ -316,7 +316,7 @@ pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {
 pub(super) fn run_list(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let kind = args.first().map(String::as_str).unwrap_or("commands");
     match kind {
-        // Workflow #434 LAB-5F: the authoring module's commands only where it is installed.
+        // Workflow #434 LAB-5F: the authoring module's commands only where the option lists them.
         "commands" => Ok(json!({
             "commands": crate::cli_module::authoring::listed(command_capabilities())?
         })),

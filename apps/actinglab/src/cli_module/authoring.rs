@@ -1,41 +1,35 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! The authoring option (Workflow #434 LAB-5F; `contracts/lab-two-entries.md` §8.3; register
-//! §1.287, "Slice LAB-5F"): the operations of the authoring module, the rows whose `module` is
-//! `authoring` in `contracts/lab-operations.json`, are listed and served only where the module is
-//! installed.
+//! §1.287, "Slice LAB-5F"): what it decides is only whether the operations of the authoring
+//! module, the rows whose `module` is `authoring` in `contracts/lab-operations.json`, are listed
+//! by default. This build has the authoring code, so it serves them wherever it runs, whatever the
+//! key says (LAB-5F fix 2, the coordinator's ruling of 2026-11-11: not listed is not refused).
 //!
-//! - **Installed** ([`module`], `lab_ops::locate::authoring_module`, read at each call): outside
+//! - **Listed** ([`module`], `lab_ops::locate::authoring_module`, read at each listing): outside
 //!   any installation root, always (the coordinator's ruling of 2026-11-10 on #434, point 15: an
 //!   unpacked Tools package has no configuration to read); inside one, when its selected
-//!   configuration says `lab_module_authoring: true`. Absent or `false`: not installed. A
-//!   configuration that cannot be read, or whose key is not a boolean: not installed, and the
-//!   refusal carries why.
-//! - **A call** ([`admit`]): every authoring row is served by actinglab's own command
-//!   (`engine::COMMANDS`), so `crate::execute` asks first, before any of its gates and before the
-//!   command runs: on actinglab's own command line, the short words of the row (which `main`'s
-//!   route gives to that command), `serve --stdio` (`engine::line`) and MCP's `--via` child. Where
-//!   the module is not installed the call is refused with `lab_command_option_disabled`
-//!   (`operation` the row's name, `lab_option` `authoring`), nothing sent and nothing written.
-//!   Rows of the core, debugging and rescue modules never meet it.
+//!   configuration says `lab_module_authoring: true`. Absent or `false`: not listed. A selection
+//!   or configuration that cannot be read, or whose key is not a boolean: not listed, and the
+//!   command that lists says why once, on its developer line ([`unread_option_line`]: the path and
+//!   the cause).
 //! - **The listing** ([`listed`], [`listed_help`]): `help`, `list commands` and `capabilities`
-//!   leave out the commands of the authoring rows where the module is not installed, and a group
-//!   one word shorter than such a command (`record`, `session record`). `serve --stdio` lists
-//!   nothing.
+//!   leave out the commands of the authoring rows where they are not listed, and a group one word
+//!   shorter than such a command (`record`, `session record`). `serve --stdio` lists nothing.
+//! - **A call** of an authoring row runs everywhere: nothing here stands before a command (fix 2
+//!   removed the refusal `lab_command_option_disabled` that LAB-5F had placed at the start of
+//!   `crate::execute`).
 //! - **Which command line is a row's**: the row's `source` entries `actinglab <words>` (a note in
-//!   parentheses after the words left out); a command line whose command words begin with those
-//!   words is the row's, the longest such words deciding.
+//!   parentheses after the words left out); a listing entry whose command words begin with those
+//!   words is the row's.
 
-use super::{table, words};
-use crate::codes::ActinglabCode;
+use super::{PROGRAM, table, words};
 use crate::{CliError, CliOutcome, ErrorKind};
-use actingcommand_contract::LabOption;
-use actingcommand_contract::outcome::{Detail, Outcome};
+use actingcommand_contract::outcome::{Category, Detail, Outcome};
 use actingcommand_lab_ops::cli_line;
 use actingcommand_lab_ops::locate::{self, AUTHORING_KEY, AuthoringModule};
 use actingcommand_lab_ops::table::{Operation, OperationModule, OperationTable};
-use serde_json::{Map, Value, json};
-use std::path::PathBuf;
+use serde_json::{Value, json};
 
 /// How a row's `source` names one of actinglab's own commands.
 const OWN_SOURCE: &str = "actinglab ";
@@ -46,8 +40,8 @@ const HELP_TABLES: [&str; 2] = ["command_options", "compatibility_notes"];
 /// The member of `help` that lists the commands.
 const HELP_COMMANDS: &str = "commands";
 
-/// What the place this process runs from says of the authoring module, read at each call, so that
-/// a `serve --stdio` sees a configuration changed while it runs.
+/// What the place this process runs from says of the authoring module, read at each listing, so
+/// that a long-running process sees a configuration changed while it runs.
 pub(crate) fn module() -> Result<AuthoringModule, Outcome> {
     #[cfg(test)]
     if let Some(program) = test_place::program() {
@@ -89,85 +83,6 @@ fn begins(words: &[&str], prefix: &[&str]) -> bool {
     words.len() >= prefix.len() && words.iter().zip(prefix).all(|(word, own)| word == own)
 }
 
-/// The offered authoring row whose own command the command line `line` (its command words and
-/// arguments) is: the row one of whose own commands begins it, the longest.
-pub(crate) fn row_of<'a>(table: &'a OperationTable, line: &[&str]) -> Option<&'a Operation> {
-    own_commands(table)
-        .filter(|(_, own)| begins(line, own))
-        .max_by_key(|(_, own)| own.len())
-        .map(|(operation, _)| operation)
-}
-
-/// actinglab's own command line `command` `args`, when it calls an authoring row where the module
-/// is not installed: refused with `lab_command_option_disabled` (§8.3), before the command runs.
-/// `Ok` for every other command line, and for every line where the module is installed.
-pub(crate) fn admit(command: &[String], args: &[String]) -> CliOutcome<()> {
-    let line = command
-        .iter()
-        .chain(args)
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    let row = match table() {
-        Ok(table) => match row_of(table, &line) {
-            Some(operation) => Ok(operation.name.as_str()),
-            None => return Ok(()),
-        },
-        Err(outcome) => Err(outcome),
-    };
-    let why = match module() {
-        Ok(AuthoringModule::Configured {
-            config,
-            installed: false,
-        }) => Ok(config),
-        Ok(_) => return Ok(()),
-        Err(cause) => Err(cause),
-    };
-    match row {
-        Ok(name) => Err(refusal(name, why)),
-        // Where the module is not installed, a table that does not read leaves no line known to
-        // be no authoring row's.
-        Err(outcome) => Err(unreadable_table(&outcome)),
-    }
-}
-
-/// `lab_command_option_disabled` of the authoring row `operation` (§8.3): `operation` and
-/// `lab_option` `authoring` as its values; `why`, the selected configuration that does not say
-/// `true` (`config_path` in the details) or the failure that kept the option unknown (its outcome
-/// whole as `cause` in the details, fail loud).
-fn refusal(operation: &str, why: Result<PathBuf, Outcome>) -> CliError {
-    let mut details = Map::new();
-    details.insert("operation".to_owned(), json!(operation));
-    details.insert("lab_option".to_owned(), json!(LabOption::Authoring));
-    let reason = match why {
-        Ok(config) => {
-            let text = format!(
-                "the selected configuration {} does not say {AUTHORING_KEY}: true",
-                config.display()
-            );
-            details.insert(
-                "config_path".to_owned(),
-                json!(config.display().to_string()),
-            );
-            text
-        }
-        Err(cause) => {
-            let text = format!("its option could not be read ({})", cause.code().as_str());
-            details.insert(
-                "cause".to_owned(),
-                cli_line::outcome_value(&cause, Detail::Full),
-            );
-            text
-        }
-    };
-    CliError::new(
-        ErrorKind::UsageValidation,
-        ActinglabCode::LabCommandOptionDisabled.as_str(),
-        format!("{operation}: the authoring module is not installed here: {reason}"),
-        &[],
-    )
-    .with_details(Value::Object(details))
-}
-
 /// The operation table this build embeds did not read (`super::table`): which commands are the
 /// authoring module's cannot be told.
 fn unreadable_table(outcome: &Outcome) -> CliError {
@@ -181,15 +96,29 @@ fn unreadable_table(outcome: &Outcome) -> CliError {
     .with_details(json!({"outcome": cli_line::outcome_value(outcome, Detail::Full)}))
 }
 
+/// The developer line of a listing whose place's option could not be read: `cause` (the
+/// selection or the configuration that does not read, or whose key is not a boolean) with its
+/// path and its own cause. A warning: the listing still answers, leaving the authoring module's
+/// commands out, and no call is refused because of it.
+pub(crate) fn unread_option_line(cause: &Outcome) -> String {
+    format!(
+        "{} {PROGRAM}: {cause} the authoring module's commands are left out of this listing, \
+         since {AUTHORING_KEY} could not be read",
+        cli_line::level(Category::Warning)
+    )
+}
+
 /// The command words of the authoring rows' own commands.
 type OwnCommands = Vec<Vec<&'static str>>;
 
-/// The own commands of the authoring rows to leave out of a listing here: `None` where the module
-/// is installed. A place whose option cannot be read is not installed (its calls are refused,
-/// saying why); a table that does not read is the error.
+/// The own commands of the authoring rows to leave out of a listing here: `None` where they are
+/// listed. A place whose option cannot be read leaves them out and says why once, on the
+/// developer line ([`unread_option_line`]); a table that does not read is the error.
 fn unlisted() -> CliOutcome<Option<OwnCommands>> {
-    if module().is_ok_and(|module| module.installed()) {
-        return Ok(None);
+    match module() {
+        Ok(module) if module.installed() => return Ok(None),
+        Ok(_) => {}
+        Err(cause) => eprintln!("{}", unread_option_line(&cause)),
     }
     let table = table().map_err(|outcome| unreadable_table(&outcome))?;
     Ok(Some(own_commands(table).map(|(_, own)| own).collect()))

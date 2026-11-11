@@ -2,42 +2,43 @@
 
 // Workflow #434 LAB-5F (register §1.287, "Slice LAB-5F"; contracts/lab-two-entries.md §8.3; the
 // coordinator's ruling of 2026-11-10 on #434, point 15; work order
-// rd-1108/arch-013/brief-lab5f.md): the authoring module's operations are listed and served only
-// where the module is installed.
+// rd-1108/arch-013/brief-lab5f.md): the authoring option decides whether the authoring module's
+// operations are listed; fix 2 (rd-1108/arch-013/brief-lab5f-fix2.md; the coordinator's ruling of
+// 2026-11-11): only that. A build with the authoring code serves them everywhere.
 // - `lab5f_authoring_rows_follow_the_installed_module`: on a made-up installation root (a
 //   single-location root in a temporary folder, `runtime\BUILD-MANIFEST.json` beside the root's
 //   `actingd.config.json`, the program read as the root's `runtime\actinglab.exe`), with
 //   `lab_module_authoring: true` the authoring rows are listed (`help`, its options, `list
-//   commands`, `capabilities`) and a call reaches its command (`package fmt` writes; `regression`,
-//   given by its short words, answers its command's own refusal). With the key absent, `false`, a
-//   value that is no boolean, a configuration that is no JSON and none at all, they are not listed
-//   and a call is refused with `lab_command_option_disabled` (`operation` the row's name,
-//   `lab_option` `authoring`; exit 1 on the line, 2 on a `--via` line): `package fmt` leaves its
-//   file as it was, `record start` makes no state directory, `observe --capture` sends nothing; the
-//   refusal names the configuration, or carries the failure that kept the option unknown. Outside
-//   any installation root they are listed and served. A row of each other module (`codes`, core;
-//   `user-config`, debugging; `op status`, rescue, on Windows) answers the same in every case.
-//   Fix 1 (rd-1108/arch-013/brief-lab5f-fix1.md; the coordinator's ruling of 2026-11-11):
-//   `standard-pack check` is a row of the core module, which the rescue module's `place` runs as
-//   its post-check: in every place, the key absent, `false` and a configuration that cannot be
-//   read included, it is listed (`help`, its options, `list commands`, `capabilities`) and its call
+//   commands`, `capabilities`); with the key absent, `false`, a value that is no boolean, a
+//   configuration that is no JSON and none at all they are not listed, and where the option cannot
+//   be read the listing's developer line names the failure with the configuration's path. Outside
+//   any installation root they are listed. Fix 2: in every place a call of an authoring row
+//   reaches its command, with the answer it has outside any root (`package fmt` writes, also
+//   through MCP's `--via` child; `regression`, given by its short words, answers its command's own
+//   refusal; `record start` makes its state directory; `observe --capture` and `standard-pack
+//   compose` answer their commands); `lab_command_option_disabled` is never the answer. A row of
+//   each other module (`codes`, core; `user-config`, debugging; `op status`, rescue, on Windows)
+//   answers the same in every case. Fix 1 (rd-1108/arch-013/brief-lab5f-fix1.md; the
+//   coordinator's ruling of 2026-11-11): `standard-pack check` is a row of the core module, which
+//   the rescue module's `place` runs as its post-check: in every place it is listed and its call
 //   reaches its command (its own refusal of a game folder with no root file); `standard-pack
-//   compose` is listed only where the module is installed and refused, writing nothing, where it
-//   is not.
-// - `lab5f_serve_answers_as_the_command_line`: `serve --stdio` answers an authoring row's call with
-//   the line the command line's `--json` prints, the refusal where the module is not installed and
-//   the command's own line where it is; the other modules' rows answer as before. `serve --stdio`
-//   lists nothing. Fix 1: `standard-pack check` answers the command line's line in every place,
-//   its command's own refusal; `standard-pack compose` the refusal where the module is not
-//   installed.
+//   compose` is listed only where the option lists the authoring rows.
+// - `lab5f_serve_answers_as_the_command_line`: `serve --stdio` answers an authoring row's call in
+//   every place with the line the command line's `--json` prints, its command's own line (fix 2);
+//   the other modules' rows answer as before. `serve --stdio` lists nothing. Fix 1:
+//   `standard-pack check` answers the command line's line in every place, its command's own
+//   refusal; fix 2: `standard-pack compose` reaches its command in every place.
 // Fakes only: made-up roots in a temporary folder; no Runtime, no device, no clock, no sleep.
 
 use super::*;
 use crate::cli_module::{self, authoring, own_line, serve};
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_lab_ops::initiator::ENVIRONMENT_VARIABLE;
 use actingcommand_lab_ops::locate::AuthoringModule;
+use std::collections::BTreeMap;
 
-/// The refusal of a call where the authoring module is not installed.
+/// The refusal LAB-5F first gave a call where the authoring module was not installed, which no
+/// call answers since fix 2.
 const DISABLED: &str = "lab_command_option_disabled";
 /// A non-canonical JSON file of the package `package fmt` formats.
 const COMPACT: &[u8] = b"{\"kept\":false}";
@@ -63,6 +64,7 @@ enum Place {
     Missing,
 }
 
+/// The places, the first outside any root: what a call answers there every other place answers.
 const PLACES: [Place; 7] = [
     Place::Unrooted,
     Place::True,
@@ -74,7 +76,8 @@ const PLACES: [Place; 7] = [
 ];
 
 impl Place {
-    fn installed(self) -> bool {
+    /// Whether the authoring rows are listed here.
+    fn listed(self) -> bool {
         matches!(self, Self::Unrooted | Self::True)
     }
 }
@@ -137,52 +140,34 @@ fn printed(line: &[&str]) -> (u8, Value) {
     (exit.code, answered)
 }
 
-/// The refusal `answered` of the authoring row `operation` where the module is not installed at
-/// `place`, whose configuration is `config`.
-fn assert_refused(place: Place, operation: &str, config: Option<&Path>, answered: &Value) {
-    let outcome = &answered["outcome"];
-    assert_eq!(
-        outcome["code"], DISABLED,
-        "{place:?} {operation}: {answered}"
+/// The exit and the outcome's code of the answer to each call in the first place.
+type FirstAnswers = BTreeMap<&'static str, (u8, Value)>;
+
+/// Fix 2: the answer `answered` (exit `code`) of the call `call` at `place` came from its command,
+/// whatever the option says: never `lab_command_option_disabled`, and the same exit and outcome
+/// code as in the first place, outside any root, where the rows are listed (`first` keeps them).
+fn reached(first: &mut FirstAnswers, place: Place, call: &'static str, code: u8, answered: &Value) {
+    assert_ne!(
+        answered["outcome"]["code"], DISABLED,
+        "{place:?} {call}: {answered}"
     );
-    assert_eq!(outcome["category"], "error", "{place:?}: {answered}");
-    assert_eq!(
-        outcome["values"]["operation"], operation,
-        "{place:?}: {answered}"
-    );
-    assert_eq!(
-        outcome["values"]["lab_option"], "authoring",
-        "{place:?}: {answered}"
+    let seen = (code, answered["outcome"]["code"].clone());
+    let expected = first.entry(call).or_insert_with(|| seen.clone());
+    assert_eq!(seen, *expected, "{place:?} {call}: {answered}");
+}
+
+/// Fix 2: where the option cannot be read (`cause`), the developer line a listing writes is a
+/// warning that names the failure with the configuration `config`.
+fn assert_unread_line(place: Place, cause: &Outcome, config: Option<&Path>) {
+    let line = authoring::unread_option_line(cause);
+    assert!(
+        line.starts_with(&format!("WARN actinglab: {}", cause.code().as_str())),
+        "{place:?}: {line}"
     );
     assert!(
-        answered["message"]
-            .as_str()
-            .is_some_and(|message| message.starts_with(operation)),
-        "{place:?}: {answered}"
+        line.contains(text_of(config.expect("a root's configuration"))),
+        "{place:?}: {line}"
     );
-    let details = &answered["details"];
-    assert_eq!(details["operation"], operation, "{place:?}: {answered}");
-    assert_eq!(details["lab_option"], "authoring", "{place:?}: {answered}");
-    // The refusal says why: the configuration that does not say `true`, or the failure that kept
-    // the option unknown, never read as installed.
-    let config = text_of(config.expect("a root's configuration"));
-    match place {
-        Place::Absent | Place::False => {
-            assert_eq!(details["config_path"], config, "{place:?}: {answered}");
-            assert!(details.get("cause").is_none(), "{place:?}: {answered}");
-        }
-        Place::NotBoolean | Place::NotJson | Place::Missing => {
-            let cause = &details["cause"];
-            let code = if place == Place::Missing {
-                "config_read_failed"
-            } else {
-                "config_decode_failed"
-            };
-            assert_eq!(cause["code"], code, "{place:?}: {answered}");
-            assert_eq!(cause["values"]["path"], config, "{place:?}: {answered}");
-        }
-        Place::Unrooted | Place::True => panic!("{place:?} is installed: {answered}"),
-    }
 }
 
 /// Whether the command entries `entries` list `command`.
@@ -195,7 +180,7 @@ fn lists(entries: &Value, command: &str) -> bool {
 }
 
 /// The commands of the authoring rows, and the groups of `record`, that the listings leave out
-/// where the module is not installed.
+/// where the option does not list them.
 const AUTHORING_COMMANDS: [&str; 9] = [
     "package fmt",
     "record start",
@@ -238,13 +223,14 @@ fn lab5f_authoring_rows_follow_the_installed_module() {
     unsafe {
         env::remove_var(ENVIRONMENT_VARIABLE);
     }
+    let mut first = FirstAnswers::new();
     for place in PLACES {
         let temp = TempDir::new().unwrap();
         let (program, config) = made_up(temp.path(), place);
         let _place = authoring::test_place::set(program);
         // No Runtime runs: the state root `capabilities` and `observe` would read is not there.
         let _runtime_env = use_runtime_state_root(&temp.path().join("runtime-must-not-exist"));
-        let installed = place.installed();
+        let listed = place.listed();
 
         // What decides: the place, and the selected configuration's key.
         match (place, authoring::module()) {
@@ -262,10 +248,12 @@ fn lab5f_authoring_rows_follow_the_installed_module() {
                 }),
             ) => {}
             (Place::NotBoolean | Place::NotJson, Err(outcome)) => {
-                assert_eq!(outcome.code().as_str(), "config_decode_failed", "{place:?}")
+                assert_eq!(outcome.code().as_str(), "config_decode_failed", "{place:?}");
+                assert_unread_line(place, &outcome, config.as_deref());
             }
             (Place::Missing, Err(outcome)) => {
-                assert_eq!(outcome.code().as_str(), "config_read_failed", "{place:?}")
+                assert_eq!(outcome.code().as_str(), "config_read_failed", "{place:?}");
+                assert_unread_line(place, &outcome, config.as_deref());
             }
             (place, read) => panic!("{place:?} read as {read:?}"),
         }
@@ -277,7 +265,7 @@ fn lab5f_authoring_rows_follow_the_installed_module() {
         for command in AUTHORING_COMMANDS {
             assert_eq!(
                 lists(&help["commands"], command),
-                installed,
+                listed,
                 "{place:?}: help and {command}"
             );
         }
@@ -291,7 +279,7 @@ fn lab5f_authoring_rows_follow_the_installed_module() {
         ] {
             assert_eq!(
                 help["command_options"].get(command).is_some(),
-                installed,
+                listed,
                 "{place:?}: help's options of {command}"
             );
         }
@@ -306,33 +294,28 @@ fn lab5f_authoring_rows_follow_the_installed_module() {
             &["--json", "list", "commands"][..],
             &["--json", "capabilities"][..],
         ] {
-            let listed = run_cli(line.iter().copied(), true);
+            let answered = run_cli(line.iter().copied(), true);
             assert_eq!(
-                listed.exit_code(),
+                answered.exit_code(),
                 0,
                 "{place:?}: {}",
-                listed.envelope_json()
+                answered.envelope_json()
             );
-            let commands = &listed.envelope.data.as_ref().expect("an answer")["commands"];
-            assert_eq!(
-                lists(commands, "package fmt"),
-                installed,
-                "{place:?} {line:?}"
-            );
-            assert_eq!(lists(commands, "record"), installed, "{place:?} {line:?}");
+            let commands = &answered.envelope.data.as_ref().expect("an answer")["commands"];
+            assert_eq!(lists(commands, "package fmt"), listed, "{place:?} {line:?}");
+            assert_eq!(lists(commands, "record"), listed, "{place:?} {line:?}");
             assert!(lists(commands, "tap"), "{place:?} {line:?}");
             // Fix 1.
             assert!(lists(commands, "standard-pack check"), "{place:?} {line:?}");
             assert_eq!(
                 lists(commands, "standard-pack compose"),
-                installed,
+                listed,
                 "{place:?} {line:?}"
             );
         }
 
         // Fix 1: `standard-pack check`, a row of the core module, reaches its command in every
-        // place, the key absent, `false` and a configuration that cannot be read included: its
-        // command's own refusal of a game folder with no root file, never the module's.
+        // place: its command's own refusal of a game folder with no root file.
         let game = empty_game_root(temp.path());
         let (code, answered) =
             printed(&["--json", "standard-pack", "check", "--root", text_of(&game)]);
@@ -341,8 +324,8 @@ fn lab5f_authoring_rows_follow_the_installed_module() {
             answered["outcome"]["code"], NO_ROOT_FILE,
             "{place:?}: {answered}"
         );
-        // `standard-pack compose`, an authoring row, is refused where the module is not installed,
-        // before it writes; where it is, the call reaches its command.
+        // Fix 2: `standard-pack compose`, an authoring row, reaches its command in every place,
+        // listed or not.
         let composed = temp.path().join("composed");
         let (code, answered) = printed(&[
             "--json",
@@ -355,48 +338,33 @@ fn lab5f_authoring_rows_follow_the_installed_module() {
             "--out",
             text_of(&composed),
         ]);
-        if installed {
-            assert_ne!(
-                answered["outcome"]["code"], DISABLED,
-                "{place:?}: {answered}"
-            );
-        } else {
-            assert_eq!(code, 1, "{place:?}: {answered}");
-            assert_refused(place, "standard-pack compose", config.as_deref(), &answered);
-            assert!(!composed.exists(), "{place:?}: nothing written");
-        }
+        reached(&mut first, place, "standard-pack compose", code, &answered);
 
-        // A call on actinglab's own words: `package fmt` writes where the module is installed and
-        // is refused before it writes where it is not.
+        // Fix 2: a call on actinglab's own words reaches its command in every place: `package fmt`
+        // writes.
         let package = package(temp.path());
         let compact = package.join("data").join("compact.json");
         let (code, answered) =
             printed(&["--json", "package", "fmt", "--package", text_of(&package)]);
-        if installed {
-            assert_eq!(code, 0, "{place:?}: {answered}");
-            assert_eq!(
-                answered["outcome"]["code"], "lab_operation_completed",
-                "{answered}"
-            );
-            assert_eq!(
-                answered["reformatted"],
-                json!(["data/compact.json"]),
-                "{answered}"
-            );
-            assert_eq!(fs::read_to_string(&compact).unwrap(), CANONICAL);
-        } else {
-            assert_eq!(code, 1, "{place:?}: {answered}");
-            assert_refused(place, "package fmt", config.as_deref(), &answered);
-            assert_eq!(
-                fs::read(&compact).unwrap(),
-                COMPACT,
-                "{place:?}: nothing written"
-            );
-        }
+        assert_eq!(code, 0, "{place:?}: {answered}");
+        assert_eq!(
+            answered["outcome"]["code"], "lab_operation_completed",
+            "{place:?}: {answered}"
+        );
+        assert_eq!(
+            answered["reformatted"],
+            json!(["data/compact.json"]),
+            "{place:?}: {answered}"
+        );
+        assert_eq!(
+            fs::read_to_string(&compact).unwrap(),
+            CANONICAL,
+            "{place:?}"
+        );
 
         // A call on the row's short words, which `main`'s route gives to its own command
-        // (`regression` is `recognition-regression`): its command's own refusal where the module is
-        // installed (the evidence is not there), the module's refusal where it is not.
+        // (`regression` is `recognition-regression`): its command's own refusal in every place
+        // (the evidence is not there).
         let evidence = temp.path().join("page.json");
         let state = temp.path().join("state");
         let (code, answered) = printed(&[
@@ -410,57 +378,54 @@ fn lab5f_authoring_rows_follow_the_installed_module() {
             text_of(&package),
         ]);
         assert_eq!(code, 1, "{place:?}: {answered}");
-        if installed {
-            assert_ne!(
-                answered["outcome"]["code"], DISABLED,
-                "{place:?}: {answered}"
-            );
-        } else {
-            assert_refused(place, "regression", config.as_deref(), &answered);
-        }
+        reached(&mut first, place, "regression", code, &answered);
 
-        if !installed {
-            // `record start` makes no state directory; `observe --capture` sends nothing (the
-            // refusal is the module's, before any Runtime connection is opened).
-            let record = temp.path().join("record");
-            let (code, answered) = printed(&[
+        // Fix 2: `record start` reaches its command, which makes its state directory, in every
+        // place; `observe --capture` reaches its command (no Runtime runs, so it answers as it
+        // does outside any root).
+        let record = temp.path().join("record");
+        let (code, answered) = printed(&[
+            "--json",
+            "record",
+            "start",
+            "--state-dir",
+            text_of(&record),
+            "--task-id",
+            "neutral",
+        ]);
+        reached(&mut first, place, "record start", code, &answered);
+        assert!(
+            record.exists(),
+            "{place:?}: record start reached its command"
+        );
+        let (code, answered) =
+            printed(&["--json", "observe", "--capture", "--instance", "neutral.a"]);
+        reached(&mut first, place, "observe --capture", code, &answered);
+        // MCP's `--via` child: the same call reaches its command in every place and writes.
+        fs::write(&compact, COMPACT).unwrap();
+        let via = run_cli(
+            [
                 "--json",
-                "record",
-                "start",
-                "--state-dir",
-                text_of(&record),
-                "--task-id",
-                "neutral",
-            ]);
-            assert_eq!(code, 1, "{place:?}: {answered}");
-            assert_refused(place, "record start", config.as_deref(), &answered);
-            assert!(!record.exists(), "{place:?}: nothing written");
-            let (code, answered) =
-                printed(&["--json", "observe", "--capture", "--instance", "neutral.a"]);
-            assert_eq!(code, 1, "{place:?}: {answered}");
-            assert_refused(place, "observe", config.as_deref(), &answered);
-            // MCP's `--via` child: the same code in its envelope, exit 2 (a usage refusal).
-            let via = run_cli(
-                [
-                    "--json",
-                    "--via",
-                    "mcp",
-                    "package",
-                    "fmt",
-                    "--package",
-                    text_of(&package),
-                ],
-                true,
-            );
-            assert_eq!(via.exit_code(), 2, "{place:?}: {}", via.envelope_json());
-            let error = via.envelope.error.as_ref().expect("the refusal");
-            assert_eq!(error.code, DISABLED, "{place:?}");
-            assert_eq!(
-                fs::read(&compact).unwrap(),
-                COMPACT,
-                "{place:?}: nothing written"
-            );
-        }
+                "--via",
+                "mcp",
+                "package",
+                "fmt",
+                "--package",
+                text_of(&package),
+            ],
+            true,
+        );
+        assert_eq!(via.exit_code(), 0, "{place:?}: {}", via.envelope_json());
+        assert!(
+            via.envelope.error.is_none(),
+            "{place:?}: {}",
+            via.envelope_json()
+        );
+        assert_eq!(
+            fs::read_to_string(&compact).unwrap(),
+            CANONICAL,
+            "{place:?}: written"
+        );
 
         // A row of each other module answers the same in every place.
         let (code, answered) = printed(&["--json", "codes", DISABLED]);
@@ -492,9 +457,11 @@ fn lab5f_serve_answers_as_the_command_line() {
         env::remove_var(ENVIRONMENT_VARIABLE);
     }
     let table = cli_module::table().expect("the operation table");
+    // Fix 2: the code `standard-pack compose` answers in the first place, outside any root.
+    let mut first_compose: Option<Value> = None;
     for place in PLACES {
         let temp = TempDir::new().unwrap();
-        let (program, config) = made_up(temp.path(), place);
+        let (program, _) = made_up(temp.path(), place);
         let _place = authoring::test_place::set(program);
         let package = package(temp.path());
         // Fix 1: `standard-pack check` (core) and `standard-pack compose` (authoring).
@@ -520,7 +487,8 @@ fn lab5f_serve_answers_as_the_command_line() {
         let served = output.lines().collect::<Vec<_>>();
         assert_eq!(served.len(), 5, "{place:?}: {output}");
 
-        // The authoring row: the line the command line's `--json` prints for the same call.
+        // The authoring row: in every place (fix 2), the line the command line's `--json` prints
+        // for the same call, its command's own.
         let (code, line) = printed(&[
             "--json",
             "package",
@@ -535,15 +503,11 @@ fn lab5f_serve_answers_as_the_command_line() {
             "{place:?}"
         );
         assert_eq!(code, 1, "{place:?}: {line}");
-        if place.installed() {
-            // `--check` reached the command, which names the file and writes nothing.
-            assert_eq!(
-                line["outcome"]["code"], "package_fmt_check_failed",
-                "{line}"
-            );
-        } else {
-            assert_refused(place, "package fmt", config.as_deref(), &line);
-        }
+        // `--check` reached the command, which names the file and writes nothing.
+        assert_eq!(
+            line["outcome"]["code"], "package_fmt_check_failed",
+            "{place:?}: {line}"
+        );
         assert_eq!(
             fs::read(package.join("data").join("compact.json")).unwrap(),
             COMPACT
@@ -560,28 +524,13 @@ fn lab5f_serve_answers_as_the_command_line() {
         );
         assert_eq!(code, 1, "{place:?}: {line}");
         assert_eq!(line["outcome"]["code"], NO_ROOT_FILE, "{place:?}: {line}");
-        // `standard-pack compose`, an authoring row, is refused where the module is not installed,
-        // as on the command line, and writes nothing.
+        // Fix 2: `standard-pack compose`, an authoring row, reaches its command in every place,
+        // the code it answers outside any root.
         let compose = serde_json::from_str::<Value>(served[4]).unwrap();
-        if place.installed() {
-            assert_ne!(compose["outcome"]["code"], DISABLED, "{place:?}: {compose}");
-        } else {
-            assert_refused(place, "standard-pack compose", config.as_deref(), &compose);
-            assert!(!composed.exists(), "{place:?}: nothing written");
-            let (code, line) = printed(&[
-                "--json",
-                "standard-pack",
-                "compose",
-                "--root",
-                text_of(&packs),
-                "--instance",
-                "neutral.a=neutral/test",
-                "--out",
-                text_of(&composed),
-            ]);
-            assert_eq!(code, 1, "{place:?}: {line}");
-            assert_eq!(compose, line, "{place:?}");
-        }
+        let code = compose["outcome"]["code"].clone();
+        assert_ne!(code, DISABLED, "{place:?}: {compose}");
+        let expected = first_compose.get_or_insert_with(|| code.clone());
+        assert_eq!(*expected, code, "{place:?}: {compose}");
 
         // The other modules' rows answer as the command line does, in every place.
         for (served, words) in [

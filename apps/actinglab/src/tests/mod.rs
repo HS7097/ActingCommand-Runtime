@@ -102,8 +102,8 @@ mod gate_434_lab5g4a;
 // Workflow #434 LAB-5E: every offered row says in one sentence what it does.
 #[path = "gate_434_lab5e.rs"]
 mod gate_434_lab5e;
-// Workflow #434 LAB-5F: the authoring rows are listed and served only where the module is
-// installed.
+// Workflow #434 LAB-5F: the authoring rows are listed only where the option lists them, and
+// served everywhere (fix 2).
 #[path = "gate_434_lab5f.rs"]
 mod gate_434_lab5f;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};

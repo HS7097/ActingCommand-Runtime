@@ -10,9 +10,8 @@ actingcommand_contract::outcome_codes! {
     // (contracts/runtime-interface.md, "Outcome codes"). Nothing emits them yet.
     #[allow(dead_code)]
     pub(crate) enum ActinglabCode {
-        /// Error. A call of an operation of the authoring module where it is not installed (keys
-        /// `operation`, `lab_option`). Workflow #434 LAB-5F emits it
-        /// (`cli_module::authoring::admit`, `contracts/lab-two-entries.md` §8.3).
+        /// Error. An offline package-tool command while Lab option one (authoring) is not
+        /// installed (keys `operation`, `lab_option`).
         LabCommandOptionDisabled => "lab_command_option_disabled": error / none,
         // ---- end of #389 U-0 registrations
         // ---- #391 MCP-391b (pending)

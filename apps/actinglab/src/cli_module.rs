@@ -36,9 +36,8 @@
 //!   `Lab-MCP` when MCP's actinglab child (`--via mcp`) adds them, or (Workflow #434 LAB-5G4a) a
 //!   `serve --stdio --front mcp` process, an MCP server's child, whose rescue rows take `Lab-MCP`
 //!   too ([`serve::Front`]).
-//! - **The authoring option** (§8.3; Workflow #434 LAB-5F, [`authoring`]): the authoring rows are
-//!   listed and served only where the authoring module is installed; elsewhere a call is refused
-//!   with `lab_command_option_disabled` before anything is sent or written.
+//! - **The authoring option** (§8.3; Workflow #434 LAB-5F, [`authoring`]): it decides only
+//!   whether the authoring rows are listed by default; they are served everywhere (fix 2).
 
 // Workflow #434 LAB-5F: the authoring option.
 pub(crate) mod authoring;

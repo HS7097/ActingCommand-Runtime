@@ -14,9 +14,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A call of an operation of the Lab's authoring module (a row whose module is authoring in contracts/lab-operations.json: recording, package and resource checks and the like) where the module is not installed (Workflow #434 LAB-5F, contracts/lab-two-entries.md section 8.3): actinglab runs inside an installation root whose selected configuration does not say lab_module_authoring: true. It is refused before anything is sent to the Runtime or written, on the command line, through serve --stdio and through MCP's actinglab child; the line exits 1 (a --via line 2). operation names the operation, lab_option is authoring; the details name the configuration, or carry as cause the failure that kept the option unknown (config_read_failed, config_decode_failed). Outside any installation root, as an unpacked Tools package runs, the module counts as installed.",
-      "common_causes": "The selected configuration names no lab_module_authoring or says false; or it cannot be read, or the key is not a boolean.",
-      "handling": "Set lab_module_authoring to true in the selected configuration (the installer's Lab page), or repair the configuration the cause names."
+      "description": "An actinglab offline package-tool command (recording, binding draft, package check, resource catalog and the like) ran while Lab option one (authoring) is not installed. It prints one JSON line, exits 1 and changes no file. actinglab reads the two options from the Runtime's configuration facts, or from the selected configuration generation when the Runtime does not answer; until #389 U-6, a configuration that names neither option counts as both installed.",
+      "common_causes": "Only the debugging option is installed.",
+      "handling": "Tick the authoring option on the installer's Lab page."
     },
     "observe_identity_limit_exceeded": {
       "category": "error",

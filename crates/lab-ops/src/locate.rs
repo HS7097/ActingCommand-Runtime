@@ -26,7 +26,9 @@
 //! unknown.
 //!
 //! Workflow #434 LAB-5F (§8.3; the coordinator's ruling of 2026-11-10 on #434, point 15): the
-//! same places say whether the authoring module is installed ([`authoring_module_from`]). Outside
+//! same places say whether the authoring module is installed ([`authoring_module_from`]), which
+//! since LAB-5F fix 2 (the coordinator's ruling of 2026-11-11) decides only whether its operations
+//! are listed by default: a build with the authoring code serves them wherever it runs. Outside
 //! any installed root there is no configuration to read and the module counts as installed;
 //! inside one the selected configuration's `lab_module_authoring` decides, and a configuration
 //! that cannot be read, or whose key is not a boolean, is a failure, never read as installed.
@@ -41,8 +43,8 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Workflow #434 LAB-5F: the configuration key that says the authoring module is installed
-/// (§8.3).
+/// Workflow #434 LAB-5F: the configuration key that says the authoring module is installed, that
+/// is (fix 2) that its operations are listed by default (§8.3).
 pub const AUTHORING_KEY: &str = actingcommand_runtime_config::lab_module::AUTHORING;
 
 /// The members' folder of a root, a slot or a kept build that holds the Runtime's programs.
