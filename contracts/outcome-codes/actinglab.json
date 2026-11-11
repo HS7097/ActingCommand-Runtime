@@ -618,8 +618,8 @@
       "status": "active",
       "since": "0.12.9",
       "description": "Workflow #411 B34: actinglab package check admitted the package, and an operation's click declares a box of one point: a point click, a long press without a box, or a rect, specific_rect or long-press box of 1x1. pack_operation_id names the operation; box_x, box_y, box_width and box_height the box in the coordinate space of its task (a point click's box is 1x1 at its point). A click located on the frame (target, target_center, offset) and a drag are not judged. The package still passes; one warning per such click.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "An operation of the admitted package declares a click of one point: a point click, a long press without a box, or a rect, specific_rect or long-press box of 1x1; a long press recorded at one point in the Lab is generated as such a click.",
+      "handling": "The package still passes. The Runtime draws a run's press from the declared box, so a 1x1 box presses the same point every time: where the press may land anywhere on the control, the pack author gives the operation (pack_operation_id) a rect click that covers it."
     },
     "lab_operation_check_failed": {
       "category": "error",
