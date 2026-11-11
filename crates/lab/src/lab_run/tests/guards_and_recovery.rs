@@ -34,22 +34,22 @@ fn roi_comparison_resets_when_target_fails() {
 }
 #[test]
 fn page_namespace_matches_operation_anchors_without_blind_split() {
-    assert_eq!(canonical_page_anchor("arknights", "arknights/home"), "home");
+    assert_eq!(canonical_page_anchor("fixture-game-a", "fixture-game-a/home"), "home");
     assert_eq!(
-        canonical_page_anchor("arknights", "arknights/navigation/home_to_task"),
+        canonical_page_anchor("fixture-game-a", "fixture-game-a/navigation/home_to_task"),
         "navigation/home_to_task"
     );
-    assert_eq!(canonical_page_anchor("arknights", "home"), "home");
-    assert!(page_anchor_matches("arknights", "arknights/home", "home"));
-    assert!(page_anchor_matches("arknights", "home", "home"));
+    assert_eq!(canonical_page_anchor("fixture-game-a", "home"), "home");
+    assert!(page_anchor_matches("fixture-game-a", "fixture-game-a/home", "home"));
+    assert!(page_anchor_matches("fixture-game-a", "home", "home"));
     assert!(page_anchor_matches(
-        "arknights",
-        "arknights/quickswitch_dropdown",
+        "fixture-game-a",
+        "fixture-game-a/quickswitch_dropdown",
         "quickswitch_dropdown"
     ));
     assert!(!page_anchor_matches(
-        "arknights",
-        "bluearchive/home",
+        "fixture-game-a",
+        "fixture-game-c/home",
         "home"
     ));
 }

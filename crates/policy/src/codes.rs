@@ -330,6 +330,16 @@ actingcommand_contract::outcome_codes! {
         /// tell; the catalog compiles.
         PoolLinesUnspendable => "pool_lines_unspendable": warning / none,
         // ---- SCHED-C1c: end ----
+        // ---- SCHED-C1f1 (a run's consumption read from a fact, `contracts/scheduling/README.md`,
+        // "A run's consumption read from a fact"): begin ----
+        /// Warning. A task's consumption of a pool is read from a fact, and the instance holds a
+        /// record of it that is present and current but not usable (a confidence of 0, or a value
+        /// of another kind or an integer out of range): the decision reads the fallback. It is the
+        /// decision's first reason, once per pool, on every decision of the task on the instance in
+        /// the evaluation, and never settles it (keys `task_id`, `pool_id`, `fact_key`,
+        /// `unknown_reason`, `consumption` the whole units the decision reads with the fallback).
+        ConsumptionFactUnusable => "consumption_fact_unusable": warning / none,
+        // ---- SCHED-C1f1: end ----
     }
 }
 
@@ -379,6 +389,21 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- #428 SCHED-C1e: end ----
+
+// ---- #428 SCHED-C1f1 (`contracts/scheduling/README.md`, "A run's consumption read from a fact"):
+// begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Where the amount of a task's consumption of a pool read from a fact comes from in an
+    /// evaluation (the vocabulary `consumption_source`), a value of `pool_line_held`,
+    /// `capped_spend`, `resource_reserve_insufficient` and `pool_lines_unspendable`.
+    pub enum ConsumptionSource: "consumption_source" {
+        /// The value of the fact's usable record of the instance.
+        Fact => "fact",
+        /// The fallback the entry writes: the instance holds no usable record of the fact.
+        Fallback => "fallback",
+    }
+}
+// ---- #428 SCHED-C1f1: end ----
 
 // ---- SS-2b: begin ----
 actingcommand_contract::outcome_vocabulary! {

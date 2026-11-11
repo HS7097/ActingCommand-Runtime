@@ -478,9 +478,14 @@ fn judge(
         let (pool, valuation) = valued_pool(&effect.pool_id, instance, context)
             .map_err(|_| PolicyEvaluationError::invalid("a judged pool lost its valuation"))?;
         // SS-2g: in thousandths, so an expected consumption costs exactly its share; an integer
-        // catalog's numerator is the `amount × 1000` of before.
-        let consumed_milli =
-            crate::resource_targets::declared_consumption_milli(task, &effect.pool_id)?;
+        // catalog's numerator is the `amount × 1000` of before. SCHED-C1f1 (register §1.303): an
+        // amount read from a fact as it is in effect on the instance, an integer, so it adds to
+        // no `m` of `ε`.
+        let consumed_milli = crate::resource_targets::consumption_milli(
+            task,
+            &effect.pool_id,
+            context.amounts.on(&instance.instance_id),
+        )?;
         let weight_milli =
             weight(&effect.pool_id).unwrap_or_else(|| u64::from(valuation.base_weight_milli));
         // SS-2h (register §1.289): a unit consumed costs its full weight `W` whatever the pool's
@@ -856,12 +861,18 @@ fn tolerance_reason(
 }
 
 /// SCHED-C1a (register §1.299): a judged candidate whose task has a fixed value carries
-/// `benefit_fixed_value` with the `B` its decision reads before its other reasons.
+/// `benefit_fixed_value` with the `B` its decision reads before its other reasons; SCHED-C1f1
+/// (register §1.303 SC1F-4): after the warnings `consumption_fact_unusable`, which come first.
 fn note_fixed_value(task_work: &mut TaskWork, task: &TaskSpec, benefit_milli: i64, expected: u64) {
     if let Some(value) = task.benefit_fixed_value_milli {
+        let first = task_work
+            .reasons
+            .iter()
+            .take_while(|reason| reason.outcome.is(PolicyCode::ConsumptionFactUnusable))
+            .count();
         task_work
             .reasons
-            .insert(0, fixed_value_reason(benefit_milli, value, expected));
+            .insert(first, fixed_value_reason(benefit_milli, value, expected));
     }
 }
 

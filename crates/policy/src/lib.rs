@@ -144,4 +144,7 @@ mod tests {
     // #428 SCHED-C1e (0.12.54; register §1.299 SC1-12): a pool's lines given for one instance
     // come before the catalog's, and every reason that carries the lines names their source.
     mod gate_sched_c1e;
+    // #428 SCHED-C1f1 (0.12.54; register §1.303): a run's consumption read from a fact, with a
+    // fallback, resolved once per evaluation and read by every reader of the consumption.
+    mod gate_sched_c1f1;
 }

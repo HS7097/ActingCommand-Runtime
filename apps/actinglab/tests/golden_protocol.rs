@@ -1166,9 +1166,9 @@ impl Fixture {
                 os("--run-root"),
                 self.run_root.clone().into_os_string(),
                 os("--game"),
-                os("arknights"),
+                os("fixture-game-a"),
                 os("--server"),
-                os("cn"),
+                os("s1"),
             ]
         };
         let scene = |base: &mut Vec<OsString>, path: &Path| {
@@ -1182,9 +1182,9 @@ impl Fixture {
                 os("--resource-root"),
                 self.resource_root.clone().into_os_string(),
                 os("--game"),
-                os("arknights"),
+                os("fixture-game-a"),
                 os("--server"),
-                os("cn"),
+                os("s1"),
             ];
         }
 
@@ -1374,9 +1374,9 @@ impl Fixture {
             os("--run-root"),
             self.run_root.clone().into_os_string(),
             os("--game"),
-            os("arknights"),
+            os("fixture-game-a"),
             os("--server"),
-            os("cn"),
+            os("s1"),
             os("--instance"),
             os("fixture:5555"),
             os("detect"),
@@ -1527,7 +1527,7 @@ fn write_semantic_resources(root: &Path) {
     fs::create_dir_all(&navigation).expect("navigation");
     fs::create_dir_all(&env_detection).expect("env detection");
     fs::write(
-        recognition.join("arknights.cn.pack.json"),
+        recognition.join("fixture-game-a.s1.pack.json"),
         r#"{
             "schema_version":"0.3",
             "coordinate_space":{"width":1,"height":1},
@@ -1540,26 +1540,26 @@ fn write_semantic_resources(root: &Path) {
     )
     .expect("pack");
     fs::write(
-        recognition.join("arknights.cn.pages.json"),
+        recognition.join("fixture-game-a.s1.pages.json"),
         r#"{
             "schema_version":"0.3",
             "pages":[
-                {"id":"arknights/home","required":["home_anchor"]},
-                {"id":"arknights/target","required":["target_anchor"]}
+                {"id":"fixture-game-a/home","required":["home_anchor"]},
+                {"id":"fixture-game-a/target","required":["target_anchor"]}
             ]
         }"#,
     )
     .expect("pages");
     fs::write(
-        navigation.join("arknights.cn.navigation.json"),
+        navigation.join("fixture-game-a.s1.navigation.json"),
         r#"{
             "schema_version":"0.3",
-            "game":"arknights",
-            "server":"cn",
+            "game":"fixture-game-a",
+            "server":"s1",
             "navigation":[{
                 "id":"home_to_target",
-                "from_page":"arknights/home",
-                "to_page":"arknights/target",
+                "from_page":"fixture-game-a/home",
+                "to_page":"fixture-game-a/target",
                 "click":{"kind":"rect","x":10,"y":20,"width":4,"height":6}
             }],
             "destructive_actions":[]
@@ -1573,8 +1573,8 @@ fn write_semantic_resources(root: &Path) {
             "detections":[{
                 "id":"detect_resolution",
                 "version":"1",
-                "game_id":"arknights",
-                "server_id":"cn",
+                "game_id":"fixture-game-a",
+                "server_id":"s1",
                 "resource_pack_id":"golden-pack",
                 "keys":[{
                     "key":"resolution",
@@ -1591,26 +1591,28 @@ fn write_semantic_resources(root: &Path) {
 }
 
 fn write_semantic_package(path: &Path, root: &Path) {
-    let pack = fs::read(root.join("recognition/arknights.cn.pack.json")).expect("semantic pack");
-    let pages = fs::read(root.join("recognition/arknights.cn.pages.json")).expect("semantic pages");
-    let navigation = fs::read(root.join("navigation/arknights.cn.navigation.json"))
+    let pack =
+        fs::read(root.join("recognition/fixture-game-a.s1.pack.json")).expect("semantic pack");
+    let pages =
+        fs::read(root.join("recognition/fixture-game-a.s1.pages.json")).expect("semantic pages");
+    let navigation = fs::read(root.join("navigation/fixture-game-a.s1.navigation.json"))
         .expect("semantic navigation");
     write_zip(
         path,
         &[
             (
                 "control.json",
-                br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#,
+                br#"{"game":"fixture-game-a","server":"s1","entry_task_id":"task"}"#,
             ),
             (
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
             ),
             ("resources/operations/task/task.json", br#"{}"#),
-            ("resources/recognition/arknights.cn.pack.json", &pack),
-            ("resources/recognition/arknights.cn.pages.json", &pages),
+            ("resources/recognition/fixture-game-a.s1.pack.json", &pack),
+            ("resources/recognition/fixture-game-a.s1.pages.json", &pages),
             (
-                "resources/navigation/arknights.cn.navigation.json",
+                "resources/navigation/fixture-game-a.s1.navigation.json",
                 &navigation,
             ),
         ],
@@ -1632,8 +1634,8 @@ fn write_package_repo(root: &Path) {
         r#"{
             "schema_version":"0.3",
             "task_id":"operator_task",
-            "game":"arknights",
-            "server_scope":["cn"],
+            "game":"fixture-game-a",
+            "server_scope":["s1"],
             "locale":"zh-CN",
             "goal":"golden fixture",
             "coordinate_space":{"width":1280,"height":720},
@@ -1656,7 +1658,7 @@ fn write_package_repo(root: &Path) {
     )
     .expect("package task");
     fs::write(
-        root.join("navigation/arknights.cn.navigation.json"),
+        root.join("navigation/fixture-game-a.s1.navigation.json"),
         r#"{"schema_version":"0.3","control_points":[{"name":"home","point":[1,1]}]}"#,
     )
     .expect("package navigation file");
@@ -1696,8 +1698,8 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
                     "schema_version":"Lab-1y.control.v1",
                     "package_id":"golden.task",
                     "execution_mode":"recognize_only",
-                    "game":"arknights",
-                    "server":"cn",
+                    "game":"fixture-game-a",
+                    "server":"s1",
                     "resolution":{"width":16,"height":9},
                     "entry_task_id":"task"
                 }"#,
@@ -1711,8 +1713,8 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
                 br#"{
                     "schema_version":"0.3",
                     "task_id":"task",
-                    "game":"arknights",
-                    "server_scope":["cn"],
+                    "game":"fixture-game-a",
+                    "server_scope":["s1"],
                     "goal":"golden fixture",
                     "coordinate_space":{"width":16,"height":9},
                     "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
@@ -1736,11 +1738,11 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
             // Workflow #396 REC-7: the one-color template is flat (its flat-field score is 1000
             // milli), so only a threshold of 0, a target that always passes, is admitted.
             (
-                "resources/recognition/arknights.cn.pack.json",
+                "resources/recognition/fixture-game-a.s1.pack.json",
                 br#"{
                     "schema_version":"0.3",
-                    "game":"arknights",
-                    "server":"cn",
+                    "game":"fixture-game-a",
+                    "server":"s1",
                     "coordinate_space":{"width":16,"height":9},
                     "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
                     "targets":[{
@@ -1753,8 +1755,8 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
                 }"#,
             ),
             (
-                "resources/recognition/arknights.cn.pages.json",
-                br#"{"schema_version":"0.3","pages":[{"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]}]}"#,
+                "resources/recognition/fixture-game-a.s1.pages.json",
+                br#"{"schema_version":"0.3","pages":[{"id":"fixture-game-a/home","required":["page/home"],"optional":[],"forbidden":[]}]}"#,
             ),
         ],
     );

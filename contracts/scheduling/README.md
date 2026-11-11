@@ -270,7 +270,7 @@ the declaration-only parser checks wire types. Existing integer declarations ser
 identically when the new field is absent. A binary that does not understand the field
 rejects it, so a state lineage containing these declarations requires a compatible reader.
 
-## A run's consumption read from a fact (SCHED-C1f, not built yet)
+## A run's consumption read from a fact (SCHED-C1f1, since 0.12.54)
 
 Register §1.303. The rules of this section are the coordinator's work order of 11-11 and the
 coordinator's rulings of 11-11 14:5x on the nine questions of §1.303, not Alice's words: the member
@@ -284,7 +284,7 @@ consumption could only be the constant `consumes[].amount`. A fact a task's own 
 gate that task's first run (the coordinator's rule of 10-28, "Self-read fact probe"), so the form
 carries a fallback and the amount is never Unknown.
 
-- **The form** (SCHED-C1f, not built yet). In an `actingcommand.scheduling.v2` catalog the `amount`
+- **The form** (SCHED-C1f1, since 0.12.54). In an `actingcommand.scheduling.v2` catalog the `amount`
   of a `consumes` entry may be, instead of a positive integer, the object
   `{"type": "fact", "fact_key": B, "fallback": F}`:
 
@@ -2611,7 +2611,7 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Pool valuation scale | 1..=9,007,199,254,740,991 |
 | Pool valuation base weight / gap weight | 0..=1,000,000 / 1..=1,000,000 milli |
 | A task's fixed value (SCHED-C1a, since 0.12.52) | 1..=9,007,199,254,740,991 milli |
-| A consumption's fallback, and a usable amount read from a fact (SCHED-C1f, not built yet) | 1..=9,007,199,254,740,991, at most a constant capacity |
+| A consumption's fallback, and a usable amount read from a fact (SCHED-C1f1, since 0.12.54) | 1..=9,007,199,254,740,991, at most a constant capacity |
 
 Loop budgets are mandatory in V1; in V2 each run-count bound is optional (SS-3, "Optional run-count bounds"). Arrays and strings that exceed their limit reject the entire catalog. Duplicate identifiers, duplicate object keys, and unbounded recursive input are invalid.
 
