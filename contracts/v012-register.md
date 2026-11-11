@@ -12796,8 +12796,9 @@ or writer of any interface sees changes.
 
 ### 1.306 Slice CLI-EV (0.12.55): `events` shows the newest records by default (Workflow #434; the audit of 2026-11-11 named the oldest-first default among what makes the command line unfriendly; the coordinator's rulings of 2026-11-11, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §4; coordinator work order `rd-1111/brief-cli-events-newest.md`)
 
-1.306 is the next free number on main `e5efe44e`, where #1600 added §1.305 (NEUT-1); the
-coordinator renumbers this section if another open slice takes the number first. [runtime-interface.md](runtime-interface.md) (the `ac_events`
+Four slices of 0.12.55 were written as §1.306 on main `e5efe44e`, where #1600 added §1.305
+(NEUT-1); in their train the coordinator kept the number for this one and gave CLI-IN §1.307, R-8
+§1.308 and the S168-LB1 contract §1.309. [runtime-interface.md](runtime-interface.md) (the `ac_events`
 row) and [lab-operations.json](lab-operations.json) (the `help` of the `events` row) are the
 contract; the tool's description and the usage of `actingctl events` follow it. No persisted shape,
 wire shape, configuration key, outcome code or interface revision is new or changed.
@@ -12904,9 +12905,8 @@ give `after_sequence` 0, for that test and for
 
 ### 1.307 Slice CLI-IN (0.12.55): `--instance <alias>` names the instance on every command (Workflow #434; the audit of 2026-11-11, which found that the module's rows take the instance only as a positional and actinglab's own commands only as the global `--instance`; the coordinator's five rulings of the same day, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §3, on main `a62434a4`; coordinator work order `rd-1111/brief-cli-instance-flag.md`)
 
-The number is the next free one on main `e5efe44e` (written on `a62434a4` as §1.305, which
-NEUT-1 took and merged first); the coordinator renumbers this section if another open slice
-takes it first.
+Written as §1.306 on main `e5efe44e` (and on `a62434a4` as §1.305, which NEUT-1 took and merged
+first); the coordinator renumbered it in the 0.12.55 train, where CLI-EV kept §1.306.
 
 [lab-two-entries.md](lab-two-entries.md) §9.3 (its first rule, and the global options a core row
 refuses) is the contract; [lab-operations.json](lab-operations.json) records it in the instance
@@ -12957,16 +12957,17 @@ instance):
 
 | Kind | Rows | The command line after CLI-IN | Before |
 |---|---|---|---|
-| CLI module, instance required (16) | `targets set`, `remedy lift`, `frame`, `frames`, `monitor set`, `monitor clear`, `emu start`, `emu stop`, `emu restart`, `emu selfcheck`, `devices bind`, `devices unbind` (an alias), `task stop`, `run start`, `reset`, `drill` | `<x>` or `--instance <x>` (after, before or between the words), never both | `<x>` only; `monitor set` also `--instance <x>` |
+| CLI module, instance required (17) | `targets set`, `remedy lift`, `frame`, `frames`, `monitor set`, `monitor clear`, `emu start`, `emu stop`, `emu restart`, `emu selfcheck`, `devices bind`, `devices unbind` (an alias), `task stop`, `pack-schedule` (opened by R-8 in the same release, §1.308; the coordinator's addition in the train), `run start`, `reset`, `drill` | `<x>` or `--instance <x>` (after, before or between the words), never both | `<x>` only; `monitor set` also `--instance <x>` |
 | CLI module, instance optional (13) | `status`, `facts`, `schedule`, `summary`, `events`, `runs`, `diagnose`, `targets`, `remedy`, `pause`, `resume`, `offset` (its third positional), `packs` | the same; absent: every instance (`facts`: one of the instance, `--program`, `--config`) | `<x>` only; `runs` also `--instance <x>` |
 | An own command under other words, instance required (4) | `app launch`, `app restart`, `app stop` (to `session app`), `recover` (to `session recover`) | the same, handed to the command as its `--instance <x>` | `<x>`; `recover` also `--instance <x>` after the words |
 | An own command under the row's name (20) | `tap`, `swipe`, `long-tap`, `key`, `text`, `touch-probe`, `record step` (instance required); `do`, `ensure`, `wait`, `tap-target`, `navigate`, `observe`, `record start`, `record mark`, `record status`, `record stop`, `record candidates`, `record amend`, `locate` (absent: actinglab's default instance) | `--instance <x>` before or after the words, as before; no positional instance (ruling 2) | unchanged |
 | The instance an option of the row (2) | `remedy set` (one of the instance and `--game`), `wake-test` | `--instance <x>` as the row's option, as before | unchanged |
 
 Left out: `standard-pack compose`, whose own `--instance <alias>=<game>/<server>` is a binding, not
-an instance (unchanged); the nine reserved rows with a positional instance (`targets edit`, `hold`,
-`unhold`, `task run`, `pack-schedule`, `pack load`, `pack unload`, `batch`, `a11y`), which no
-program offers yet: each takes the rule, by its type, when its slice opens it.
+an instance (unchanged); the eight reserved rows with a positional instance (`targets edit`, `hold`,
+`unhold`, `task run`, `pack load`, `pack unload`, `batch`, `a11y`), which no program offers yet:
+each takes the rule, by its type, when its slice opens it, as the ninth, `pack-schedule`, took it
+when R-8 opened it in the same release (its parameter's note added in the train).
 
 **What a person sees.** `actinglab pause --instance neutral.a` and `actinglab --instance neutral.a
 pause` answer what `actinglab pause neutral.a` answers; `actinglab app launch --instance 16384`
@@ -13001,9 +13002,9 @@ on a module row, and LAB-5A's `runs --instance <x> <y>` keeps its refusal.
 
 ### 1.308 Slice R-8 (0.12.55): a task package switched on or off for one instance (Workflow #429 SR-11 with A.7.1 points 1 to 7, board #429 6535257887, and the slice row R-8; the console's task list (UI-3f1) says single tasks cannot be switched yet, and both requests answered `not_implemented` since 0.12.30; the coordinator's decision of 11-11 on which packages the view lists, not Alice's words; coordinator work order `rd-1111/brief-r8.md`, read on main `a62434a4`)
 
-The number 1.308 is this slice's: on its base 1.305 was free but held by NEUT-1, which merged with
-it the same day (SCHED-C1f1 writes under §1.303); main `e5efe44e` is merged into the branch. The
-coordinator renumbers it if another open slice takes it first. [instance-fact-store.md](instance-fact-store.md) ("Pack schedule facts") is the contract;
+Written as §1.306 with main `e5efe44e` merged into the branch (SCHED-C1f1 writes under §1.303);
+the coordinator renumbered it in the 0.12.55 train, where CLI-EV kept §1.306 and CLI-IN took
+§1.307. [instance-fact-store.md](instance-fact-store.md) ("Pack schedule facts") is the contract;
 [runtime-interface.md](runtime-interface.md) ("Workbench request kinds", the rows `EditPackSchedule`
 and `PackScheduleView`), [scheduling-blackout.md](scheduling-blackout.md) ("Order of the
 deferrals", position 5), [lab-operations.json](lab-operations.json) (the rows `pack-schedule` and
@@ -13143,10 +13144,9 @@ list", the new "Lower bound of a list maximum", "Scheduling consumer"),
 [scheduling/README.md](scheduling/README.md) (the new "Record lists and the projection",
 "Bounds") and [component-interfaces.md](component-interfaces.md) (the new "Planned: Workflow #428
 S168-LB1" and the sentences under the planned rows of #434 and of 168) are the contract. The
-section was written on `a62434a4` as §1.305; NEUT-1 took that number and merged first, so with
-main `e5efe44e` merged in it is 1.309, the next free number there (SCHED-C1f1 merged its rows
-under §1.303); the coordinator renumbers it if another open slice takes it first (R-8 takes one
-too).
+section was written on `a62434a4` as §1.305; NEUT-1 took that number and merged first, and with
+main `e5efe44e` merged in it was §1.306 (SCHED-C1f1 merged its rows under §1.303); the coordinator
+renumbered it in the 0.12.55 train, where CLI-EV kept §1.306, CLI-IN took §1.307 and R-8 §1.308.
 
 **S168-LB1 itself.** Contracts only: no code, no test, no schema file, no gate row, no CI file, no
 configuration key, no code of the outcome catalog and no live revision raised. Every rule it adds

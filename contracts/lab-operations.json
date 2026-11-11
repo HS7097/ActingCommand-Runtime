@@ -1045,7 +1045,7 @@
       "name": "pack-schedule",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"}
       ],
       "help": "Reads whether each task package of an instance may be scheduled now, the layer and row that decide it, and each scope's list version.",
       "output": "the pack schedule view (PackScheduleViewed)",

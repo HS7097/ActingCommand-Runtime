@@ -758,7 +758,12 @@ them; an expired list keeps none), checks the whole list and publishes it as one
 `fact.published` without expiry that keeps the request's origin; `rows: []` withdraws the
 package's rows of the scope. An edit's refusal points into the request: `/package_id`, `/rows`
 (more rows than the bound, the package's or the list's), `/rows/<row>/until_unix_ms` and
-`/rows/<row>`. A run in progress is not stopped by either. The publisher of a whole list chooses
+`/rows/<row>`. The edit's record is observed at the host's clock, and the store takes a record
+of a key only when it is newer than the one it replaces: an edit that changes a scope's list in
+the same millisecond as the record it would replace is Denied `fact_observation_not_newer`, as
+every observation that is not newer is, with nothing appended, and the client sends it again
+(the coordinator's note in the 0.12.55 train, read from the store's publish rule; no test of
+R-8 pins it). A run in progress is not stopped by either. The publisher of a whole list chooses
 the lifetime: no `expires_at_unix_ms` never expires; publishing an empty list withdraws every
 row of the scope; publishing the list without a package's rows withdraws only those. The writers
 (R-8) are the Lab's two core rows, `pack-schedule <inst>` (the view) and `pack-schedule set
