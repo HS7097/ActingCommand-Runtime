@@ -295,6 +295,31 @@
       "common_causes": "The first start of a version that settles a run an earlier version refused, for example (0.12.51) a run cut by a stop after its own failure path wrote its lease release and its inputs, and before its terminal.",
       "handling": "Nothing to repair: the dispatch is closed and the pair's failure state is what it was before the settlement. A hold the earlier start put on the instance (policy_settlement_dispatch_unsettled) is not lifted by this record: look at the instance's screen once, then lift it."
     },
+    "policy_settlement_facts_skipped": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "failure_code": "optional",
+        "fact_key": "required",
+        "instance_id": "required",
+        "observed_at_unix_ms": "required",
+        "task_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.52",
+      "description": "A start did not write the settlement facts (Workflow #308 slice 5b) of one (task, instance) pair: the Runtime's fact store refused one of the pair's records for that pair alone (ISO-START-1). The start goes on with the other pairs and the rest of its steps. Recorded once per pair and start, by the start's derivation of every pair's settlement facts (operation record_policy_settlement_facts), under the instance's links: task_id is the pair's catalog task, instance_id the instance alias, fact_key the refused record's key and observed_at_unix_ms its observation (the settlement time); failure_code is the refusal's code and the refusal is the caused_by link. Nothing more of the pair is written after the refused record. With failure_code runtime_fact_stale the store already holds a record of that key observed at that time or later (the caused_by link's observed_at_unix_ms): nothing is lost and nothing is held. With any other refusal of the pair alone (invalid_runtime_fact_key, a key the store cannot form; runtime_fact_capacity_exceeded, a full store; policy_settlement_fact_overflow, a value that does not fit) the instance is paused with this code as the pause reason, which the status read shows, after the persisted pauses are restored and before any instance is prepared, unless it is paused already (that pause stays). A failure that is not the pair's own (the ledger cannot be written, a lock, the store and the ledger disagreeing) still fails the start.",
+      "common_causes": "With runtime_fact_stale: a start of an earlier version (v0.12.50) after a settling start of 0.12.51 was cut before its value records, so the start derives a pair's facts from an older run than the one whose facts the store holds (register 1.296, the edge of the rollback). With another refusal: a catalog task id longer than the fact key bound in a ledger written before catalog activation refused such ids, a full Runtime fact store, or a record written by a defect.",
+      "handling": "With runtime_fact_stale nothing needs to be done: the pair's newer facts stand, and its next settlement writes the pair's facts again. With another refusal the instance is paused: report it with the instance, task_id, fact_key and failure_code, since the pair's settlement facts are missing and a rule that reads them decides without them; once the cause is fixed, lift the instance's scheduling pause. A later start that meets the same refusal records it again and pauses the instance again."
+    },
     "proposal_report_unavailable": {
       "category": "error",
       "ladder_class": "none",
@@ -17320,6 +17345,7 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "observed_at_unix_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -17329,7 +17355,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports runtime fact stale.",
+      "description": "The Runtime host reports runtime fact stale. Since 0.12.52 (ISO-START-1), as the caused_by link of policy_settlement_facts_skipped, it carries observed_at_unix_ms: the observation of the record the store holds for the key.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

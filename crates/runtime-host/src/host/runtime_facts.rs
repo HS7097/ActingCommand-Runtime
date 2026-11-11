@@ -12,7 +12,7 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::policy_host::PolicySettlement;
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, BackendOpenReport, DeviceSelfCheck,
     DeviceSelfCheckCapture, DeviceSelfCheckEntry, DeviceSelfCheckFailure, DeviceSelfCheckStatus,
@@ -64,6 +64,135 @@ const TASK_SETTLEMENT_SUFFIXES: [&str; 4] = [
 
 fn task_settlement_fact_key(task_id: &str, suffix: &str) -> String {
     format!("task.{task_id}.{suffix}")
+}
+
+/// ISO-START-1 (#419): a refusal of one pair's settlement facts, the key of the record it
+/// concerns and the failure.
+struct RefusedSettlementFact {
+    key: String,
+    refusal: RuntimeHostError,
+}
+
+/// The four settlement fact records of one pair (Workflow #308 slice 5b), in their write order:
+/// in the instance scope of `instance_id`, source `policy`, no lifetime, observed at the
+/// settlement time. A value that does not fit an integer fact refuses all four
+/// (`policy_settlement_fact_overflow`, fatal), with the key it concerns.
+fn settlement_fact_records(
+    settlement: &PolicySettlement,
+    instance_id: InstanceId,
+) -> Result<Vec<RuntimeFactRecord>, RefusedSettlementFact> {
+    let key_of = |suffix: &str| task_settlement_fact_key(&settlement.catalog_task_id, suffix);
+    let integer = |suffix: &str, value: u64| {
+        i64::try_from(value)
+            .map(FactValue::Integer)
+            .map_err(|_| RefusedSettlementFact {
+                key: key_of(suffix),
+                refusal: RuntimeHostError::fatal(
+                    HostCode::PolicySettlementFactOverflow,
+                    HostLocation::RecordPolicySettlementFacts,
+                    RuntimeErrorCode::RuntimeHalted,
+                ),
+            })
+    };
+    let values = [
+        (
+            TASK_LAST_DURATION_SUFFIX,
+            integer(TASK_LAST_DURATION_SUFFIX, settlement.duration_ms)?,
+        ),
+        (
+            TASK_LAST_OUTCOME_SUFFIX,
+            FactValue::String(
+                if settlement.succeeded {
+                    "succeeded"
+                } else {
+                    "failed"
+                }
+                .to_owned(),
+            ),
+        ),
+        (
+            TASK_FAILURE_STREAK_SUFFIX,
+            integer(TASK_FAILURE_STREAK_SUFFIX, settlement.failure_streak)?,
+        ),
+        (
+            TASK_COMPLETED_AT_SUFFIX,
+            integer(TASK_COMPLETED_AT_SUFFIX, settlement.completed_at_unix_ms)?,
+        ),
+    ];
+    Ok(values
+        .into_iter()
+        .map(|(suffix, value)| RuntimeFactRecord {
+            scope: RuntimeFactScope::Instance { instance_id },
+            key: key_of(suffix),
+            value,
+            observed_at_unix_ms: settlement.completed_at_unix_ms,
+            source: OriginModule::Policy,
+            ttl_ms: None,
+        })
+        .collect())
+}
+
+/// ISO-START-1 (#419), test builds only: what the next start on this thread adds to its
+/// settlement-fact step (`HostShared::record_policy_settlement_facts_on_start`).
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct StartSettlementFactsForTest {
+    /// Settlements of pairs with no dispatch in the ledger, written after the recovered ones.
+    pub(crate) settlements: Vec<PolicySettlement>,
+    /// The step's first write fails as an append the ledger cannot make (`ledger_failure`).
+    pub(crate) store_fails: bool,
+}
+
+#[cfg(test)]
+pub(crate) type StartSettlementFactsHook = std::cell::RefCell<Option<StartSettlementFactsForTest>>;
+
+#[cfg(test)]
+thread_local! {
+    /// ISO-START-1 (#419), test builds only: taken by the next start on this thread.
+    pub(crate) static START_SETTLEMENT_FACTS_FOR_TEST: StartSettlementFactsHook =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test builds only: `settlements` followed by those of [`START_SETTLEMENT_FACTS_FOR_TEST`],
+/// and whether the step's first write fails.
+#[cfg(test)]
+fn start_settlement_facts_for_test(
+    mut settlements: Vec<PolicySettlement>,
+) -> (Vec<PolicySettlement>, bool) {
+    match START_SETTLEMENT_FACTS_FOR_TEST.with(|hook| hook.borrow_mut().take()) {
+        Some(hook) => {
+            settlements.extend(hook.settlements);
+            (settlements, hook.store_fails)
+        }
+        None => (settlements, false),
+    }
+}
+
+/// ISO-START-1 (#419), tests: the Runtime's fact store written and read as its producers and
+/// its readers do.
+#[cfg(test)]
+impl RuntimeHost {
+    /// `record` written through the host's one writer ([`HostShared::record_runtime_fact`]).
+    pub(crate) fn record_runtime_fact_for_test(
+        &self,
+        record: RuntimeFactRecord,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::RecordRuntimeFactForTest)?
+            .record_runtime_fact(record)
+            .map(|_| ())
+    }
+
+    /// The record the store holds for `key` in `scope`, if any.
+    pub(crate) fn runtime_fact_for_test(
+        &self,
+        scope: &RuntimeFactScope,
+        key: &str,
+    ) -> RuntimeHostResult<Option<RuntimeFactRecord>> {
+        let read = crate::codes::test_spellings::TestLocation::ReadRuntimeFactForTest;
+        Ok(lock(&self.shared_ref(read)?.runtime_facts, read)?
+            .get(scope, key)
+            .cloned())
+    }
 }
 
 /// `passed` when the open's `status`, its `connection` and the entry's own check
@@ -792,6 +921,9 @@ impl HostShared {
     /// instance scope of the run's registered instance with source `policy` and no lifetime.
     /// Identical stored records append nothing, so a replayed or reconciled settlement never
     /// appends a record twice. Any refusal is fatal: the settlement itself is already durable.
+    /// The start's own derivation of every pair's facts is
+    /// [`Self::record_policy_settlement_facts_on_start`], where a refusal of one pair's facts
+    /// is that pair's alone (ISO-START-1).
     pub(super) fn record_policy_settlement_facts(
         &self,
         settlement: &PolicySettlement,
@@ -827,17 +959,178 @@ impl HostShared {
     /// store exists) reaches the same store state as the live path. Identical records append
     /// nothing; a pair of an instance no longer registered has no instance scope and is left
     /// as the ledger holds it.
-    pub(super) fn record_policy_settlement_facts_on_start(&self) -> RuntimeHostResult<()> {
+    ///
+    /// ISO-START-1 (#419; register §1.299): one pair's refusal never stops the start. Each pair
+    /// is written with the records and in the order of the live path
+    /// ([`Self::record_start_settlement_facts`]). A refusal of that pair alone (a value that does
+    /// not fit, or the store's refusal of one of its records before anything of that record is
+    /// appended: stale, invalid, over capacity) is recorded once
+    /// ([`Self::record_skipped_settlement_facts`]) and the start goes on with the next pair. A
+    /// fatal failure (the ledger's append, a lock, the store and the ledger disagreeing, a
+    /// failure after a record's commit) fails the start, as before. Returns the aliases of the
+    /// instances to hold ([`Self::hold_skipped_settlement_fact_instances`]): each instance with
+    /// a pair refused for another reason than `runtime_fact_stale`, once, in the order met. A
+    /// stale pair holds nothing: the store already holds a record at least as new.
+    pub(super) fn record_policy_settlement_facts_on_start(&self) -> RuntimeHostResult<Vec<String>> {
         let settlements =
             lock(self.policy()?, HostLocation::ReadPolicySettlements)?.latest_settlements()?;
+        #[cfg(test)]
+        let (settlements, store_fails) = start_settlement_facts_for_test(settlements);
+        let mut held = Vec::new();
         for settlement in &settlements {
-            if self
-                .settlement_instance_id(&settlement.instance_alias)?
-                .is_none()
-            {
+            let Some(instance_id) = self.settlement_instance_id(&settlement.instance_alias)? else {
                 continue;
+            };
+            #[cfg(test)]
+            if store_fails {
+                let error = ledger_error(HostLocation::AppendRuntimeEvent);
+                self.fatal.mark(error.clone())?;
+                return Err(error);
             }
-            self.record_policy_settlement_facts(settlement)?;
+            let refused = match self.record_start_settlement_facts(settlement, instance_id) {
+                Ok(refused) => refused,
+                Err(error) => {
+                    let error = error.into_fatal();
+                    self.fatal.mark(error.clone())?;
+                    return Err(error);
+                }
+            };
+            let Some(refused) = refused else {
+                continue;
+            };
+            let stale = refused.refusal.code() == HostCode::RuntimeFactStale.as_str();
+            self.record_skipped_settlement_facts(settlement, instance_id, &refused, stale)?;
+            if !stale && !held.contains(&settlement.instance_alias) {
+                held.push(settlement.instance_alias.clone());
+            }
+        }
+        Ok(held)
+    }
+
+    /// ISO-START-1 (#419): writes one pair's settlement facts at start, the records and the
+    /// order of the live path ([`settlement_fact_records`]). `Ok(None)` when every record was
+    /// written or was stored already. `Ok(Some(refused))` for a refusal of the pair alone, with
+    /// the key it concerns; nothing more of the pair is written after it. A value that does
+    /// not fit refuses the pair before its first record, as on the live path; a request-class
+    /// failure of one record is the store's refusal of it, made before anything of it is
+    /// appended, unless the store holds the record after all. `Err` for a fatal failure, and for
+    /// a request-class failure after a record's commit (the store holds it): neither concerns
+    /// one pair, and either would refuse every other pair too.
+    fn record_start_settlement_facts(
+        &self,
+        settlement: &PolicySettlement,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<Option<RefusedSettlementFact>> {
+        let records = match settlement_fact_records(settlement, instance_id) {
+            Ok(records) => records,
+            Err(overflow) => return Ok(Some(overflow)),
+        };
+        for record in records {
+            let written = record.clone();
+            let refusal = match self.record_runtime_fact(record) {
+                Ok(_) => continue,
+                Err(error) if error.is_fatal() => return Err(error),
+                Err(error) => error,
+            };
+            if self.runtime_fact_held(&written)? {
+                return Err(refusal);
+            }
+            return Ok(Some(RefusedSettlementFact {
+                key: written.key,
+                refusal,
+            }));
+        }
+        Ok(None)
+    }
+
+    /// Whether the store holds exactly `record`.
+    fn runtime_fact_held(&self, record: &RuntimeFactRecord) -> RuntimeHostResult<bool> {
+        Ok(lock(
+            &self.runtime_facts,
+            HostLocation::RecordPolicySettlementFacts,
+        )?
+        .get(&record.scope, &record.key)
+        .is_some_and(|stored| stored == record))
+    }
+
+    /// ISO-START-1 (#419; register §1.299): one Warning `runtime.failed`
+    /// `policy_settlement_facts_skipped` under the instance's links for a pair whose settlement
+    /// facts the start did not write: the pair (`task_id`, its catalog task; `instance_id`, the
+    /// instance alias), the refused record's `fact_key` and its observation
+    /// (`observed_at_unix_ms`, the settlement time), the refusal's code (`failure_code`) and the
+    /// refusal itself as the `caused_by` link, which for a stale record carries the observation
+    /// of the record the store holds for the key (`observed_at_unix_ms`). Handed to the daemon's
+    /// log too.
+    fn record_skipped_settlement_facts(
+        &self,
+        settlement: &PolicySettlement,
+        instance_id: InstanceId,
+        refused: &RefusedSettlementFact,
+        stale: bool,
+    ) -> RuntimeHostResult<()> {
+        let RefusedSettlementFact { key, refusal } = refused;
+        let stored = lock(
+            &self.runtime_facts,
+            HostLocation::RecordPolicySettlementFacts,
+        )?
+        .get(&RuntimeFactScope::Instance { instance_id }, key)
+        .map(|record| record.observed_at_unix_ms);
+        let cause = match stored {
+            Some(stored) if stale => refusal.record_outcome().observed_at_unix_ms(stored),
+            _ => refusal.record_outcome(),
+        };
+        let outcome = Outcome::new(HostCode::PolicySettlementFactsSkipped)
+            .operation(HostLocation::RecordPolicySettlementFacts)
+            .task_id(settlement.catalog_task_id.as_str())
+            .instance_id(settlement.instance_alias.as_str())
+            .fact_key(key.as_str())
+            .observed_at_unix_ms(settlement.completed_at_unix_ms);
+        let outcome = match Code::relayed(refusal.code()) {
+            Some(code) => outcome.failure_code(code),
+            None => outcome,
+        }
+        .caused_by(cause);
+        let links = self
+            .events
+            .system_links()?
+            .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
+        self.append_event_raw(
+            EventSeverity::Warning,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            RuntimePayloadDraft::failed(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::NotPerformed,
+                outcome.clone(),
+                DiagnosticDetailDraft::new(
+                    "policy_settlement",
+                    RuntimeLifecycleFailureStage::PolicyInitialization.location(),
+                    "runtime_host",
+                    HostLocation::RecordPolicySettlementFacts.as_str(),
+                ),
+                AuditInput::new(),
+            ),
+        )?;
+        self.fatal.report_warning(&outcome);
+        Ok(())
+    }
+
+    /// ISO-START-1 (#419; register §1.299): holds each instance whose pair's settlement facts
+    /// the start refused for another reason than a stale record
+    /// ([`Self::record_policy_settlement_facts_on_start`]), as the start holds the instance of
+    /// a dispatch it could not settle (Workflow #369 E3, `hold_unsettled_dispatches`): a
+    /// scheduling pause of the instance with `policy_settlement_facts_skipped` as its reason,
+    /// after the persisted pauses are restored and before any instance is prepared, unless the
+    /// instance is paused already (that pause stays as it is). A person lifts it after looking.
+    pub(super) fn hold_skipped_settlement_fact_instances(
+        &self,
+        instance_aliases: &[String],
+    ) -> RuntimeHostResult<()> {
+        let reason = HostCode::PolicySettlementFactsSkipped.code();
+        for instance_alias in instance_aliases {
+            self.hold_instance_pause_at_start(instance_alias, reason)?;
         }
         Ok(())
     }
@@ -860,46 +1153,10 @@ impl HostShared {
         settlement: &PolicySettlement,
         instance_id: InstanceId,
     ) -> RuntimeHostResult<()> {
-        let integer = |value: u64| {
-            i64::try_from(value).map(FactValue::Integer).map_err(|_| {
-                RuntimeHostError::fatal(
-                    HostCode::PolicySettlementFactOverflow,
-                    HostLocation::RecordPolicySettlementFacts,
-                    RuntimeErrorCode::RuntimeHalted,
-                )
-            })
-        };
-        let values = [
-            (TASK_LAST_DURATION_SUFFIX, integer(settlement.duration_ms)?),
-            (
-                TASK_LAST_OUTCOME_SUFFIX,
-                FactValue::String(
-                    if settlement.succeeded {
-                        "succeeded"
-                    } else {
-                        "failed"
-                    }
-                    .to_owned(),
-                ),
-            ),
-            (
-                TASK_FAILURE_STREAK_SUFFIX,
-                integer(settlement.failure_streak)?,
-            ),
-            (
-                TASK_COMPLETED_AT_SUFFIX,
-                integer(settlement.completed_at_unix_ms)?,
-            ),
-        ];
-        for (suffix, value) in values {
-            self.record_runtime_fact(RuntimeFactRecord {
-                scope: RuntimeFactScope::Instance { instance_id },
-                key: task_settlement_fact_key(&settlement.catalog_task_id, suffix),
-                value,
-                observed_at_unix_ms: settlement.completed_at_unix_ms,
-                source: OriginModule::Policy,
-                ttl_ms: None,
-            })?;
+        let records =
+            settlement_fact_records(settlement, instance_id).map_err(|refused| refused.refusal)?;
+        for record in records {
+            self.record_runtime_fact(record)?;
         }
         Ok(())
     }

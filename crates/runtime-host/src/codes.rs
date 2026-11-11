@@ -122,6 +122,15 @@ actingcommand_contract::outcome_codes! {
         /// is on the record's links). A stop between the completion and this record leaves it
         /// unwritten; the settlement and the completion are the lasting records.
         PolicySettlementDispatchClosed => "policy_settlement_dispatch_closed": info / none,
+        /// Warning (ISO-START-1, 0.12.52; #419). A start did not write one (task, instance)
+        /// pair's settlement facts: the store refused one of them for that pair alone, and the
+        /// start went on. Recorded once per pair and start, under the instance's links (keys
+        /// `task_id`, the catalog task; `instance_id`, the instance alias; `fact_key` and
+        /// `observed_at_unix_ms`, the refused record's key and observation; `failure_code`, the
+        /// refusal's code, and the refusal as the `caused_by` link, which for
+        /// `runtime_fact_stale` carries the stored record's `observed_at_unix_ms`). Any other
+        /// refusal than a stale record pauses the instance with this code as its reason.
+        PolicySettlementFactsSkipped => "policy_settlement_facts_skipped": warning / none,
         /// Error. An operator emulator restart whose Stop phase was not confirmed; after a
         /// Stop whose readiness wait expired its Start still ran (Workflow #381 B F3). The
         /// request's one failure record (keys `restart_phase`, `stop_result`,
@@ -2725,6 +2734,9 @@ pub(crate) mod test_spellings {
             FenceRecheckTickForTest => "fence_recheck_tick_for_test",
             // Workflow #398 RD-5b: a test runs one sample of the handsets' device state at once.
             DeviceStateSampleForTest => "device_state_sample_for_test",
+            // ISO-START-1 (#419): a test writes and reads the Runtime's fact store.
+            ReadRuntimeFactForTest => "read_runtime_fact_for_test",
+            RecordRuntimeFactForTest => "record_runtime_fact_for_test",
         }
     }
 }

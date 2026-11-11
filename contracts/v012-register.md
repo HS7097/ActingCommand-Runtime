@@ -10309,10 +10309,14 @@ records, followed by a start of v0.12.50. That start's re-alignment commits the 
 under its older rule, as the pair's latest failure, and its value record then names the late
 dispatch as the pair's latest completed one (by completion order; alone, for a task outside the
 remedy journal). That start starts. In R the start after it fails with `runtime_fact_stale`,
-which is fatal, on either version: it loads only the late run and records that run's settlement
-facts over the later run's newer ones; only a run the pair completes in between avoids it. In N
-it does not fail. Hence the operating rule: after a deploy of 0.12.51, do not go back to v0.12.50
-before one start of 0.12.51 has completed after the settlement.
+which is fatal, on v0.12.50 and 0.12.51: it loads only the late run and records that run's
+settlement facts over the later run's newer ones; only a run the pair completes in between
+avoids it. In N it does not fail. Hence the operating rule: after a deploy of 0.12.51, do not go
+back to v0.12.50 before one start of 0.12.51 has completed after the settlement. From 0.12.52
+(ISO-START-1, §1.299) a start of 0.12.52 or later in that place starts: it records the pair's
+refused record once (`policy_settlement_facts_skipped`, Warning, `failure_code`
+`runtime_fact_stale`), keeps the later run's newer facts, writes none of the late run's and
+holds nothing; a start of v0.12.50 or 0.12.51 there still fails.
 
 **The online path.** The changed check also serves the online settlement of abandoned and inactive
 runs (`reconcile_scheduled_policy_outcomes_for` with no start, #427-A). A run with its own
@@ -10352,9 +10356,10 @@ a task that declares a remedy or provides a capability when the pair ran since: 
 reads the late run as the pair's latest, and the pair's outcome key is missing until the pair's
 next completion. The edge: a settling start of 0.12.51 cut after the settlement and before its
 value records, followed by a start of v0.12.50: that start starts, and when the pair ran since,
-the start after it fails with `runtime_fact_stale`, on either version, unless the pair completed
-a run in between. Operating rule: after a deploy of 0.12.51, do not go back to v0.12.50 before
-one start of 0.12.51 has completed after the settlement.
+the start after it fails with `runtime_fact_stale`, on v0.12.50 and 0.12.51 (a start of 0.12.52
+or later records the pair's skip and starts, §1.299), unless the pair completed a run in
+between. Operating rule: after a deploy of 0.12.51, do not go back to v0.12.50 before one start
+of 0.12.51 has completed after the settlement.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -10601,6 +10606,137 @@ running `read_request` over a test-only fake whose detector load takes five time
 no sleep, no model file). No existing test changed: none called the request path,
 `remaining_inference_budget` or the detector's load (`gate_407_gpu1b1`, `gate_407_gpu1b2` and
 `gate_407_gpu1e` build sessions through `ModelSessions` over their own fakes).
+
+### 1.299 Slice ISO-START-1 (0.12.52): one pair's refused settlement fact no longer stops the start (#419; Alice's requirement on board #419 of 10-24: one emulator's fault must not bring down the whole Runtime; the debt the coordinator logged on 11-11, #421 6774483473 and #428 6770731970: isolate only that pair; the coordinator's ruling on the three cases, not Alice's words: coordinator work order `rd-1111/brief-iso-start-1.md`)
+
+[runtime-fact-store.md](runtime-fact-store.md) ("Settlement facts" and "Typed codes") and the
+catalog entries of `policy_settlement_facts_skipped` and `runtime_fact_stale` are the contract.
+1.299 is the next free number: main `c0edc8b2` holds 1.298 (VIS-LOAD-1, PR #1572), and no open
+pull request takes 1.299. No persisted ledger shape, wire shape, configuration key, location or
+vocabulary is new or changed; one outcome code is new, and one pending code gains an optional
+value.
+
+**Why.** Once per start the host derives the four settlement facts (Workflow #308 slice 5b) of
+every registered (task, instance) pair again (`record_policy_settlement_facts_on_start`, after
+the standard packs are registered). It wrote each pair through the live path's
+`record_policy_settlement_facts`, which turns every refusal fatal ("the settlement itself is
+already durable"), so one pair whose record the store refused (`precheck_runtime_fact`: an older
+or equal observation is `runtime_fact_stale`) failed the start of the whole Runtime, for every
+instance. UNSET-2 (§1.296) names such a start: after its rollback edge, the start derives a
+pair's facts from the late run over the later run's newer ones and fails with
+`runtime_fact_stale`.
+
+**What changed: the three cases.** The start's derivation writes each pair with the records and
+in the order of the live path (`settlement_fact_records`, which both paths now share:
+`last_duration_ms`, `last_outcome`, `failure_streak`, `completed_at_unix_ms`, instance scope,
+source `policy`, no lifetime, observed at the settlement time) and decides per pair
+(`HostShared::record_start_settlement_facts` and `record_policy_settlement_facts_on_start`,
+`crates/runtime-host/src/host/runtime_facts.rs`):
+
+1. **Stale.** The store refuses a record of the pair as `runtime_fact_stale`: it holds a record
+   of that key observed at the settlement time or later, so nothing is lost by not writing. The
+   start writes nothing more of the pair, records one Warning `runtime.failed`
+   `policy_settlement_facts_skipped` (below) with `failure_code` `runtime_fact_stale`, holds
+   nothing and goes on with the next pair and the rest of its steps.
+2. **Another refusal of the pair alone.** A value that does not fit an integer fact
+   (`policy_settlement_fact_overflow`, decided before the pair's first record, as on the live
+   path) or the store's refusal of one record before anything of it is appended (a key it cannot
+   form, `invalid_runtime_fact_key`, `runtime_fact_family_unknown`; a full store,
+   `runtime_fact_capacity_exceeded`; an unregistered instance scope,
+   `runtime_fact_instance_unknown`, which the start's own check of the instance leaves
+   unreachable). The start writes nothing more of the pair, records the same Warning with that
+   code as `failure_code`, and holds the pair's instance (below); the other instances start.
+3. **A fault of no one pair.** A fatal failure of the write (the ledger's append, a lock, the
+   store and the ledger disagreeing, `runtime_fact_store_desync`), and a request-class failure
+   after a record's commit (the store holds the record after all: a failure of the instance fact
+   store's synchronization behind the write, which every later write meets too), fails the start
+   as before: the error, made fatal, is latched and returned.
+
+**How the code tells case 2 from case 3.** By the failure's class and the store's state after it.
+A fatal failure is case 3. A request-class failure is the store's refusal of that one record (its
+rules are applied, `precheck_runtime_fact`, under the fact write gate before the record is
+appended), so case 1 or 2 by its code, unless the store holds exactly that record afterwards, in
+which case the failure came after the commit and is case 3. Only a failure that would also break
+every other pair's write is case 3.
+
+**The record.** `runtime.failed` (an existing record; `DiagnosticCode::RuntimeDiagnostic`, effect
+`not_performed`, the diagnostic detail of the start's settlement records: `policy_settlement`,
+stage `runtime_lifecycle_policy_initialization`), Warning, under the instance's links (system links with the
+registered instance), once per refused pair and start, written at the pair's place in the step:
+`operation` `record_policy_settlement_facts`, `task_id` the pair's catalog task, `instance_id`
+the instance alias, `fact_key` the refused record's key, `observed_at_unix_ms` its observation
+(the settlement time), `failure_code` the refusal's code, and the refusal as the `caused_by`
+link; for `runtime_fact_stale` that link carries `observed_at_unix_ms`, the observation of the
+record the store holds for the key. It is handed to the daemon's log as a warning too, and the
+ledger's event reads (`actingctl events`, the MCP's `ac_events`) show it under the instance.
+
+**The hold (case 2).** The start's existing hold of an instance it cannot make ready to schedule:
+the hold of an instance whose dispatch the start could not settle (Workflow #369 E3,
+`hold_unsettled_dispatches` through `hold_instance_pause_at_start`). It fits because the cause is
+the same kind: the pair's settled state is missing from what the scheduler reads (its settlement
+facts), and a rule that reads them would decide without them. It is a persisted instance pause
+(`host.scheduling_pause`, stage `released`), with `policy_settlement_facts_skipped` as its reason,
+taken right after the unsettled dispatches' holds (after the persisted pauses are restored, before
+any instance is prepared; the daemon-start preparation then leaves the instance unprepared), once
+per instance, unless the instance is paused already (that pause stays as it is). The status read
+shows it as the instance's `pause` with that reason. A person lifts it after looking (`actingctl
+resume`). No new kind of hold. The refusal is not persisted, so a later start that meets the same
+refusal records it and holds the instance again, as E3 did before UNSET-1.
+
+**What stays.** For every pair that passes, the start writes the records main writes, byte for
+byte, in main's order, and appends nothing for a stored identical record. The live path
+(`record_policy_settlement_facts`: a live settlement, a replayed completion, the reconciliation
+tick) keeps "any refusal is fatal". The order of the start's steps stays; the hold is one step
+added after `hold_unsettled_dispatches`. UNSET-2's behaviour (which dispatches are settled, with
+which values) is unchanged.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): `ledger`: a
+new code of an existing record (the reader checks a code's spelling, never whether it is
+registered), a new optional value of a pending code on a link, and a pause row whose reason is a
+name; `runtime-outcomes`: one new code and one optional key of an existing pending code, in the
+catalog only; `runtime-client` and the protocol: no request kind, no member; no configuration
+key.
+
+**What an operator sees after deploy.** Ordinarily nothing: every pair's facts derive as before
+and no record is new. After the UNSET-2 rollback edge (§1.296) a start of 0.12.52 or later
+records one Warning `policy_settlement_facts_skipped` (`failure_code` `runtime_fact_stale`, the
+pair's task, instance and key) in the ledger and as a `WARN actingd:` line, and starts; the
+pair's newer facts stand and nothing is paused. A pair refused for another reason gives the same
+Warning with its own code, and its instance shows a scheduling pause with reason
+`policy_settlement_facts_skipped` in `actingctl status` and `ac_overview`, while every other
+instance runs. A ledger or store fault fails the start as before.
+
+**Rollback** (below 0.12.52). A start of 0.12.51 or earlier fails again at a refused pair (every
+refusal is fatal there, `runtime_fact_stale` included). A pause with reason
+`policy_settlement_facts_skipped` that 0.12.52 persisted is restored by an earlier build as any
+instance pause and lifted by a person's resume; an earlier build reads the new records as a code
+it does not act on. Nothing else to undo.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ISOS1-1 | `runtime.failed` with `policy_settlement_facts_skipped` (warning, `none`; `failure_code`, `fact_key`, `instance_id`, `observed_at_unix_ms`, `task_id`, `operation`) | new code of an existing record (host gate row "#419 ISO-START-1") | ISO-START-1 | ISO-START-1 | `since` 0.12.52; once per refused pair and start, under the instance's links |
+| ISOS1-2 | `runtime_fact_stale` with the optional value `observed_at_unix_ms` | optional key of a pending code (catalog only) | ISO-START-1 | ISO-START-1 | only as the `caused_by` link of ISOS1-1: the observation of the record the store holds |
+| ISOS1-3 | the start's derivation of the settlement facts: a refusal of one pair is that pair's alone (`record_policy_settlement_facts_on_start`, `record_start_settlement_facts`) | rule (no shape; corrects [runtime-fact-store.md](runtime-fact-store.md), "Settlement facts") | ISO-START-1 | — | the live path stays fatal; a fault of no one pair stays fatal at start |
+| ISOS1-4 | the start's instance pause with reason `policy_settlement_facts_skipped` (`hold_skipped_settlement_fact_instances`, through E3's `hold_instance_pause_at_start`) | rule (the existing pause row; a reason is a name) | ISO-START-1 | ISO-START-1 | case 2 only; after `hold_unsettled_dispatches`; an instance paused already keeps its pause |
+
+Tests (host gate row "#419 ISO-START-1", `gate_419_iso_start1`):
+`iso_start1_a_stale_pair_is_skipped_once_and_the_two_others_are_written` (three pairs, the
+stale one between the two others; a later run's record of its first key, newer than its
+settlement, written by the first start; the restart completes with no host fault, writes the two
+others' facts as main writes them, keeps the newer record, writes none of the stale pair's,
+records the skip once with `runtime_fact_stale`, the key and both observations, and holds
+nothing); `iso_start1_a_pair_refused_for_its_own_reason_holds_only_its_instance` (A's pair names
+a catalog task of 128 bytes, so the store cannot form its keys, `invalid_runtime_fact_key`; A is
+held with `policy_settlement_facts_skipped` in the status read, its pair recorded once and none
+of its records written; B's pair is written as main writes it and B is not held); and
+`iso_start1_a_store_that_cannot_be_written_still_fails_the_start` (the step's first write fails
+as an append the ledger cannot make; the start fails with `ledger_failure`, fatal). The pairs come
+from settlements a test-only hook adds to the step after the recovered ones
+(`START_SETTLEMENT_FACTS_FOR_TEST`; a pair with no dispatch in the ledger), and test 3's append
+failure is injected at the step; the refusals of tests 1 and 2 are the store's own. Two test-only
+helpers write and read the Runtime's fact store (`record_runtime_fact_for_test`,
+`runtime_fact_for_test`). No existing test changed: main had no test that pinned "any refusal is
+fatal" at the start, nor a start whose settlement-fact write failed.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

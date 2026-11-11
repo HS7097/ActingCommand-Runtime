@@ -3408,3 +3408,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::policy_admission::unset2_the_journal_keeps_a_late_completion_until_a_value_record_follows_it",
 ]
 incident = ["#428 UNSET-2"]
+
+# #419 ISO-START-1 (0.12.52; register §1.299; brief rd-1111/brief-iso-start-1.md): one pair's refused settlement fact no longer stops the start. The start derives every registered pair's four settlement facts again; a pair the store refuses as stale (it holds a record of the key observed at the settlement time or later) is skipped and recorded once at Warning, policy_settlement_facts_skipped with failure_code runtime_fact_stale, the fact key and both observations, and nothing is held; a pair refused for a reason of its own (a key the store cannot form, invalid_runtime_fact_key) is recorded the same way and its instance paused with that code as the pause reason, which the status read shows; the other pairs' facts are written as main writes them and their instances are not held; a store whose ledger append fails still fails the start (ledger_failure, fatal)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_419_iso_start1::iso_start1_a_stale_pair_is_skipped_once_and_the_two_others_are_written",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso_start1::iso_start1_a_pair_refused_for_its_own_reason_holds_only_its_instance",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso_start1::iso_start1_a_store_that_cannot_be_written_still_fails_the_start",
+]
+incident = ["#419 ISO-START-1"]
