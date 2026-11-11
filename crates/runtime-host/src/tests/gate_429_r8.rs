@@ -1100,11 +1100,15 @@ fn r8_a_record_written_after_an_evaluation_refuses_its_admission_as_stale() {
 
 // Without any `session.pack.schedule` record nothing of the pack schedule enters an evaluation:
 // on a host whose catalog tasks are bound to their packages (so the Runtime knows each task's
-// package) and on one whose bindings name no package, the same inputs give the same snapshot
-// identity and every decision the same, none of them naming a pack schedule code, and the
-// candidate is dispatched.
+// package) and on one whose bindings name no package, the same inputs give every decision the
+// same, none of them naming a pack schedule code, and the candidate is dispatched on both. (The
+// coordinator's correction in the 0.12.55 train: the two hosts' snapshot identities are not
+// compared. An identity holds its own host's fact events, so two hosts never share one, and the
+// comparison failed on the slice's first build. That the pack schedule adds nothing to the
+// identity without a record is how `CycleSchedule` is built: it reads the evaluation's facts and
+// adds none.)
 #[test]
-fn r8_without_a_record_the_identity_and_every_decision_are_unchanged() {
+fn r8_without_a_record_every_decision_is_unchanged() {
     let bound = Fixture::with_packages(&[(TASK_A, ALIAS, PACK_A), (TASK_B, ALIAS, PACK_B)], None);
     let unbound = Fixture::start(
         TempDir::new().expect("tempdir"),
@@ -1141,10 +1145,14 @@ fn r8_without_a_record_the_identity_and_every_decision_are_unchanged() {
             .collect::<Vec<_>>()
     };
     assert_eq!(decided(&with_packages), decided(&without));
-    let (intent, _) = dispatched(&with_packages, TASK_A)
-        .unwrap_or_else(|| panic!("{TASK_A} is dispatched: {with_packages:#?}"));
-    let (other, _) = dispatched(&without, TASK_A).expect("the same dispatch");
-    assert_eq!(intent.fact_snapshot_id, other.fact_snapshot_id);
+    assert!(
+        dispatched(&with_packages, TASK_A).is_some(),
+        "{TASK_A} is dispatched: {with_packages:#?}"
+    );
+    assert!(
+        dispatched(&without, TASK_A).is_some(),
+        "the same dispatch: {without:#?}"
+    );
     bound.close();
     unbound.close();
 }

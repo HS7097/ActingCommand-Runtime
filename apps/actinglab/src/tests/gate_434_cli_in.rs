@@ -11,8 +11,12 @@
 //   words), and the row's note says so; for some rows also the words `lab-ops` is given, the stop
 //   `task stop` sends and the own command's line, compared with the positional's.
 // - `cli_in_both_spellings_on_one_line_are_refused_before_anything_is_sent`: on every such row the
-//   positional and the flag on one line, the same instance or another, in any order, and the flag
-//   twice, are refused `repeated` with the word named, the module's line exits 1 with nothing but
+//   positional and the flag on one line (every positional of the row given), the same instance or
+//   another, in any order, and the flag twice, are refused `repeated` with the word named; a row
+//   whose next positional is not required (`targets set`, its `<file>`) reads a lone word beside
+//   the flag as that positional (the coordinator's correction in the 0.12.55 train: the rule
+//   refuses one word too many, and there the word is not too many); the module's line exits 1 with
+//   nothing but
 //   the refusal (nothing read, nothing sent), an own command's row is actinglab's
 //   `validation_failed`; `--instance` without a value is `value_missing`.
 // - `cli_in_the_own_commands_and_the_own_options_read_as_before`: the rows actinglab's own command
@@ -102,6 +106,30 @@ fn positional_words(operation: &Operation, instance: Option<&str>) -> Vec<String
         if param.value_type == ParamType::Instance {
             line.extend(instance.map(str::to_owned));
         } else if param.required {
+            line.push(word_of(param));
+        }
+    }
+    line
+}
+
+/// The row's words and every positional in its order, required or not, the instance `instance` in
+/// its place: a line on which no further positional word fits. (The coordinator's addition in the
+/// 0.12.55 train: with only the required positionals, `targets set <x> --instance <y>` reads `<x>`
+/// as the row's optional `<file>`, so the two spellings are told apart only on a full line.)
+fn every_positional_words(operation: &Operation, instance: &str) -> Vec<String> {
+    let mut line = operation
+        .name
+        .split(' ')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    for param in operation
+        .params
+        .iter()
+        .filter(|param| param.form == ParamForm::Positional)
+    {
+        if param.value_type == ParamType::Instance {
+            line.push(instance.to_owned());
+        } else {
             line.push(word_of(param));
         }
     }
@@ -373,7 +401,8 @@ fn cli_in_both_spellings_on_one_line_are_refused_before_anything_is_sent() {
     let same = words_of(&[words::INSTANCE_FLAG, ALIAS]);
     let other = words_of(&[words::INSTANCE_FLAG, OTHER]);
     for operation in instance_rows() {
-        let positional = positional_words(operation, Some(ALIAS));
+        // Every positional given, so that the flag's instance is one word too many on any row.
+        let positional = every_positional_words(operation, ALIAS);
         let bare = positional_words(operation, None);
         let name_len = operation.name.split(' ').count();
         let both = [
@@ -427,6 +456,13 @@ fn cli_in_both_spellings_on_one_line_are_refused_before_anything_is_sent() {
             }
         }
     }
+    // A row whose next positional is not required reads a lone word beside the flag as that
+    // positional, not as a second instance: `targets set <file> --instance <x>` is the flag's
+    // spelling of `targets set <x> <file>`.
+    assert_eq!(
+        params(&["targets", "set", ALIAS, "--instance", OTHER]),
+        json!({"file": ALIAS, "instance": OTHER})
+    );
     // Rows with more positionals name the word in the instance's place.
     assert_eq!(
         refused(&words_of(&[

@@ -12984,7 +12984,14 @@ row's words, since the core rows refuse or take a global option before or after 
 (LAB-2b fix 3); a line with `--via` that begins with it stays actinglab's own, as before. (c) With
 the flag, the other positionals keep their order wherever it stands, so `run start <package>
 --instance <x>` works. (d) `runs --instance` and `monitor set --instance` without a value, which
-handed `true` on as the instance (a line no Runtime took), are `value_missing` now.
+handed `true` on as the instance (a line no Runtime took), are `value_missing` now. (e) (The
+coordinator's correction in the 0.12.55 train.) The rule refuses one word too many, so both
+spellings are told apart only when the row's other positionals are all given: on the one offered
+row whose next positional is not required, `targets set <instance> [<file>]`, a lone word beside
+the flag is the file (`targets set <x> --instance <y>` reads `<x>` as `<file>`, the flag's
+spelling of `targets set <y> <x>`), and `targets set <x> <file> --instance <y>` is refused,
+`<x>` repeated. The slice's test asked every row for the refusal on the short line and failed on
+this row on its first build; it now gives every positional, and pins the short line's reading.
 
 **Interface.** None moves: no table schema change, no new outcome code, no request, ledger or
 configuration shape. `ledger` 7, `runtime-client` 6, `actingd-config` 28, `package` 8 and
@@ -13121,7 +13128,7 @@ Tests (host gate rows "#429 R-8"): `gate_429_r8::r8_the_three_origins_may_write_
 `r8_an_edit_compares_the_scope_list_version`,
 `r8_a_closed_package_is_deferred_after_a_blackout_and_wakes_at_the_row_end`,
 `r8_a_record_written_after_an_evaluation_refuses_its_admission_as_stale`,
-`r8_without_a_record_the_identity_and_every_decision_are_unchanged`,
+`r8_without_a_record_every_decision_is_unchanged`,
 `r8_the_view_lists_the_instance_packages_and_an_unknown_package_is_reported_once` and
 `r8_closing_a_task_then_stopping_its_run` (the host, a manual clock, a fake device, neutral
 packages), and actinglab's `gate_429_r8::r8_pack_schedule_rows_reach_their_requests` (apps gate).
@@ -13131,6 +13138,14 @@ longer sends `EditPackSchedule`; `gate_429_r0::r0c_pack_schedule_view_answers_no
 is removed with its gate row (R-0c's `PackScheduleView` now answers); and the contract's
 `a4_each_request_kind_that_completes_has_its_own_success_code` no longer lists the two kinds among
 those that never complete. No golden changes.
+
+The coordinator's correction in the 0.12.55 train: `r8_without_a_record_every_decision_is_unchanged`
+was first named for the identity as well, and also compared the snapshot identities of its two
+hosts. An identity holds its own host's fact events, so two hosts never
+share one (the two values differed, and differed again between two builds), and the test failed
+on the slice's first build. It now compares the decisions. That the pack schedule adds nothing to
+the identity without a record rests on how it is built (it reads the evaluation's facts and adds
+none; the identity's own code is untouched), not on a test.
 
 ### 1.309 Workflow #428 S168-LB1 (contracts only): a list longer than 256 rows can be read, and one entry without a value no longer empties its group (a customer-view audit of 11-11 found both defects in what the S168 slices built, and the coordinator confirmed them; the coordinator's rulings 1 to 10 of 11-11, not Alice's words; read on main `a62434a4`, with the read-only survey `rd-1111/survey-s168-lb1.md`; coordinator work order `rd-1111/brief-s168-lb1-contract.md`)
 

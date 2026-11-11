@@ -520,7 +520,10 @@ sentence fails that test.
   time (the positional instance's word, or `--instance` given twice), with
   `actingctl_usage_invalid` on a row of the CLI module and actinglab's `validation_failed` on a row
   its own command serves under other words (`app launch|restart|stop`, `recover`); `--instance`
-  without a value is refused `value_missing`. A line without `--instance` is read as before; a line
+  without a value is refused `value_missing`. The refusal is that of one word too many: on a row
+  whose next positional is not required (`targets set <inst> [<file>]`) a lone word beside the
+  flag is that positional (`targets set <file> --instance <inst>`), and the two spellings are
+  refused when the file is given too. A line without `--instance` is read as before; a line
   with `--via` that begins with `--instance` stays actinglab's own, as before. The 20 rows
   actinglab's own
   command serves under the row's own name (`tap`, `swipe`, `long-tap`, `key`, `text`,
