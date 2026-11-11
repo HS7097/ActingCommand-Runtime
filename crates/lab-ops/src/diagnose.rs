@@ -1903,3 +1903,119 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, Option<PathBuf>, DiagnoseRe
         state_root.ok_or_else(|| Failure::argument("--state-root", ArgumentProblem::Required))?;
     Ok((PathBuf::from(state_root), root.map(PathBuf::from), request))
 }
+
+// Workflow #429 R-6b1 (register §1.314 R6B-8, §1.315): `ac_diagnose` and `actingctl diagnose`
+// list no stopped run as a failure or a pause. `failures_grouped` takes a policy execution only
+// when it paused its task, and a stopped run's record carries no disposition. Nothing writes the
+// kind yet, so the record is built with the contract's own types.
+#[cfg(test)]
+mod r6b1_tests {
+    use super::{failure_record, scheduled_failure_code_str};
+    use actingcommand_contract::outcome::Outcome;
+    use actingcommand_contract::{
+        AuditInput, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity,
+        EventSource, IdentifierIssuer, OriginModule, PerformanceContext, PolicyExecutionEventData,
+        PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord,
+        PolicyPayloadDraft, ProjectedEvent, ProjectionPayload, RuntimeErrorCode, SanitizationError,
+        SecretField, SecretFingerprinter, Sha256Fingerprint,
+    };
+
+    const AT_MS: u64 = 1_752_147_200_000;
+
+    struct NoSecrets;
+
+    impl SecretFingerprinter for NoSecrets {
+        fn fingerprint(
+            &self,
+            _field: SecretField,
+            _original: &str,
+        ) -> Result<Sha256Fingerprint, SanitizationError> {
+            panic!("the fixture holds no secret")
+        }
+    }
+
+    /// A `policy.execution_recorded` whose result is `outcome`, as a full read projects it.
+    fn execution(outcome: PolicyExecutionOutcome) -> ProjectedEvent {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let sanitized = EventDraft::new(
+            issuer.mint_event_id().expect("event id"),
+            AT_MS,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+            ),
+            EventLinksDraft::default(),
+            PolicyPayloadDraft::execution_recorded(
+                PolicyExecutionEventData {
+                    decision_id: "decision:diagnose-fixture".to_owned(),
+                    task_id: "task:diagnose-fixture".to_owned(),
+                    instance_id: "instance:diagnose-fixture".to_owned(),
+                    observed_at_unix_ms: AT_MS,
+                    outcome,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        )
+        .sanitize(&NoSecrets)
+        .expect("an execution fixture");
+        ProjectedEvent {
+            views: Vec::new(),
+            artifact_evictions: Vec::new(),
+            schema_version: sanitized.schema_version().to_owned(),
+            sequence: 1,
+            event_id: *sanitized.event_id(),
+            timestamp_unix_ms: sanitized.timestamp_unix_ms(),
+            event_type: sanitized.event_type(),
+            severity: sanitized.severity(),
+            sensitivity: sanitized.sensitivity(),
+            origin: sanitized.origin().clone(),
+            links: sanitized.links().clone(),
+            payload_schema: sanitized.payload_schema().to_owned(),
+            payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
+            artifacts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn r6b1_d1_diagnose_lists_no_stopped_run_as_a_failure_or_a_pause() {
+        let stopped = execution(PolicyExecutionOutcome::Stopped {
+            outcome: Outcome::new(RuntimeErrorCode::ContainedTaskCancelled),
+            runtime_ms: 1_000,
+        });
+        assert!(
+            failure_record(&stopped).is_none(),
+            "a stopped run is no failure group and no pause"
+        );
+
+        // The same reader lists a run that paused its task.
+        let paused_failure = Outcome::new(RuntimeErrorCode::CaptureFailed);
+        let paused = execution(PolicyExecutionOutcome::Failed {
+            failure: PolicyFailureRecord {
+                outcome: paused_failure.clone(),
+                failure_identity: None,
+                reported_success: false,
+                original_class: PolicyFailureClass::Severe,
+                effective_class: PolicyFailureClass::Severe,
+                consecutive_same_error: 1,
+                escalation_streak: 1,
+                performance_tax_exempt: false,
+                retry_attempt: 0,
+                disposition: PolicyFailureDisposition::PausedTask,
+                retry_at_unix_ms: None,
+                runtime_ms: 1_000,
+                sensitive: false,
+                perf_context: Box::new(PerformanceContext::unavailable(AT_MS)),
+                condition: None,
+            },
+        });
+        let record = failure_record(&paused).expect("a paused run is listed");
+        assert_eq!(
+            record.catalog_task_id.as_deref(),
+            Some("task:diagnose-fixture")
+        );
+        assert_eq!(record.code, scheduled_failure_code_str(&paused_failure));
+    }
+}

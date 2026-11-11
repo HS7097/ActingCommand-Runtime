@@ -720,7 +720,8 @@ fn execution_failure(host: &RuntimeHost, decision_id: &str) -> PolicyFailureReco
             {
                 match payload.policy_result() {
                     PolicyExecutionOutcome::Failed { failure } => Some(failure.clone()),
-                    PolicyExecutionOutcome::Succeeded { .. } => None,
+                    PolicyExecutionOutcome::Succeeded { .. }
+                    | PolicyExecutionOutcome::Stopped { .. } => None,
                 }
             }
             _ => None,

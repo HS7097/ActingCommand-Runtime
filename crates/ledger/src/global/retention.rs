@@ -28,6 +28,9 @@ mod prior_epoch;
 mod proof_levels;
 mod resident;
 mod view;
+// Workflow #429 R-6b1: the frame retention's match of a stopped run's record with its terminal.
+#[cfg(test)]
+mod gate_429_r6b1;
 pub use material::{LedgerFrameRefsNote, LedgerOpenTiming, OwnerReadFull};
 // #422 W1-8 (P27): the persistent proof set the writer publishes its eviction proofs in.
 pub(super) use material::{PendingMaterial, elapsed_ms};
@@ -1445,12 +1448,17 @@ fn lab_release_request_matches<E: LedgerEventRead>(
         && event.payload().lab_pin_release_request() == Some(target)
 }
 
+/// Whether a run's settlement matches its terminal's branch. Workflow #429 R-6b (register
+/// §1.314 R6B-8): a stopped run's `stopped` record matches the `task.failed` terminal every
+/// scheduled cancel writes, and no other; like a failed run's frames, a stopped run's never
+/// source an eviction intent, which takes a success.
 fn settlement_matches<E: LedgerEventRead>(event: &E, outcome: TaskOutcome) -> bool {
     let EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) = event.payload() else {
         return false;
     };
     match (outcome, payload.policy_result()) {
-        (TaskOutcome::Success, PolicyExecutionOutcome::Succeeded { .. }) => true,
+        (TaskOutcome::Success, PolicyExecutionOutcome::Succeeded { .. })
+        | (TaskOutcome::Failure, PolicyExecutionOutcome::Stopped { .. }) => true,
         (
             TaskOutcome::Failure | TaskOutcome::Cancelled,
             PolicyExecutionOutcome::Failed { failure },

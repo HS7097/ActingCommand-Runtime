@@ -921,3 +921,12 @@ tests = [
     "actingcommand-ledger::lib::global::tests::interrupted_policy_execution_recovery_accepts_effects_and_rejects_duplicate_release",
 ]
 incident = ["#428 UNSET-2"]
+
+# Workflow #429 R-6b1 (0.12.55; register §1.314 R6B-7 and R6B-8, §1.315; brief rd-1111/brief-r6b1-form-readers.md; the ledger half of R6B-7): a recovered settlement of the kind stopped is accepted from a task.failed terminal whose outcome is contained_task_cancelled, with runtime_ms measured as a failure's (the terminal's time less the run's task request's) and the stored severity of its outcome's category, and refused from a success terminal (scheduled_execution_recovery_success_conflict) and from a failed terminal of another code (scheduled_execution_recovery_failure_conflict); the frame retention matches a stopped record with its task.failed terminal only, never with a success, so its frames source no eviction intent, and the two existing kinds match as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::r6b1_l1_a_stopped_settlement_is_recovered_only_from_a_cancelled_task_failure",
+    "actingcommand-ledger::lib::global::retention::gate_429_r6b1::r6b1_l2_the_retention_matches_a_stopped_record_with_its_failed_terminal_only",
+]
+incident = ["#429 R-6b1"]

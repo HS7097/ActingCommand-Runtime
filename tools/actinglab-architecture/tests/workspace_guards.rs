@@ -491,6 +491,121 @@ fn neut1_source_and_test_trees_name_no_real_game() {
     );
 }
 
+/// Workflow #434 NEUT-2: the short abbreviations of real games that no file of NEUT-1's trees
+/// may hold as a word, split as the C2 guard splits words (the tool's `identifier_words`):
+/// `POLICY_BA_MODE`, `policyBaMode` and `ba-mode` hold `ba`; `base` and the digest `0e1ba7` do
+/// not. Tests and fixtures use NEUT-1's values (games `fixture-game-a`, `-b`, `-c`, servers
+/// `s1`, `s2`, `s3`). `al` is not on the list: in these trees it is only a SQL table alias and
+/// an OCR fragment, never a game.
+const NEUT2_FORBIDDEN_WORDS: &[&str] = &["ak", "ark", "azur", "ba", "gf2"];
+
+/// The files that keep one of the words, each with its reason. An entry whose file is gone or no
+/// longer holds one of the words fails the guard, so the list cannot outlive its reason.
+const NEUT2_ALLOW_LIST: &[(&str, &str)] = &[
+    (
+        "apps/actinglab/src/commands/session_contracts.rs",
+        "the policy document `session capture-policy` prints: reported in NEUT-2, the \
+         coordinator rules",
+    ),
+    (
+        "scripts/windows-tools/Test-WindowsRemoteBuildTools.ps1",
+        "a base64 archive whose letters the word splitting cuts into one of the words; no game",
+    ),
+    (
+        "tools/actinglab-architecture/src/lib.rs",
+        "the C2 and R2-F guards' own word lists and the counterexamples their unit tests feed them",
+    ),
+    (
+        "tools/actinglab-architecture/tests/workspace_guards.rs",
+        "this guard's own word list and counterexample, and the C2 guard's counterexample",
+    ),
+];
+
+/// Each line of `text` that holds one of [`NEUT2_FORBIDDEN_WORDS`] as a word, as
+/// `path:line holds word`.
+fn neut2_findings(display: &str, text: &str) -> Vec<String> {
+    let mut findings = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        // Every word the splitting gives is a part of the line's lowercase form, so a line that
+        // holds none of the words as a part is not split.
+        let lower = line.to_ascii_lowercase();
+        if !NEUT2_FORBIDDEN_WORDS
+            .iter()
+            .any(|word| lower.contains(word))
+        {
+            continue;
+        }
+        let words = actingcommand_actinglab_architecture::identifier_words(line)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        for word in NEUT2_FORBIDDEN_WORDS {
+            if words.contains(*word) {
+                findings.push(format!("{display}:{} holds `{word}`", index + 1));
+            }
+        }
+    }
+    findings
+}
+
+#[test]
+fn neut2_source_and_test_trees_hold_no_game_abbreviation() {
+    // The matcher itself: a word as the C2 guard splits words, never a part of a longer word.
+    assert_eq!(
+        neut2_findings(
+            "counterexample.rs",
+            "const BASE: &str = \"fixture-game-a\";\nconst POLICY_BA_MODE: bool = true;\n\
+             fn policyBaMode() {}\nlet mode = \"ba-mode\";\nlet digest = \"0e1ba7\";\n"
+        ),
+        [
+            "counterexample.rs:2 holds `ba`",
+            "counterexample.rs:3 holds `ba`",
+            "counterexample.rs:4 holds `ba`"
+        ]
+    );
+
+    let root = workspace_root();
+    let mut files = Vec::new();
+    for tree in NEUT1_TREES {
+        collect_every_file(&root.join(tree), &mut files);
+    }
+    files.sort();
+    assert!(!files.is_empty(), "NEUT-2 found no file to read");
+
+    let mut violations = Vec::new();
+    let mut allowed_with_words = BTreeSet::new();
+    for path in files {
+        let display = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let bytes =
+            fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let findings = neut2_findings(&display, &String::from_utf8_lossy(&bytes));
+        if NEUT2_ALLOW_LIST.iter().any(|(file, _)| *file == display) {
+            if !findings.is_empty() {
+                allowed_with_words.insert(display);
+            }
+            continue;
+        }
+        violations.extend(findings);
+    }
+    for (file, reason) in NEUT2_ALLOW_LIST {
+        if !allowed_with_words.contains(*file) {
+            violations.push(format!(
+                "allow-list entry {file} ({reason}) is gone or holds none of the words"
+            ));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "NEUT-2: a file of the product's source and test trees holds a game's short abbreviation \
+         as a word; use the neutral fixture values (game fixture-game-a, server s1):\n{}",
+        violations.join("\n")
+    );
+}
+
 fn collect_generic_runtime_files(root: &Path, files: &mut Vec<PathBuf>) {
     let entries =
         fs::read_dir(root).unwrap_or_else(|error| panic!("read {}: {error}", root.display()));

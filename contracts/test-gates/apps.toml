@@ -1513,3 +1513,11 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_cli_help::cli_help_the_refusals_that_are_gone_and_status_help_unchanged",
 ]
 incident = ["#434 CLI-HELP"]
+
+# Workflow #429 R-6b1 (0.12.55; register §1.314 R6B-8, §1.315; brief rd-1111/brief-r6b1-form-readers.md): ac_diagnose and actingctl diagnose list no stopped run as a failure or a pause: failures_grouped takes a stopped run's record as no record of its kinds, while it lists a run that paused its task with its catalog task and its code (the record built with the contract's own types; nothing writes the kind yet)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::diagnose::r6b1_tests::r6b1_d1_diagnose_lists_no_stopped_run_as_a_failure_or_a_pause",
+]
+incident = ["#429 R-6b1"]

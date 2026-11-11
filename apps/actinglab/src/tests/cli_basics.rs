@@ -361,13 +361,13 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
                 "--json",
                 "user-config",
                 "set",
-                "instance.ba.serial",
+                "instance.fixture-game-c.serial",
                 "127.0.0.1:16448",
             ],
             true,
         );
         assert_eq!(set.exit_code(), 0);
-        let get = run_cli(["--json", "user-config", "get", "instance.ba.serial"], true);
+        let get = run_cli(["--json", "user-config", "get", "instance.fixture-game-c.serial"], true);
         set_missing_config_env();
 
         assert_eq!(get.exit_code(), 0);
@@ -394,13 +394,13 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
                 "--json",
                 "user-config",
                 "set",
-                "instance.ak.package",
+                "instance.fixture-game-a.package",
                 "com.example.fixture.a",
             ],
             true,
         );
         assert_eq!(set.exit_code(), 0);
-        let get = run_cli(["--json", "user-config", "get", "instance.ak.package"], true);
+        let get = run_cli(["--json", "user-config", "get", "instance.fixture-game-a.package"], true);
         set_missing_config_env();
 
         assert_eq!(get.exit_code(), 0);
@@ -427,7 +427,7 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
                 "--json",
                 "user-config",
                 "set",
-                "instance.ak-b.adb_path",
+                "instance.fixture-game-a-b.adb_path",
                 "C:\\Tools\\adb.exe",
             ],
             true,
@@ -437,14 +437,14 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
                 "--json",
                 "user-config",
                 "set",
-                "instance.ak-b.capture_backend",
+                "instance.fixture-game-a-b.capture_backend",
                 "nemu_ipc",
             ],
             true,
         );
-        let get_adb = run_cli(["--json", "user-config", "get", "instance.ak-b.adb_path"], true);
+        let get_adb = run_cli(["--json", "user-config", "get", "instance.fixture-game-a-b.adb_path"], true);
         let get_backend = run_cli(
-            ["--json", "user-config", "get", "instance.ak-b.capture_backend"],
+            ["--json", "user-config", "get", "instance.fixture-game-a-b.capture_backend"],
             true,
         );
         set_missing_config_env();
@@ -485,7 +485,7 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
                 "--json",
                 "user-config",
                 "set",
-                "instance.ak-b.capture_backend",
+                "instance.fixture-game-a-b.capture_backend",
                 "not-a-backend",
             ],
             true,

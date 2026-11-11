@@ -335,6 +335,10 @@ struct ScheduledRecoveryDrafts {
     recovered_release_after_terminal: actingcommand_contract::SanitizedEventDraft,
     lease_expired_after_terminal: actingcommand_contract::SanitizedEventDraft,
     interrupted_execution_after_terminal: actingcommand_contract::SanitizedEventDraft,
+    /// Workflow #429 R-6b1: the `task.failed` terminal of a scheduled run a `StopInstanceRun`
+    /// stopped (`contained_task_cancelled`), and that run's `stopped` settlement measured from it.
+    task_failed_cancelled: actingcommand_contract::SanitizedEventDraft,
+    recovered_stopped_execution: actingcommand_contract::SanitizedEventDraft,
 }
 
 fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
@@ -1031,6 +1035,51 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             )
             .into(),
         ),
+        task_failed_cancelled: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Error,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            task_terminal_links.clone(),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    task_result: TaskOutcome::Failure,
+                    final_page: None,
+                    executed_steps: Some(0),
+                    outcome: Some(Outcome::new(
+                        actingcommand_contract::RuntimeErrorCode::ContainedTaskCancelled,
+                    )),
+                    failure_severe: false,
+                    scheduling_disposition: None,
+                    task_timing: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        recovered_stopped_execution: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Error,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+            ),
+            EventLinksDraft::default(),
+            PolicyPayloadDraft::execution_recorded(
+                recovered_execution(PolicyExecutionOutcome::Stopped {
+                    outcome: Outcome::new(
+                        actingcommand_contract::RuntimeErrorCode::ContainedTaskCancelled,
+                    ),
+                    runtime_ms: 50,
+                }),
+                AuditInput::new(),
+            )
+            .into(),
+        ),
         recovered_interrupted_execution: sanitize(
             1_752_147_200_350,
             EventSeverity::Error,
@@ -1345,6 +1394,87 @@ fn recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes() {
     assert_recovered_execution_chain(&recovered, &interrupted_drafts);
     assert_eq!(recovered.timestamp_unix_ms(), release.timestamp_unix_ms());
     interrupted.close().expect("close interrupted ledger");
+}
+
+/// Workflow #429 R-6b1 (register §1.314 R6B-7, §1.315; the ledger half): a recovered settlement
+/// of the kind `stopped` is accepted from a `task.failed` terminal whose outcome is
+/// `contained_task_cancelled`, with `runtime_ms` measured as a failure's (the terminal's time
+/// less the run's task request's, 50 ms here), and its stored severity is its outcome's category;
+/// it is refused from a success terminal and from a failed terminal of another code.
+#[test]
+fn r6b1_l1_a_stopped_settlement_is_recovered_only_from_a_cancelled_task_failure() {
+    let root = TempDir::new().expect("stopped temp");
+    let ledger = GlobalLedger::open(config(&root, "stopped-recovery-writer")).expect("ledger");
+    let drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&ledger, &drafts);
+    ledger
+        .append(drafts.task_request.clone())
+        .expect("task request");
+    let terminal = ledger
+        .append(drafts.task_failed_cancelled.clone())
+        .expect("the stopped run's task failure");
+    ledger
+        .append(drafts.task_release.clone())
+        .expect("task release");
+    reconcile_scheduled_settlement(&ledger, &drafts.recovered_stopped_execution)
+        .expect("recover the stopped run's settlement");
+    let recovered = recovered_execution_fact(&ledger, &drafts.recovered_stopped_execution);
+    assert_recovered_execution_chain(&recovered, &drafts);
+    assert_eq!(recovered.timestamp_unix_ms(), terminal.timestamp_unix_ms());
+    let EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) = recovered.payload()
+    else {
+        panic!("a recovered execution record");
+    };
+    assert_eq!(
+        payload.policy_result(),
+        &PolicyExecutionOutcome::Stopped {
+            outcome: Outcome::new(actingcommand_contract::RuntimeErrorCode::ContainedTaskCancelled),
+            runtime_ms: 50,
+        }
+    );
+    // Its outcome's category (`contained_task_cancelled`: error).
+    assert_eq!(recovered.severity(), EventSeverity::Error);
+    ledger.close().expect("close the stopped ledger");
+
+    let success_root = TempDir::new().expect("success temp");
+    let success =
+        GlobalLedger::open(config(&success_root, "stopped-success-writer")).expect("ledger");
+    let success_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&success, &success_drafts);
+    success
+        .append(success_drafts.task_request.clone())
+        .expect("task request");
+    success
+        .append(success_drafts.task_completed.clone())
+        .expect("task completed");
+    success
+        .append(success_drafts.task_release.clone())
+        .expect("task release");
+    expect_recovered_execution_error(
+        success,
+        success_drafts.recovered_stopped_execution,
+        LedgerCode::ScheduledExecutionRecoverySuccessConflict.as_str(),
+    );
+
+    let failure_root = TempDir::new().expect("failure temp");
+    let failure =
+        GlobalLedger::open(config(&failure_root, "stopped-failure-writer")).expect("ledger");
+    let failure_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&failure, &failure_drafts);
+    failure
+        .append(failure_drafts.task_request.clone())
+        .expect("task request");
+    failure
+        .append(failure_drafts.task_failed_warning.clone())
+        .expect("a task failure of another code");
+    failure
+        .append(failure_drafts.task_release.clone())
+        .expect("task release");
+    expect_recovered_execution_error(
+        failure,
+        failure_drafts.recovered_stopped_execution,
+        LedgerCode::ScheduledExecutionRecoveryFailureConflict.as_str(),
+    );
 }
 
 /// Workflow #378 A3 (acceptance CL-L1, coordinator ruling 9): a failed terminal whose failure
