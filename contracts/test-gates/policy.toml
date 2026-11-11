@@ -460,6 +460,17 @@ tests = [
     "actingcommand-policy::lib::tests::gate_sched_c1e::sched_c1e_t4_without_a_set_every_decision_is_as_before_but_the_new_value",
 ]
 incident = ["#428 SCHED-C1e"]
+# #428 SCHED-C1f1 (the coordinator's work order of 11-11 and rulings of 11-11 14:5x on the nine questions of register §1.303, not Alice's words; Alice's rule of 10-26 that what belongs to the account is read from a fact; rd-1111 brief-sched-c1f1; contracts/scheduling/README.md, "A run's consumption read from a fact"; register §1.303 SC1F-1 to SC1F-5; since 0.12.54): a V2 consumes entry's amount {type fact, fact_key, fallback} is refused in V1 (unknown_field at amount/type), with another type, a key that is no identifier or no string, a fallback that is no integer or null (type_mismatch at the member), a fallback of 0 or 2^53 (limit_exceeded at amount/fallback) or above a constant capacity (effect_incompatible at the entry), a missing member (missing_required_field at amount), offset, scope or another member (unknown_field at it), beside expected_amount_milli (limit_exceeded at the entry), on a produces entry (effect_incompatible at its amount) and as a second form on one pool (effect_incompatible at its amount), and compiles at 1, at the capacity and beside a constant entry; the example keeps its V1 and V2 golden identities and the form is hashed and re-serialized as written; one evaluation reads a usable record (20, fact) and else the fallback (10, fallback) for no record, an expired one and one a reset invalidated, with consumption_fact_unusable {task_id, pool_id, fact_key, unknown_reason, consumption} as the first reason for one at confidence 0 (fact_low_confidence), of another kind or an integer out of range (type_mismatch); the net benefit, the hard line, pool_lines_unspendable (decision on the amount in effect, compile warning on the fallback), a capped round's order and plan, a reserve with SS-6's run_cap and the forward projection all read the amount in effect; an episode keeps its consumers key on the fallback (a changed reading keeps it and its frozen order, rank 2 of round 1 on the new amount; the head's check on the new amount ends the round; a changed fallback ends the episode; a constant replaced by the form with that fallback keeps it); a usable record's expiry bounds its candidate's freshness and wakes the evaluation, which then reads the fallback
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_sched_c1f1::sched_c1f1_t1_the_form_is_refused_at_its_pointer_and_its_absence_changes_nothing",
+    "actingcommand-policy::lib::tests::gate_sched_c1f1::sched_c1f1_t2_one_evaluation_reads_a_usable_record_or_the_fallback",
+    "actingcommand-policy::lib::tests::gate_sched_c1f1::sched_c1f1_t3_every_reader_reads_the_amount_in_effect",
+    "actingcommand-policy::lib::tests::gate_sched_c1f1::sched_c1f1_t4_an_episode_keeps_its_consumers_key_and_its_round_its_order",
+    "actingcommand-policy::lib::tests::gate_sched_c1f1::sched_c1f1_t5_a_usable_records_expiry_bounds_freshness_and_wakes_the_evaluation",
+]
+incident = ["#428 SCHED-C1f1"]
 
 # The intent pins freshness, limits, catalog hash and ledger position
 [[gate]]
@@ -1204,6 +1215,14 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_cov1::cov1_t4_a_file_without_followers_answers_as_before",
 ]
 incident = ["#428 COV-1"]
+# #428 SCHED-C1f1 (rd-1111 brief-sched-c1f1; contracts/standard-pack-schedule.md, "requires", "A run's consumption read from a fact", "Composition" and "Tools"; register §1.303 SC1F-6 and SC1F-7; since 0.12.54): a schedule.json rule's consumes amount {type fact, fact_key, fallback} passes through to the composed task as written, with no scope, and compiles into the form; a file that writes it without consumption_fact in requires is refused schedule_invalid at /rules/0/consumes/0/amount, a scope in it by the reader at /rules/0/consumes/0/amount/scope, and a fallback of 0 at /rules/0/consumes/0/amount/fallback (the compiler's limit_exceeded mapped back); a rule with the form is complete in benefit_coverage; standard-pack check and package bundle --schedule answer consumption_facts {rule_id, pool_id, fact_key, fallback} per entry with the form in file order, empty when none
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_sched_c1f1::sched_c1f1_t6_the_composer_carries_the_form_and_requires_its_subsystem",
+    "actingcommand-resource-tooling::lib::gate_sched_c1f1::sched_c1f1_t7_the_check_lists_the_consumptions_read_from_a_fact",
+]
+incident = ["#428 SCHED-C1f1"]
 # SS-4 (rd-1029 plan-state-driven, the notes on removing the counts; rd-1031 brief-ss4 test 6; contracts/standard-pack-schedule.md, "Tools", "Failure escalation without a daily bound"; register §1.231; since 0.12.34): a rule without a daily bound (loop_budget without daily_limit, or no loop_budget) whose escalation_threshold is above 10 is one standard_pack_escalation_threshold_high {game, task_id, count, limit_count 10} in file order, outside the composition's own warnings; a rule with a daily limit, or at the threshold 10, gives none; the file composes all the same
 [[gate]]
 coverage = "Y"

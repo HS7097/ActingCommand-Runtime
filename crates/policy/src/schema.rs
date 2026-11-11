@@ -569,8 +569,10 @@ pub struct ResourceEffectSpec {
     pub pool_id: String,
     pub direction: EffectDirection,
     /// A positive integer in real inventory units, or (SS-2b, V2 only) the marker
-    /// [`PENDING_MARKER`]: the quantity is not known yet. Read it through
-    /// [`ResourceEffectSpec::units`] and [`ResourceEffectSpec::is_pending`].
+    /// [`PENDING_MARKER`]: the quantity is not known yet; or (SCHED-C1f1, register §1.303, a V2
+    /// `consumes` entry only) one run's amount read from a fact ([`ConsumptionFact`]). Read it
+    /// through [`ResourceEffectSpec::units`], [`ResourceEffectSpec::is_pending`] and
+    /// [`ResourceEffectSpec::fact_amount`].
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -593,13 +595,74 @@ fn effect_quantity<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<
     u64::deserialize(deserializer).map(Some)
 }
 
-/// An effect's written `amount` (SS-2b, register §1.225).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// An effect's written `amount` (SS-2b, register §1.225; SCHED-C1f1, register §1.303).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EffectAmount {
     /// A non-negative integer as written; the compiler requires it to be positive.
     Units(u64),
     /// The marker [`PENDING_MARKER`]: the quantity is not known yet.
     Pending,
+    /// SCHED-C1f1 (register §1.303 SC1F-1; `contracts/scheduling/README.md`, "A run's
+    /// consumption read from a fact"): `{"type": "fact", "fact_key": B, "fallback": F}`, written
+    /// with exactly these members, `fact_key` a string and `fallback` an unsigned integer. The
+    /// compiler checks the rest (a V2 `consumes` entry only, B an identifier, F in
+    /// `1..=2^53−1` and at most a constant capacity).
+    Fact(ConsumptionFact),
+    /// SCHED-C1f1: an object `amount` that is not [`EffectAmount::Fact`] as the format writes it
+    /// (another `type`, a member missing, of another kind, or one the form does not have), kept as
+    /// written only so that the compiler refuses it at its member; a compiled catalog holds none.
+    Malformed(serde_json::Map<String, serde_json::Value>),
+}
+
+/// SCHED-C1f1 (register §1.303 SC1F-1): one run's amount of a pool read from the instance fact
+/// `fact_key` (B) in the scope of the instance an evaluation decides for, and `fallback` (F), the
+/// amount while B gives no usable reading. It names no scope and no offset: the fact holds the
+/// amount itself, which the evaluation resolves once per instance (the evaluator's
+/// `consumption` module).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumptionFact {
+    pub fact_key: String,
+    pub fallback: u64,
+}
+
+/// SCHED-C1f1 (register §1.303 SC1F-6): the configuration-manifest subsystem of a Runtime that
+/// reads a `consumes` entry's `amount` written as a fact; a `schedule.json` whose rule writes one
+/// names it in `requires`, so an older Runtime refuses the file instead of misreading it.
+pub const CONSUMPTION_FACT_SUBSYSTEM: &str = "consumption_fact";
+
+/// SCHED-C1f1: the members of [`ConsumptionFact`]'s wire form, in the order the format writes
+/// them.
+pub(crate) const CONSUMPTION_FACT_MEMBERS: [&str; 3] = ["type", "fact_key", "fallback"];
+
+/// The wire form of a [`ConsumptionFact`].
+#[derive(Serialize)]
+struct ConsumptionFactWire<'a> {
+    #[serde(rename = "type")]
+    kind: FactReferenceTag,
+    fact_key: &'a str,
+    fallback: u64,
+}
+
+impl ConsumptionFact {
+    /// The amount an object `amount` writes: [`EffectAmount::Fact`] when it is the form exactly
+    /// (the three members, `type` the fact reference's, a string key and an unsigned fallback),
+    /// else [`EffectAmount::Malformed`] as written.
+    fn read(members: serde_json::Map<String, serde_json::Value>) -> EffectAmount {
+        let [kind, fact_key, fallback] = CONSUMPTION_FACT_MEMBERS;
+        let form = members.len() == CONSUMPTION_FACT_MEMBERS.len()
+            && members.get(kind).and_then(serde_json::Value::as_str) == Some(FACT_REFERENCE_TYPE);
+        match (
+            form,
+            members.get(fact_key).and_then(serde_json::Value::as_str),
+            members.get(fallback).and_then(serde_json::Value::as_u64),
+        ) {
+            (true, Some(key), Some(amount)) => EffectAmount::Fact(Self {
+                fact_key: key.to_owned(),
+                fallback: amount,
+            }),
+            _ => EffectAmount::Malformed(members),
+        }
+    }
 }
 
 impl Serialize for EffectAmount {
@@ -607,22 +670,40 @@ impl Serialize for EffectAmount {
         match self {
             Self::Units(amount) => serializer.serialize_u64(*amount),
             Self::Pending => serializer.serialize_str(PENDING_MARKER),
+            Self::Fact(form) => ConsumptionFactWire {
+                kind: FactReferenceTag::Fact,
+                fact_key: &form.fact_key,
+                fallback: form.fallback,
+            }
+            .serialize(serializer),
+            Self::Malformed(members) => members.serialize(serializer),
         }
     }
 }
 
-/// An `amount` member: an unsigned integer, or the string [`PENDING_MARKER`]. Every other value,
+/// An `amount` member: an unsigned integer, the string [`PENDING_MARKER`], or (SCHED-C1f1) an
+/// object, read by [`ConsumptionFact::read`] and checked by the compiler. Every other value,
 /// `null` included, is refused (`type_mismatch`), as an integer-only `amount` refused it before.
 fn effect_amount<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<EffectAmount>, D::Error> {
     struct AmountVisitor;
 
-    impl serde::de::Visitor<'_> for AmountVisitor {
+    impl<'de> serde::de::Visitor<'de> for AmountVisitor {
         type Value = EffectAmount;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(formatter, "u64 or the string \"{PENDING_MARKER}\"")
+            write!(
+                formatter,
+                "u64, the string \"{PENDING_MARKER}\" or a consumption read from a fact"
+            )
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<EffectAmount, A::Error> {
+            let members = serde_json::Map::<String, serde_json::Value>::deserialize(
+                serde::de::value::MapAccessDeserializer::new(map),
+            )?;
+            Ok(ConsumptionFact::read(members))
         }
 
         fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<EffectAmount, E> {
@@ -649,17 +730,26 @@ fn effect_amount<'de, D: Deserializer<'de>>(
 
 impl ResourceEffectSpec {
     /// The written integer `amount`; `None` for an `expected_amount_milli` entry (a production or,
-    /// SS-2g, a consumption) and for a pending quantity.
+    /// SS-2g, a consumption), for a pending quantity and (SCHED-C1f1) for an amount read from a
+    /// fact, which only the evaluator's resolution reads.
     pub fn units(&self) -> Option<u64> {
-        match self.amount {
-            Some(EffectAmount::Units(amount)) => Some(amount),
-            Some(EffectAmount::Pending) | None => None,
+        match &self.amount {
+            Some(EffectAmount::Units(amount)) => Some(*amount),
+            _ => None,
         }
     }
 
     /// SS-2b: whether the effect's `amount` is the marker [`PENDING_MARKER`].
     pub fn is_pending(&self) -> bool {
-        self.amount == Some(EffectAmount::Pending)
+        matches!(self.amount, Some(EffectAmount::Pending))
+    }
+
+    /// SCHED-C1f1 (register §1.303): the effect's `amount` read from a fact, when it writes one.
+    pub fn fact_amount(&self) -> Option<&ConsumptionFact> {
+        match &self.amount {
+            Some(EffectAmount::Fact(form)) => Some(form),
+            _ => None,
+        }
     }
 }
 

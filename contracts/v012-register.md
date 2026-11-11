@@ -12531,6 +12531,74 @@ name `consumption_fact`, so its composer refuses such a `schedule.json` (`schedu
 first replace the form by a constant `amount` and let this build activate a generation without it,
 as §1.289's rollback says for SS-2h's.
 
+#### Slice SCHED-C1f1 (0.12.54): a run's consumption read from a fact (coordinator work order `rd-1111/brief-sched-c1f1.md`; rows SC1F-1 to SC1F-7 and the rulings above)
+
+**What.**
+
+- **The form** (SC1F-1; `crates/policy/src/schema.rs`, `EffectAmount::Fact`, `ConsumptionFact`;
+  `crates/policy/src/validation.rs`, `validate_consumption_fact`). An object `amount` is read as
+  the form when it is exactly `{type: "fact", fact_key: <string>, fallback: <unsigned>}`, and is
+  kept as written otherwise (`EffectAmount::Malformed`) so that each refusal points at its member;
+  a compiled catalog holds none of the latter. Every refusal of SC1F-1 is at its pointer; a catalog
+  without the form serializes, hashes and decides as before.
+- **The one resolution** (SC1F-2; `crates/policy/src/evaluator/consumption.rs`, `resolve`). At
+  each evaluation, after the time-validity projection, each fact-driven entry of each task is read
+  once for each instance its scope covers, in exactly that instance's scope, by every fact's rule
+  (ruling 1): missing, past its own expiry or invalidated by a reset, the fallback with no warning;
+  at a confidence of 0, of another kind or an integer outside `1..=2^53−1` or above a constant
+  capacity, the fallback with `consumption_fact_unusable`; otherwise its value. The forward
+  projection resolves once at its start and holds the amounts (`forward.rs`, `held_amounts`).
+- **Every reader through it.** `resource_targets::consumption_milli` and `consumption` (the former
+  `declared_consumption_milli` and `declared_consumption`) take the amounts (`Amounts::InEffect`
+  of the evaluation and instance, or `Amounts::Declared`, the fallback): the net benefit's cost and
+  `ε` (`evaluator/benefit.rs`, `judge`); the pool's reading and the hard-line hold (`capped.rs`,
+  `lines`, `plan`); `pool_lines_unspendable` (`capped.rs`, `least_consumption`, in effect;
+  `validation.rs`, `unspendable_lines`, declared); the capped listing, order, plan, head's check,
+  block fit and fallbacks (`capped.rs`, `start_round`, `Round::plan`, `step`, `RoundView::decide`,
+  by `member_amounts`); who is a consumer and the consumers key (`capped.rs`, `consumers`,
+  `ConsumerKey::of`, declared); the reserve views and selection fields, the unshown consumption
+  and the reserve gate (`resource_targets.rs`, `reserve_views_with`, `unshown_consumption`,
+  `reserve_hold`); SS-6's allowance and `run_cap` (`spend_values`, `run_cap` reading the view's
+  consumption); the tie-break (`tie_break.rs`, `consumed`); the forward projection
+  (`forward.rs`, `apply_held_effects`).
+- **Episodes and rounds** (SC1F-3): the consumers key holds the declared consumption; a round
+  keeps its frozen order and `Member::consumed`, while its plan and checks read the amounts in
+  effect (`Member::in_effect`). `host.capped_episodes` keeps its rows.
+- **What a person sees** (SC1F-4): `consumption_fact_unusable` (warning / none; `task_id`,
+  `pool_id`, `fact_key`, `unknown_reason`, `consumption`) opens each decision of the task on the
+  instance, before `benefit_fixed_value`, and never settles one; `consumption` and
+  `consumption_source` (vocabulary `consumption_source`: `fact`, `fallback`) on `pool_line_held`,
+  `capped_spend`, `resource_reserve_insufficient` and `pool_lines_unspendable` when the reason's
+  task's consumption of the pool is fact-driven (`consumption::with_values`). New prefix
+  `consumption_` (policy).
+- **Freshness and wakes** (ruling 1): a usable record's expiry, as the projection leaves it, bounds
+  the freshness of each candidate of its instance whose task consumes or reserves its pool, and the
+  evaluation wakes a millisecond after it; the fallback bounds nothing.
+- **Composer and tools** (SC1F-5 to SC1F-7; `compose.rs`): the form passes through; `requires`
+  `consumption_fact` (`CONSUMPTION_FACT_SUBSYSTEM`), refused `schedule_invalid` at the first such
+  `amount`; `consumption_facts` (`ConsumptionFactRule`) per game of the rules not held, answered by
+  `standard-pack check` and `package bundle --schedule` (absent without `schedule.json`); the
+  coverage counts the form as a declared quantity. The always-on row `consumption_fact` of
+  `config.subsystems` (`apps/actingd/src/config/manifest.rs`).
+
+**Tests** (gate rows "#428 SCHED-C1f1" of `contracts/test-gates/policy.toml`):
+`gate_sched_c1f1::sched_c1f1_t1_the_form_is_refused_at_its_pointer_and_its_absence_changes_nothing`,
+`sched_c1f1_t2_one_evaluation_reads_a_usable_record_or_the_fallback`,
+`sched_c1f1_t3_every_reader_reads_the_amount_in_effect`,
+`sched_c1f1_t4_an_episode_keeps_its_consumers_key_and_its_round_its_order`,
+`sched_c1f1_t5_a_usable_records_expiry_bounds_freshness_and_wakes_the_evaluation`,
+`sched_c1f1_t6_the_composer_carries_the_form_and_requires_its_subsystem` (policy) and
+`sched_c1f1_t7_the_check_lists_the_consumptions_read_from_a_fact` (resource tooling). One existing
+test changes because a whole struct gained a member: `gate_cov1::cov1_t4_a_file_without_followers_answers_as_before`
+builds a `StandardPackCheckResponse`, which gained `consumption_facts`. No golden is re-recorded.
+
+**What changes live.** Nothing until a `schedule.json` writes the form beside `consumption_fact`
+in `requires`: a catalog without it keeps its hash and decides byte for byte as before;
+`config.subsystems` gains the always-on row `consumption_fact`. No configuration key, no ledger
+shape and no interface revision.
+
+**Rollback** as above (SCHED-C1f1 rollback).
+
 ### 1.304 Slice IDLE-2 (0.12.54): `idle.action` `auto` takes the idle action by the gap to the next task (Workflow #386; Alice's words of 11-11: 「原本我考虑的是在调度器上线后。根据任务间隔时间自动选择是关闭模拟器还是关闭应用还是回到主页面」; the coordinator's rulings on #386, comment 6787682270, not Alice's words; the read-only survey `rd-1111/idle2-step0-result.txt`; coordinator work order `rd-1111/brief-idle2.md`)
 
 [runtime-config.md](runtime-config.md) ("The `idle` section", the `auto` paragraph and its table)

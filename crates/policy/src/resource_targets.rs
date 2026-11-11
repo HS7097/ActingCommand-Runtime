@@ -27,15 +27,15 @@ use sha2::{Digest, Sha256};
 use crate::canonical::canonical_serialized;
 use crate::codes::PolicyCode;
 use crate::evaluator::{
-    activity_scope_specificity, pool_bound, project_pool_value, project_time_validity,
-    scope_matches_instance,
+    Amounts, ConsumptionAmounts, activity_scope_specificity, pool_bound, project_pool_value,
+    project_time_validity, scope_matches_instance, with_values,
 };
 use crate::source::{CatalogDocumentSource, SourceMap, parse_document};
 use crate::{
-    CatalogDiagnostic, CatalogDiagnosticCode, CompiledCatalog, DecisionReason, EvaluationFacts,
-    EvaluationTime, FactScalar, FactValue, InstanceSnapshot, MAX_ID_BYTES, ObservationRef,
-    ObservedFact, PolicyEvaluationError, PolicyEvaluationResult, PoolSpec, PoolValueSnapshot,
-    PoolValueSource, ResourceEffectSpec, SchedulingDocumentKind, ScopeSelector,
+    CatalogDiagnostic, CatalogDiagnosticCode, CompiledCatalog, ConsumptionFact, DecisionReason,
+    EvaluationFacts, EvaluationTime, FactScalar, FactValue, InstanceSnapshot, MAX_ID_BYTES,
+    ObservationRef, ObservedFact, PolicyEvaluationError, PolicyEvaluationResult, PoolSpec,
+    PoolValueSnapshot, PoolValueSource, ResourceEffectSpec, SchedulingDocumentKind, ScopeSelector,
     TaskRuntimeSnapshot, TaskSpec,
 };
 use actingcommand_selection_policy::UnknownReason;
@@ -3310,7 +3310,8 @@ pub(crate) struct ReserveView {
     pub(crate) pool_id: String,
     pub(crate) at_least: u64,
     /// The task's declared consumption of the pool: the sum of its `consumes` amounts for it, an
-    /// expected consumption rounded up (SS-2g, [`declared_consumption`]), 0 when it declares none.
+    /// expected consumption rounded up (SS-2g, [`consumption`]), 0 when it declares none;
+    /// SCHED-C1f1: an amount read from a fact as it is in effect on the candidate's instance.
     pub(crate) consumes: u64,
     /// The pool's projected amount less `consumes`; `None` while the projected amount is
     /// unknown.
@@ -3351,33 +3352,58 @@ impl ReserveView {
     }
 }
 
-/// A task's declared consumption of one pool per run in thousandths of a real unit, `C`: the sum
-/// over its `consumes` entries for the pool of `amount × 1000` and (SS-2g, register §1.232) a V2
+/// A task's consumption of one pool per run in thousandths of a real unit, `C`: the sum over its
+/// `consumes` entries for the pool of `amount × 1000` and (SS-2g, register §1.232) a V2
 /// `expected_amount_milli` as written. The net benefit reads it exactly. SS-2b: a pending `amount`
-/// declares no consumption here, as an entry without the pool would.
-pub(crate) fn declared_consumption_milli(
+/// declares no consumption here, as an entry without the pool would. SCHED-C1f1 (register §1.303
+/// SC1F-2): an `amount` read from a fact counts as `amounts` reads it, the amount in effect on an
+/// instance at the evaluation or, [`Amounts::Declared`], its fallback.
+pub(crate) fn consumption_milli(
     task: &TaskSpec,
     pool_id: &str,
+    amounts: Amounts<'_>,
+) -> PolicyEvaluationResult<u128> {
+    consumption_milli_by(task, pool_id, |index, form| {
+        amounts.of(&task.id, index, form)
+    })
+}
+
+/// [`consumption_milli`] with the amount of each fact-driven entry (by its index in `consumes`)
+/// given by `amount`: the one sum the resolution of the amounts in effect reads too.
+pub(crate) fn consumption_milli_by(
+    task: &TaskSpec,
+    pool_id: &str,
+    amount: impl Fn(usize, &ConsumptionFact) -> u64,
 ) -> PolicyEvaluationResult<u128> {
     task.consumes
         .iter()
-        .filter(|effect| effect.pool_id == pool_id && !effect.is_pending())
-        .try_fold(0_u128, |sum, effect| {
-            let amount = u128::from(effect.units().unwrap_or(0)).checked_mul(1_000)?;
-            sum.checked_add(amount)?
+        .enumerate()
+        .filter(|(_, effect)| effect.pool_id == pool_id && !effect.is_pending())
+        .try_fold(0_u128, |sum, (index, effect)| {
+            let units = match effect.fact_amount() {
+                Some(form) => amount(index, form),
+                None => effect.units().unwrap_or(0),
+            };
+            let units = u128::from(units).checked_mul(1_000)?;
+            sum.checked_add(units)?
                 .checked_add(u128::from(effect.expected_amount_milli.unwrap_or(0)))
         })
         .ok_or_else(|| consumption_overflow(task, pool_id))
 }
 
-/// A task's declared consumption of one pool in real units, `⌈C/1000⌉` of
-/// [`declared_consumption_milli`]: the sum of its `consumes` amounts for the pool, an expected
-/// consumption (SS-2g) rounded up, so a reserve is never read as safer than the expectation says.
-/// Every reader of an integer consumption reads this one: the reserve views and the reserve gate,
-/// the consumption a reading does not show yet, SS-2's tie key and the selection fields
-/// `task.consumes.<pool>`. A catalog without an expected consumption reads the sum of before.
-pub(crate) fn declared_consumption(task: &TaskSpec, pool_id: &str) -> PolicyEvaluationResult<u64> {
-    let milli = declared_consumption_milli(task, pool_id)?;
+/// A task's consumption of one pool in real units, `⌈C/1000⌉` of [`consumption_milli`]: the sum
+/// of its `consumes` amounts for the pool, an expected consumption (SS-2g) rounded up, so a
+/// reserve is never read as safer than the expectation says. Every reader of an integer
+/// consumption reads this one: the reserve views and the reserve gate, the consumption a reading
+/// does not show yet, SS-2's tie key and the selection fields `task.consumes.<pool>`. A catalog
+/// without an expected consumption reads the sum of before. SCHED-C1f1: with `amounts`, as
+/// [`consumption_milli`] reads them.
+pub(crate) fn consumption(
+    task: &TaskSpec,
+    pool_id: &str,
+    amounts: Amounts<'_>,
+) -> PolicyEvaluationResult<u64> {
+    let milli = consumption_milli(task, pool_id, amounts)?;
     u64::try_from(milli.div_ceil(1_000)).map_err(|_| consumption_overflow(task, pool_id))
 }
 
@@ -3388,11 +3414,24 @@ fn consumption_overflow(task: &TaskSpec, pool_id: &str) -> PolicyEvaluationError
     ))
 }
 
-/// The reserve views of a task, in the order it declares its reserves; `None` when it declares
-/// none. `projected` answers a pool's projected amount at the evaluation and the next instant it
-/// changes, or `None` while the amount is unknown.
+/// The reserve views of a task with a constant consumption, [`reserve_views_with`] at the
+/// declared amounts: what the gate tests of SS-6 read.
+#[cfg(test)]
 pub(crate) fn reserve_views(
     task: &TaskSpec,
+    projected: impl FnMut(&str) -> PolicyEvaluationResult<Option<(u64, Option<u64>)>>,
+) -> PolicyEvaluationResult<Option<Vec<ReserveView>>> {
+    reserve_views_with(task, Amounts::Declared, projected)
+}
+
+/// The reserve views of a task, in the order it declares its reserves; `None` when it declares
+/// none. `projected` answers a pool's projected amount at the evaluation and the next instant it
+/// changes, or `None` while the amount is unknown. SCHED-C1f1: `consumes` is the task's
+/// consumption in effect on the candidate's instance (`amounts`), which SS-6's spend values read
+/// from the view.
+pub(crate) fn reserve_views_with(
+    task: &TaskSpec,
+    amounts: Amounts<'_>,
     mut projected: impl FnMut(&str) -> PolicyEvaluationResult<Option<(u64, Option<u64>)>>,
 ) -> PolicyEvaluationResult<Option<Vec<ReserveView>>> {
     let Some(reserves) = &task.reserves else {
@@ -3400,7 +3439,7 @@ pub(crate) fn reserve_views(
     };
     let mut views = Vec::with_capacity(reserves.len());
     for reserve in reserves {
-        let consumes = declared_consumption(task, &reserve.pool_id)?;
+        let consumes = consumption(task, &reserve.pool_id, amounts)?;
         let pool = projected(&reserve.pool_id)?;
         let after = pool
             .map(|(amount, _)| {
@@ -3430,13 +3469,15 @@ pub(crate) type UnshownConsumption<'a> = BTreeMap<(&'a str, &'a str), Vec<(&'a s
 
 /// The consumption a pool's latest reading does not show yet, per (instance, pool) of `pools`:
 /// each task of the catalog that consumes the pool and whose latest dispatch on the instance is
-/// at or after the pool's observation (`observed_at`), with its declared consumption, in task id
-/// order. A pool without an observation has none.
+/// at or after the pool's observation (`observed_at`), with its consumption, in task id order. A
+/// pool without an observation has none. SCHED-C1f1: each task's consumption in effect on the
+/// instance (`amounts`).
 pub(crate) fn unshown_consumption<'a>(
     tasks: &'a [TaskSpec],
     states: &'a [TaskRuntimeSnapshot],
     pools: &BTreeSet<&'a str>,
     observed_at: impl Fn(&str) -> Option<u64>,
+    amounts: &ConsumptionAmounts,
 ) -> PolicyEvaluationResult<UnshownConsumption<'a>> {
     let mut unshown = UnshownConsumption::new();
     for state in states {
@@ -3450,7 +3491,7 @@ pub(crate) fn unshown_consumption<'a>(
             if observed_at(pool_id).is_none_or(|observed| dispatched < observed) {
                 continue;
             }
-            let consumes = declared_consumption(task, pool_id)?;
+            let consumes = consumption(task, pool_id, amounts.on(&state.instance_id))?;
             if consumes > 0 {
                 unshown
                     .entry((state.instance_id.as_str(), pool_id))
@@ -3524,9 +3565,13 @@ pub(crate) struct ReserveHold {
 ///    not together, the higher score runs this round.
 ///
 /// A candidate without reserves is never held; its consumption still counts against the others.
+/// SCHED-C1f1: every consumption is the one in effect on the candidates' instance (`amounts`), and
+/// a hold of a pool the candidate's consumption of which is read from a fact carries
+/// `consumption` and `consumption_source`.
 pub(crate) fn hold_reserves(
     candidates: &[ReserveCandidate<'_>],
     unshown: &UnshownConsumption<'_>,
+    amounts: &ConsumptionAmounts,
 ) -> PolicyEvaluationResult<Vec<Option<ReserveHold>>> {
     let mut order = (0..candidates.len()).collect::<Vec<_>>();
     order.sort_by(|left, right| {
@@ -3542,7 +3587,7 @@ pub(crate) fn hold_reserves(
         kept.retain(|kept| candidates[*kept].instance_id == candidate.instance_id);
         let hold = match candidate.views {
             None => None,
-            Some(views) => reserve_hold(candidate, views, &kept, candidates, unshown)?,
+            Some(views) => reserve_hold(candidate, views, &kept, candidates, unshown, amounts)?,
         };
         match hold {
             Some(hold) => holds[index] = Some(hold),
@@ -3560,14 +3605,25 @@ fn reserve_hold(
     kept: &[usize],
     candidates: &[ReserveCandidate<'_>],
     unshown: &UnshownConsumption<'_>,
+    amounts: &ConsumptionAmounts,
 ) -> PolicyEvaluationResult<Option<ReserveHold>> {
     for view in views {
+        // SCHED-C1f1 (SC1F-4): the hold names the candidate's consumption of the pool when it is
+        // read from a fact.
+        let held = |after: Option<i64>, first: Option<&str>| {
+            let mut hold = reserve_insufficient(view, after, first);
+            hold.reason = with_values(
+                hold.reason,
+                amounts.values(&candidate.task.id, candidate.instance_id, &view.pool_id),
+            );
+            hold
+        };
         let Some(after) = view.after else {
-            return Ok(Some(reserve_insufficient(view, None, None)));
+            return Ok(Some(held(None, None)));
         };
         let at_least = i128::from(view.at_least);
         if i128::from(after) < at_least {
-            return Ok(Some(reserve_insufficient(view, Some(after), None)));
+            return Ok(Some(held(Some(after), None)));
         }
         let mut left = i128::from(after);
         let mut first = None;
@@ -3583,19 +3639,16 @@ fn reserve_hold(
         if left < at_least
             && let Some(first) = first
         {
-            return Ok(Some(reserve_insufficient(
-                view,
-                Some(amount_after(view, left)?),
-                Some(first),
-            )));
+            return Ok(Some(held(Some(amount_after(view, left)?), Some(first))));
         }
         for &other in kept {
             let other = candidates[other].task;
-            let consumes = declared_consumption(other, &view.pool_id)?;
+            // SCHED-C1f1: a candidate kept before it, on the same instance, by its own amount in
+            // effect there.
+            let consumes = consumption(other, &view.pool_id, amounts.on(candidate.instance_id))?;
             let both = left - i128::from(consumes);
             if consumes > 0 && both < at_least {
-                return Ok(Some(reserve_insufficient(
-                    view,
+                return Ok(Some(held(
                     Some(amount_after(view, both)?),
                     Some(other.id.as_str()),
                 )));
@@ -3776,6 +3829,21 @@ fn declared_amount(effects: &[ResourceEffectSpec], pool_id: &str) -> Option<u64>
         .filter(|amount| *amount > 0)
 }
 
+/// SS-6: one run's amount of the reserved pool of `view` by `task`: the view's consumption, the
+/// sum of the task's integer per-run `amount`s on the pool, when every entry of the pool declares
+/// one; SCHED-C1f1 (register §1.303, "Who reads it" item 7): an `amount` read from a fact is an
+/// integer, and the view holds it as it is in effect on the candidate's instance. `None` when an
+/// entry declares no integer amount (an `expected_amount_milli` or a pending one) or the amount
+/// is 0.
+fn run_amount(task: &TaskSpec, view: &ReserveView) -> Option<u64> {
+    task.consumes
+        .iter()
+        .filter(|effect| effect.pool_id == view.pool_id)
+        .all(|effect| effect.units().is_some() || effect.fact_amount().is_some())
+        .then_some(view.consumes)
+        .filter(|amount| *amount > 0)
+}
+
 /// SS-6 `run_cap`: the spend term, the least over the pools of the task's `consumes` that it also
 /// reserves of ⌊allowance / the task's declared consumption of the pool per run⌋, at most the
 /// goal term ([`goal_runs`]) when there is one, and at most the designated effect cap's ceiling
@@ -3786,6 +3854,9 @@ fn declared_amount(effects: &[ResourceEffectSpec], pool_id: &str) -> Option<u64>
 /// integer per-run `amount` on every entry. SS-2g (register §1.232): so a task that reserves a
 /// pool it consumes by `expected_amount_milli` gets no `run_cap`, as a goal-driven production
 /// declared by expectation gives none; its `spend_allowance` is unchanged and stops the spend.
+/// SCHED-C1f1: one run's amount is the one in effect on the candidate's instance, which its
+/// reserve view holds ([`run_amount`]), an integer, so an amount read from a fact gives a
+/// `run_cap`.
 fn run_cap(
     task: &TaskSpec,
     views: Option<&[ReserveView]>,
@@ -3796,11 +3867,13 @@ fn run_cap(
     let mut seen = BTreeSet::new();
     let mut spend: Option<u64> = None;
     for effect in &task.consumes {
-        if !seen.insert(effect.pool_id.as_str()) || reserve_view(views, &effect.pool_id).is_none() {
+        if !seen.insert(effect.pool_id.as_str()) {
             continue;
         }
-        let runs =
-            allowance(effect.pool_id.as_str())? / declared_amount(&task.consumes, &effect.pool_id)?;
+        let Some(view) = reserve_view(views, &effect.pool_id) else {
+            continue;
+        };
+        let runs = allowance(effect.pool_id.as_str())? / run_amount(task, view)?;
         spend = Some(spend.map_or(runs, |spend| spend.min(runs)));
     }
     let spend = spend?;

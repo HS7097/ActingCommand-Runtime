@@ -64,11 +64,12 @@ use sha2::{Digest, Sha256};
 
 use crate::canonical::canonical_serialized;
 use crate::{
-    ActivityProfile, BENEFIT_FIXED_VALUE_SUBSYSTEM, CatalogDiagnosticCode, CatalogDocumentSource,
-    CatalogSources, CompiledCatalog, FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE,
-    FACT_UNKNOWN_PROBE_SUBSYSTEM, POOL_FACT_REFERENCE_SUBSYSTEM, POOL_LINES_SUBSYSTEM, PoolSpec,
-    PredicateSpec, RESET_EXCLUSIONS_SUBSYSTEM, SCHEDULING_SCHEMA_VERSION_V2,
-    SchedulingDocumentKind, TaskSpec, TaskTerminalState, TimelineEvent, compile_composed_catalog,
+    ActivityProfile, BENEFIT_FIXED_VALUE_SUBSYSTEM, CONSUMPTION_FACT_SUBSYSTEM,
+    CatalogDiagnosticCode, CatalogDocumentSource, CatalogSources, CompiledCatalog,
+    FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM,
+    POOL_FACT_REFERENCE_SUBSYSTEM, POOL_LINES_SUBSYSTEM, PoolSpec, PredicateSpec,
+    RESET_EXCLUSIONS_SUBSYSTEM, SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec,
+    TaskTerminalState, TimelineEvent, compile_composed_catalog,
 };
 
 /// The catalog id of every composition (model §3.2 step 4).
@@ -289,6 +290,19 @@ pub struct BenefitProvenance {
     pub valuation: ValueOrigins,
 }
 
+/// SCHED-C1f1 (register §1.303 SC1F-7; `contracts/standard-pack-schedule.md`, "A run's
+/// consumption read from a fact"): one `consumes` entry of a game's `schedule.json` whose
+/// `amount` is read from a fact, by the file's ids, with its key and fallback. It decides
+/// nothing: nothing checks the key against the rule's package (ruling 4), and a key no run writes
+/// leaves every decision on the fallback.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConsumptionFactRule {
+    pub rule_id: String,
+    pub pool_id: String,
+    pub fact_key: String,
+    pub fallback: u64,
+}
+
 /// SCHED-C1a: ids by who wrote their value, each list in file order.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ValueOrigins {
@@ -357,6 +371,9 @@ pub struct StandardPackComposition {
     /// #428 COV-1: each game whose `schedule.json` was read, by game id, with its chain followers
     /// in file order.
     followers: Vec<(String, Vec<BenefitFollower>)>,
+    /// SCHED-C1f1: each game whose `schedule.json` was read, by game id, with its consumptions
+    /// read from a fact in file order.
+    consumption_facts: Vec<(String, Vec<ConsumptionFactRule>)>,
     /// SS-2c: each game whose composed rules use exactly two priority values and whose rules
     /// include one in the other tier than its declaration says, by game id, with those rules' ids
     /// in file order.
@@ -471,6 +488,15 @@ impl StandardPackComposition {
     /// them.
     pub fn benefit_followers(&self) -> &[(String, Vec<BenefitFollower>)] {
         &self.followers
+    }
+
+    /// SCHED-C1f1 (register §1.303 SC1F-7; `contracts/standard-pack-schedule.md`, "A run's
+    /// consumption read from a fact", "Tools"): the consumptions read from a fact of each game
+    /// whose `schedule.json` was read, by game id, each game's in file order: one per `consumes`
+    /// entry with the form of a rule not held, empty when none. Only the resource tools report
+    /// them.
+    pub fn consumption_facts(&self) -> &[(String, Vec<ConsumptionFactRule>)] {
+        &self.consumption_facts
     }
 
     /// SS-2c (register §1.227): one `standard_pack_priority_tier_mismatch` per rule of a game
@@ -1130,6 +1156,7 @@ pub fn compose_standard_pack_rules(
     let mut benefit = Vec::new();
     let mut provenance = Vec::new();
     let mut followers = Vec::new();
+    let mut consumption_facts = Vec::new();
     let mut mismatches = Vec::new();
     let mut escalations = Vec::new();
     let mut redundant = Vec::new();
@@ -1143,6 +1170,11 @@ pub fn compose_standard_pack_rules(
         followers.push((game.game_id.to_owned(), riding));
         // SCHED-C1a: who wrote its fixed values and its valuation blocks.
         provenance.push((game.game_id.to_owned(), benefit_provenance(&game.schedule)));
+        // SCHED-C1f1: its consumptions read from a fact, with their keys and fallbacks.
+        consumption_facts.push((
+            game.game_id.to_owned(),
+            consumption_fact_rules(&game.schedule),
+        ));
         // SS-2: the game's composed rules, warned about past two tiers and never refused.
         let tiers = priority_values(&composed.tasks[before..]).len();
         if tiers > STANDARD_PACK_PRIORITY_TIERS {
@@ -1240,6 +1272,7 @@ pub fn compose_standard_pack_rules(
     benefit.sort_by(|left, right| left.0.cmp(&right.0));
     provenance.sort_by(|left, right| left.0.cmp(&right.0));
     followers.sort_by(|left, right| left.0.cmp(&right.0));
+    consumption_facts.sort_by(|left, right| left.0.cmp(&right.0));
     mismatches.sort_by(|left, right| left.0.cmp(&right.0));
     escalations.sort_by(|left, right| left.0.cmp(&right.0));
     redundant.sort_by(|left, right| left.0.cmp(&right.0));
@@ -1253,6 +1286,7 @@ pub fn compose_standard_pack_rules(
         benefit,
         provenance,
         followers,
+        consumption_facts,
         tier_mismatches: mismatches,
         escalations,
         redundant_triggers: redundant,
@@ -1383,6 +1417,21 @@ fn read_game(
             format!(
                 "a pool's {POOL_TRIGGER_LINE_MEMBER} needs requires to name {}",
                 crate::POOL_TRIGGER_LINE_SUBSYSTEM
+            ),
+        ));
+    }
+    // SCHED-C1f1 (register §1.303 SC1F-6): likewise a rule whose `consumes` entry writes its
+    // `amount` as a fact, the first such `amount` in file order.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == CONSUMPTION_FACT_SUBSYSTEM)
+        && let Some(pointer) = first_consumption_fact(&schedule)
+    {
+        return Err(refused(
+            schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
+            format!(
+                "a consumption read from a fact needs requires to name {CONSUMPTION_FACT_SUBSYSTEM}"
             ),
         ));
     }
@@ -1586,6 +1635,67 @@ fn first_fixed_value_member(schedule: &StandardPackSchedule) -> Option<String> {
             .position(|pool| pool.valuation_origin == ScheduleValueOrigin::Model)
             .map(|index| format!("/pools/{index}/{SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER}"))
     })
+}
+
+/// SCHED-C1f1 (register §1.303 SC1F-6): each `consumes` entry of a rule, in file order, whose
+/// `amount` is written as a fact (an object whose `type` is `fact`), with its rule and the
+/// entry's index. The compiler checks the rest.
+fn consumption_fact_entries(
+    schedule: &StandardPackSchedule,
+) -> impl Iterator<Item = (usize, &ScheduleRule, usize, &Map<String, Value>)> {
+    schedule
+        .rules
+        .iter()
+        .enumerate()
+        .flat_map(|(rule_index, rule)| {
+            rule.body
+                .get("consumes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .filter_map(move |(entry_index, entry)| {
+                    let amount = entry.get("amount");
+                    if !is_fact_reference(amount) {
+                        return None;
+                    }
+                    let members = amount?.as_object()?;
+                    Some((rule_index, rule, entry_index, members))
+                })
+        })
+}
+
+/// SCHED-C1f1 (register §1.303 SC1F-6): the pointer of the first `amount` written as a fact, in
+/// file order (rules, then their `consumes` entries), which requires
+/// [`CONSUMPTION_FACT_SUBSYSTEM`]. `None` when no rule writes one.
+fn first_consumption_fact(schedule: &StandardPackSchedule) -> Option<String> {
+    consumption_fact_entries(schedule)
+        .next()
+        .map(|(rule, _, entry, _)| format!("/rules/{rule}/consumes/{entry}/amount"))
+}
+
+/// SCHED-C1f1 (register §1.303 SC1F-7): the consumptions read from a fact of one game's file, in
+/// file order, of the rules not held (the composed ones, which the compiler checked): one
+/// [`ConsumptionFactRule`] per entry, by the file's ids.
+fn consumption_fact_rules(schedule: &StandardPackSchedule) -> Vec<ConsumptionFactRule> {
+    let [_, fact_key, fallback] = crate::schema::CONSUMPTION_FACT_MEMBERS;
+    consumption_fact_entries(schedule)
+        .filter(|(_, rule, _, _)| !schedule.holds(&rule.package_id))
+        .filter_map(|(_, rule, entry, members)| {
+            let pool_id = rule
+                .body
+                .get("consumes")?
+                .get(entry)?
+                .get("pool_id")?
+                .as_str()?;
+            Some(ConsumptionFactRule {
+                rule_id: rule.id.clone(),
+                pool_id: pool_id.to_owned(),
+                fact_key: members.get(fact_key)?.as_str()?.to_owned(),
+                fallback: members.get(fallback)?.as_u64()?,
+            })
+        })
+        .collect()
 }
 
 /// SCHED-C1c (register §1.299): the pointer of the first pool, in file order, that writes
