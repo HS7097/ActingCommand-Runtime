@@ -11426,7 +11426,7 @@ helpers write and read the Runtime's fact store (`record_runtime_fact_for_test`,
 `runtime_fact_for_test`). No existing test changed: main had no test that pinned "any refusal is
 fatal" at the start, nor a start whose settlement-fact write failed.
 
-### 1.302 Slice R-6, first slice (0.12.52): `StopInstanceRun` stops a client's direct run and the Runtime resets the device itself (Workflow #429 A.2 contract point 2 and the slice row R-6, board #429 6535257381; the desktop program's "close this task" button is disabled because the Runtime answered `not_implemented`, and a run the scheduler started could not be stopped from the Lab or MCP at all; the coordinator's choice of 11-11, option C, not Alice's words: this slice stops direct runs only and refuses a policy run with `run_origin` until `ledger` 8; coordinator work order `rd-1111/brief-r6.md`, read on main `c0edc8b2`)
+### 1.302 Slice R-6, first slice (0.12.53): `StopInstanceRun` stops a client's direct run and the Runtime resets the device itself (Workflow #429 A.2 contract point 2 and the slice row R-6, board #429 6535257381; the desktop program's "close this task" button is disabled because the Runtime answered `not_implemented`, and a run the scheduler started could not be stopped from the Lab or MCP at all; the coordinator's choice of 11-11, option C, not Alice's words: this slice stops direct runs only and refuses a policy run with `run_origin` until `ledger` 8; coordinator work order `rd-1111/brief-r6.md`, read on main `c0edc8b2`)
 
 [runtime-interface.md](runtime-interface.md) ("Workbench request kinds", the row `StopInstanceRun`)
 is the contract; [lab-operations.json](lab-operations.json) (the row `task stop`) and
@@ -11502,7 +11502,7 @@ slice may not raise; the coordinator chose to refuse it until then (option C).
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | R6-1 | `StopInstanceRun {instance_alias, request_id, wait_ms}` → `InstanceRunStopped {stopped: {request_id, settled, reset?}}` | behaviour of an R-0 kind (no shape change; `runtime-client` stays as it is) | R-6 | the host | direct runs only; memory of the latest stopped run per instance (a leaf lock), empty after a restart; `wait_ms` has no bound of its own: the run's deadline and its end grace bound the wait, and a shutdown answers `settled: false` |
-| R6-2 | `request_stop_instance_run_completed` | new success code (contract, `ReceiptCode`) | R-6 | the host | `since` 0.12.52; Workflow #378 A4's one success code per completing kind; a failed reset is its cause |
+| R6-2 | `request_stop_instance_run_completed` | new success code (contract, `ReceiptCode`) | R-6 | the host | `since` 0.12.53; Workflow #378 A4's one success code per completing kind; a failed reset is its cause |
 | R6-3 | outcome key `run_origin` (`vocab:run_origin`, tokens `policy`, `host`) on `scheduled_contained_task_not_client_cancellable` | new key and vocabulary in `runtime-outcomes` 1 (additive: readers keep values as a free map, and keys are append-only, as 0.12.39 added a value, a vocabulary and a key) | R-6 | the host | kept in codes mode (a vocabulary); the code's entry is pending, so it takes the optional key; `request_id` names the run |
 | R6-4 | the Lab's row `task stop` | operation table row opened (`reserved` → `planned`, `help`, requests add `Status`) | R-6 | — | `BUILT_SLICES` names R-6; served by `lab_ops::core_ops` (its `stop_target` public, which actinglab's test reads), not listed in `lab-ops`' registry `served::SERVED` (which holds LAB-1 and LAB-1b's rows only) |
 | R6-5 | the row `task run` | slice tag `R-5` → `R-18` (Alice's ruling 113 moved "run once" to the Lab) | R-6 | — | the row is otherwise unchanged (still `reserved`, `opens_with` R-5, entries lab and ui); no test pins the tag |
@@ -11528,7 +11528,7 @@ with a player hold, to stop it. A failed reset fences only that instance (`Statu
 which a self-check lifts. `ac_stop_run` and actinglab `run stop` (the client's own cancel and
 reset) are unchanged.
 
-**Rollback** (below 0.12.52): `StopInstanceRun` is refused `not_implemented` again and the row
+**Rollback** (below 0.12.53): `StopInstanceRun` is refused `not_implemented` again and the row
 `task stop` is not offered; a direct run is stopped with `run stop` and the client's reset, as
 before. Nothing persisted changes, so no state needs undoing.
 

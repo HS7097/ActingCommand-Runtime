@@ -18034,7 +18034,7 @@
       "values": {},
       "review": "pending",
       "status": "active",
-      "since": "0.12.52",
+      "since": "0.12.53",
       "description": "A completed receipt of a StopInstanceRun request: the stop, settled with how the Runtime's own reset went or still stopping after wait_ms; a failed reset's failure is this code's cause (caused_by). Workflow #378 A4: one success code per request kind (Workflow #429 R-0 adds the kind; R-6 first completes it).",
       "common_causes": "The request succeeded; the run was asked to stop, or had stopped.",
       "handling": "Read settled and reset; with reset failed, the cause names the fence of the instance, which a self-check lifts."
