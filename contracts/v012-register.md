@@ -11638,8 +11638,7 @@ with no episode.
 #### Slice SCHED-C1e (0.12.54): a pool's lines given for one instance
 
 Coordinator work order `rd-1111/brief-sched-c1e.md`; on SCHED-C1d's branch at `5dd645a2` (PR
-#1593, main `f4ff86ae` merged in), so its PR carries SCHED-C1d's commits until #1593 merges. The
-contract is [scheduling/README.md](scheduling/README.md) ("Pool lines" with "Lines for one
+#1593), with main `6e773d47` merged in once that PR had merged. The contract is [scheduling/README.md](scheduling/README.md) ("Pool lines" with "Lines for one
 instance", "Capped spending order" with "Episodes survive") and
 [runtime-config.md](runtime-config.md), row SC1-12 above and the coordinator's answers 3, 5 and 8
 (not Alice's words; Alice, 11-09 17:42: 「这个红线会随着时间由外部修改」). The text names no game,
