@@ -15,7 +15,8 @@
 //!   the cause).
 //! - **The listing** ([`listed`], [`listed_help`]): `help`, `list commands` and `capabilities`
 //!   leave out the commands of the authoring rows where they are not listed, and a group one word
-//!   shorter than such a command (`record`, `session record`). `serve --stdio` lists nothing.
+//!   shorter than such a command (`record`, `session record`); `help`'s `list` (Workflow #434
+//!   CLI-HELP) its entries of module `authoring`. `serve --stdio` lists nothing.
 //! - **A call** of an authoring row runs everywhere: nothing here stands before a command (fix 2
 //!   removed the refusal `lab_command_option_disabled` that LAB-5F had placed at the start of
 //!   `crate::execute`).
@@ -39,6 +40,11 @@ const COMMAND: &str = "command";
 const HELP_TABLES: [&str; 2] = ["command_options", "compatibility_notes"];
 /// The member of `help` that lists the commands.
 const HELP_COMMANDS: &str = "commands";
+/// Workflow #434 CLI-HELP: the member of `help` that lists every command with its sentence, and
+/// the member of its entries that names their module; an authoring row's is `authoring`.
+const HELP_LIST: &str = "list";
+const LIST_MODULE: &str = "module";
+const AUTHORING: &str = "authoring";
 
 /// What the place this process runs from says of the authoring module, read at each listing, so
 /// that a long-running process sees a configuration changed while it runs.
@@ -50,8 +56,9 @@ pub(crate) fn module() -> Result<AuthoringModule, Outcome> {
     locate::authoring_module()
 }
 
-/// The command words of the source `source` when it names one of actinglab's own commands.
-fn own_words(source: &str) -> Option<Vec<&str>> {
+/// The command words of the source `source` when it names one of actinglab's own commands
+/// (Workflow #434 CLI-HELP: also the help's, `crate::cli_help`, for the commands a row replaces).
+pub(crate) fn own_words(source: &str) -> Option<Vec<&str>> {
     let words = source.strip_prefix(OWN_SOURCE)?;
     let words = words.split_once(" (").map_or(words, |(words, _)| words);
     let words = words
@@ -153,7 +160,8 @@ pub(crate) fn listed(entries: Vec<Value>) -> CliOutcome<Vec<Value>> {
         .collect())
 }
 
-/// `help`'s answer as this place lists it: its commands, and its tables keyed by command.
+/// `help`'s answer as this place lists it: its commands, and its tables keyed by command; and
+/// (Workflow #434 CLI-HELP) its `list`, without the authoring rows where they are not listed.
 pub(crate) fn listed_help(mut help: Value) -> CliOutcome<Value> {
     let Some(own) = unlisted()? else {
         return Ok(help);
@@ -170,6 +178,9 @@ pub(crate) fn listed_help(mut help: Value) -> CliOutcome<Value> {
                 .and_then(Value::as_str)
                 .is_some_and(|command| left_out(command, &own))
         });
+    }
+    if let Some(entries) = help.get_mut(HELP_LIST).and_then(Value::as_array_mut) {
+        entries.retain(|entry| entry.get(LIST_MODULE).and_then(Value::as_str) != Some(AUTHORING));
     }
     Ok(help)
 }

@@ -455,7 +455,7 @@ LAB-5 the MCP tools, and LAB-1's test `lab_ops_table_complete` reads the file it
 | `module` | `core`, `debugging`, `authoring` or `rescue` |
 | `params` | each `{name, form, type, required, repeat?, default?, required_in?, note?}`; `form` is `positional`, `option` or `switch`; an option's CLI flag is `--` and the name with `_` as `-`, its MCP argument the name; positionals keep their order; `required_in` (LAB-5A) lists the front ends (the ids of the `modules` rows of role `front_end`) in which the parameter is required although the row does not require it (today only `mcp`, on `resume`'s `expect`, `pause`'s `reason` and, since LAB-5C, `remedy set`'s `rows`; nothing reads it yet, and the CLI and `serve` do not change); what the schema cannot state (a one-of rule, a value given as a positional or as a flag, a joint or exclusive group, flag sets that depend on a path or a kind) is in the parameter's `note`, and the code enforces it |
 | `params_more` | when present: the source command whose further flags carry over unchanged under the same naming rule. Since LAB-5A only a row no program offers yet has it (a rescue row whose source command is not built); every offered row declares all of its parameters (section 9.2) |
-| `help` | optional (LAB-5E): what the operation does, in one sentence of the row's own, shared by the command line's help and the MCP tool's description; written on its own line directly before the row's `output`. English, ASCII, 1 to 160 bytes, one line; one sentence or two short ones, beginning with a verb in the third person ("Reads…", "Pauses…", "Lists…"); it says what the operation does and on what and, where a caller must know it to use the row at all, what comes back or what to call next. No rule every row shares (budgets, handles, exports, cursors, what `irreversible` means: those are the MCP server's instructions), no MCP tool name (`ac_…`; a row is named by its words), no game word, no path of a machine, nothing the row's parameters already say. Every offered row has one (section 9.2); a row no program offers (reserved, or planned and not served) has none yet. No command prints it yet |
+| `help` | optional (LAB-5E): what the operation does, in one sentence of the row's own, shared by the command line's help and the MCP tool's description; written on its own line directly before the row's `output`. English, ASCII, 1 to 160 bytes, one line; one sentence or two short ones, beginning with a verb in the third person ("Reads…", "Pauses…", "Lists…"); it says what the operation does and on what and, where a caller must know it to use the row at all, what comes back or what to call next. No rule every row shares (budgets, handles, exports, cursors, what `irreversible` means: those are the MCP server's instructions), no MCP tool name (`ac_…`; a row is named by its words), no game word, no path of a machine, nothing the row's parameters already say. Every offered row has one (section 9.2); a row no program offers (reserved, or planned and not served) has none yet. `actinglab help` prints it (Workflow #434 CLI-HELP, section 9.3, "Help"), read from the table the build embeds, never copied |
 | `output` | what the operation answers; the CLI's `--json` line, the MCP result and the serve answer are the same JSON |
 | `writes` | whether it changes anything; MCP's `readOnlyHint` is its negation |
 | `irreversible` | section 5; MCP's `destructiveHint` is `irreversible` or `disruptive` |
@@ -712,6 +712,44 @@ sentence fails that test.
   its connection, `output_budget_exceeded` for an answer that does not fit even so, and the Lab
   tools' overflow rule stay MCP's. What MCP answers does not change: runtime-interface.md, "MCP
   (counter `mcp`)", still says what it is.
+- **Help** (Workflow #434 CLI-HELP, 0.12.55; register §1.313; the coordinator's rulings of
+  2026-11-11, not Alice's words).
+  - `actinglab help`, and the bare `actinglab`, print without `--json` a text a person reads: the
+    usage lines; the global options, one phrase each (the retired `--require-session` is not
+    listed); then every command this build offers, grouped: the offered rows by module (core,
+    debugging, authoring, rescue; a row a platform does not offer is not listed, and the authoring
+    rows only where section 8.3 lists them), then actinglab's own commands that no row serves or
+    replaces. Each entry: its words, its parameters in short form and its one sentence. Plain
+    ASCII, at most 100 columns, no colour, no paging.
+  - A row's sentence is its `help`, read from the table the build embeds. An own command without
+    a row has one sentence in one static table of actinglab's code (`cli_help::OWN_WITHOUT_ROW`),
+    and none of the table's three facts.
+  - `actinglab help <command words>` and `<command words> --help` print one command: its usage
+    (a row's name first, then the words of the own command that serves it under other words, and
+    the own commands it replaces, each with parameters of its own); its sentence; its module and
+    whether it writes, is irreversible and needs the Runtime; each parameter with its form, type,
+    whether it is required or repeats, its default and its note. The instance is written as the
+    first rule of this section says: `<instance>` (`[<instance>]` when optional) on a row of the
+    CLI module or of an own command under other words, `--instance <instance>` on the 20 rows
+    actinglab's own command serves under the row's name and on the two that take it as an option.
+    Words beyond a command's own (its positionals) are left out; words that begin no command are
+    refused as `help`'s unknown word (`validation_failed`, `argument_problem` `unknown`).
+  - The words of a group (`lab`, `package`, `session`, `run`, `record`, `emu` and the like) after
+    `help` or before `--help`, and one of actinglab's own groups followed by `help` (`lab help`),
+    list the group's commands the same way, each by its words under the group and with the row
+    that serves or replaces it named.
+  - `--help` anywhere on a line asks for the help of the line's command words (actinglab's global
+    options and their values left out, up to the first other flag) and runs nothing: the line is
+    `help`'s before anything else reads it, and nothing is sent. A row's words keep a `help` after
+    them as the row's word: `status help` names the instance `help`, as before; its help is
+    `status --help` or `help status`.
+  - `--json` prints `help`'s line: every member it answered before, unchanged, and `list`, the
+    same list as data, each command's `name`, `module` (`own` for an own command without a row),
+    `help`, `usage`, `params`, `writes`, `irreversible`, `runtime` (`null` for an own command
+    without a row), `spellings` and `replaces`. `help <command words> --json` answers `command`,
+    one such entry, or `group` and `members`. A line with `--via` keeps its envelope.
+  - The module's refusal of a row's words names `actinglab help` in its developer text, where it
+    named this table's file.
 
 ### 9.4 Changing the table
 

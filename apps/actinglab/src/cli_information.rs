@@ -12,11 +12,12 @@ use actingcommand_device::resolve_adb_path;
 use serde_json::{Value, json};
 
 /// Workflow #434 LAB-5B5 (register §1.287, "Slice LAB-5B5"): the flags and words `help` reads:
-/// none; its command line is parsed by it (`FlagArgs::parse_reading`), which refuses any.
+/// no flag; its command line is parsed by it (`FlagArgs::parse_reading`), which refuses one.
+/// Workflow #434 CLI-HELP (register §1.313): its words are the command words it describes.
 pub(crate) const HELP_READS: FlagReads = FlagReads {
     row: "help",
     parts: &[],
-    positionals: &[],
+    positionals: &["<command>..."],
 };
 
 /// Workflow #434 LAB-5B5: `version`'s: none. A line `--version` makes a version line keeps its
@@ -62,10 +63,19 @@ pub(crate) const USER_CONFIG_SET_READS: FlagReads = FlagReads {
     positionals: &["<key>", "<value>"],
 };
 
-/// Workflow #434 LAB-5B5: `help`, its command line parsed by [`HELP_READS`] first.
+/// Workflow #434 LAB-5B5: `help`, its command line parsed by [`HELP_READS`] first. Workflow #434
+/// CLI-HELP (register §1.313): without words, every member it answered before and `list`, every
+/// command this build offers with its sentence (`cli_help::list`); with the words of a command or
+/// a group, that command's detail or the group's commands (`cli_help::topic`).
 pub(super) fn run_help(args: &[String]) -> CliOutcome<Value> {
-    FlagArgs::parse_reading(args, &HELP_READS)?;
-    crate::cli_module::authoring::listed_help(help_data())
+    let words = FlagArgs::parse_reading(args, &HELP_READS)?.positionals;
+    let mut help = help_data();
+    if !words.is_empty() {
+        return crate::cli_help::topic(&words, &help["command_options"]);
+    }
+    let list = crate::cli_help::list(&help["command_options"])?;
+    help["list"] = list;
+    crate::cli_module::authoring::listed_help(help)
 }
 
 /// Workflow #434 LAB-5B5: `version`, its command line parsed by [`VERSION_READS`] first, but on a

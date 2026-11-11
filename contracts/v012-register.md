@@ -13584,6 +13584,146 @@ tests, among them `table_list_max_missing_key_is_unknown` and
 `table_list_max_unknown_follows_the_declared_action`, pin documents without the member and do not
 change. No golden changes.
 
+### 1.313 Slice CLI-HELP (0.12.55): `actinglab help` prints a text a person reads, and `--help` asks for it on any line (Workflow #434; the customer-view audit of 2026-11-11 found the command line's help of no use to a person; the coordinator's eight rulings of the same day, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §1, on main `a62434a4`; coordinator work order `rd-1111/brief-cli-help.md`)
+
+The coordinator assigned this number while four slices were open at once (§1.310 to §1.313).
+[lab-two-entries.md](lab-two-entries.md) §9.3, "Help", is the contract, and §9.1's `help` member
+says that the command prints it. No persisted shape, wire shape, configuration key, outcome code or
+interface revision is new or changed; [lab-operations.json](lab-operations.json) is unchanged.
+
+**Why.** `actinglab help` answered JSON, and without `--json` a person saw counts (`[18 items]`,
+`{27 members}`), also on the bare `actinglab`; none of the Lab's rows was in it, and no command
+printed the one sentence per row LAB-5E gave the operation table. `actinglab --help`, `lab help`
+and `status --help` were refused as unknown, the last pointing a person at a contract file.
+
+**What** (`apps/actinglab/src/cli_help.rs`; `cli_module::route`, `cli_information::run_help`,
+`main`, `cli_module::authoring::listed_help`).
+
+- **The lines that ask** (rulings 2 and 6; `cli_help::asked`, read first in `cli_module::route`):
+  `--help` anywhere on a line, for the line's command words (actinglab's global options and their
+  values left out, up to the first other flag; a leading `help` left out when words follow it), and
+  one of actinglab's own groups of one word followed by `help` (`crate::OWN_GROUPS`, `run`,
+  `record`: `lab help`). Either line becomes actinglab's own `help` with those words (and the line's
+  `--json` and `--via <counter>`) before anything else reads it: nothing runs and nothing is sent. A
+  row's words keep a `help` after them as the row's word (`status help` names the instance `help`;
+  `user-config help` reads the key `help`), as before.
+- **`help`'s words** (`cli_information::HELP_READS`): its read list's positionals are
+  `<command>...`, the words it describes; a flag on its line is still refused (LAB-5B5).
+- **The list** (ruling 1; `cli_help::list`, the member `list`; `cli_help::listing`, the text):
+  every row this build offers (`words::offered`: the rescue rows on Windows only), by module (core,
+  debugging, authoring, rescue), each module's rows in the table's order, then actinglab's own
+  commands that no row serves or replaces (`cli_help::OWN_WITHOUT_ROW`). Each entry: the row's name
+  (what `serve` and MCP call it, ruling 5), its parameters in short form (its positionals in order,
+  `[<x>]` when not required, its required options, `[options]` for the rest), its sentence. Before
+  it, the usage lines and the global options with one phrase each, the retired `--require-session`
+  left out. The authoring rows are left out where §8.3 does not list them
+  (`authoring::listed_help` takes them out of `list` as it takes their commands out of `commands`).
+- **The detail** (ruling 2; `cli_help::topic`, the member `command`; `cli_help::detail`): `help
+  <command words>` and `<command words> --help` name an entry by the row's name, by the words of
+  the own command that serves it under other words (`engine::COMMANDS`: `session app launch` for
+  `app launch`, `lab watch` for `watch`) or by those of an own command it replaces (its `source`
+  entries `actinglab <words>` that are commands of actinglab's own dispatch: `capture` and `runtime
+  observe` for `frame`, `lab status` for `status`, `run list` for `runs`). It prints the usage, the
+  other spellings after the row's name ("Also: …"), the commands it replaces ("Replaces: …", each
+  with parameters of its own), the sentence, `Module: …. Writes: …. Irreversible: …. Runtime: …`
+  from the table, and each parameter with its form, type, whether it is required or repeats, its
+  default and its note. The instance as register §1.307 says: `<instance>` (`[<instance>]` when
+  optional) with the note "on the command line also --instance <x>, in place of the positional",
+  `--instance <instance>` on the 20 rows actinglab's own command serves under the row's name (whose
+  note says "only") and on `remedy set` and `wake-test`, which take it as an option.
+- **A group** (ruling 2; the members `group` and `members`; `cli_help::group_lines`): words that
+  begin the names of entries and name none (`lab`, `session`, `run`, `record`, `emu`, `lab
+  signatures`) list those entries, each by its words under the group, a row of another name said so
+  ("(row watch)", "(replaced by row status)").
+- **Words beyond a command's own** (a positional, or words that begin a known command) are left
+  out, the longest beginning of the words that names an entry or a group answering; words that begin
+  none are refused as `help`'s unknown word, as a read list refuses one (`validation_failed`,
+  `help: unknown <word>`, `argument_problem` `unknown`; no new code, ruling 7).
+- **For people** (`cli_help::people`, which `main` prints for `help` without `--json`,
+  `cli_help::for_people`): the text is built from the JSON line the same answer prints with
+  `--json`, so the two never differ. Plain ASCII, at most 100 columns (`cli_help::WIDTH`), no
+  colour, no paging; the same on every platform but for the rows a platform does not offer.
+- **`--json`** (ruling 3): every member `help` answered (`usage`, `global_options`,
+  `command_options`, `compatibility_notes`, `commands`) unchanged, `--require-session` in
+  `global_options` included, and the new `list`: per entry `name`, `module` (`core`, `debugging`,
+  `authoring`, `rescue`, or `own` for an own command without a row), `help`, `usage`, `params` (each
+  `name`, `form`, `type`, `required`, `repeat`, `default`, `note`, `written`), `writes`,
+  `irreversible`, `runtime` (the table's; `null` for an own command without a row), `spellings`
+  (the row's name first), `replaces`, and for an own command `options`, its lines of
+  `command_options`. A line with `--via` keeps its envelope, with the same data.
+- **The sentences** (ruling 4): a row's is its `help`, read from the table this build embeds; the 34
+  own commands without a row (the inventory's commands that no offered row names, serves or
+  replaces) and `serve`, the CLI module's resident mode, have one each in `OWN_WITHOUT_ROW`, written
+  from what each command's code does; the internal self-test and the commands that refuse every
+  line or only echo say so ("Internal self-test: …", "Retired: …", "Reserved: …", "Refuses every
+  line …").
+- **The refusal that named a contract file** (ruling 6): the developer text of a row's refused words
+  (`cli_module::USAGE`) says "actinglab help lists the operations", and the rescue module's
+  (`lab-rescue`'s `rescue::USAGE`) "actinglab help lists the rows of module rescue", where both
+  named `contracts/lab-operations.json`. No refusal's code changes.
+
+**What a person sees.** Before, `actinglab help` printed `lab_operation_completed` and five rows of
+counts (`usage                actinglab [global-options] <command> [args]`, `global_options
+[18 items]`, `command_options      {27 members}`, …). After, `actinglab help` and the bare
+`actinglab` begin `usage: actinglab [<global options>] <command words> [<parameters>]`, list `--json
+print the one JSON line of the answer instead of this text` among the global options, then under
+`Core module:` lines such as `status [<instance>] [options]   Reads an overview of the Runtime and
+every instance, one block per`, under `Debugging module:` `tap --instance <instance> <x> <y>` with
+its sentence below it from column 34, and last `serve --stdio [--front mcp]     For programs:
+answers each JSON line {op, params} on stdin with`. `actinglab tap --help` (or `actinglab help
+tap`) prints `actinglab tap --instance <instance> <x> <y>`, `Taps one point of an instance's screen
+through the Runtime.`, `Module: debugging. Writes: yes. Irreversible: no. Runtime: required,
+refused while it is stopped.` and a line per parameter (`<x>` `integer, required`). `actinglab lab
+--help` lists `lab watch [options]   (row watch) Waits for the next batch of Runtime ledger events
+…`. `actinglab status --help` prints the detail of `status`; `actinglab status help` still asks
+`status` about the instance `help`.
+
+**Settled where the rulings left it open** (the implementer's; for the coordinator to confirm).
+(a) One entry of the list is its words and short parameters from column 2 and its sentence from
+column 34, wrapped at 100 columns, so an entry takes two or three lines: a sentence of up to 160
+bytes fits no single line of 100 columns. (b) The short form gives the positionals and the required
+options and `[options]` for the rest; the detail gives every parameter. (c) An own command a row
+replaces is no entry of its own: `help <its words>` describes the row ("Replaces: …"), which is how
+the survey's census gives 34 own commands without a row. (d) An own command without a row has no
+table facts: `writes`, `irreversible` and `runtime` are `null` in `list`, and its detail says they
+are not recorded; its parameters are its usage line in `OWN_WITHOUT_ROW` and, where `help` has them,
+its `command_options` lines, since the map from command to read list stays in the test build
+(ruling 8). (e) `serve` is in the static table, the 35th entry: the CLI module's command, not one of
+the inventory. (f) `<group> help` is read only for actinglab's own groups of one word; `help
+<words>` and `<words> --help` take any group's words. (g) A `--via` line that asks for help keeps
+`--via` and `--json`, so MCP's actinglab child would get the envelope of `help`'s data. (h) The
+rescue module's usage text changed with the module's, for the same reason.
+
+**Interface.** None moves: no table schema change, no new outcome code, no request, ledger or
+configuration shape; no dispatch arm (the inventory, the README's count and LAB-5B5's census are
+unchanged). `ledger` 7, `runtime-client` 6, `actingd-config` 28, `package` 8 and
+`runtime-outcomes` 1 unchanged.
+
+**Rollback.** Nothing is persisted: a build before this one prints `help` as JSON or counts and
+refuses `--help` again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CLIHELP-1 | `actinglab help` and the bare `actinglab` without `--json` | the text for people | CLI-HELP | actinglab | `since` 0.12.55; plain ASCII, at most 100 columns |
+| CLIHELP-2 | `help <command words>`, `<command words> --help`, `<own group> help` | command lines answered, refused before | CLI-HELP | actinglab | `since` 0.12.55; `--help` runs nothing |
+| CLIHELP-3 | `help`'s member `list`; `help <words>`'s `command`, or `group` and `members` | `help`'s answer members | CLI-HELP | actinglab | `since` 0.12.55; every member before unchanged |
+| CLIHELP-4 | `cli_help::OWN_WITHOUT_ROW`, one sentence per own command without a row | product table | CLI-HELP | — | 35 entries: the inventory's 34 and `serve` |
+
+Tests (apps gate row "#434 CLI-HELP"; the table this build embeds, the command inventory, neutral
+aliases and a scripted Runtime that answers nothing):
+`gate_434_cli_help::cli_help_the_list_has_every_offered_row_and_own_command_once`,
+`cli_help_the_detail_of_each_kind_by_help_and_by_the_flag`,
+`cli_help_groups_the_bare_line_and_a_flagged_line_that_runs_nothing`,
+`cli_help_json_keeps_todays_members_and_adds_the_list` and
+`cli_help_the_refusals_that_are_gone_and_status_help_unchanged`. No existing test changes: the tests
+that pin today's members (`help_lists_capture_backend_short_alias`,
+`help_lists_resource_declaration_options`, `help_lists_required_external_authoring_metadata` and
+`help_documents_recognize_target_shared_output_shape` in `tests/mod.rs`, which read `help_data`;
+`gate_434_lab5f`'s listing of `help`'s `commands` and `command_options`; `gate_434_lab2b`'s `help`
+without a member `outcome`; `gate_rv1`'s `command_options` of `resource verify`) pass unchanged, and
+LAB-5B5's `help --frobnicate x` is still refused naming the flag. None pinned a refusal this slice
+removes or the people's rendering of `help`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

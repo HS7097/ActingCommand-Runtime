@@ -135,6 +135,9 @@ mod gate_434_cli_in;
 // Workflow #429 R-8: the core rows `pack-schedule` and `pack-schedule set` reach their requests.
 #[path = "gate_429_r8.rs"]
 mod gate_429_r8;
+// Workflow #434 CLI-HELP: `help` prints a text a person reads; `--help` on any line asks for it.
+#[path = "gate_434_cli_help.rs"]
+mod gate_434_cli_help;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
