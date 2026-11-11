@@ -138,6 +138,10 @@ mod gate_429_r8;
 // Workflow #434 CLI-HELP: `help` prints a text a person reads; `--help` on any line asks for it.
 #[path = "gate_434_cli_help.rs"]
 mod gate_434_cli_help;
+// Workflow #434 CLI-COMP: Tab completion, a script per shell and the callback that prints the
+// candidates.
+#[path = "gate_434_cli_comp.rs"]
+mod gate_434_cli_comp;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
