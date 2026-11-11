@@ -800,6 +800,7 @@ fn served(
                 .map_err(|error| client_failed(&error))?;
             reported(&queued, ActingctlCode::AgentWakeTestQueued)
         }
+        "task stop" => task_stop(params, client)?,
         "run start" => run_start(params, client)?,
         "run stop" => run_stop(params, client, completed_code)?,
         "reset" => {
@@ -831,6 +832,34 @@ fn served(
             ));
         }
     })
+}
+
+/// Workflow #429 R-6: `task stop <inst> <request> [--wait]`, `StopInstanceRun`: the Runtime stops
+/// the run and resets the device itself, with the run's own lease. The answer is the stop and its
+/// receipt's outcome, which carries a failed reset's failure as its cause; a refusal (a run no
+/// client may stop, with `run_origin`) is the refused receipt beside its outcome.
+fn task_stop(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit, Exit> {
+    let alias = alias_of(client, required_text(params, "instance")?)?;
+    let (request_id, wait) = stop_target(params)?;
+    let stopped = match client.stop_instance_run(&alias, request_id, wait) {
+        Ok(stopped) => stopped,
+        Err(error) => return receipt_refused(error),
+    };
+    let members = serde_json::to_value(stopped.stopped)
+        .map(|value| cli_line::members(value, RESULT_MEMBER))
+        .map_err(|error| output_failed(&error))?;
+    Ok(cli_line::success(members, &stopped.outcome))
+}
+
+/// Workflow #429 R-6: the run `task stop` names (`request`) and how long the stop waits for its
+/// end (`wait`; absent: it answers at once, `wait_ms` 0), the same from the command line's words
+/// and from a `serve --stdio` line.
+pub fn stop_target(params: &Map<String, Value>) -> Result<(RequestId, Duration), Exit> {
+    let id = required_text(params, "request")?;
+    let request_id = serde_json::from_value::<RequestId>(Value::String(id.to_owned()))
+        .map_err(|_| usage("<request>", ArgumentProblem::NotRecognised))?;
+    let wait = duration(params, "wait")?.unwrap_or(Duration::ZERO);
+    Ok((request_id, wait))
 }
 
 /// `run start <inst> <package> [--recovery] [--deadline] [--wait]` (actingctl's `task-run`): the
@@ -1375,13 +1404,15 @@ fn scalar(value: &Value) -> String {
 // ---- moved with this module from actinglab's words (`apps/actinglab/src/cli_module/words.rs`),
 // which reads them from here
 
-/// The member that holds the further words of a row of actinglab's `LENIENT_ON_COMMAND_LINE` on
-/// the command line.
+/// The member that held the further words of the rows whose command line handed them on to a
+/// command that ignored them (actinglab's `LENIENT_ON_COMMAND_LINE`, gone with Workflow #434
+/// LAB-5B4); no row declares it and no command line writes it now, and a call that carries it is
+/// refused by name (`serve --stdio` refuses it as undeclared).
 pub const MORE_WORDS: &str = "words";
 
-/// The members of `params` the row does not declare: on the command line, the global options, a
-/// lenient row's further flags and the undeclared flags of actinglab's `KEPT_FLAGS` handed on
-/// (never [`MORE_WORDS`]), in the map's order.
+/// The members of `params` the row does not declare: on the command line, the global options and
+/// the undeclared flags of actinglab's `KEPT_FLAGS` handed on (never [`MORE_WORDS`]), in the map's
+/// order.
 pub fn further_flags<'a>(
     operation: &Operation,
     params: &'a Map<String, Value>,

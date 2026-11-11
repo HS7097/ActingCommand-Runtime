@@ -18,8 +18,13 @@
 //!   tier) and whose run leaves `r − c < H` is held (`would_cross_hard_line`). A pool without
 //!   lines whose reading is unknown has no hard line to keep, as before; one with lines is held
 //!   (`capped_cap_unknown`).
-//! - **The capped state.** At `r ≥ cap` (at the start too) the pool enters a capped episode on
-//!   the instance; it ends once `r ≤ S` and `r < cap`. A round lists the judged consumers of the
+//! - **The trigger line** (SCHED-C1c, register §1.299): a pool that writes both lines may write
+//!   `trigger_line` `T` in the same two forms, read with them; without it `T` is the capacity. The
+//!   lines read must then hold `0 ≤ H < S ≤ T ≤ cap` (`lines_invalid`, with `trigger_line`).
+//!   Below `T`, while no episode is under way, the pool is below the cap for the rules above.
+//! - **The capped state.** At `r ≥ T` (at the start too; SCHED-C1c: `T` where SS-2h read the cap)
+//!   the pool enters a capped episode on the instance; it ends once `r ≤ S` and `r < T`
+//!   ([`Lines::at_trigger`], [`Lines::spent`]). A round lists the judged consumers of the
 //!   pool that are candidates now, whose value without the pool's cost `V` is above its rounding
 //!   bound (never by their cost), and, from the second round on, only those not marked
 //!   `benefit_limited`. It freezes them by `V ÷ c`, the higher first, then by task id, and plans
@@ -45,6 +50,11 @@
 //!   head's place (the head's tier and `B ÷ E`, `B = V − W·(c − a)`, `a = min(c, max(0, r − S))`);
 //!   the first of them that every later gate admits is dispatched (`capped_spend`), the others wait
 //!   (`capped_not_head`; a fallback with the hold the round gives it). Every other gate stays.
+//! - **Lines that cannot spend** (SCHED-C1c; `contracts/scheduling/README.md`, "A pool its lines
+//!   cannot spend"): when every judged consumer of the pool on the instance, candidate or not,
+//!   consumes more in one run than `cap − H`, no run can start from the cap above the hard line. At
+//!   `r ≥ T` no episode then begins (one under way waits) and the pool's judged candidates are
+//!   held with the warning `pool_lines_unspendable`.
 //! - **Memory only** ([`CappedMemory`]): the episodes, their round numbers, frozen orders and
 //!   passed members, as SS-4's `NoProgressMemory` keeps its guards. A start, or a new catalog
 //!   generation, begins with none. Which tasks a round dispatched is read from the task snapshots
@@ -281,17 +291,31 @@ struct Lines {
     reading: i128,
     stop: u64,
     hard: u64,
+    /// SCHED-C1c: the trigger line the pool writes, as read; `None` without one.
+    trigger_line: Option<u64>,
 }
 
 impl Lines {
-    /// Whether the pool is at or above its cap: an episode begins.
-    fn at_cap(&self) -> bool {
-        self.reading >= i128::from(self.capacity)
+    /// SCHED-C1c (register §1.299): the trigger line `T`, the capacity without one. The episode's
+    /// rule reads it where SS-2h read the cap: it begins at `r ≥ T` and is spent at `r ≤ S`,
+    /// `r < T`.
+    fn trigger(&self) -> u64 {
+        self.trigger_line.unwrap_or(self.capacity)
     }
 
-    /// Whether `reading` is spent down: at or below the stop line and below the cap.
+    /// Whether the pool is at or above its trigger line: an episode begins.
+    fn at_trigger(&self) -> bool {
+        self.reading >= i128::from(self.trigger())
+    }
+
+    /// Whether `reading` is spent down: at or below the stop line and below the trigger line.
     fn spent(&self, reading: i128) -> bool {
-        reading <= i128::from(self.stop) && reading < i128::from(self.capacity)
+        reading <= i128::from(self.stop) && reading < i128::from(self.trigger())
+    }
+
+    /// SCHED-C1c: the room a run has from the cap above the hard line, `cap − H`.
+    fn room(&self) -> u64 {
+        self.capacity.saturating_sub(self.hard)
     }
 }
 
@@ -304,11 +328,13 @@ enum LinesProblem {
         fact_key: Option<String>,
         unknown_reason: Option<UnknownReason>,
     },
-    /// The lines read break `0 ≤ H < S ≤ cap`.
+    /// The lines read break `0 ≤ H < S ≤ cap` (SCHED-C1c: `0 ≤ H < S ≤ T ≤ cap`, `trigger` the
+    /// trigger line the pool writes, as read).
     Invalid {
         capacity: u64,
         stop: i128,
         hard: i128,
+        trigger: Option<i128>,
     },
 }
 
@@ -379,7 +405,10 @@ pub(super) fn plan(
                             capacity,
                             stop,
                             hard,
-                        } => Some(invalid_lines_reason(&pool.id, capacity, stop, hard)),
+                            trigger,
+                        } => Some(invalid_lines_reason(
+                            &pool.id, capacity, stop, hard, trigger,
+                        )),
                     };
                     if let Some(hold) = hold {
                         for (index, _, _) in candidates.values() {
@@ -389,6 +418,19 @@ pub(super) fn plan(
                     continue;
                 }
             };
+            // SCHED-C1c ("A pool its lines cannot spend"): at or above the trigger line, lines
+            // under which no consumer's run fits from the cap begin no episode (one under way
+            // waits), and the pool's judged candidates are held with the warning.
+            if lines.at_trigger()
+                && let Some(least) = least_consumption(&consumers, &pool.id)?
+                && least > lines.room()
+            {
+                let reason = unspendable_reason(&pool.id, lines, least);
+                for (index, _, _) in candidates.values() {
+                    decided[*index].held(reason.clone());
+                }
+                continue;
+            }
             let in_round = step(
                 context,
                 memory,
@@ -401,8 +443,8 @@ pub(super) fn plan(
                 instance,
             )?;
             let Some(view) = in_round else {
-                // Below the cap, or the episode ended: the hard line holds a run that would cross
-                // it.
+                // Below the cap (SCHED-C1c: the trigger line), or the episode ended: the hard line
+                // holds a run that would cross it.
                 for (index, _, term) in candidates.values() {
                     let after = lines.reading - i128::from(units(term.consumed_milli)?);
                     if after < i128::from(lines.hard) {
@@ -618,11 +660,21 @@ fn lines(
         // The compiler refuses one without the other; read as lines that break their rules.
         _ => (0, 0),
     };
-    if !(0..stop).contains(&hard) || stop > i128::from(capacity) {
+    // SCHED-C1c: the trigger line, read as the other two; the capacity without one.
+    let trigger = match &pool.trigger_line {
+        Some(line) => match line_value(pool, line, facts, context) {
+            Ok(trigger) => Some(trigger),
+            Err(problem) => return Ok(Err(problem)),
+        },
+        None => None,
+    };
+    let begins = trigger.unwrap_or(i128::from(capacity));
+    if !(0..stop).contains(&hard) || stop > begins || begins > i128::from(capacity) {
         return Ok(Err(LinesProblem::Invalid {
             capacity,
             stop,
             hard,
+            trigger,
         }));
     }
     Ok(Ok(Lines {
@@ -630,6 +682,10 @@ fn lines(
         reading,
         stop: u64::try_from(stop).map_err(|_| PolicyEvaluationError::overflow("a stop line"))?,
         hard: u64::try_from(hard).map_err(|_| PolicyEvaluationError::overflow("a hard line"))?,
+        trigger_line: trigger
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| PolicyEvaluationError::overflow("a trigger line"))?,
     }))
 }
 
@@ -719,7 +775,8 @@ fn step<'m>(
         memory.episodes.remove(key);
     }
     if !memory.episodes.contains_key(key) {
-        if !lines.at_cap() {
+        // SCHED-C1c: an episode begins at the trigger line, the cap without one.
+        if !lines.at_trigger() {
             return Ok(None);
         }
         let begun = memory.begun.entry(key.clone()).or_insert(0);
@@ -1178,7 +1235,7 @@ fn spend_reason(
     round: u64,
     rank: usize,
 ) -> DecisionReason {
-    let outcome = Outcome::new(PolicyCode::CappedSpend)
+    let mut outcome = Outcome::new(PolicyCode::CappedSpend)
         .pool_id(pool_id)
         .pool_capacity(lines.capacity)
         .stop_line(lines.stop)
@@ -1187,14 +1244,17 @@ fn spend_reason(
         .capped_round(round)
         .capped_rank(u64::try_from(rank).unwrap_or(u64::MAX))
         .pool_reading(record_integer(lines.reading));
-    reason_with(
-        outcome,
-        format!(
-            "pool_id={pool_id} pool_capacity={} stop_line={} hard_line={} capped_episode={episode} \
-             capped_round={round} capped_rank={rank} pool_reading={}",
-            lines.capacity, lines.stop, lines.hard, lines.reading
-        ),
-    )
+    let mut detail = format!(
+        "pool_id={pool_id} pool_capacity={} stop_line={} hard_line={} capped_episode={episode} \
+         capped_round={round} capped_rank={rank} pool_reading={}",
+        lines.capacity, lines.stop, lines.hard, lines.reading
+    );
+    // SCHED-C1c: the trigger line, when the pool writes one.
+    if let Some(trigger) = lines.trigger_line {
+        outcome = outcome.trigger_line(trigger);
+        detail.push_str(&format!(" trigger_line={trigger}"));
+    }
+    reason_with(outcome, detail)
 }
 
 /// `pool_line_held` `capped_round_empty`.
@@ -1262,21 +1322,62 @@ fn unknown_lines_reason(
     reason_with(outcome, detail)
 }
 
-/// `pool_line_held` `lines_invalid`.
-fn invalid_lines_reason(pool_id: &str, capacity: u64, stop: i128, hard: i128) -> DecisionReason {
-    let outcome = Outcome::new(PolicyCode::PoolLineHeld)
+/// `pool_line_held` `lines_invalid`; SCHED-C1c: with `trigger_line` when the pool writes one.
+fn invalid_lines_reason(
+    pool_id: &str,
+    capacity: u64,
+    stop: i128,
+    hard: i128,
+    trigger: Option<i128>,
+) -> DecisionReason {
+    let mut outcome = Outcome::new(PolicyCode::PoolLineHeld)
         .pool_line_hold(PoolLineHold::LinesInvalid)
         .pool_id(pool_id)
         .pool_capacity(capacity)
         .stop_line(record_integer(stop))
         .hard_line(record_integer(hard));
+    let mut detail = format!(
+        "pool_line_hold=lines_invalid pool_id={pool_id} pool_capacity={capacity} \
+         stop_line={stop} hard_line={hard}"
+    );
+    if let Some(trigger) = trigger {
+        outcome = outcome.trigger_line(record_integer(trigger));
+        detail.push_str(&format!(" trigger_line={trigger}"));
+    }
+    reason_with(outcome, detail)
+}
+
+/// SCHED-C1c (register §1.299): `pool_lines_unspendable`, the warning of a pool whose lines no
+/// consumer's run fits under from the cap (`least` the least consumption among its consumers).
+fn unspendable_reason(pool_id: &str, lines: Lines, least: u64) -> DecisionReason {
+    let outcome = Outcome::new(PolicyCode::PoolLinesUnspendable)
+        .pool_id(pool_id)
+        .pool_capacity(lines.capacity)
+        .stop_line(lines.stop)
+        .hard_line(lines.hard)
+        .least_consumption(least);
     reason_with(
         outcome,
         format!(
-            "pool_line_hold=lines_invalid pool_id={pool_id} pool_capacity={capacity} \
-             stop_line={stop} hard_line={hard}"
+            "pool_id={pool_id} pool_capacity={} stop_line={} hard_line={} \
+             least_consumption={least}",
+            lines.capacity, lines.stop, lines.hard
         ),
     )
+}
+
+/// SCHED-C1c: the least `⌈C/1000⌉` of one run among a pool's `consumers` (each by its declared
+/// consumption of `pool_id`, candidate or not); `None` without a consumer.
+fn least_consumption(
+    consumers: &[Consumer<'_>],
+    pool_id: &str,
+) -> PolicyEvaluationResult<Option<u64>> {
+    let mut least = None::<u64>;
+    for consumer in consumers {
+        let consumed = crate::resource_targets::declared_consumption(consumer.task, pool_id)?;
+        least = Some(least.map_or(consumed, |least| least.min(consumed)));
+    }
+    Ok(least)
 }
 
 /// SS-2h: `capped_not_head` for a block candidate behind the block's dispatched one (`head`).

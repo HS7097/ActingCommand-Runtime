@@ -222,6 +222,19 @@ crate::outcome_vocabulary! {
     }
 }
 
+crate::outcome_vocabulary! {
+    /// Who started a run that a client cannot stop (vocabulary `run_origin`; Workflow #429 R-6):
+    /// `StopInstanceRun` refuses it with `scheduled_contained_task_not_client_cancellable`, naming
+    /// it, and a pause or a person's hold stops it instead.
+    pub enum RunOrigin: "run_origin" {
+        /// A run the scheduler dispatched (a policy run). The first slice of R-6 refuses it until
+        /// the ledger's revision 8 can record its stop as an interruption.
+        Policy => "policy",
+        /// A run the Runtime starts for itself: a startup package or a recovery ladder rung.
+        Host => "host",
+    }
+}
+
 impl IoKind {
     /// The token of a Rust error kind; a kind this vocabulary does not list is `uncategorized`.
     pub fn from_error_kind(kind: std::io::ErrorKind) -> Self {

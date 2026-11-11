@@ -1827,20 +1827,21 @@ A V2 pool may write `stop_line` and `hard_line` ([v2/README.md](v2/README.md);
   less a margin. The Runtime adds the given offset to the fact it reads and computes no line.
 - **A constant**, an integer in `0..=9007199254740991`, the line itself.
 
-SCHED-C1 (register §1.299, not built yet) adds a third member in the same two forms, `trigger_line`,
-written only beside the other two ("The trigger line" below), and lines given for one instance
-("Lines for one instance" below).
+SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two forms,
+`trigger_line`, written only beside the other two ("The trigger line" below); SCHED-C1 (not built
+yet) adds lines given for one instance ("Lines for one instance" below).
 
 - **Without lines** a pool's stop line `S` is its capacity and its hard line `H` is 0 (the
   research channel's proposal the coordinator approved, design §1.6 item 1): it is spent only at
-  its cap, one run at a time, and has no protection of its own. SCHED-C1: its trigger line `T` is
-  its capacity too, and so is that of a pool that writes the two lines and no `trigger_line`.
+  its cap, one run at a time, and has no protection of its own. SCHED-C1c (since 0.12.53): its
+  trigger line `T` is its capacity too, and so is that of a pool that writes the two lines and no
+  `trigger_line`.
 - **At each evaluation** the lines of a valued pool are read on each instance its scope covers and
-  must hold `0 ≤ H < S ≤ cap` (SCHED-C1: `0 ≤ H < S ≤ T ≤ cap`). The reading `r` they are checked against is the pool's projected
+  must hold `0 ≤ H < S ≤ cap` (SCHED-C1c, since 0.12.53: `0 ≤ H < S ≤ T ≤ cap`). The reading `r` they are checked against is the pool's projected
   amount less the consumption its reading does not show yet: every task dispatched on the
   instance at or after the reading's observation, by its declared consumption (the reserve gate's
   step 3, "Task Reserves").
-- **Below the cap** (SCHED-C1: below the trigger line, while no episode is under way) a judged candidate that would pass the net-benefit gate (a positive `B`, or
+- **Below the cap** (SCHED-C1c, since 0.12.53: below the trigger line, while no episode is under way) a judged candidate that would pass the net-benefit gate (a positive `B`, or
   released in the zero tier) and whose run would leave `r − ⌈C/1000⌉ < H` is not dispatched:
   deferred with `pool_line_held` (info; `pool_line_hold` `would_cross_hard_line`, `pool_id`,
   `pool_reading`, `pool_capacity`, `stop_line`, `hard_line`, `amount_after`), waking at a
@@ -1863,8 +1864,8 @@ written only beside the other two ("The trigger line" below), and lines given fo
   where the compiler can tell (a constant above a constant capacity, or a reference to the
   capacity's own fact with a larger offset), and when the stop line is not above the hard line
   where it can tell (two constants, or two references to one fact by their offsets; at
-  `hard_line`). Lines it cannot compare are checked at each evaluation (above). SCHED-C1 (not
-  built yet): `trigger_line` by the same rules, at `trigger_line`: `pool_lines_invalid` when it is
+  `hard_line`). Lines it cannot compare are checked at each evaluation (above). SCHED-C1c (since
+  0.12.53): `trigger_line` by the same rules, at `trigger_line`: `pool_lines_invalid` when it is
   written without both other lines, below the stop line, or above the capacity, where the compiler
   can tell.
 - **Without a valuation** (SS-2h fix 1): only a valued pool's lines take part. A V2 pool that writes
@@ -1886,7 +1887,7 @@ written only beside the other two ("The trigger line" below), and lines given fo
   without it (`schedule_invalid` at the first such member), so a Runtime that does not name the
   subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older
   Runtime given a catalog with either member refuses it at its reader (`unknown_field`).
-  SCHED-C1 (not built yet): `trigger_line` likewise with its own always-on subsystem
+  SCHED-C1c (since 0.12.53): `trigger_line` likewise with its own always-on subsystem
   `pool_trigger_line`, which a `schedule.json` whose pool writes it lists in `requires` (a Runtime
   that names `pool_lines` alone does not read it).
 - **Identity.** A pool without the members serializes, and hashes, exactly as before.
@@ -1898,7 +1899,8 @@ written only beside the other two ("The trigger line" below), and lines given fo
   catalog's over the defaults above. SCHED-C1 specifies it ("Lines for one instance" below).
 
 The three parts below are SCHED-C1's (register §1.299), the coordinator's rulings of 11-11, not
-Alice's words; none is built yet.
+Alice's words. "The trigger line" and "A pool its lines cannot spend" are built (SCHED-C1c, since
+0.12.53); "Lines for one instance" is not built yet.
 
 - **The trigger line** (the coordinator's point 10). A pool that writes both lines may also write
   `trigger_line`, in either form: the reading at which a capped episode begins ("Capped spending
@@ -1960,11 +1962,12 @@ Alice's words; none is built yet.
   leave no consumer that fits. When `⌈C/1000⌉ > cap − H` for every judged consumer of a valued pool
   on an instance (each by its declared consumption, whether or not it is a candidate), no run can
   start from the capacity without leaving the pool below its hard line, and the pool stays full.
-  Today each evaluation at the cap then begins and ends an episode with the info reason
-  `pool_line_held` `capped_round_empty`. With SCHED-C1 it is a warning of its own: at an evaluation
-  where the pool is at or above its trigger line, no episode begins (one under way waits), and its
-  consumers are deferred with `pool_lines_unspendable` (warning; `pool_id`, `pool_capacity`,
-  `stop_line`, `hard_line`, `least_consumption` the least `⌈C/1000⌉` among them, `lines_source`).
+  Before SCHED-C1c each evaluation at the cap then began and ended an episode with the info reason
+  `pool_line_held` `capped_round_empty`. With SCHED-C1c (since 0.12.53) it is a warning of its own:
+  at an evaluation where the pool is at or above its trigger line, no episode begins (one under way
+  waits), and its consumers are deferred with `pool_lines_unspendable` (warning; `pool_id`,
+  `pool_capacity`, `stop_line`, `hard_line`, `least_consumption` the least `⌈C/1000⌉` among them;
+  SCHED-C1, not built yet: `lines_source`).
   The status read shows it, as the not-run explanation every scheduling read answers
   (`ScheduleExplanation`: `actingctl schedule`, `ac_schedule`, `ac_overview`'s `not_running`,
   `ac_diagnose`'s `not_run`), and the idle plan counts it neither due nor as a wake of its own, as
@@ -1995,11 +1998,12 @@ without a valuation is untouched.
   is a candidate at all (each in its cooldown, running, or held by its own conditions) nothing
   could be dispatched in any case: the episode waits for its next round. A new episode begins at
   the cap again; each counts from 1 since the Runtime started (`capped_episode`).
-  SCHED-C1 (register §1.299, not built yet): the episode begins at `r ≥ T`, the pool's trigger
-  line ("Pool lines"; the capacity without one, as now), and ends once `r ≤ S` and `r < T`; it no
-  longer ends on a catalog generation that leaves the pool's consumers unchanged, or on lines or a
+  SCHED-C1c (register §1.299, since 0.12.53): the episode begins at `r ≥ T`, the pool's trigger
+  line ("Pool lines"; the capacity without one, as before), and ends once `r ≤ S` and `r < T`; a
+  pool its lines cannot spend begins none ("Pool lines"). SCHED-C1 (not built yet): it no longer
+  ends on a catalog generation that leaves the pool's consumers unchanged, or on lines or a
   reading that give no value, and it outlives a start, so its number counts on from the state
-  file's ("Episodes survive" below). A pool its lines cannot spend begins none ("Pool lines").
+  file's ("Episodes survive" below).
 - **A round** lists the pool's judged consumers that are candidates of the evaluation now (every
   condition the policy holds passed: the trigger with its counts and preconditions, the feedback
   stop, the cooldown, the no-progress guard, the placement and the score stage) whose value
@@ -2028,7 +2032,7 @@ without a valuation is untouched.
   (the reserve gate, the shared run limits, every pause, hold, blackout and budget of the Runtime)
   is dispatched with `capped_spend` (info; `pool_id`, `pool_capacity`, `stop_line`, `hard_line`,
   `capped_episode`, `capped_round`, `capped_rank` its place in the round's order,
-  `pool_reading`; SCHED-C1, not built yet: `trigger_line` when the pool has one and `lines_source`). A block candidate a later gate defers keeps that gate's reason and the next one
+  `pool_reading`; SCHED-C1c, since 0.12.53: `trigger_line` when the pool has one; SCHED-C1, not built yet: `lines_source`). A block candidate a later gate defers keeps that gate's reason and the next one
   is tried; one behind the dispatched one, or behind its head when a more urgent candidate took
   the instance, waits with `pool_line_held` `capped_not_head` (`task_id` the head), a fallback
   with the hold the round gives it otherwise (`capped_not_head`, or
@@ -2106,7 +2110,7 @@ without a valuation is untouched.
   nothing though a consumer is a candidate), when a generation changes the pool's consumers, when
   the instance or the pool leaves the catalog or the pool loses its declared valuation, and when
   the file is not read at a start.
-- **Old triggers on a capped pool** (SCHED-C1, not built yet in the composer; the coordinator's
+- **Old triggers on a capped pool** (SCHED-C1c, since 0.12.53, in the composer; the coordinator's
   point 12, after point 9 of the ten points of #428 comment 6735960127). A consumer whose trigger
   requires, through `all`, a reading of the pool of at least its capacity less a margin (a
   `resource_projection` on the pool, or a `fact` on its reading key, compared

@@ -4,15 +4,34 @@ use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, create_error_report_zip, effective_run_root,
     list_runs, read_user_config, runtime_slice_cli,
 };
+use crate::flag_args::reads::FlagReads;
 use actingcommand_contract::RunId;
 use actingcommand_runtime_client::RuntimeClient;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
+/// Workflow #434 LAB-5B4: the flags `run list` reads: none, and no positional; its command line
+/// is parsed by it (`FlagArgs::parse_reading`), which refuses every flag and word given.
+pub(crate) const RUN_LIST_READS: FlagReads = FlagReads {
+    row: "run list",
+    parts: &[],
+    positionals: &[],
+};
+
+/// Workflow #434 LAB-5B4: the flags of `run <sub>`: `list`'s parsed by its read list, the other
+/// words' as before. A function of its own, not an `if` or a match in [`dispatch`], which the
+/// command inventory guard reads for its first match on the subcommand.
+fn run_flags(sub: &str, args: &[String]) -> CliOutcome<FlagArgs> {
+    if sub == "list" {
+        return FlagArgs::parse_reading(args, &RUN_LIST_READS);
+    }
+    FlagArgs::parse(args)
+}
+
 /// actinglab's own `run` words. Workflow #434 LAB-2b: `run show` is the core row's (open point
 /// 10), served by the CLI module; its placeholder here is gone.
 pub(super) fn dispatch(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = run_flags(sub, args)?;
     match sub {
         "list" => list_runs(&run_root(global)?),
         "open" | "summary" | "export" => {

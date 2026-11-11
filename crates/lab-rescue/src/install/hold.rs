@@ -29,6 +29,12 @@
 //! its release ([`release_own`]) resumes only the instances its pause step paused, each while its
 //! pause still shows the hold's reason, in whatever owner epoch: the Runtime's restore numbers
 //! every pause anew, so the revision does not survive a restart ([`OwnedHold`]).
+//!
+//! Workflow #421 INST-5b: the hold of the rescue module's `instance add` also sets, in its pause
+//! step after the instance pauses, one global pause with the hold's reason ([`global_pause`]),
+//! unless a global pause is in effect (then it sets none and leaves that one alone); the step
+//! records it in its `own_pauses` (`global`), and [`release_own`] hands it back first, with the
+//! hold's other pauses ([`own_global`]).
 
 use super::Flags;
 use super::host::Host;
@@ -56,6 +62,10 @@ pub(crate) struct HoldInputs {
     /// module's `place` holds the instances bound to the bundle's game); `None` for every
     /// instance, as `install stop` and the composite update hold.
     pub(crate) only: Option<Vec<String>>,
+    /// Workflow #421 INST-5b: the hold's pause step also sets one global pause with the hold's
+    /// reason, unless a global pause is in effect ([`global_pause`]); only the rescue module's
+    /// `instance add` asks for it, every other hold is `false`.
+    pub(crate) global: bool,
 }
 
 /// `--hold <reason>` and every `--known-pause ALIAS=REASON`: the reason and each named pause of
@@ -90,6 +100,7 @@ pub(crate) fn parse_hold(flags: &Flags<'_>) -> Result<Option<HoldInputs>, Outcom
         reason,
         known,
         only: None,
+        global: false,
     }))
 }
 
@@ -308,14 +319,61 @@ impl PauseIntent {
     }
 }
 
-/// The pause step's intent.
+/// The pause step's intent. Workflow #421 INST-5b: with the member `global: true` when the hold
+/// sets a global pause too ([`global_of`]); every other hold's intent is written as before.
 pub(crate) fn pause_intent(hold: &HoldInputs, held: &[String], drain_timeout_ms: u64) -> Value {
-    record_value(PauseIntent {
+    let mut intent = record_value(PauseIntent {
         reason: hold.reason.clone(),
         instances: held.to_vec(),
         known: hold.known.clone(),
         drain_timeout_ms,
-    })
+    });
+    if hold.global {
+        intent[GLOBAL_INTENT] = Value::Bool(true);
+    }
+    intent
+}
+
+/// Workflow #421 INST-5b: the member of a pause step's intent that asks for the hold's global
+/// pause.
+const GLOBAL_INTENT: &str = "global";
+
+/// Workflow #421 INST-5b: whether a pause step's intent asks for the hold's global pause.
+pub(crate) fn global_of(intent: &Value) -> bool {
+    intent
+        .get(GLOBAL_INTENT)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Workflow #421 INST-5b (the coordinator's ruling of 11-11): the global pause of a pause step
+/// whose intent asks for one, after its instance pauses and before the close, so that every
+/// instance, one the start registers anew too, stays held across the restart (the Runtime
+/// persists the global pause and restores it at its start before any instance is prepared). A
+/// global pause in effect with another reason, anyone's, is kept as it is and the step sets none
+/// (`None`); one in effect with the hold's own reason is the step's own, set by an earlier run of
+/// it; otherwise the step sets one with the hold's reason now. The revision of the step's own, in
+/// the owner epoch `seen` shows. `seen` is the status the step checked last: none (no Runtime
+/// answers) refuses `runtime_not_running`, and a pause the Runtime refuses `runtime_stop_failed`
+/// with its failure as the cause; a hold that asked for its global pause never goes on without it.
+pub(crate) fn global_pause(
+    runtime: &dyn RuntimeLink,
+    state_root: &Path,
+    operation: InstallLocation,
+    intent: &PauseIntent,
+    seen: Option<&RuntimeSeen>,
+) -> Result<Option<u64>, Outcome> {
+    let Some(seen) = seen else {
+        return Err(super::refusal(operation, InstallRefusal::RuntimeNotRunning));
+    };
+    match &seen.global_pause {
+        Some(pause) if pause.reason == intent.reason => Ok(Some(pause.revision)),
+        Some(_) => Ok(None),
+        None => runtime
+            .pause_global(state_root, &intent.reason, intent.drain_timeout_ms)
+            .map(Some)
+            .map_err(|cause| stop_failed(operation, cause)),
+    }
 }
 
 /// A release step's intent: the hold's reason, and whether an automatic rollback planned it.
@@ -351,7 +409,8 @@ impl HoldReport<'_> {
     }
 }
 
-/// A release step's evidence: the hold's reason and what the step did.
+/// A release step's evidence: the hold's reason and what the step did. Workflow #421 INST-5b:
+/// `global_resumed` when it resumed the hold's own global pause (absent otherwise).
 #[derive(Serialize)]
 pub(crate) struct ReleaseEvidence<'a> {
     pub(crate) reason: &'a SchedulingPauseReason,
@@ -359,6 +418,8 @@ pub(crate) struct ReleaseEvidence<'a> {
     pub(crate) skipped: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) resumed: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) global_resumed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) handed_back: Option<&'a Value>,
 }
@@ -673,6 +734,10 @@ pub(crate) struct OwnPauses {
     pub(crate) reason: SchedulingPauseReason,
     pub(crate) owner_epoch: String,
     pub(crate) revisions: BTreeMap<String, u64>,
+    /// Workflow #421 INST-5b: the revision of the global pause the step set with `reason` (or an
+    /// earlier run of it set), in `owner_epoch`; absent when the step set none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) global: Option<u64>,
 }
 
 impl OwnPauses {
@@ -697,7 +762,20 @@ impl OwnPauses {
                     Some((instance.alias.clone(), pause.revision))
                 })
                 .collect(),
+            global: None,
         }
+    }
+
+    /// Workflow #421 INST-5b: the record with the revision of the global pause the step set.
+    pub(crate) fn with_global(mut self, revision: Option<u64>) -> Self {
+        self.global = revision;
+        self
+    }
+
+    /// Workflow #421 INST-5b: the global pause the record holds as the step's own: the owner
+    /// epoch it was recorded in and its revision then.
+    pub(crate) fn recorded_global(&self) -> Option<(String, u64)> {
+        Some((self.owner_epoch.clone(), self.global?))
     }
 
     pub(crate) fn value(&self) -> Value {
@@ -722,15 +800,36 @@ impl OwnPauses {
 pub(crate) struct OwnedHold {
     pub(crate) paused: BTreeSet<String>,
     pub(crate) intended: BTreeSet<String>,
+    /// Workflow #421 INST-5b: the global pause a pause step of the hold recorded as its own
+    /// ([`OwnPauses`]'s `global`): the owner epoch it was recorded in and its revision then.
+    pub(crate) global: Option<(String, u64)>,
+}
+
+/// Workflow #421 INST-5b: the global pause `seen` shows that is the hold `reason`'s own: one a
+/// pause step of the hold recorded (`owned.global`) that shows the hold's reason now; in the owner
+/// epoch it was recorded in only at the revision recorded then, in a later one (the Runtime's
+/// restore numbers every pause anew, revision 1) by its reason. Never another party's.
+pub(crate) fn own_global<'a>(
+    seen: &'a RuntimeSeen,
+    reason: &SchedulingPauseReason,
+    owned: &OwnedHold,
+) -> Option<&'a PauseSeen> {
+    let (epoch, revision) = owned.global.as_ref()?;
+    let pause = seen.global_pause.as_ref()?;
+    let recorded = seen.owner_epoch != *epoch || pause.revision == *revision;
+    (&pause.reason == reason && recorded).then_some(pause)
 }
 
 /// What a release of the rescue module's own hold did: the instances it resumed, and the
 /// instances the hold was to pause that show its reason though its pause step did not pause them,
-/// which are not the module's pauses and are left as they are.
+/// which are not the module's pauses and are left as they are. Workflow #421 INST-5b: and whether
+/// it resumed the hold's own global pause (`global`, absent when not).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct OwnRelease {
     pub(crate) resumed: Vec<String>,
     pub(crate) left: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) global: bool,
 }
 
 /// Workflow #434 LAB-3 fix 1 and 2: the release of the rescue module's own hold `reason`, in the
@@ -739,7 +838,9 @@ pub(crate) struct OwnRelease {
 /// revision), only while that pause has `reason`; one the hold was to pause that shows `reason`
 /// though its step did not pause it is left (`left`). No other instance and no other pause, an
 /// instance whose pause shows another reason, a global pause or another party's above all, is
-/// ever touched. A failure as [`release`]'s.
+/// ever touched. Workflow #421 INST-5b: first the hold's own global pause ([`own_global`]), by the
+/// owner epoch and the revision the Runtime shows; no other global pause. A failure as
+/// [`release`]'s.
 pub(crate) fn release_own(
     runtime: &dyn RuntimeLink,
     state_root: &Path,
@@ -755,6 +856,15 @@ pub(crate) fn release_own(
         })?
         .ok_or_else(|| super::refusal(operation, InstallRefusal::RuntimeNotRunning))?;
     let mut released = OwnRelease::default();
+    if let Some(pause) = own_global(&seen, reason, owned) {
+        runtime
+            .resume_global(state_root, &seen.owner_epoch, pause.revision)
+            .map_err(|cause| {
+                super::refusal(operation, InstallRefusal::RuntimeNotRunning)
+                    .joined(CauseRelation::CausedBy, cause)
+            })?;
+        released.global = true;
+    }
     for instance in &seen.instances {
         let Some(pause) = instance
             .pause

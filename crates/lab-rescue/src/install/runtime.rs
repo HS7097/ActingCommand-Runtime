@@ -165,6 +165,22 @@ pub(crate) trait RuntimeLink {
         owner_epoch: &str,
         revision: u64,
     ) -> Result<(), Outcome>;
+    /// Workflow #421 INST-5b: sets the global pause with `reason` (`drain_timeout_ms` is checked
+    /// as for every pause; a global pause drains nothing); the revision it answers.
+    fn pause_global(
+        &self,
+        state_root: &Path,
+        reason: &SchedulingPauseReason,
+        drain_timeout_ms: u64,
+    ) -> Result<u64, Outcome>;
+    /// Workflow #421 INST-5b: lifts exactly the global pause the caller saw: in `owner_epoch` at
+    /// `revision`.
+    fn resume_global(
+        &self,
+        state_root: &Path,
+        owner_epoch: &str,
+        revision: u64,
+    ) -> Result<(), Outcome>;
     /// The formal close (`request-shutdown`), then the wait until the owner record closed and
     /// the process exited, at most `wait_ms`; nothing is killed. The terminal outcome is read
     /// from the logs of `root`.
@@ -207,6 +223,28 @@ fn scalar_text(value: Option<&FactScalar>) -> Option<String> {
         Some(FactScalar::String(text)) => Some(text.clone()),
         _ => None,
     }
+}
+
+/// Lifts exactly the pause of `scope` the caller saw: in `owner_epoch` at `revision`.
+fn resume_seen(
+    state_root: &Path,
+    scope: SchedulingPauseScope,
+    owner_epoch: &str,
+    revision: u64,
+) -> Result<(), Outcome> {
+    let owner_epoch = serde_json::from_value::<OwnerEpoch>(Value::String(owner_epoch.to_owned()))
+        .map_err(|error| super::files::json_failure(&error))?;
+    let client = connect(state_root)?;
+    client
+        .resume_scheduling_expected(
+            scope,
+            SchedulingPauseExpectation {
+                owner_epoch,
+                revision,
+            },
+        )
+        .map(drop)
+        .map_err(|error| error.outcome())
 }
 
 impl RuntimeLink for SystemRuntime {
@@ -381,22 +419,51 @@ impl RuntimeLink for SystemRuntime {
         owner_epoch: &str,
         revision: u64,
     ) -> Result<(), Outcome> {
-        let owner_epoch =
-            serde_json::from_value::<OwnerEpoch>(Value::String(owner_epoch.to_owned()))
-                .map_err(|error| super::files::json_failure(&error))?;
+        resume_seen(
+            state_root,
+            SchedulingPauseScope::Instance {
+                instance_alias: alias.to_owned(),
+            },
+            owner_epoch,
+            revision,
+        )
+    }
+
+    fn pause_global(
+        &self,
+        state_root: &Path,
+        reason: &SchedulingPauseReason,
+        drain_timeout_ms: u64,
+    ) -> Result<u64, Outcome> {
         let client = connect(state_root)?;
-        client
-            .resume_scheduling_expected(
-                SchedulingPauseScope::Instance {
-                    instance_alias: alias.to_owned(),
-                },
-                SchedulingPauseExpectation {
-                    owner_epoch,
-                    revision,
-                },
+        let paused = client
+            .pause_scheduling(
+                SchedulingPauseScope::Global,
+                reason.clone(),
+                drain_timeout_ms,
             )
-            .map(drop)
-            .map_err(|error| error.outcome())
+            .map_err(|error| error.outcome())?;
+        // The client answers only the `SchedulingPaused` of the scope it asked for.
+        let RuntimeResult::SchedulingPaused { revision, .. } = paused else {
+            return Err(Outcome::new(
+                actingcommand_runtime_client::ClientCode::RuntimeResultUnexpected,
+            ));
+        };
+        Ok(revision)
+    }
+
+    fn resume_global(
+        &self,
+        state_root: &Path,
+        owner_epoch: &str,
+        revision: u64,
+    ) -> Result<(), Outcome> {
+        resume_seen(
+            state_root,
+            SchedulingPauseScope::Global,
+            owner_epoch,
+            revision,
+        )
     }
 
     fn shutdown(&self, root: &Path, state_root: &Path, wait_ms: u64) -> Result<Closed, Outcome> {

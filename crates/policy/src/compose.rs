@@ -17,7 +17,8 @@
 //!    (#386 CF-5) and `reset_exclusions` when a timeline event writes `excludes_fact_prefixes`
 //!    (Workflow #411 P19) and `fact_unknown_probe` when a rule's `fact` predicate writes
 //!    `on_unknown` (SS-5) and `pool_lines` when a pool writes `stop_line` or `hard_line` (SS-2h),
-//!    no timeline event invalidating the Runtime's application update fact
+//!    `pool_trigger_line` when a pool writes `trigger_line` (SCHED-C1c), no timeline event
+//!    invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
 //!    against the registry, and the registry's packages classified. A refused game is reported
 //!    with its game id.
@@ -223,6 +224,10 @@ pub const POOL_LINE_MEMBERS: [&str; 2] = ["stop_line", "hard_line"];
 /// ([`SCHEDULE_RULE_FIXED_VALUE_MEMBER`]). A rule never writes it itself.
 pub const BENEFIT_FIXED_VALUE_MEMBER: &str = "benefit_fixed_value_milli";
 
+/// SCHED-C1c (register §1.299): the pool member of the trigger line, which the composer copies as
+/// written, as the two lines, and which requires [`crate::POOL_TRIGGER_LINE_SUBSYSTEM`].
+pub const POOL_TRIGGER_LINE_MEMBER: &str = "trigger_line";
+
 /// SS-2b (register §1.225; Alice's ruling 116, 「业务覆盖完整」): how far one game's judged rules
 /// (those whose package is not maintenance-role and that do not declare themselves maintenance,
 /// not held) declare their values, as the resource tools report it. Each rule counts once,
@@ -335,6 +340,10 @@ pub struct StandardPackComposition {
     /// [`STANDARD_PACK_ESCALATION_WARNING_THRESHOLD`], by game id, with those rules' ids and
     /// thresholds in file order.
     escalations: Vec<(String, Vec<(String, u64)>)>,
+    /// SCHED-C1c: each game with a judged rule whose trigger still requires a consumed capped
+    /// pool's reading at least its capacity less a margin, by game id, with those rules' and
+    /// pools' file ids in file order.
+    redundant_triggers: Vec<(String, Vec<(String, String)>)>,
     /// #428 CW-1: the compiled catalog's warnings, placed and each once.
     compile_warnings: Vec<StandardPackCompileWarning>,
 }
@@ -469,6 +478,140 @@ impl StandardPackComposition {
             })
             .collect()
     }
+
+    /// SCHED-C1c (register §1.299; `contracts/standard-pack-schedule.md`, "A redundant trigger"):
+    /// one `standard_pack_line_trigger_redundant` per judged rule and consumed pool, the pool
+    /// writing both lines and a declared valuation block, whose trigger still requires the pool's
+    /// reading at least its capacity fact less a margin, which the capped spending order already
+    /// does (keys `game`, `task_id` the rule's id, `pool_id` the file's pool id), by game id, then
+    /// in file order. A hint, never a refusal: only the resource tools report them, after
+    /// [`StandardPackComposition::escalation_warnings`]; the Runtime's workbench records none.
+    pub fn redundant_trigger_warnings(&self) -> Vec<Outcome> {
+        self.redundant_triggers
+            .iter()
+            .flat_map(|(game_id, rules)| {
+                rules.iter().map(move |(rule_id, pool_id)| {
+                    Outcome::new(SharedCode::StandardPackLineTriggerRedundant)
+                        .game(game_id.as_str())
+                        .task_id(rule_id.as_str())
+                        .pool_id(pool_id.as_str())
+                })
+            })
+            .collect()
+    }
+}
+
+/// SCHED-C1c (register §1.299; `contracts/standard-pack-schedule.md`, "A redundant trigger"): the
+/// rules of one game, among its composed rules `tasks` (each once, in file order), that are judged
+/// and consume a pool of the file writing both lines and a declared valuation block, and whose
+/// `trigger` requires, through `all`, the pool's reading (its `resource_projection`, or a `fact` on
+/// its reading key) compared `greater_than_or_equal` or `greater_than` with a fact reference to
+/// the pool's capacity fact: each with that pool's file id, the pools in file order. A pool whose
+/// capacity is a constant has no capacity fact and is not reported. The compiler checks the
+/// shapes; a member of another shape here is no such trigger.
+fn redundant_triggers(game: &ReadGame<'_>, tasks: &[(Value, Origin)]) -> Vec<(String, String)> {
+    let composed = tasks
+        .iter()
+        .map(|(_, origin)| origin.index)
+        .collect::<BTreeSet<_>>();
+    let mut found = Vec::new();
+    for (index, rule) in game.schedule.rules.iter().enumerate() {
+        if !composed.contains(&index) || !judged(rule, &game.classification) {
+            continue;
+        }
+        let mut required = Vec::new();
+        if let Some(trigger) = rule.body.get("trigger") {
+            required_nodes(trigger, &mut required);
+        }
+        for pool in &game.schedule.pools {
+            if !consumes_pool(rule, &pool.id) || !valued_with_lines(pool) {
+                continue;
+            }
+            let Some(capacity_key) = reference_fact_key(pool.body.get("capacity")) else {
+                continue;
+            };
+            if required
+                .iter()
+                .any(|node| reads_at_capacity(node, pool, capacity_key))
+            {
+                found.push((rule.id.clone(), pool.id.clone()));
+            }
+        }
+    }
+    found
+}
+
+/// SCHED-C1c: the predicate nodes a `schedule.json` trigger requires, every node reached from its
+/// root only through `all` (an `all` itself excepted), as the evaluator reads a required
+/// condition.
+fn required_nodes<'a>(node: &'a Value, found: &mut Vec<&'a Value>) {
+    if node.get("kind").and_then(Value::as_str) == Some("all") {
+        if let Some(Value::Array(children)) = node.get("predicates") {
+            for child in children {
+                required_nodes(child, found);
+            }
+        }
+        return;
+    }
+    found.push(node);
+}
+
+/// SCHED-C1c: whether a `schedule.json` rule declares a `consumes` entry of `pool_id`.
+fn consumes_pool(rule: &ScheduleRule, pool_id: &str) -> bool {
+    let Some(Value::Array(entries)) = rule.body.get("consumes") else {
+        return false;
+    };
+    entries
+        .iter()
+        .any(|entry| entry.get("pool_id").and_then(Value::as_str) == Some(pool_id))
+}
+
+/// SCHED-C1c: whether a `schedule.json` pool writes both lines and a declared valuation block
+/// (not the pending marker): a pool the capped spending order spends.
+fn valued_with_lines(pool: &ScheduleItem) -> bool {
+    let [stop, hard] = POOL_LINE_MEMBERS;
+    matches!(pool.body.get("valuation"), Some(Value::Object(_)))
+        && pool.body.contains_key(stop)
+        && pool.body.contains_key(hard)
+}
+
+/// SCHED-C1c: the `fact_key` of a fact reference (an object whose `type` is `fact`); `None` for
+/// any other value.
+fn reference_fact_key(value: Option<&Value>) -> Option<&str> {
+    if !is_fact_reference(value) {
+        return None;
+    }
+    value?.get("fact_key")?.as_str()
+}
+
+/// SCHED-C1c: the reading key of a `schedule.json` pool, the `fact_key` of its `fact`
+/// observation; `None` for another observation.
+fn reading_key(pool: &ScheduleItem) -> Option<&str> {
+    let observation = pool.body.get("observation")?;
+    if observation.get("kind").and_then(Value::as_str) != Some("fact") {
+        return None;
+    }
+    observation.get("fact_key")?.as_str()
+}
+
+/// SCHED-C1c: whether a required trigger node reads `pool`'s reading at least its capacity fact
+/// `capacity_key` less a margin: a `resource_projection` on the pool, or a `fact` on its reading
+/// key, compared `greater_than_or_equal` or `greater_than` with a fact reference to that fact.
+fn reads_at_capacity(node: &Value, pool: &ScheduleItem, capacity_key: &str) -> bool {
+    let reads = match node.get("kind").and_then(Value::as_str) {
+        Some("resource_projection") => {
+            node.get("pool_id").and_then(Value::as_str) == Some(pool.id.as_str())
+        }
+        Some("fact") => {
+            let key = node.get("fact_key").and_then(Value::as_str);
+            key.is_some() && key == reading_key(pool)
+        }
+        _ => false,
+    };
+    let comparison = node.get("comparison").and_then(Value::as_str);
+    reads
+        && matches!(comparison, Some("greater_than_or_equal" | "greater_than"))
+        && reference_fact_key(node.get("value")) == Some(capacity_key)
 }
 
 /// SS-4 (register §1.231): the rules of one game, among its composed rules `tasks` (each once, in
@@ -820,6 +963,7 @@ pub fn compose_standard_pack_rules(
     let mut provenance = Vec::new();
     let mut mismatches = Vec::new();
     let mut escalations = Vec::new();
+    let mut redundant = Vec::new();
     for game in &read {
         let before = composed.tasks.len();
         instantiate(game, &mut composed, &mut manifest, &mut issues);
@@ -842,6 +986,11 @@ pub fn compose_standard_pack_rules(
         let rules = high_escalations(game, &composed.tasks[before..]);
         if !rules.is_empty() {
             escalations.push((game.game_id.to_owned(), rules));
+        }
+        // SCHED-C1c: the rules whose old capacity threshold the capped spending order repeats.
+        let rules = redundant_triggers(game, &composed.tasks[before..]);
+        if !rules.is_empty() {
+            redundant.push((game.game_id.to_owned(), rules));
         }
         games.push(ComposedGame {
             game_id: game.game_id.to_owned(),
@@ -921,6 +1070,7 @@ pub fn compose_standard_pack_rules(
     provenance.sort_by(|left, right| left.0.cmp(&right.0));
     mismatches.sort_by(|left, right| left.0.cmp(&right.0));
     escalations.sort_by(|left, right| left.0.cmp(&right.0));
+    redundant.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(StandardPackComposition {
         sources,
         compiled,
@@ -932,6 +1082,7 @@ pub fn compose_standard_pack_rules(
         provenance,
         tier_mismatches: mismatches,
         escalations,
+        redundant_triggers: redundant,
         compile_warnings,
     })
 }
@@ -1043,6 +1194,22 @@ fn read_game(
                 "a rule's {SCHEDULE_RULE_FIXED_VALUE_MEMBER} and a pool's \
                  {SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER} need requires to name \
                  {BENEFIT_FIXED_VALUE_SUBSYSTEM}"
+            ),
+        ));
+    }
+    // SCHED-C1c (register §1.299): likewise a pool that writes `trigger_line`, in either form; its
+    // two lines need `pool_lines` besides.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == crate::POOL_TRIGGER_LINE_SUBSYSTEM)
+        && let Some(pointer) = first_trigger_line(&schedule)
+    {
+        return Err(refused(
+            schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
+            format!(
+                "a pool's {POOL_TRIGGER_LINE_MEMBER} needs requires to name {}",
+                crate::POOL_TRIGGER_LINE_SUBSYSTEM
             ),
         ));
     }
@@ -1246,6 +1413,16 @@ fn first_fixed_value_member(schedule: &StandardPackSchedule) -> Option<String> {
             .position(|pool| pool.valuation_origin == ScheduleValueOrigin::Model)
             .map(|index| format!("/pools/{index}/{SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER}"))
     })
+}
+
+/// SCHED-C1c (register §1.299): the pointer of the first pool, in file order, that writes
+/// `trigger_line`, in either form. `None` when no pool writes one.
+fn first_trigger_line(schedule: &StandardPackSchedule) -> Option<String> {
+    schedule
+        .pools
+        .iter()
+        .position(|pool| pool.body.contains_key(POOL_TRIGGER_LINE_MEMBER))
+        .map(|index| format!("/pools/{index}/{POOL_TRIGGER_LINE_MEMBER}"))
 }
 
 /// #386 CF-4: the pointer of the first fact reference a rule's `trigger` or `feedback_stop`

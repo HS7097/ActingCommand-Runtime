@@ -56,6 +56,11 @@ pub const CONFIG_CATALOG_FACT_KEY: &str = "config.catalog";
 /// generation (#428 CW-1, register §1.290): [`ConfigCatalogWarnings`]. Absent while no composed
 /// generation had a warning; recorded empty once the active one has none.
 pub const CONFIG_CATALOG_WARNINGS_FACT_KEY: &str = "config.catalog_warnings";
+/// Key of the runtime fact that holds who wrote the values of the active composed catalog
+/// generation (#428 SCHED-C1b, register §1.299): [`ConfigCatalogProvenance`]. Absent while no
+/// composed generation had a fixed value or a declared valuation; recorded empty once the active
+/// one has none.
+pub const CONFIG_CATALOG_PROVENANCE_FACT_KEY: &str = "config.catalog_provenance";
 /// Key of the runtime fact that holds the settings an instruction changed (Workflow #387 D1b,
 /// model v1.2 §5.7): one row per overridden key, restored at start.
 pub const CONFIG_OVERRIDES_FACT_KEY: &str = "host.config_overrides";
@@ -729,6 +734,294 @@ impl ConfigCatalogWarnings {
                     warning,
                     game,
                     pointer,
+                }),
+                _ => return Err(refused()),
+            }
+        }
+        Ok(read)
+    }
+}
+
+/// Which value of a composed catalog a `config.catalog_provenance` row names (#428 SCHED-C1b,
+/// register §1.299): a judged rule's fixed value or a pool's declared valuation block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CatalogValueKind {
+    FixedValue,
+    Valuation,
+}
+
+impl CatalogValueKind {
+    /// Every kind, in the order the fact lists them.
+    pub const ALL: [Self; 2] = [Self::FixedValue, Self::Valuation];
+
+    /// The spelling the fact and the overview carry.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FixedValue => "fixed_value",
+            Self::Valuation => "valuation",
+        }
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == text)
+    }
+}
+
+/// Who wrote a value of a composed catalog (#428 SCHED-C1b): the pack's own hand (no origin
+/// member in `schedule.json`) or the model's export (the origin member `"model"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CatalogValueOrigin {
+    Pack,
+    Model,
+}
+
+impl CatalogValueOrigin {
+    /// Every origin, in the order the fact lists them.
+    pub const ALL: [Self; 2] = [Self::Pack, Self::Model];
+
+    /// The spelling the fact and the overview carry.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pack => "pack",
+            Self::Model => "model",
+        }
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|origin| origin.as_str() == text)
+    }
+}
+
+/// One value of the active composed catalog generation by who wrote it (#428 SCHED-C1b): the
+/// game whose `schedule.json` holds it, its kind, its origin and the file id of its rule or pool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogProvenanceEntry {
+    pub game: String,
+    pub kind: CatalogValueKind,
+    pub origin: CatalogValueOrigin,
+    pub id: String,
+}
+
+/// How many values of one kind one game's file holds from one origin (#428 SCHED-C1b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogProvenanceCount {
+    pub game: String,
+    pub kind: CatalogValueKind,
+    pub origin: CatalogValueOrigin,
+    pub count: u64,
+}
+
+/// The member of the cut row of `config.catalog_provenance` that says how many count rows the
+/// fact's row bound left out (#428 SCHED-C1b, as CW-1 fix 1).
+const CATALOG_PROVENANCE_COUNTS_OMITTED: &str = "counts_omitted";
+/// The member of the cut row of `config.catalog_provenance` that says how many id rows the fact's
+/// row bound left out (#428 SCHED-C1b).
+const CATALOG_PROVENANCE_IDS_OMITTED: &str = "ids_omitted";
+
+/// Who wrote the values of the active composed catalog generation (#428 SCHED-C1b, register
+/// §1.299; `contracts/standard-pack-schedule.md`, "Provenance"), recorded as
+/// `config.catalog_provenance` (runtime scope, re-observed like every `config.` fact): first one
+/// count row `{game, kind, origin, count}` per game, kind and origin that has a value, then one id
+/// row `{game, kind, origin, id}` per rule or pool. As `config.catalog_warnings` (CW-1 fix 1), rows
+/// past the fact's row bound are never left out silently: the id rows are cut first, then the
+/// count rows, and one last cut row `{counts_omitted, ids_omitted}` says how many of each are
+/// missing. Empty while the generation has no fixed value and no declared valuation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigCatalogProvenance {
+    pub counts: Vec<CatalogProvenanceCount>,
+    pub ids: Vec<CatalogProvenanceEntry>,
+    /// How many count rows the row bound left out: their values are in no count.
+    pub counts_omitted: u64,
+    /// How many id rows the row bound left out.
+    pub ids_omitted: u64,
+}
+
+impl ConfigCatalogProvenance {
+    /// The values of `entries`: counted by game, kind and origin, and listed in the order game,
+    /// kind, origin, then as given (the composer gives each list in file order). When the rows
+    /// pass [`MAX_RUNTIME_FACT_RECORD_ROWS`], one row is kept for the cut row and the rest hold the
+    /// count rows first, then as many id rows as fit; [`Self::counts_omitted`] and
+    /// [`Self::ids_omitted`] say how many of each were left out.
+    pub fn of(entries: &[CatalogProvenanceEntry]) -> Self {
+        let mut ids = entries.to_vec();
+        // Stable: each list keeps the order it was given in.
+        ids.sort_by(|left, right| {
+            left.game
+                .cmp(&right.game)
+                .then(left.kind.cmp(&right.kind))
+                .then(left.origin.cmp(&right.origin))
+        });
+        let mut counts = BTreeMap::<(&str, CatalogValueKind, CatalogValueOrigin), u64>::new();
+        for entry in &ids {
+            *counts
+                .entry((entry.game.as_str(), entry.kind, entry.origin))
+                .or_default() += 1;
+        }
+        let mut counts = counts
+            .into_iter()
+            .map(|((game, kind, origin), count)| CatalogProvenanceCount {
+                game: game.to_owned(),
+                kind,
+                origin,
+                count,
+            })
+            .collect::<Vec<_>>();
+        let (mut counts_omitted, mut ids_omitted) = (0, 0);
+        if counts.len() + ids.len() > MAX_RUNTIME_FACT_RECORD_ROWS {
+            let omitted = |rows: usize| u64::try_from(rows).unwrap_or(u64::MAX);
+            // The cut row takes one row of the bound.
+            let room = MAX_RUNTIME_FACT_RECORD_ROWS - 1;
+            let counts_kept = counts.len().min(room);
+            let ids_kept = room - counts_kept;
+            counts_omitted = omitted(counts.len().saturating_sub(counts_kept));
+            ids_omitted = omitted(ids.len().saturating_sub(ids_kept));
+            counts.truncate(counts_kept);
+            ids.truncate(ids_kept);
+        }
+        Self {
+            counts,
+            ids,
+            counts_omitted,
+            ids_omitted,
+        }
+    }
+
+    /// Whether the generation has no fixed value and no declared valuation.
+    pub fn is_empty(&self) -> bool {
+        self.counts.is_empty() && self.counts_omitted == 0
+    }
+
+    /// Whether the row bound left rows out: the fact then ends with its cut row.
+    pub fn is_cut(&self) -> bool {
+        self.counts_omitted > 0 || self.ids_omitted > 0
+    }
+
+    /// How many values of `kind` from `origin` the count rows count, over every game; a value
+    /// whose count row was left out ([`Self::counts_omitted`]) is not in it.
+    pub fn total(&self, kind: CatalogValueKind, origin: CatalogValueOrigin) -> u64 {
+        self.counts
+            .iter()
+            .filter(|count| count.kind == kind && count.origin == origin)
+            .map(|count| count.count)
+            .sum()
+    }
+
+    /// The `config.catalog_provenance` fact: the count rows, then the id rows, then, when rows
+    /// were left out, the cut row `{counts_omitted, ids_omitted}`.
+    pub fn to_fact_record(
+        &self,
+        observed_at_unix_ms: u64,
+        source: OriginModule,
+    ) -> RuntimeFactRecord {
+        let row = |game: &str, kind: CatalogValueKind, origin: CatalogValueOrigin| {
+            BTreeMap::from([
+                ("game".to_owned(), FactScalar::String(game.to_owned())),
+                (
+                    "kind".to_owned(),
+                    FactScalar::String(kind.as_str().to_owned()),
+                ),
+                (
+                    "origin".to_owned(),
+                    FactScalar::String(origin.as_str().to_owned()),
+                ),
+            ])
+        };
+        let integer = |value: u64| FactScalar::Integer(i64::try_from(value).unwrap_or(i64::MAX));
+        let counts = self.counts.iter().map(|count| {
+            let mut counted = row(&count.game, count.kind, count.origin);
+            counted.insert("count".to_owned(), integer(count.count));
+            counted
+        });
+        let ids = self.ids.iter().map(|entry| {
+            let mut listed = row(&entry.game, entry.kind, entry.origin);
+            listed.insert("id".to_owned(), FactScalar::String(entry.id.clone()));
+            listed
+        });
+        let cut = self.is_cut().then(|| {
+            BTreeMap::from([
+                (
+                    CATALOG_PROVENANCE_COUNTS_OMITTED.to_owned(),
+                    integer(self.counts_omitted),
+                ),
+                (
+                    CATALOG_PROVENANCE_IDS_OMITTED.to_owned(),
+                    integer(self.ids_omitted),
+                ),
+            ])
+        });
+        RuntimeFactRecord {
+            scope: RuntimeFactScope::Runtime,
+            key: CONFIG_CATALOG_PROVENANCE_FACT_KEY.to_owned(),
+            value: FactValue::RecordList(counts.chain(ids).chain(cut).collect()),
+            observed_at_unix_ms,
+            source,
+            ttl_ms: None,
+        }
+    }
+
+    /// The values a `config.catalog_provenance` record holds; a row that is neither a count row,
+    /// an id row nor, last, a cut row as [`Self::to_fact_record`] writes them is
+    /// `invalid_fact_snapshot_record`.
+    pub fn from_fact_record(record: &RuntimeFactRecord) -> Result<Self, SanitizationError> {
+        let refused = || {
+            SanitizationError::new(
+                SanitizationCode::InvalidFactSnapshotRecord,
+                "config_catalog_provenance",
+            )
+        };
+        let FactValue::RecordList(rows) = &record.value else {
+            return Err(refused());
+        };
+        let mut read = Self::default();
+        for (index, row) in rows.iter().enumerate() {
+            // The cut row, the last one, with its two members and nothing else.
+            if row.contains_key(CATALOG_PROVENANCE_COUNTS_OMITTED)
+                || row.contains_key(CATALOG_PROVENANCE_IDS_OMITTED)
+            {
+                let omitted = |field: &str| match row.get(field) {
+                    Some(FactScalar::Integer(value)) => {
+                        u64::try_from(*value).map_err(|_| refused())
+                    }
+                    _ => Err(refused()),
+                };
+                read.counts_omitted = omitted(CATALOG_PROVENANCE_COUNTS_OMITTED)?;
+                read.ids_omitted = omitted(CATALOG_PROVENANCE_IDS_OMITTED)?;
+                if index + 1 != rows.len() || row.len() != 2 || !read.is_cut() {
+                    return Err(refused());
+                }
+                continue;
+            }
+            let text = |field: &str| match row.get(field) {
+                Some(FactScalar::String(value)) => Ok(value.clone()),
+                _ => Err(refused()),
+            };
+            let game = text("game")?;
+            let kind = text("kind")?;
+            let kind = CatalogValueKind::parse(&kind).ok_or_else(refused)?;
+            let origin = text("origin")?;
+            let origin = CatalogValueOrigin::parse(&origin).ok_or_else(refused)?;
+            // A count row or an id row: the three members and one of `count` and `id`.
+            if row.len() != 4 {
+                return Err(refused());
+            }
+            match (row.get("count"), row.get("id")) {
+                (Some(FactScalar::Integer(count)), None) => {
+                    let count = u64::try_from(*count)
+                        .ok()
+                        .filter(|count| *count > 0)
+                        .ok_or_else(refused)?;
+                    read.counts.push(CatalogProvenanceCount {
+                        game,
+                        kind,
+                        origin,
+                        count,
+                    });
+                }
+                (None, Some(FactScalar::String(id))) => read.ids.push(CatalogProvenanceEntry {
+                    game,
+                    kind,
+                    origin,
+                    id: id.clone(),
                 }),
                 _ => return Err(refused()),
             }

@@ -39,6 +39,10 @@ use std::time::{Duration, Instant};
 const ADMISSION_INSTANCE: &str = "lab.package.edit";
 const BYTE_ORDER_MARK: &[u8] = b"\xEF\xBB\xBF";
 pub(crate) const FMT_FLAGS: &[&str] = &["--package", "--check"];
+/// Workflow #434 LAB-5B4: the flag of `package fmt` that takes no value, which takes none from the
+/// next word but `true` or `false` (`FlagArgs::parse_switches`); the register reads it
+/// (`cli_module::own_flags`).
+pub(crate) const FMT_SWITCHES: [&str; 1] = ["--check"];
 pub(crate) const EDIT_FLAGS: &[&str] = &[
     "--package",
     "--patch",

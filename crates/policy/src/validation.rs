@@ -2174,8 +2174,16 @@ fn validate_pools(
                 diagnostics,
             );
         }
-        // SS-2h (register §1.289): the stop line and the hard line are V2's.
-        validate_pool_lines(pool, &path, map, descriptor, diagnostics);
+        // SS-2h (register §1.289): the stop line and the hard line are V2's; SCHED-C1c (register
+        // §1.299): so is the trigger line, and the consumers tell whether the lines can spend.
+        validate_pool_lines(
+            pool,
+            &bundle.tasks.tasks,
+            &path,
+            map,
+            descriptor,
+            diagnostics,
+        );
     }
 }
 
@@ -2191,9 +2199,18 @@ fn validate_pools(
 /// 3. the stop line not above the hard line, when both are known to the compiler: two constants,
 ///    or two references to one fact compared by their offsets (at `hard_line`).
 ///
-/// Lines the compiler cannot compare are checked at each evaluation (`lines_invalid`).
+/// SCHED-C1c (register §1.299; "The trigger line" there): a pool's `trigger_line` at
+/// `<path>/trigger_line` is a V2 member of the same two forms and rules, and `pool_lines_invalid`
+/// at it when it is written without both other lines (rule 1), above the capacity (rule 2), or
+/// below the stop line where both are known to the compiler (rule 4: two constants, or two
+/// references to one fact compared by their offsets).
+///
+/// Lines the compiler cannot compare are checked at each evaluation (`lines_invalid`). SCHED-C1c:
+/// a valued pool whose lines are valid and cannot spend it ([`unspendable_lines`]) compiles with
+/// the warning `pool_lines_unspendable` at its `hard_line`.
 fn validate_pool_lines(
     pool: &PoolSpec,
+    tasks: &[TaskSpec],
     path: &str,
     map: &SourceMap,
     descriptor: Option<(&str, u64)>,
@@ -2202,6 +2219,7 @@ fn validate_pool_lines(
     let written = [
         ("stop_line", &pool.stop_line),
         ("hard_line", &pool.hard_line),
+        ("trigger_line", &pool.trigger_line),
     ];
     if written.iter().all(|(_, line)| line.is_none()) {
         return;
@@ -2245,17 +2263,28 @@ fn validate_pool_lines(
         }
     }
     let (Some(stop), Some(hard)) = (&pool.stop_line, &pool.hard_line) else {
-        let member = if pool.stop_line.is_some() {
-            "stop_line"
-        } else {
-            "hard_line"
-        };
-        diagnostics.push(map.diagnostic(
-            CatalogDiagnosticCode::PoolLinesInvalid,
-            format!("{path}/{member}"),
-            "a pool writes stop_line and hard_line together, or neither",
-            descriptor,
-        ));
+        if pool.stop_line.is_some() || pool.hard_line.is_some() {
+            let member = if pool.stop_line.is_some() {
+                "stop_line"
+            } else {
+                "hard_line"
+            };
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::PoolLinesInvalid,
+                format!("{path}/{member}"),
+                "a pool writes stop_line and hard_line together, or neither",
+                descriptor,
+            ));
+        }
+        // SCHED-C1c, rule 1: a trigger line only beside both lines.
+        if pool.trigger_line.is_some() {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::PoolLinesInvalid,
+                format!("{path}/trigger_line"),
+                "a pool writes trigger_line only beside stop_line and hard_line",
+                descriptor,
+            ));
+        }
         return;
     };
     // SS-2h fix 1: only a valued pool's lines take part; a pool without a declared valuation
@@ -2273,8 +2302,18 @@ fn validate_pool_lines(
     if !well_formed {
         return;
     }
-    // Rule 2: a line above the capacity, where both are known here.
-    for (member, line) in [("stop_line", stop), ("hard_line", hard)] {
+    let invalid = diagnostics.len();
+    // Rule 2: a line above the capacity, where both are known here; SCHED-C1c: the trigger line
+    // too.
+    let lines = [
+        ("stop_line", Some(stop)),
+        ("hard_line", Some(hard)),
+        ("trigger_line", pool.trigger_line.as_ref()),
+    ];
+    for (member, line) in lines {
+        let Some(line) = line else {
+            continue;
+        };
         let above = match (line, &pool.capacity) {
             (PoolLine::Constant(value), PoolCapacity::Constant(capacity)) => value > capacity,
             (PoolLine::Fact(reference), PoolCapacity::Fact(capacity)) => {
@@ -2307,6 +2346,89 @@ fn validate_pool_lines(
             descriptor,
         ));
     }
+    // SCHED-C1c, rule 4: the trigger line at or above the stop line, where both are known here.
+    let below = match (&pool.trigger_line, stop) {
+        (Some(PoolLine::Constant(trigger)), PoolLine::Constant(stop)) => trigger < stop,
+        (Some(PoolLine::Fact(trigger)), PoolLine::Fact(stop)) => {
+            trigger.fact_key == stop.fact_key && trigger.offset < stop.offset
+        }
+        _ => false,
+    };
+    if below {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::PoolLinesInvalid,
+            format!("{path}/trigger_line"),
+            "a pool's trigger_line may not be below its stop_line",
+            descriptor,
+        ));
+    }
+    // SCHED-C1c ("A pool its lines cannot spend"): valid lines of a valued pool that no judged
+    // consumer's run fits under, where the compiler can tell (a warning; the catalog compiles).
+    if diagnostics.len() == invalid
+        && pool.declared_valuation().is_some()
+        && let Some((room, least)) = unspendable_lines(pool, hard, tasks)
+    {
+        let mut warning = map.diagnostic(
+            CatalogDiagnosticCode::PoolLinesUnspendable,
+            format!("{path}/hard_line"),
+            format!(
+                "every judged consumer's run consumes more than the capacity less the hard_line: \
+                 pool_id={} capacity_less_hard_line={room} least_consumption={least}",
+                pool.id
+            ),
+            descriptor,
+        );
+        warning.severity = DiagnosticSeverity::Warning;
+        diagnostics.push(warning);
+    }
+}
+
+/// SCHED-C1c (register §1.299; `contracts/scheduling/README.md`, "Pool lines", "A pool its lines
+/// cannot spend"): where the compiler can tell, the pool's capacity less its hard line `hard` and
+/// the least consumption `⌈C/1000⌉` of one run among the pool's judged consumers, when every one
+/// consumes more than that room: no run can start from the capacity without leaving the pool below
+/// its hard line. The compiler can tell for a constant hard line against a constant capacity, and
+/// for a hard line that references the capacity's own fact (the capacity's offset less the
+/// line's), against every consumer's consumption: a judged task that is no manual request and
+/// declares a consumption of the pool, the evaluator's consumers, one of whose entries of the pool
+/// is pending leaving it untold. `None` otherwise, and for a pool without a consumer.
+fn unspendable_lines(pool: &PoolSpec, hard: &PoolLine, tasks: &[TaskSpec]) -> Option<(u64, u64)> {
+    let room = match (&pool.capacity, hard) {
+        (PoolCapacity::Constant(capacity), PoolLine::Constant(hard)) => {
+            capacity.checked_sub(*hard)?
+        }
+        (PoolCapacity::Fact(capacity), PoolLine::Fact(hard)) => {
+            if capacity.fact_key != hard.fact_key {
+                return None;
+            }
+            u64::try_from(i128::from(capacity.offset) - i128::from(hard.offset)).ok()?
+        }
+        _ => return None,
+    };
+    let mut least = None::<u64>;
+    for task in tasks {
+        if !task.is_benefit_judged() || crate::evaluator::manual_request(task) {
+            continue;
+        }
+        let mut entries = task
+            .consumes
+            .iter()
+            .filter(|effect| effect.pool_id == pool.id)
+            .peekable();
+        if entries.peek().is_none() {
+            continue;
+        }
+        if entries.any(|effect| effect.is_pending()) {
+            return None;
+        }
+        let consumed = crate::resource_targets::declared_consumption(task, &pool.id).ok()?;
+        if consumed > 0 {
+            least = Some(least.map_or(consumed, |least| least.min(consumed)));
+        }
+    }
+    least
+        .filter(|least| *least > room)
+        .map(|least| (room, least))
 }
 
 fn validate_valuation(

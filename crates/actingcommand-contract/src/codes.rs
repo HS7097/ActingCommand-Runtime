@@ -199,6 +199,8 @@ crate::outcome_codes! {
         // Workflow #429 R-12 (register §1.264): the routine summary's read first answers
         // completed.
         RoutineSummaryCompleted => "request_routine_summary_completed": success / none,
+        // Workflow #429 R-6 (register §1.302): a stop first answers completed.
+        StopInstanceRunCompleted => "request_stop_instance_run_completed": success / none,
     }
 }
 
@@ -466,6 +468,13 @@ crate::outcome_codes! {
         // threshold written, `limit_count` 10). A hint only; the root is composed as before. The
         // policy composer finds it; the resource tools report it.
         StandardPackEscalationThresholdHigh => "standard_pack_escalation_threshold_high": warning / declaration_error,
+        // #428 SCHED-C1c (register §1.299; contracts/standard-pack-schedule.md, "A redundant
+        // trigger"): a judged rule consumes a pool that writes both lines and a declared valuation
+        // block, and its trigger still requires, through `all`, the pool's reading at least its
+        // capacity fact less a margin, which the capped spending order already does (keys `game`,
+        // `task_id` the rule, `pool_id` the file's pool). A hint only; the root is composed as
+        // before. The policy composer finds it; the resource tools report it.
+        StandardPackLineTriggerRedundant => "standard_pack_line_trigger_redundant": warning / declaration_error,
         // Workflow #373 NAV-6: a standard-pack root file breaks its shape, a limit or a
         // reference (keys `game`, `path`, `standard_pack_problem`, `json_pointer`). The Runtime's
         // root reader and check-config report it; the resource tools share the same check.

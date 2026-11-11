@@ -56,6 +56,8 @@ pub(crate) fn options() -> [&'static str; 3] {
 
 /// Workflow #434 LAB-5B2: the flags `resource validate` takes.
 pub(crate) const VALIDATE_FLAGS: [&str; 3] = ["--repo", "--changed-path", "--changed-paths-file"];
+/// Workflow #434 LAB-5B4: the positionals `resource validate` reads: none.
+pub(crate) const VALIDATE_POSITIONALS: [&str; 0] = [];
 
 pub(crate) fn run_resource_validation(repo: &Path, flags: &FlagArgs) -> CliOutcome<Value> {
     for flag in flags.flags.keys() {
@@ -65,6 +67,8 @@ pub(crate) fn run_resource_validation(repo: &Path, flags: &FlagArgs) -> CliOutco
             )));
         }
     }
+    // Workflow #434 LAB-5B4: it reads no positional; one is refused, not ignored.
+    flags.refuse_unread_positionals("resource validate", &VALIDATE_POSITIONALS)?;
     let mut reader = DeclarationReader::new(repo)?;
     let mut selected = flags
         .values("--changed-path")

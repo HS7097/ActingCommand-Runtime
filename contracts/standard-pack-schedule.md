@@ -34,7 +34,7 @@ package path and no approval:
 
 SCHED-C1a (register §1.299, since 0.12.52) adds to a rule an optional `"fixed_value_milli"` with an
 optional `"fixed_value_origin"` ("The fixed value" below), and to a pool an optional
-`"valuation_origin"` ("Provenance" below). SCHED-C1 (register §1.299, not built yet): a pool's V2
+`"valuation_origin"` ("Provenance" below). SCHED-C1c (register §1.299, since 0.12.53): a pool's V2
 member `"trigger_line"` passes through as the other two lines do.
 
 Every member but `schema_version` may be absent, which means empty. The reader
@@ -106,7 +106,7 @@ names the member). A reference form needs `pool_lines` only.
 
 SCHED-C1a (register §1.299, since 0.12.52). A rule that writes `fixed_value_milli` or a pool that
 writes `valuation_origin` ("The fixed value", "Provenance" below) requires `benefit_fixed_value`,
-and (SCHED-C1, not built yet) a pool that writes `trigger_line`
+and (SCHED-C1c, since 0.12.53) a pool that writes `trigger_line`
 ([scheduling/README.md](scheduling/README.md), "Pool lines", "The trigger line") requires
 `pool_trigger_line` beside `pool_lines`, alike: the composer refuses a file that writes one while
 `requires` does not name its subsystem, `schedule_invalid` at the first such member in file order
@@ -307,8 +307,8 @@ replace.
   so the composed pool never carries it.
 - The tools answer `benefit_provenance` for each game ("Tools"): `{fixed_value: {pack: [rule ids],
   model: [rule ids]}, valuation: {pack: [pool ids], model: [pool ids]}}`, in file order.
-- (SCHED-C1b, not built yet) The workbench holds the active generation's provenance, every
-  game's, in the program fact
+- (SCHED-C1b, register §1.299, since 0.12.53) The workbench holds the active generation's
+  provenance, every game's, in the program fact
   `config.catalog_provenance` (runtime scope, re-observed; [runtime-config.md](runtime-config.md),
   "Facts", its row with the code): one count row `{game, kind, origin, count}` per game, kind
   (`fixed_value`, `valuation`) and origin, then one row `{game, kind, origin, id}` per rule or
@@ -351,8 +351,9 @@ each game root that holds `schedule.json`, that file's bytes, the root as
 2. **Read** each game's file (above): the reader, `requires` (it names `fact_reference` when a
    rule writes a fact reference, `pool_fact_reference` when a pool's `capacity` or a
    `resource_projection`'s `value` is one, `pool_lines` when a pool writes `stop_line` or
-   `hard_line`, SCHED-C1: `pool_trigger_line` when one writes `trigger_line` and
-   `benefit_fixed_value` when a rule writes `fixed_value_milli` or a pool `valuation_origin`,
+   `hard_line`, SCHED-C1c (0.12.53) and SCHED-C1a (0.12.52): `pool_trigger_line` when one writes
+   `trigger_line` and `benefit_fixed_value` when a rule writes `fixed_value_milli` or a pool
+   `valuation_origin`,
    `reset_exclusions` when a timeline event writes
    `excludes_fact_prefixes`, `fact_unknown_probe` when a rule's `fact` predicate writes
    `on_unknown`, and the given subsystems name each entry), no timeline event
@@ -466,10 +467,10 @@ warnings; `standard-pack compose` and the Runtime's workbench do not.
   SS-4 (since 0.12.34): after those, `warnings` ends with one
   `standard_pack_escalation_threshold_high` per rule ("Failure escalation without a daily bound"
   below). SCHED-C1a (register §1.299, since 0.12.52): `benefit_coverage` also answers
-  `fixed_value`, and both answer `benefit_provenance` ("Provenance" above). SCHED-C1 (not built
-  yet): `warnings` ends with one `standard_pack_line_trigger_redundant` per rule ("A redundant
-  trigger" below).
-- **A redundant trigger** (SCHED-C1, not built yet; the coordinator's point 12;
+  `fixed_value`, and both answer `benefit_provenance` ("Provenance" above). SCHED-C1c (since
+  0.12.53): `warnings` ends with one `standard_pack_line_trigger_redundant` per rule and pool ("A
+  redundant trigger" below).
+- **A redundant trigger** (SCHED-C1c, register §1.299, since 0.12.53; the coordinator's point 12;
   [scheduling/README.md](scheduling/README.md), "Capped spending order", "Old triggers on a capped
   pool"). A judged rule that consumes a pool writing both lines and a declared valuation block,
   and whose `trigger` requires through `all` the pool's reading (its `resource_projection`, or a
@@ -551,7 +552,7 @@ nothing.
   fact was cut ([runtime-interface.md](runtime-interface.md)). A warning the composer cannot place in a game's
   file (none so far) has no game, keeps its pointer in the composed document and is held in the
   fact only. Composing, activating and deciding do not depend on them.
-- **Provenance** (SCHED-C1, register §1.299, not built yet). After the same compositions the
+- **Provenance** (SCHED-C1b, register §1.299, since 0.12.53). After the same compositions the
   workbench also holds the active generation's provenance in `config.catalog_provenance`
   ("Provenance" above), with no record of its own: the `standard_pack_registered` record is
   unchanged.
@@ -667,5 +668,6 @@ No ledger record type or member is added. A composed generation is activated wit
 catalog records and no approval (RL-1b); `standard_pack_registered` gains the optional values
 `schedule_sha256`, `rules`, `held` and `unclassified`, and (#428 CW-1) `compile_warnings`, values
 the ledger's reader only spells, on the records the workbench writes already (no record is added);
-`config.catalog_warnings` is a new key of the `config.` fact family. The configuration's catalog section, its approvals and
+`config.catalog_warnings` and (#428 SCHED-C1b) `config.catalog_provenance` are new keys of the
+`config.` fact family. The configuration's catalog section, its approvals and
 its procedure manifest stay as they are until RL-C removes them.

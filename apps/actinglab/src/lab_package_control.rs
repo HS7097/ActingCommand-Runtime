@@ -76,8 +76,8 @@ fn run_lab_vendor_stdio_selftest(args: &[String]) -> CliOutcome<Value> {
     }))
 }
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `package inspect` reads.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `package inspect` reads. Workflow #434 LAB-5B4: its command
+/// line is parsed by it (`FlagArgs::parse_reading`); no positional.
 pub(crate) const INSPECT_READS: crate::flag_args::reads::FlagReads =
     crate::flag_args::reads::FlagReads {
         row: "package inspect",
@@ -86,19 +86,33 @@ pub(crate) const INSPECT_READS: crate::flag_args::reads::FlagReads =
             switches: &[],
             refused: &[],
         }],
+        positionals: &[],
     };
 
-/// Workflow #434 LAB-5B3 (tests only): holds the reads of `package <sub>`'s flags to its read list
-/// when it is lenient, and to the forms the register gives them for `fmt` and `loading`. A
-/// function of its own, not a match in `run_package`: the command inventory guard
+/// Workflow #434 LAB-5B4: the flags of `package <sub>`: `validate`'s, `inspect`'s and `bundle`'s
+/// parsed by their read lists (`FlagArgs::parse_reading`), which refuse a word the list does not
+/// hold; `fmt`'s and `loading`'s with their switches taking no value from the next word but `true`
+/// or `false` (they check their flags against their own lists); every other subcommand's as
+/// before. A function of its own, not a match in `run_package`: the command inventory guard
 /// (`command_inventory_matches_checked_in_snapshot`) takes the first match on the subcommand in a
 /// group's dispatcher for its dispatch.
+fn package_flags(sub: &str, args: &[String]) -> CliOutcome<FlagArgs> {
+    Ok(match sub {
+        "validate" => FlagArgs::parse_reading(args, &package_cli::VALIDATE_READS)?,
+        "inspect" => FlagArgs::parse_reading(args, &INSPECT_READS)?,
+        "bundle" => FlagArgs::parse_reading(args, &package_build::BUNDLE_READS)?,
+        "fmt" => FlagArgs::parse_switches(args, &crate::package_tool::FMT_SWITCHES),
+        "loading" => FlagArgs::parse_switches(args, &package_build::LOADING_SWITCHES),
+        _ => FlagArgs::parse(args)?,
+    })
+}
+
+/// Workflow #434 LAB-5B3 (tests only): holds the reads of `package fmt`'s and `package loading`'s
+/// flags to the forms the register gives them (the read lists hold the others,
+/// [`package_flags`]); a function of its own for the reason `package_flags` gives.
 #[cfg(test)]
 fn hold_package_reads(sub: &str, flags: &FlagArgs) {
     match sub {
-        "validate" => flags.reading(&package_cli::VALIDATE_READS),
-        "inspect" => flags.reading(&INSPECT_READS),
-        "bundle" => flags.reading(&package_build::BUNDLE_READS),
         "fmt" => flags.reading_forms("package fmt"),
         "loading" => flags.reading_forms("package loading"),
         _ => {}
@@ -106,9 +120,9 @@ fn hold_package_reads(sub: &str, flags: &FlagArgs) {
 }
 
 pub(super) fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    // Workflow #434 LAB-5B3: in test builds, a lenient subcommand's reads are held to its read
-    // list, and those of `fmt` and `loading` to the forms the register gives their flags.
+    let flags = package_flags(sub, args)?;
+    // Workflow #434 LAB-5B3: in test builds, the reads of `fmt` and `loading` are held to the
+    // forms the register gives their flags.
     #[cfg(test)]
     hold_package_reads(sub, &flags);
     match sub {
@@ -229,8 +243,8 @@ fn write_package_light_event(
     }))
 }
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `operation validate` reads.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `operation validate` reads. Workflow #434 LAB-5B4: each of the
+/// three lists of `operation` parses its command line (`FlagArgs::parse_reading`); no positional.
 pub(crate) const OPERATION_VALIDATE_READS: crate::flag_args::reads::FlagReads =
     crate::flag_args::reads::FlagReads {
         row: "operation validate",
@@ -239,41 +253,41 @@ pub(crate) const OPERATION_VALIDATE_READS: crate::flag_args::reads::FlagReads =
             switches: &[],
             refused: &[],
         }],
+        positionals: &[],
     };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `operation inspect` reads.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `operation inspect` reads.
 pub(crate) const OPERATION_INSPECT_READS: crate::flag_args::reads::FlagReads =
     crate::flag_args::reads::FlagReads {
         row: "operation inspect",
         parts: &[&OPERATION_DIR_READS],
+        positionals: &[],
     };
 
-/// Workflow #434 LAB-5B3 (tests only): the flags `operation explain` reads, as `inspect`'s.
-#[cfg(test)]
+/// Workflow #434 LAB-5B3: the flags `operation explain` reads, as `inspect`'s.
 pub(crate) const OPERATION_EXPLAIN_READS: crate::flag_args::reads::FlagReads =
     crate::flag_args::reads::FlagReads {
         row: "operation explain",
         parts: &[&OPERATION_DIR_READS],
+        positionals: &[],
     };
 
 /// The operation directory `operation inspect` and `operation explain` read.
-#[cfg(test)]
 const OPERATION_DIR_READS: crate::flag_args::reads::ReadPart = crate::flag_args::reads::ReadPart {
     options: &["--operation-dir"],
     switches: &[],
     refused: &[],
 };
 
-/// Workflow #434 LAB-5B3 (tests only): holds the reads of a lenient `operation <sub>`'s flags to
-/// its read list; a function of its own for the reason `hold_package_reads` gives.
-#[cfg(test)]
-fn hold_operation_reads(sub: &str, flags: &FlagArgs) {
+/// Workflow #434 LAB-5B4: the flags of `operation <sub>`: `validate`'s, `inspect`'s and
+/// `explain`'s parsed by their read lists, which refuse a word the list does not hold; `run`'s as
+/// before. A function of its own for the reason `package_flags` gives.
+fn operation_flags(sub: &str, args: &[String]) -> CliOutcome<FlagArgs> {
     match sub {
-        "validate" => flags.reading(&OPERATION_VALIDATE_READS),
-        "inspect" => flags.reading(&OPERATION_INSPECT_READS),
-        "explain" => flags.reading(&OPERATION_EXPLAIN_READS),
-        _ => {}
+        "validate" => FlagArgs::parse_reading(args, &OPERATION_VALIDATE_READS),
+        "inspect" => FlagArgs::parse_reading(args, &OPERATION_INSPECT_READS),
+        "explain" => FlagArgs::parse_reading(args, &OPERATION_EXPLAIN_READS),
+        _ => FlagArgs::parse(args),
     }
 }
 
@@ -282,10 +296,7 @@ pub(super) fn run_operation(
     _global: &GlobalOptions,
     args: &[String],
 ) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    // Workflow #434 LAB-5B3: in test builds, each lenient subcommand's reads are held to its list.
-    #[cfg(test)]
-    hold_operation_reads(sub, &flags);
+    let flags = operation_flags(sub, args)?;
     match sub {
         "validate" => {
             let repo = flags.required_path("--repo")?;

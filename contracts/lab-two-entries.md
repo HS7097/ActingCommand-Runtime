@@ -152,7 +152,8 @@ No roles, users or tokens. It equals the table's `ui_kinds` (section 9), which L
 | `PauseScheduling`, `ResumeScheduling`, `ControlEmulatorInstance`, `SelfCheckInstance`, `RequestShutdown` | write | the console sends them today |
 | `ApplicationLifecycle` | write | the console sends it today; the kind acts only on the instance's assigned application |
 | `ConfigureSettings` | write | the console sends it today; every key `daily` or `advanced` and settable (section 2.3) |
-| `RunInstanceTask`, `StopInstanceRun`, `EditPackSchedule`, `EditResourceTarget`, `AcquirePlayerHold`, `ReleasePlayerHold` | write | on the list before they are built (#429 R-5, R-6, R-8, R-13c, R-7b); until then the Runtime answers them `not_implemented` |
+| `StopInstanceRun` | write | built by #429 R-6's first slice (0.12.53): it stops a client's direct run and the Runtime resets the device itself; a policy run and a host run are refused with `run_origin` (runtime-interface.md, "Workbench request kinds") |
+| `RunInstanceTask`, `EditPackSchedule`, `EditResourceTarget`, `AcquirePlayerHold`, `ReleasePlayerHold` | write | on the list before they are built (#429 R-5, R-8, R-13c, R-7b); until then the Runtime answers them `not_implemented` |
 | `RecordClientAction` | write | transitional: the console's button trace, until UI-L1 ships; LAB-7 takes it off the list, since the G14 record's initiator replaces it |
 
 - **Everything else is refused** on `ui`: a run by path, input and leases, stopping a run with the
@@ -334,8 +335,10 @@ Alice's answer 4. From LAB-3, in the rescue module:
 - **"Only the operation's own hold"** (§5), as LAB-3 fix 1 and 2 build it
   ([install-cli.md](install-cli.md), "The Lab's rescue module"): `release-hold <reason>` hands back
   only a hold that a journal of the module in this root recorded in its pause step, only the
-  instances that step paused, each while its pause shows that reason, in any owner epoch (the
-  Runtime's restore numbers the pauses anew, so the revision does not survive a restart); any
+  instances that step paused (and the global pause it set, `instance add`'s only: Workflow #421
+  INST-5b, install-cli.md, "Instances, the first slice"), each while its pause shows that reason,
+  in any owner epoch (the Runtime's restore numbers the pauses anew, so the revision does not
+  survive a restart); any
   other reason refuses `hold_not_owned` and nothing is resumed; `down` refuses a reason an
   instance already shows and never adopts a pause; every composite that releases follows the same
   rule; a refusal after the module paused something and before anything changed on disk hands its
@@ -595,6 +598,21 @@ sentence fails that test.
     `user-config [<key>]` for `user-config get`, `app launch|restart|stop` for `session app`, and
     the like) is given to that command in its words and answers as it does; refused short words
     are actinglab's own usage error (`validation_failed`).
+  - **actinglab's own commands refuse a word they do not read** (Workflow #434 LAB-5B4; register
+    §1.287, "Slice LAB-5B4"). Until that slice 24 own commands of the debugging and authoring
+    rows, and `run list`, `capture`, `lab receipt` and `lab evidence`, ignored a flag they did not
+    read, and a switch took the next word as its value. Now each parses its command line by its
+    read list: a flag off the list is refused before the command does anything
+    (`validation_failed`, its details `argument` the flag and `argument_problem` `unknown`, the
+    message `<command>: unknown <flag>`, as the module refuses a row's undeclared flag); an option
+    at the end of the line is refused `value_missing`; a positional beyond those the command reads
+    is refused `unknown`. On these command lines, and those of the strict commands that take
+    switches (`observe`, `do`, `ensure`, `wait`, `record mark`, `record stop`, `package fmt`,
+    `package loading`), a switch takes the next word as its value only when it is `true` or
+    `false`, and leaves any other word where it is; `observe`, `do`, `ensure`, `wait`, `package
+    preflight`, `resource catalog` and `resource validate` refuse a positional they do not read
+    too. No own command of the two modules ignores a flag. `serve --stdio` hands a row only its
+    declared parameters, as before.
   - **`serve --stdio`** answers each operation the line its `--json` answers: the CLI module's
     line, for actinglab's own commands too since LAB-2b.
   - **`status` and `run show`** (open point 10): the command line and `serve --stdio` answer them

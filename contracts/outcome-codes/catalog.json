@@ -2624,6 +2624,18 @@
     "fixed_value_milli": {
       "type": "integer",
       "description": "A task's fixed value V in milli of its game's value unit: the value of one run without the cost of the pools it consumes, written in its standard pack (the schedule.json rule member fixed_value_milli, the catalog's benefit_fixed_value_milli); a judged candidate's net benefit is V less the cost of what it consumes (#428 SCHED-C1a, contracts/scheduling/README.md \"Fixed values written in the pack\")."
+    },
+    "run_origin": {
+      "type": "vocab:run_origin",
+      "description": "Who started the run a StopInstanceRun refused: the scheduler (a policy run) or the Runtime itself (a startup package, a ladder rung); kept in codes mode (Workflow #429 R-6)."
+    },
+    "trigger_line": {
+      "type": "integer",
+      "description": "A pool's trigger line at the evaluation, in the pool's real units, when the pool writes one: a capped episode begins at a reading at or above it; without one the capacity (#428 SCHED-C1c, contracts/scheduling/README.md \"Pool lines\", \"The trigger line\")."
+    },
+    "least_consumption": {
+      "type": "integer",
+      "description": "The least consumption of one run, in whole units of the pool, among a pool's judged consumers on an instance, by their declared consumption (#428 SCHED-C1c, contracts/scheduling/README.md \"A pool its lines cannot spend\")."
     }
   },
   "vocabularies": {
@@ -9026,6 +9038,22 @@
         },
         "R11": {
           "description": "Release row R11."
+        }
+      }
+    },
+    "run_origin": {
+      "description": "Who started a run that a client cannot stop, the value of a StopInstanceRun's refusal scheduled_contained_task_not_client_cancellable (Workflow #429 R-6, contracts/runtime-interface.md \"Workbench request kinds\").",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/outcome/vocabulary.rs",
+        "enum": "RunOrigin"
+      },
+      "tokens": {
+        "policy": {
+          "description": "A run the scheduler dispatched. The first slice of R-6 refuses it until the ledger's revision 8 records its stop as an interruption; a pause or a person's hold stops it meanwhile."
+        },
+        "host": {
+          "description": "A run the Runtime starts for itself: a startup package or a recovery ladder rung; a pause or a person's hold stops it."
         }
       }
     }

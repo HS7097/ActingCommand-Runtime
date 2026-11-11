@@ -8616,7 +8616,9 @@ that builds the source opens them.
 **The debt.** `words::LENIENT_ON_COMMAND_LINE`: on the command line `recover`, `debug-package` and
 `export-evidence` still hand every further flag and word to their command, which ignores what it
 does not read, as before; `serve --stdio` refuses them. A later slice makes the three commands
-strict and removes the list.
+strict and removes the list. (Paid by LAB-5B4: the list is gone, the three rows refuse an
+undeclared flag and a further word as every row does, and their commands refuse what they do not
+read; "Slice LAB-5B4" below.)
 
 **Tests.** New: apps row "#434 LAB-5A": `gate_434_lab5a::lab5a_rows_take_what_they_took`
 (actinglab's binary tests; a state root in a temporary folder on which no Runtime runs; no device,
@@ -8920,7 +8922,7 @@ draft`) is in exactly one:
 | Kind | Constant | Rows | Its own test |
 |---|---|---|---|
 | strict | `STRICT_ROWS` | 31: `tap`, `swipe`, `long-tap`, `key`, `text`, `observe`, `do`, `ensure`, `wait`, `watch`, `signatures register\|match\|retire`, `unpin`, `record mark`, `record stop`, `package check\|preflight\|loading\|fmt\|edit`, `resource catalog\|validate\|verify\|restore`, `standard-pack check\|compose`, `scheduling compile\|timeline`, `regression`, `replay`: the own command checks its flags against lists in code | this slice |
-| lenient | `LENIENT_ROWS` | 24: `touch-probe`, `recover`, `tap-target`, `navigate`, `debug-package`, `export-evidence`, `recognize-artifact`, `record start\|status\|candidates\|amend\|step`, `package validate\|inspect\|bundle`, `resource compile-maa`, `operation validate\|inspect\|explain`, `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`: the own command ignores a flag it does not read | B3 gives each a read list |
+| lenient | `LENIENT_ROWS` | 24: `touch-probe`, `recover`, `tap-target`, `navigate`, `debug-package`, `export-evidence`, `recognize-artifact`, `record start\|status\|candidates\|amend\|step`, `package validate\|inspect\|bundle`, `resource compile-maa`, `operation validate\|inspect\|explain`, `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`: the own command ignores a flag it does not read (a debt; LAB-5B4 makes them refuse it: `READ_LIST_ROWS`, "Slice LAB-5B4") | B3 gives each a read list |
 | table-driven | `TABLE_DRIVEN_ROWS` | 6: `run start`, `run stop`, `reset`, `drill` (the CLI module serves them itself), `user-config`, `user-config set` (their own command is given only the row's declared positionals, `engine::Line::Declared`) | B1 |
 | no command | `NO_COMMAND_ROWS` | `record draft` (MCP's `ac_binding_draft` until LAB-5 builds its command) | LAB-5 |
 
@@ -9131,13 +9133,228 @@ Every existing test now also fails on an undeclared read.
 parameters of L5B3-1 to L5B3-4.
 
 **Left to other slices.** Making the 24 commands refuse a flag their list does not hold (the
-coordinator's ruling: a later slice); B1, C, E, F, G as their work orders say.
+coordinator's ruling: a later slice; done by LAB-5B4); B1, C, E, F, G as their work orders say.
 
 **What LAB-5B3 changes live.** No command line accepts, refuses or prints anything new; `serve
 --stdio` takes the parameters L5B3-1 to L5B3-4 add and hands them to the command, which reads them
 as it reads them from the command line.
 
 **LAB-5B3 rollback** (to the release before it). Nothing persisted: code and the table only.
+
+#### Slice LAB-5B4 (0.12.53): a flag a command does not read is refused; a switch does not swallow the next word
+
+Coordinator work order `rd-1108/arch-013/brief-lab5b4.md`, on the coordinator's ruling of 11-11
+(board #434, 6784514298 point 3; not Alice's words), after the read-only check
+`rd-1111/audit-check/findings-rt-lab.md` §1 and §2. Built on LAB-5B3 (#1581) and merged with main
+after it. The rule of LAB-5's earlier slices, that no command line changes what it accepts or
+refuses, has one exception here, on purpose: this slice changes exactly three things, (1) a flag
+an own command does not read is refused, (2) a switch takes no value from the next word but `true`
+or `false`, (3) a positional a command does not read is refused; nothing else.
+
+**What changed.**
+
+- **The read lists are the product's** (`flag_args::reads::{FlagReads, ReadPart}`, no longer
+  test-only; one list per command, no copy for tests). Each gains `positionals`: the positional
+  words its command reads, in order, each of which may be absent (`<name>` any word, a bare name
+  that word itself). The 24 lists of LAB-5B3, and four new ones for the own commands outside the
+  table: `run_summary::RUN_LIST_READS` (`run list`), `commands/device_commands.rs` `CAPTURE_READS`
+  (`capture`, `session capture`), `lab2_cli.rs` `RECEIPT_READS` and `EVIDENCE_READS` (`lab
+  receipt`, `lab evidence`). A list's `row` is the command's name in its refusal (the row's name;
+  the four commands' own words).
+- **`FlagArgs::parse_reading(args, list)`** parses the command line of each of these 28 commands
+  where it starts, before it reads or writes anything (the record actions' before their session
+  directory is created; `package`'s, `operation`'s and `run`'s dispatchers through
+  `package_flags`, `operation_flags` and `run_flags`, functions of their own so that the command
+  inventory guard still reads each dispatcher's first match; `resource compile-maa` before
+  `--repo` is read): a flag off the list is refused `unknown`; a switch of the list takes the next
+  word only when it is `true` or `false`; an option takes the next word as before (none that
+  begins with `--`) and at the end of the line is refused `value_missing`; a flag the list reads
+  only to refuse it (`--via-daemon`, `--local`, `--state-dir`, `--touch-backend`, the readers'
+  `--capture`) is read as before, for the command's own refusal; a positional beyond the list's,
+  or other than the word it names, is refused `unknown`. In test builds the parse holds the flags
+  to the list (LAB-5B3's recording); the explicit `reading` calls are gone.
+- **The refusal** is the one the CLI module gives a row's short words (`cli_module::refused_word`,
+  through `refused_words`): `validation_failed`, the message `<command>: <argument_problem>
+  <word>`, the details `{argument, argument_problem}`; on actinglab's own line exit 1 and the
+  developer line `ERROR actinglab: … <message>`, as `watch --frobnicate` prints; on a `--via`
+  line the envelope's exit 2, as every `validation_failed`.
+- **The strict commands that take switches** parse with `FlagArgs::parse_switches(args,
+  switches)`: the switch rule only, their own refusals unchanged. Their switch lists are the code's
+  constants (`lab2_cli::LAB2_SWITCHES`, `session_record::RECORD_MARK_SWITCHES` and
+  `RECORD_STOP_SWITCHES`, `package_tool::FMT_SWITCHES`, `package_build::LOADING_SWITCHES`), which
+  the register reads (`own_flags`; LAB-5B2's hand-written copies are gone). `record mark` and
+  `record stop` keep reading their switches with `values` (`record_flag_switch`): `true` reads
+  true, any other value they took is refused "takes no value", as before; a word after a switch is
+  now a positional, which both refuse by their own check ("takes flags only"). Their refusal of an
+  unknown flag is their own lists' (`RECORD_MARK_SHORTCUT_FLAGS`, `RECORD_MARK_REQUEST_FLAGS`,
+  `RECORD_STOP_FLAGS`), unchanged; each switch of the two switch lists is on its command's flag
+  list (checked by the slice's test), and the two lists hold every flag `record_flag_switch` reads
+  (`--dry-run`, `--optional`, `--not-optional`, `--replace-click`, `--replace-transition`,
+  `--no-anchor`, `--close-step` for mark; `--dry-run` for stop; by reading every call).
+- **Positionals of the strict commands that counted none** (`FlagArgs::refuse_unread_positionals`,
+  the same refusal): `observe` none, `do` `<target>`, `ensure` and `wait` `<page>`
+  (`lab2_cli::*_POSITIONALS`), `package preflight`, `resource catalog`, `resource validate` none
+  (`PREFLIGHT_POSITIONALS`, `CATALOG_POSITIONALS`, `VALIDATE_POSITIONALS`), each checked after the
+  command's own flag refusal, so a line refused before keeps its refusal. Strict commands that
+  checked an exact count (`tap`, `swipe`, `long-tap`, `key`, the commands with
+  `expect_positionals(…, 0)`) keep their own refusal.
+- **The short words**: `words::LENIENT_ON_COMMAND_LINE` is gone (the debt of "Slice LAB-5A"):
+  `recover`, `debug-package` and `export-evidence` refuse an undeclared flag and a further word by
+  name, as every row does. `lab_ops::core_ops::MORE_WORDS` stays (no row declares it and nothing
+  writes it now; a call that carries it is refused); its doc says so.
+- **The register** (`cli_module::own_flags`, tests only): `LENIENT_ROWS` is gone; its 24 rows are
+  `READ_LIST_ROWS`, strict by their read list, and no kind is lenient. `reads(row)` gives their
+  positionals from the list; `UNROWED_READS` lists the four commands outside the table;
+  `accepted(row)` gives the positionals the verbs and the three strict commands now check and,
+  `Accepted::first_positional`, the `--page` that `ensure` and `wait` read as their first
+  positional.
+- **`record amend --from-drift-diagnostics`** (the coordinator's ruling, handed on by LAB-5B3):
+  `--holder`, `--lease-holder` and `--lease-id`, which its own pass list
+  (`reject_direct_drift_amend_flags`) let through and amend never reads, are refused as every flag
+  off amend's read list, and are gone from that pass list. No caller in this repository passes
+  them to `record amend` (searched: only `record start` and MCP's `ac_record_start` pass
+  `--holder` and `--lease-id`).
+- **Left as they are** (the coordinator's ruling): `main.rs`'s `record_flag_gate` and
+  `retired_digest_flag_gate`, which read the raw words of every command line, are on no list and
+  run before the command, as before.
+- **Contract**: `lab-two-entries.md` §9.3, a bullet "actinglab's own commands refuse a word they
+  do not read" (the contract had no sentence that let them ignore one).
+
+**Commands changed** (28 by point 1, all three rules): the 24 rows that were lenient and `run
+list`, `capture`, `lab receipt`, `lab evidence`. Beyond them, for rules 2 and 3 only: `observe`,
+`do`, `ensure`, `wait`, `record mark`, `record stop`, `package fmt`, `package loading`, `package
+preflight`, `resource catalog`, `resource validate`. Other own commands outside the debugging and
+authoring rows that read their flags by name (`run open`, `run export`, `control …`, `env …`,
+`lab run|status|arbitrator|replay-evidence`, `package dry-run|run`, `operation run`, `session …`,
+`report export` and the like) are not changed: the work order's count was the four the check found
+outside the table, and sweeping some forty more commands, each needing a read list built from its
+code, is the coordinator's to decide (listed in the slice's report).
+
+**The list of what is now refused** (work order point 5; the coordinator warns callers with it):
+
+| # | Command (its name in the refusal) | Options it reads | Switches it reads | Positionals it reads (each may be absent) | A line main accepts silently, refused now |
+|---|---|---|---|---|---|
+| 1 | `touch-probe` | none (`--touch-backend` is refused) | none | none | `touch-probe --instnace neutral.b` |
+| 2 | `recover` (`recover <inst>`, `session recover`) | `--seed`, `--fresh-delay-ms`, `--pack`, `--pack-root`, `--pages`, `--navigation`, `--env-task`, `--scene`, `--to`, `--max-actions`, `--step-timeout-ms`, `--poll-ms`, `--startup-max-rounds`, `--startup-interval-ms`, `--startup-login-file` | `--stale-capture`, `--startup-login`, `--capture`, `--diagnose`, `--require-fresh` | none | `session recover --capture --instnace neutral.b` |
+| 3 | `tap-target` | `--target`, `--seed`, `--scene`, `--package`, `--zip` | `--allow-destructive`, `--require-fresh` | `<target>` | `tap-target ui/ok --sede 7` |
+| 4 | `navigate` | `--to`, `--step-timeout-ms`, `--poll-ms`, `--seed`, `--scene`, `--package`, `--zip` | `--allow-destructive`, `--require-fresh` | none | `navigate --to home extra` |
+| 5 | `debug-package` (`lab debug-package`) | `--package`, `--zip` | none | none | `lab debug-package --package p --frobnicate` |
+| 6 | `export-evidence` (`lab export-evidence`) | `--package`, `--zip`, `--out`, `--outcome` | none | none | `lab export-evidence --package p --out e.zip --outcom failure` |
+| 7 | `recognize-artifact` | `--request` | none | none | `recognize-artifact --request r.json extra` |
+| 8 | `record start` | `--state-dir`, `--task-id`, `--locale`, `--template-threshold`, `--metric`, `--holder`, `--lease-holder`, `--record-id`, `--lease-id` | `--force` | none | `record start neutral.b --task-id t` (the word was ignored and the session started on the default instance) |
+| 9 | `record status` | `--state-dir` | none | none | `record status neutral.b` |
+| 10 | `record candidates` | `--state-dir`, `--step-id` | none | `<step-id>` | `record candidates s1 s2` |
+| 11 | `record amend` | `--state-dir`, `--from-drift-diagnostics`, `--step-id`, `--id`, `--candidate-index`, `--auto-candidate`, `--region`, `--threshold`, `--contrast-frame`, `--negative-frame`, `--metric`, `--from`, `--to`, `--click` | `--color-check`, `--no-color-check`, `--clear-threshold`, `--destructive`, `--non-destructive` | `<step-id>` | `record amend --from-drift-diagnostics d.json --holder h` |
+| 12 | `record step` | `--state-dir`, `--kind`, `--step-id`, `--id`, `--region`, `--threshold`, `--frame`, `--source-frame`, `--artifact-dir`, `--fresh-delay-ms`, `--contrast-frame`, `--negative-frame`, `--metric`, `--from`, `--to`, `--click`, `--swipe`, `--drag`, `--long-press`, `--long-tap`, `--duration-ms` | `--color-check`, `--capture`, `--current-frame`, `--require-fresh`, `--destructive` | none | `record step --kind anchor --id a --frame f.png --colour-check` |
+| 13 | `package validate` | `--zip` | none | none | `package validate --zip p.zip --strict` |
+| 14 | `package inspect` | `--zip` | none | none | `package inspect --zip p.zip --detail full` |
+| 15 | `package bundle` | `--applications`, `--packs-root`, `--out`, `--source-repository`, `--source-commit`, `--maintenance`, `--pages`, `--interrupts`, `--navigation`, `--schedule`, `--display-layout`, `--loading` | none | none | `package bundle --applications a.json --packs-root packs --out o --layout l.json` |
+| 16 | `resource compile-maa` | `--repo`, `--maa-tasks`, `--task` | `--facts` | none | `resource compile-maa --repo r --maa-tasks m --tasks t` |
+| 17 | `operation validate` | `--repo`, `--operation-dir` | none | none | `operation validate --repo r --operation-dir d extra` |
+| 18 | `operation inspect` | `--operation-dir` | none | none | `operation inspect --operation-dir d --out x` |
+| 19 | `operation explain` | `--operation-dir` | none | none | `operation explain --operation-dir d extra` |
+| 20 | `recognize` | `--target`, `--scene`, `--package`, `--zip` | `--require-fresh` | none | `recognize --target t --scene f.png --zip p.zip --threshold 0.9` |
+| 21 | `detect-page` | `--scene`, `--package`, `--zip` | `--check-pages`, `--require-fresh` | none | `detect-page --scene f.png --zip p.zip --all` |
+| 22 | `current-page` | `--scene`, `--package`, `--zip` | `--require-fresh` | none | `current-page --scene f.png --zip p.zip extra` |
+| 23 | `is-visible` | `--target`, `--scene`, `--package`, `--zip` | `--require-fresh` | `<target>` | `is-visible t1 t2 --scene f.png --zip p.zip` |
+| 24 | `locate` | `--template`, `--metric`, `--scene`, `--fresh-delay-ms` | `--capture`, `--require-fresh` | `<template>` | `locate t.png --scene f.png --region 0,0,9,9` |
+| 25 | `run list` | none | none | none | `run list --limit 5` |
+| 26 | `capture` (`session capture`) | `--out`, `--fresh-delay-ms` | `--diagnose`, `--record`, `--require-fresh` | the word `diagnose` | `capture diagnostics --out f.png` (any word but `diagnose` was ignored and a frame captured) |
+| 27 | `lab receipt` | `--req` | none | `<req_id>` | `lab receipt --req r1 --limit 5` |
+| 28 | `lab evidence` | `--id` | none | `<evidence_id>` | `lab evidence --id e1 --run r1` |
+
+Besides: actinglab's global options (`--instance`, `--game`, `--server`, `--dry-run`, `--verbose`, `--json` and the rest) are taken by its parser anywhere on the line, as before; the legacy routing flags `--via-daemon`, `--local` and `--state-dir` stay refused by name where they were (rows 2 to 4 and 20 to 26), and `--capture` by the readers (rows 3, 4, 20 to 23).
+
+The strict commands whose command line changes for the switch and positional rules only:
+
+| Command | What changes | A line main accepts silently, refused now |
+|---|---|---|
+| `observe` | its switches (`--capture`, `--preview`, `--record`, `--pretty`, ...) take no word but `true`/`false`; a positional is refused (it reads none) | `observe --capture neutral.b` (the traced line: `neutral.b` was the value of `--capture`, which was then false) |
+| `do` | the same switches; a second positional is refused (it reads `<target>`) | `do --capture el1 el2` |
+| `ensure`, `wait` | the same switches; a second positional is refused (each reads `<page>`) | `wait --capture --page home extra` |
+| `record mark`, `record stop` | their switches take no word but `true`/`false`; the word left is refused by their own positional check | (both refused before, now for the positional: `record mark --close-step word`) |
+| `package fmt` | `--check` takes no word but `true`/`false` | `package fmt --package d --check yes` (main wrote the files: `--check` was `yes`, so false) |
+| `package loading` | `--write`, `--check` likewise | (refused before as "takes no value", now for the positional) |
+| `package preflight`, `resource catalog`, `resource validate` | a positional is refused (they read none) | `resource validate --repo r extra` |
+
+Lines that change from refused to accepted: a switch followed by its command's positional, as `do --capture <target>`, `ensure --capture <page>`, `wait --capture <page>` and `tap-target --allow-destructive <target>` (main took the word as the switch's value and refused the line or ran another path).
+
+**Reads that rest on reading** (handed on by LAB-5B3): `recover`'s `--pack-root` and `--pages`
+(with `--pack`) are now reached by a test (a planned recovery that reads them before it reads the
+missing pack). The capture freshness of `recover`'s route and of `locate` (`--capture`,
+`--require-fresh`, `--fresh-delay-ms`) and `navigate`'s step timing (`--step-timeout-ms`,
+`--poll-ms`) are read only right before a capture or a press: after the route's resources and the
+user configuration's device (an adb found on the host) are loaded, or, for `navigate`, after a
+package and a frame are loaded and a live drive is built, so no command line of a test reaches
+those reads without a device or a Runtime. Their lists hold them, read again for this slice
+(`SCENE_READS`, `NAVIGATE_READS`), and the slice's test parses each list's line of them and reads
+them in their commands' forms under the recording. No list missed a flag its command reads.
+
+**Tests.** New: apps row "#434 LAB-5B4", `gate_434_lab5b4::every_own_command_refuses_a_flag_it_does_not_read`
+(the 28 commands, the register's `READ_LIST_ROWS` and `UNROWED_READS`: `--frobnicate` refused
+before anything runs, with the line, exit code and developer line of `watch --frobnicate` but for
+the name; no read, no Runtime, no session directory, no frame; `record amend
+--from-drift-diagnostics` refusing `--holder`, `--lease-holder`, `--lease-id`),
+`a_switch_takes_no_value_from_the_next_word` (a switch and a word, `true`, `false`, a flag; an
+option and `--`; a positional beyond the list; `observe`'s and `record mark`'s switches, mark's and
+stop's switches on their flag lists; the traced `observe --capture <alias>` refused for its
+positional and `observe --capture --instance <alias>` a capture on that instance; `tap-target`'s
+second word and `capture`'s word other than `diagnose`), `an_option_at_the_end_of_the_line_is_refused`
+(`value_missing`, nothing written), `the_reads_that_rested_on_reading_are_on_their_lists`,
+`lines_with_declared_flags_answer_as_before` (LAB-5B3's lines as the corpus,
+`gate_434_lab5b3::corpus`: each answers its exit and error code, none refused by the new parse)
+and `serve_hands_a_formerly_lenient_row_its_declared_parameters_as_before` (`recover` and `record
+status` through `serve --stdio` answer the line the command line gives for the same words: the
+command's own seed refusal, and the status). Changed, where this slice changes what they pin:
+`gate_434_lab5b2::every_debugging_and_authoring_row_has_one_kind` (the kind "lenient" is "strict
+by its read list", `READ_LIST_ROWS`) and `strict_rows_match_their_commands` (the positionals the
+verbs and the three strict commands now check, with the first positional of `ensure` and `wait`;
+new helper `with_first_positional`); `gate_434_lab5b3::lenient_rows_match_their_reads`
+(`READ_LIST_ROWS`; the positionals the lists name, with the first positional),
+`a_held_read_outside_its_list_fails` (its probe list's `positionals`) and
+`every_lenient_command_reads_through_its_list` (its lines moved into `corpus`, shared; `resource
+compile-maa`'s writes `--task --facts` for `--facts --task`, the same flags, since `--task` at the
+end is refused now); `gate_434_lab5a::lab5a_rows_take_what_they_took` (the three lenient rows'
+undeclared flag and further word are refused by name, where the test pinned them handed on).
+
+**`serve --stdio` and MCP.** Unchanged: `serve` hands a row only its declared parameters
+(`words::from_json`), every one of which its command's list holds (LAB-5B3's two-way test), a
+switch as the flag alone or nothing and an option with its value; the serve test above shows a
+formerly lenient row's answer is the command line's. MCP's actinglab child (`actingctl mcp-serve`,
+`--via mcp`) passes `record start` and `record status` only flags on their lists, and `observe`
+and `do` their switches alone; its lines answer as before.
+
+**Interface.** None raised. No outcome code, key, location or table row is added; the operation
+table is unchanged.
+
+**What an operator sees after deploy.** A command line that passes a flag its command does not
+read, or a word it does not read, is refused with `validation_failed` naming the word
+(`<command>: unknown <word>`, exit 1; exit 2 on a `--via` line), where it was ignored; an option
+left without a value at the end is refused `value_missing`. A switch followed by a word other than
+`true` or `false` leaves the word as a positional: `observe --capture <alias>` is refused for its
+positional (`--instance <alias>` names the instance), and `do --capture <target>`, `ensure
+--capture <page>`, `wait --capture <page>` now run the capture path with that target or page. A
+script that relied on an ignored flag fails loud; the table above lists an example per command.
+
+**Merged with main after LAB-5F** (coordinator work order
+`rd-1108/arch-013/brief-lab5b4-merge-main1.md`; main `aa2db24c`, LAB-5F #1576 with its fixes 1
+and 2). What LAB-5F changed that this slice now carries: fix 1 made `standard-pack check` a row of
+the core module, so in the register (`cli_module::own_flags`) it is in `CORE_STRICT_ROWS` and not
+in `STRICT_ROWS` (30 rows, this slice's 31 less one), `accepted` still answers for it from
+`standard_pack_cli::CHECK_FLAGS`, and the module doc keeps LAB-5F's `CORE_STRICT_ROWS` paragraph,
+its sentence on the tests naming `READ_LIST_ROWS` where it named the lenient rows; LAB-5B2's
+`strict_rows_match_their_commands` walks `CORE_STRICT_ROWS` after the strict rows with this
+slice's checks (the first positional too), and `every_debugging_and_authoring_row_has_one_kind`
+holds this slice's four kinds and LAB-5F's check of the core rows. The two hand-written switch
+lists main still kept in the register stay gone (the code's constants, above). LAB-5F's own tests
+(`gate_434_lab5f`) were read line by line against this slice's rules: each passes only flags and
+positionals its command reads, and no switch of theirs is followed by a plain word, so none
+changed; LAB-5F added nothing under `apps/actinglab/tests/`. `standard-pack check` is none of the
+commands this slice changes: it refuses an unknown flag and a positional by its own check, as
+before.
+
+**LAB-5B4 rollback** (to the release before it). Nothing persisted: code, the register and the
+contract text only. Rolling back makes the 28 commands ignore an unknown flag again.
 
 #### Slice LAB-5G4a (0.12.52): `serve --stdio --front mcp` records `Lab-MCP`; `serve` refuses values that begin with `--`
 
@@ -11189,6 +11406,137 @@ name `benefit_fixed_value`, so its composer refuses such a `schedule.json`
 decision memories name (§1.225's rollback correction), so first remove the members and let this
 build activate a generation without them, as §1.289's rollback says for SS-2h's.
 
+#### Slice SCHED-C1b (0.12.53): the workbench records where a catalog's values come from
+
+Coordinator work order `rd-1111/brief-sched-c1b.md`; on the SCHED-C1a branch
+`claude/428-sched-c1a-fixed-value` at `a6ca4160` (Runtime PR #1585), with main `4e1d9608` merged
+in once that PR had merged. The contract is
+[standard-pack-schedule.md](standard-pack-schedule.md) ("Provenance", "The scheduler workbench"),
+row SC1-7 above, and CW-1's `config.catalog_warnings` (§1.290), whose shape, limits and place the
+fact follows. The text names no game, resource or value: the tests' ids are neutral.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| C1B-1 | the program fact `config.catalog_provenance` (runtime scope, untagged): `ConfigCatalogProvenance` of `CatalogProvenanceCount` and `CatalogProvenanceEntry` rows, `CatalogValueKind` (`fixed_value`, `valuation`), `CatalogValueOrigin` (`pack`, `model`), `CONFIG_CATALOG_PROVENANCE_FACT_KEY` (SC1-7) | new key of the `config.` family | SCHED-C1b | runtime-host workbench | `crates/actingcommand-contract/src/runtime_fact.rs`; written by `record_catalog_provenance` (`crates/runtime-host/src/host/standard_pack_schedule.rs`), called right after `record_catalog_warnings`, from the composer's `StandardPackComposition::benefit_provenance` (read, not changed); the cut row `{counts_omitted, ids_omitted}` last when rows were left out; no record of its own |
+| C1B-2 | `catalog.benefit_provenance {fixed_value {pack, model}, valuation {pack, model}, items [{game, kind, origin, id}], items_omitted?, counts_omitted?}` (SC1-7) | `actingctl overview` / `ac_overview` answer | SCHED-C1b | lab-ops overview | `crates/lab-ops/src/overview.rs` `benefit_provenance`, from `catalog_block`; absent without the fact or with nothing in it; the cut takes `catalog.benefit_provenance.items` just before `catalog.compile_warnings.items` |
+
+**Tests.** New: host rows "#428 SCHED-C1b",
+`actingcommand-runtime-host::lib::tests::gate_rl1b::sched_c1b_a_the_fact_holds_each_value_under_its_origin_and_follows_an_origin_change`
+and `gate_rl1b::sched_c1b_b_a_generation_without_values_records_no_fact`; apps rows "#428
+SCHED-C1b",
+`actingcommand-lab-ops::lib::overview::tests::sched_c1b_c_a_cut_fact_and_the_catalog_block_say_how_many_rows_are_missing`
+and `overview::tests::sched_c1b_d_the_catalog_block_shows_the_provenance_and_is_unchanged_without_the_fact`;
+on fakes with a manual clock, no sleep and no wait. No test adapted.
+
+**Interface.** None raised, as §1.290: a new key in the `config.` family of
+`runtime.fact_recorded` with the existing `RecordList` value, no member or word of a closed
+vocabulary the ledger reader checks; no request or answer shape of `runtime-client` changes (the
+fact travels in the existing `RuntimeFactSnapshot` answer); the overview's `catalog` block is
+presentation. No outcome code, outcome key or configuration key is new.
+
+**Where SCHED-C1b reads the contract.**
+
+- (a) "One count row per game, kind and origin" is one per combination that has a value, as CW-1
+  writes a count row only for a code a game has. A generation without any fixed value or declared
+  valuation therefore has no row, and the fact follows CW-1's rule for no warnings: not recorded
+  while absent, recorded empty once the active generation has none.
+- (b) The order: count rows by game, kind (`fixed_value` before `valuation`) and origin (`pack`
+  before `model`); the id rows in the same order, each list in the file order the composer gives.
+- (c) The cut row's members are `counts_omitted` and `ids_omitted`; the overview carries them as
+  `counts_omitted` and `items_omitted`, the names CW-1's member uses.
+- (d) The overview's counts are totals over every game; each game's values are in `items`.
+- (e) "The budget rules the overview's other catalog members follow": MCP cuts
+  `catalog.benefit_provenance.items` (leaving `items_truncated: true`) just before
+  `catalog.compile_warnings.items`, so a warning outlasts an informational list, then the block;
+  registered in [runtime-interface.md](runtime-interface.md) and in the overview's cut order. The
+  `ac_overview` tool description names the member and its cut.
+- (f) The contract text: "(SCHED-C1b, not built yet)" became "(SCHED-C1b, register §1.299, since
+  0.12.53)", and so did the mark "(SCHED-C1, register §1.299, not built yet)" of the workbench's
+  "Provenance" bullet in "The scheduler workbench", the one other sentence naming the fact; no
+  other mark changed.
+
+**What SCHED-C1b changes live.** Nothing until a `schedule.json` writes a fixed value or a
+valuation block: no fact is recorded and the overview's `catalog` block is unchanged. With one,
+the workbench records one `runtime.fact_recorded` of `config.catalog_provenance` when a
+composition's provenance differs from the one it holds, and again at the first check after each
+start (`config.` is re-observed). Composing, activating and deciding are unchanged.
+
+**SCHED-C1b rollback** (to the build before it). The ledger and the configuration need nothing:
+`config.catalog_provenance` is a fact record of an existing shape, which an earlier build reads as
+any other and does not load at its start; its overview shows no such member.
+
+#### Slice SCHED-C1c (0.12.53): a pool's trigger line; lines that cannot spend warn; old triggers are hinted
+
+Coordinator work order `rd-1111/brief-sched-c1c.md`; on main `4e1d9608` (SCHED-C1a merged as PR
+#1585). The contract is [scheduling/README.md](scheduling/README.md) ("Pool lines" with "The
+trigger line" and "A pool its lines cannot spend", "Capped spending order" with "Old triggers on a
+capped pool") and [standard-pack-schedule.md](standard-pack-schedule.md) ("The file", `requires`,
+"Composition", "Tools", "A redundant trigger"), rows SC1-8 to SC1-10 and SC1-5's
+`pool_trigger_line` above. The text names no game, resource or value: the tests' ids are neutral.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| C1C-1 | `PoolSpec::trigger_line` (`Option<PoolLine>`, V2 only, the two forms) (SC1-8) | catalog format addition | SCHED-C1c | `acmodel bindings apply` (RL-R); a raw V2 catalog | `crates/policy/src/schema.rs`; absent it serializes as nothing; `validate_pool_lines` in `validation.rs`: V1 `unknown_field`; a reference by a capacity reference's rules, a constant above 2^53−1 `limit_exceeded`; `pool_lines_invalid` at `trigger_line` without both lines, above the capacity, below the stop line, where the compiler can tell; `v2/pools.schema.json` (`dependentRequired` both lines) |
+| C1C-2 | the episode's start: `capped::Lines::trigger` (`T`, the capacity without one), `at_trigger` (`r ≥ T`) and `spent` (`r ≤ S`, `r < T`); `lines_invalid` for `0 ≤ H < S ≤ T ≤ cap` broken, with `trigger_line`; `capped_spend` with `trigger_line` when the pool writes one | behaviour (evaluation); outcome values | SCHED-C1c | the policy evaluator | `crates/policy/src/evaluator/capped.rs`; the ranks, rounds, plan, stop line, hard line and every other end of the order unchanged |
+| C1C-3 | `pool_lines_unspendable` (warning / none, pending, since 0.12.53; `pool_id`, `pool_capacity`, `stop_line`, `hard_line`, `least_consumption`), the catalog diagnostic of the same code (warning), the keys `least_consumption` and `trigger_line` (`integer`) (SC1-9) | outcome catalog additions (policy) | SCHED-C1c | the policy evaluator and compiler | `capped::plan` before the episode's step; `validation.rs` `unspendable_lines`; `diagnostic.schema.json`; the idle plan (`runtime-host` `schedule_explanation.rs`) counts it as `pool_line_held` |
+| C1C-4 | `standard_pack_line_trigger_redundant` (warning / declaration_error, pending, since 0.12.53; `game`, `task_id`, `pool_id`) (SC1-10) | outcome catalog addition (contract) | SCHED-C1c | the composer, for the tools | `compose.rs` `redundant_triggers`, `StandardPackComposition::redundant_trigger_warnings`; `resource-tooling` appends them to `warnings` after SS-4's |
+| C1C-5 | the always-on row `pool_trigger_line` of `config.subsystems`; `POOL_TRIGGER_LINE_SUBSYSTEM`; `POOL_TRIGGER_LINE_MEMBER` (SC1-5) | new row value of an existing fact | SCHED-C1c | actingd | `apps/actingd/src/config/manifest.rs`; the composer refuses a pool's `trigger_line` without it in `requires` (`schedule_invalid` at the first pool that writes it) |
+
+**Tests.** New: policy rows "#428 SCHED-C1c", `actingcommand-policy::lib::tests::gate_sched_c1c`
+tests 1 to 5 (`sched_c1c_t1_an_episode_starts_at_the_trigger_line`,
+`sched_c1c_t2_the_member_is_refused_at_its_pointer`,
+`sched_c1c_t3_without_the_member_nothing_changes`,
+`sched_c1c_t4_a_pool_its_lines_cannot_spend_warns`,
+`sched_c1c_t5_the_composer_carries_the_member_and_hints_at_old_triggers`), on fakes with a fixed
+clock, no sleep and no thread. No existing test changed; no golden re-recorded (the example
+catalog's golden hashes are asserted unchanged).
+
+**Interface.** None raised (`ledger`, `actingd-config`, `runtime-client`, `package`,
+`runtime-outcomes`): a catalog member and a `schedule.json` member gated by `requires`, a
+subsystem row of an existing fact, a decision reason and a compile diagnostic, outcome values of
+existing reasons and a tools' hint (as §1.289).
+
+**Where SCHED-C1c reads the contract.**
+
+- (a) "Ends once `r ≤ S` and `r < T`" is the one rule `Lines::spent`, which the round's plan reads
+  too ("above `S`, or at `T`"); it differs from SS-2h only for `S = T < cap`, where SS-2h's
+  `r < cap` would begin and end an episode at once.
+- (b) `lines_source` is SCHED-C1e's: `pool_lines_unspendable` and `capped_spend` carry none yet.
+- (c) `pool_lines_unspendable` holds the pool's judged candidates whose `B` is known, as a capped
+  hold whatever their sign; a consumer that is no candidate keeps its own reason. It applies to
+  every valued pool on the instance, with its lines or the defaults (`H` 0), at `r ≥ T`.
+- (d) The compile warning's values are in the diagnostic's text (`pool_id`,
+  `capacity_less_hard_line`, `least_consumption`): a diagnostic carries no outcome values, and
+  `config.catalog_warnings` records its code, game and pointer (CW-1). It is checked only on valid
+  lines of a valued pool; a consumer is a judged task that is no manual request and declares a
+  consumption of the pool, and one entry of the pool pending leaves the compiler unable to tell; a
+  hard line that references the capacity's fact gives `cap − H` = the capacity's offset less the
+  line's.
+- (e) "The first such member in file order (rules, then pools)" is read per subsystem, as for
+  `fact_reference` and `pool_fact_reference`: `benefit_fixed_value`'s check runs first, then
+  `pool_trigger_line`'s at the first pool that writes `trigger_line`.
+- (f) A `trigger_line` beside one line only is refused at both members.
+- (g) The contract names `trigger_line` as a value of `lines_invalid` and `capped_spend` without
+  registering the key: it and `least_consumption` are registered (`integer`).
+- (h) The redundant trigger: "through `all`" is the evaluator's required conditions (nested `all`s;
+  the trigger itself when it is no `all`); the pool's capacity must be a fact reference (a constant
+  capacity has no capacity fact); judged composed rules only (not held), each rule's pools in file
+  order.
+
+**What SCHED-C1c changes live.** Nothing until a `schedule.json` writes `trigger_line` (with
+`pool_trigger_line` in `requires`): a catalog without it keeps its hash, rules digest and
+decisions; `config.subsystems` gains the always-on row `pool_trigger_line`. A valued pool whose
+lines no consumer's run fits under from its capacity now warns instead of beginning and ending an
+episode with `capped_round_empty` (no production pool is valued today), and the tools hint at old
+capacity thresholds on valued pools with lines (none today).
+
+**SCHED-C1c rollback** (to the release before it). The ledger and the configuration need nothing.
+Before a `schedule.json` writes the member: nothing to undo. After: a build without SCHED-C1c
+refuses a pool that writes `trigger_line` at its reader (`unknown_field`) and does not name
+`pool_trigger_line`, so its composer refuses such a `schedule.json` (`schedule_requires_missing`);
+first remove the member and let this build activate a generation without it, as §1.289's rollback
+says for SS-2h's.
+
 ### 1.300 Slice INST-5, first slice (0.12.52): the Lab's rescue module adds an emulator instance, committed as a configuration replacement (Workflow #421; the desktop program's "add account / device" button is disabled with the words "wait for the Runtime's support; edit the configuration file by hand for now", and adding an instance today means editing two places of the file and restarting; the read-only survey of 11-11 found that a first version fits today's interface revisions; the coordinator's ruling of 11-11, not Alice's words, that the new instance starts paused; coordinator work order `rd-1111/brief-inst5.md`, read on main `c0edc8b2`)
 
 [install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh root" ("Instances,
@@ -11225,7 +11573,7 @@ pause that existed before, of any holder, is there after the restart unchanged.
 
 **Why it starts paused** (the coordinator's ruling of 11-11): a new account must not start running
 tasks the moment it is added, and an installation whose other instances are paused must not gain
-an unpaused one by this command. **The window that remains**: between the new Runtime's readiness
+an unpaused one by this command. **The window that remains** (closed by INST-5b, below): between the new Runtime's readiness
 and the pause (the post-start checks and one status read) the new instance is not paused; a
 stopped Runtime takes no pause of an alias it never registered, and only a start that knows the
 instance (INST-R's Runtime half) can start it held. If the instance cannot be paused (the started
@@ -11294,6 +11642,75 @@ and `install::instance_add::AddedRecord`, made JSON by `install::hold::record_va
 (the step's `alias`, `reason`, `set`, `runtime`, `registered`, `already_paused`, `drained`;
 `added.pause_reason` and the journal input's), so no reader, test or text changes, and the guard's
 allow list is not touched.
+
+**INST-5b** (0.12.53; coordinator work order `rd-1111/brief-inst5b.md`, on main `dedba173ad`, PR
+#1584 merged; the coordinator's ruling of 11-11, not Alice's words: close the window above with a
+global pause that spans the restart, without waiting for INST-R). [install-cli.md](install-cli.md),
+"Instances, the first slice" ("No moment unpaused") and "The Lab's rescue module" ("Only its own
+hold", "Ways out of a kept hold"), and [lab-two-entries.md](lab-two-entries.md) §7 are the
+contract.
+
+*What was built.* Only for `instance add` (`HoldInputs.global`, which `rescue::commit` sets when it
+adds): the hold's pause step, after its instance pauses and before the close, sets one global
+pause with the hold's own reason `lab-instance-<ms>` (`install::hold::global_pause`; a global and
+an instance pause are separate scopes, each with its own revision, so they share the reason and one
+`release-hold <reason>` names the whole hold), unless a global pause is in effect: anyone's, so the
+step sets none and leaves that one with its reason and revision; one with the hold's own reason is
+the step's own (a step run again). The Runtime persists it and restores it at its start before any
+physical instance is prepared, so the new instance is held from the new Runtime's readiness until
+its own pause. The step's intent gains `global: true`, its evidence `own_pauses.global` (the
+revision, in `own_pauses.owner_epoch`); `deploy::owned_hold` reads it back (`OwnedHold.global`),
+and `hold::release_own` resumes it first, before the hold's instance pauses, only while it shows the
+hold's reason and, in the owner epoch the step recorded, the revision it recorded (in a later epoch
+the restore numbers it 1, so by its reason, as fix 2 above rules for instance pauses:
+`hold::own_global`), conditionally by the epoch and revision the Runtime shows. The release step's
+evidence gains `global_resumed: true`, a hand-back's `release` the member `global: true`. A Runtime
+that does not answer when the global pause is to be set refuses the step `runtime_not_running`, one
+that refuses it `runtime_stop_failed` (its failure as the cause), both before anything changed on
+disk, the hold's own pauses handed back. The close's second read of S0 lists the global pause, which
+the start restores, so the post-start check `pauses` expects it. An answer of the module whose hold
+stays names `actingctl_resume_global` (`actingctl resume --state-root <s>`) in `next` while the
+Runtime shows the hold's own global pause. `RuntimeLink` gains `pause_global` and `resume_global`
+(the CLI channel; `PauseScheduling` and a conditional `ResumeScheduling` of the global scope), so the
+row's `requests` are unchanged. `config replace`, `config restore`, `place`, `deploy`, `rollback`,
+`down` and `actingctl install` write their intents, evidence and journals as before: each new member
+is absent when false or none. No interface, code, key, location, vocabulary or persisted ledger
+shape is new.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| INST5-6 | the pause step's intent member `global: true` and evidence member `own_pauses.global` (a revision) of `instance add`'s `config_replace` journal | installer journal member | INST-5b | `install::hold::pause_intent`, `install::deploy` (the pause step) | absent for every other hold |
+| INST5-7 | the release step's evidence member `global_resumed: true`; a hand-back's `hold.release.global: true` | installer journal and answer member | INST-5b | `install::deploy`, `install::hold::release_own` | absent when no global pause was resumed |
+| INST5-8 | `next.actingctl_resume_global` | answer member | INST-5b | `rescue::ways_out` | only while the Runtime shows the hold's own global pause |
+| INST5-9 | the global pause with the hold's reason `lab-instance-<ms>` | behaviour (a global `PauseScheduling` on the CLI channel, lifted by a conditional `ResumeScheduling`) | INST-5b | `install::hold::global_pause` | the Runtime records it as every pause (`host.scheduling_pause`) |
+
+*Tests* (apps gate row "#421 INST-5b"; the fake Runtime of `fixture.rs` gains `pause_global` and
+`resume_global`, listed in its calls as `global pause <reason>` and `global resume`, and
+`status_reads`, every status read with the calls listed by then and the global pause's reason):
+`gate_421_inst5::inst5b_the_global_pause_spans_the_restart`,
+`inst5b_a_global_pause_from_before_is_neither_replaced_nor_lifted`,
+`inst5b_a_refused_pause_of_the_added_instance_keeps_the_global_pause_and_the_hold` and
+`inst5b_config_replace_and_restore_send_no_global_pause`. No existing test changed: INST-5's
+pinned order (hold, close, start, the added instance's pause, release) holds with the two calls
+between, and no existing test lists a call of the global scope.
+
+*What an operator sees.* While `instance add` runs, the status shows a global pause with the hold's
+reason from just before the close until the new instance is paused with `instance.added`; after a
+done answer nothing of the hold stays, and the step `release` says `global_resumed: true`. If the new
+instance cannot be paused, the answer ends `post_check_failed` with `hold` `kept: true`, the global
+pause and the hold's pauses in the status, and `next` naming `pause_added`, `release_hold`,
+`actingctl_release_hold`, `actingctl_resume` and `actingctl_resume_global`; `release-hold <reason>`
+lifts the global pause and the hold's instance pauses and nothing else (pause the new instance
+first, `pause_added`, unless its account is ready). A global pause another party set before the
+command is there after it, unchanged.
+
+*At deploy.* Nothing to do: no key, no interface; production keeps adding instances by hand
+(§1.300, "At deploy").
+
+*Rollback* (to 0.12.52). Nothing persisted changes shape: 0.12.52 reads a journal with `global` and
+`own_pauses.global` (unknown members are ignored), and its `release-hold` resumes the hold's
+instance pauses only, leaving a global pause 0.12.53 set: lift it with `actingctl resume
+--state-root <s>`.
 
 ### 1.301 Slice ISO-START-1 (0.12.52): one pair's refused settlement fact no longer stops the start (#419; Alice's requirement on board #419 of 10-24: one emulator's fault must not bring down the whole Runtime; the debt the coordinator logged on 11-11, #421 6774483473 and #428 6770731970: isolate only that pair; the coordinator's ruling on the three cases, not Alice's words: coordinator work order `rd-1111/brief-iso-start-1.md`)
 
@@ -11426,6 +11843,124 @@ helpers write and read the Runtime's fact store (`record_runtime_fact_for_test`,
 `runtime_fact_for_test`). No existing test changed: main had no test that pinned "any refusal is
 fatal" at the start, nor a start whose settlement-fact write failed.
 
+### 1.302 Slice R-6, first slice (0.12.53): `StopInstanceRun` stops a client's direct run and the Runtime resets the device itself (Workflow #429 A.2 contract point 2 and the slice row R-6, board #429 6535257381; the desktop program's "close this task" button is disabled because the Runtime answered `not_implemented`, and a run the scheduler started could not be stopped from the Lab or MCP at all; the coordinator's choice of 11-11, option C, not Alice's words: this slice stops direct runs only and refuses a policy run with `run_origin` until `ledger` 8; coordinator work order `rd-1111/brief-r6.md`, read on main `c0edc8b2`)
+
+[runtime-interface.md](runtime-interface.md) ("Workbench request kinds", the row `StopInstanceRun`)
+is the contract; [lab-operations.json](lab-operations.json) (the row `task stop`) and
+[lab-two-entries.md](lab-two-entries.md) (the `ui` entry's list) follow it. The number 1.302 is the
+coordinator's: 1.300 is held for INST-5 and 1.301 for ISO-START-1, open the same day. No wire shape, configuration key, ledger shape or interface revision is new: the
+request and its answer are R-0's (§1.213) and the client's method R-0c's (§1.216); one success code
+and one outcome key with its vocabulary are (R6-2, R6-3).
+
+**Why not a policy run (the stop found before writing it).** The spec stops a policy run too and
+settles it "neither a success nor a failure of the task: no failure backoff, no suspension, no
+ladder, not in `scheduling.rerun.condition_codes`". The ledger's `policy.execution_recorded` has no
+legal form for that: `validate_policy_execution_data` (`crates/actingcommand-contract/src/event/payload.rs`)
+requires a failure record without `condition` to count (`consecutive_same_error` and
+`escalation_streak` at least 1, a sensitive task's `paused_task`), the only uncounted form is a
+condition, whose record owes a rerun on every reader (`commit_paced_execution`), and the interrupted
+settlement `policy_settlement_interrupted` is a counted severe failure that only a restart lifts.
+A Runtime of `ledger` 7 replays an execution record against its own settlement and refuses any
+other (`policy_execution_record_mismatch`), and the ledger's own recovery of an unsettled scheduled
+run (`crates/ledger/src/global/storage.rs`) writes a counted failure. A stopped policy run
+therefore needs `ledger` 8 (the planned revision of #434 LAB-6 and #428 S168-5b), which this
+slice may not raise; the coordinator chose to refuse it until then (option C).
+
+**What.**
+
+- **The handler** (`crates/runtime-host/src/host/stop_instance_run.rs`,
+  `HostShared::stop_instance_run`): the instance's registered run of that request is found in the
+  host's run registry (its `activity.request_id`, R-0b). A run no client may stop is refused
+  `scheduled_contained_task_not_client_cancellable` with `run_origin` (`host` for a startup
+  package or a ladder rung, `policy` for a policy run) and the run's `request_id`; nothing is asked
+  of it. A run the instance neither runs nor stopped last is refused
+  `contained_task_cancellation_identity_missing` with the `request_id`. Each refusal follows its
+  `command.received` with `command.rejected`; a stop follows it with `command.validated` (G14, the
+  generic action `runtime_action`, as `AgentWakeTest`). A direct run is asked to stop at its next
+  checkpoint as its client's cancel asks it (`ClientRequested`, a reason a run already ending for
+  its deadline or a pause keeps against it), and the request waits up to `wait_ms` for the run to
+  leave the registry, as a pause's drain waits (a 20 ms poll): `settled: true` with `reset`, or
+  after `wait_ms` `settled: false` with no `reset`, the stop staying asked. The instance's latest
+  stopped run is kept in memory (one per instance), so a later stop of the same run, on any
+  connection, answers its result.
+- **The reset** (`crates/runtime-host/src/host/contained_task.rs`, the cancel branch of
+  `execute_contained_task_with_lease`, and `HostShared::reset_stopped_run`): a run whose client's
+  cancel ended it and whose stop a `StopInstanceRun` asked (`ContainedRunControl::take_runtime_stop`)
+  is reset with the run's own lease before its terminal and its lease end: an `Input` `reset`
+  linked to the run, recorded as every input is (`input.committed`, action `InputReset`). It runs
+  on the run's own thread, so the requesting client's connection plays no part, and the run's
+  client owes no `SafeReset` (`await_client_reset` is skipped). A reset that fails is contained
+  against the run's instance only (#419, `contain_failure`; an operation's failure fences the
+  instance too, since the touch state is unknown), the run's lease ends as a failed run's
+  (`cleanup_token`, `backend_failure`), and the stop answers `reset: failed`: its receipt's success
+  code carries the fence's failure (`instance_resources_fenced`, caused by the reset's) as its
+  cause, which codes mode keeps. A run that ends without the stop's reset (its own end before its
+  check saw the stop, or its deadline or a pause ending it first) answers `reset: not_needed`, as
+  the client's `cancel_contained_task_and_reset` answers `not_needed` for a run its client did not
+  end. The spec's other `not_needed`, a backend that cannot reset (`nemu_ipc`, 10-30), no longer
+  exists: since #402 HS-4 the Nemu input performs `reset` (`reset_with_check`) and every other touch
+  backend did already, so today's client `SafeReset` resets on every backend and the stop does
+  the same.
+- **The settlement.** A stopped direct run settles as before: `contained_task_cancelled`
+  (`ClientRequested`), an interruption in the routine summary (R-12), never a failure; a direct run
+  starts no ladder on a cancel (only a failed end may, under `rules.direct_runs = trigger`) and
+  owes no rerun. **Counts:** a direct run uses no count of the scheduling contract (none is taken at
+  its admission, `contracts/scheduling/README.md`, "Optional run-count bounds" and Alice's ruling
+  100), so a stop uses none either; the refund the contract knows is a condition rerun's
+  ("Condition termination and owed reruns"), which a stop is not. No policy run is stopped, so no
+  policy settlement, streak, rerun or daily count changes.
+- **The Lab's row** `task stop <inst> <request> [--wait <duration>]` (core, slice R-6) is offered:
+  the CLI module serves it through the serving code LAB-5G1 moved into `lab-ops`
+  (`crates/lab-ops/src/core_ops.rs`, `task_stop`, on the connection its caller gives), resolving the
+  instance by one status read and sending `StopInstanceRun` through `stop_instance_run`; without
+  `--wait` it answers at once (`wait_ms` 0). Its line is the stop's members beside the receipt's
+  outcome, a refusal the refused receipt beside its outcome. `serve --stdio` takes the same call.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R6-1 | `StopInstanceRun {instance_alias, request_id, wait_ms}` → `InstanceRunStopped {stopped: {request_id, settled, reset?}}` | behaviour of an R-0 kind (no shape change; `runtime-client` stays as it is) | R-6 | the host | direct runs only; memory of the latest stopped run per instance (a leaf lock), empty after a restart; `wait_ms` has no bound of its own: the run's deadline and its end grace bound the wait, and a shutdown answers `settled: false` |
+| R6-2 | `request_stop_instance_run_completed` | new success code (contract, `ReceiptCode`) | R-6 | the host | `since` 0.12.53; Workflow #378 A4's one success code per completing kind; a failed reset is its cause |
+| R6-3 | outcome key `run_origin` (`vocab:run_origin`, tokens `policy`, `host`) on `scheduled_contained_task_not_client_cancellable` | new key and vocabulary in `runtime-outcomes` 1 (additive: readers keep values as a free map, and keys are append-only, as 0.12.39 added a value, a vocabulary and a key) | R-6 | the host | kept in codes mode (a vocabulary); the code's entry is pending, so it takes the optional key; `request_id` names the run |
+| R6-4 | the Lab's row `task stop` | operation table row opened (`reserved` → `planned`, `help`, requests add `Status`) | R-6 | — | `BUILT_SLICES` names R-6; served by `lab_ops::core_ops` (its `stop_target` public, which actinglab's test reads), not listed in `lab-ops`' registry `served::SERVED` (which holds LAB-1 and LAB-1b's rows only) |
+| R6-5 | the row `task run` | slice tag `R-5` → `R-18` (Alice's ruling 113 moved "run once" to the Lab) | R-6 | — | the row is otherwise unchanged (still `reserved`, `opens_with` R-5, entries lab and ui); no test pins the tag |
+
+**Left for later slices.** A policy run's stop and its settlement as an interruption (no ladder, no
+rerun, no streak, counts as the contract will say for it), with `ledger` 8; a host run stays refused
+by design (a pause or a person's hold stops it). R-7b's use of the reset step: a player hold's drain
+cancels a policy run and the Runtime resets it with the run's lease, `reset_stopped_run` being that
+step. R-8's "close this task" (the schedule row, then the stop) and its test of the two steps.
+
+**Interface.** None raised ([component-interfaces.md](component-interfaces.md)): `runtime-client`,
+`ledger`, `actingd-config` and `package` do not move (the request and the answer are R-0's, the
+records are existing input, lease, task and command records with existing actions and members);
+`runtime-outcomes` stays 1 (a success code, a key and a vocabulary added within the revision, as
+§1.264 added a success code and 0.12.39 a key and a vocabulary).
+
+**What an operator sees after deploy.** `actinglab task stop <inst> <request>` and the console's
+"close this task" stop a manual run (`RunContainedTask`, actinglab `run start`, MCP `ac_run_pack`):
+the run ends `contained_task_cancelled`, its record shows one `InputReset` before its lease's
+release, and the stop's answer says `reset: done`. A scheduled run or one the Runtime started is
+refused with `run_origin` (`policy` or `host`) and keeps running: pause the instance, or take it
+with a player hold, to stop it. A failed reset fences only that instance (`Status.resource_fence`),
+which a self-check lifts. `ac_stop_run` and actinglab `run stop` (the client's own cancel and
+reset) are unchanged.
+
+**Rollback** (below 0.12.53): `StopInstanceRun` is refused `not_implemented` again and the row
+`task stop` is not offered; a direct run is stopped with `run stop` and the client's reset, as
+before. Nothing persisted changes, so no state needs undoing.
+
+Tests (exec gate rows "#429 R-6"): `gate_429_r6::r6_stopping_a_direct_run_cancels_it_and_the_runtime_resets_it_before_its_lease_ends`,
+`r6_the_reset_happens_after_the_requesting_client_disconnects`,
+`r6_a_host_run_and_a_policy_run_are_refused_with_their_origin_and_nothing_is_cancelled`,
+`r6_after_wait_ms_the_stop_answers_unsettled_without_a_reset`,
+`r6_a_failed_reset_fences_only_its_instance_and_answers_failed` and
+`r6_a_run_that_ended_on_its_own_needed_no_reset` (the host, on a fake clock and a fake device), and
+actinglab's `gate_429_r6::r6_task_stop_words_and_serve_line_reach_the_same_stop`. Two existing tests
+pinned the request as not built and change with it: `gate_429_r0::r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effect`
+no longer sends `StopInstanceRun`, and the contract's
+`a4_each_request_kind_that_completes_has_its_own_success_code` no longer lists it among the kinds
+that never complete.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -11494,6 +12029,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.catalog_warnings` (count and place rows of the active composed generation's compile warnings; §1.290 CW1-2) | workbench | no (`config.` is re-observed) | #428 CW-1 |
+| `config.catalog_provenance` (count and id rows of who wrote the active composed generation's fixed values and valuations; §1.299 SC1-7, C1B-1) | workbench | no (`config.` is re-observed) | #428 SCHED-C1b |
 | `config.parameters.touch` (a section fact of the `config.parameters.<section>` family, five rows; §1.136 T12-4) | workbench | no (`config.` is re-observed) | #406 T12 |
 | `config.parameters.emulator_control` (a section fact of the `config.parameters.<section>` family, one row; §1.158 A50-5) | workbench | no (`config.` is re-observed) | #411 A50 |
 | `config.parameters.execution` (a section fact of the `config.parameters.<section>` family, four rows since STILL-1; §1.177 B1-2, B1-3; §1.249 ST1-1) | workbench | no (`config.` is re-observed) | PERF-B1 |

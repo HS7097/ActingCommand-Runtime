@@ -429,6 +429,16 @@ tests = [
     "actingcommand-policy::lib::tests::gate_sched_c1a::sched_c1a_t8_without_the_member_nothing_changes",
 ]
 incident = ["#428 SCHED-C1a"]
+# #428 SCHED-C1c (the coordinator's rulings of 11-11, points 10 and 11, not Alice's words; rd-1111 brief-sched-c1c; contracts/scheduling/README.md, "Pool lines" with "The trigger line" and "A pool its lines cannot spend", "Capped spending order"; register §1.299; since 0.12.53): a pool's trigger_line T 20 below the cap (160) begins a capped episode at a reading between it and the cap (175: A then B frozen by V ÷ c, A capped_spend rank 1 with trigger_line 160, B capped_not_head then rank 2 of the same round, spent at 120 and ended), at 160 too (r ≥ T), at 159 not, and the same pool without the member begins none at 175 (A within tolerance, B not positive); the member is refused pool_lines_invalid at trigger_line written without both lines (and at stop_line beside the stop line alone), below the stop or the hard line, above the capacity, each form's own errors (a constant above 2^53−1 limit_exceeded; a reference's key type_mismatch, offset limit_exceeded, scope unknown_field) and in V1 unknown_field, and is carried as written at the stop line and at the capacity; at evaluation a trigger line read below the stop line holds a consumer that would pass with lines_invalid carrying trigger_line; a catalog without the member keeps the example's golden hashes, serializes no trigger_line and its capped_spend names none; a valued pool whose capacity less its hard line (20) is below every consumer's run (30, 25) compiles with the warning pool_lines_unspendable at its hard_line (constant lines and capacity, or a hard line referencing the capacity's fact), placed at /pools/1/hard_line of its game's schedule.json and recorded so for config.catalog_warnings, none with a consumer that fits (20) or a constant hard line against a read capacity; at evaluation an episode under way waits (episode 1, round 1 kept) and its candidates are deferred with pool_lines_unspendable {pool_id, pool_capacity 180, stop_line 170, hard_line 160, least_consumption 25}, the next of the round runs once the hard line is read lower again, no episode begins while it holds, and one does with a consumer that fits
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_sched_c1c::sched_c1c_t1_an_episode_starts_at_the_trigger_line",
+    "actingcommand-policy::lib::tests::gate_sched_c1c::sched_c1c_t2_the_member_is_refused_at_its_pointer",
+    "actingcommand-policy::lib::tests::gate_sched_c1c::sched_c1c_t3_without_the_member_nothing_changes",
+    "actingcommand-policy::lib::tests::gate_sched_c1c::sched_c1c_t4_a_pool_its_lines_cannot_spend_warns",
+]
+incident = ["#428 SCHED-C1c"]
 
 # The intent pins freshness, limits, catalog hash and ledger position
 [[gate]]
@@ -1156,6 +1166,13 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_sched_c1a::sched_c1a_t9_the_check_answers_coverage_and_provenance",
 ]
 incident = ["#428 SCHED-C1a"]
+# #428 SCHED-C1c (the coordinator's point 12 of 11-11, not Alice's words; rd-1111 brief-sched-c1c; contracts/standard-pack-schedule.md, "The file", "requires", "Composition", "Tools", "A redundant trigger"; register §1.299; since 0.12.53): a schedule.json pool's trigger_line passes through to the composed pool as written and compiles into PoolSpec::trigger_line; a file that writes it without pool_trigger_line in requires is refused schedule_invalid at the first pool that writes it, and one below its stop line at the same pointer (the compiler's pool_lines_invalid mapped back); judged rules consuming a valued pool with lines whose trigger requires through all the pool's projection at least its capacity fact less 20, or under a nested all a fact on its reading key above it, are one standard_pack_line_trigger_redundant {game, task_id, pool_id} each in file order, none for a threshold under any, compared less_than_or_equal or a constant, and none on a pool without a valuation; the hint is none of the composition's own warnings
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_sched_c1c::sched_c1c_t5_the_composer_carries_the_member_and_hints_at_old_triggers",
+]
+incident = ["#428 SCHED-C1c"]
 # SS-4 (rd-1029 plan-state-driven, the notes on removing the counts; rd-1031 brief-ss4 test 6; contracts/standard-pack-schedule.md, "Tools", "Failure escalation without a daily bound"; register §1.231; since 0.12.34): a rule without a daily bound (loop_budget without daily_limit, or no loop_budget) whose escalation_threshold is above 10 is one standard_pack_escalation_threshold_high {game, task_id, count, limit_count 10} in file order, outside the composition's own warnings; a rule with a daily limit, or at the threshold 10, gives none; the file composes all the same
 [[gate]]
 coverage = "Y"
