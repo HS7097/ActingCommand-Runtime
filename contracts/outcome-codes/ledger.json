@@ -2213,8 +2213,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The database holds a format-1 ledger (ledger revision 2, written by v0.11); this Runtime reads only ledger revision 3 (SQLite format 2) and refuses it after reading only its format: before any ledger row is read or written and, at the Runtime's start, before the owner journal and the writer lock.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The state root's runtime database holds ledger tables under SQLite format 1 (ledger revision 2), which v0.11 wrote; this Runtime reads only ledger revision 3 (format 2).",
+      "handling": "This Runtime has no conversion path: it refuses the database before reading or writing any ledger row. Check that the configuration's state_root names the intended state root; a state root of v0.11 cannot be used by this Runtime."
     },
     "ledger_index_mismatch": {
       "category": "error",

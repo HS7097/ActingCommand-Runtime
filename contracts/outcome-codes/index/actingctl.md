@@ -16,17 +16,17 @@ column means. 198 codes.
 | `agent_channel_reported` | success | none | 0.12.37 | active | pending | TBD | actingctl agent-channel did its work on the channel registry or a session's live record: a channel added, removed or listed, or a running session registered;… |
 | `agent_facts_published` | success | none | 0.12.0 | active | pending | TBD | actingctl agent-publish-facts: the Runtime recorded the fact observation. |
 | `agent_wake_test_queued` | success | none | 0.12.37 | active | pending | written | actingctl agent-wake-test: the test wake is queued for the worker; the line carries {wake_id, channel, quiet?} and, with --wait-s, the wake's row (Workflow #432… |
-| `answer_exported` | warning | none | 0.12.0 | active | pending | TBD | An answer larger than the output budget was written whole to an export file. |
+| `answer_exported` | warning | none | 0.12.0 | active | pending | written | An answer larger than the output budget was written whole to an export file. |
 | `arguments_invalid` | error | none | 0.12.0 | active | pending | TBD | An MCP tool was called with arguments its input schema refuses. |
-| `binding_requires_unavailable` | warning | none | 0.12.0 | active | pending | TBD | ac_binding_draft: the answer carries no binding_requires. |
+| `binding_requires_unavailable` | warning | none | 0.12.0 | active | pending | written | ac_binding_draft: the answer carries no binding_requires. |
 | `call_budget_exhausted` | error | none | 0.12.0 | active | pending | TBD | An MCP call reached the end of its time budget. |
 | `check_config_failed` | error | none | 0.12.0 | active | pending | TBD | actingd check-config could not run or printed no JSON report. |
-| `check_config_unavailable` | warning | none | 0.12.0 | active | pending | TBD | ac_binding_draft: actingd check-config gave no report. |
-| `client_action_not_recorded` | warning | none | 0.12.0 | active | pending | TBD | Recording the call's client.action in the Runtime failed after actinglab answered. |
-| `client_action_without_req_id` | warning | none | 0.12.0 | active | pending | TBD | actinglab's answer carried no req_id for the call's client.action. |
+| `check_config_unavailable` | warning | none | 0.12.0 | active | pending | written | ac_binding_draft: actingd check-config gave no report. |
+| `client_action_not_recorded` | warning | none | 0.12.0 | active | pending | written | Recording the call's client.action in the Runtime failed after actinglab answered. |
+| `client_action_without_req_id` | warning | none | 0.12.0 | active | pending | written | actinglab's answer carried no req_id for the call's client.action. |
 | `clock_unavailable` | error | none | 0.12.0 | active | pending | TBD | The system clock is before the Unix epoch or out of range. |
 | `config_facts_missing` | error | none | 0.12.0 | active | pending | TBD | status --config: the runtime fact snapshot holds no config.subsystems or config.parameters record. |
-| `config_generation_mismatch` | warning | none | 0.12.0 | active | pending | TBD | actingctl overview or ac_overview found that the configuration generation actingd runs is not the one the installation selects now, or that the selected… |
+| `config_generation_mismatch` | warning | none | 0.12.0 | active | pending | written | actingctl overview or ac_overview found that the configuration generation actingd runs is not the one the installation selects now, or that the selected… |
 | `config_settings_changed` | success | none | 0.12.0 | active | pending | TBD | actingctl config set\|clear: the Runtime applied every change. |
 | `cursor_encode_failed` | error | none | 0.12.0 | active | pending | TBD | The MCP server could not encode a cursor. |
 | `cursor_invalid` | error | none | 0.12.0 | active | pending | TBD | An MCP cursor belongs to another query, Runtime connection or server process. |
@@ -41,7 +41,7 @@ column means. 198 codes.
 | `errors_query_invalid` | error | none | 0.12.0 | active | pending | TBD | ac_diagnose could not form its errors view query. |
 | `exited_during_startup` | error | none | 0.12.0 | active | pending | TBD | The Runtime the watchdog started exited before it answered. |
 | `handle_unknown` | error | none | 0.12.0 | active | pending | TBD | No job of this MCP server process has the handle. |
-| `install_build_manifest_unreadable` | warning | none | 0.12.0 | active | pending | TBD | actingctl overview or ac_overview could not read the install's build manifest. |
+| `install_build_manifest_unreadable` | warning | none | 0.12.0 | active | pending | written | actingctl overview or ac_overview could not read the install's build manifest. |
 | `install_caveat_noted` | warning | none | 0.12.12 | active | pending | written | An actingctl install command did its work, but install_caveat names something left unchecked, pending or on the previous build; operation names the command. |
 | `install_command_done` | success | none | 0.12.12 | active | pending | written | An actingctl install command did what was asked (contracts/install-cli.md); operation names the command. |
 | `install_command_refused` | error | none | 0.12.12 | active | pending | written | An actingctl install command refused, or failed without leaving an unfinished operation; operation names the command and install_refusal says why, with that… |
@@ -84,7 +84,7 @@ column means. 198 codes.
 | `mcp_config_program_unresolved` | error | none | 0.12.0 | active | pending | TBD | actingctl mcp-config cannot name the program a client registers: the executable or the installation selection cannot be read, or a slot's fixed entry is… |
 | `mcp_config_program_unsupported` | error | none | 0.12.0 | active | pending | TBD | actingctl mcp-config cannot write the client configuration for this program path (not Unicode, or a double quote for claude). |
 | `mcp_file_too_large` | error | none | 0.12.0 | active | pending | TBD | mcp-serve, or actingctl overview reading the build manifest, read a file (a configuration, a manifest, an export) larger than its bound limit_bytes. |
-| `mcp_identity_card_refused` | warning | none | 0.12.0 | active | pending | TBD | The Runtime refused mcp-serve's governance identity card (governance.allowed_clients); the write went ahead without it and the refusal is the caused_by link. |
+| `mcp_identity_card_refused` | warning | none | 0.12.0 | active | pending | written | The Runtime refused mcp-serve's governance identity card (governance.allowed_clients); the write went ahead without it and the refusal is the caused_by link. |
 | `mcp_input_failed` | error | none | 0.12.0 | active | pending | TBD | mcp-serve could not read stdin and ended; the OS error is the caused_by link. |
 | `mcp_message_malformed` | error | none | 0.12.0 | active | pending | TBD | JSON-RPC -32700: an MCP message line is not JSON; the parser's error is the caused_by link. |
 | `mcp_message_too_large` | error | none | 0.12.0 | active | pending | TBD | JSON-RPC -32700: an MCP message line is longer than limit_bytes and was skipped. |
@@ -103,9 +103,9 @@ column means. 198 codes.
 | `monitor_status_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl monitor-status: the Runtime reported its monitor registry. |
 | `outcome_codes_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl codes: the catalog entry of one outcome code, or one page of the code list, was printed from the outcome catalog this build embeds, as ac_outcome_code… |
 | `output_budget_exceeded` | error | none | 0.12.0 | active | pending | TBD | An MCP tool result takes more bytes as sent than the tool output budget: actual_bytes is the bytes the tools/call result takes as sent in the session's protocol… |
-| `package_binding_unreadable` | warning | none | 0.12.0 | active | pending | TBD | actingctl packs or ac_packs found a package binding of the selected configuration whose path does not exist or cannot be read (a package folder bound as a… |
+| `package_binding_unreadable` | warning | none | 0.12.0 | active | pending | written | actingctl packs or ac_packs found a package binding of the selected configuration whose path does not exist or cannot be read (a package folder bound as a… |
 | `package_bindings_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl packs: the bound packages of the selected configuration were printed. |
-| `preflight_failed` | warning | none | 0.12.0 | active | pending | TBD | ac_binding_draft: actinglab package preflight did not pass the recorded package. |
+| `preflight_failed` | warning | none | 0.12.0 | active | pending | written | ac_binding_draft: actinglab package preflight did not pass the recorded package. |
 | `process_probe_failed` | error | none | 0.12.0 | active | pending | TBD | The watchdog's process probe failed. |
 | `recovery_ladder_drill_queued` | success | none | 0.12.0 | active | pending | TBD | actingctl ladder-drill: the Runtime admitted a drill of the instance's stuck-recovery ladder and queued its claim; the line carries the drill {instance_alias,… |
 | `resource_targets_applied` | success | none | 0.12.0 | active | pending | TBD | actingctl agent-apply-resource-targets: the Runtime applied the resource target policy. |
@@ -152,9 +152,9 @@ column means. 198 codes.
 | `watchdog_budget_exhausted` | error | none | 0.12.0 | active | pending | TBD | Watchdog decision: the restart budget is exhausted. |
 | `watchdog_config_unreadable` | error | none | 0.12.0 | active | pending | TBD | The watchdog cannot read the selected configuration. |
 | `watchdog_directory_unavailable` | error | none | 0.12.0 | active | pending | TBD | The watchdog cannot create its directory. |
-| `watchdog_fatal_hold` | fatal | none | 0.12.0 | active | pending | TBD | Watchdog decision: the Runtime's last start ended fatally; it is held until an external fix. |
+| `watchdog_fatal_hold` | fatal | none | 0.12.0 | active | pending | written | Watchdog decision: the Runtime's last start ended fatally; it is held until an external fix. |
 | `watchdog_formal_close` | info | none | 0.12.0 | active | pending | TBD | Watchdog decision: the last owner closed formally. |
-| `watchdog_formal_close_unlogged` | warning | none | 0.12.0 | active | pending | TBD | Watchdog status attention: no Runtime log covers the formally closed owner epoch, so a fatal stop of an unlogged start may be hidden. |
+| `watchdog_formal_close_unlogged` | warning | none | 0.12.0 | active | pending | written | Watchdog status attention: no Runtime log covers the formally closed owner epoch, so a fatal stop of an unlogged start may be hidden. |
 | `watchdog_formal_start_observed` | info | none | 0.12.0 | active | pending | TBD | The watchdog observed a formal start of the Runtime. |
 | `watchdog_grace` | info | none | 0.12.0 | active | pending | TBD | Watchdog decision: a start waits out the grace after a gap. |
 | `watchdog_install_refused` | error | none | 0.12.0 | active | pending | TBD | actingctl watchdog install refused; the condition that refused it (installer busy, a tick in progress) is the caused_by link. |
@@ -163,7 +163,7 @@ column means. 198 codes.
 | `watchdog_installer_unfinished` | warning | none | 0.12.12 | active | pending | written | Watchdog decision (row 7a''): a start would be considered, but install\current.json names the unfinished installer update or rollback (or its undo)… |
 | `watchdog_journal_unreadable` | error | none | 0.12.0 | active | pending | TBD | The watchdog cannot read the owner journal. |
 | `watchdog_journal_unrecognised` | error | none | 0.12.0 | active | pending | TBD | The watchdog does not recognise the owner journal's records. |
-| `watchdog_last_start_failed` | warning | none | 0.12.0 | active | pending | TBD | Watchdog status attention: the last watchdog start (at_unix_ms) failed; its start result is the caused_by link. |
+| `watchdog_last_start_failed` | warning | none | 0.12.0 | active | pending | written | Watchdog status attention: the last watchdog start (at_unix_ms) failed; its start result is the caused_by link. |
 | `watchdog_launcher_log_unavailable` | error | none | 0.12.0 | active | pending | TBD | actingwatch cannot open \<root>\watchdog\watchdog.log. |
 | `watchdog_launcher_misplaced` | error | none | 0.12.0 | active | pending | TBD | actingwatch is not \<root>\tools\actingwatch.exe, so it knows no installation root. |
 | `watchdog_launcher_missing` | error | none | 0.12.0 | active | pending | TBD | The watchdog's launcher or entry program is not a file. |
@@ -176,9 +176,9 @@ column means. 198 codes.
 | `watchdog_misconfigured` | error | none | 0.12.0 | active | pending | TBD | Watchdog decision: the watchdog is misconfigured. |
 | `watchdog_never_started` | info | none | 0.12.0 | active | pending | TBD | Watchdog decision: the state root holds no owner record. |
 | `watchdog_owner_lock_held` | info | none | 0.12.0 | active | pending | TBD | Watchdog decision: the owner lock is held by an owner that does not answer. |
-| `watchdog_owner_lock_unanswered` | warning | none | 0.12.0 | active | pending | TBD | Watchdog status attention: the owner lock has been held for elapsed_ms (10 minutes or more) without an answering owner. |
+| `watchdog_owner_lock_unanswered` | warning | none | 0.12.0 | active | pending | written | Watchdog status attention: the owner lock has been held for elapsed_ms (10 minutes or more) without an answering owner. |
 | `watchdog_owner_retained_unconfirmed` | error | none | 0.12.0 | active | pending | TBD | Watchdog decision: the last owner was retained with its resources unconfirmed. |
-| `watchdog_restarts_repeated` | warning | none | 0.12.0 | active | pending | TBD | Watchdog status attention: the watchdog started the Runtime count times (2 or more) within a day. |
+| `watchdog_restarts_repeated` | warning | none | 0.12.0 | active | pending | written | Watchdog status attention: the watchdog started the Runtime count times (2 or more) within a day. |
 | `watchdog_root_mismatch` | error | none | 0.12.0 | active | pending | TBD | The watchdog's root is not the install root the selection names. |
 | `watchdog_root_unavailable` | error | none | 0.12.0 | active | pending | TBD | The watchdog's root cannot be resolved. |
 | `watchdog_run_in_progress` | info | none | 0.12.0 | active | pending | TBD | Watchdog decision: another tick holds the run lock. |
@@ -190,13 +190,13 @@ column means. 198 codes.
 | `watchdog_start_failed` | error | none | 0.12.0 | active | pending | TBD | Watchdog decision: the watchdog's start of the Runtime failed. |
 | `watchdog_start_pending` | info | none | 0.12.0 | active | pending | TBD | Watchdog state: a start whose result is not known yet. |
 | `watchdog_started_runtime` | info | none | 0.12.0 | active | pending | TBD | Watchdog decision: the watchdog started the Runtime. |
-| `watchdog_state_reset` | warning | none | 0.12.0 | active | pending | TBD | The watchdog set its state file aside and started a fresh state. |
+| `watchdog_state_reset` | warning | none | 0.12.0 | active | pending | written | The watchdog set its state file aside and started a fresh state. |
 | `watchdog_state_root_invalid` | error | none | 0.12.0 | active | pending | TBD | The selected configuration names no usable state root. |
 | `watchdog_state_unreadable` | error | none | 0.12.0 | active | pending | TBD | The watchdog cannot read its state file. |
 | `watchdog_state_unwritable` | error | none | 0.12.0 | active | pending | TBD | The watchdog cannot write its state file. |
 | `watchdog_task_delete_failed` | error | none | 0.12.0 | active | pending | TBD | Removing the watchdog task failed. |
 | `watchdog_task_mismatch` | error | none | 0.12.0 | active | pending | TBD | Task Scheduler holds another definition than the watchdog's. |
-| `watchdog_task_missing` | warning | none | 0.12.0 | active | pending | TBD | Watchdog status attention: no watchdog task (name) is registered for this root. |
+| `watchdog_task_missing` | warning | none | 0.12.0 | active | pending | written | Watchdog status attention: no watchdog task (name) is registered for this root. |
 | `watchdog_task_query_failed` | error | none | 0.12.0 | active | pending | TBD | Reading the watchdog task from Task Scheduler failed. |
 | `watchdog_task_register_failed` | error | none | 0.12.0 | active | pending | TBD | Registering the watchdog task failed. |
 | `watchdog_uninstalled` | success | none | 0.12.0 | active | pending | TBD | The watchdog task was removed. |

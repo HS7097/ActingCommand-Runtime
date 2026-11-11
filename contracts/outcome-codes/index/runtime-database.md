@@ -35,8 +35,8 @@ it by hand. The [summary](README.md) says what each column means. 51 codes.
 | `maintenance_target_invalid` | error | none | 0.12.0 | active | pending | TBD | The runtime database reports maintenance target invalid. |
 | `restore_target_not_empty` | error | none | 0.12.0 | active | pending | TBD | The runtime database reports restore target not empty. |
 | `restored_material_mismatch` | error | none | 0.12.0 | active | pending | TBD | The runtime database reports restored material mismatch. |
-| `sqlite_backup_busy` | warning | none | 0.12.0 | active | pending | TBD | The runtime database reports sqlite backup busy. |
-| `sqlite_backup_locked` | warning | none | 0.12.0 | active | pending | TBD | The runtime database reports sqlite backup locked. |
+| `sqlite_backup_busy` | warning | none | 0.12.0 | active | pending | written | actingd ledger-maintenance backup: a step of SQLite's online backup of the runtime database answered SQLITE_BUSY. |
+| `sqlite_backup_locked` | warning | none | 0.12.0 | active | pending | written | actingd ledger-maintenance backup: a step of SQLite's online backup of the runtime database answered SQLITE_LOCKED. |
 | `state_connection_busy` | error | none | 0.12.0 | active | pending | TBD | The runtime database reports state connection busy. |
 | `state_connection_poisoned` | error | none | 0.12.0 | active | pending | TBD | The runtime database reports state connection poisoned. |
 | `state_database_config_failed` | error | none | 0.12.0 | active | pending | TBD | The runtime database reports state database config failed. |

@@ -6,7 +6,7 @@ column means. 4 codes.
 
 | Code | Category | Ladder class | Since | Status | Review | Text | Description |
 |---|---|---|---|---|---|---|---|
-| `vision_gpu_unavailable` | warning | none | 0.12.44 | active | pending | TBD | The configured GPU execution provider cannot be used (Workflow #407 GPU-1, design rd-1031/perf-407/design-gpu1.md section 2.5): with gpu_fallback cpu the work… |
+| `vision_gpu_unavailable` | warning | none | 0.12.44 | active | pending | written | The configured GPU execution provider cannot be used (Workflow #407 GPU-1, design rd-1031/perf-407/design-gpu1.md section 2.5): with gpu_fallback cpu the work… |
 | `vision_model_folder_invalid` | error | none | 0.12.0 | active | pending | TBD | A vision root's model listing cannot be used: a model folder breaks the folder rule (check-config and vision-provider-check refuse it; startup records it). |
 | `vision_models_empty` | error | none | 0.12.0 | active | pending | TBD | A vision root's model listing cannot be used: the models directory holds no model folder. |
 | `vision_root_unavailable` | error | none | 0.12.0 | active | pending | TBD | A vision root's model listing cannot be used: the root or its models directory is unavailable. |

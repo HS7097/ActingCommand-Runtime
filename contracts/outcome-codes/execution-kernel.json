@@ -4150,8 +4150,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A contained task operation's guard target was not evaluated because the observed page is not the guard's page.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The page recognised on the step's frame is not the page the operation's guard names (its page_id), so the guard target was not evaluated and the operation was refused with contained_task_guard_refused.",
+      "handling": "Read that refusal (its page_id is the observed page) and the step's task diagnostic records: if the screen showed another page, the flow differs from the pack there; if it showed the guard's page, its recognition missed it. Either is the pack author's to fix."
     },
     "environment_value_low_confidence": {
       "category": "error",

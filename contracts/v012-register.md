@@ -14938,6 +14938,53 @@ neutral owners, one without a fragment file, in a temporary folder):
 hand, a file the index does not hold; no BOM, no CR). No Rust test, gate map entry or golden
 changes.
 
+### 1.324 Slice CODES-T1 (0.12.56): the fatal and warning codes say what causes them and what to do (Workflow #439; the owner's approval of 11-12 to fill the catalog's texts in batches; coordinator work order `rd-1111/brief-codes-t1.md`, read on main `e2b5590f`)
+
+1.324 is the coordinator's number, appended after §1.320 on main `e2b5590f`; §1.321 to §1.323
+belong to slices not merged yet. This first batch writes `common_causes` and `handling` of the
+active fatal and warning codes that still held `TBD` on that main: 4 fatal and 52 warning codes,
+the ones the Runtime raises for a person to look at. Each text says only what the places that
+raise the code support; the pull request lists those places by file and line, and the catalog
+holds none.
+
+Active codes with both texts written (`common_causes` and `handling` neither empty nor `TBD`),
+by category:
+
+| Category | Active | Before | After |
+|---|---|---|---|
+| fatal | 14 | 10 | 14 |
+| error | 3403 | 342 | 342 |
+| warning | 146 | 94 | 144 |
+| info | 205 | 93 | 93 |
+| success | 126 | 86 | 86 |
+| all | 3894 | 625 | 679 |
+
+- **Written:** 54 codes (4 fatal, 50 warning): actingctl 17, actinglab 1, artifact-store 1,
+  contract 2, execution-kernel 1, ledger 1, page-detector 2, policy 5, runtime-database 2,
+  runtime-host 21, vision-ffi 1. Six of them held a written `common_causes` already
+  (`frame_store_budget_floor_applied`, `contained_settlement_anchor_invalid`,
+  `emulator_autostart_network_status_unknown`, `emulator_state_read_failed`,
+  `emulator_stop_process_unverified`, `ledger_open_slow`): only their `handling` is written, and
+  the written text stays.
+- **Descriptions rewritten:** `sqlite_backup_busy` and `sqlite_backup_locked`, whose generated
+  sentences ("The runtime database reports sqlite backup busy", "... locked") said nothing of
+  when: they now name the operation (`actingd ledger-maintenance backup`), the waits and where the
+  warning is kept, as [ledger-maintenance.md](ledger-maintenance.md) describes them.
+- **Not written, nothing raises them** on main `e2b5590f`: `display_map_stale` (display-adapter;
+  only its registry entry spells it, DA-3 emits nothing yet) and `fact_reader_document_mismatch`
+  (runtime-host; no place emits it, nor the `reader_problem` tokens `confidence_below_document`
+  and `interval_exceeds_freshness` it would carry). Both stay `TBD`.
+- **Seen, not changed:** the written `common_causes` of `frame_store_budget_floor_applied` says
+  "below the 2 GiB OS reserve"; the code applies the floor when the available memory less the
+  reserve leaves less than the floor (256 MiB by default), so also somewhat above the reserve.
+- **The index:** `ci/outcome_codes_index.py` does not exist on main `e2b5590f`; no index is
+  generated here.
+
+No interface, shape, code or behaviour changes: only texts of pending entries change (two
+descriptions included); every category, ladder class, owner, layer, value, `since`, status and
+review (`pending`) stays, `runtime-outcomes` stays 1, and no release file changes, since a release
+file holds no text.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

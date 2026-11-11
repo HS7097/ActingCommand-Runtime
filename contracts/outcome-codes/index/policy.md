@@ -21,7 +21,7 @@ means. 116 codes.
 | `decision_record` | info | none | 0.12.0 | active | pending | written | Scheduling decision reason: the policy state and the candidates a dispatch decision compared (decision record). |
 | `dependency_already_served` | info | none | 0.12.12 | active | pending | written | Scheduling decision reason (SCH-M CF-1, contracts/scheduling/README.md "Condition edges"): a `dependency_completed` predicate with `since_own_run: true` is… |
 | `descriptor_mismatch` | error | none | 0.12.0 | active | pending | TBD | Catalog compile diagnostic: the scheduling documents of one catalog do not share one schema version and catalog descriptor. |
-| `effect_evidence_insufficient` | warning | none | 0.12.0 | active | pending | TBD | Forward projection evidence gap: a dispatched task's effects are only expected, inferred or not fully confident. |
+| `effect_evidence_insufficient` | warning | none | 0.12.0 | active | pending | written | Forward projection evidence gap: a dispatched task's effects are only expected, inferred or not fully confident. |
 | `effect_incompatible` | error | none | 0.12.0 | active | pending | TBD | Catalog compile diagnostic: a task effect's direction or kind does not fit the pool it names. |
 | `execution_continues` | info | none | 0.12.0 | active | pending | TBD | Strategic planning-lane reason: execution continues under a matched template. |
 | `fact_probe` | info | none | 0.12.32 | active | pending | written | Scheduling decision reason (SS-5, contracts/scheduling/README.md "Self-read fact probe"): a `fact` predicate with `on_unknown: probe` reads its fact (fact_key,… |
@@ -88,10 +88,10 @@ means. 116 codes.
 | `resource_target_override` | info | none | 0.12.0 | active | pending | TBD | An override resource target (resource_target_id) supersedes the candidate's selection score and, unless it keeps it, its manual offset. |
 | `resource_target_pending` | info | none | 0.12.0 | active | pending | TBD | A resource target (resource_target_id) is configured but waits for a valid observation of its resource. |
 | `resource_target_policy_expired` | info | none | 0.12.0 | active | pending | TBD | Scheduling decision reason: the instance's resource target policy has expired. |
-| `resource_target_policy_ignored` | warning | none | 0.12.0 | active | pending | TBD | Scheduling decision reason: a resource target record that the formal entry did not write is ignored. |
-| `resource_target_policy_unreadable` | warning | none | 0.12.0 | active | pending | TBD | Scheduling decision reason: the instance's stored resource target policy cannot be read, and the instance runs base scheduling. |
+| `resource_target_policy_ignored` | warning | none | 0.12.0 | active | pending | written | Scheduling decision reason: a resource target record that the formal entry did not write is ignored. |
+| `resource_target_policy_unreadable` | warning | none | 0.12.0 | active | pending | written | Scheduling decision reason: the instance's stored resource target policy cannot be read, and the instance runs base scheduling. |
 | `resource_target_satisfied` | info | none | 0.12.0 | active | pending | TBD | A resource target (resource_target_id) is met: its gap is closed and it no longer moves the candidate. |
-| `resource_target_tasks_unevaluable` | warning | none | 0.12.0 | active | pending | TBD | Scheduling decision reason: some tasks the resource target policy names cannot be evaluated. |
+| `resource_target_tasks_unevaluable` | warning | none | 0.12.0 | active | pending | written | Scheduling decision reason: some tasks the resource target policy names cannot be evaluated. |
 | `resource_target_unmapped` | info | none | 0.12.0 | active | pending | TBD | A resource target (resource_target_id) of the instance's resource-targets policy cannot be mapped to the candidate's task or resource. |
 | `resource_targets` | info | none | 0.12.0 | active | pending | TBD | Scheduling decision reason: the resource targets that weigh the candidate under an active v2 policy. |
 | `resource_targets_canonical_encode_failed` | error | none | 0.12.0 | active | pending | TBD | A checked resource target document could not be encoded canonically. |
@@ -110,7 +110,7 @@ means. 116 codes.
 | `selection_input_unknown` | warning | none | 0.12.0 | active | pending | written | A gate or term (rule_id) of a scheduling-layer selection document met an unknown input (unknown_reason) for a candidate on the instance that no reading can… |
 | `selection_policy_invalid` | error | none | 0.12.0 | active | pending | TBD | The catalog's scheduling selection document could not be evaluated. |
 | `selection_unknown_clause_ignored` | warning | declaration_error | 0.12.0 | active | pending | written | A gate or term (rule_id) of a scheduling-layer selection document declares a drop_candidate or substitute clause (unknown_clause) that the scheduling layer does… |
-| `step_budget_exhausted` | warning | none | 0.12.0 | active | pending | TBD | Forward projection evidence gap: the evaluation step budget ran out before the horizon. |
+| `step_budget_exhausted` | warning | none | 0.12.0 | active | pending | written | Forward projection evidence gap: the evaluation step budget ran out before the horizon. |
 | `strategy_catalog_mismatch` | error | none | 0.12.0 | active | pending | TBD | A strategic report does not match the active catalog. |
 | `strategy_numeric_overflow` | error | none | 0.12.0 | active | pending | TBD | The strategic projection overflowed an integer. |
 | `strategy_report_invalid` | error | none | 0.12.0 | active | pending | TBD | A strategic report is invalid. |

@@ -6,5 +6,5 @@ hand. The [summary](README.md) says what each column means. 2 codes.
 
 | Code | Category | Ladder class | Since | Status | Review | Text | Description |
 |---|---|---|---|---|---|---|---|
-| `batch_terminated` | warning | none | 0.12.0 | active | pending | TBD | A page of an evaluation batch was not evaluated because the batch stopped early after a page evaluation broke an invariant. |
-| `batch_validation_failed` | warning | none | 0.12.0 | active | pending | TBD | A page of an evaluation batch was not evaluated because the batch request failed validation before any page ran. |
+| `batch_terminated` | warning | none | 0.12.0 | active | pending | written | A page of an evaluation batch was not evaluated because the batch stopped early after a page evaluation broke an invariant. |
+| `batch_validation_failed` | warning | none | 0.12.0 | active | pending | written | A page of an evaluation batch was not evaluated because the batch request failed validation before any page ran. |

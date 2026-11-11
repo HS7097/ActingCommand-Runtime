@@ -113,7 +113,7 @@ means. 293 codes.
 | `ledger_dump_unsupported` | fatal | none | 0.12.0 | active | pending | written | The dump file at path declares a dump_version newer than this build reads; the Runtime refuses to start and leaves the file untouched (Workflow #383 AO-1). |
 | `ledger_flush_delayed` | warning | none | 0.12.0 | active | pending | written | The oldest unflushed record became older than flush_lag_warn_ms (started) or the lag fell back (ended) (Workflow #383 AO-8). |
 | `ledger_format_marker_mismatch` | error | none | 0.12.0 | active | pending | TBD | The ledger reports ledger format marker mismatch. |
-| `ledger_format_unsupported` | fatal | none | 0.12.0 | active | pending | TBD | The database holds a format-1 ledger (ledger revision 2, written by v0.11); this Runtime reads only ledger revision 3 (SQLite format 2) and refuses it after… |
+| `ledger_format_unsupported` | fatal | none | 0.12.0 | active | pending | written | The database holds a format-1 ledger (ledger revision 2, written by v0.11); this Runtime reads only ledger revision 3 (SQLite format 2) and refuses it after… |
 | `ledger_index_mismatch` | error | none | 0.12.0 | active | pending | TBD | The ledger reports ledger index mismatch. |
 | `ledger_initialization_conflict` | error | none | 0.12.0 | active | pending | TBD | The ledger reports ledger initialization conflict. |
 | `ledger_insert_incomplete` | error | none | 0.12.0 | active | pending | TBD | The ledger reports ledger insert incomplete. |

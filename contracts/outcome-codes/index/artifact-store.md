@@ -69,7 +69,7 @@ by hand. The [summary](README.md) says what each column means. 77 codes.
 | `frame_material_hash_mismatch` | error | none | 0.12.0 | active | pending | TBD | The artifact store reports frame material hash mismatch. |
 | `frame_material_unavailable` | error | none | 0.12.0 | active | pending | TBD | The artifact store reports frame material unavailable. |
 | `frame_spill_material_pending` | error | none | 0.12.0 | active | pending | TBD | The artifact store reports frame spill material pending. |
-| `frame_store_budget_floor_applied` | warning | none | 0.12.12 | active | pending | TBD | The frame store's memory sample left a budget below the floor after the OS reserve (zero included: available or total memory at or below os_reserve_bytes), so… |
+| `frame_store_budget_floor_applied` | warning | none | 0.12.12 | active | pending | written | The frame store's memory sample left a budget below the floor after the OS reserve (zero included: available or total memory at or below os_reserve_bytes), so… |
 | `frame_store_device` | error | none | 0.12.0 | active | pending | TBD | The artifact store reports frame store device. |
 | `frame_store_flush_reserve_invalid` | error | none | 0.12.0 | active | pending | TBD | The artifact store reports frame store flush reserve invalid. |
 | `frame_store_invalid` | error | none | 0.12.0 | active | pending | TBD | The artifact store reports frame store invalid. |

@@ -617,8 +617,8 @@ column means. 915 codes.
 | `package_reference_invalid` | error | declaration_error | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): package reference invalid. |
 | `page_recognition_conflict` | error | none | 0.12.4 | active | pending | written | A frame matches two or more pages of the package's page set, so the Lab decides no page for it and refuses the command instead of taking the first match (#411… |
 | `paired_backend_open_failed` | error | environment_fault | 0.12.0 | active | pending | written | Opening an instance's paired capture and input session failed and its temporary resources were released. |
-| `panic_caught` | warning | none | 0.12.0 | active | pending | TBD | A panic boundary caught a panic; raw_text keeps the panic payload. |
-| `panic_unrecovered` | fatal | none | 0.12.0 | active | pending | TBD | The watchdog's restart budget ran out and every start in its window ended in runtime_restart_required (Workflow #378 A6a, model sections 2.4 and 7.5): neither… |
+| `panic_caught` | warning | none | 0.12.0 | active | pending | written | A panic boundary caught a panic; raw_text keeps the panic payload. |
+| `panic_unrecovered` | fatal | none | 0.12.0 | active | pending | written | The watchdog's restart budget ran out and every start in its window ended in runtime_restart_required (Workflow #378 A6a, model sections 2.4 and 7.5): neither… |
 | `performance_control_evidence_missing` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: performance control evidence missing. |
 | `performance_process_count_overflow` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): performance process count overflow. |
 | `performance_sample_time_invalid` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): performance sample time invalid. |

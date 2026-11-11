@@ -41,7 +41,7 @@ it by hand. The [summary](README.md) says what each column means. 203 codes.
 | `contained_task_frame_resolution_mismatch` | error | declaration_error | 0.12.0 | retired, replaced by `display_map_unresolved` | pending | written | Retired (Workflow #392 DA-2a, model 392 v1.2 §0.2 C10). |
 | `contained_task_guard_invalid` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task operation's guard is invalid. |
 | `contained_task_guard_missing` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task operation that needs a guard declares none. |
-| `contained_task_guard_page_mismatch` | warning | none | 0.12.0 | active | pending | TBD | A contained task operation's guard target was not evaluated because the observed page is not the guard's page. |
+| `contained_task_guard_page_mismatch` | warning | none | 0.12.0 | active | pending | written | A contained task operation's guard target was not evaluated because the observed page is not the guard's page. |
 | `contained_task_guard_refused` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A contained task operation's guard did not pass before its input. |
 | `contained_task_guard_skipped` | info | none | 0.12.0 | active | pending | TBD | A contained task operation declares unguarded_trusted_coordinate, so no guard target was evaluated before its input. |
 | `contained_task_guard_target_invalid` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task operation's guard target is not usable. |
