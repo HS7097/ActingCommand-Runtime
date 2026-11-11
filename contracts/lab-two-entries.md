@@ -427,6 +427,7 @@ LAB-5 the MCP tools, and LAB-1's test `lab_ops_table_complete` reads the file it
 | `module` | `core`, `debugging`, `authoring` or `rescue` |
 | `params` | each `{name, form, type, required, repeat?, default?, required_in?, note?}`; `form` is `positional`, `option` or `switch`; an option's CLI flag is `--` and the name with `_` as `-`, its MCP argument the name; positionals keep their order; `required_in` (LAB-5A) lists the front ends (the ids of the `modules` rows of role `front_end`) in which the parameter is required although the row does not require it (today only `mcp`, on `resume`'s `expect`, `pause`'s `reason` and, since LAB-5C, `remedy set`'s `rows`; nothing reads it yet, and the CLI and `serve` do not change); what the schema cannot state (a one-of rule, a value given as a positional or as a flag, a joint or exclusive group, flag sets that depend on a path or a kind) is in the parameter's `note`, and the code enforces it |
 | `params_more` | when present: the source command whose further flags carry over unchanged under the same naming rule. Since LAB-5A only a row no program offers yet has it (a rescue row whose source command is not built); every offered row declares all of its parameters (section 9.2) |
+| `help` | optional (LAB-5E): what the operation does, in one sentence of the row's own, shared by the command line's help and the MCP tool's description; written on its own line directly before the row's `output`. English, ASCII, 1 to 160 bytes, one line; one sentence or two short ones, beginning with a verb in the third person ("Reads…", "Pauses…", "Lists…"); it says what the operation does and on what and, where a caller must know it to use the row at all, what comes back or what to call next. No rule every row shares (budgets, handles, exports, cursors, what `irreversible` means: those are the MCP server's instructions), no MCP tool name (`ac_…`; a row is named by its words), no game word, no path of a machine, nothing the row's parameters already say. Every offered row has one (section 9.2); a row no program offers (reserved, or planned and not served) has none yet. No command prints it yet |
 | `output` | what the operation answers; the CLI's `--json` line, the MCP result and the serve answer are the same JSON |
 | `writes` | whether it changes anything; MCP's `readOnlyHint` is its negation |
 | `irreversible` | section 5; MCP's `destructiveHint` is `irreversible` or `disruptive` |
@@ -467,7 +468,12 @@ another); no offered row carries `params_more` (only a planned rescue row may, w
 command is not built: the test checks that in `crates/lab-ops`, and actinglab's `gate_434_lab5a`,
 which knows which rows actinglab offers, that no offered row has it); every `required_in` names
 front ends, on a parameter the row does not require; a `disruptive` row writes and is not
-irreversible.
+irreversible. Since LAB-5E also: every `help` is ASCII, 1 to 160 bytes on one line (no control
+character), names no MCP tool (`ac_`), and no two rows share one; every offered row has one:
+every row actinglab offers and every planned row of slice LAB-5, which LAB-5's MCP server offers
+itself (actinglab's `gate_434_lab5e`, which knows which rows actinglab offers). The neutrality
+guard's test reads the table line by line, each `help` on its own line, so a game word in a
+sentence fails that test.
 
 ### 9.3 Defaults and output (LAB-1, LAB-2)
 

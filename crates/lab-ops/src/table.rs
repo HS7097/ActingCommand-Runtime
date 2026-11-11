@@ -27,6 +27,8 @@ pub const SCHEMA_VERSION: &str = "actingcommand.lab-operations.v1";
 pub const TABLE_PATH: &str = "contracts/lab-operations.json";
 /// The largest table file read.
 pub const MAX_TABLE_BYTES: u64 = 1024 * 1024;
+/// Workflow #434 LAB-5E: the longest `help` of a row, in bytes (§9.1).
+pub const MAX_HELP_BYTES: usize = 160;
 /// The table this build embeds.
 const TABLE_TEXT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -169,6 +171,9 @@ pub struct Operation {
     /// The source command whose further flags carry over unchanged; since Workflow #434 LAB-5A
     /// only on a row no program offers yet (§9.2).
     pub params_more: Option<String>,
+    /// Workflow #434 LAB-5E: what the operation does, in one sentence of its own, shared by the
+    /// command line's help and the MCP tool's description (§9.1); every offered row has one.
+    pub help: Option<String>,
     /// What the operation answers.
     pub output: String,
     /// Whether it changes anything (MCP's `readOnlyHint` is its negation).

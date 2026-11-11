@@ -99,6 +99,9 @@ mod gate_434_lab5b2;
 // that begins with `--`.
 #[path = "gate_434_lab5g4a.rs"]
 mod gate_434_lab5g4a;
+// Workflow #434 LAB-5E: every offered row says in one sentence what it does.
+#[path = "gate_434_lab5e.rs"]
+mod gate_434_lab5e;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
