@@ -84,8 +84,29 @@
 //!   again. It is kept until its claim is granted or an emulator control cancels it (a stop), so
 //!   it runs once. A woken instance is not kept so: its wake's record already brings its startup
 //!   package back.
+//!
+//! IDLE-2 (0.12.54; Alice's words of 11-11: 「根据任务间隔时间自动选择是关闭模拟器还是关闭应用还是回到主页面」; the
+//! coordinator's rulings on Workflow #386, comment 6787682270): the action `auto`.
+//!
+//! - **One tier by the gap, directly.** When an active instance meets every condition above but
+//!   the gap, `auto` reads the gap `g` to its next work (the plan's next task or reading, the
+//!   earlier, as `idle.min_gap_ms` reads it) and takes one tier: below
+//!   `idle.return_home_min_gap_ms` nothing; up to `idle.min_gap_ms` a rest at home; up to
+//!   `idle.stop_emulator_min_gap_ms` `close_app`; from there on, or with no next work,
+//!   `stop_emulator`. The tier never exceeds what the instance can be brought back from
+//!   ([`IdleView::auto_cap`]): without its configured emulator start `close_app`, without a
+//!   startup package a rest only (its `instance_idle_action_unsupported` once, as today; a rest
+//!   needs no way back). `close_app` and `stop_emulator` are then exactly the actions above, with
+//!   their own wakes.
+//! - **A rest** ([`IdleStep::Rest`]) runs once per idle stretch: the instance rests
+//!   (`Resting`) until the host reports its end, whatever it is, and is then `Rested`: it owes no
+//!   wake, is not kept in `host.idle_state`, and is never rested again until work holds it. A
+//!   later plan with a longer gap takes a higher tier from it as from an active instance.
+//! - **The switch under `auto`.** An idle instance's wake comes at once for a switched action;
+//!   under `auto` the action is switched only when the tier it took is no longer one `auto` allows
+//!   on it, so a restart that restores a closed application under `auto` does not wake it.
 
-use actingcommand_runtime_config::{IdleAction, IdleConfig};
+use actingcommand_runtime_config::{AutoGaps, IdleAction, IdleConfig};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// What one instance shows to an idle check.
@@ -118,11 +139,12 @@ impl IdleView {
     }
 
     /// What the instance lacks to be brought back after `action`; none when it can be (and for
-    /// `none`, which never acts).
+    /// `none`, which never acts). IDLE-2: `auto` lacks only a startup package; without its
+    /// configured emulator start its tier stops at `close_app` instead ([`Self::auto_cap`]).
     const fn missing(&self, action: IdleAction) -> Option<IdleRequirement> {
         let wakeable = match action {
             IdleAction::None => return None,
-            IdleAction::CloseApp => self.app_wakeable,
+            IdleAction::CloseApp | IdleAction::Auto(_) => self.app_wakeable,
             IdleAction::StopEmulator => self.emulator_wakeable,
         };
         if wakeable {
@@ -133,6 +155,61 @@ impl IdleView {
             Some(IdleRequirement::EmulatorStart)
         }
     }
+
+    /// IDLE-2: the highest tier `auto` takes on the instance: `stop_emulator` when it can be
+    /// brought back after it (a startup package and its configured emulator start), `close_app`
+    /// when it can after that one (a startup package), a rest otherwise (a rest needs no way
+    /// back).
+    pub(crate) const fn auto_cap(&self) -> Tier {
+        if self.emulator_wakeable {
+            Tier::StopEmulator
+        } else if self.app_wakeable {
+            Tier::CloseApp
+        } else {
+            Tier::Rest
+        }
+    }
+
+    /// IDLE-2: whether `auto` still allows the tier `taken` (`close_app` or `stop_emulator`) on
+    /// the instance: it is not above [`Self::auto_cap`].
+    const fn auto_allows(&self, taken: IdleAction) -> bool {
+        let tier = match taken {
+            IdleAction::CloseApp => Tier::CloseApp,
+            IdleAction::StopEmulator => Tier::StopEmulator,
+            IdleAction::None | IdleAction::Auto(_) => return false,
+        };
+        tier as u8 <= self.auto_cap() as u8
+    }
+}
+
+/// IDLE-2: the tiers of `auto`, lowest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Tier {
+    /// The game's declared return-home package runs once; the instance stays open.
+    Rest,
+    /// `close_app`.
+    CloseApp,
+    /// `stop_emulator`.
+    StopEmulator,
+}
+
+/// IDLE-2: the tier `auto` takes for the gap `gap_ms` to the instance's next work (none: no work
+/// planned) with its thresholds `gaps` and `min_gap_ms` (the `close_app` tier's), no higher than
+/// `cap`; none below `gaps.return_home_min_gap_ms`. Each threshold belongs to its own tier: a gap
+/// of exactly a threshold takes the tier that starts there.
+pub(crate) fn auto_tier(
+    gaps: AutoGaps,
+    min_gap_ms: u64,
+    gap_ms: Option<u64>,
+    cap: Tier,
+) -> Option<Tier> {
+    let wanted = match gap_ms {
+        Some(gap) if gap < gaps.return_home_min_gap_ms => return None,
+        Some(gap) if gap < min_gap_ms => Tier::Rest,
+        Some(gap) if gap < gaps.stop_emulator_min_gap_ms => Tier::CloseApp,
+        _ => Tier::StopEmulator,
+    };
+    Some(wanted.min(cap))
 }
 
 /// What an instance lacks for its idle action to work: the wake needs it to bring the instance
@@ -218,6 +295,13 @@ pub(crate) struct KeptState {
     pub(crate) startup_queued: BTreeSet<String>,
 }
 
+/// IDLE-2: the `idle_action` of a rest's records: the tier, never a value of `idle.action`.
+pub(crate) const REST_IDLE_ACTION: &str = "return_home";
+/// IDLE-2: the `member` of the one `instance_idle_action_unsupported` of a rest whose game declares
+/// no return-home package for the instance's server: the standard pack's `bundle.json` member
+/// whose entry (`uses` holding `return_home`) it lacks.
+pub(crate) const REST_DECLARATION_MEMBER: &str = "maintenance";
+
 /// What a wake queues, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WakeWork {
@@ -230,12 +314,13 @@ pub(crate) enum WakeWork {
 const STOP_EMULATOR_WAKE: &[WakeWork] = &[WakeWork::EmulatorStart, WakeWork::StartupPackage];
 const CLOSE_APP_WAKE: &[WakeWork] = &[WakeWork::StartupPackage];
 
-/// What a wake after `action` queues, in order.
+/// What a wake after `action` queues, in order. IDLE-2: `auto` is no tier an instance is idle
+/// after, so it queues nothing.
 pub(crate) const fn wake_work(action: IdleAction) -> &'static [WakeWork] {
     match action {
         IdleAction::StopEmulator => STOP_EMULATOR_WAKE,
         IdleAction::CloseApp => CLOSE_APP_WAKE,
-        IdleAction::None => &[],
+        IdleAction::None | IdleAction::Auto(_) => &[],
     }
 }
 
@@ -259,10 +344,18 @@ pub(crate) enum IdleStep {
     /// once per hold revision. The next check that finds the start no longer held queues the wake.
     WakeHeld,
     /// Report once that `action`, the action in effect, cannot work on the instance: it lacks
-    /// `missing`. The instance never acts while it does.
+    /// `missing`. The instance never acts while it does (IDLE-2: under `auto` it may still rest).
     Unsupported {
         action: IdleAction,
         missing: IdleRequirement,
+    },
+    /// IDLE-2: rest the instance at home now (`auto`'s first tier): the game's declared
+    /// return-home package runs once, its run bounded by `within_ms` (the tier's threshold
+    /// `idle.return_home_min_gap_ms`, so it ends before the next task is due). The plan's next
+    /// due time (none: no task wakes). No wake follows.
+    Rest {
+        next_due_unix_ms: Option<u64>,
+        within_ms: u64,
     },
 }
 
@@ -306,6 +399,11 @@ enum Phase {
     },
     /// The action was not performed: the instance is left as it is until work holds it again.
     Failed,
+    /// IDLE-2: a rest was asked for; its end is not reported yet.
+    Resting,
+    /// IDLE-2: the instance rested in this idle stretch (whatever the rest's end): it owes no
+    /// wake and rests no more until work holds it; a later plan may take a higher tier.
+    Rested,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -336,6 +434,9 @@ pub(crate) struct IdlePlanner {
     start_anchor: Option<u64>,
     /// When the lease sweep's idle check last ran (monotonic milliseconds).
     last_sweep_ms: Option<u64>,
+    /// IDLE-2: the instances whose game declares no return-home package for their server, as a
+    /// rest found it, by alias: each is warned once per start.
+    rest_undeclared: BTreeSet<String>,
     /// Test only: how many idle actions' workers ended, whatever their result.
     #[cfg(test)]
     pub(crate) ended_for_test: u64,
@@ -364,15 +465,18 @@ impl IdlePlanner {
         let phase = entry.phase;
         match phase {
             // The host reports the action's end (`finished`, `abandoned`) before the instance is
-            // free again.
-            Phase::Acting { .. } => None,
-            Phase::Active | Phase::Failed if view.in_use() => {
+            // free again (IDLE-2: a rest's once its key is released).
+            Phase::Acting { .. } | Phase::Resting => None,
+            // IDLE-2: work on a rested instance ends its idle stretch, as on an active one.
+            Phase::Active | Phase::Failed | Phase::Rested if view.in_use() => {
                 entry.in_use_at_unix_ms = Some(now_unix_ms);
                 entry.phase = Phase::Active;
                 None
             }
             Phase::Failed => None,
-            Phase::Active => decide(entry, config, view, plan, now_unix_ms),
+            Phase::Active => decide(entry, config, view, plan, now_unix_ms, false),
+            // IDLE-2: rested in this stretch: a higher tier only.
+            Phase::Rested => decide(entry, config, view, plan, now_unix_ms, true),
             // #405 O-2: the wake's claims (its startup package) still hold the instance.
             Phase::Woken { .. } if view.in_use() => {
                 entry.in_use_at_unix_ms = Some(now_unix_ms);
@@ -381,7 +485,7 @@ impl IdlePlanner {
             // Free again: the wake's claims have ended, the startup package's run with them.
             Phase::Woken { .. } => {
                 entry.phase = Phase::Active;
-                decide(entry, config, view, plan, now_unix_ms)
+                decide(entry, config, view, plan, now_unix_ms, false)
             }
             // IDLE-2: a hold neither ends an idle instance's wait nor cancels its wake.
             Phase::Idle {
@@ -399,7 +503,7 @@ impl IdlePlanner {
                     wake_at_unix_ms,
                     plan,
                     now_unix_ms,
-                    view.start_held,
+                    view,
                 )
             }
         }
@@ -422,20 +526,35 @@ impl IdlePlanner {
     /// result unknown, leaves the instance idle and owing its planned wake; one not performed
     /// leaves it as it is.
     pub(crate) fn finished(&mut self, alias: &str, end: IdleEnd) {
-        if let Some(entry) = self.instances.get_mut(alias)
-            && let Phase::Acting {
+        let Some(entry) = self.instances.get_mut(alias) else {
+            return;
+        };
+        let phase = entry.phase;
+        match phase {
+            Phase::Acting {
                 action,
                 wake_at_unix_ms,
-            } = entry.phase
-        {
-            entry.phase = match end {
-                IdleEnd::Done | IdleEnd::Indeterminate => Phase::Idle {
-                    action,
-                    wake_at_unix_ms,
-                },
-                IdleEnd::NotPerformed => Phase::Failed,
-            };
+            } => {
+                entry.phase = match end {
+                    IdleEnd::Done | IdleEnd::Indeterminate => Phase::Idle {
+                        action,
+                        wake_at_unix_ms,
+                    },
+                    IdleEnd::NotPerformed => Phase::Failed,
+                };
+            }
+            // IDLE-2: a rest, whatever its end, is the stretch's one rest; it owes no wake and is
+            // not tried again before work holds the instance.
+            Phase::Resting => entry.phase = Phase::Rested,
+            _ => {}
         }
+    }
+
+    /// IDLE-2: a rest found that the game of `alias` declares no return-home package for its
+    /// server; whether it is the first time this start (the host warns once per start and
+    /// instance).
+    pub(crate) fn note_rest_undeclared(&mut self, alias: &str) -> bool {
+        self.rest_undeclared.insert(alias.to_owned())
     }
 
     /// PAUSE-AUTO (0.12.34): the configured emulator start a wake of `alias` queued met a hold on
@@ -461,10 +580,10 @@ impl IdlePlanner {
     }
 
     /// The host did not carry the action out (on its key it met a pause or work, or no key came):
-    /// the instance is active again.
+    /// the instance is active again. IDLE-2: so is an instance whose rest was not carried out.
     pub(crate) fn abandoned(&mut self, alias: &str) {
         if let Some(entry) = self.instances.get_mut(alias)
-            && matches!(entry.phase, Phase::Acting { .. })
+            && matches!(entry.phase, Phase::Acting { .. } | Phase::Resting)
         {
             entry.phase = Phase::Active;
         }
@@ -516,7 +635,8 @@ impl IdlePlanner {
                         wake_at_unix_ms: Some(woken_at_unix_ms),
                         woken: true,
                     },
-                    Phase::Active | Phase::Failed => return None,
+                    // IDLE-2: a resting or rested instance is open, never kept.
+                    Phase::Active | Phase::Failed | Phase::Resting | Phase::Rested => return None,
                 };
                 Some((alias.clone(), kept))
             })
@@ -612,27 +732,42 @@ impl IdlePlanner {
             _ => None,
         }
     }
+
+    /// IDLE-2, tests: whether the instance rested in its current idle stretch.
+    #[cfg(test)]
+    pub(crate) fn rested(&self, alias: &str) -> bool {
+        self.instances
+            .get(alias)
+            .is_some_and(|entry| matches!(entry.phase, Phase::Rested))
+    }
 }
 
-/// An active instance's check: the action, when every condition holds.
+/// An active instance's check: the action, when every condition holds. IDLE-2: under `auto` the
+/// tier by the gap; `rested`, the instance rested in this idle stretch, so a rest is not taken
+/// again (a higher tier is).
 fn decide(
     entry: &mut InstanceIdle,
     config: &IdleConfig,
     view: IdleView,
     plan: Option<IdlePlan>,
     now_unix_ms: u64,
+    rested: bool,
 ) -> Option<IdleStep> {
     let action = config.action;
     if action == IdleAction::None {
         return None;
     }
     // Fail Loud: an action that cannot bring the instance back never runs, and says so once.
+    // IDLE-2: `auto` on an instance that cannot be brought back says so once too, and may still
+    // rest (a rest needs no way back).
     if let Some(missing) = view.missing(action) {
-        if entry.unsupported == Some(action) {
+        if entry.unsupported.map(IdleAction::as_str) != Some(action.as_str()) {
+            entry.unsupported = Some(action);
+            return Some(IdleStep::Unsupported { action, missing });
+        }
+        if !matches!(action, IdleAction::Auto(_)) {
             return None;
         }
-        entry.unsupported = Some(action);
-        return Some(IdleStep::Unsupported { action, missing });
     }
     if view.paused || !view.emulator_on {
         return None;
@@ -649,13 +784,34 @@ fn decide(
     {
         return None;
     }
-    // A task or a reading within the minimum gap keeps the instance as it is.
-    if plan
+    // The gap to the instance's next work, its next task or reading (none: no work planned).
+    let gap_ms = plan
         .next_work_unix_ms()
-        .is_some_and(|due| due.saturating_sub(now_unix_ms) < config.min_gap_ms)
-    {
-        return None;
-    }
+        .map(|due| due.saturating_sub(now_unix_ms));
+    let action = match action {
+        // IDLE-2: one tier by the gap, directly, no higher than the instance can take.
+        IdleAction::Auto(gaps) => {
+            match auto_tier(gaps, config.min_gap_ms, gap_ms, view.auto_cap())? {
+                Tier::Rest if rested => return None,
+                Tier::Rest => {
+                    entry.phase = Phase::Resting;
+                    return Some(IdleStep::Rest {
+                        next_due_unix_ms: plan.next_wake_unix_ms,
+                        within_ms: gaps.return_home_min_gap_ms,
+                    });
+                }
+                Tier::CloseApp => IdleAction::CloseApp,
+                Tier::StopEmulator => IdleAction::StopEmulator,
+            }
+        }
+        // A task or a reading within the minimum gap keeps the instance as it is.
+        action => {
+            if gap_ms.is_some_and(|gap| gap < config.min_gap_ms) {
+                return None;
+            }
+            action
+        }
+    };
     // IDLE-1P: the wake is planned for the next task alone; a reading never sets it.
     let next_due_unix_ms = plan.next_wake_unix_ms;
     let wake_at_unix_ms =
@@ -674,8 +830,11 @@ fn decide(
 /// An idle instance's check, held or not: the wake, when it is due; `current_unix_ms` is the wake
 /// in effect. Otherwise the instance stays idle with the same wake or an earlier one. IDLE-1P: only
 /// the plan's tasks count here; its fact-refresh reading neither wakes the instance nor moves the
-/// wake. PAUSE-AUTO (0.12.34): a due wake whose work starts the emulator while `start_held` is
-/// not queued; the instance stays idle with its wake ([`IdleStep::WakeHeld`]).
+/// wake. PAUSE-AUTO (0.12.34): a due wake whose work starts the emulator while the view's
+/// `start_held` is not queued; the instance stays idle with its wake ([`IdleStep::WakeHeld`]).
+/// IDLE-2: under `auto` the action is switched only when `auto` no longer allows the tier taken
+/// on the instance ([`IdleView::auto_allows`]), so the configured word `auto` beside a kept
+/// `close_app` or `stop_emulator` is no switch.
 fn wake(
     entry: &mut InstanceIdle,
     config: &IdleConfig,
@@ -683,8 +842,9 @@ fn wake(
     current_unix_ms: Option<u64>,
     plan: Option<IdlePlan>,
     now_unix_ms: u64,
-    start_held: bool,
+    view: IdleView,
 ) -> Option<IdleStep> {
+    let start_held = view.start_held;
     let lead_ms = config.wake_lead_ms(action);
     let from_plan = plan
         .and_then(|plan| plan.next_due_unix_ms())
@@ -695,7 +855,10 @@ fn wake(
         (at, None) | (None, at) => at,
     };
     let due_now = plan.is_some_and(|plan| plan.due_now);
-    let switched = config.action != action;
+    let switched = match config.action {
+        IdleAction::Auto(_) => !view.auto_allows(action),
+        configured => configured != action,
+    };
     if switched || due_now || wake_at_unix_ms.is_some_and(|at| at <= now_unix_ms) {
         // PAUSE-AUTO: a wake that would start the emulator waits, owed, for the start to be free.
         if start_held && wake_work(action).contains(&WakeWork::EmulatorStart) {

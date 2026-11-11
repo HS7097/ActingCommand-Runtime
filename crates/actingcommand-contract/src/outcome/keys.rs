@@ -773,4 +773,7 @@ outcome_keys! {
     trigger_line: integer,
     least_consumption: integer,
     // ---- #428 SCHED-C1c: end ----
+    // ---- #428 SCHED-C1e (lines given for one instance, contracts/scheduling/README.md "Lines
+    // for one instance"): where a pool's lines in effect come from. ----
+    lines_source: vocab(lines_source),
 }

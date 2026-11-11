@@ -69,6 +69,17 @@
 //!   The Runtime keeps the memory across a start as the tagged program fact
 //!   `host.capped_episodes` ([`CappedMemory::kept`], [`CappedMemory::restore`], module
 //!   [`kept`]); the host owns the fact, this module the shape and the rules of an episode.
+//! - **Lines for one instance** (SCHED-C1e, register §1.299 SC1-12;
+//!   `contracts/scheduling/README.md`, "Lines for one instance"): the host reads each instance's
+//!   `instance.<instance id>.scheduling.pool_lines` in effect at every evaluated cycle and hands
+//!   it to the evaluation ([`InstancePoolLines`]). For a pool its set names, on that instance,
+//!   the set replaces the catalog's lines whole (a trigger line it does not write is the
+//!   capacity, not the catalog's); otherwise the catalog's lines, otherwise the defaults
+//!   ([`lines`]). `S ≤ cap` and `T ≤ cap` are checked at each evaluation as before
+//!   (`lines_invalid`). A change ends no episode: the next evaluation reads the new lines, and
+//!   the episode ends only by its own rule against them. Every reason that carries the lines
+//!   (`pool_line_held`, `capped_spend`, `pool_lines_unspendable`) names where they come from,
+//!   `lines_source` (`instance`, `catalog` or `default`).
 //!
 //! The lines constrain the scheduler only: a manual request, a chain successor that rides with its
 //! chain and the Runtime's own tasks are no judged candidates and are not held.
@@ -87,10 +98,12 @@ use super::{
     DecisionReason, EvaluationFacts, InstanceSnapshot, PlacementCandidate, PlacementContext,
     PolicyEvaluationError, PolicyEvaluationResult, SchedulingDecisionState, TaskWork,
     UnknownReasonToken, live_pool_unknown_reason, pool_bound, project_pool_value, reason_with,
-    scope_matches_instance, unknown_token,
+    scope_matches_identity, scope_matches_instance, unknown_token,
 };
-use crate::codes::{PolicyCode, PoolLineHold};
-use crate::{FactValue, ObservationRef, PoolCapacity, PoolLine, PoolSpec, TaskSpec};
+use crate::codes::{LinesSource, PolicyCode, PoolLineHold};
+use crate::{
+    CompiledCatalog, FactValue, ObservationRef, PoolCapacity, PoolLine, PoolSpec, TaskSpec,
+};
 
 // SCHED-C1d (register §1.299 SC1-11): what the Runtime keeps of the memory across a start.
 mod kept;
@@ -125,6 +138,85 @@ impl CappedMemory {
             .get(&(instance_id.to_owned(), pool_id.to_owned()))
             .map(|episode| (episode.number, episode.rounds))
     }
+}
+
+/// SCHED-C1e (register §1.299 SC1-12; `contracts/scheduling/README.md`, "Lines for one
+/// instance"): one pool's lines given for one instance, each in the two forms a catalog line has
+/// (a reference reads its fact in the pool's scope). It replaces the catalog's lines of the pool
+/// whole: without `trigger_line` the pool's trigger line is its capacity, not the catalog's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceLineSet {
+    pub stop_line: PoolLine,
+    pub hard_line: PoolLine,
+    pub trigger_line: Option<PoolLine>,
+}
+
+/// SCHED-C1e: the lines given for each instance, by instance alias and then by the pool id the
+/// instance's `scheduling.pool_lines` names: the id the instance's `schedule.json` writes (a
+/// composed copy's id without `@<alias>`), or in catalog mode the catalog's id. The Runtime reads
+/// them from the configuration in effect at every evaluated cycle and passes them to
+/// [`super::evaluate_with_instance_lines`]; every other entry point evaluates with none, so each
+/// pool takes its catalog's lines.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InstancePoolLines {
+    instances: BTreeMap<String, BTreeMap<String, InstanceLineSet>>,
+}
+
+impl InstancePoolLines {
+    /// Whether no instance sets lines.
+    pub fn is_empty(&self) -> bool {
+        self.instances.is_empty()
+    }
+
+    /// Sets `lines` for the pool `pool_id` names on the instance `instance_id` (its alias).
+    pub fn insert(&mut self, instance_id: &str, pool_id: &str, lines: InstanceLineSet) {
+        self.instances
+            .entry(instance_id.to_owned())
+            .or_default()
+            .insert(pool_id.to_owned(), lines);
+    }
+
+    /// The set the instance `instance_id` gives the catalog pool `pool_id`: the one named by the
+    /// pool's id, or by the id of which it is the instance's composed copy (`<id>@<instance_id>`).
+    fn get(&self, instance_id: &str, pool_id: &str) -> Option<&InstanceLineSet> {
+        let pools = self.instances.get(instance_id)?;
+        pools.get(pool_id).or_else(|| {
+            pool_id
+                .strip_suffix(instance_id)
+                .and_then(|base| base.strip_suffix('@'))
+                .and_then(|base| pools.get(base))
+        })
+    }
+}
+
+/// SCHED-C1e (`contracts/scheduling/README.md`, "Lines for one instance", *Checks*): the pools
+/// `catalog` gives the instance `instance_id` (its alias, of `server_id` and `game_id`) with a
+/// declared valuation, each by the id the instance's `scheduling.pool_lines` names it by (a
+/// composed copy's id without `@<instance_id>`, otherwise the catalog's id). The host fills the
+/// configuration's check context with them, so an instruction names only these.
+pub fn instance_valued_pool_ids(
+    catalog: &CompiledCatalog,
+    instance_id: &str,
+    server_id: &str,
+    game_id: &str,
+) -> BTreeSet<String> {
+    catalog
+        .catalog()
+        .pools
+        .pools
+        .iter()
+        .filter(|pool| {
+            pool.declared_valuation().is_some()
+                && scope_matches_identity(&pool.scope, instance_id, server_id, game_id)
+        })
+        .map(|pool| {
+            pool.id
+                .strip_suffix(instance_id)
+                .and_then(|base| base.strip_suffix('@'))
+                .unwrap_or(&pool.id)
+                .to_owned()
+        })
+        .collect()
 }
 
 /// One capped episode of a pool on an instance.
@@ -406,6 +498,8 @@ struct Lines {
     hard: u64,
     /// SCHED-C1c: the trigger line the pool writes, as read; `None` without one.
     trigger_line: Option<u64>,
+    /// SCHED-C1e: where the lines come from: the instance's own set, the catalog or the defaults.
+    source: LinesSource,
 }
 
 impl Lines {
@@ -442,12 +536,13 @@ enum LinesProblem {
         unknown_reason: Option<UnknownReason>,
     },
     /// The lines read break `0 ≤ H < S ≤ cap` (SCHED-C1c: `0 ≤ H < S ≤ T ≤ cap`, `trigger` the
-    /// trigger line the pool writes, as read).
+    /// trigger line the pool writes, as read; SCHED-C1e: `source` where the lines come from).
     Invalid {
         capacity: u64,
         stop: i128,
         hard: i128,
         trigger: Option<i128>,
+        source: LinesSource,
     },
 }
 
@@ -541,8 +636,12 @@ pub(super) fn plan(
                             stop,
                             hard,
                             trigger,
+                            source,
                         } => Some(invalid_lines_reason(
-                            &pool.id, capacity, stop, hard, trigger,
+                            &pool.id,
+                            capacity,
+                            (stop, hard, trigger),
+                            source,
                         )),
                     };
                     if let Some(hold) = hold {
@@ -727,13 +826,36 @@ fn units(consumed_milli: u128) -> PolicyEvaluationResult<u64> {
 }
 
 /// The lines of `pool` on `instance` at the evaluation (module doc), or why they cannot be kept.
+/// SCHED-C1e: the instance's own set of the pool first, whole (its trigger line the capacity when
+/// it writes none); otherwise the catalog's lines; otherwise the defaults.
 fn lines(
     context: &PlacementContext<'_>,
     facts: &EvaluationFacts,
     instance: &InstanceSnapshot,
     pool: &PoolSpec,
 ) -> PolicyEvaluationResult<Result<Lines, LinesProblem>> {
-    let written = pool.stop_line.is_some() || pool.hard_line.is_some();
+    let (stop_line, hard_line, trigger_line, source) =
+        match context.instance_lines.get(&instance.instance_id, &pool.id) {
+            Some(own) => (
+                Some(&own.stop_line),
+                Some(&own.hard_line),
+                own.trigger_line.as_ref(),
+                LinesSource::Instance,
+            ),
+            None if pool.stop_line.is_some() || pool.hard_line.is_some() => (
+                pool.stop_line.as_ref(),
+                pool.hard_line.as_ref(),
+                pool.trigger_line.as_ref(),
+                LinesSource::Catalog,
+            ),
+            None => (
+                None,
+                None,
+                pool.trigger_line.as_ref(),
+                LinesSource::Defaults,
+            ),
+        };
+    let written = stop_line.is_some() || hard_line.is_some();
     let unknown = |fact_key: Option<String>, unknown_reason| LinesProblem::Unknown {
         written,
         fact_key,
@@ -778,7 +900,7 @@ fn lines(
         }
     }
     let reading = i128::from(projected) - unshown;
-    let (stop, hard) = match (&pool.stop_line, &pool.hard_line) {
+    let (stop, hard) = match (stop_line, hard_line) {
         (None, None) => (i128::from(capacity), 0),
         (Some(stop), Some(hard)) => {
             let stop = match line_value(pool, stop, facts, context) {
@@ -795,7 +917,7 @@ fn lines(
         _ => (0, 0),
     };
     // SCHED-C1c: the trigger line, read as the other two; the capacity without one.
-    let trigger = match &pool.trigger_line {
+    let trigger = match trigger_line {
         Some(line) => match line_value(pool, line, facts, context) {
             Ok(trigger) => Some(trigger),
             Err(problem) => return Ok(Err(problem)),
@@ -809,6 +931,7 @@ fn lines(
             stop,
             hard,
             trigger,
+            source,
         }));
     }
     Ok(Ok(Lines {
@@ -820,6 +943,7 @@ fn lines(
             .map(u64::try_from)
             .transpose()
             .map_err(|_| PolicyEvaluationError::overflow("a trigger line"))?,
+        source,
     }))
 }
 
@@ -1338,6 +1462,9 @@ impl RoundView<'_> {
             outcome = outcome.task_id(head);
             detail.push_str(&format!(" task_id={head}"));
         }
+        // SCHED-C1e: where the lines come from.
+        outcome = outcome.lines_source(lines.source);
+        detail.push_str(&format!(" lines_source={}", lines.source.as_str()));
         reason_with(outcome, detail)
     }
 }
@@ -1386,6 +1513,9 @@ fn spend_reason(
         outcome = outcome.trigger_line(trigger);
         detail.push_str(&format!(" trigger_line={trigger}"));
     }
+    // SCHED-C1e: where the lines come from.
+    outcome = outcome.lines_source(lines.source);
+    detail.push_str(&format!(" lines_source={}", lines.source.as_str()));
     reason_with(outcome, detail)
 }
 
@@ -1405,7 +1535,7 @@ fn round_empty_reason(pool_id: &str, episode: u64, round: u64) -> DecisionReason
     )
 }
 
-/// `pool_line_held` `would_cross_hard_line`, below the cap.
+/// `pool_line_held` `would_cross_hard_line`, below the cap; SCHED-C1e: with `lines_source`.
 fn hard_line_reason(pool_id: &str, lines: Lines, after: i128) -> DecisionReason {
     let hold = PoolLineHold::WouldCrossHardLine;
     let outcome = Outcome::new(PolicyCode::PoolLineHeld)
@@ -1415,17 +1545,19 @@ fn hard_line_reason(pool_id: &str, lines: Lines, after: i128) -> DecisionReason 
         .pool_capacity(lines.capacity)
         .stop_line(lines.stop)
         .hard_line(lines.hard)
-        .amount_after(record_integer(after));
+        .amount_after(record_integer(after))
+        .lines_source(lines.source);
     reason_with(
         outcome,
         format!(
             "pool_line_hold={} pool_id={pool_id} pool_reading={} pool_capacity={} stop_line={} \
-             hard_line={} amount_after={after}",
+             hard_line={} amount_after={after} lines_source={}",
             hold.as_str(),
             lines.reading,
             lines.capacity,
             lines.stop,
-            lines.hard
+            lines.hard,
+            lines.source.as_str()
         ),
     )
 }
@@ -1454,13 +1586,13 @@ fn unknown_lines_reason(
     reason_with(outcome, detail)
 }
 
-/// `pool_line_held` `lines_invalid`; SCHED-C1c: with `trigger_line` when the pool writes one.
+/// `pool_line_held` `lines_invalid` of the lines read `(stop, hard, trigger)`; SCHED-C1c: with
+/// `trigger_line` when the pool writes one; SCHED-C1e: with `lines_source`.
 fn invalid_lines_reason(
     pool_id: &str,
     capacity: u64,
-    stop: i128,
-    hard: i128,
-    trigger: Option<i128>,
+    (stop, hard, trigger): (i128, i128, Option<i128>),
+    source: LinesSource,
 ) -> DecisionReason {
     let mut outcome = Outcome::new(PolicyCode::PoolLineHeld)
         .pool_line_hold(PoolLineHold::LinesInvalid)
@@ -1476,6 +1608,8 @@ fn invalid_lines_reason(
         outcome = outcome.trigger_line(record_integer(trigger));
         detail.push_str(&format!(" trigger_line={trigger}"));
     }
+    outcome = outcome.lines_source(source);
+    detail.push_str(&format!(" lines_source={}", source.as_str()));
     reason_with(outcome, detail)
 }
 
@@ -1487,13 +1621,18 @@ fn unspendable_reason(pool_id: &str, lines: Lines, least: u64) -> DecisionReason
         .pool_capacity(lines.capacity)
         .stop_line(lines.stop)
         .hard_line(lines.hard)
-        .least_consumption(least);
+        .least_consumption(least)
+        // SCHED-C1e: where the lines come from.
+        .lines_source(lines.source);
     reason_with(
         outcome,
         format!(
             "pool_id={pool_id} pool_capacity={} stop_line={} hard_line={} \
-             least_consumption={least}",
-            lines.capacity, lines.stop, lines.hard
+             least_consumption={least} lines_source={}",
+            lines.capacity,
+            lines.stop,
+            lines.hard,
+            lines.source.as_str()
         ),
     )
 }

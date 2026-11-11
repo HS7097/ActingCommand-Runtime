@@ -648,7 +648,12 @@ the backend self-check facts (source `device-proxy` or `capture`).
   another shape is `invalid_runtime_state_fact` (operation
   `restore_idle_state`), recorded, and the start goes on with every
   instance's state unknown; a record a build before 0.12.25 wrote (its writer
-  row names `owner_epoch`) is one.
+  row names `owner_epoch`) is one. IDLE-2 (0.12.54): under `idle.action`
+  `auto` a row's `action` is the tier the instance took (`close_app` or
+  `stop_emulator`), never `auto`, so the shape and an older build's read are
+  unchanged; an instance that rested at home is open and has no row; an
+  unknown state of an `auto` instance counts as closed after the highest tier
+  it can take (`stop_emulator` with its emulator start, `close_app` without).
 - `host.capped_episodes` (#428 SCHED-C1d, 0.12.53; register §1.299 SC1-11;
   [scheduling/README.md](scheduling/README.md), "Episodes survive") — runtime
   scope, `record_list`, no lifetime, source `runtime`: the capped spending

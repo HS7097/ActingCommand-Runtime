@@ -3051,6 +3051,33 @@ tests = [
 ]
 incident = ["#421 IDLE-WG"]
 
+# IDLE-2 auto (0.12.54; register §1.304; Alice's words of 11-11 「根据任务间隔时间自动选择是关闭模拟器还是关闭应用还是回到主页面」; the coordinator's rulings on #386, comment 6787682270; brief rd-1111/brief-idle2.md): idle.action auto parses with idle.return_home_min_gap_ms 600000 and idle.stop_emulator_min_gap_ms 7200000 (60000..=86400000, section and per instance, settable); each threshold out of range is refused where it enters; under auto a rest threshold above idle.min_gap_ms or a stop threshold below it is section_check on that key, at start and through an instruction, equal thresholds pass, another action's thresholds are not checked together, and auto needs no start_emulator; a file without them keeps today's behaviour
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::idle2_auto_tests::idle2_auto_c1_the_word_and_the_two_keys_parse_with_their_defaults_and_per_instance_values",
+    "actingcommand-runtime-config::lib::idle2_auto_tests::idle2_auto_c2_each_range_and_each_whole_section_refusal",
+    "actingcommand-runtime-config::lib::idle2_auto_tests::idle2_auto_c3_a_file_without_them_keeps_today_s_behaviour",
+]
+incident = ["#386 IDLE-2 auto"]
+
+# IDLE-2 auto (0.12.54; register §1.304): the idle planner on a manual clock takes one tier by the gap to the next work, directly (nothing below idle.return_home_min_gap_ms, a rest up to idle.min_gap_ms, close_app up to idle.stop_emulator_min_gap_ms, stop_emulator from there or with no next work; each threshold belongs to the tier it starts), capped at close_app without the configured emulator start and at a rest without a startup package (reported once); a rest runs once per idle stretch whatever its end, owes no wake, is not kept, and a later longer gap closes the application while work starts a new stretch; nothing runs while a pause, a player hold, a blackout or a fence holds the instance; a closed application restored under auto is not woken at once and a tier auto no longer allows is; through the host (#419), a rest runs the return-home package the neutral game declares once on the idle action's claim and records instance_idle_action return_home with nothing kept, a failed rest is recorded, climbs no ladder and is not retried, a game that declares none runs nothing and is warned once across two stretches, and a restart under auto restores the stopped emulator (host.idle_state names stop_emulator, never auto) without waking it before its time
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_idle2_auto::idle2_auto_a_each_tier_is_taken_at_its_gap_and_nothing_below_the_first",
+    "actingcommand-runtime-host::lib::tests::gate_idle2_auto::idle2_auto_b_without_its_emulator_start_the_tier_stops_at_close_app_and_no_next_wake_stops_the_emulator",
+    "actingcommand-runtime-host::lib::tests::gate_idle2_auto::idle2_auto_c_a_rest_runs_once_per_stretch_and_a_later_longer_gap_closes_the_application",
+    "actingcommand-runtime-host::lib::tests::gate_idle2_auto::idle2_auto_d_a_failed_rest_is_not_retried_in_its_stretch",
+    "actingcommand-runtime-host::lib::tests::gate_idle2_auto::idle2_auto_e_no_rest_and_no_action_while_a_pause_a_player_hold_or_a_fence_holds_the_instance",
+    "actingcommand-runtime-host::lib::tests::gate_idle2_auto::idle2_auto_f_a_closed_application_restored_under_auto_is_not_woken_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_idle2_auto_host::idle2_auto_g_a_rest_runs_the_declared_return_home_package_once_and_records_it",
+    "actingcommand-runtime-host::lib::tests::gate_idle2_auto_host::idle2_auto_h_a_failed_rest_is_recorded_climbs_no_ladder_and_is_not_retried",
+    "actingcommand-runtime-host::lib::tests::gate_idle2_auto_host::idle2_auto_i_without_a_declared_return_home_package_no_rest_runs_and_one_warning_says_so",
+    "actingcommand-runtime-host::lib::tests::gate_idle2_auto_host::idle2_auto_j_a_restart_keeps_the_tier_taken_and_does_not_wake_it_at_once",
+]
+incident = ["#386 IDLE-2 auto"]
+
 # SS-2d (Alice's ruling 127, 2026-10-31; ACM-PRICE addendum 2.1 §7.3 and §7.6 test 17; rd-1031 brief-ss2d; contracts/scheduling/README.md, "Within tolerance"; register §1.235 SS2d-5; since 0.12.35): the idle plan counts no decision within tolerance (benefit_within_tolerance among its reasons, deferred or released and held later) as due or as a wake of its own, while SS-2b's not-positive decision keeps its own wake beside it and a released decision that was selected is due
 [[gate]]
 coverage = "Y"
@@ -3451,3 +3478,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_sched_c1d::sched_c1d_h4_a_runtime_that_never_has_an_episode_records_no_fact",
 ]
 incident = ["#428 SCHED-C1d"]
+
+# #428 SCHED-C1e (0.12.54; register §1.299 SC1-12; brief rd-1111/brief-sched-c1e.md; contracts/scheduling/README.md, "Lines for one instance"; contracts/runtime-config.md, "Pool lines for one instance"): instance.<instance id>.scheduling.pool_lines is an object row in the instances[] entry's scheduling member, no default, settable, read by SCHED-C1e; the file names it for one instance (explicit, read back as its pools' lines) and an instruction sets it over no base and clears it; the section check refuses, config_value_invalid for the instance's key with the JSON pointer of what breaks the rule, a value of another shape, a pool's or a line's or a reference's member of another shape (wrong_type), a 33rd pool, a member that is no pool identifier, a constant, an offset or a fact key out of range (out_of_range), a set without both lines and H < S <= T broken between two constants or two references to one fact (section_check), at start and check-config too, and passes lines the values cannot order; with the active generation's valued pools in the context an instruction naming a pool the generation does not give the instance (or gives without a valuation) is refused section_check, a context without pools asks nothing and another key's change does not ask again; the restore at start keeps a value whose pool it cannot check; a configuration without the key has no row of it; through ConfigureSettings on a connection bound to cli the instruction records the instance's config.parameters.instance row (instruction) and its host.config_overrides row with channel cli, a pool of no valuation and a pool the catalog does not have are Denied config_value_invalid section_check with nothing changed, a later generation that no longer values the pool leaves the value in effect while a new instruction naming it is refused, and a restart restores the value
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::gate_sched_c1e::sched_c1e_c1_the_key_is_read_from_the_file_and_set_and_cleared_by_an_instruction",
+    "actingcommand-runtime-config::lib::gate_sched_c1e::sched_c1e_c2_each_refusal_of_the_section_check_names_the_key_and_its_problem",
+    "actingcommand-runtime-config::lib::gate_sched_c1e::sched_c1e_c3_an_instruction_names_only_the_valued_pools_the_generation_gives_the_instance",
+    "actingcommand-runtime-config::lib::gate_sched_c1e::sched_c1e_c4_the_restore_at_start_keeps_a_value_whose_pool_it_cannot_check",
+    "actingcommand-runtime-config::lib::gate_sched_c1e::sched_c1e_c5_a_configuration_without_the_key_has_no_row_of_it",
+    "actingcommand-runtime-host::lib::tests::gate_sched_c1e::sched_c1e_h1_an_instruction_sets_an_instances_lines_and_a_restart_keeps_them",
+]
+incident = ["#428 SCHED-C1e"]
