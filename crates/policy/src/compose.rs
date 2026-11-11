@@ -67,8 +67,8 @@ use crate::{
     ActivityProfile, BENEFIT_FIXED_VALUE_SUBSYSTEM, CatalogDiagnosticCode, CatalogDocumentSource,
     CatalogSources, CompiledCatalog, FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE,
     FACT_UNKNOWN_PROBE_SUBSYSTEM, POOL_FACT_REFERENCE_SUBSYSTEM, POOL_LINES_SUBSYSTEM, PoolSpec,
-    RESET_EXCLUSIONS_SUBSYSTEM, SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec,
-    TimelineEvent, compile_composed_catalog,
+    PredicateSpec, RESET_EXCLUSIONS_SUBSYSTEM, SCHEDULING_SCHEMA_VERSION_V2,
+    SchedulingDocumentKind, TaskSpec, TaskTerminalState, TimelineEvent, compile_composed_catalog,
 };
 
 /// The catalog id of every composition (model §3.2 step 4).
@@ -253,6 +253,28 @@ pub struct BenefitCoverage {
     /// consumes alone (its `produces` are not read): complete when each has a valuation, pending
     /// when every value it lacks is the marker, undeclared for a consumed pool with neither.
     pub fixed_value: usize,
+    /// #428 COV-1 (register §1.299): the judged rules that declare no value (no `produces` and no
+    /// `consumes` entry, no fixed value) and, by their trigger alone, only run in their chain
+    /// head's run window, riding with a complete rule ([`BenefitFollower`]). None of them counts
+    /// as undeclared or is warned about. Absent from the answer while 0, so an answer for a file
+    /// without followers is the one of before.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub follower: usize,
+}
+
+/// `serde`'s test for a count the answer leaves out while it is 0.
+const fn is_zero(count: &usize) -> bool {
+    *count == 0
+}
+
+/// #428 COV-1 (register §1.299; `contracts/standard-pack-schedule.md`, "Coverage"): one chain
+/// follower of a game's `schedule.json` and the complete rule it rides with, by their file ids.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BenefitFollower {
+    /// The follower.
+    pub task_id: String,
+    /// The complete judged rule its walk up its edges ends at, whose value the chain carries.
+    pub rides_with: String,
 }
 
 /// SCHED-C1a (register §1.299; `contracts/standard-pack-schedule.md`, "Provenance"): who wrote
@@ -332,6 +354,9 @@ pub struct StandardPackComposition {
     /// SCHED-C1a: each game whose `schedule.json` was read, by game id, with who wrote its fixed
     /// values and its valuation blocks.
     provenance: Vec<(String, BenefitProvenance)>,
+    /// #428 COV-1: each game whose `schedule.json` was read, by game id, with its chain followers
+    /// in file order.
+    followers: Vec<(String, Vec<BenefitFollower>)>,
     /// SS-2c: each game whose composed rules use exactly two priority values and whose rules
     /// include one in the other tier than its declaration says, by game id, with those rules' ids
     /// in file order.
@@ -437,6 +462,15 @@ impl StandardPackComposition {
     /// read, by game id. An origin changes no decision, no catalog hash and no rules digest.
     pub fn benefit_provenance(&self) -> &[(String, BenefitProvenance)] {
         &self.provenance
+    }
+
+    /// #428 COV-1 (register §1.299; `contracts/standard-pack-schedule.md`, "Coverage"): the chain
+    /// followers of each game whose `schedule.json` was read, by game id, each game's in file
+    /// order with the complete rule it rides with. A static reading of the file: whether a
+    /// candidate is judged at an evaluation is the evaluator's. Only the resource tools report
+    /// them.
+    pub fn benefit_followers(&self) -> &[(String, Vec<BenefitFollower>)] {
+        &self.followers
     }
 
     /// SS-2c (register §1.227): one `standard_pack_priority_tier_mismatch` per rule of a game
@@ -652,11 +686,13 @@ fn judged(rule: &ScheduleRule, classification: &StandardPackClassification) -> b
 /// that declare themselves maintenance. The compiler has checked the shapes; a value that is no
 /// object, no list or no string here counts as missing. SCHED-C1a (register §1.299): a rule that
 /// writes a fixed value is judged by the pools it consumes alone, and with no consumption it is
-/// complete; it is also counted in `fixed_value`.
+/// complete; it is also counted in `fixed_value`. #428 COV-1 (register §1.299): a rule that
+/// declares no value and only rides with its chain is a follower ([`chain_followers`]), not
+/// undeclared; the followers are returned in file order.
 fn benefit_coverage(
     schedule: &StandardPackSchedule,
     classification: &StandardPackClassification,
-) -> (BenefitCoverage, Vec<UndeclaredRule>) {
+) -> (BenefitCoverage, Vec<UndeclaredRule>, Vec<BenefitFollower>) {
     let valuations = schedule
         .pools
         .iter()
@@ -664,6 +700,9 @@ fn benefit_coverage(
         .collect::<BTreeMap<_, _>>();
     let mut coverage = BenefitCoverage::default();
     let mut undeclared = Vec::new();
+    // #428 COV-1: the complete rules, and the rules with no entry and no fixed value.
+    let mut complete = BTreeSet::new();
+    let mut bare = BTreeSet::new();
     for rule in &schedule.rules {
         if schedule.holds(&rule.package_id) {
             continue;
@@ -698,6 +737,7 @@ fn benefit_coverage(
                 rule_id: rule.id.clone(),
                 pool_id: None,
             });
+            bare.insert(rule.id.as_str());
             continue;
         }
         let mut pending = false;
@@ -723,10 +763,138 @@ fn benefit_coverage(
                 });
             }
             None if pending => coverage.pending += 1,
-            None => coverage.complete += 1,
+            None => {
+                coverage.complete += 1;
+                complete.insert(rule.id.as_str());
+            }
         }
     }
-    (coverage, undeclared)
+    // #428 COV-1: a follower is counted apart and not warned about.
+    let followers = chain_followers(schedule, classification, &complete, &bare);
+    if !followers.is_empty() {
+        let riding = followers
+            .iter()
+            .map(|follower| follower.task_id.as_str())
+            .collect::<BTreeSet<_>>();
+        undeclared.retain(|rule| rule.pool_id.is_some() || !riding.contains(rule.rule_id.as_str()));
+        coverage.undeclared = undeclared.len();
+        coverage.follower = followers.len();
+    }
+    (coverage, undeclared, followers)
+}
+
+/// #428 COV-1 (register §1.299; `contracts/standard-pack-schedule.md`, "Coverage"): the chain
+/// followers of one game's file, in file order. A rule is one when it is in `bare` (judged, not
+/// held, no `produces` and no `consumes` entry, no fixed value) and [`rides_with`] finds the rule
+/// in `complete` its chain rides with. By its trigger alone such a rule can only be due in its
+/// chain head's run window, where the evaluator lets it ride with its chain (SS-2e,
+/// `contracts/scheduling/README.md`, "Who is judged"); the evaluator stays the judge.
+fn chain_followers(
+    schedule: &StandardPackSchedule,
+    classification: &StandardPackClassification,
+    complete: &BTreeSet<&str>,
+    bare: &BTreeSet<&str>,
+) -> Vec<BenefitFollower> {
+    let mut rules = BTreeMap::new();
+    for rule in &schedule.rules {
+        if !schedule.holds(&rule.package_id) {
+            rules.entry(rule.id.as_str()).or_insert(rule);
+        }
+    }
+    let mut followers = Vec::new();
+    for rule in &schedule.rules {
+        if schedule.holds(&rule.package_id) || !bare.contains(rule.id.as_str()) {
+            continue;
+        }
+        let mut visited = BTreeSet::new();
+        if let Some(head) = rides_with(rule, &rules, classification, complete, bare, &mut visited) {
+            followers.push(BenefitFollower {
+                task_id: rule.id.clone(),
+                rides_with: head,
+            });
+        }
+    }
+    followers
+}
+
+/// #428 COV-1: the complete rule `rule` rides with, or `None` when it is no chain follower. Its
+/// trigger's chain links ([`chain_link`]) must all name judged rules: the evaluator walks up
+/// whichever link ran last, and a link to a rule that is not judged could leave the candidate
+/// judged on its own. Then its edges, in trigger order, each name a rule in `complete` (the
+/// answer) or one in `bare` that rides with one itself, walked depth first, each rule once, so a
+/// cycle ends the walk; any other rule (not judged, pending, undeclared for a pool) ends it too.
+fn rides_with(
+    rule: &ScheduleRule,
+    rules: &BTreeMap<&str, &ScheduleRule>,
+    classification: &StandardPackClassification,
+    complete: &BTreeSet<&str>,
+    bare: &BTreeSet<&str>,
+    visited: &mut BTreeSet<String>,
+) -> Option<String> {
+    visited.insert(rule.id.clone());
+    let mut required = Vec::new();
+    if let Some(trigger) = rule.body.get("trigger") {
+        required_nodes(trigger, &mut required);
+    }
+    // A task that names itself is not its own link, as the evaluator reads one.
+    let links = required
+        .into_iter()
+        .filter_map(chain_link)
+        .filter(|(task_id, _)| *task_id != rule.id)
+        .collect::<Vec<_>>();
+    let all_judged = links.iter().all(|(task_id, _)| {
+        rules
+            .get(task_id.as_str())
+            .is_some_and(|linked| judged(linked, classification))
+    });
+    if !all_judged {
+        return None;
+    }
+    for (task_id, edge) in &links {
+        if !*edge {
+            continue;
+        }
+        if complete.contains(task_id.as_str()) {
+            return Some(task_id.clone());
+        }
+        if bare.contains(task_id.as_str())
+            && !visited.contains(task_id)
+            && let Some(&linked) = rules.get(task_id.as_str())
+            && let Some(head) = rides_with(linked, rules, classification, complete, bare, visited)
+        {
+            return Some(head);
+        }
+    }
+    None
+}
+
+/// #428 COV-1: a required trigger node that is a chain link
+/// (`contracts/scheduling/README.md`, "Ties and chain heads"; the evaluator's
+/// `required_predecessors`): a `dependency_completed` whose `terminal_states` holds `succeeded`,
+/// with the task it names and whether it is an *edge*, one that accepts `succeeded` and nothing
+/// else and writes `since_own_run: true`, so that the rule is due only while that task's latest
+/// run succeeded and the rule has not served it. `None` for any other node: the compiler checks
+/// the shapes, and a node of another shape here is no link.
+fn chain_link(node: &Value) -> Option<(String, bool)> {
+    if node.get("kind").and_then(Value::as_str) != Some("dependency_completed") {
+        return None;
+    }
+    let PredicateSpec::DependencyCompleted {
+        task_id,
+        terminal_states,
+        since_own_run,
+    } = serde_json::from_value::<PredicateSpec>(node.clone()).ok()?
+    else {
+        return None;
+    };
+    if !terminal_states.contains(&TaskTerminalState::Succeeded) {
+        return None;
+    }
+    let edge = since_own_run == Some(true)
+        && terminal_states
+            .iter()
+            .all(|state| *state == TaskTerminalState::Succeeded);
+    Some((task_id, edge))
 }
 
 /// SCHED-C1a (register §1.299; `contracts/standard-pack-schedule.md`, "Provenance"): who wrote the
@@ -961,6 +1129,7 @@ pub fn compose_standard_pack_rules(
     let mut priority_tiers = Vec::new();
     let mut benefit = Vec::new();
     let mut provenance = Vec::new();
+    let mut followers = Vec::new();
     let mut mismatches = Vec::new();
     let mut escalations = Vec::new();
     let mut redundant = Vec::new();
@@ -968,8 +1137,10 @@ pub fn compose_standard_pack_rules(
         let before = composed.tasks.len();
         instantiate(game, &mut composed, &mut manifest, &mut issues);
         // SS-2b: how far the game's judged rules declare their values, counted once per rule.
-        let (coverage, undeclared) = benefit_coverage(&game.schedule, &game.classification);
+        let (coverage, undeclared, riding) = benefit_coverage(&game.schedule, &game.classification);
         benefit.push((game.game_id.to_owned(), coverage, undeclared));
+        // #428 COV-1: the rules that ride with their chain, each with the rule it rides with.
+        followers.push((game.game_id.to_owned(), riding));
         // SCHED-C1a: who wrote its fixed values and its valuation blocks.
         provenance.push((game.game_id.to_owned(), benefit_provenance(&game.schedule)));
         // SS-2: the game's composed rules, warned about past two tiers and never refused.
@@ -1068,6 +1239,7 @@ pub fn compose_standard_pack_rules(
     priority_tiers.sort();
     benefit.sort_by(|left, right| left.0.cmp(&right.0));
     provenance.sort_by(|left, right| left.0.cmp(&right.0));
+    followers.sort_by(|left, right| left.0.cmp(&right.0));
     mismatches.sort_by(|left, right| left.0.cmp(&right.0));
     escalations.sort_by(|left, right| left.0.cmp(&right.0));
     redundant.sort_by(|left, right| left.0.cmp(&right.0));
@@ -1080,6 +1252,7 @@ pub fn compose_standard_pack_rules(
         priority_tiers,
         benefit,
         provenance,
+        followers,
         tier_mismatches: mismatches,
         escalations,
         redundant_triggers: redundant,

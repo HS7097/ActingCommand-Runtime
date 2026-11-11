@@ -113,6 +113,11 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
             lay_loading(&staging, loading)?;
         }
         fs::rename(&staging, &out).map_err(|error| write_error(&out, error))?;
+        // #428 COV-1: the chain followers, none without `--schedule`.
+        let benefit_followers = schedule
+            .as_ref()
+            .map(|report| report.benefit_followers.clone())
+            .unwrap_or_default();
         Ok(PackageBundleResponse {
             status: "written".to_string(),
             out: out.display().to_string(),
@@ -120,6 +125,7 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
             warnings,
             benefit_coverage: schedule.as_ref().map(|report| report.benefit_coverage),
             benefit_provenance: schedule.map(|report| report.benefit_provenance),
+            benefit_followers,
         })
     })
     .map_err(|mut error| {

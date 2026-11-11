@@ -262,6 +262,32 @@ declare itself maintenance:
   *complete* when every pool it consumes has a valuation (its `produces` are not read), *pending*
   when every value it lacks is the marker, and *undeclared* only for a consumed pool with neither;
   *fixed_value* counts these rules, each also counted in one of the three.
+  COV-1 (register §1.299, since 0.12.53; the coordinator's ruling of 11-11, not Alice's words): a
+  judged rule that would be undeclared for having no `produces`, no `consumes` entry and no fixed
+  value is a *follower* instead when, by its trigger alone, it can only be due in its chain head's
+  run window ([scheduling/README.md](scheduling/README.md), "Ties and chain heads") and rides with
+  a rule whose value the file declares: (1) its trigger requires another rule by an *edge*, a
+  `dependency_completed` reached from the root only through `all` whose `terminal_states` is
+  `succeeded` alone and which writes `since_own_run: true` ("Condition edges" there), so that it
+  is due only while that rule's latest run succeeded and it has not served that run; (2) the rule
+  an edge names is a judged rule that counts as *complete* (a fixed value included) or is itself
+  a follower: the walk goes up the edges in trigger order, depth first, each rule once, to the
+  first complete rule, the one the follower rides with, and a walk that reaches none (a cycle, or
+  only rules that are not judged, are *pending* or are *undeclared*) makes no follower; (3) every
+  chain link of its trigger (each `dependency_completed` reached through `all` whose
+  `terminal_states` holds `succeeded`, naming another rule) names a judged rule, since the
+  evaluator walks up from the link dispatched last and judges on its own a candidate whose walked
+  links are all unmarked. A rule without an edge (its dependencies lack `since_own_run`, also
+  accept another state, or stand under an `any` or a `not`) can be due outside its head's window,
+  where the evaluator judges it on its own: it stays undeclared, with its warning, and so does a
+  rule that touches a pool without a valuation, whatever its trigger. *follower* counts the followers; none of them counts as undeclared or is
+  a `standard_pack_benefit_undeclared`. The tools answer it as `benefit_coverage.follower`, absent
+  while 0, and list the followers as `benefit_followers: [{task_id, rides_with}]`, rule ids in
+  file order, absent while empty, so an answer for a file without followers is byte for byte the
+  one of before. The count is a static reading of the file and decides nothing: whether a
+  candidate is judged at an evaluation is the evaluator's
+  ([scheduling/README.md](scheduling/README.md), "Who is judged"), and its decision's reasons
+  show it.
   Only the resource tools report the coverage and these warnings ("Tools"); the Runtime's
   workbench records neither.
 

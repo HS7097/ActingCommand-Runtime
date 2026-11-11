@@ -76,6 +76,8 @@ fn sched_c1a_t9_the_check_answers_coverage_and_provenance() {
             maintenance_declared: 0,
             realization: 0,
             fixed_value: 2,
+            // #428 COV-1 (register §1.299): no rule rides with a chain.
+            follower: 0,
         }
     );
     assert_eq!(

@@ -296,6 +296,8 @@ fn ss2c_t5_the_coverage_counts_a_declared_rule_as_not_judged() {
                 realization: 0,
                 // SCHED-C1a (register §1.299): no rule writes a fixed value.
                 fixed_value: 0,
+                // #428 COV-1 (register §1.299): no rule rides with a chain.
+                follower: 0,
             }
         )]
     );

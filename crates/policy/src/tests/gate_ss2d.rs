@@ -625,6 +625,8 @@ fn ss2d_t14_the_compiler_holds_the_mark_to_its_conditions() {
                 realization: 1,
                 // SCHED-C1a (register §1.299): no rule writes a fixed value.
                 fixed_value: 0,
+                // #428 COV-1 (register §1.299): no rule rides with a chain.
+                follower: 0,
             }
         )]
     );

@@ -145,6 +145,11 @@ pub struct StandardPackCheckResponse {
     /// file order. Absent without `schedule.json`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub benefit_provenance: Option<actingcommand_policy::BenefitProvenance>,
+    /// #428 COV-1 (register §1.299): with `schedule.json`, each chain follower
+    /// (`benefit_coverage.follower`) with the complete rule it rides with, `{task_id,
+    /// rides_with}`, in file order. Absent when there is none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub benefit_followers: Vec<actingcommand_policy::BenefitFollower>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -177,6 +182,11 @@ pub struct PackageBundleResponse {
     /// file order. Absent without it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub benefit_provenance: Option<actingcommand_policy::BenefitProvenance>,
+    /// #428 COV-1 (register §1.299): with `--schedule`, each chain follower
+    /// (`benefit_coverage.follower`) with the complete rule it rides with, `{task_id,
+    /// rides_with}`, in file order. Absent when there is none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub benefit_followers: Vec<actingcommand_policy::BenefitFollower>,
 }
 
 #[derive(Debug, Clone)]

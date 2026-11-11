@@ -35,9 +35,9 @@ use actingcommand_contract::{
     StandardPackRoot, StandardPackRootBytes, read_standard_pack_root, validate_instance_alias,
 };
 use actingcommand_policy::{
-    BenefitCoverage, BenefitProvenance, ComposedGame, ComposedProcedure, StandardPackBinding,
-    StandardPackComposeFailure, StandardPackComposeInput, StandardPackComposition,
-    StandardPackGameFiles, compose_standard_pack_rules,
+    BenefitCoverage, BenefitFollower, BenefitProvenance, ComposedGame, ComposedProcedure,
+    StandardPackBinding, StandardPackComposeFailure, StandardPackComposeInput,
+    StandardPackComposition, StandardPackGameFiles, compose_standard_pack_rules,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -108,11 +108,13 @@ pub(crate) fn check_schedule(
 /// `standard_pack_line_trigger_redundant` per judged rule and valued pool with lines whose old
 /// capacity threshold the capped spending order repeats, and the game's judged rules' coverage
 /// (complete, pending, undeclared; SS-2c: and the rules declared maintenance); SCHED-C1a (register
-/// §1.299): and who wrote the game's fixed values and valuation blocks.
+/// §1.299): and who wrote the game's fixed values and valuation blocks; #428 COV-1 (register
+/// §1.299): and the game's chain followers, each with the rule it rides with, in file order.
 pub(crate) struct ScheduleReport {
     pub(crate) warnings: Vec<Outcome>,
     pub(crate) benefit_coverage: BenefitCoverage,
     pub(crate) benefit_provenance: BenefitProvenance,
+    pub(crate) benefit_followers: Vec<BenefitFollower>,
 }
 
 /// Checks `schedule` (the bytes of the game root's `schedule.json` at `path`) against the game
@@ -149,10 +151,18 @@ pub(crate) fn report_schedule(
         .find(|(game_id, _)| game_id == game)
         .map(|(_, provenance)| provenance.clone())
         .unwrap_or_default();
+    // #428 COV-1: the game's chain followers, as the composer reports them.
+    let benefit_followers = composition
+        .benefit_followers()
+        .iter()
+        .find(|(game_id, _)| game_id == game)
+        .map(|(_, followers)| followers.clone())
+        .unwrap_or_default();
     Ok(ScheduleReport {
         warnings,
         benefit_coverage,
         benefit_provenance,
+        benefit_followers,
     })
 }
 

@@ -1184,6 +1184,16 @@ tests = [
     "actingcommand-policy::lib::tests::gate_sched_c1c::sched_c1c_t5_the_composer_carries_the_member_and_hints_at_old_triggers",
 ]
 incident = ["#428 SCHED-C1c"]
+# #428 COV-1 (the coordinator's ruling of 11-11, not Alice's words; rd-1111 brief-cov1; contracts/standard-pack-schedule.md, "Coverage"; register §1.299; since 0.12.53): standard-pack check and package bundle --schedule count a judged rule with no produces, no consumes entry and no fixed value whose trigger requires through all an edge (dependency_completed accepting succeeded alone, since_own_run true) to a complete rule, or to a follower of one, and whose chain links all name judged rules, in benefit_coverage.follower, not in undeclared and with no standard_pack_benefit_undeclared, and list it in benefit_followers {task_id, rides_with} in file order; a level link, an edge under any, an edge that also accepts failed, an edge to a rule declared maintenance or maintenance-role, a link beside it to such a rule, an edge to an undeclared rule and a consumed pool without a valuation each stay undeclared with their warning; a file without followers answers without follower and benefit_followers
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_cov1::cov1_t1_a_rule_riding_with_a_valued_head_is_a_follower_and_not_warned_about",
+    "actingcommand-resource-tooling::lib::gate_cov1::cov1_t2_a_follower_of_a_follower_rides_with_the_valued_head",
+    "actingcommand-resource-tooling::lib::gate_cov1::cov1_t3_each_way_of_not_being_a_follower_stays_undeclared_with_its_warning",
+    "actingcommand-resource-tooling::lib::gate_cov1::cov1_t4_a_file_without_followers_answers_as_before",
+]
+incident = ["#428 COV-1"]
 # SS-4 (rd-1029 plan-state-driven, the notes on removing the counts; rd-1031 brief-ss4 test 6; contracts/standard-pack-schedule.md, "Tools", "Failure escalation without a daily bound"; register §1.231; since 0.12.34): a rule without a daily bound (loop_budget without daily_limit, or no loop_budget) whose escalation_threshold is above 10 is one standard_pack_escalation_threshold_high {game, task_id, count, limit_count 10} in file order, outside the composition's own warnings; a rule with a daily limit, or at the threshold 10, gives none; the file composes all the same
 [[gate]]
 coverage = "Y"

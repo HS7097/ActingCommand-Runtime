@@ -76,6 +76,11 @@ mod gate_ss2c;
 #[cfg(test)]
 mod gate_sched_c1a;
 
+// #428 COV-1 (register §1.299): standard-pack check counts a rule that declares no value and only
+// rides with its chain as a follower, not undeclared, and lists it with the rule it rides with.
+#[cfg(test)]
+mod gate_cov1;
+
 // Workflow #428 CFL-2: standard-pack check names a target whose chain differs from its shared
 // read, with and without `pages.json`.
 #[cfg(test)]

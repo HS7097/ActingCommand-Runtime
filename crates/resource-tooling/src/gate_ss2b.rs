@@ -47,6 +47,8 @@ fn ss2b_t9_the_check_counts_the_judged_rules_and_warns_once_per_undeclared_rule(
             realization: 0,
             // SCHED-C1a (register §1.299): the count of judged rules writing a fixed value.
             fixed_value: 0,
+            // #428 COV-1 (register §1.299): no rule rides with a chain.
+            follower: 0,
         }
     );
     let codes = report

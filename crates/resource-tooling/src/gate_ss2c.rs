@@ -50,6 +50,8 @@ fn ss2c_t5_t6_the_check_counts_declared_rules_apart_and_warns_of_a_tier_mismatch
             realization: 0,
             // SCHED-C1a (register §1.299): no rule writes a fixed value.
             fixed_value: 0,
+            // #428 COV-1 (register §1.299): no rule rides with a chain.
+            follower: 0,
         }
     );
     let found = report
