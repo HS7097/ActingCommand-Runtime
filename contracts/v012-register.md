@@ -11109,6 +11109,86 @@ the capacity, data the pack or a person sets).
 SCHED-C1d: a valued pool's episode then survives a start, a generation and an unknown reading (no
 production pool is valued today).
 
+#### Slice SCHED-C1a (0.12.52): a rule's fixed value written in its pack is its known benefit
+
+Coordinator work order `rd-1111/brief-sched-c1a.md`; on the contract branch
+`claude/428-sched-c1-contract` at `ad6b2d84` (Runtime PR #1582, on main `c0edc8b2`). The contract
+is [scheduling/README.md](scheduling/README.md) ("Fixed values written in the pack", "Pool
+Valuation" with "A valuation written in the pack", "Net benefit within a tier", "Bounds") and
+[standard-pack-schedule.md](standard-pack-schedule.md) ("The file", `requires`, "Judged rules",
+"The fixed value", "Provenance", "Composition", "Tools"), rows SC1-1 to SC1-6 above but
+`pool_trigger_line`. The text names no game, resource or value: the tests' ids are neutral.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| C1A-1 | `TaskSpec::benefit_fixed_value_milli` (`Option<i64>`, V2 only, `1..=2^53−1`) (SC1-1) | catalog format addition | SCHED-C1a | the composer; a raw V2 catalog | `crates/policy/src/schema.rs`; read as a written bound (an explicit `null` is `type_mismatch`); absent it serializes as nothing; `validate_fixed_value` in `validation.rs`: V1 `unknown_field`, out of range `limit_exceeded`, without `benefit_judged` `missing_required_field`, `fixed_value_conflict` beside a `produces` entry on a pool whose `valuation` is a block or the marker and beside `benefit_realization: true`, each at the member but the second |
+| C1A-2 | `ScheduleRule::fixed_value_milli` (as written) and `fixed_value_origin`, `ScheduleItem::valuation_origin` of a pool, `ScheduleValueOrigin` `{Pack, Model}` (SC1-2) | `schedule.json` format addition | SCHED-C1a | the resource side; `acmodel bindings apply` for `"model"` | `crates/actingcommand-contract/src/standard_pack_schedule.rs`; taken out of the rule or the pool, refused beside `"maintenance": true`, of another origin, an origin without a value, a valuation origin beside no block |
+| C1A-3 | `B` from a fixed value: `judge` starts `S` at `V`, reads no `produces`, adds nothing to `ε`; the capped round's value without the pool's cost is `S + cost`, so `V` less the other pools' cost (SC1-3) | behaviour (evaluation) | SCHED-C1a | the policy evaluator | `crates/policy/src/evaluator/benefit.rs` `judge`; `capped.rs` `start_round` reads it through `Known::sum` unchanged, `RoundView::decide` carries `V` on the member's `KnownBenefit` |
+| C1A-4 | `benefit_fixed_value` (info / none, pending, since 0.12.52; `benefit_milli`, `fixed_value_milli`, `expected_duration_ms`), `fixed_value_conflict` (error / none, pending, since 0.12.52), the key `fixed_value_milli` (`integer`), the prefix `fixed_value_` (policy); the winner's `rank_breakdown` detail ` fixed_value_milli=<V>` (SC1-4) | outcome catalog additions (policy) | SCHED-C1a | the policy evaluator and compiler | `benefit.rs` `note_fixed_value` inserts the reason first on every judged decision whose `B` is known and came from `V` (held, a capped member, within tolerance, not positive, positive); `evaluator.rs` `rank_breakdown_detail` |
+| C1A-5 | the always-on row `benefit_fixed_value` of `config.subsystems`; `BENEFIT_FIXED_VALUE_SUBSYSTEM` (SC1-5) | new row value of an existing fact | SCHED-C1a | actingd | `apps/actingd/src/config/manifest.rs`; the composer refuses a file that writes a rule's `fixed_value_milli` or a pool's `valuation_origin` without it in `requires`, at the first such member, rules then pools |
+| C1A-6 | `BenefitCoverage::fixed_value`; `BenefitProvenance {fixed_value, valuation}` of `ValueOrigins {pack, model}`, `StandardPackComposition::benefit_provenance` (SC1-6) | `actinglab standard-pack check` and `package bundle --schedule` answers | SCHED-C1a | actinglab (resource tooling) | `crates/policy/src/compose.rs`; `crates/resource-tooling` answers `benefit_provenance` beside `benefit_coverage`, absent without `schedule.json` |
+
+**Tests.** New: policy rows "#428 SCHED-C1a", `actingcommand-policy::lib::tests::gate_sched_c1a`
+tests 1 to 8 (`sched_c1a_t1_a_fixed_value_without_effects_is_its_known_benefit`,
+`sched_c1a_t2_two_collect_rules_order_by_b_per_e_exactly`,
+`sched_c1a_t3_below_the_cap_a_consumer_is_judged_by_v_less_its_cost`,
+`sched_c1a_t4_in_a_capped_round_a_fixed_consumer_ranks_by_v_per_c`,
+`sched_c1a_t5_a_consumed_pool_without_a_valuation_stays_unknown`,
+`sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer`,
+`sched_c1a_t7_the_composer_writes_the_member_and_keeps_the_origins_out`,
+`sched_c1a_t8_without_the_member_nothing_changes`) and
+`actingcommand-resource-tooling::lib::gate_sched_c1a::sched_c1a_t9_the_check_answers_coverage_and_provenance`,
+on fakes with a fixed clock, no sleep. Adapted, because the coverage answer gains a member the
+contract requires (`benefit_coverage.fixed_value`) and these tests pin the whole struct: the
+`BenefitCoverage` value of `gate_ss2b::ss2b_t9_the_composer_marks_the_judged_rules_and_counts_their_coverage`,
+`gate_ss2c::ss2c_t5_the_coverage_counts_a_declared_rule_as_not_judged` and
+`gate_ss2d::ss2d_t14_the_compiler_holds_the_mark_to_its_conditions` (policy) and of the resource
+tooling's `gate_ss2b::ss2b_t9_the_check_counts_the_judged_rules_and_warns_once_per_undeclared_rule`
+and `gate_ss2c::ss2c_t5_t6_the_check_counts_declared_rules_apart_and_warns_of_a_tier_mismatch`
+gains `fixed_value: 0`; nothing else of them changed. No golden re-recorded: the example
+catalog's golden hashes are asserted unchanged.
+
+**Interface.** None raised (`ledger`, `actingd-config`, `runtime-client`, `package`,
+`runtime-outcomes`): a catalog member and a `schedule.json` member gated by `requires`, a
+subsystem row of an existing fact, a decision reason the record reader only spells, a compile
+diagnostic and two members of the tools' answers (as §1.289).
+
+**Where SCHED-C1a reads the contract.**
+
+- (a) The member is read as a signed integer, so a negative one is `limit_exceeded` like 0 and
+  2^53 ("one outside `1..=9007199254740991`"); an integer beyond the signed 64-bit range is a
+  `type_mismatch`, as is an explicit `null`.
+- (b) `benefit_fixed_value`'s `benefit_milli` is the `B` the decision reads: a capped round's
+  member its own `B` (`V − W·(c − a)`), every other `⌊S⌋`.
+- (c) "Before its other reasons" is the decision's first reason, before the trigger's and the
+  score stage's reasons too; an unknown `B` carries none.
+- (d) Only the judged winner's `rank_breakdown` names `V`; a listed candidate's row
+  (`decision_candidate_not_selected`) is unchanged.
+- (e) Provenance lists the rules that are not held, as the coverage counts them, and every pool
+  whose `valuation` is a block, by their file ids; a held rule's value is in neither list.
+- (f) The subsystem's spelling equals the code's: the policy crate takes it from the registry
+  (`PolicyCode::BenefitFixedValue.as_str()`), since a string literal of a registered name is
+  refused outside the registry (outcome guard G5); actingd's manifest writes it as the other rows.
+- (g) The contract text: "(SCHED-C1, not built yet)" became "(SCHED-C1a, since 0.12.52)" where this
+  slice builds the sentence; a sentence that also names a later slice's member was split, the
+  later part keeping its mark, and the workbench's provenance bullet of "Provenance" is marked
+  "(SCHED-C1b, not built yet)". The `config.subsystems` row of
+  [runtime-config.md](runtime-config.md) names the new always-on row, as SS-2h's did.
+
+**What SCHED-C1a changes live.** Nothing until a `schedule.json` writes `fixed_value_milli` (with
+`benefit_fixed_value` in `requires`) or a raw V2 catalog writes the task member: a catalog without
+it keeps its hash, rules digest and decisions; `config.subsystems` gains the always-on row
+`benefit_fixed_value`. With the members, a judged rule runs on its value (ruling 116's stop still
+holds every production instance until it is lifted).
+
+**SCHED-C1a rollback** (to the release before it). The ledger and the configuration need nothing.
+Before a `schedule.json` writes the members: nothing to undo. After: a build without SCHED-C1a
+refuses a task that writes `benefit_fixed_value_milli` at its reader (`unknown_field`) and does not
+name `benefit_fixed_value`, so its composer refuses such a `schedule.json`
+(`schedule_requires_missing`); it compiles at its start every generation its dispatches and
+decision memories name (§1.225's rollback correction), so first remove the members and let this
+build activate a generation without them, as §1.289's rollback says for SS-2h's.
+
 ### 1.301 Slice ISO-START-1 (0.12.52): one pair's refused settlement fact no longer stops the start (#419; Alice's requirement on board #419 of 10-24: one emulator's fault must not bring down the whole Runtime; the debt the coordinator logged on 11-11, #421 6774483473 and #428 6770731970: isolate only that pair; the coordinator's ruling on the three cases, not Alice's words: coordinator work order `rd-1111/brief-iso-start-1.md`)
 
 [runtime-fact-store.md](runtime-fact-store.md) ("Settlement facts" and "Typed codes") and the
@@ -11524,6 +11604,110 @@ an overview near the budget starts cutting a little earlier, in the order it alr
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | R0B2-1 | `instances[].activity?` | `actingctl overview` / `ac_overview` answer | R-0b2 | R-0b2 | `since` 0.12.36; from the one Status read; never cut |
+
+### 1.300 Slice INST-5, first slice (0.12.52): the Lab's rescue module adds an emulator instance, committed as a configuration replacement (Workflow #421; the desktop program's "add account / device" button is disabled with the words "wait for the Runtime's support; edit the configuration file by hand for now", and adding an instance today means editing two places of the file and restarting; the read-only survey of 11-11 found that a first version fits today's interface revisions; the coordinator's ruling of 11-11, not Alice's words, that the new instance starts paused; coordinator work order `rd-1111/brief-inst5.md`, read on main `c0edc8b2`)
+
+[install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh root" ("Instances,
+the first slice") and "The Lab's rescue module", [lab-two-entries.md](lab-two-entries.md) §5 and
+§7, and the row `instance add` of [lab-operations.json](lab-operations.json) are the contract. The
+number is 1.300 and the section stands here, after §1.243, because open PR #1582 (SCHED-C1)
+holds 1.299 at the end of section 1; on `c0edc8b2` §1.298 is VIS-LOAD-1. No persisted ledger
+shape, wire shape, configuration key or shape, code, location or vocabulary is new.
+
+**What it does.** `actinglab instance add <alias> --game <g> --server <s> --mumu-index <n>
+--touch-backend <b> --capture-backend <b>` (the rescue module, entry `lab` only; the UI starts it
+as a child with the initiator `Lab-救急`), every parameter required, none with a default. It reads
+the selected configuration, refuses before writing anything an alias either place has, an
+emulator index an entry binds, a game no game root of `standard_packs.root` binds by a
+`bundle.json` the contract crate reads, a server none of that bundle's packs names, and a
+configuration without a policy row to take the host and the capabilities from (each
+`instance_invalid`), and with no Runtime running `runtime_not_running`. It then composes the
+candidate: the entry `{alias, instance_id, instance_index, touch_backend, capture_backend}` and the
+row `{instance_id: <alias>, server_id, game_id, host_id, available: true,
+capability_operation_ids, preferred_task_ids: []}` together (both places, until INST-R), the
+`instance_id` minted and checked against the live file's ids and those the root's journals
+recorded as added. The candidate is written beside the live file
+(`actingd.config.json.new-<ms>.part`) and committed by `config replace`'s path, not a second one:
+check-config (its refusal relayed whole as `config_refused_by_target`'s cause), the hold of every
+unpaused instance (`lab-instance-<ms>`), the close, the swap (the candidate is the swap's part;
+the replaced file kept as `actingd.config.json.prev-<ms>`), the start and its checks, all one
+`config_replace` journal with the initiator and the input `instance_add`. After the start and
+before `alive` and the release, the new instance is paused with its own reason `instance.added`
+(the reason's form: [scheduling-pause.md](scheduling-pause.md), `pause_reason`); the release hands
+back only the hold's pauses, so the new instance stays paused until a person resumes it, and every
+pause that existed before, of any holder, is there after the restart unchanged.
+
+**Why it starts paused** (the coordinator's ruling of 11-11): a new account must not start running
+tasks the moment it is added, and an installation whose other instances are paused must not gain
+an unpaused one by this command. **The window that remains**: between the new Runtime's readiness
+and the pause (the post-start checks and one status read) the new instance is not paused; a
+stopped Runtime takes no pause of an alias it never registered, and only a start that knows the
+instance (INST-R's Runtime half) can start it held. If the instance cannot be paused (the started
+Runtime did not register it, or refused the pause) the command ends `post_check_failed` (`alias`,
+`count` 1) with the hold kept and `next.pause_added`, the core pause as actingctl runs it.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): `install-cli`
+takes the instance commands into revision 1 without a raise (its row), the configuration's shape
+does not change (the entry and the row are existing members), and the journal stays
+`actingcommand.install-operation.v1` with one more input of an existing kind (the LAB-3 ruling of
+2026-11-10: no `install-root` raise for single-location journals). The outcome catalog:
+`install_command_refused` takes the existing keys `server` and `instance_index`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| INST5-1 | the rescue row `instance add` (six parameters, `help`, irreversible, Runtime required, the requests of `config replace`) | operation table row opened | INST-5 | `crates/lab-rescue` (`rescue::SERVED`) | `since` 0.12.52; no `params_more`; `instance remove` stays reserved |
+| INST5-2 | the configuration candidate `actingd.config.json.new-<ms>.part` beside the live file | installer file (a kept part when refused) | INST-5 | `install::instance_add::stage` | consumed by the swap on success |
+| INST5-3 | the journal input `instance_add {alias, instance_id, game, server, instance_index, touch_backend, capture_backend, capabilities_from, pause_reason}` of a `config_replace` journal | installer journal member | INST-5 | `install::config_swap::open` | read back to keep minted ids unique |
+| INST5-4 | the pause of the added instance, reason `instance.added` | behaviour (a `PauseScheduling` on the CLI channel) | INST-5 | `rescue::pause_added` | the Runtime records it as every pause (`host.scheduling_pause`); no ledger record of the installer's own |
+| INST5-5 | `install_command_refused` values `server`, `instance_index` | outcome catalog addition (existing keys) | INST-5 | `install::instance_add` | `instance_invalid` only |
+
+**At deploy.** The rescue module offers `instance add` (`actinglab instance add …` and `serve
+--stdio`); nothing else changes, no configuration key, no interface. Production keeps adding instances by hand until the coordinator says otherwise (the
+rescue module's composites are not used on the production root before LAB-7, install-cli.md,
+"Journals across versions").
+
+**What an operator sees after deploy.** On a root whose Runtime runs: one line, `install_command_done`
+(`install_instance_add`, the operation id, `alias`, `game`), with the steps `check_config`, `swap`,
+`pause_added`, `alive` and `release`, the `backup` (the kept `actingd.config.json.prev-<ms>`) and
+`added` (the alias, the minted `instance_id`, game, server, index, backends, the row the
+capabilities came from); the configuration names the instance in `instances` and
+`policy.facts.instances`; the status shows it paused with `instance.added` and every other instance
+as before the command. A refusal changes nothing of the installation: the file, the journals and
+the Runtime stay as they were (a candidate check-config refused stays beside the live file and
+`leftovers` lists it). To let the new account run: resume it from the console, or `actingctl resume
+--state-root <s> --instance <alias>`.
+
+**Rollback.** Of the instance: `config restore <backup>` puts the kept file back by the same path
+and restarts under a hold; its post-start checks judge the configuration and the pauses from before
+the restore, so the instance it removes fails `bindings` and `pauses`: it ends `post_check_failed`
+with the previous configuration running and its hold kept, and `release-hold <its reason>` hands
+the hold back (the Runtime drops the pause of the alias no longer registered). Of the release (to
+0.12.51): nothing persisted changes shape; a configuration that gained an instance stays valid
+(both places are written), the instance's pause stays restored at every start, and an installer
+of 0.12.51 reads the `config_replace` journal as before (its `inputs` are free JSON).
+
+Tests (apps gate row "#421 INST-5"), on the fake host and Runtime of `fixture.rs`, which gains
+`registers_at_start` (the aliases the next start registers; none by default, no existing test
+changes): `gate_421_inst5::inst5_the_added_instance_is_registered_and_paused_after_the_restart`,
+`inst5_a_duplicate_alias_or_index_is_refused_and_nothing_changes`,
+`inst5_a_candidate_check_config_refuses_changes_nothing`,
+`inst5_the_prev_file_is_kept_and_equals_the_old_file`,
+`inst5_a_pause_from_before_stays_with_its_reason_and_revision` and
+`inst5_the_journal_carries_the_initiator_and_what_was_added`. No existing test changed.
+`config replace` and `config restore` run the same code as before through the shared commit
+(`rescue::commit`), with no `instance_add` input and the same steps, members and outcomes.
+
+**Fix round 1** (coordinator brief `rd-1111/brief-inst5-fix1.md`; main `d70edfb9` merged in). The
+outcome guard's G3 refuses a `json!` key named `code`, `reason`, `category`, `operation`, `stage`
+or `boundary`, or ending `_code`, `_reason`, `_operation` or `_stage`; the result of the step
+`pause_added` (`reason`, six places) and `added` (`pause_reason`) were such keys. Both are now
+serde records whose reason is the name type `SchedulingPauseReason`, as the hold's records keep a
+reason (`install::hold`: `PauseRecord`, `HoldReport`, `ReleaseEvidence`): `rescue::PauseAddedResult`
+and `install::instance_add::AddedRecord`, made JSON by `install::hold::record_value` (now
+`pub(crate)`); `Added` carries the reason it records. Every member keeps its name, place and value
+(the step's `alias`, `reason`, `set`, `runtime`, `registered`, `already_paused`, `drained`;
+`added.pause_reason` and the journal input's), so no reader, test or text changes, and the guard's
+allow list is not touched.
 
 ### 5.1 Capacity of `config.parameters`
 

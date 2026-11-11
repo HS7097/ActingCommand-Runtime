@@ -303,6 +303,18 @@ actingcommand_contract::outcome_codes! {
         /// are carried and change nothing. The catalog compiles.
         PoolLinesUnvalued => "pool_lines_unvalued": warning / none,
         // ---- SS-2h: end ----
+        // ---- SCHED-C1a (a rule's fixed value, `contracts/scheduling/README.md`, "Fixed values
+        // written in the pack"): begin ----
+        /// Info. A judged candidate's net benefit was computed from its task's fixed value `V`,
+        /// the value of one run without the cost of the pools it consumes; carried before the
+        /// decision's other reasons, whatever the gate then decides (keys `benefit_milli`,
+        /// `fixed_value_milli`, `expected_duration_ms`).
+        BenefitFixedValue => "benefit_fixed_value": info / none,
+        /// Error (catalog compile diagnostic). A task's `benefit_fixed_value_milli` beside a
+        /// `produces` entry on a pool whose valuation is declared or pending, or beside
+        /// `benefit_realization: true`: the task would have two values.
+        FixedValueConflict => "fixed_value_conflict": error / none,
+        // ---- SCHED-C1a: end ----
     }
 }
 

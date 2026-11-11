@@ -71,6 +71,11 @@ mod gate_ss2b;
 #[cfg(test)]
 mod gate_ss2c;
 
+// #428 SCHED-C1a (register §1.299): standard-pack check counts the rules that write a fixed value
+// and says who wrote each fixed value and each valuation block.
+#[cfg(test)]
+mod gate_sched_c1a;
+
 // Workflow #428 CFL-2: standard-pack check names a target whose chain differs from its shared
 // read, with and without `pages.json`.
 #[cfg(test)]

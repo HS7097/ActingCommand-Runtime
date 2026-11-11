@@ -196,6 +196,16 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // SCHED-C1a (register §1.299): this build reads a task's `benefit_fixed_value_milli` (a
+        // rule's fixed value is its known benefit, less the cost of what it consumes); a
+        // `schedule.json` whose rule writes `fixed_value_milli` or whose pool writes
+        // `valuation_origin` requires it, so an older Runtime refuses the file instead of reading
+        // the rule without its value.
+        subsystem(
+            "benefit_fixed_value",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // Workflow #411 P19: this build reads a timeline event's `excludes_fact_prefixes`, and its
         // resets keep a task's own last result for the task's own edges; a `schedule.json` whose
         // event writes the member requires it, so an older Runtime refuses the file instead of

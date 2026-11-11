@@ -682,6 +682,8 @@ fn ss2b_t9_the_composer_marks_the_judged_rules_and_counts_their_coverage() {
                 // SS-2d (register §1.235): the count of judged rules carrying the realization
                 // mark.
                 realization: 0,
+                // SCHED-C1a (register §1.299): the count of judged rules writing a fixed value.
+                fixed_value: 0,
             }
         )]
     );

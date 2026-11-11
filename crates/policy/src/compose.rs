@@ -50,9 +50,10 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     APPLICATION_UPDATE_REQUIRED_FACT_KEY, BundleMaintenance, CatalogCompileWarning,
+    SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER, SCHEDULE_RULE_FIXED_VALUE_MEMBER,
     SCHEDULE_RULE_REALIZATION_MEMBER, STANDARD_PACK_SCHEDULE_FILE, ScheduleItem, ScheduleMember,
-    ScheduleRule, StandardPackClassification, StandardPackProblem, StandardPackRoot,
-    StandardPackRootIssue, StandardPackSchedule, classify_standard_pack_packages,
+    ScheduleRule, ScheduleValueOrigin, StandardPackClassification, StandardPackProblem,
+    StandardPackRoot, StandardPackRootIssue, StandardPackSchedule, classify_standard_pack_packages,
     parse_standard_pack_schedule, standard_pack_maintenance_packages,
     validate_standard_pack_schedule_references,
 };
@@ -62,11 +63,11 @@ use sha2::{Digest, Sha256};
 
 use crate::canonical::canonical_serialized;
 use crate::{
-    ActivityProfile, CatalogDiagnosticCode, CatalogDocumentSource, CatalogSources, CompiledCatalog,
-    FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM,
-    POOL_FACT_REFERENCE_SUBSYSTEM, POOL_LINES_SUBSYSTEM, PoolSpec, RESET_EXCLUSIONS_SUBSYSTEM,
-    SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec, TimelineEvent,
-    compile_composed_catalog,
+    ActivityProfile, BENEFIT_FIXED_VALUE_SUBSYSTEM, CatalogDiagnosticCode, CatalogDocumentSource,
+    CatalogSources, CompiledCatalog, FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE,
+    FACT_UNKNOWN_PROBE_SUBSYSTEM, POOL_FACT_REFERENCE_SUBSYSTEM, POOL_LINES_SUBSYSTEM, PoolSpec,
+    RESET_EXCLUSIONS_SUBSYSTEM, SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec,
+    TimelineEvent, compile_composed_catalog,
 };
 
 /// The catalog id of every composition (model §3.2 step 4).
@@ -217,6 +218,11 @@ pub const BENEFIT_LIMITED_MEMBER: &str = "benefit_limited";
 /// written and which require [`POOL_LINES_SUBSYSTEM`].
 pub const POOL_LINE_MEMBERS: [&str; 2] = ["stop_line", "hard_line"];
 
+/// SCHED-C1a (register §1.299): the task member the composer writes, with the rule's integer, on
+/// a judged rule that carries the rule member `fixed_value_milli`
+/// ([`SCHEDULE_RULE_FIXED_VALUE_MEMBER`]). A rule never writes it itself.
+pub const BENEFIT_FIXED_VALUE_MEMBER: &str = "benefit_fixed_value_milli";
+
 /// SS-2b (register §1.225; Alice's ruling 116, 「业务覆盖完整」): how far one game's judged rules
 /// (those whose package is not maintenance-role and that do not declare themselves maintenance,
 /// not held) declare their values, as the resource tools report it. Each rule counts once,
@@ -237,6 +243,41 @@ pub struct BenefitCoverage {
     /// SS-2d (register §1.235): the judged rules that carry the model's realization mark
     /// (`"realization": true`); each also counts in one of the first three.
     pub realization: usize,
+    /// SCHED-C1a (register §1.299): the judged rules that write a fixed value
+    /// (`fixed_value_milli`); each also counts in one of the first three, by the pools it
+    /// consumes alone (its `produces` are not read): complete when each has a valuation, pending
+    /// when every value it lacks is the marker, undeclared for a consumed pool with neither.
+    pub fixed_value: usize,
+}
+
+/// SCHED-C1a (register §1.299; `contracts/standard-pack-schedule.md`, "Provenance"): who wrote
+/// the values one game's `schedule.json` holds, so that a later model export can replace them one
+/// by one. It decides nothing; the catalog carries no origin.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct BenefitProvenance {
+    /// The judged rules (not held) that run on a fixed value, by their file ids.
+    pub fixed_value: ValueOrigins,
+    /// The pools whose `valuation` is a declared block (not the pending marker), by their file
+    /// ids.
+    pub valuation: ValueOrigins,
+}
+
+/// SCHED-C1a: ids by who wrote their value, each list in file order.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ValueOrigins {
+    /// No origin member: the pack's own hand wrote the value.
+    pub pack: Vec<String>,
+    /// The origin member is `"model"`: the model's export wrote it.
+    pub model: Vec<String>,
+}
+
+impl ValueOrigins {
+    fn add(&mut self, origin: ScheduleValueOrigin, id: &str) {
+        match origin {
+            ScheduleValueOrigin::Pack => self.pack.push(id.to_owned()),
+            ScheduleValueOrigin::Model => self.model.push(id.to_owned()),
+        }
+    }
 }
 
 /// One judged rule that declares no value: its id and the touched pool without a valuation
@@ -283,6 +324,9 @@ pub struct StandardPackComposition {
     /// SS-2b: each game whose `schedule.json` was read, by game id, with its judged rules'
     /// coverage and the rules that declare no value, in file order.
     benefit: Vec<(String, BenefitCoverage, Vec<UndeclaredRule>)>,
+    /// SCHED-C1a: each game whose `schedule.json` was read, by game id, with who wrote its fixed
+    /// values and its valuation blocks.
+    provenance: Vec<(String, BenefitProvenance)>,
     /// SS-2c: each game whose composed rules use exactly two priority values and whose rules
     /// include one in the other tier than its declaration says, by game id, with those rules' ids
     /// in file order.
@@ -379,6 +423,13 @@ impl StandardPackComposition {
             .collect()
     }
 
+    /// SCHED-C1a (register §1.299; `contracts/standard-pack-schedule.md`, "Provenance"): who
+    /// wrote the fixed values and the valuation blocks of each game whose `schedule.json` was
+    /// read, by game id. An origin changes no decision, no catalog hash and no rules digest.
+    pub fn benefit_provenance(&self) -> &[(String, BenefitProvenance)] {
+        &self.provenance
+    }
+
     /// SS-2c (register §1.227): one `standard_pack_priority_tier_mismatch` per rule of a game
     /// whose composed rules use exactly two priority values, when the rule declares itself
     /// maintenance and carries the lower value or is judged and carries the higher (keys `game`,
@@ -456,7 +507,9 @@ fn judged(rule: &ScheduleRule, classification: &StandardPackClassification) -> b
 /// held, whose package is not maintenance-role and that does not declare itself maintenance
 /// (SS-2c), in file order, as complete, pending or undeclared; SS-2c: and the rules, not held,
 /// that declare themselves maintenance. The compiler has checked the shapes; a value that is no
-/// object, no list or no string here counts as missing.
+/// object, no list or no string here counts as missing. SCHED-C1a (register §1.299): a rule that
+/// writes a fixed value is judged by the pools it consumes alone, and with no consumption it is
+/// complete; it is also counted in `fixed_value`.
 fn benefit_coverage(
     schedule: &StandardPackSchedule,
     classification: &StandardPackClassification,
@@ -481,12 +534,22 @@ fn benefit_coverage(
         if rule.realization {
             coverage.realization += 1;
         }
-        let entries = ["produces", "consumes"]
-            .into_iter()
-            .filter_map(|member| rule.body.get(member).and_then(Value::as_array))
+        // SCHED-C1a: a fixed value leaves the rule's `produces` unread.
+        let fixed = rule.fixed_value_milli.is_some();
+        let members: &[&str] = if fixed {
+            &["consumes"]
+        } else {
+            &["produces", "consumes"]
+        };
+        if fixed {
+            coverage.fixed_value += 1;
+        }
+        let entries = members
+            .iter()
+            .filter_map(|member| rule.body.get(*member).and_then(Value::as_array))
             .flatten()
             .collect::<Vec<_>>();
-        if entries.is_empty() {
+        if entries.is_empty() && !fixed {
             coverage.undeclared += 1;
             undeclared.push(UndeclaredRule {
                 rule_id: rule.id.clone(),
@@ -521,6 +584,27 @@ fn benefit_coverage(
         }
     }
     (coverage, undeclared)
+}
+
+/// SCHED-C1a (register §1.299; `contracts/standard-pack-schedule.md`, "Provenance"): who wrote the
+/// values of one game's file, in file order: each rule, not held, that writes a fixed value (the
+/// reader and `read_game` refuse one on a rule that is not judged), and each pool whose
+/// `valuation` is a block, by its origin member (absent is the pack's).
+fn benefit_provenance(schedule: &StandardPackSchedule) -> BenefitProvenance {
+    let mut provenance = BenefitProvenance::default();
+    for rule in &schedule.rules {
+        if rule.fixed_value_milli.is_some() && !schedule.holds(&rule.package_id) {
+            provenance
+                .fixed_value
+                .add(rule.fixed_value_origin, &rule.id);
+        }
+    }
+    for pool in &schedule.pools {
+        if matches!(pool.body.get("valuation"), Some(Value::Object(_))) {
+            provenance.valuation.add(pool.valuation_origin, &pool.id);
+        }
+    }
+    provenance
 }
 
 /// SS-2: the distinct `priority` values among composed rules.
@@ -616,7 +700,8 @@ impl Composed {
             None => (rest, ""),
         };
         // SS-2d: the composed task's realization member comes from the rule's `realization`;
-        // SS-2h: its limited member from the rule's `limited`.
+        // SS-2h: its limited member from the rule's `limited`; SCHED-C1a: its fixed value from
+        // the rule's `fixed_value_milli`.
         let realization_tail;
         let tail = if document == SchedulingDocumentKind::Tasks
             && tail.strip_prefix('/') == Some(BENEFIT_REALIZATION_MEMBER)
@@ -627,6 +712,11 @@ impl Composed {
             && tail.strip_prefix('/') == Some(BENEFIT_LIMITED_MEMBER)
         {
             realization_tail = format!("/{SCHEDULE_RULE_LIMITED_MEMBER}");
+            realization_tail.as_str()
+        } else if document == SchedulingDocumentKind::Tasks
+            && tail.strip_prefix('/') == Some(BENEFIT_FIXED_VALUE_MEMBER)
+        {
+            realization_tail = format!("/{SCHEDULE_RULE_FIXED_VALUE_MEMBER}");
             realization_tail.as_str()
         } else {
             tail
@@ -727,6 +817,7 @@ pub fn compose_standard_pack_rules(
     let mut manifest = BTreeMap::<String, ComposedProcedure>::new();
     let mut priority_tiers = Vec::new();
     let mut benefit = Vec::new();
+    let mut provenance = Vec::new();
     let mut mismatches = Vec::new();
     let mut escalations = Vec::new();
     for game in &read {
@@ -735,6 +826,8 @@ pub fn compose_standard_pack_rules(
         // SS-2b: how far the game's judged rules declare their values, counted once per rule.
         let (coverage, undeclared) = benefit_coverage(&game.schedule, &game.classification);
         benefit.push((game.game_id.to_owned(), coverage, undeclared));
+        // SCHED-C1a: who wrote its fixed values and its valuation blocks.
+        provenance.push((game.game_id.to_owned(), benefit_provenance(&game.schedule)));
         // SS-2: the game's composed rules, warned about past two tiers and never refused.
         let tiers = priority_values(&composed.tasks[before..]).len();
         if tiers > STANDARD_PACK_PRIORITY_TIERS {
@@ -825,6 +918,7 @@ pub fn compose_standard_pack_rules(
         })?;
     priority_tiers.sort();
     benefit.sort_by(|left, right| left.0.cmp(&right.0));
+    provenance.sort_by(|left, right| left.0.cmp(&right.0));
     mismatches.sort_by(|left, right| left.0.cmp(&right.0));
     escalations.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(StandardPackComposition {
@@ -835,6 +929,7 @@ pub fn compose_standard_pack_rules(
         rules_digest,
         priority_tiers,
         benefit,
+        provenance,
         tier_mismatches: mismatches,
         escalations,
         compile_warnings,
@@ -934,6 +1029,23 @@ fn read_game(
             ),
         ));
     }
+    // SCHED-C1a (register §1.299): likewise a rule that writes `fixed_value_milli` or a pool that
+    // writes `valuation_origin`, the first in file order, rules then pools.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == BENEFIT_FIXED_VALUE_SUBSYSTEM)
+        && let Some(pointer) = first_fixed_value_member(&schedule)
+    {
+        return Err(refused(
+            schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
+            format!(
+                "a rule's {SCHEDULE_RULE_FIXED_VALUE_MEMBER} and a pool's \
+                 {SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER} need requires to name \
+                 {BENEFIT_FIXED_VALUE_SUBSYSTEM}"
+            ),
+        ));
+    }
     // UPD-1 fix round 5 (`standard-pack-schedule.md`, "The store update rule"): no timeline event
     // invalidates the Runtime's application update fact. A reset that cleared it would leave the
     // store update rule's trigger reading the key missing (Unknown), so the rule would never run,
@@ -1018,6 +1130,24 @@ fn read_game(
             ),
         ));
     }
+    // SCHED-C1a (register §1.299): likewise the fixed value's task member is the composer's,
+    // written from the rule member `fixed_value_milli`.
+    if let Some(index) = schedule
+        .rules
+        .iter()
+        .position(|rule| rule.body.contains_key(BENEFIT_FIXED_VALUE_MEMBER))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/rules/{index}/{BENEFIT_FIXED_VALUE_MEMBER}"),
+            ),
+            format!(
+                "{BENEFIT_FIXED_VALUE_MEMBER} is the composer's: a rule writes its value as \
+                 {SCHEDULE_RULE_FIXED_VALUE_MEMBER}"
+            ),
+        ));
+    }
     if let Some(subsystems) = subsystems
         && let Some((index, name)) = schedule
             .requires
@@ -1078,7 +1208,44 @@ fn read_game(
             ),
         ));
     }
+    // SCHED-C1a (register §1.299): likewise the fixed value, which only a judged rule's benefit
+    // reads (the reader already refuses it beside `"maintenance": true`).
+    if let Some(index) = schedule
+        .rules
+        .iter()
+        .position(|rule| rule.fixed_value_milli.is_some() && !judged(rule, &classification))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/rules/{index}/{SCHEDULE_RULE_FIXED_VALUE_MEMBER}"),
+            ),
+            format!(
+                "{SCHEDULE_RULE_FIXED_VALUE_MEMBER} values a judged rule only, and this rule's \
+                 package is maintenance-role"
+            ),
+        ));
+    }
     Ok((schedule, classification))
+}
+
+/// SCHED-C1a (register §1.299): the pointer of the first member that requires
+/// [`BENEFIT_FIXED_VALUE_SUBSYSTEM`], in the order of the members `rules` then `pools`: a rule's
+/// `fixed_value_milli`, then a pool's `valuation_origin` (the reader takes both out and keeps
+/// what they said). `None` when there is none.
+fn first_fixed_value_member(schedule: &StandardPackSchedule) -> Option<String> {
+    let rule = schedule
+        .rules
+        .iter()
+        .position(|rule| rule.fixed_value_milli.is_some())
+        .map(|index| format!("/rules/{index}/{SCHEDULE_RULE_FIXED_VALUE_MEMBER}"));
+    rule.or_else(|| {
+        schedule
+            .pools
+            .iter()
+            .position(|pool| pool.valuation_origin == ScheduleValueOrigin::Model)
+            .map(|index| format!("/pools/{index}/{SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER}"))
+    })
 }
 
 /// #386 CF-4: the pointer of the first fact reference a rule's `trigger` or `feedback_stop`
@@ -1459,6 +1626,11 @@ fn compose_task(rule: &ScheduleRule, alias: &str, copies: &Copies<'_>, judged: b
         // SS-2h: so does the limited mark (`read_game` refuses it elsewhere).
         if rule.body.get(SCHEDULE_RULE_LIMITED_MEMBER) == Some(&Value::Bool(true)) {
             task.insert(BENEFIT_LIMITED_MEMBER.to_owned(), Value::Bool(true));
+        }
+        // SCHED-C1a: and the fixed value, as written, for the compiler to check (the reader and
+        // `read_game` refuse it elsewhere); its origin stays in the file.
+        if let Some(value) = &rule.fixed_value_milli {
+            task.insert(BENEFIT_FIXED_VALUE_MEMBER.to_owned(), value.clone());
         }
     }
     if copies

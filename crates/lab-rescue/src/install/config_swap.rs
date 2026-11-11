@@ -13,6 +13,11 @@
 //! its post-start checks (the `config` check against the new file); the operation ends with the
 //! hold kept, and the module reads `alive` and releases it (`crate::rescue`). Without a running
 //! Runtime only the swap runs; the next start reads the new file.
+//!
+//! Workflow #421 INST-5 (first slice): `instance add` commits the candidate it composed the same
+//! way, as one `config_replace` operation ([`Staged`]): the candidate, written beside the live file
+//! as `actingd.config.json.new-<ms>.part`, is the swap's own part (so no copy of it stays), and the
+//! journal's inputs record what was added (`instance_add`).
 
 use super::deploy::HoldStart;
 use super::files;
@@ -97,15 +102,30 @@ pub(crate) fn candidate(
     })
 }
 
+/// Workflow #421 INST-5: a candidate `instance add` composed and staged itself beside the live
+/// file. The swap takes it as its part, `part` (a file name in the root), so nothing more is
+/// staged; `added` is what the command added, journalled as the input [`ADDED_INPUT`].
+pub(crate) struct Staged {
+    pub(crate) part: String,
+    pub(crate) added: Value,
+}
+
+/// The input of a `config_replace` journal that records the instance `instance add` added.
+pub(crate) const ADDED_INPUT: &str = "instance_add";
+
 /// The steps: with a hold, the pause and the close first, and after the swap the start, its
-/// checks and the release; the swap alone otherwise.
+/// checks and the release; the swap alone otherwise. The part is `staged`'s when given (INST-5).
 fn steps(
     candidate: &Candidate,
     commit: Option<&str>,
     hold: Option<(&HoldStart, &Loaded)>,
+    staged: Option<&Staged>,
     ms: u64,
 ) -> Vec<PlannedStep> {
-    let part = format!("{CONFIG_FILE}.new-{ms}.part");
+    let part = staged.map_or_else(
+        || format!("{CONFIG_FILE}.new-{ms}.part"),
+        |staged| staged.part.clone(),
+    );
     let kept = format!("{CONFIG_FILE}.prev-{ms}");
     let mut steps: Vec<PlannedStep> = Vec::new();
     if let Some((begun, loaded)) = hold {
@@ -156,7 +176,8 @@ fn steps(
 
 /// Opens the operation (`config_replace`) for `candidate`, with the hold `hold` (its S0, guards
 /// and deferred record journalled) when a Runtime runs; the kept file's name is the inputs'
-/// `backup`.
+/// `backup`. Workflow #421 INST-5: `staged`, `instance add`'s candidate already in its part, with
+/// what it added as the input [`ADDED_INPUT`].
 pub(crate) fn open<'h>(
     host: &'h dyn Host,
     paths: &Paths,
@@ -164,21 +185,26 @@ pub(crate) fn open<'h>(
     candidate: &Candidate,
     hold: Option<&HoldStart>,
     initiator: Option<Initiator>,
+    staged: Option<&Staged>,
 ) -> Result<Operation<'h>, Outcome> {
     let commit = loaded.state.live.as_ref().map(|live| live.commit.clone());
+    let mut inputs = json!({
+        "commit": commit,
+        "file": files::plain(&candidate.path),
+        // The `config` post-start check judges the file the operation puts in place.
+        "config_sha256": format!("sha256:{}", candidate.sha256),
+        "replaced_sha256": format!("sha256:{}", candidate.live_sha256),
+        "hold": hold.map(|begun| begun.hold.reason.clone()),
+        "known_pauses": hold.map(|begun| begun.hold.known.clone()),
+    });
+    if let Some(staged) = staged {
+        inputs[ADDED_INPUT] = staged.added.clone();
+    }
     let opening = Opening {
         kind: OperationKind::ConfigReplace,
         initiator,
         one_way: false,
-        inputs: json!({
-            "commit": commit,
-            "file": files::plain(&candidate.path),
-            // The `config` post-start check judges the file the operation puts in place.
-            "config_sha256": format!("sha256:{}", candidate.sha256),
-            "replaced_sha256": format!("sha256:{}", candidate.live_sha256),
-            "hold": hold.map(|begun| begun.hold.reason.clone()),
-            "known_pauses": hold.map(|begun| begun.hold.known.clone()),
-        }),
+        inputs,
         plan_id: None,
         plan: None,
         acknowledged: Vec::new(),
@@ -193,6 +219,7 @@ pub(crate) fn open<'h>(
             candidate,
             commit.as_deref(),
             hold.map(|begun| (begun, loaded)),
+            staged,
             ms,
         )
     })?;

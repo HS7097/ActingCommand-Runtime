@@ -2621,6 +2621,10 @@
       "type": "id",
       "description": "The smallest listed key, in byte order, whose row holds a list maximum's largest value: a business identity, never screen text (Workflow #428 S168-5a)."
     },
+    "fixed_value_milli": {
+      "type": "integer",
+      "description": "A task's fixed value V in milli of its game's value unit: the value of one run without the cost of the pools it consumes, written in its standard pack (the schedule.json rule member fixed_value_milli, the catalog's benefit_fixed_value_milli); a judged candidate's net benefit is V less the cost of what it consumes (#428 SCHED-C1a, contracts/scheduling/README.md \"Fixed values written in the pack\")."
+    },
     "run_origin": {
       "type": "vocab:run_origin",
       "description": "Who started the run a StopInstanceRun refused: the scheduler (a policy run) or the Runtime itself (a startup package, a ladder rung); kept in codes mode (Workflow #429 R-6)."
@@ -10039,6 +10043,9 @@
     ],
     "first_": [
       "lab"
+    ],
+    "fixed_value_": [
+      "policy"
     ],
     "fixture_": [
       "actingd",

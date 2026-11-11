@@ -778,6 +778,9 @@ pub(super) struct FakeRuntime {
     /// reads answer, one per read (a new composition the workbench activates).
     pub(super) catalog: RefCell<Option<String>>,
     pub(super) catalogs: RefCell<VecDeque<String>>,
+    /// Workflow #421 INST-5: the aliases the next start that comes ready registers, unpaused (the
+    /// instances a configuration it starts with gained); none by default.
+    pub(super) registers_at_start: RefCell<Vec<String>>,
 }
 
 impl FakeRuntime {
@@ -812,6 +815,7 @@ impl FakeRuntime {
             revisions: Cell::new(0),
             catalog: RefCell::new(None),
             catalogs: RefCell::new(VecDeque::new()),
+            registers_at_start: RefCell::new(Vec::new()),
         }
     }
 
@@ -1141,6 +1145,10 @@ impl RuntimeLink for FakeRuntime {
             self.running.set(true);
             *self.build.borrow_mut() = build;
             self.next_owner(at);
+            let gained = std::mem::take(&mut *self.registers_at_start.borrow_mut());
+            for alias in gained {
+                self.register(&alias);
+            }
         }
         if !self.running.get() {
             return None;

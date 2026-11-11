@@ -130,4 +130,7 @@ mod tests {
     // SS-2h (0.12.46; register §1.289): a pool's stop line and hard line, and the capped spending
     // order inside the scheduler.
     mod gate_ss2h;
+    // #428 SCHED-C1a (0.12.52; register §1.299): a rule's fixed value written in its pack is its
+    // known benefit, less the cost of what it consumes.
+    mod gate_sched_c1a;
 }
