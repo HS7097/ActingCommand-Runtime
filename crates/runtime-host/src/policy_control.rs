@@ -1486,6 +1486,16 @@ impl PolicyControlState {
     /// there are any, so it is checked like any record and then changes nothing of the decision
     /// memory: no failure streak, pause, backoff or retry round, not the pair's latest failure,
     /// no owed rerun ended, and its admission's counts stay as the admission took them.
+    ///
+    /// Workflow #429 R-6b (register §1.314 R6B-5; `contracts/policy-suspension.md`, "A stopped
+    /// run"): a `stopped` record is rebuilt from its own members
+    /// ([`Self::preview_stopped_settlement`]) and then sets no failure streak, escalation,
+    /// backoff, retry or pause, owes no rerun and is never a condition; the counts its admission
+    /// took stay taken and its runtime counts in the task's and the activity's windows as a
+    /// success's does; the Runtime's own reruns its dispatch served end with it (the round of an
+    /// immediate rerun, as at `policy_retry_round_ended`, and an owed rerun). The live settlement
+    /// (R-6b2) and the replay at a start both pass here, so a restarted Runtime holds the same
+    /// memory.
     pub(crate) fn commit_paced_execution(
         &mut self,
         catalog: &CompiledCatalog,
@@ -1495,44 +1505,60 @@ impl PolicyControlState {
         budget_elapsed_ms: Option<u64>,
         late: bool,
     ) -> RuntimeHostResult<()> {
-        let input = match &data.outcome {
-            PolicyExecutionOutcome::Succeeded { .. } => PolicyExecutionInput::Succeeded,
-            PolicyExecutionOutcome::Failed { failure } if failure.reported_success => {
-                PolicyExecutionInput::Succeeded
-            }
-            PolicyExecutionOutcome::Failed { failure } => PolicyExecutionInput::Failed {
-                outcome: failure.outcome.clone(),
-                failure_identity: failure.failure_identity.clone(),
-                class: failure.original_class,
-            },
-        };
-        let perf_context = match &data.outcome {
-            PolicyExecutionOutcome::Succeeded { .. } => PerformanceContext::unavailable(1),
-            PolicyExecutionOutcome::Failed { failure } => failure.perf_context.as_ref().clone(),
-        };
+        let stopped = matches!(data.outcome, PolicyExecutionOutcome::Stopped { .. });
         let runtime_ms = match &data.outcome {
-            PolicyExecutionOutcome::Succeeded { runtime_ms } => *runtime_ms,
+            PolicyExecutionOutcome::Succeeded { runtime_ms }
+            | PolicyExecutionOutcome::Stopped { runtime_ms, .. } => *runtime_ms,
             PolicyExecutionOutcome::Failed { failure } => failure.runtime_ms,
         };
         // Workflow #386 SR-2a (SCHED §4.2): the condition comes from the record, never from the
-        // configuration, so a replay settles as the record did.
+        // configuration, so a replay settles as the record did. A stopped run is never one.
         let condition = match &data.outcome {
-            PolicyExecutionOutcome::Succeeded { .. } => None,
+            PolicyExecutionOutcome::Succeeded { .. } | PolicyExecutionOutcome::Stopped { .. } => {
+                None
+            }
             PolicyExecutionOutcome::Failed { failure } => failure.condition,
         };
-        let expected = self.preview_paced_settlement(
-            catalog,
-            intent,
-            admission,
-            PolicyExecutionTiming {
-                observed_at_unix_ms: data.observed_at_unix_ms,
-                runtime_ms,
-            },
-            budget_elapsed_ms,
-            &input,
-            &perf_context,
-            condition,
-        )?;
+        let timing = PolicyExecutionTiming {
+            observed_at_unix_ms: data.observed_at_unix_ms,
+            runtime_ms,
+        };
+        let expected = match &data.outcome {
+            PolicyExecutionOutcome::Stopped { outcome, .. } => {
+                self.preview_stopped_settlement(catalog, intent, timing, outcome)?
+            }
+            PolicyExecutionOutcome::Succeeded { .. } => self.preview_paced_settlement(
+                catalog,
+                intent,
+                admission,
+                timing,
+                budget_elapsed_ms,
+                &PolicyExecutionInput::Succeeded,
+                &PerformanceContext::unavailable(1),
+                condition,
+            )?,
+            PolicyExecutionOutcome::Failed { failure } => {
+                let input = if failure.reported_success {
+                    PolicyExecutionInput::Succeeded
+                } else {
+                    PolicyExecutionInput::Failed {
+                        outcome: failure.outcome.clone(),
+                        failure_identity: failure.failure_identity.clone(),
+                        class: failure.original_class,
+                    }
+                };
+                self.preview_paced_settlement(
+                    catalog,
+                    intent,
+                    admission,
+                    timing,
+                    budget_elapsed_ms,
+                    &input,
+                    failure.perf_context.as_ref(),
+                    condition,
+                )?
+            }
+        };
         if &expected != data {
             return Err(fatal(
                 HostCode::PolicyExecutionRecordMismatch,
@@ -1543,7 +1569,8 @@ impl PolicyControlState {
             return Ok(());
         }
         // SCHED §4.2 item 4: the runtime of a run a condition ended is not counted; the windows
-        // keep what they held before its reservation.
+        // keep what they held before its reservation. A stopped run's runtime counts as a
+        // success's does (Workflow #429 R-6b).
         let counted_runtime_ms = if condition.is_some() { 0 } else { runtime_ms };
         let (task_runtime_used_ms, activity_runtime_used_ms) =
             actual_runtime_totals(intent, admission, counted_runtime_ms)?;
@@ -1587,8 +1614,9 @@ impl PolicyControlState {
         }
         let key = (intent.task_id.clone(), intent.instance_id.clone());
         // Workflow #372 K5: a success or a failure no condition settled sets the pair's failure
-        // state, so it becomes the one its accounting group reads.
-        if condition.is_none() {
+        // state, so it becomes the one its accounting group reads. A stopped run sets none
+        // (Workflow #429 R-6b): the group goes on reading the failure state it read before.
+        if condition.is_none() && !stopped {
             self.settlements = self.settlements.checked_add(1).ok_or_else(|| {
                 fatal(
                     HostCode::PolicyFailureCountOverflow,
@@ -1600,9 +1628,12 @@ impl PolicyControlState {
         // Workflow #386 SR-2b-1 (register L7): a run a condition ended owes its pair a rerun, by
         // the record's own `condition`, so a replay rebuilds it; any other settlement of the
         // pair (a success, or an ordinary failure, the exhausted one included) ends the pair's
-        // condition terminations and owes none.
+        // condition terminations and owes none. Workflow #429 R-6b: so does a stopped run, whose
+        // dispatch served the rerun owed before it.
         let owed = match &data.outcome {
-            PolicyExecutionOutcome::Succeeded { .. } => None,
+            PolicyExecutionOutcome::Succeeded { .. } | PolicyExecutionOutcome::Stopped { .. } => {
+                None
+            }
             PolicyExecutionOutcome::Failed { failure } => {
                 failure.condition.map(|condition| PolicyConditionReruns {
                     failure_code: scheduled_failure_code_str(&failure.outcome),
@@ -1656,8 +1687,45 @@ impl PolicyControlState {
                     },
                 );
             }
+            // Workflow #429 R-6b: a stop is no failure of the task. `failure_streaks` keeps the
+            // pair's latest real failure (its streak, backoff and pause, the identity a lift
+            // compares), and the round the stopped dispatch served ends as at
+            // `policy_retry_round_ended`, so no evaluation reruns it at once: the pair waits for
+            // its own trigger and cooldown. Its counts stay taken.
+            PolicyExecutionOutcome::Stopped { .. } => {
+                self.withdraw_immediate_retry(catalog, &intent.task_id, &intent.instance_id);
+            }
         }
         self.end_exhausted_retry_rounds(catalog, &intent.instance_id, true)
+    }
+
+    /// Workflow #429 R-6b (register §1.314 R6B-3, R6B-5; `contracts/policy-suspension.md`, "A
+    /// stopped run"): the record of `intent`'s run that a `StopInstanceRun` stopped: `stopped`,
+    /// with `outcome` (its terminal outcome's top node) and the run's wall time. It carries no
+    /// failure identity, class, streak, retry, disposition, sensitivity, performance context or
+    /// condition, and is never re-judged as over its runtime budget. A replay rebuilds a stopped
+    /// record here from its own members and requires it to come out again
+    /// ([`Self::commit_paced_execution`]); R-6b2's live settlement builds it here.
+    pub(crate) fn preview_stopped_settlement(
+        &self,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        timing: PolicyExecutionTiming,
+        outcome: &Outcome,
+    ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        // The task and its activity profile resolve under the dispatch's catalog, as for the two
+        // other kinds.
+        task_and_profile(catalog, intent)?;
+        Ok(PolicyExecutionEventData {
+            decision_id: intent.decision_id.clone(),
+            task_id: intent.task_id.clone(),
+            instance_id: intent.instance_id.clone(),
+            observed_at_unix_ms: timing.observed_at_unix_ms,
+            outcome: PolicyExecutionOutcome::Stopped {
+                outcome: outcome.clone(),
+                runtime_ms: timing.runtime_ms,
+            },
+        })
     }
 
     /// Workflow #336 L6: the failure identity (if it has one) and the dispatch of a pair's
@@ -3919,6 +3987,359 @@ mod tests {
                 requested: 30_000,
                 limit: 100_000,
             })
+        );
+    }
+
+    // ---- Workflow #429 R-6b1 (register §1.314 R6B-5, §1.315; `policy-suspension.md`, "A
+    // stopped run"): the decision memory of a `stopped` record. Nothing writes the kind yet, so
+    // each record is built here ([`PolicyControlState::preview_stopped_settlement`]) and committed
+    // as the replay at a start commits every execution record.
+
+    /// The stop's terminal outcome.
+    fn stop_outcome() -> Outcome {
+        Outcome::new(RuntimeErrorCode::ContainedTaskCancelled)
+    }
+
+    /// A failure with a failure identity an immediate rerun (R22) can take.
+    fn identified_failure() -> PolicyExecutionInput {
+        PolicyExecutionInput::Failed {
+            outcome: Outcome::new(RuntimeErrorCode::CaptureFailed),
+            failure_identity: Some(
+                "capture_failed~v2~k000000000000~m0123abcd456789abcdef\
+                 ~p89abcdef0123456789ab~faaaaaaaaaaaa"
+                    .to_owned(),
+            ),
+            class: PolicyFailureClass::Recoverable,
+        }
+    }
+
+    /// Admits `intent` at `now` (an immediate rerun when `immediate`) and commits the run's
+    /// `stopped` record after `runtime_ms`.
+    fn stop_at(
+        state: &mut PolicyControlState,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        now: u64,
+        runtime_ms: u64,
+        immediate: bool,
+    ) -> (PolicyAdmissionRecord, PolicyExecutionEventData) {
+        let admission = state
+            .preview_admission(catalog, intent, now)
+            .expect("admission");
+        state
+            .commit_admission(catalog, intent, &admission, immediate)
+            .expect("commit the admission");
+        let data = state
+            .preview_stopped_settlement(
+                catalog,
+                intent,
+                PolicyExecutionTiming {
+                    observed_at_unix_ms: now + runtime_ms,
+                    runtime_ms,
+                },
+                &stop_outcome(),
+            )
+            .expect("the stopped record");
+        state
+            .commit_execution(catalog, intent, &admission, &data)
+            .expect("commit the stopped record");
+        (admission, data)
+    }
+
+    /// The pair's value record.
+    fn pair_record(state: &PolicyControlState) -> PolicyControlStateRecord {
+        state
+            .value_records(&BTreeMap::new(), &BTreeMap::new())
+            .into_values()
+            .find_map(|record| match record {
+                PolicyValueRecord::Control(record) => Some(*record),
+                PolicyValueRecord::Activity(_) => None,
+            })
+            .expect("the pair's value record")
+    }
+
+    // A pair failed once (retry scheduled, with an identity R22 reruns at once); its immediate
+    // rerun is stopped. The stopped record keeps the failure state of the real failure (streak 1,
+    // no new backoff, no pause), takes no count back, counts its runtime, and ends the round, so
+    // the pair is no longer rerun at once. A fresh state replaying the same admissions and
+    // records rebuilds the same memory, and the pair's next failure counts on from the real one.
+    #[test]
+    fn r6b1_m1_the_replay_of_a_stopped_record_sets_no_failure_state_and_ends_the_round() {
+        let catalog = catalog();
+        let mut live = PolicyControlState::default();
+        let first = intent(&catalog, 1);
+        let (first_admission, failed) = settle(
+            &mut live,
+            &catalog,
+            &first,
+            NOW,
+            100,
+            &identified_failure(),
+            None,
+        );
+        let PolicyExecutionOutcome::Failed { failure } = &failed.outcome else {
+            panic!("expected a failure")
+        };
+        assert_eq!(
+            failure.disposition,
+            PolicyFailureDisposition::RetryScheduled
+        );
+        let retry_at = failure.retry_at_unix_ms.expect("a retry");
+        let rerun_at = retry_at.max(first_admission.activity.next_eligible_unix_ms);
+        let pair = (first.task_id.clone(), first.instance_id.clone());
+        assert!(
+            live.immediate_retry_pairs(&catalog, rerun_at)
+                .expect("the rerun pairs")
+                .contains(&pair),
+            "before the stop the pair is rerun at once"
+        );
+
+        let rerun = intent(&catalog, 2);
+        let (rerun_admission, stopped) =
+            stop_at(&mut live, &catalog, &rerun, rerun_at, 1_000, true);
+        assert_eq!(
+            stopped.outcome,
+            PolicyExecutionOutcome::Stopped {
+                outcome: stop_outcome(),
+                runtime_ms: 1_000,
+            }
+        );
+
+        let mut replay = PolicyControlState::default();
+        for (dispatch, admission, data, immediate) in [
+            (&first, &first_admission, &failed, false),
+            (&rerun, &rerun_admission, &stopped, true),
+        ] {
+            replay
+                .commit_admission(&catalog, dispatch, admission, immediate)
+                .expect("the admission replays");
+            replay
+                .commit_execution(&catalog, dispatch, admission, data)
+                .expect("the stopped record replays from its own members");
+        }
+        assert_eq!(
+            replay.value_records(&BTreeMap::new(), &BTreeMap::new()),
+            live.value_records(&BTreeMap::new(), &BTreeMap::new()),
+            "the replay rebuilds the same memory"
+        );
+
+        let after = rerun_admission.activity.next_eligible_unix_ms;
+        for state in [&live, &replay] {
+            assert!(
+                state
+                    .immediate_retry_pairs(&catalog, after)
+                    .expect("the rerun pairs")
+                    .is_empty(),
+                "the round the stopped rerun served has ended"
+            );
+            assert_eq!(
+                state.latest_failure(&first.task_id, &first.instance_id),
+                Some((
+                    failure.failure_identity.as_deref(),
+                    first.decision_id.as_str()
+                )),
+                "the pair keeps its latest real failure"
+            );
+            let record = pair_record(state);
+            let streak = record.failure_streak.expect("the real failure's streak");
+            assert_eq!(streak.count, 1);
+            assert_eq!(streak.escalation_streak, 1);
+            assert_eq!(streak.disposition, PolicyFailureDisposition::RetryScheduled);
+            assert_eq!(streak.retry_at_unix_ms, Some(retry_at), "no new backoff");
+            assert_eq!(record.retry_round, None);
+            assert_eq!(record.condition_reruns, None);
+            assert_eq!(
+                record.daily_counts.iter().map(|day| day.count).sum::<u32>(),
+                2,
+                "the counts the two admissions took stay taken"
+            );
+            assert_eq!(record.window_counts, 2);
+            assert_eq!(
+                record.window_runtime_ms, 1_100,
+                "the stopped run's 1,000 ms count beside the failure's 100 ms"
+            );
+            // No pause and no backoff: the pair is admitted at its next interval.
+            state
+                .preview_admission(&catalog, &intent(&catalog, 3), after)
+                .expect("no pause and no backoff");
+        }
+        let next = intent(&catalog, 3);
+        let next_admission = live
+            .preview_admission(&catalog, &next, after)
+            .expect("the next admission");
+        let next_failure = live
+            .preview_execution(
+                &catalog,
+                &next,
+                &next_admission,
+                PolicyExecutionTiming {
+                    observed_at_unix_ms: after + 100,
+                    runtime_ms: 100,
+                },
+                &identified_failure(),
+                &unavailable(after + 100),
+            )
+            .expect("the next failure");
+        let PolicyExecutionOutcome::Failed { failure } = &next_failure.outcome else {
+            panic!("expected a failure")
+        };
+        assert_eq!(
+            failure.consecutive_same_error, 2,
+            "the next failure counts on from the real one"
+        );
+    }
+
+    // A stopped record of a sensitive task's run pauses nothing: no failure state at all, and
+    // the pair is admitted at its next interval.
+    #[test]
+    fn r6b1_m2_a_sensitive_tasks_stopped_run_is_not_paused() {
+        let catalog = catalog_with(
+            |tasks| tasks["tasks"][0]["sensitive"] = serde_json::json!(true),
+            |_| {},
+        );
+        let mut state = PolicyControlState::default();
+        let first = intent(&catalog, 1);
+        let (admission, _) = stop_at(&mut state, &catalog, &first, NOW, 1_000, false);
+        assert_eq!(
+            state.latest_failure(&first.task_id, &first.instance_id),
+            None
+        );
+        let record = pair_record(&state);
+        assert_eq!(record.failure_streak, None);
+        assert_eq!(record.failure_settled, None);
+        state
+            .preview_admission(
+                &catalog,
+                &intent(&catalog, 2),
+                admission.activity.next_eligible_unix_ms,
+            )
+            .expect("a sensitive task's stopped run is not paused");
+    }
+
+    // A run a condition ended owes its pair a rerun; the owed rerun is stopped: the rerun is no
+    // longer owed and nothing is owed again.
+    #[test]
+    fn r6b1_m3_a_stopped_owed_rerun_is_owed_no_more() {
+        let catalog = catalog();
+        let mut state = PolicyControlState::default();
+        let first = intent(&catalog, 1);
+        let condition = PolicyConditionSettlement {
+            refunded: false,
+            count: 1,
+            expires_at_unix_ms: window_end(&catalog, NOW),
+        };
+        let (first_admission, _) = settle(
+            &mut state,
+            &catalog,
+            &first,
+            NOW,
+            100,
+            &sampling_ended(),
+            Some(condition),
+        );
+        let pair = (first.task_id.clone(), first.instance_id.clone());
+        assert!(
+            state.condition_reruns().contains_key(&pair),
+            "the condition owes a rerun"
+        );
+        stop_at(
+            &mut state,
+            &catalog,
+            &intent(&catalog, 2),
+            first_admission.activity.next_eligible_unix_ms,
+            1_000,
+            false,
+        );
+        assert!(
+            state.condition_reruns().is_empty(),
+            "the stopped rerun is owed no more"
+        );
+        assert_eq!(pair_record(&state).condition_reruns, None);
+    }
+
+    // `scheduling.rerun.condition_codes` naming the stop's code: a failure of that code would
+    // end by a condition, but a stopped record is never one. It owes no rerun, gives no count
+    // back (a task limited to one run a day is refused the same day), and a stopped run that ran
+    // past its runtime budget is not re-judged as over it.
+    #[test]
+    fn r6b1_m4_condition_codes_naming_the_stop_do_not_make_a_stopped_record_a_condition() {
+        let catalog = catalog_with(
+            |tasks| {
+                tasks["tasks"][0]["loop_budget"]["daily_limit"] = serde_json::json!(1);
+                tasks["tasks"][0]["loop_budget"]["window_iteration_limit"] = serde_json::json!(1);
+            },
+            |_| {},
+        );
+        let rule = ConditionRule {
+            condition_codes: BTreeSet::from([stop_outcome().code().as_str().to_owned()]),
+            max_per_occurrence: 1,
+            refund_counts: true,
+        };
+        let mut state = PolicyControlState::default();
+        let first = intent(&catalog, 1);
+        let admission = state
+            .preview_admission(&catalog, &first, NOW)
+            .expect("admission");
+        assert!(
+            matches!(
+                state
+                    .decide_condition(
+                        &catalog,
+                        &first,
+                        &admission,
+                        &PolicyExecutionInput::Failed {
+                            outcome: stop_outcome(),
+                            failure_identity: None,
+                            class: PolicyFailureClass::Recoverable,
+                        },
+                        &rule,
+                    )
+                    .expect("the decision"),
+                ConditionDecision::Condition(_)
+            ),
+            "the rule names the stop's code"
+        );
+        state
+            .commit_admission(&catalog, &first, &admission, false)
+            .expect("commit the admission");
+        // Far past the task's 300,000 ms runtime budget.
+        let runtime_ms = 900_000;
+        let stopped = state
+            .preview_stopped_settlement(
+                &catalog,
+                &first,
+                PolicyExecutionTiming {
+                    observed_at_unix_ms: NOW + runtime_ms,
+                    runtime_ms,
+                },
+                &stop_outcome(),
+            )
+            .expect("the stopped record");
+        assert_eq!(
+            stopped.outcome,
+            PolicyExecutionOutcome::Stopped {
+                outcome: stop_outcome(),
+                runtime_ms,
+            },
+            "never rewritten as over its runtime budget"
+        );
+        state
+            .commit_execution(&catalog, &first, &admission, &stopped)
+            .expect("commit the stopped record");
+        assert!(state.condition_reruns().is_empty(), "no rerun is owed");
+        let error = state
+            .preview_admission(
+                &catalog,
+                &intent(&catalog, 2),
+                admission.activity.next_eligible_unix_ms,
+            )
+            .expect_err("no count was given back");
+        assert_eq!(
+            error
+                .policy_rejection()
+                .budget
+                .map(|denial| denial.dimension),
+            Some(PolicyBudgetDimension::TaskDaily)
         );
     }
 }

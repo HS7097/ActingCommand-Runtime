@@ -821,7 +821,8 @@ fn recorded_identity(run: &Run) -> FailureIdentity {
             EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
                 match payload.policy_result() {
                     PolicyExecutionOutcome::Failed { failure } => failure.failure_identity.clone(),
-                    PolicyExecutionOutcome::Succeeded { .. } => None,
+                    PolicyExecutionOutcome::Succeeded { .. }
+                    | PolicyExecutionOutcome::Stopped { .. } => None,
                 }
             }
             _ => None,

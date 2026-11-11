@@ -1371,6 +1371,9 @@ fn prune_journal(
             (pair, (oldest_kept, latest_intent))
         })
         .collect::<BTreeMap<_, _>>();
+    // Workflow #429 R-6b: a pair whose latest completed run is a stopped one keeps its latest
+    // run that settled, which its projections still read.
+    let behind_a_stop = settled_behind_a_stop(seen);
     let removed = seen
         .iter()
         .filter(|(_, dispatch)| {
@@ -1393,7 +1396,8 @@ fn prune_journal(
                     dispatch
                         .completed_sequence
                         .is_some_and(|completed| completed > through)
-                });
+                })
+                || behind_a_stop.contains(&dispatch.intent_sequence);
             (!kept).then(|| {
                 (
                     decision_id.clone(),
@@ -1419,7 +1423,9 @@ fn prune_journal(
 /// completed dispatch). UNSET-2 (register §1.296, rulings L1 and L2): the previous one is the
 /// pair's latest other completed dispatch in admission order ([`admission_order`]), and a late
 /// settlement (`settled_late`) is not a failure of its pair: it keeps that dispatch's count, as
-/// if its run did not exist.
+/// if its run did not exist. Workflow #429 R-6b (register §1.314 R6B-6): neither is a stopped
+/// run, which is no success either: it keeps that dispatch's count too, so a later run counts
+/// on from the pair's previous success or failure.
 fn failures_through(
     seen: &BTreeMap<String, SeenDispatch>,
     decision_id: &str,
@@ -1432,7 +1438,8 @@ fn failures_through(
             .map(|execution| &execution.outcome),
         Some(PolicyExecutionOutcome::Failed { .. })
     );
-    if !failed {
+    let stopped = is_stopped(dispatch);
+    if !failed && !stopped {
         return 0;
     }
     let previous = seen
@@ -1446,11 +1453,62 @@ fn failures_through(
         .max_by_key(|(_, other)| admission_order(other))
         .and_then(|(_, other)| other.failures)
         .unwrap_or(0);
-    if dispatch.settled_late {
+    if dispatch.settled_late || stopped {
         previous
     } else {
         previous.saturating_add(1)
     }
+}
+
+/// Workflow #429 R-6b (register §1.314 R6B-3): whether `dispatch`'s execution record is the
+/// `stopped` result of a run a `StopInstanceRun` stopped.
+fn is_stopped(dispatch: &SeenDispatch) -> bool {
+    matches!(
+        dispatch
+            .execution
+            .as_ref()
+            .map(|execution| &execution.outcome),
+        Some(PolicyExecutionOutcome::Stopped { .. })
+    )
+}
+
+/// Workflow #429 R-6b (register §1.314 R6B-6): per (task, instance) pair whose latest completed
+/// dispatch in admission order ([`admission_order`]) is a stopped run, the intent sequence of
+/// its latest completed dispatch that settled (a success or a failure): the run its task
+/// snapshot's `last_duration_ms` and `failure_streak` and its settlement facts still describe,
+/// which the journal therefore keeps and the pair's value record names. Empty while the ledger
+/// holds no stopped record, so the journal and the value records are as before.
+fn settled_behind_a_stop(seen: &BTreeMap<String, SeenDispatch>) -> BTreeSet<u64> {
+    let mut latest = BTreeMap::<(&str, &str), &SeenDispatch>::new();
+    let mut settled = BTreeMap::<(&str, &str), &SeenDispatch>::new();
+    for dispatch in seen.values() {
+        if dispatch.completed_sequence.is_none() {
+            continue;
+        }
+        let pair = (
+            dispatch.data.task_id.as_str(),
+            dispatch.data.instance_id.as_str(),
+        );
+        let order = admission_order(dispatch);
+        if latest
+            .get(&pair)
+            .is_none_or(|current| admission_order(current) < order)
+        {
+            latest.insert(pair, dispatch);
+        }
+        if !is_stopped(dispatch)
+            && settled
+                .get(&pair)
+                .is_none_or(|current| admission_order(current) < order)
+        {
+            settled.insert(pair, dispatch);
+        }
+    }
+    latest
+        .into_iter()
+        .filter(|(_, dispatch)| is_stopped(dispatch))
+        .filter_map(|(pair, _)| settled.get(&pair).map(|dispatch| dispatch.intent_sequence))
+        .collect()
 }
 
 /// Workflow #422 LN-4 (register §1.184 LN4-7): per (task, instance), the dispatches its value
@@ -1479,6 +1537,8 @@ fn journal_records_of(
             latest_completed.insert(pair, order);
         }
     }
+    // Workflow #429 R-6b: behind a stopped latest run, the pair's latest run that settled too.
+    let behind_a_stop = settled_behind_a_stop(seen);
     let mut records = BTreeMap::<(String, String), Vec<PolicyJournalDispatchRecord>>::new();
     for dispatch in seen.values() {
         let pair = (
@@ -1491,6 +1551,7 @@ fn journal_records_of(
         ) || latest_completed
             .get(&pair)
             .is_some_and(|(_, intent)| *intent == dispatch.intent_sequence)
+            || behind_a_stop.contains(&dispatch.intent_sequence)
             || (dispatch.admitted_sequence.is_some()
                 && remedy_task(dispatch.data.task_id.as_str()));
         if !named {
@@ -2143,6 +2204,146 @@ pub(crate) fn journal_keeps_a_late_completion_for_test(
     (seen.contains_key("decision-0"), seen.len())
 }
 
+/// Workflow #429 R-6b1, tests (register §1.314 R6B-6): what the projections read of one (task,
+/// instance) pair's runs ([`pair_projection_for_test`]): each run's failure count through it,
+/// the pair's settlement (the four settlement facts and the task snapshot's `last_duration_ms`
+/// and `failure_streak`), the terminal its latest run shows in the task snapshot, and the runs,
+/// by index, the pair's value record names and the journal keeps.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PairProjectionForTest {
+    pub(crate) failures: Vec<u64>,
+    pub(crate) settlement: Option<PolicySettlement>,
+    pub(crate) terminal: Option<TaskTerminalState>,
+    pub(crate) named: Vec<usize>,
+    pub(crate) kept: Vec<usize>,
+}
+
+/// Workflow #429 R-6b1, tests: run `index` of [`pair_projection_for_test`] is admitted at this
+/// instant plus `index` minutes and its record observed 10 s later.
+#[cfg(test)]
+pub(crate) const PAIR_PROJECTION_ADMITTED_AT_UNIX_MS: u64 = 1_700_000_000_000;
+
+/// Workflow #429 R-6b1, tests: one (task, instance) pair's runs, each admitted, executed with the
+/// record `outcomes` gives it (in order) and completed in turn, with its failure count through
+/// it and the journal's pruning at each completion, as [`PolicyHost::complete_dispatch`] keeps
+/// them; then what the projections read of them, by the functions they read it with.
+#[cfg(test)]
+pub(crate) fn pair_projection_for_test(
+    outcomes: &[PolicyExecutionOutcome],
+) -> PairProjectionForTest {
+    let mut seen = BTreeMap::new();
+    let mut order = BTreeMap::new();
+    let mut pruned = BTreeSet::new();
+    let mut failures = Vec::new();
+    for (index, outcome) in outcomes.iter().enumerate() {
+        let run = u64::try_from(index).expect("a run index");
+        let decision_id = format!("decision-{index}");
+        let intent_sequence = run * 4 + 1;
+        let admitted_at_unix_ms = PAIR_PROJECTION_ADMITTED_AT_UNIX_MS + run * 60_000;
+        let data = PolicyDispatchEventData {
+            decision_id: decision_id.clone(),
+            task_id: "task-synthetic".to_owned(),
+            instance_id: "instance-synthetic".to_owned(),
+            operation_id: "operation-synthetic".to_owned(),
+            procedure_binding_digest: format!("sha256:{}", "0".repeat(64)),
+            reason_chain_id: format!("chain-{index}"),
+            reasons: Vec::new(),
+            catalog_hash: format!("sha256:{}", "1".repeat(64)),
+            catalog_version: 1,
+            input_ledger_position: intent_sequence - 1,
+            fact_snapshot_id: format!("snapshot-{index}"),
+            approval_fact_ids: Vec::new(),
+            urgency_milli: 0,
+        };
+        let admission = PolicyAdmissionRecord {
+            activity: actingcommand_contract::PolicyActivitySample {
+                profile_id: "activity-synthetic".to_owned(),
+                local_day: 1,
+                window_id: "window-synthetic".to_owned(),
+                admitted_at_unix_ms,
+                seed: 1,
+                interval_ms: 1_000,
+                next_eligible_unix_ms: admitted_at_unix_ms + 1_000,
+            },
+            budget: actingcommand_contract::PolicyBudgetReceipt {
+                task_daily_used: None,
+                task_daily_limit: None,
+                task_window_used: None,
+                task_window_limit: None,
+                task_runtime_reserved_ms: None,
+                task_runtime_limit_ms: None,
+                activity_daily_used: None,
+                activity_daily_limit: None,
+                activity_window_used: None,
+                activity_window_limit: None,
+                activity_runtime_reserved_ms: None,
+                activity_runtime_limit_ms: None,
+            },
+        };
+        let dispatch = SeenDispatch {
+            execution: Some(PolicyExecutionEventData {
+                decision_id: decision_id.clone(),
+                task_id: data.task_id.clone(),
+                instance_id: data.instance_id.clone(),
+                observed_at_unix_ms: admitted_at_unix_ms + 10_000,
+                outcome: outcome.clone(),
+            }),
+            data,
+            admission: Some(admission),
+            completed_run: None,
+            intent_sequence,
+            admitted_sequence: Some(intent_sequence + 1),
+            rejected_sequence: None,
+            completed_sequence: Some(intent_sequence + 3),
+            lifecycle: DispatchLifecycle::Completed,
+            failures: None,
+            expected_duration_ms: None,
+            settled_late: false,
+        };
+        let count = failures_through(&seen, &decision_id, &dispatch);
+        failures.push(count);
+        order.insert(intent_sequence, decision_id.clone());
+        seen.insert(
+            decision_id,
+            SeenDispatch {
+                failures: Some(count),
+                ..dispatch
+            },
+        );
+        prune_journal(&mut seen, &mut order, &mut pruned, None);
+    }
+    let index_of =
+        |intent_sequence: u64| usize::try_from((intent_sequence - 1) / 4).expect("a run index");
+    let settlement = fold_settlements(seen.values())
+        .expect("the settlement fold")
+        .into_values()
+        .next();
+    let terminal = seen
+        .values()
+        .max_by_key(|dispatch| admission_order(dispatch))
+        .and_then(|dispatch| dispatch.execution.as_ref())
+        .and_then(|execution| snapshot_terminal(execution, None));
+    let named = journal_records_of(&seen, &|_: &str| false)
+        .into_values()
+        .flatten()
+        .map(|record| index_of(record.intent_sequence))
+        .collect();
+    let kept = seen
+        .values()
+        .map(|dispatch| index_of(dispatch.intent_sequence))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    PairProjectionForTest {
+        failures,
+        settlement,
+        terminal,
+        named,
+        kept,
+    }
+}
+
 /// SCH-M ED-2 (§3.4 D-15): the duration an admission's own projection gives an intent's pair:
 /// the expected duration E its task state carries, when it carries one, and the configured
 /// declared duration of a fact refresh read.
@@ -2609,34 +2810,15 @@ impl PolicyHost {
                             HostLocation::ProjectPolicyTaskState,
                         )
                     })?;
-                    let terminal_state = match execution.outcome {
-                        PolicyExecutionOutcome::Succeeded { .. } => TaskTerminalState::Succeeded,
-                        PolicyExecutionOutcome::Failed { .. } => TaskTerminalState::Failed,
-                    };
-                    // Workflow #386 SR-2b-2 (`policy-suspension.md`, "Settlement"): while the
-                    // rerun a condition termination owes is owed (its window has not ended by
-                    // the evaluation instant, or no instant is given), its terminal and
-                    // completed window are hidden, so no `dependency_completed(head, *)` of a
-                    // chain becomes true; once expired the failure shows again.
-                    let owed = match &execution.outcome {
-                        PolicyExecutionOutcome::Failed { failure } => {
-                            failure.condition.is_some_and(|condition| {
-                                eligibility_as_of_unix_ms
-                                    .is_none_or(|now| now < condition.expires_at_unix_ms)
-                            })
-                        }
-                        PolicyExecutionOutcome::Succeeded { .. } => false,
-                    };
-                    if owed {
-                        (None, None)
-                    } else {
-                        (
+                    match snapshot_terminal(execution, eligibility_as_of_unix_ms) {
+                        None => (None, None),
+                        Some(terminal_state) => (
                             Some(terminal_state),
                             Some(CompletedActivityWindow {
                                 window_id: admission.activity.window_id.clone(),
                                 completed_at_unix_ms: execution.observed_at_unix_ms,
                             }),
-                        )
+                        ),
                     }
                 } else {
                     (None, None)
@@ -2721,7 +2903,10 @@ impl PolicyHost {
     }
 
     /// The latest settlement of the pair `decision_id` dispatched to, once that dispatch has
-    /// an execution outcome.
+    /// an execution outcome. Workflow #429 R-6b (`contracts/runtime-fact-store.md`, the
+    /// settlement facts): none for a stopped run, which is no settlement of its pair, so its
+    /// settlement records no settlement fact and the four keep the pair's latest success or
+    /// failure.
     pub(crate) fn latest_settlement_for_decision(
         &self,
         decision_id: &str,
@@ -2732,7 +2917,7 @@ impl PolicyHost {
                 HostLocation::ReadPolicySettlement,
             )
         })?;
-        if dispatch.execution.is_none() {
+        if dispatch.execution.is_none() || is_stopped(dispatch) {
             return Ok(None);
         }
         self.latest_settlement(&dispatch.data.task_id, &dispatch.data.instance_id)
@@ -3783,17 +3968,13 @@ impl PolicyHost {
                     HostLocation::ResolveActivityWindow,
                 )
             })?;
-        let settled = match dispatch
-            .execution
-            .as_ref()
-            .map(|execution| &execution.outcome)
-        {
-            None => RemedySettlement::InFlight,
-            Some(PolicyExecutionOutcome::Succeeded { .. }) => RemedySettlement::Succeeded {
-                outcome_key: self.remedies.outcome_key(decision_id).map(str::to_owned),
-            },
-            Some(PolicyExecutionOutcome::Failed { .. }) => RemedySettlement::Failed,
-        };
+        let settled = remedy_settlement(
+            dispatch
+                .execution
+                .as_ref()
+                .map(|execution| &execution.outcome),
+            || self.remedies.outcome_key(decision_id).map(str::to_owned),
+        );
         Ok(RemedyRun {
             decision_id: decision_id.to_owned(),
             admitted_at_unix_ms,
@@ -5589,6 +5770,27 @@ fn withdraw_refused_immediate_retry(
     Ok(())
 }
 
+/// Workflow #411 B15 R4 (model-b15 §7.8): how a run of the remedy journal settled, from its
+/// execution record (`None` while it runs); `outcome_key` reads the key a success's terminal
+/// named. Workflow #429 R-6b (register §1.314, question 3): a stopped run ends the Runtime's own
+/// rerun its dispatch served as a failed run does, without being a failure of its task (the
+/// decision memory counts none): a remedy retry closes its round and a provider's request is
+/// used.
+pub(crate) fn remedy_settlement(
+    outcome: Option<&PolicyExecutionOutcome>,
+    outcome_key: impl FnOnce() -> Option<String>,
+) -> RemedySettlement {
+    match outcome {
+        None => RemedySettlement::InFlight,
+        Some(PolicyExecutionOutcome::Succeeded { .. }) => RemedySettlement::Succeeded {
+            outcome_key: outcome_key(),
+        },
+        Some(PolicyExecutionOutcome::Failed { .. } | PolicyExecutionOutcome::Stopped { .. }) => {
+            RemedySettlement::Failed
+        }
+    }
+}
+
 /// UNSET-2 (register §1.296): whether `outcome` records a run settled as interrupted
 /// (`policy_settlement_interrupted`).
 pub(crate) fn settled_as_interrupted(outcome: &PolicyExecutionOutcome) -> bool {
@@ -6574,6 +6776,33 @@ fn accounting_tasks(catalog: &CompiledCatalog) -> BTreeMap<&str, &str> {
         .collect()
 }
 
+/// The terminal state a completed dispatch's execution shows in its pair's task snapshot, or
+/// `None` while it is hidden. Workflow #386 SR-2b-2 (`policy-suspension.md`, "Settlement"):
+/// while the rerun a condition termination owes is owed (its window has not ended by the
+/// evaluation instant, or no instant is given), its terminal and completed window are hidden, so
+/// no `dependency_completed(head, *)` of a chain becomes true; once expired the failure shows
+/// again. Workflow #429 R-6b (register §1.314 R6B-6): a stopped run shows `cancelled`, the
+/// evaluator's existing word.
+fn snapshot_terminal(
+    execution: &PolicyExecutionEventData,
+    eligibility_as_of_unix_ms: Option<u64>,
+) -> Option<TaskTerminalState> {
+    let owed = match &execution.outcome {
+        PolicyExecutionOutcome::Failed { failure } => failure.condition.is_some_and(|condition| {
+            eligibility_as_of_unix_ms.is_none_or(|now| now < condition.expires_at_unix_ms)
+        }),
+        PolicyExecutionOutcome::Succeeded { .. } | PolicyExecutionOutcome::Stopped { .. } => false,
+    };
+    if owed {
+        return None;
+    }
+    Some(match execution.outcome {
+        PolicyExecutionOutcome::Succeeded { .. } => TaskTerminalState::Succeeded,
+        PolicyExecutionOutcome::Failed { .. } => TaskTerminalState::Failed,
+        PolicyExecutionOutcome::Stopped { .. } => TaskTerminalState::Cancelled,
+    })
+}
+
 /// Folds the executed runs among `runs`, in admission order per (task, instance) pair, into
 /// each pair's latest settlement (Workflow #308 slice 5b).
 fn fold_settlements<'a>(
@@ -6590,6 +6819,11 @@ fn fold_settlements<'a>(
 /// completion keeps for its own (task, instance) pair, or for an executed run not completed
 /// yet, 0 after a success and otherwise one more than the key's latest completed run among
 /// `runs`.
+///
+/// Workflow #429 R-6b (register §1.314 R6B-6; `contracts/runtime-fact-store.md`, the settlement
+/// facts): a stopped run is no settlement. The key's latest success or failure settles it, with
+/// the failure count that run keeps; a stopped run stays among the completed runs, whose count it
+/// carries on unchanged ([`failures_through`]).
 fn fold_settlements_by<'a>(
     runs: impl Iterator<Item = &'a SeenDispatch>,
     accounting: &BTreeMap<&str, &str>,
@@ -6606,9 +6840,10 @@ fn fold_settlements_by<'a>(
             .unwrap_or(dispatch.data.task_id.as_str());
         let key = (task_id.to_owned(), dispatch.data.instance_id.clone());
         let order = (dispatch.admitted_sequence, dispatch.intent_sequence);
-        if latest
-            .get(&key)
-            .is_none_or(|current| (current.admitted_sequence, current.intent_sequence) < order)
+        if !is_stopped(dispatch)
+            && latest
+                .get(&key)
+                .is_none_or(|current| (current.admitted_sequence, current.intent_sequence) < order)
         {
             latest.insert(key.clone(), dispatch);
         }
@@ -6643,6 +6878,8 @@ fn fold_settlements_by<'a>(
                     .observed_at_unix_ms
                     .saturating_sub(admission.activity.admitted_at_unix_ms),
             ),
+            // Never a key's latest (above): a cut-short run is no settlement.
+            PolicyExecutionOutcome::Stopped { .. } => continue,
         };
         let failure_streak = match (succeeded, dispatch.completed_sequence) {
             (true, _) => 0,

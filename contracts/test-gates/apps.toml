@@ -1514,6 +1514,14 @@ tests = [
 ]
 incident = ["#434 CLI-HELP"]
 
+# Workflow #429 R-6b1 (0.12.55; register §1.314 R6B-8, §1.315; brief rd-1111/brief-r6b1-form-readers.md): ac_diagnose and actingctl diagnose list no stopped run as a failure or a pause: failures_grouped takes a stopped run's record as no record of its kinds, while it lists a run that paused its task with its catalog task and its code (the record built with the contract's own types; nothing writes the kind yet)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::diagnose::r6b1_tests::r6b1_d1_diagnose_lists_no_stopped_run_as_a_failure_or_a_pause",
+]
+incident = ["#429 R-6b1"]
+
 # Workflow #434 CLI-COMP (0.12.55; register §1.318; brief rd-1111/brief-cli-completion.md; contracts/lab-two-entries.md §9.3, "Completion"): the callback __complete prints the candidates of the word being typed from what this build knows: at the first word every offered row's and own command's first word but its own, by prefix; a group's second word (lab watch, lab validate, lab status, lab arbitrator); help <words> as the words; the global options a person gives (not --via, not the retired --require-session) at the first word and, alone, after an own command without a row; after a row's words its options and switches with the global options its line takes, one already on the line left out (events --limit) and a repeating one kept (ensure --scene), --instance while the instance is not given; an enumeration's words after its option, by prefix; at an instance's place a scripted Runtime's aliases by prefix, asked with one Status after the handshake, and the selected configuration's aliases where the Runtime does not answer within --wait-ms or there is none, or none; tap, whose instance is only --instance, offers the flag and its aliases and no alias in a positional's place; an index beyond the words, the program's word, a word that is no command and lines it cannot read print nothing, with --json no candidate, and the dispatch arm answers the same candidates as data; the two scripts are plain ASCII, name the callback and their registration (Register-ArgumentCompleter -Native, complete -o default -F), pass every word quoted and marked, and completion <shell> prints them; words with a quote, a space, a tab or a percent sign read back whole; completion without a shell or with another word is refused as a read list refuses one; run as a process, the callback prints on stdout only and exits 0 with an answering Runtime, a silent one, none and a line it cannot read
 [[gate]]
 coverage = "Y"

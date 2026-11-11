@@ -14108,6 +14108,187 @@ nothing. A console of `runtime-client` 6 cannot read event pages that hold a sto
 
 **Rollback of this slice.** Nothing to roll back: text only.
 
+### 1.315 Slice R-6b1 (code): the `stopped` result of a scheduled run, its check and its readers (Workflow #429 R-6b, §1.314; the coordinator's split into R-6b1 and R-6b2 and its answers to the eight questions; coordinator work order `rd-1111/brief-r6b1-form-readers.md`; built on the contract head `92390b85`, stacked on its pull request)
+
+**What it builds.** The form of §1.314 and every reader of it, and nothing that writes it:
+`StopInstanceRun` still refuses a policy run exactly as in 0.12.53, so no record of the kind exists
+until R-6b2. A ledger with no stopped record reads, replays, projects and decides byte for byte as
+before: every new branch is taken only on a `stopped` record, and the one rule that is not a match
+arm (the journal keeps, and the value record names, a pair's latest settled run while its latest
+run is a stopped one) is empty without one. No record type, table, index, SQLite format,
+`actingcommand.event.v3`, configuration key, outcome code or vocabulary changes.
+
+| Row | This slice (R-6b1) | Left to R-6b2 |
+|---|---|---|
+| R6B-1 | nothing | `StopInstanceRun` of a policy run, a fact refresh read included; `stop_target`, `stop_refused_origin` |
+| R6B-2 | nothing | the reset of a stopped policy run with its lease, a failed reset's fence |
+| R6B-3 | built: `PolicyExecutionOutcome::Stopped {outcome, runtime_ms}` (`crates/actingcommand-contract/src/event/payload.rs`), serialized `{"kind": "stopped", "outcome", "runtime_ms"}`; its check in `validate_policy_execution_data` asks only that `outcome` is a code (its type); the kind's members are closed, so a record without `outcome` or naming a member of a failure does not decode; its stored severity is its outcome's category (`PayloadDetail::outcome`); the public projection's `policy_execution_outcome` carries it codes only (`codes_only`) | nothing |
+| R6B-4 | nothing (no input a run produces: `PolicyExecutionInput` has no `Stopped`) | the live settlement, `PolicyExecutionInput::Stopped`, the scheduled cancel branch's settlement |
+| R6B-5 | built where a record is committed to the memory, `PolicyControlState::commit_paced_execution`: a stopped record is rebuilt from its own members by `preview_stopped_settlement` (`policy_execution_record_mismatch` otherwise) and then sets no streak, escalation, backoff, retry or pause (a sensitive task included) and no `failure_settled` order, is never a condition and owes no rerun, takes no count back, counts its runtime in the task's and the activity's windows as a success's, is never rewritten as `policy_runtime_budget_exceeded`, removes the pair's owed rerun and ends the round of its accounting group as at `policy_retry_round_ended` (`withdraw_immediate_retry`); the remedy journal settles it as a failed run (`remedy_settlement`: a retry closes its round, a provider's request is used). The replay at a start passes the same place | calling the same place live |
+| R6B-6 | built: the task snapshot shows `terminal_state` `cancelled` with its `completed_window` (`snapshot_terminal`); `fold_settlements_by` takes a stopped run as no settlement (the key's latest success or failure settles it); `failures_through` keeps the previous run's count for a stopped run, so a later run counts on from the pair's previous success or failure; `latest_settlement_for_decision` answers none for a stopped run, so its settlement records no settlement fact; the outcome projection (`recover_authoritative_policy_outcomes`, the admission's outcome check in `policy_dispatch.rs`) projects no outcome for a stopped run, as for a failed one; the dispatch journal (`prune_journal`) keeps, and the value record (`journal_records_of`) names, the pair's latest settled run behind a stopped latest one (`settled_behind_a_stop`), so the snapshot's `last_duration_ms` and `failure_streak` survive a restart from the value records | nothing |
+| R6B-7 | the ledger half: `crates/ledger/src/global/storage.rs`, the recovery of a scheduled settlement, accepts `stopped` from a `task.failed` terminal whose outcome is `contained_task_cancelled`, with the terminal's code and `runtime_ms` measured as a failure's, never as a rewrite, and from no other terminal | the runtime-host half: the start's and the abandoned run's reconciliation that write it |
+| R6B-8 | built: the frame retention's `settlement_matches` matches a stopped record with its `task.failed` terminal only; `actingd suspended` (`suspension_report.rs`) leaves a stopped execution out of its pairs, as a late settlement, so no stopped run is listed as a failure or a pause; `ac_diagnose` and `actingctl diagnose` (lab-ops `diagnose.rs`) list none (no code change: `failures_grouped` takes a paused failure only); the client's run summary (`runtime-client`, `run_summary_terminal`, `validate_task_terminal`) reads it beside its `task.failed` terminal (`simulated_failed`, `failed`, the record in `outcome.policy`); the routine summary needs nothing (R-12's `RunEnd::of_terminal` counts the terminal under `interruptions`) | nothing |
+| R6B-9 | nothing: every text that says a policy run is refused stays, the refusal being true | the `help` of `task stop`, the comments, the catalog's descriptions |
+| R6B-10 | nothing: `component-interfaces.json`, the architecture test of the revisions and the "Planned" rows are untouched | the declarations |
+
+**A reader the contract does not name.** The maintenance evidence of a planning query
+(`crates/runtime-host/src/planning.rs`, `collect_maintenance_evidence`) takes no duration sample
+from a stopped run, whose time a person cut short, as the run-duration samples take none.
+
+**Settled by this slice** (each in the contract's sense, reported to the coordinator): the form is
+rebuilt from its own members, not from an input, so `PolicyExecutionInput` stays two kinds until
+R-6b2; a stopped run ends the round of its accounting group whatever dispatch it was (a normal
+dispatch's round included), since the failure state it keeps would otherwise offer the pair at once
+again; the journal and the value record keep the pair's latest settled run behind a stopped latest
+one (the only change of what a value record names, and only with a stopped record).
+
+**For R-6b2.** `execution_input_matches` (`policy_host.rs`), `policy_recovery_outcome_matches`
+(`policy_outcome.rs`) and `recorded_failure_input` (`failure_settlement.rs`) have no stopped arm
+yet (a catch-all refuses, or reads a failure); the live settlement and the replayed one call
+`latest_settlement` and refuse `policy_settlement_missing` when it answers none, which a pair whose
+only run was stopped does; a stopped record whose dispatch is not completed at a start reaches
+`reconcile_scheduled_policy_settlement` with the record already in the ledger.
+
+**Declarations.** None here. Another slice of the same train, S168-LB1a, raises `ledger` to [3, 8]
+and `runtime-client` to [3, 7]; this slice merges only after it and joins those revisions, which
+cover the new kind (§1.314, "Interfaces").
+
+**Tests** (gate rows `#429 R-6b1` in `contracts/test-gates/contract.toml`, `ledger.toml`,
+`host.toml` and `apps.toml`): the form, its check, its severity and its projection, and the two
+existing kinds serializing as before; the ledger's recovery rule and the retention's match; the
+replay of a stopped record (a stopped immediate rerun, a sensitive task's, a stopped owed rerun,
+condition codes naming the stop's code); the projections, the journal behind 70 stops and the
+remedy settlement; `actingd suspended`, the diagnose and the run summary. Six existing test
+helpers that enumerate the kinds of the result name the third, which reads as no failure there
+(`gate_373_nav5`, `gate_373_nav6`, `gate_386_sr2b1`, `gate_390_exec3`, two in
+`instance_workers`); no golden or schema lists the kinds.
+
+**What an operator sees after deploy.** Nothing: no record of the kind exists until R-6b2.
+
+**Rollback.** A revert of the code. Nothing is written, so no state root, ledger record or
+configuration changes; the revisions are S168-LB1a's (and §1.314's rollback rule applies to them).
+
+### 1.317 Slice NEUT-2 (0.12.55): the core's tests and fixtures hold no game abbreviation (Workflow #434; Alice's hard constraint of 10-10 that the program itself is game-neutral, in code, contracts, configuration, code tables and tests, with game content only in the resource repositories; coordinator work order `rd-1111/brief-neut2.md`, read on main `385bb500`)
+
+The section number is the coordinator's. Tests, fixtures, one guard, one gate row and one
+visibility change in the architecture tool only: no product code, behaviour, assertion, contract
+text, wire shape, configuration key, ledger shape, outcome code or interface revision changes.
+This note spells none of the short abbreviations: it calls them by their games' order in the
+mapping of §1.305 (the first, second and third game), and the pull request lists the old values.
+
+**The survey.** A script of the slice listed every line of the repository, outside `target` and
+`Cargo.lock`, that holds one of the work order's six short words as a whole token: the four that
+§1.305 left ("Not renamed"), a second abbreviation of the second game and a short code of the
+fourth game of §1.305's guard list. It read each line twice, by the coordinator's pattern (letters
+as the only word characters) and by the C2 guard's word splitting. On text files the coordinator's
+pattern gives 259 lines in 29 files. Classified, both readings together:
+
+| Class | Lines | Files |
+|---|---|---|
+| a fixture value of test code (renamed below) | 195 | 8 |
+| product output (reported below) | 3 | 1 |
+| history or third-party text: four dated `benchmarks/reports/`, the upstream manifest | 27 | 5 |
+| the C2, R2-F and NEUT-1 guards' own word lists and counterexamples | 23 | 2 |
+| no game reference in a text file: digest digits, base64, a SQL table alias, an OCR fragment, a Unicode escape | 49 | 24 |
+| no game reference: the bytes of nine images under `docs/assets` and one executable | 550 | 10 |
+
+**What was renamed.** 195 lines of 8 files of `apps/actinglab`, all test code:
+`src/tests/session_record.rs` (113), `src/tests/mod.rs` (58), `src/tests/cli_basics.rs` (9),
+`src/tests/contained_semantic.rs` (2), and the `#[cfg(test)]` modules of `src/project_interface.rs`
+(5), `src/runtime_capture_backend.rs` (5), `src/runtime_session_adapter.rs` (2) and
+`src/runtime_slice_cli.rs` (1). The abbreviations were an instance alias (`--instance`, a fake
+provider's alias, a Runtime instance status), an instance id (also inside the keys
+`instance.<id>.<field>` and an error message a test reads), a `--game` value, the game of an
+instance configuration, a project id, an operation profile and a page set's file name. No file was
+renamed: no file name holds one. rustfmt reflowed 10 statements that the longer values pushed past
+the width; `cli_basics.rs` and `session_record.rs` are pulled into `src/tests/mod.rs` by
+`include!`, which `cargo fmt` does not format, and keep their lines as the script wrote them.
+
+**The mapping**, one table applied in this order by the slice's script, exact bytes, each count
+checked before any file was written:
+
+| Old value (its role in the tests) | New value |
+|---|---|
+| the first game's alias `<game>.<server>` (an instance alias) | `fixture-game-a.s1` |
+| a page set's file name built from the first game | `pages/fixture-game-a.pages.json` |
+| the first game's instance ids `<game>-b` and `<game>-live`, also inside `instance.<id>.` keys | `fixture-game-a-b`, `fixture-game-a-live` |
+| the first game's two abbreviations (instance alias and id, project id, `--game`, an instance's game) | `fixture-game-a` |
+| the second game's abbreviation (the id of an instance whose game is `fixture-game-b`, server `s2`) | `fixture-game-b-s2` |
+| the third game's instance id `<game>-<server>` | `fixture-game-c-s2` |
+| the third game's abbreviation (an instance id, an instance's game) | `fixture-game-c` |
+| two local bindings of one test, named after their instances | `game_a`, `game_c` |
+
+The work order proposed the new game id for a bare abbreviation. The second game's abbreviation is
+the id of an instance whose game a test sets to `fixture-game-b` (NEUT-1's value) and whose id the
+test reads back beside it; as `fixture-game-b` the two would be equal, so the id takes the
+instance's server too, as the third game's `<game>-<server>` id does, and no two values a test
+tells apart become equal. The two bindings are renamed only because they hold the words; no test's
+name, structure or assertion changes. Each new value passes its readers:
+`validate_instance_alias` (1 to 256 bytes without a control character), the user-config keys
+`instance.<id>.<field>` (exactly three parts at the dots, so an id inside a key holds no dot),
+`safe_file_stem` (a record's file name) and `canonical_resource_identifier` for `--game`
+(`[a-z0-9._-]`, at most 128). In the renamed `--game` tests the global `--game` is only checked as
+an identifier and handed to the resolution of environment markers, which their packages, holding
+no marker, never reach; the commands take the game of their package, so a value now equal to it
+decides nothing new.
+
+**Pins.** None changed and none left for CI. No renamed value reaches a hash, a byte count, a
+line of `apps/actinglab/tests/golden/expected.json` (which holds none of them), a sorted order (the
+two instances of the registry test keep theirs) or a column width.
+
+**The guard.** `actingcommand-actinglab-architecture::workspace_guards::neut2_source_and_test_trees_hold_no_game_abbreviation`,
+in the gate row A4 (project neutrality) of `test-gates/contract.toml`, beside NEUT-1's. It reads
+every file under NEUT-1's 11 trees and fails on each line that holds one of its five words as a
+word, naming the file and line. Words are split as the C2 guard splits them, by
+`identifier_words` of `tools/actinglab-architecture/src/lib.rs`, made public for it with a doc
+comment and otherwise unchanged: at every character outside ASCII letters and digits and at each case boundary, so
+`POLICY_X_MODE`, `policyXMode` and `x-mode` hold the word `x`, and a longer word or a run of digest
+digits does not. Its words are the four of §1.305 and the fourth game's short code, which no file
+holds. The second game's other abbreviation is not one of them: in the 11 trees it is on 31 lines
+of 8 files, a SQL table alias of the ledger's queries and the tests that pin them and one OCR
+fragment, never a game, and the rule cannot tell them apart. A counterexample checks the matcher
+first. Its allow list, each entry with its reason; an entry whose file is gone or holds none of
+the words fails:
+
+- `apps/actinglab/src/commands/session_contracts.rs`: product output, reported below for the
+  coordinator's ruling;
+- `scripts/windows-tools/Test-WindowsRemoteBuildTools.ps1`: a base64 archive whose letters the
+  word splitting cuts into one of the words, no game;
+- `tools/actinglab-architecture/src/lib.rs`: the C2 and R2-F guards' own word lists and their unit
+  tests' counterexamples;
+- `tools/actinglab-architecture/tests/workspace_guards.rs`: this guard's word list and
+  counterexample and the C2 guard's counterexample.
+
+**Places reported for a ruling** (not changed by this slice):
+
+- `apps/actinglab/src/commands/session_contracts.rs` lines 156, 157 and 164: the policy document
+  that `session capture-policy` prints (`session_capture_policy_payload`) carries, in
+  `stale_classification` and `freeze_classification_gate`, a member whose key holds the first
+  game's abbreviation and whose value is the digest of one game's frame, and twice a finding id
+  that names the game. No code of the repository reads them or decides by them;
+  `retired_instance_commands_are_absent_from_live_contracts` serializes the document and looks for
+  retired command names only.
+- Game words outside the work order's list, in product code: `reject_dangerous_semantic_id`
+  (`apps/actinglab/src/commands/navigation_recovery.rs` lines 1872 to 1891) refuses, unless
+  `--allow-destructive` is given, a semantic id that holds a word of its list, which names game
+  modes (it decides); the document of `session self-heal-policy` (`session_contracts.rs` line 510)
+  has a member whose key names a game mode (nothing decides by it); `resource validate`
+  (`apps/actinglab/src/resource_declarations.rs` lines 630 to 636, 752, 986 and 991) and the
+  converter (`crates/resource-tooling/src/resource_convert/mod.rs` lines 26 and 27) find a
+  third-party game tool's task file by its name (they decide: the file is checked and read); a
+  comment of `apps/actinglab/src/resource_runtime_support.rs` line 77 names two reserved commands
+  after another third-party tool; `distribution/windows/INSTALL.md` lines 394 and 573 name both
+  tools.
+- History and third-party text outside the 11 trees: four dated reports of `benchmarks/reports/`
+  (25 lines, and one file name), and `resources/upstream-manifest.toml` lines 10 and 11 (an
+  upstream project's name).
+
+**Not renamed.** Region values that are no game's abbreviation (the server option of
+`project_interface.rs`'s tests) are outside the work order's list and stay.
+
+**Interface.** None raised ([component-interfaces.md](component-interfaces.md)): nothing a reader
+or writer of any interface sees changes.
+
 ### 1.318 Slice CLI-COMP (0.12.55): Tab completes `actinglab`'s command lines in PowerShell and bash (Workflow #434; the customer-view audit of 2026-11-11 asked for a command line a person can use without the manual; the coordinator's eight rulings of the same day, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §2, on main `a62434a4`; coordinator work order `rd-1111/brief-cli-completion.md`, read on main `fed839c2`)
 
 The number is the coordinator's: §1.315 to §1.317 and §1.319 are open at the same time.
@@ -14245,8 +14426,9 @@ Runtime's aliases; `actinglab events --view <Tab>`
 `tap`'s line takes, `--instance` among them; `actinglab run start <alias> <Tab>` file names. With
 the Runtime stopped, an alias comes from the selected configuration. A Tab never prints an error.
 
-**Interface.** None moves: `ledger` 7, `runtime-client` 6, `actingd-config` 28, `package` 8 and
-`runtime-outcomes` 1 unchanged; no request, no outcome code, no configuration key.
+**Interface.** None moves: `ledger` 8, `runtime-client` 7, `actingd-config` 28, `package` 9 and
+`runtime-outcomes` 1, as the release's other slices leave them, unchanged by this one; no request,
+no outcome code, no configuration key.
 
 **Rollback.** Nothing is persisted. A build before this one answers `completion` and `__complete`
 as unknown commands (exit 1, nothing on stdout the scripts read), so a loaded script then offers
@@ -14275,6 +14457,90 @@ existing test that changes is CLI-HELP's count above; the inventory guard
 `consumer_command_lines_take_the_old_path_unchanged`, LAB-2b's `own_results_never_name_outcome`
 and LAB-5B5's `the_census_puts_every_inventory_word_in_one_group` read the moved censuses
 unchanged. No golden changes.
+
+### 1.319 Slice NAV-L1 (0.12.55): a phased route run as a layer enters at the stage its entry page starts (Workflow #428; a production run of 11-11 failed as a layer where the offline regression of the same package was green; the coordinator's ruling of 11-11, not Alice's words: one rule for every run of a phased route; coordinator work order `rd-1111/brief-nav-l1.md`, read on main `385bb500`)
+
+[README.md](README.md) ("Entry page sets", the sentence on the stage a phased route enters at)
+is the contract. 1.319 is the coordinator's number for this slice, appended after 1.309 on main
+`385bb500`; the numbers between belong to other slices. No persisted ledger shape, wire shape,
+configuration key, outcome code, vocabulary or package member is new or changed.
+
+**What happened.** A navigation package that other packages name as their prerequisite package
+was changed from one stage to two: a first stage that receives finished items (three operations,
+from three pages; its target the panel page with a free slot) and a second stage that opens a list
+(one operation from the panel page with a free slot, one from the panel page with every slot busy).
+Its entry page set holds three panel pages. Run as a prerequisite layer on the panel page with
+every slot busy, it failed at once with `contained_task_state_invalid`: the dependent package's
+entry preflight recorded `entry_recovery_failed` for it and ended `fail_closed`. That page starts
+an operation of the second stage only; the first stage has no operation from it and does not list
+it as a target. The package's offline regression on the same scene was green, because the offline
+simulation runs a package as an ordinary run, which enters at the stage its matched entry page
+starts (Workflow #373 NAV-3b), here the second.
+
+**Cause** (confirmed in the code on main `385bb500`). `run_with_collector`
+(`crates/execution-kernel/src/contained_task.rs`) took the run's required entry only when the run
+was `ContainedTaskEntry::Ordinary` and no declared operation's run, and called
+`RunStateMachine::start_at_phase` only with it. A layer (`run_as_prerequisite`,
+`run_entry_recovery`, `run_as_host_layer`, each entered as `ContainedTaskEntry::BoundRecovery`;
+the host passes nothing else) therefore always started at the first stage, whatever page it first
+observed. On a page from which the first stage has no operation, `RunStateMachine::next_directive`
+(`crates/execution-kernel/src/run.rs`) found none (`run_decision_invalid`, "no operation can
+continue from page"), and `candidate_directive` (`contained_task/candidates.rs`) turned that, on a
+page that is no error page, into the bare `contained_task_state_invalid`. What value that code
+should carry is another slice's.
+
+**The rule.** When the first page a run of a phased route observes is one of the package's entry
+pages, the run enters at the stage that page starts, whether it is an ordinary run or a layer the
+host runs for another package's entry: a prerequisite package, a navigation edge, a shared
+interrupt's handler, the configured return-home package (`run_as_prerequisite`), a request's own
+entry recovery package (`run_entry_recovery`), a step of a navigation recovery chain
+(`run_as_host_layer`). A layer whose first page is no entry page of the package starts at the
+first stage, as before. Nothing else of a layer changes: it still accepts any page of the package
+as its first page, waits for one as long as before (the page wait, not the entry wait of an
+ordinary run), and keeps its limits and codes; the host's own entry recognition before and after
+it is unchanged. In the code the stage entry reads the package's entry pages and the stage each
+starts (`RequiredEntryPages::phase_of`) for every run but a declared operation's, while the entry
+wait and the entry end below keep the required entry of an ordinary run (`run_with_collector`). An
+ordinary run, a declared operation's run, a route without stages and a phased route with a single
+entry page (which starts the first stage) decide byte for byte as before.
+
+**The entry end (#411 B20).** `end_on_entry_page` is still called only with an ordinary run's
+required entry. A layer has no gap there: a package whose stage lists `end_pages` is refused as
+every kind of layer before it runs (`scheduling_outcome_incompatibility`, reason
+`phase_end_pages`, read by `is_prerequisite_compatible` and `is_entry_recovery_compatible`), so no
+stage of a layer has an end page. Nothing is built for it.
+
+**What a package author can rely on after deploy.** A phased package run as a layer enters where
+its own run, and its offline simulation, enter: on an entry page of a later stage it starts at that
+stage, so a stage need not hold a move from every entry page, and an offline regression of the
+package from an entry page shows the operations its layer runs from that page. A layer on a page of
+the package outside its entry page set still starts at the first stage, which needs a move from
+that page.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): no record,
+member, code, key, vocabulary or package member.
+
+**Rollback** (below 0.12.55). Nothing is persisted: an earlier build starts every layer at the
+first stage again, and a package whose first stage has no move from an entry page of a later stage
+fails there as a layer with `contained_task_state_invalid`, as in the incident.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NAVL1-1 | the stage a phased layer enters at (`run_with_collector`, `RequiredEntryPages::phase_of`) | rule (no shape; corrects [README.md](README.md), "Entry page sets") | NAV-L1 | — | `since` 0.12.55; a layer off its entry pages starts at the first stage; a declared operation's run is unchanged |
+
+Tests (exec gate row "#428 NAV-L1", `gate_428_nav_l1`; synthetic packages on the kernel's scripted
+runtime; every layer case runs through `run_as_prerequisite`, `run_entry_recovery` and
+`run_as_host_layer`; a two-stage route whose entry page set holds a panel page that starts the
+first stage and one that starts the second):
+`nav_l1_t1_a_layer_enters_at_the_stage_its_first_entry_page_starts` (on the second stage's entry
+page the layer runs that stage's one operation and ends on its target, with no step of the first
+stage; on the first stage's entry page it runs the first stage, then the second);
+`nav_l1_t2_an_ordinary_run_and_a_layer_run_the_same_operations_from_each_entry_page` (from each
+entry page the ordinary run and each layer run the same operations of the same stages in the same
+order, and end on the same page after as many steps); `nav_l1_t3_a_layer_off_the_entry_pages_starts_at_the_first_stage`
+(on a page of the package outside the set the layer starts at the first stage, as before); and
+`nav_l1_t4_a_route_without_stages_and_a_single_entry_page_run_as_a_layer_as_before`. No existing
+test changed: main had no test that ran a phased route as a layer.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
