@@ -185,6 +185,18 @@ pub(super) fn offline_capability() -> Value {
     offline::capability()
 }
 
+/// Workflow #434 LAB-5B3 (tests only): the flags `package validate` reads.
+#[cfg(test)]
+pub(crate) const VALIDATE_READS: crate::flag_args::reads::FlagReads =
+    crate::flag_args::reads::FlagReads {
+        row: "package validate",
+        parts: &[&crate::flag_args::reads::ReadPart {
+            options: &["--zip"],
+            switches: &[],
+            refused: &[],
+        }],
+    };
+
 /// Workflow #336 PKG-S4 (option 丙): the package by its path; no hash is taken or reported.
 pub(super) fn run_validate(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     let zip = flags.required_path("--zip")?;
