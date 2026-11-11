@@ -750,6 +750,52 @@ sentence fails that test.
     one such entry, or `group` and `members`. A line with `--via` keeps its envelope.
   - The module's refusal of a row's words names `actinglab help` in its developer text, where it
     named this table's file.
+- **Completion** (Workflow #434 CLI-COMP, 0.12.55; register §1.318; the coordinator's rulings of
+  2026-11-11, not Alice's words).
+  - `actinglab completion powershell` and `actinglab completion bash` print a script for a person
+    to load from the shell's profile (without `--json` the script as it is, with it `{shell,
+    script}`); actinglab and the installer never edit a profile. PowerShell: `actinglab
+    completion powershell | Out-String | Invoke-Expression` turns it on in the session, and the
+    same line added to `$PROFILE` in every session. bash: `source <(actinglab completion bash)`,
+    and the same line added to `~/.bashrc`. Another shell word, or none, is refused as a read list
+    refuses one (`validation_failed`, `argument_problem` `not_recognised` or `required`).
+  - The scripts are plain ASCII and thin: each registers itself for `actinglab` and
+    `actinglab.exe` (`Register-ArgumentCompleter -Native`; `complete -o default -F`) and, at each
+    Tab, calls back the program the line names (its first word as typed: `actinglab` on the path,
+    or the path the person typed) with the words typed so far and the index of the word being
+    completed, so that a new row or a renamed word needs no new script. Where the callback gives
+    no candidate the shell completes file names itself; that is how a `path`, `file` or `dir`
+    parameter is completed.
+  - The callback, `actinglab __complete [--json] [--wait-ms <ms>] <index> <word>...`, is an own
+    command that is not for people. Its words are every word typed so far, the program's first
+    (index 0), up to the one being completed, each in the word form: `:` and the word with `%`,
+    `"`, a space and a tab written `%25`, `%22`, `%20` and `%09` (it reads any `%` and two hex
+    digits as that byte). It prints the candidates of the word at the index, by its prefix, sorted,
+    one per line and nothing else; with `--json` the line of an own command with the member
+    `candidates`. It runs nothing, sends no request that changes anything, writes no file, and
+    exits 0 with no candidate when it has none or anything goes wrong, writing nothing on stderr;
+    `main` answers a line that begins with it before anything else reads the line.
+  - What completes, from what the build knows: the command words `actinglab help` lists (the
+    offered rows' names, the words of the own command that serves a row or that a row replaces,
+    the own commands without a row; the callback's own word left out), by prefix at each position;
+    `help <words>` as the words. After a row's own name: its options and switches (`--name`, `_`
+    as `-`), not one already on the line unless it repeats; an enumeration's words after its
+    option or in its positional's place; the global options its line takes (where the row's
+    command takes them as written, those a person gives, else `--json` and `--help`), and
+    `--instance` while it may still name the row's instance. After an own command without a row,
+    or a row's other spelling: the global options only (their own flags come with a later slice).
+    The global options a person gives are those `help` lists but `--via`, `--instances`,
+    `--profile` and `--quiet`.
+  - An instance, wherever a row's parameter is one (the positional, `--instance` before or after
+    the words, or the instance option of `remedy set` and `wake-test`; on the 20 rows actinglab's
+    own command serves under the row's name only `--instance`, never in a positional's place):
+    the aliases of the running Runtime, asked with `Status`, the read that resolves `<instance>`
+    today, on one Lab connection whose every exchange ends by the wait (`--wait-ms`, default 500
+    milliseconds; 0 asks no Runtime); where no Runtime answers in time, those of the selected
+    configuration the offline rows read; none where neither reads. The handshake and `Status`
+    record nothing; no configuration key is read for the wait.
+  - Not completed: a file, path, directory, key, id, number, duration, JSON or free text, and an
+    own command's own flags.
 
 ### 9.4 Changing the table
 

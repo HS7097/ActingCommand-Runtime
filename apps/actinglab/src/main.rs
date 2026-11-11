@@ -167,6 +167,8 @@ use user_config_store::write_user_config;
 #[cfg(test)]
 use zip::{ZipWriter, write::FileOptions};
 
+// Workflow #434 CLI-COMP: Tab completion, a script per shell and the callback it calls.
+mod cli_completion;
 // Workflow #434 CLI-HELP: `help` for people, and the lines that ask for it.
 mod cli_help;
 mod cli_information;
@@ -235,6 +237,11 @@ const SESSION_STATE_ENV: &str = "ACTINGLAB_SESSION_STATE_DIR";
 const REQUIRE_SESSION_DAEMON_ENV: &str = "ACTINGLAB_REQUIRE_SESSION_DAEMON";
 const ALLOW_PATH_ADB_FOR_MUMU_ENV: &str = "ACTINGCOMMAND_ALLOW_PATH_ADB_FOR_MUMU";
 fn main() -> ExitCode {
+    // Workflow #434 CLI-COMP: the completion scripts' callback answers before anything else reads
+    // its line, and always exits 0 with nothing on stderr (register §1.318).
+    if let Some(exit) = cli_completion::callback_line(env::args_os().skip(1)) {
+        return exit;
+    }
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     // Workflow #389 U-2 (model section 3.5): an actingd before U-2 leaves this process's
     // connections unbound; the runtime client reports it once, on stderr.
@@ -263,8 +270,13 @@ fn main() -> ExitCode {
     }
     // Workflow #434 CLI-HELP: `help` without `--json` prints its text for people.
     let help = cli_help::for_people(&invocation);
+    // Workflow #434 CLI-COMP: `completion <shell>` without `--json` prints its script as it is.
+    let script = cli_completion::for_people(&invocation);
     let (exit, json) = own_line::answer(invocation);
     if help && let Some(text) = cli_help::people(&exit) {
+        return cli_module::print_text(&text, &exit);
+    }
+    if script && let Some(text) = cli_completion::script_text(&exit) {
         return cli_module::print_text(&text, &exit);
     }
     cli_module::print(&exit, json)
@@ -332,7 +344,8 @@ fn own_command_line(arguments: &[String]) -> bool {
 /// `gate_434_lab2::consumer_command_lines_take_the_old_path_unchanged` checks every command of
 /// `ratchet/actinglab_commands.json`, which the architecture guard keeps equal to [`execute`]).
 /// Workflow #434 LAB-2b: `status` is the core row's (open point 10), not actinglab's own.
-const OWN_COMMANDS: [&str; 32] = [
+/// Workflow #434 CLI-COMP: `completion` and `__complete`, the completion scripts' callback.
+const OWN_COMMANDS: [&str; 34] = [
     "help",
     "version",
     "paths",
@@ -365,6 +378,8 @@ const OWN_COMMANDS: [&str; 32] = [
     "stream",
     "record",
     "explain",
+    "completion",
+    "__complete",
 ];
 
 /// actinglab's command groups whose every subcommand word is theirs, as [`execute`] dispatches
@@ -545,6 +560,11 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         }
         [cmd] if cmd == "record" => run_session_record(&invocation.global, &invocation.args),
         [cmd] if cmd == "explain" => run_explain_run(&invocation.args),
+        // Workflow #434 CLI-COMP: the completion script of a shell, and the scripts' callback,
+        // which `main` answers first on a line that begins with it; on any other line that
+        // reaches the dispatch it answers its candidates as data.
+        [cmd] if cmd == "completion" => cli_completion::run_completion(&invocation.args),
+        [cmd] if cmd == "__complete" => cli_completion::run_callback(&invocation.args),
         // Workflow #434 LAB-2 (open point 7, the coordinator's ruling): actinglab's own user
         // configuration file, `config get|set` before, renamed so as not to take the operation
         // table's `config` words.

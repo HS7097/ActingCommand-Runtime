@@ -418,7 +418,7 @@ panics) or the shutdown that ends the thread holding it.
 
 | `kind` | Shows while | `request_id` | `package_id` | On the key of |
 |---|---|---|---|---|
-| `policy_run` | a scheduled run executes, from its package's preparation on its dispatch's lease until its execution returns (its lease released, or handed to its ladder) | the `RunContainedTask` request the Runtime issues for the dispatch: the run's own request, which its records name and `StopInstanceRun` takes | its package's `package_id` | its own (the dispatch's lease) |
+| `policy_run` | a scheduled run executes, from the end of its package's preparation on its dispatch's lease (the activity names the prepared package, so it begins once the package is prepared; the run's control is registered before the preparation, and a stop that names the run reaches it then, Workflow #429 R-6b2) until its execution returns (its lease released, or handed to its ladder) | the `RunContainedTask` request the Runtime issues for the dispatch: the run's own request, which its records name and `StopInstanceRun` takes | its package's `package_id` | its own (the dispatch's lease) |
 | `direct_run` | a client's `RunContainedTask` executes, from its grant until its execution returns | the client's request, the `task_request_id` of `CancelContainedTask` | its package's `package_id` | its own |
 | `host_run` | a run the Runtime starts for itself executes: a startup package, or a ladder rung's package | the request the Runtime issues for the run | its package's `package_id` | its own (a startup package's claim), or its ladder's |
 | `reconnect` | an instance resume's reconnect prepares the instance on its claim | the `ResumeScheduling` request | — | its own |
