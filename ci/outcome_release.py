@@ -69,24 +69,37 @@ def binds(signature):
     return signature["review"] == "settled" or signature["status"] == "retired"
 
 
-def catalog_signatures(root):
-    """Every code's and location's signature in the catalog the fragments hold now."""
+def owner_fragments(root):
+    """The header and the owner fragments it names, in the header's order: `(header, [(owner,
+    fragment)])`. An owner without a fragment file has registered nothing yet. A name registered
+    twice, as a code or a location, fails. ci/outcome_codes_index.py reads the catalog with it
+    too (Workflow #439 CODES-IX), so both read the same entries."""
     header = read_json(root / HEADER_FILE)
-    keys = header["keys"]
-    codes, locations = {}, {}
+    owned, names = [], set()
     for owner in header["fragments"]:
         path = root / FRAGMENT_DIR / f"{owner}.json"
         if not path.is_file():
             continue
         fragment = read_json(path)
-        for section, table, signature in (
-            ("codes", codes, lambda entry: code_signature(entry, keys)),
-            ("locations", locations, location_signature),
-        ):
-            for name, entry in fragment.get(section, {}).items():
-                if name in codes or name in locations:
+        for section in ("codes", "locations"):
+            for name in fragment.get(section, {}):
+                if name in names:
                     fail(f"{name} is registered twice")
-                table[name] = signature(entry)
+                names.add(name)
+        owned.append((owner, fragment))
+    return header, owned
+
+
+def catalog_signatures(root):
+    """Every code's and location's signature in the catalog the fragments hold now."""
+    header, owned = owner_fragments(root)
+    keys = header["keys"]
+    codes, locations = {}, {}
+    for _, fragment in owned:
+        for name, entry in fragment.get("codes", {}).items():
+            codes[name] = code_signature(entry, keys)
+        for name, entry in fragment.get("locations", {}).items():
+            locations[name] = location_signature(entry)
     return codes, locations
 
 

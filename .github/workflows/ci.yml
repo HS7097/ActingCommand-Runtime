@@ -659,6 +659,7 @@ jobs:
           sparse-checkout: |
             .github/workflows/ci.yml
             ci/
+            contracts/outcome-codes/
             contracts/test-gates/
           sparse-checkout-cone-mode: false
       # Guard 1 runs inside `light`; if `light` left this needs list, its red would not reach
@@ -716,3 +717,16 @@ jobs:
         run: |
           python3 --version
           python3 ci/test_gate_check.py -v
+      # Workflow #439 CODES-IX: the committed index contracts/outcome-codes/index/ is what
+      # ci/outcome_codes_index.py generates from the catalog's fragments; a stale index fails
+      # here, naming its first file that differs. Then the script's own logic tests.
+      - name: Outcome code index is current
+        if: ${{ !cancelled() }}
+        run: |
+          python3 --version
+          python3 ci/outcome_codes_index.py --check
+      - name: outcome_codes_index logic tests
+        if: ${{ !cancelled() }}
+        run: |
+          python3 --version
+          python3 ci/test_outcome_codes_index.py -v
