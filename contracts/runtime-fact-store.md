@@ -152,8 +152,9 @@ The target of [Ledger observer](ledger-observer.md) for this store (LEDG §3.1�
    the four settlement keys `task.*.last_duration_ms`, `.last_outcome`, `.failure_streak`,
    `.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition` and its `.pauses`,
    `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`,
-   `host.contained_settlement` (#411 A65), `host.idle_state` (#405 IDLE-1P) and `host.agent_wake`
-   (#432 AGT-1b, [agent-wake.md](agent-wake.md)). Keys under
+   `host.contained_settlement` (#411 A65), `host.idle_state` (#405 IDLE-1P), `host.agent_wake`
+   (#432 AGT-1b, [agent-wake.md](agent-wake.md)) and `host.capped_episodes` (#428 SCHED-C1d,
+   0.12.53). Keys under
    `ledger_observer.tag.reobserve_prefixes` (`device.`, `backend.`, `application.`, `lease.`,
    `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.`) are not
    loaded: this start observes or replays them again, so the takeover invalidation of
@@ -648,6 +649,32 @@ the backend self-check facts (source `device-proxy` or `capture`).
   `restore_idle_state`), recorded, and the start goes on with every
   instance's state unknown; a record a build before 0.12.25 wrote (its writer
   row names `owner_epoch`) is one.
+- `host.capped_episodes` (#428 SCHED-C1d, 0.12.53; register §1.299 SC1-11;
+  [scheduling/README.md](scheduling/README.md), "Episodes survive") — runtime
+  scope, `record_list`, no lifetime, source `runtime`: the capped spending
+  order's episodes, kept across a start under iron rule 13 (no state file).
+  The first row names the writer, `start_anchor` alone (an integer: the start
+  event sequence of the recording start, as `host.idle_state`'s, #405 N-2).
+  Then, per instance and pool with an open or waiting episode, one episode row
+  (`instance_alias`, `pool_id`, `capped_episode` its number, `capped_round` its
+  rounds, and while a round is under way `round_started_at_unix_ms` and
+  `pool_reading`, the reading the round's plan starts from), its consumer rows
+  (`consumer_task_id`, `consumed`, `limited`: the consumers key) and, while a
+  round is under way, its member rows in the round's frozen order
+  (`member_task_id`, `consumed`, `passed` true for a member the round passed,
+  with `gate_code` when it was passed with one). A record row holds scalars
+  only, so an episode's lists are rows of their own after it. Recorded after
+  every evaluated cycle that changed an episode and once by a start that found
+  the fact, under its own anchor; a Runtime that never has an episode records
+  none. A start keeps it by the anchor rule of `host.idle_state` (only when its
+  writer is the last start that completed its settlement); what it cannot keep
+  (a value of another shape or against its rules, a stale one, an episode whose
+  instance is not registered or whose pool the active catalog does not give a
+  declared valuation) is dropped with the warning `capped_state_failed`
+  (`operation` `load_capped_episodes`), and a record the store refuses for this
+  fact alone is the same warning (`operation` `store_capped_episodes`); neither
+  stops the Runtime or an instance. At most 256 rows (writer, episode, consumer
+  and member rows together); a larger list is a record the store refuses.
 
 `contracts/actingd-check-config.md` lists the subsystems and parameters
 `actingd` reports; `actingctl facts --program` returns both records as part of

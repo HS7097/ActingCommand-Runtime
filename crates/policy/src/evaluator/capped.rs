@@ -55,10 +55,20 @@
 //!   consumes more in one run than `cap − H`, no run can start from the cap above the hard line. At
 //!   `r ≥ T` no episode then begins (one under way waits) and the pool's judged candidates are
 //!   held with the warning `pool_lines_unspendable`.
-//! - **Memory only** ([`CappedMemory`]): the episodes, their round numbers, frozen orders and
-//!   passed members, as SS-4's `NoProgressMemory` keeps its guards. A start, or a new catalog
-//!   generation, begins with none. Which tasks a round dispatched is read from the task snapshots
-//!   (`last_dispatched_unix_ms` at or after the round's start).
+//! - **The memory** ([`CappedMemory`]): the episodes, their round numbers, frozen orders and
+//!   passed members, as SS-4's `NoProgressMemory` keeps its guards. Which tasks a round
+//!   dispatched is read from the task snapshots (`last_dispatched_unix_ms` at or after the
+//!   round's start).
+//! - **Episodes survive** (SCHED-C1d, register §1.299 SC1-11; `contracts/scheduling/README.md`,
+//!   "Episodes survive"): an episode is kept by its pool's consumers on the instance (the
+//!   consumers key: each consumer by its accounting identity, its id or one its `continues_from`
+//!   names, its `⌈C/1000⌉` and its `benefit_limited`), not by the catalog generation: a new
+//!   generation that leaves them unchanged keeps it, any other change ends it. While the
+//!   capacity, the reading or a line's fact gives no value, an episode under way waits, and its
+//!   judged candidates are held with `capped_cap_unknown`, whether or not the pool writes lines.
+//!   The Runtime keeps the memory across a start as the tagged program fact
+//!   `host.capped_episodes` ([`CappedMemory::kept`], [`CappedMemory::restore`], module
+//!   [`kept`]); the host owns the fact, this module the shape and the rules of an episode.
 //!
 //! The lines constrain the scheduler only: a manual request, a chain successor that rides with its
 //! chain and the Runtime's own tasks are no judged candidates and are not held.
@@ -82,14 +92,23 @@ use super::{
 use crate::codes::{PolicyCode, PoolLineHold};
 use crate::{FactValue, ObservationRef, PoolCapacity, PoolLine, PoolSpec, TaskSpec};
 
-/// SS-2h: the Runtime's memory of the capped episodes, per (instance alias, pool id). Memory
-/// only: nothing here enters a snapshot, a decision identity, a ledger record or a state file,
-/// and a start begins with none. The Runtime passes it to [`super::evaluate_with_capped_spending`]
-/// at every evaluation of a cycle; every other entry point evaluates with an empty one.
+// SCHED-C1d (register §1.299 SC1-11): what the Runtime keeps of the memory across a start.
+mod kept;
+
+pub use kept::{
+    CappedRestore, CappedStateProblem, KeptConsumer, KeptEpisode, KeptMember, KeptRound,
+};
+
+/// SS-2h: the Runtime's memory of the capped episodes, per (instance alias, pool id). Nothing here
+/// enters a snapshot or a decision identity. The Runtime passes it to
+/// [`super::evaluate_with_capped_spending`] at every evaluation of a cycle; every other entry point
+/// evaluates with an empty one. SCHED-C1d: the Runtime keeps it across a start as the tagged
+/// program fact `host.capped_episodes` ([`Self::kept`], [`Self::restore`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CappedMemory {
     episodes: BTreeMap<(String, String), Episode>,
-    /// How many episodes each pair began since the start.
+    /// How many episodes each pair began since the start; SCHED-C1d: a restored episode's
+    /// number counts on from it.
     begun: BTreeMap<(String, String), u64>,
 }
 
@@ -111,12 +130,106 @@ impl CappedMemory {
 /// One capped episode of a pool on an instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Episode {
-    /// The catalog generation it began under: another one ends it.
-    catalog_hash: String,
+    /// SCHED-C1d: the consumers key, the pool's consumers on the instance as the episode began,
+    /// by task id: a generation that changes them ends the episode ([`Episode::keep_consumers`]).
+    consumers: Vec<ConsumerKey>,
     number: u64,
     /// How many rounds it began.
     rounds: u64,
     round: Option<Round>,
+}
+
+/// SCHED-C1d: one consumer of an episode's pool on its instance, as the consumers key reads it:
+/// its task id, its `⌈C/1000⌉` and whether it is marked `benefit_limited`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ConsumerKey {
+    task_id: String,
+    consumed: u64,
+    limited: bool,
+}
+
+impl ConsumerKey {
+    fn of(consumer: &Consumer<'_>, pool_id: &str) -> PolicyEvaluationResult<Self> {
+        Ok(Self {
+            task_id: consumer.task.id.clone(),
+            consumed: crate::resource_targets::declared_consumption(consumer.task, pool_id)?,
+            limited: consumer.task.is_benefit_limited(),
+        })
+    }
+}
+
+/// SCHED-C1d: the consumers key of `consumers` of `pool_id`, by task id.
+fn consumer_keys(
+    consumers: &[Consumer<'_>],
+    pool_id: &str,
+) -> PolicyEvaluationResult<Vec<ConsumerKey>> {
+    let mut keys = consumers
+        .iter()
+        .map(|consumer| ConsumerKey::of(consumer, pool_id))
+        .collect::<PolicyEvaluationResult<Vec<_>>>()?;
+    keys.sort();
+    Ok(keys)
+}
+
+/// SCHED-C1d: whether `task` accounts as `task_id`: it is that task, or its `continues_from`
+/// names it (Workflow #372 K5's accounting identity).
+fn accounts_as(task: &TaskSpec, task_id: &str) -> bool {
+    task.id == task_id
+        || task
+            .continues_from
+            .as_deref()
+            .is_some_and(|continued| continued.iter().any(|id| id == task_id))
+}
+
+impl Episode {
+    /// SCHED-C1d ("Episodes survive"): whether `consumers`, the pool's consumers on the
+    /// instance at this evaluation, are the episode's, each kept consumer matched by its
+    /// accounting identity with the same consumption and the same mark. When they are, a kept
+    /// consumer that now runs under another id (its `continues_from` names the kept one) takes
+    /// that id in the key and in the round's frozen order, which stays as it is.
+    fn keep_consumers(
+        &mut self,
+        consumers: &[Consumer<'_>],
+        pool_id: &str,
+    ) -> PolicyEvaluationResult<bool> {
+        if consumers.len() != self.consumers.len() {
+            return Ok(false);
+        }
+        let mut taken = BTreeSet::new();
+        let mut renamed = BTreeMap::<String, String>::new();
+        for kept in &self.consumers {
+            let Some((index, consumer)) = consumers.iter().enumerate().find(|(index, consumer)| {
+                !taken.contains(index) && accounts_as(consumer.task, &kept.task_id)
+            }) else {
+                return Ok(false);
+            };
+            let now = ConsumerKey::of(consumer, pool_id)?;
+            if now.consumed != kept.consumed || now.limited != kept.limited {
+                return Ok(false);
+            }
+            taken.insert(index);
+            if now.task_id != kept.task_id {
+                renamed.insert(kept.task_id.clone(), now.task_id);
+            }
+        }
+        if renamed.is_empty() {
+            return Ok(true);
+        }
+        for kept in &mut self.consumers {
+            if let Some(id) = renamed.get(&kept.task_id) {
+                kept.task_id.clone_from(id);
+            }
+        }
+        self.consumers.sort();
+        if let Some(round) = self.round.as_mut() {
+            for member in &mut round.order {
+                if let Some(id) = renamed.get(&member.task_id) {
+                    member.task_id.clone_from(id);
+                }
+            }
+        }
+        Ok(true)
+    }
 }
 
 /// One round: its frozen order, the reading its plan starts from, and the members it passed.
@@ -341,7 +454,7 @@ enum LinesProblem {
 /// The pools' lines and the capped spending order over the benefit gate's judged candidates
 /// (module doc). `ranked` are the gate's candidates and `known` their judgements, aligned; the
 /// answer is aligned with them. Reasons for the pools' consumers that are no candidates are added
-/// to `work`; `memory` is updated under `catalog_hash`.
+/// to `work`; `memory` is updated.
 pub(super) fn plan(
     context: &PlacementContext<'_>,
     facts: &EvaluationFacts,
@@ -349,7 +462,6 @@ pub(super) fn plan(
     known: &[Option<Known<'_>>],
     work: &mut [TaskWork],
     memory: &mut CappedMemory,
-    catalog_hash: &str,
 ) -> PolicyEvaluationResult<Vec<Disposition>> {
     let mut decided = (0..ranked.len())
         .map(|_| Decided::default())
@@ -366,6 +478,15 @@ pub(super) fn plan(
                 continue;
             }
             let key = (instance.instance_id.clone(), pool.id.clone());
+            // SCHED-C1d ("Episodes survive"): an episode is kept while the pool's consumers on the
+            // instance are its own, whatever else a new catalog generation changed.
+            let same_consumers = match memory.episodes.get_mut(&key) {
+                Some(episode) => episode.keep_consumers(&consumers, &pool.id)?,
+                None => true,
+            };
+            if !same_consumers {
+                memory.episodes.remove(&key);
+            }
             // The known judged candidates of this instance that consume the pool, by task id.
             let candidates = known
                 .iter()
@@ -388,6 +509,20 @@ pub(super) fn plan(
             considered.insert(key.clone());
             let lines = match lines(context, facts, instance, pool)? {
                 Ok(lines) => lines,
+                // SCHED-C1d: an episode under way waits on an unknown value: its judged candidates
+                // are held with `capped_cap_unknown`, whether or not the pool writes lines, and
+                // it goes on, or ends by its rule, once the values come back.
+                Err(LinesProblem::Unknown {
+                    fact_key,
+                    unknown_reason,
+                    ..
+                }) if memory.episodes.contains_key(&key) => {
+                    let hold = unknown_lines_reason(&pool.id, fact_key.as_deref(), unknown_reason);
+                    for (index, _, _) in candidates.values() {
+                        decided[*index].held(hold.clone());
+                    }
+                    continue;
+                }
                 Err(problem) => {
                     memory.episodes.remove(&key);
                     let hold = match problem {
@@ -435,7 +570,6 @@ pub(super) fn plan(
                 context,
                 memory,
                 &key,
-                catalog_hash,
                 lines,
                 &candidates,
                 work,
@@ -760,18 +894,15 @@ fn step<'m>(
     context: &PlacementContext<'_>,
     memory: &'m mut CappedMemory,
     key: &(String, String),
-    catalog_hash: &str,
     lines: Lines,
     candidates: &PairCandidates<'_, '_>,
     work: &mut [TaskWork],
     consumers: &[Consumer<'_>],
     instance: &InstanceSnapshot,
 ) -> PolicyEvaluationResult<Option<RoundView<'m>>> {
-    if memory
-        .episodes
-        .get(key)
-        .is_some_and(|episode| episode.catalog_hash != catalog_hash || lines.spent(lines.reading))
-    {
+    // SCHED-C1d: a generation that changed the pool's consumers ended the episode already
+    // ([`plan`]); here only its own rule ends it.
+    if memory.episodes.contains_key(key) && lines.spent(lines.reading) {
         memory.episodes.remove(key);
     }
     if !memory.episodes.contains_key(key) {
@@ -779,13 +910,14 @@ fn step<'m>(
         if !lines.at_trigger() {
             return Ok(None);
         }
+        let consumers_key = consumer_keys(consumers, &key.1)?;
         let begun = memory.begun.entry(key.clone()).or_insert(0);
         *begun += 1;
         let number = *begun;
         memory.episodes.insert(
             key.clone(),
             Episode {
-                catalog_hash: catalog_hash.to_owned(),
+                consumers: consumers_key,
                 number,
                 rounds: 0,
                 round: None,

@@ -50,15 +50,16 @@ use actingcommand_contract::{
 };
 use actingcommand_ledger::{GlobalLedger, LedgerIndexRole, PersistedEvent};
 use actingcommand_policy::{
-    ActivityProfile, CandidateEligibility, CappedMemory, CatalogDocumentSource, CatalogSources,
-    CompiledCatalog, CompletedActivityWindow, DecisionReason, DecisionReasonChain,
+    ActivityProfile, CandidateEligibility, CappedMemory, CappedStateProblem, CatalogDocumentSource,
+    CatalogSources, CompiledCatalog, CompletedActivityWindow, DecisionReason, DecisionReasonChain,
     DetectionSuggestion, DispatchIntent, DispatchPrerequisites, EligibilityState, EvaluationFacts,
     EvaluationResources, EvaluationTime, FACT_REFRESH_TASK_ID, FactRefreshInputs,
-    FactRefreshReader, InstanceSnapshot, MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK,
-    MAX_TASK_LAST_DURATION_MS, NoProgressMemory, PolicyEvaluation, REMEDY_JOURNAL_MAX_RUNS,
-    RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement, RunSlots,
-    SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot, TaskTerminalState,
-    activity_window_at, compile_catalog, evaluate_with_capped_spending, plan_remedies,
+    FactRefreshReader, InstanceSnapshot, KeptEpisode, MAX_EVALUATION_INSTANCES,
+    MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, NoProgressMemory, PolicyEvaluation,
+    REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement,
+    RunSlots, SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
+    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_capped_spending,
+    plan_remedies,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
 use serde::{Deserialize, Serialize};
@@ -1264,8 +1265,35 @@ pub(crate) struct PolicyHost {
     /// (task, instance). Memory only; a host starts with none.
     no_progress: NoProgressMemory,
     /// SS-2h (register §1.289): the capped episodes of the valued pools, per (instance, pool),
-    /// with their rounds' frozen orders. Memory only; a host starts with none.
+    /// with their rounds' frozen orders. SCHED-C1d (register §1.299): a start restores them from
+    /// the tagged program fact `host.capped_episodes` ([`Self::restore_capped_episodes`]).
     capped: CappedMemory,
+    /// SCHED-C1d: what `host.capped_episodes` holds of `capped`, and the start anchor it is
+    /// recorded under.
+    capped_kept: CappedKept,
+}
+
+/// SCHED-C1d (register §1.299 SC1-11): what the host recorded of the capped episodes as
+/// `host.capped_episodes`, so that a cycle that changed none records nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CappedKept {
+    /// The start anchor the fact's writer row names: this start's own start event (#405 N-2, as
+    /// `host.idle_state`'s); none before the start's restore.
+    anchor: Option<u64>,
+    /// The episodes the fact holds as this start last recorded, or tried to record, them; `None`
+    /// while it holds what an earlier start recorded, which this start records again under its
+    /// own anchor. A start that found no fact holds none: `Some` of no episode, so a Runtime that
+    /// never has an episode records nothing.
+    recorded: Option<Vec<KeptEpisode>>,
+}
+
+impl Default for CappedKept {
+    fn default() -> Self {
+        Self {
+            anchor: None,
+            recorded: Some(Vec::new()),
+        }
+    }
 }
 
 /// Workflow #422 LN-4: the dispatch journal while it is rebuilt.
@@ -1729,6 +1757,7 @@ impl PolicyHost {
             reruns: rerun::RerunState::default(),
             no_progress: NoProgressMemory::default(),
             capped: CappedMemory::default(),
+            capped_kept: CappedKept::default(),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -2860,6 +2889,58 @@ impl PolicyHost {
                     Some(DispatchLifecycle::Completed) => ScheduleDispatchState::Completed,
                 }
             })
+    }
+
+    /// SCHED-C1d (register §1.299 SC1-11; `contracts/scheduling/README.md`, "Episodes survive"):
+    /// the start's restore of the capped episodes, before the first evaluation. `kept` are the
+    /// episodes the start keeps of `host.capped_episodes` (none when it found no fact, or one it
+    /// does not keep), `anchor` this start's anchor, which every later record names, and `found`
+    /// whether the start found the fact, which it then records again under that anchor. The
+    /// episodes are restored under the active catalog ([`CappedMemory::restore`]); the answer
+    /// names the episodes dropped because the catalog does not give their pool a declared
+    /// valuation, or the problem that refused them all.
+    pub(crate) fn restore_capped_episodes(
+        &mut self,
+        kept: Vec<KeptEpisode>,
+        anchor: Option<u64>,
+        found: bool,
+    ) -> Result<Vec<(String, String)>, CappedStateProblem> {
+        self.capped_kept = CappedKept {
+            anchor,
+            recorded: (!found).then(Vec::new),
+        };
+        let catalog = self.active.as_ref().map(|active| active.compiled.as_ref());
+        match CappedMemory::restore(kept, catalog) {
+            Ok(restored) => {
+                self.capped = restored.memory;
+                Ok(restored.dropped)
+            }
+            Err(problem) => {
+                self.capped = CappedMemory::default();
+                Err(problem)
+            }
+        }
+    }
+
+    /// SCHED-C1d: the capped episodes `host.capped_episodes` does not hold yet, with the anchor
+    /// to record them under; `None` when it holds them as they are (a cycle that changed no
+    /// episode records nothing).
+    pub(crate) fn unrecorded_capped_episodes(&self) -> Option<(Option<u64>, Vec<KeptEpisode>)> {
+        let kept = self.capped.kept();
+        (self.capped_kept.recorded.as_ref() != Some(&kept))
+            .then_some((self.capped_kept.anchor, kept))
+    }
+
+    /// SCHED-C1d: `kept` was recorded as `host.capped_episodes`, or its record was refused: the
+    /// next change records the episodes again, and no cycle before it tries.
+    pub(crate) fn note_capped_episodes_recorded(&mut self, kept: Vec<KeptEpisode>) {
+        self.capped_kept.recorded = Some(kept);
+    }
+
+    /// SCHED-C1d, test only: the capped episodes the host holds.
+    #[cfg(test)]
+    pub(crate) fn capped_episodes_for_test(&self) -> CappedMemory {
+        self.capped.clone()
     }
 
     /// Workflow #427-B: the limit of concurrent policy runs the host started with
