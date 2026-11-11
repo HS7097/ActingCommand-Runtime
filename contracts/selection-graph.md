@@ -926,7 +926,11 @@ The same scan session reads a list for a `read_list` step (Workflow #428 S168-4,
 [resource-readings.md](resource-readings.md), "List readings"): steps 1 and 2 only, with no
 policy, no early stop, no `Return`, no `Confirm` and no tap. Its scan failures end the run as
 here, with the stage `read_list`; a position it could not read is a miss of the list, not a
-failure.
+failure. It stops on the viewport that reads one position more than a list may hold, the miss
+`list_rows_exceeded`: the 1025th from S168-LB1a (not built yet; [v012-register.md](v012-register.md)
+§1.305), the 257th until it. The scan's own bounds above do not move, so with at most 128
+viewports a list reaches 1024 rows only when each advance brings about 8 new positions
+([resource-readings.md](resource-readings.md), "Rows").
 
 ### Record per path
 
@@ -1255,6 +1259,21 @@ unknown instance and the unknown check does not count it (step 4), and it still 
 with `unknown_outcome_key`. A candidate that a gate decides against on a known value (the class
 gate's `absent`, a comparison whose operands are known) is a known decision, `gate_rejected`, and
 does not count.
+
+**A list maximum read as a lower bound** (Workflow #428 S168-LB1b, not built yet, amending this
+planned text; [v012-register.md](v012-register.md) §1.305; the coordinator's ruling 8 of 11-11,
+not Alice's words; [selection-policy.md](selection-policy.md), "Lower bound of a list maximum"). A
+reference that opts in and reads "at least L" is no Unknown read. A comparison the bound settles
+is a known verdict, `ranked` or `gate_rejected`, and does not count against `outcome_key`: the
+judgment is `judged`. A comparison the bound does not settle is Unknown: its candidate is
+`unknown_dropped` under `drop_candidate`, or the evaluation `unknown` under `abort_evaluation`,
+and the run ends with `unknown_outcome_key`: the judgment is `unknown`. A score taken at L is a
+`ranked` verdict, `judged`; the record carries the bound in the read's
+`selection_table_list_max` (`bound` `at_least`, `lower_bound`, `lower_bound_identity`,
+`unknown_count`) and in the decision's `selection_decided_on_lower_bound`. The record gains no
+member and its unknown reasons no word (an unsettled comparison reads `lookup_miss`), so the
+judge's `ledger` row does not move for it. Whichever of S168-LB1b and S168-5b merges second
+builds this paragraph.
 
 **Every result ends the run Completed, with one of the two keys:**
 
