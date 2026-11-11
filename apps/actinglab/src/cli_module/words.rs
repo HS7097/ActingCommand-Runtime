@@ -20,14 +20,22 @@
 //!     and a word beyond its positionals, are refused on every such row (`recover`,
 //!     `debug-package` and `export-evidence` handed them on before, a debt now paid: their
 //!     commands refuse what they do not read too);
-//!   - the flags of [`KEPT_FLAGS`] go on as written too: a positional given as its flag (`runs
-//!     --instance <x>`, `run show --id <id>` and the like), and a flag of the source command the
-//!     row does not declare (`op status --operation <op>`, `devices bind --root <r>`);
+//!   - the flags of [`KEPT_FLAGS`] go on as written too: a positional given as its flag (`run show
+//!     --id <id>` and the like; `runs` and `monitor set --instance <x>` since Workflow #434 CLI-IN
+//!     by the instance's own rule, below), and a flag of the source command the row does not
+//!     declare (`op status --operation <op>`, `devices bind --root <r>`);
 //!   - on a row of [`COMPLETED_ROWS`], an option LAB-5A declared takes no word that begins with
 //!     `--` as its value, as the further flag it was took none.
 //!
 //!   `serve --stdio` refuses every member a row does not declare, and (Workflow #434 LAB-5G4a)
 //!   every string value, or string in a list, that begins with `--` ([`from_json`]).
+//! - Workflow #434 CLI-IN (register §1.307; `contracts/lab-two-entries.md` §9.3): on a row that
+//!   declares a positional instance ([`positional_instance`]) actinglab's global `--instance <x>`
+//!   ([`INSTANCE_FLAG`]) is that positional, after the row's words or before them
+//!   ([`instance_first`]); the row's other positionals then keep their order. The positional and
+//!   the flag on one line are refused (`repeated`, naming the positional instance's word; the flag
+//!   given twice, `--instance`) before anything is read or sent. A line without the flag is read
+//!   as before; `serve --stdio` is unchanged (it takes the parameter `instance`).
 //! - Types: `integer` a JSON number, `unsigned` a JSON number from 0 to 2^64 − 1, `decimal` a
 //!   decimal number kept as written, `boolean` true or false, `json` the JSON value,
 //!   `list<string>` comma-separated words, `duration` a number with `ms`, `s`, `m` or `h`, kept as
@@ -97,12 +105,13 @@ pub(crate) const GLOBAL_OPTIONS: [&str; 17] = [
 /// of the flag's name, given twice a list. A positional's own name fills that positional, as it
 /// did (its note says so); `operation` and `root` are the source command's own flags, which no
 /// row declares and the module writes as further flags, as before (the row's notes say so).
-/// Only the command line: `serve --stdio` takes the declared parameters only.
-pub(crate) const KEPT_FLAGS: [(&str, &str); 9] = [
-    ("runs", "instance"),
+/// Only the command line: `serve --stdio` takes the declared parameters only. Workflow #434 CLI-IN:
+/// `runs --instance <x>` and `monitor set --instance <x>`, two entries here before, are read by the
+/// rule every row with a positional instance follows ([`INSTANCE_FLAG`]), which gives them the
+/// same parameter.
+pub(crate) const KEPT_FLAGS: [(&str, &str); 7] = [
     ("run show", "id"),
     ("run evidence", "id"),
-    ("monitor set", "instance"),
     ("devices bind", "root"),
     ("op status", "op"),
     ("op status", "operation"),
@@ -139,6 +148,46 @@ pub(crate) const COMPLETED_ROWS: [(&str, &[&str]); 15] = [
 /// the first missing (`required`), as before, and one with both as the second `conflicting`, on
 /// the command line and in `serve --stdio` alike. `remedy set`'s rows file, or its rows inline.
 pub(crate) const ONE_OF: [(&str, &str, &str); 1] = [("remedy set", "file", "rows")];
+
+/// Workflow #434 CLI-IN (register §1.307): actinglab's global option that names the instance. On
+/// the command line of a row that declares a positional instance it is that positional: one
+/// spelling for every command that acts on one instance.
+pub(crate) const INSTANCE_FLAG: &str = "--instance";
+
+/// Workflow #434 CLI-IN: the positional instance of `operation` (its positional of type
+/// `instance`), which its command line also takes as [`INSTANCE_FLAG`]; `None` for a row without
+/// one (`remedy set` and `wake-test` declare the instance as an option of their own, and read
+/// `--instance` as that option).
+pub(crate) fn positional_instance(operation: &Operation) -> Option<&Param> {
+    operation.params.iter().find(|param| {
+        param.form == ParamForm::Positional && param.value_type == ParamType::Instance
+    })
+}
+
+/// Workflow #434 CLI-IN: a command line `words` that begins with `--instance <x>` before the words
+/// of an offered row that declares a positional instance: that row, and the line as the row's words,
+/// then `--instance <x>`, then the rest. `None` for every other line, which is read as before.
+pub(crate) fn instance_first<'a>(
+    table: &'a OperationTable,
+    words: &[String],
+) -> Option<(&'a Operation, Vec<String>)> {
+    let [flag, value, after @ ..] = words else {
+        return None;
+    };
+    if flag.as_str() != INSTANCE_FLAG || value.starts_with("--") {
+        return None;
+    }
+    let operation =
+        named(table, after).filter(|operation| positional_instance(operation).is_some())?;
+    let count = operation.name.split(' ').count();
+    let line = after[..count]
+        .iter()
+        .chain([flag, value])
+        .chain(&after[count..])
+        .cloned()
+        .collect();
+    Some((operation, line))
+}
 
 /// One operation and its parameters.
 #[derive(Debug, Clone, PartialEq)]
@@ -180,15 +229,82 @@ pub(crate) fn named<'a>(table: &'a OperationTable, words: &[String]) -> Option<&
 
 /// The call the command line `words` (after the front end's own `--json`) names.
 pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Outcome> {
-    let operation = named(table, words)
-        .ok_or_else(|| usage(words.first().map(String::as_str), ArgumentProblem::Unknown))?;
+    // Workflow #434 CLI-IN: `--instance <x>` may stand before the words of a row that takes the
+    // instance, as it may after them.
+    let reordered;
+    let (operation, words) = match named(table, words) {
+        Some(operation) => (operation, words),
+        None => {
+            let (operation, line) = instance_first(table, words).ok_or_else(|| {
+                usage(words.first().map(String::as_str), ArgumentProblem::Unknown)
+            })?;
+            reordered = line;
+            (operation, reordered.as_slice())
+        }
+    };
     let rest = &words[operation.name.split(' ').count()..];
+    // Workflow #434 CLI-IN: a line read as before until it names the instance by `--instance` is
+    // read again with the instance's place left to the flag.
+    let params = match read(operation, rest, false) {
+        Err(Stop::Flagged) => read(operation, rest, true),
+        first => first,
+    }
+    .map_err(Stop::refusal)?;
+    required(operation, &params)?;
+    Ok(Call {
+        name: operation.name.clone(),
+        params,
+    })
+}
+
+/// Why reading a row's words stopped.
+enum Stop {
+    /// The words are refused.
+    Refused(Outcome),
+    /// Workflow #434 CLI-IN: read with the instance's place among the positionals, the line names
+    /// the instance by `--instance`.
+    Flagged,
+}
+
+impl From<Outcome> for Stop {
+    fn from(outcome: Outcome) -> Self {
+        Self::Refused(outcome)
+    }
+}
+
+impl Stop {
+    /// The refusal the command line answers. A line read with the instance's place left to the
+    /// flag never stops as [`Stop::Flagged`]; were it to, the flag would be given twice.
+    fn refusal(self) -> Outcome {
+        match self {
+            Self::Refused(outcome) => outcome,
+            Self::Flagged => usage(Some(INSTANCE_FLAG), ArgumentProblem::Repeated),
+        }
+    }
+}
+
+/// The parameters of `operation` that `rest`, the words after the row's own, give. `flagged`
+/// (Workflow #434 CLI-IN): the line names the instance by `--instance`, which fills the row's
+/// positional instance; the other positional words skip its place, and one word too many means the
+/// line gives the positional instance as well (`repeated`, naming the word in the instance's
+/// place). Without it, the flag stops the reading ([`Stop::Flagged`]) and every word is read as
+/// before.
+fn read(operation: &Operation, rest: &[String], flagged: bool) -> Result<Map<String, Value>, Stop> {
     let mut params = Map::new();
     let positionals = operation
         .params
         .iter()
         .filter(|param| param.form == ParamForm::Positional)
         .collect::<Vec<_>>();
+    let instance = positional_instance(operation);
+    // Workflow #434 CLI-IN: the instance's place among the positionals, and the positional words
+    // read so far.
+    let instance_place = instance.and_then(|instance| {
+        positionals
+            .iter()
+            .position(|param| param.name == instance.name)
+    });
+    let mut given = Vec::new();
     let mut next = 0;
     // Workflow #434 LAB-5A: the flags of a row whose command reads them again go on as written
     // (Workflow #434 LAB-5B4: and no row hands on a flag it does not declare, or a further word).
@@ -201,6 +317,23 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
     let mut index = 0;
     while index < rest.len() {
         let word = rest[index].as_str();
+        // Workflow #434 CLI-IN: `--instance <x>` on a row that declares a positional instance is
+        // that positional (before this slice only `runs` and `monitor set`, `words::KEPT_FLAGS`,
+        // and `recover`, a global option handed on, read it so); a second one is `repeated`.
+        if word == INSTANCE_FLAG
+            && let Some(param) = instance
+        {
+            if !flagged {
+                return Err(Stop::Flagged);
+            }
+            let value = rest
+                .get(index + 1)
+                .filter(|value| !value.starts_with("--"))
+                .ok_or_else(|| usage(Some(word), ArgumentProblem::ValueMissing))?;
+            put(&mut params, param, typed(param, value, word)?, word)?;
+            index += 2;
+            continue;
+        }
         if let Some(flag) = word.strip_prefix("--") {
             let name = flag.replace('-', "_");
             let declared = operation
@@ -244,9 +377,18 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
                     put(&mut params, param, typed(param, value, word)?, word)?;
                     index += 2;
                 }
-                None => return Err(usage(Some(word), ArgumentProblem::Unknown)),
+                None => return Err(usage(Some(word), ArgumentProblem::Unknown).into()),
             }
         } else {
+            given.push(word);
+            // Workflow #434 CLI-IN: the flag names the instance; the word is the next of the
+            // row's other positionals.
+            if flagged
+                && let (Some(instance), Some(param)) = (instance, positionals.get(next))
+                && param.name == instance.name
+            {
+                next += 1;
+            }
             match positionals.get(next) {
                 Some(param) if param.repeat => {
                     append(&mut params, &param.name, typed(param, word, word)?);
@@ -255,16 +397,22 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
                     put(&mut params, param, typed(param, word, word)?, word)?;
                     next += 1;
                 }
-                None => return Err(usage(Some(word), ArgumentProblem::Unknown)),
+                // Workflow #434 CLI-IN: a word beyond the other positionals, with the flag: the
+                // line gives the positional instance too, the word in the instance's place, which
+                // the refusal names.
+                None if flagged => {
+                    let repeated = instance_place
+                        .and_then(|place| given.get(place))
+                        .copied()
+                        .unwrap_or(word);
+                    return Err(usage(Some(repeated), ArgumentProblem::Repeated).into());
+                }
+                None => return Err(usage(Some(word), ArgumentProblem::Unknown).into()),
             }
             index += 1;
         }
     }
-    required(operation, &params)?;
-    Ok(Call {
-        name: operation.name.clone(),
-        params,
-    })
+    Ok(params)
 }
 
 /// The call one `serve --stdio` line `{op, params}` names; the parameters are those the CLI's

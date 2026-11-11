@@ -83,7 +83,7 @@ pub(super) fn help_data() -> Value {
         "global_options": [
             "--json",
             "--run-root <path>",
-            "--instance <id>",
+            "--instance <id> (names the instance on every command that acts on one; on an operation row it stands for the row's <instance>, never beside it)",
             "--instances <id,id,...>",
             "--profile <name>",
             "--resource-root <path>",

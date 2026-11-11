@@ -504,7 +504,30 @@ sentence fails that test.
 
 ### 9.3 Defaults and output (LAB-1, LAB-2)
 
-- The instance is a positional (`<inst>`): an alias, an `instance_id` or an ADB port.
+- The instance is a positional (`<inst>`): an alias, an `instance_id` or an ADB port. **One
+  spelling for every command** (Workflow #434 CLI-IN, register §1.307; the coordinator's rulings of
+  2026-11-11, not Alice's words): on actinglab's command line a row that declares a positional
+  instance also takes actinglab's global `--instance <inst>` in its place, after the row's words or
+  before them (`actinglab pause --instance <inst>`, `actinglab --instance <inst> pause`), and the
+  row's other positionals keep their order (`devices bind --instance <alias> <handle>`, `offset
+  <task> <ms> --instance <inst>`); a row whose instance is optional takes it the same way. The table
+  records it in the parameter's `note`, one text on every such row: "on the command line also
+  --instance <x>, in place of the positional". The positional and the flag on one line, whether or
+  not they name the same instance, are refused before anything is read or sent, as a surplus word
+  is (LAB-5B4): `argument_problem` `repeated`, `argument` the word that gives the instance a second
+  time (the positional instance's word, or `--instance` given twice), with
+  `actingctl_usage_invalid` on a row of the CLI module and actinglab's `validation_failed` on a row
+  its own command serves under other words (`app launch|restart|stop`, `recover`); `--instance`
+  without a value is refused `value_missing`. A line without `--instance` is read as before; a line
+  with `--via` that begins with `--instance` stays actinglab's own, as before. The 20 rows
+  actinglab's own
+  command serves under the row's own name (`tap`, `swipe`, `long-tap`, `key`, `text`,
+  `touch-probe`, `do`, `ensure`, `wait`, `tap-target`, `navigate`, `observe`, the seven `record`
+  rows and `locate`) take the instance on the command line only as `--instance`, as before (their
+  note: "on the command line only --instance <x> …"); none gains a positional instance (for `do`,
+  `ensure`, `wait` and `text` it would be read as the target, the page or the text). `remedy set`
+  and `wake-test` declare `instance` as an option of their own and read `--instance` as that
+  option, as before. `serve --stdio` and MCP are unchanged: they pass the parameter `instance`.
 - The root is located from the program's own place (a slot's `…\runtime\actinglab.exe`, or a fixed
   entry); the state root comes from the selected configuration. No operation takes the
   installation's root or its state root as `--root` or `--state-root` (`new` names its new root).
@@ -644,7 +667,10 @@ sentence fails that test.
       Runtime only through the state root's `runtime-info.json`, whose host must be loopback. A
       line with `--via` stays actinglab's own (its dispatch knows neither word); `--version` before
       the words makes the line actinglab's `version`, and a value actinglab's parser refuses is
-      its refusal, as before.
+      its refusal, as before. Since Workflow #434 CLI-IN the rows take `--instance <inst>`, which
+      names their instance (section 9.3's first rule), before or after the words alike; a line
+      that begins with it and has another global option before the words is refused naming
+      `--instance` as before.
   - `--envelope` is gone: nothing needs it once actinglab's own command lines answer as before.
   - The catalog holds no phrase for a code, so the line for people is the code with its values,
     and none is made up; the small table is the result's members. The CLI module locates the

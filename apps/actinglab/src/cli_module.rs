@@ -21,7 +21,9 @@
 //! - **Words.** Short words taken from the operation table (`contracts/lab-operations.json`): the
 //!   operations of the core, debugging and authoring modules that LAB-1, LAB-1b and LAB-2 built
 //!   ([`words`]). Every operation offered is a table row. The instance is a positional (an alias,
-//!   an `instance_id` or an ADB port); there is no `--root` and no `--state-root` ([`place`]).
+//!   an `instance_id` or an ADB port), which (Workflow #434 CLI-IN) the command line also takes as
+//!   actinglab's global `--instance <x>`, after the row's words or before them, never both; there
+//!   is no `--root` and no `--state-root` ([`place`]).
 //! - **Output** of the module's operations. For people by default: one line with the result code
 //!   (the outcome catalog holds no phrase for a code, so the code alone, with its values) and the
 //!   result's members as a small table. `--json` prints the one line `cli_line` builds,
@@ -134,8 +136,9 @@ pub(crate) const JSON: &str = "--json";
 const SERVE: &str = "serve";
 /// The developer text of a command line the module refuses.
 const USAGE: &str = "usage: actinglab [--json] <operation words> [<positionals>] \
-     [--<option> <value>] [--<switch>]; contracts/lab-operations.json lists the operations; \
-     actinglab serve --stdio answers one {op, params} per line";
+     [--<option> <value>] [--<switch>]; a row's <instance> may be written --instance <instance> \
+     instead; contracts/lab-operations.json lists the operations; actinglab serve --stdio answers \
+     one {op, params} per line";
 /// The developer text of an `ACTINGCOMMAND_INITIATOR` this process does not take.
 const INITIATOR_TEXT: &str = "ACTINGCOMMAND_INITIATOR takes Lab-制包 or Lab-救急; without it \
      actinglab is Lab-CLI";
@@ -165,7 +168,17 @@ pub(crate) fn route(arguments: Vec<String>) -> Route {
         return Route::Module(arguments);
     }
     let loaded = table().ok();
-    let named = loaded.and_then(|table| words::named(table, &words));
+    // Workflow #434 CLI-IN: also the row whose words follow `--instance <x>` when it takes the
+    // instance (`words::instance_first`), but on a line with `--via`, which stays as it was.
+    let named = loaded.and_then(|table| {
+        words::named(table, &words).or_else(|| {
+            if own_line::via_line(&arguments) {
+                None
+            } else {
+                words::instance_first(table, &words).map(|(operation, _)| operation)
+            }
+        })
+    });
     if let Some(operation) = named
         && core_ops::serves(operation)
         && !crate::own_command(&name_words(&operation.name))

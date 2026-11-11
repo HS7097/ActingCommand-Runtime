@@ -129,6 +129,9 @@ mod gate_429_r6;
 // reads bounded by sequence; with one it reads as before.
 #[path = "gate_434_cli_ev.rs"]
 mod gate_434_cli_ev;
+// Workflow #434 CLI-IN: `--instance <alias>` names the instance on every command that acts on one.
+#[path = "gate_434_cli_in.rs"]
+mod gate_434_cli_in;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
