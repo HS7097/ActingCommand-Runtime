@@ -968,3 +968,15 @@ test = "actingcommand-runtime-host::lib::tests::gate_429_r0::r0c_pack_schedule_v
 ruling = "Workflow #429 R-8 (the plan's slice row R-8 and A.7.1 point 6, board #429 comment 6535257887; the coordinator's work order of 2026-11-11)"
 reason = "The test pinned that PackScheduleView is refused not_implemented with no effect, which was to hold only until the slice that builds the read (its own row said: until R-8). R-8 builds the read, so the refusal it pinned no longer exists."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_429_r8::r8_the_view_lists_the_instance_packages_and_an_unknown_package_is_reported_once, in the host.toml row that replaced it: the view answers, records nothing and changes no status, and an alias no instance has is refused instance_unknown."
+
+# Workflow #429 R-6b2 (register §1.316): StopInstanceRun stops a policy run; R-6's first slice
+# refused it. The test that pinned the refusal keeps its host half and is renamed for its policy
+# half, which now asks the run to stop.
+
+# host.toml, the row of Workflow #429 R-6 (first slice), which keeps the renamed test.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_429_r6::r6_a_host_run_and_a_policy_run_are_refused_with_their_origin_and_nothing_is_cancelled"
+ruling = "Workflow #429 R-6b (register §1.314, the coordinator's answers of 2026-11-11 to its eight questions; the coordinator's work order rd-1111/brief-r6b2-stop-settle.md)"
+reason = "The test pinned that StopInstanceRun refuses a policy run with run_origin policy and asks nothing of it, which was to hold only until R-6b with ledger 8 (its row said: until R-6b). R-6b2 stops a policy run, so its name's sentence no longer holds; its host half (a host run refused with run_origin host, nothing asked of it) is unchanged."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_429_r6::r6_a_host_run_is_refused_with_its_origin_and_a_policy_run_is_asked_to_stop, in the same host.toml row: the host run is still refused with run_origin host and its request, recorded, nothing asked of it; the policy run is asked to stop. The stop of a real policy run end to end is gate_429_r6b2's."

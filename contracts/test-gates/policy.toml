@@ -1335,3 +1335,12 @@ tests = [
     "actingcommand-selection-policy::lib::gate_428_s168_lb1b::lower_bound_member_needs_package_9",
 ]
 incident = ["#428 S168-LB1b"]
+
+# Workflow #429 R-6b2 (0.12.55; register §1.314 "What a stopped run leaves, per trigger" and answer 5, §1.316; brief rd-1111/brief-r6b2-stop-settle.md): what the scheduler does after a run a StopInstanceRun stopped, whose snapshot the Runtime projects cancelled with its dispatch as last_dispatched_unix_ms: an hourly clock's occurrence is served by the stopped dispatch, Blocked trigger_false until the next hour, while a dispatch stopped before the hour's start leaves it due; a fact_time_reached reading with once_per_reading is not served by a stop (no fact_time_served): the task is Deferred task_cooldown_active waking at the stopped dispatch plus its cooldown, then dispatched, where a success would have served it; the fact refresh's reader stopped after max_consecutive_failures failures in a row is not exhausted (no failure_pause), takes no failure backoff and names no failure, only its minimum interval from the stopped dispatch, at whose end it reads again
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_405_cf1::r6b2_a_stopped_run_serves_its_clock_occurrence_and_not_a_reading",
+    "actingcommand-policy::lib::tests::gate_d2_s4::r6b2_a_stopped_reader_is_no_failure_in_a_row",
+]
+incident = ["#429 R-6b2"]

@@ -169,6 +169,9 @@ pub(crate) enum ContainedTaskCheckpointPoint {
     /// ISO-5a (#419, ISO-M row B17): a lease release (a run's own, after its terminal), after its
     /// first validation and before the admission guard is taken.
     ReleaseValidated,
+    /// Workflow #429 R-6b2 (answer 8): a scheduled run's preparation, after its control entered
+    /// the run registry and before its package is read.
+    ScheduledPreparation,
 }
 
 #[cfg(test)]
@@ -905,17 +908,14 @@ impl ContainedRunControl {
         }
     }
 
-    /// Workflow #429 R-6 (register §1.302): who started a run that `StopInstanceRun` refuses: the
-    /// Runtime itself (a startup package, a ladder rung) or the scheduler (a policy run, which the
-    /// first slice refuses until `ledger` 8). `None` for a client's direct run, which it stops.
+    /// Workflow #429 R-6 (register §1.302) and R-6b2 (§1.314 R6B-1, §1.316): who started a run
+    /// that `StopInstanceRun` refuses: only the Runtime itself (a startup package, a ladder rung,
+    /// an idle action's rest), marked before the run enters the registry. `None` for every run it
+    /// stops: a client's direct run and, since 0.12.55, a policy run (a fact refresh read
+    /// included), which settles as a stop. A client's own `CancelContainedTask` still refuses
+    /// every run that is not its direct run (`client_cancellable`).
     pub(super) fn stop_refused_origin(&self) -> Option<RunOrigin> {
-        if self.client_cancellable {
-            None
-        } else if self.is_host_package() {
-            Some(RunOrigin::Host)
-        } else {
-            Some(RunOrigin::Policy)
-        }
+        self.is_host_package().then_some(RunOrigin::Host)
     }
 
     /// Workflow #429 R-6: a `StopInstanceRun` asks the run to stop at its next checkpoint, as its
@@ -937,10 +937,12 @@ impl ContainedRunControl {
         }
     }
 
-    /// Workflow #429 R-6: at the reset point of a run its client's cancel ended, before its lease
-    /// ends: whether a `StopInstanceRun` asked for the stop, so that the Runtime resets the device
-    /// with the run's lease. A run no stop asked for passes the point: the client that cancelled
-    /// it resets the device, as before R-6, and a later stop finds the run ending on its own.
+    /// Workflow #429 R-6: at the reset point of a run a `ClientRequested` cancel ended, before its
+    /// lease ends: whether a `StopInstanceRun` asked for the stop, so that the Runtime resets the
+    /// device with the run's lease (a direct run's, and since R-6b2 a policy run's, on which only
+    /// that stop asks it). A direct run no stop asked for passes the point: the client that
+    /// cancelled it resets the device, as before R-6, and a later stop finds the run ending on
+    /// its own.
     fn take_runtime_stop(&self) -> bool {
         match self.runtime_stop.compare_exchange(
             Self::STOP_NONE,
@@ -980,8 +982,9 @@ impl ContainedRunControl {
         self.stop_reset.get().cloned()
     }
 
-    /// Workflow #429 R-6 tests: the control of a run of `instance_id` that no client may stop: a
-    /// host run (`host`) or a policy run.
+    /// Workflow #429 R-6 tests: the control of a run of `instance_id` that no client's own cancel
+    /// may end: a host run (`host`), which `StopInstanceRun` refuses too, or a policy run, which
+    /// it stops (R-6b2).
     #[cfg(test)]
     pub(super) fn not_client_cancellable_for_test(
         request_id: RequestId,
@@ -7201,7 +7204,7 @@ impl HostShared {
             None,
         ))?;
         let active_run =
-            self.begin_contained_run(original.request_id(), resolved.instance_id(), true)?;
+            self.begin_contained_run(original.request_id(), resolved.instance_id(), true, false)?;
         // Workflow #387 D1c (B1): a direct run's failed end starts a ladder only under
         // `recovery_ladder.rules.direct_runs = trigger`, which `ladder_at_lease_end` reads.
         let ladder_correlation_id = self
@@ -7517,13 +7520,14 @@ impl HostShared {
             None,
             None,
         ))?;
+        // Workflow #390 EXEC-3: a startup package or a ladder rung's package, marked as the host's
+        // own run before it enters the registry.
         let active_run = self.begin_contained_run(
             task_request_message.request_id(),
             resolved.instance_id(),
             false,
+            true,
         )?;
-        // Workflow #390 EXEC-3: a startup package or a ladder rung's package.
-        active_run.control.note_host_package();
         active_run
             .control
             .set_deadline(
@@ -7929,32 +7933,15 @@ impl HostShared {
             self.contained_task_deadline(task_request, token)
                 .and_then(|deadline| self.package_material_deadline(deadline))
         };
-        let prepared = if execution_provenance == ExecutionBackendProvenance::PhysicalDevice {
-            Some(self.prepare_scheduled_package(
-                context.decision_id(),
-                instance_alias,
-                task_request,
-                material_deadline,
-                prerequisite_deadline,
-            )?)
-        } else {
-            None
-        };
-        let admitted_instance = self.validated_instance(&validated, token, connection_id)?;
-        if admitted_instance.instance_id() != resolved.instance_id()
-            || admitted_instance.provenance() != execution_provenance
-        {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    HostCode::PolicyRunExecutionIdentityMismatch,
-                    HostLocation::RunScheduledContainedTask,
-                    RuntimeErrorCode::RuntimeHalted,
-                ),
-            ));
-        }
+        // Workflow #429 R-6b2 (register §1.314 answer 8, §1.316): the run's control enters the
+        // run registry before its package's preparation, for either provenance, so that a
+        // `StopInstanceRun` that names the run while it prepares reaches it and the run ends at
+        // its first checkpoint. Its deadline is the one the preparation reads under. A preparation
+        // that fails ends as before: its refusal returns, and the run leaves the registry with it.
         let active_run = self.begin_contained_run(
             task_request_message.request_id(),
             resolved.instance_id(),
+            false,
             false,
         )?;
         // Workflow #369 H-1 (review M-1): only this path gives its failed lease end a ladder
@@ -7988,6 +7975,39 @@ impl HostShared {
             .control
             .set_deadline(source_deadline)
             .map_err(RequestFailure::poison_without_terminal)?;
+        #[cfg(test)]
+        self.consume_contained_task_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::ScheduledPreparation,
+            ContainedTaskCheckpointIdentity::new(
+                task_request_message.request_id(),
+                token.instance_id(),
+                token.lease_id(),
+            ),
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
+        let prepared = if execution_provenance == ExecutionBackendProvenance::PhysicalDevice {
+            Some(self.prepare_scheduled_package(
+                context.decision_id(),
+                instance_alias,
+                task_request,
+                material_deadline,
+                prerequisite_deadline,
+            )?)
+        } else {
+            None
+        };
+        let admitted_instance = self.validated_instance(&validated, token, connection_id)?;
+        if admitted_instance.instance_id() != resolved.instance_id()
+            || admitted_instance.provenance() != execution_provenance
+        {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    HostCode::PolicyRunExecutionIdentityMismatch,
+                    HostLocation::RunScheduledContainedTask,
+                    RuntimeErrorCode::RuntimeHalted,
+                ),
+            ));
+        }
         let (prepared, prerequisites, package_load, standard_pack) = match prepared {
             Some(prepared) => prepared,
             None => self.prepare_scheduled_package(
@@ -8591,13 +8611,15 @@ impl HostShared {
                                 RuntimeErrorCode::RuntimeHalted,
                             ))
                         })?;
-                    // Workflow #429 R-6 (register §1.302): a client's run that `StopInstanceRun`
-                    // stopped is reset by the Runtime with the run's own lease, before its terminal
-                    // and its lease end; its client owes no `SafeReset`. A reset that failed fenced
-                    // the instance only, and the lease ends below as a failed one does.
-                    let reset_failed = !scheduled
-                        && reason == ContainedTaskCancellationReason::ClientRequested
-                        && control.take_runtime_stop()
+                    // Workflow #429 R-6 (register §1.302) and R-6b2 (§1.314 R6B-2, §1.316): a run
+                    // that `StopInstanceRun` stopped, a client's direct run or a policy run, is
+                    // reset by the Runtime with the run's own lease, before its terminal and its
+                    // lease end; a direct run's client owes no `SafeReset`. A reset that failed
+                    // fenced the instance only (#419), and the lease ends below as a failed one
+                    // does. On a policy run only that stop asks `ClientRequested`.
+                    let runtime_stop = reason == ContainedTaskCancellationReason::ClientRequested
+                        && control.take_runtime_stop();
+                    let reset_failed = runtime_stop
                         && self.reset_stopped_run(
                             request,
                             &token,
@@ -8662,6 +8684,17 @@ impl HostShared {
                             outcome: failure.error.outcome(),
                             severe: false,
                         });
+                        // Workflow #429 R-6b2 (register §1.314 (i), (l)): a stopped policy run
+                        // notes no ladder trigger, whatever `recovery_ladder.triggers` lists, also
+                        // when its reset failed and fenced the instance: its committed terminal
+                        // is taken off its control, so its lease ends as a failed run's and hands
+                        // the instance to no ladder. Its settlement (`stopped`) follows on the
+                        // policy lane.
+                        if runtime_stop {
+                            control
+                                .take_failed_terminal()
+                                .map_err(RequestFailure::poison_without_terminal)?;
+                        }
                         return Err(self.cleanup_composite_failure_with_run_links(
                             request,
                             token,
@@ -10557,11 +10590,15 @@ impl HostShared {
             .is_some_and(|phase| now < phase.until_monotonic_ms))
     }
 
+    /// Registers the run `request_id` of `instance_id`: `client_cancellable` for a client's direct
+    /// run, `host` for a run the host starts itself (Workflow #390 EXEC-3), marked before the run
+    /// enters the registry so that no stop ever sees a host run unmarked (Workflow #429 R-6b2).
     fn begin_contained_run(
         &self,
         request_id: RequestId,
         instance_id: InstanceId,
         client_cancellable: bool,
+        host: bool,
     ) -> Result<ActiveContainedRun<'_>, RequestFailure> {
         let mut active = lock(&self.contained_runs, HostLocation::BeginContainedRun)?;
         if active.contains_key(&request_id) {
@@ -10574,6 +10611,9 @@ impl HostShared {
             instance_id,
             client_cancellable,
         ));
+        if host {
+            control.note_host_package();
+        }
         active.insert(request_id, Arc::clone(&control));
         drop(active);
         Ok(ActiveContainedRun {
