@@ -9128,6 +9128,88 @@ yet but the table's tests.
 
 **LAB-5E rollback** (to the release before it). Nothing persisted: code and the table's text.
 
+#### Slice LAB-5G1 (0.12.52): the core rows' serving code moves into the operation layer and takes its connection from its caller
+
+Coordinator work order `rd-1108/arch-013/brief-lab5g1.md`, after the read-only survey
+`rd-1108/arch-013/lab5g-step0-survey.md` (§2 to §4); the coordinator's rulings on board #434
+(6775192250 points 1 and 4, 6769399787 point 10); on main `39c0c935` (LAB-5C). The rule of the slice:
+nothing a program prints or does changes. Every line of `actinglab` on the command line and in
+`serve --stdio` stays byte for byte; actingctl's lines too; today's MCP server
+(`apps/actingctl/src/mcp`) is not touched. **Cut as the work order says** (it passes about 2,000
+changed lines with the moved ones): this slice is the move, the connection input and actinglab's
+call; the budget, the cursor binding and the MCP front are a second slice (below).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G1-1 | `apps/actinglab/src/cli_module/core_ops.rs` moved whole to `crates/lab-ops/src/core_ops.rs` (own commit); `serves`, `answer`, `offline_words`, `handed_words`, `MaterialRead`, `material_read`, `material_written` public; `MORE_WORDS`, `further_flags`, `parse_duration` moved with it from `words.rs`, which reads them from there | moved code | LAB-5G1 | actinglab's CLI module | the mapping from a row and its parameters to the operation that serves it, for every row `core_ops` served: the 42 core rows but `app launch\|restart\|stop` (actinglab's own `session app`, unchanged) and `run start`, `run stop`, `reset`, `drill`. The same checks in the same order, the same functions called, the same words handed on |
+| L5G1-2 | `core_ops::Caller {place, unlocated, completed, connection}` and `core_ops::Place {state_root, root}` | new type | LAB-5G1 | actinglab (`cli_module::core_ops::caller`) | what stays the program's: `place`, asked for when a row needs it as before (`packs` its install root first, every row but `codes`, `gap`, `packs` its state root); `unlocated`, the developer text of a state root not located; `completed`, the code `lab_operation_completed`, the catalog owner `actinglab`'s, which only actinglab's registry emits (outcome guard G1) |
+| L5G1-3 | `lab_ops::front::Connection` (`Connect(Front)`: a connection made for the call as that front connects, `front::config`; `Kept(&RuntimeClient)`: the caller's), `Connection::per_call` (`Connect(current())`), `Connection::reach`, `Reached` (`Made`, `Kept`; `Deref` to the client, `into_client`), `front::config(front, state_root)` | new type | LAB-5G1 | `core_ops` | the connection input. Every row that reads the Runtime takes it, each of the three ways: the words of a command of `lab-ops` (`dispatch_on` of `overview`, `diagnose`, `events`, `run_list`, `run_evidence`, `remedy` with `dispatch_rows_on`, `routine_summary`, `perf_preset`, `evidence_read`, `observe_export`; each `dispatch` is its `dispatch_on` with `Connection::per_call()`, so actingctl is unchanged) and the parameters read on a client. `codes`, `gap`, `packs` and `devices` read no Runtime. A kept connection is used as it is: a detail `ACTINGCOMMAND_DETAIL` asks for is the caller's to set on it |
+
+**What stayed in actinglab, and why.** The place of the program (`cli_module/place.rs`: the root
+from its own place, the state root from the selected configuration or
+`ACTINGCOMMAND_RUNTIME_STATE_ROOT`), its developer text and `lab_operation_completed`: they are
+actinglab's, and are given as `Caller`. The words (`words.rs`: the short words, `serve`'s JSON,
+`offered`, the kept flags), the routing (`cli_module::route` and `answer`), the engine of
+actinglab's own commands (`engine.rs`, `own_line.rs`), `serve`'s loop and the printing.
+`cli_module::core_ops` is now a small module of `cli_module.rs`: `answer` calls the moved code
+with `caller()` (connected per call as the program in force, as before), and for LAB-5C's test it
+re-exports the names that test reads.
+
+**A row a kept connection does not serve as a connection made for the call does.** `shutdown
+--wait` closed its connection before it waited for the Runtime to end (`shutdown::wait`); on a kept
+connection it drops only a clone, and the caller's connection stays open while the wait reads the
+shutdown. Served so, not reconnected; the server's slice decides whether its front closes its
+connection first. **What one call leaves on a kept connection for the next:**
+
+- The client holds the connection for each whole exchange, so on a kept connection a long exchange
+  blocks every other call that shares it: `run start` until its receipt, `run stop` without
+  `--cancel-only` up to the longest deadline a run may have, and a `--wait` that expired and left
+  its worker waiting for the receipt on a clone of the connection.
+- A failed exchange leaves the connection answering that failure to every later call.
+- So a caller that keeps connections (the MCP server) gives each write its own connection and drops
+  a connection after a failure, as today's MCP server does (`apps/actingctl/src/mcp/operator.rs`,
+  `begin_write`; `runtime.rs`, `connect_fresh` and `failure`). With a connection made for each
+  call, which is all actinglab uses, none of this arises.
+
+**Left for the second slice** (the work order's cut): the budget (`Option<&Budget>` into `answer`
+and the steps of the eleven reads that shape, the line carrying `Fitted.exported` as a warning);
+the cursor binding (`CursorBinding` into `events` and `diagnose`'s errors page, actinglab passing a
+fresh one; `runs`' and `codes`' cursors bind to no session today, each carries its own position and
+query fingerprint, so a binding there would change what actinglab prints and takes: a ruling is
+needed); the MCP front (`Front::Mcp`: channel `mcp`, envelope (Cli, Cli), and the test that it
+equals the configuration `apps/actingctl/src/mcp/runtime.rs` builds). **Rows without answer
+shaping** (for the server's slice to bound): every row of `core_ops` but `status`, `diagnose`,
+`events`, `schedule`, `runs`, `run evidence`, `codes` (cut), `facts` (whose read `config` shares),
+`packs`, `remedy` (the read, MCP's `ac_remedy_get`; `remedy set|lift` have none) and `summary`
+(export). The second slice must also settle:
+
+- `Caller.completed`: the code `lab_operation_completed` is actinglab's own
+  (`apps/actinglab/src/codes.rs`), so another program cannot build it today; a registry decision.
+- A caller must refuse the members a row does not declare itself, as actinglab's words do; the
+  moved code does not refuse them on every row.
+- `status` answers `watchdog: null` unless the caller sets the watchdog block
+  (`overview::set_watchdog_block`), as actinglab does on Windows.
+- Relative paths in parameters resolve against the caller's current directory.
+
+**Tests.** New: apps row "#434 LAB-5G1" (`gate_434_lab5g1` in actinglab's binary tests, against the
+runtime client's scripted Runtime, `test_support::ScriptedRuntime`; no device, no clock, no sleep):
+`lab5g1_three_ways_serve_on_a_kept_connection` (`codes`, `events`, `resume`) and
+`lab5g1_debugging_rows_serve_on_a_kept_connection` (`run start` and `reset` refused by the Runtime,
+`run stop --cancel-only`, `drill`): the moved code on a kept connection answers the line and exit
+code the CLI module prints for the same words, the request and correlation ids each run issues
+masked; both connections carry the same requests after their handshake (`codes` none); no other
+connection is made. No existing test changed: `gate_434_lab5c` reads `core_ops::offline_words`,
+`handed_words`, `material_read`, `MaterialRead` and `material_written` through actinglab's
+`cli_module::core_ops` as before; `gate_434_lab2`, `gate_434_lab2b`, `gate_434_lab5a`,
+`gate_434_lab5d` and `lab_ops_table_complete` are untouched.
+
+**Interface.** None raised: nothing on the wire, in the ledger or in a file changes; no code, key,
+location or revision is added.
+
+**What LAB-5G1 changes live.** Nothing a person, a client or the Runtime sees.
+
+**LAB-5G1 rollback** (to the release before it). Nothing persisted: code only.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
@@ -10602,6 +10684,158 @@ no sleep, no model file). No existing test changed: none called the request path
 `remaining_inference_budget` or the detector's load (`gate_407_gpu1b1`, `gate_407_gpu1b2` and
 `gate_407_gpu1e` build sessions through `ModelSessions` over their own fakes).
 
+### 1.299 Workflow #428 SCHED-C1 (contracts only): a rule's fixed value written in its pack, a valuation the pack declares, and the capped spending order's follow-ups (a trigger line, lines for one instance, episodes that survive, a pool its lines cannot spend, redundant old triggers); slices SCHED-C1a to SCHED-C1e (Alice's two kinds of scoring of 2026-11-09 15:47 and 15:50, board #428 6734155178, and her words of 15:57, 6734197818; her capped spending order and its two lines of 11-09, 6734854946 and 6735960127, and the planned red line of 11-07, 6706630435; the coordinator's rulings of 11-11, not Alice's words, coordinator work order `rd-1111/brief-sched-contract-c1.md`, on the facts checked on 11-11 in `rd-1111/audit-check/findings-rt-policy.md` and `findings-res.md`; design `rd-1031/design-c424-redline-1109.md` §1.6 and §4; read on main `c0edc8b2`)
+
+[scheduling/README.md](scheduling/README.md) ("Pool Valuation", "A valuation written in the pack";
+"Net benefit within a tier"; the new "Fixed values written in the pack"; "Pool lines" with "The
+trigger line", "Lines for one instance" and "A pool its lines cannot spend"; "Capped spending
+order" with "Episodes survive" and "Old triggers on a capped pool"; "Bounds") and
+[standard-pack-schedule.md](standard-pack-schedule.md) ("The file", `requires`, "Judged rules",
+"The fixed value", "Provenance", "What a resource repository writes", "Composition", "Tools", "A
+redundant trigger", "The scheduler workbench") are the contract. 1.299 is the next free number on
+`c0edc8b2`, where §1.298 is VIS-LOAD-1; the code slices add their rows under this section.
+
+**SCHED-C1 itself.** Contracts only: no code, no test, no schema file, no gate row, no CI file, no
+configuration key, no code of the outcome catalog, and no live revision raised. Every rule it adds
+is marked "(SCHED-C1, not built yet)" in the text. The rows that
+[v2/README.md](scheduling/v2/README.md), the schemas, [runtime-config.md](runtime-config.md),
+[actingd-check-config.md](actingd-check-config.md), [runtime-interface.md](runtime-interface.md)
+and the outcome catalog need are written by the code slice that builds each shape. The text names
+no game, resource or value.
+
+**Alice's words** (only these; ids above). 15:47: 「这个已经有结论了，就直接用固定值」 and
+「第一个就是在任务包里面已经写明了，这种就直接沿用就行。另一种是需要动态决策的，这种我们在启用打分器，在自己算。」;
+15:50: 「我们的这个数据建模它本身也是一个打分器，只不过它是产出的是离线数据，这个用来解决当前已经固定的。」;
+15:57, of the present benefit rule:
+「要是阻碍运行或者是不符合预期的话，就直接按照新的方法重写一遍就行。能跑就暂时可以先不用动它」; 17:42, of
+the lines: 「这个红线会随着时间由外部修改」; 11-07 (6706630435), of the planned red line:
+「不让资源达到上限，但是保留一些资源用于某些限时的，收益高的任务」. The trigger at the cap is point 2 of the ten points the
+coordinator wrote down from her approval of 17:48 (6735960127), and the old triggers point 9.
+
+**Why.** Every one of the four resource repositories' 237 schedule rules has empty `produces` and
+`consumes`; 136 are judged and would be refused `benefit_unknown` (`no_effects`) once the stop of
+ruling 116 is lifted, and no pool declares a valuation, so the lines written on three pools change
+no decision. A judged rule cannot carry a fixed value (`value_milli` is the score stage's term and
+`judge` does not read it). The capped spending order works only for valued pools, keeps its
+episodes in memory only (lost at a start, a new catalog generation and an expired reading), starts
+only at the cap, takes its lines only from the catalog, and reports a pool stuck at its cap only as
+an info reason. Alice's 15:57 words leave the present rule alone while it runs; it now blocks
+running, so the coordinator proceeds without asking again.
+
+**The coordinator's rulings of 11-11** (not Alice's words; the names, codes and shapes are this
+draft's, for the coordinator's review), each with its section:
+
+1. A rule may declare a fixed value, a new V2 task member `benefit_fixed_value_milli` (from the
+   `schedule.json` rule member `fixed_value_milli`), not `value_milli`; without effects it is its
+   known `B` (scheduling/README.md, "Fixed values written in the pack", "The member", "Without a
+   consumption").
+2. A consumer's fixed value is `V`; below the cap `V − W·c`, in a capped episode by `V ÷ c`; `W` may
+   be a constant valuation the pack declares, which the compiler already accepts, its origin marked
+   by `valuation_origin` ("With a consumption"; "A valuation written in the pack").
+3. Static and dynamic rules rank on one scale, `B ÷ E` inside the tier, with no second stage ("One
+   scale").
+4. Refused at compile time: a fixed value with a priced product or with the realization mark,
+   `fixed_value_conflict`; without `benefit_judged`, `missing_required_field` ("Refused at compile
+   time").
+5. `benefit_fixed_value` (info) on every decision whose `B` came from a fixed value ("What a person
+   sees").
+6. Provenance in the tools (`benefit_provenance`) and the workbench (`config.catalog_provenance`)
+   (standard-pack-schedule.md, "Provenance").
+7. The table by rule class (standard-pack-schedule.md, "What a resource repository writes").
+8. Lines for one instance through the Lab's `config set` and `config clear`, the key
+   `instance.<instance id>.scheduling.pool_lines` (scheduling/README.md, "Lines for one instance").
+9. Episodes survive a start, a generation with unchanged consumers and an unknown reading, in the
+   state file `policy/capped-episodes.json` ("Episodes survive").
+10. An optional `trigger_line`, absent the capacity ("The trigger line").
+11. A pool its lines cannot spend is the warning `pool_lines_unspendable`, in the status read ("A
+    pool its lines cannot spend").
+12. The old "reading ≥ capacity − margin" triggers are redundant once the pool is valued with lines;
+    the composer reports each (`standard_pack_line_trigger_redundant`) ("Old triggers on a capped
+    pool"; standard-pack-schedule.md, "A redundant trigger").
+
+**Where this changes or adds to the design** (`rd-1031/design-c424-redline-1109.md`):
+
+- §1.6 item 4, last point (the state in memory only, lost at a restart) and §4.1 test 16: changed;
+  episodes survive a start, a generation with unchanged consumers and an unknown or expired reading.
+- §1.6 item 3, the trigger (at or above the cap): added to; an optional trigger line, the cap
+  without one.
+- §1.6 item 1 (lines moved per instance through SS-2h-c) and §4.3 (SS-2h-c as the member
+  `pool_lines` of #429's v3 document through `ApplyResourceTargets`, after R-13a): changed; a
+  per-instance configuration key through `ConfigureSettings`, not waiting for R-13a.
+- §1.6 item 1 (`H = S − the costliest run`): added to; the state it prevents is checked and is a
+  warning.
+- §1.6 item 8 and §4.5 (the old triggers changed in RL-R with PRICE-4b's valuations): added to; the
+  composer's hint; and a pool's valuation may be the pack's constant, so the change need not wait
+  for PRICE-4b.
+- §1.6 item 9 (no valuation, so nothing changes at deploy) and §3.1 (the coordinator's earlier
+  reading: the settled kind also declares its effects): changed; the settled kind is a fixed value,
+  and behaviour changes when a `schedule.json` writes the members, not when the Runtime deploys.
+- §3.3 (each touched pool's valuation from the model's prices): added to; until the model's export,
+  a pool's valuation may be a constant written in the pack, replaced one by one.
+- §1.6 item 7 (the reason codes): added to; `pool_lines_unspendable` and the value `lines_source`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SC1-1 | a V2 task's `benefit_fixed_value_milli` (`1..=2^53−1`) | catalog format addition (no ledger shape) | SCHED-C1a | the composer; a raw V2 catalog | V2 only; requires `benefit_judged`; with a priced product or `benefit_realization`, `fixed_value_conflict`; absent serializes as nothing |
+| SC1-2 | the `schedule.json` rule members `fixed_value_milli`, `fixed_value_origin` (`"model"`), the pool member `valuation_origin` (`"model"`) | `schedule.json` format addition | SCHED-C1a | the resource side by hand; `acmodel bindings apply` writes `"model"` | taken out by the reader; refused on a maintenance rule; require `benefit_fixed_value` |
+| SC1-3 | `B` from a fixed value (`V`, less the cost of the pools consumed); its `ε` term 0; its `produces` unread by `B` | behaviour (evaluation) | SCHED-C1a | the policy evaluator | one scale: `B ÷ E`, and `V ÷ C` in a capped round |
+| SC1-4 | `benefit_fixed_value` (info; `benefit_milli`, `fixed_value_milli`, `expected_duration_ms`), the catalog diagnostic `fixed_value_conflict` (error), the key `fixed_value_milli`; `rank_breakdown` detail ` fixed_value_milli=<V>` | outcome catalog additions (policy) | SCHED-C1a | the policy evaluator and compiler | new prefix `fixed_value_` (policy) |
+| SC1-5 | `config.subsystems` rows `benefit_fixed_value` and `pool_trigger_line` (always on) | new row values of an existing fact | SCHED-C1a, SCHED-C1c | actingd | required through `requires` |
+| SC1-6 | `benefit_coverage.fixed_value`; `benefit_provenance {fixed_value {pack, model}, valuation {pack, model}}` | `actinglab standard-pack check` and `package bundle --schedule` answers | SCHED-C1a | actinglab | ids in file order |
+| SC1-7 | the program fact `config.catalog_provenance`; the overview's `catalog.benefit_provenance` | new key of the `config.` family; `actingctl overview` / `ac_overview` answer | SCHED-C1b | the workbench; lab-ops overview | as CW-1's `config.catalog_warnings` (§1.290): 256 rows with a cut row; no record of its own |
+| SC1-8 | a V2 pool's `trigger_line` (two forms) | catalog format addition | SCHED-C1c | `acmodel bindings apply` (RL-R) | only beside both lines; `pool_lines_invalid`; `0 ≤ H < S ≤ T ≤ cap` |
+| SC1-9 | `pool_lines_unspendable` (warning; `pool_id`, `pool_capacity`, `stop_line`, `hard_line`, `least_consumption`, `lines_source`) as a decision reason and a compile warning; the key `least_consumption` | outcome catalog addition (policy) | SCHED-C1c | the policy evaluator and compiler | shown by `ScheduleExplanation`; the compile warning reaches `config.catalog_warnings` |
+| SC1-10 | `standard_pack_line_trigger_redundant` (warning; `game`, `task_id`, `pool_id`) | outcome catalog addition (shared) | SCHED-C1c | the composer, for the tools | a hint; the workbench does not record it |
+| SC1-11 | the episodes kept: `<state root>/policy/capped-episodes.json` (`actingcommand.capped-episodes.v1`: owner epoch; per instance and pool the episode number, rounds, consumers key, round start, starting reading, order and passed members); the consumers key instead of the catalog hash; waiting on an unknown value; `capped_state_failed` (warning; `operation` `load` or `store`) | Runtime-owned state file (no ledger shape); behaviour; outcome addition (runtime-host) | SCHED-C1d | runtime-host policy host | no peer reads it; prefix `capped_` registered for runtime-host too |
+| SC1-12 | the per-instance key `instance.<instance id>.scheduling.pool_lines` (object of at most 32 pools); the value `lines_source` (vocabulary `instance`, `catalog`, `default`) on `pool_line_held`, `capped_spend` and `pool_lines_unspendable` | configuration key; outcome value and vocabulary | SCHED-C1e | the Lab's `config set` and `config clear`, the console | settable, no default; in the file the entry's `scheduling.pool_lines` |
+
+**The code slices, in order.**
+
+| Slice | Repository | Size | What | Depends on | Interfaces |
+|---|---|---|---|---|---|
+| SCHED-C1a | Runtime | M–L | SC1-1 to SC1-6 but `pool_trigger_line`: the task member and its refusals, `judge` reading `V`, the reason and the rank detail, the composer's members, coverage and provenance answers, the subsystem; `v2/README.md`, `v2/tasks.schema.json`, `actingd-check-config.md` rows | this contract | none: catalog and `schedule.json` additions gated by `requires`, outcome additions (as §1.289) |
+| SCHED-C1b | Runtime | S | SC1-7 | SCHED-C1a | none (as §1.290) |
+| SCHED-C1c | Runtime | M | SC1-8 to SC1-10 and `pool_trigger_line` | this contract | none |
+| SCHED-C1d | Runtime | M | SC1-11 | SCHED-C1c (the episode's rule reads `T`) | none: a file only the Runtime writes and reads; a rollback's build ignores it, and the next start of this one drops it (owner epoch) |
+| SCHED-C1e | Runtime | M | SC1-12: the key and its section check in `runtime-config` (the instance's valued pools of the active generation in its context), the host's read at every evaluated cycle into the evaluation, `capped::lines` reading an instance's set first, `lines_source`; `runtime-config.md` rows | SCHED-C1c | `actingd-config` by one (a new member of an `instances[]` entry), once, released together with the console's matching range |
+
+Order: SCHED-C1a first, since it is what lets a game's daily rules run once ruling 116's stop is
+lifted; SCHED-C1b beside or after it; SCHED-C1c before a pack writes a valuation with lines, so that
+a pool stuck at its cap is a warning from the first day; SCHED-C1d before capped episodes matter in
+production; SCHED-C1e last. None needs a heavy computation.
+
+**The coordinator's answers of 11-11** (the coordinator's, not Alice's words; to the draft's eight
+open questions, the draft accepted as written).
+
+1. *Value unit per game:* the research channel names each game's unit (its model's price unit where
+   one exists) and the pack writes fixed values and constant valuations in it; the resource side
+   states the unit and who named it beside the game's `schedule.json`, and this contract says only
+   "one unit per game, the unit of its valuations".
+2. *Where episodes are kept:* the new file `policy/capped-episodes.json`, as written; not the
+   ledger.
+3. *Per-instance lines:* the configuration key through `ConfigureSettings`, as written, replacing
+   design §4.3; SCHED-C1e raises `actingd-config` once and is released together with the console's
+   matching range.
+4. *Origin default:* absent means the pack, as written.
+5. *A line for a pool the active generation does not give the instance:* refused at the
+   instruction (`config_value_invalid` with its existing problem `section_check`; no new code or
+   token), kept at a restore, and changes nothing while the pool is absent.
+6. *`value_milli`:* left as it is.
+7. *The class of each judged rule:* the research channel lists it per game in the rule tables it is
+   writing now; nothing for this contract.
+8. *MCP tier of `scheduling.pool_lines`:* the tier of every key but the backends.
+
+The coordinator also added two sentences: the consumer row of "What a resource repository writes"
+(a `W` with `W·c ≥ V` keeps a consumer for capped rounds; one with `V > W·c` spends the reserve
+below the stop line, still held by the hard line, with Alice's words of 11-07, 6706630435), and
+"The trigger line" (a trigger line one costliest run above the stop line spends without reaching
+the capacity, data the pack or a person sets).
+
+**What changes live.** Nothing until a slice is built and deployed, and then nothing until a
+`schedule.json` writes the members or a person or an agent sets an instance's lines, except
+SCHED-C1d: a valued pool's episode then survives a start, a generation and an unknown reading (no
+production pool is valued today).
+
 ### 1.301 Slice R-6, first slice (0.12.52): `StopInstanceRun` stops a client's direct run and the Runtime resets the device itself (Workflow #429 A.2 contract point 2 and the slice row R-6, board #429 6535257381; the desktop program's "close this task" button is disabled because the Runtime answered `not_implemented`, and a run the scheduler started could not be stopped from the Lab or MCP at all; the coordinator's choice of 11-11, option C, not Alice's words: this slice stops direct runs only and refuses a policy run with `run_origin` until `ledger` 8; coordinator work order `rd-1111/brief-r6.md`, read on main `c0edc8b2`)
 
 [runtime-interface.md](runtime-interface.md) ("Workbench request kinds", the row `StopInstanceRun`)
@@ -10670,7 +10904,8 @@ slice may not raise; the coordinator chose to refuse it until then (option C).
   ("Condition termination and owed reruns"), which a stop is not. No policy run is stopped, so no
   policy settlement, streak, rerun or daily count changes.
 - **The Lab's row** `task stop <inst> <request> [--wait <duration>]` (core, slice R-6) is offered:
-  the CLI module serves it (`apps/actinglab/src/cli_module/core_ops.rs`, `task_stop`), resolving the
+  the CLI module serves it through the serving code LAB-5G1 moved into `lab-ops`
+  (`crates/lab-ops/src/core_ops.rs`, `task_stop`, on the connection its caller gives), resolving the
   instance by one status read and sending `StopInstanceRun` through `stop_instance_run`; without
   `--wait` it answers at once (`wait_ms` 0). Its line is the stop's members beside the receipt's
   outcome, a refusal the refused receipt beside its outcome. `serve --stdio` takes the same call.
@@ -10680,7 +10915,7 @@ slice may not raise; the coordinator chose to refuse it until then (option C).
 | R6-1 | `StopInstanceRun {instance_alias, request_id, wait_ms}` → `InstanceRunStopped {stopped: {request_id, settled, reset?}}` | behaviour of an R-0 kind (no shape change; `runtime-client` stays as it is) | R-6 | the host | direct runs only; memory of the latest stopped run per instance (a leaf lock), empty after a restart; `wait_ms` has no bound of its own: the run's deadline and its end grace bound the wait, and a shutdown answers `settled: false` |
 | R6-2 | `request_stop_instance_run_completed` | new success code (contract, `ReceiptCode`) | R-6 | the host | `since` 0.12.52; Workflow #378 A4's one success code per completing kind; a failed reset is its cause |
 | R6-3 | outcome key `run_origin` (`vocab:run_origin`, tokens `policy`, `host`) on `scheduled_contained_task_not_client_cancellable` | new key and vocabulary in `runtime-outcomes` 1 (additive: readers keep values as a free map, and keys are append-only, as 0.12.39 added a value, a vocabulary and a key) | R-6 | the host | kept in codes mode (a vocabulary); the code's entry is pending, so it takes the optional key; `request_id` names the run |
-| R6-4 | the Lab's row `task stop` | operation table row opened (`reserved` → `planned`, `help`, requests add `Status`) | R-6 | — | `BUILT_SLICES` names R-6; served in actinglab's CLI module, not in `lab-ops`' registry (which holds LAB-1 and LAB-1b's rows only) |
+| R6-4 | the Lab's row `task stop` | operation table row opened (`reserved` → `planned`, `help`, requests add `Status`) | R-6 | — | `BUILT_SLICES` names R-6; served by `lab_ops::core_ops` (its `stop_target` public, which actinglab's test reads), not listed in `lab-ops`' registry `served::SERVED` (which holds LAB-1 and LAB-1b's rows only) |
 | R6-5 | the row `task run` | slice tag `R-5` → `R-18` (Alice's ruling 113 moved "run once" to the Lab) | R-6 | — | the row is otherwise unchanged (still `reserved`, `opens_with` R-5, entries lab and ui); no test pins the tag |
 
 **Left for later slices.** A policy run's stop and its settlement as an interruption (no ladder, no

@@ -20,6 +20,7 @@
 use crate::budget::{self, Budget, Fitted};
 use crate::cli_line;
 use crate::codes::{self, ActingctlCode};
+use crate::front::Connection;
 use crate::instance_selector::{self, SelectorMiss};
 use crate::material_export;
 use actingcommand_contract::outcome::{Code, Detail as OutcomeDetail, Outcome};
@@ -33,6 +34,7 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use std::collections::hash_map::RandomState;
+use std::convert::identity;
 use std::ffi::OsString;
 use std::hash::BuildHasher;
 use std::path::PathBuf;
@@ -823,10 +825,15 @@ pub fn brief_row(event: &ProjectedEvent) -> Value {
 /// (Workflow #378 A5), the page with `runtime_events_reported`, or `{outcome}` with the failure
 /// (an argument failure's developer line adds the usage) and exit 1.
 pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
+    dispatch_on(arguments, Connection::per_call())
+}
+
+/// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
+pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
-    Some(match run_cli(&arguments[1..]) {
+    Some(match run_cli(&arguments[1..], connection) {
         Ok(page) => cli_line::success(
             cli_line::members(page, "events"),
             &Outcome::new(ActingctlCode::RuntimeEventsReported),
@@ -846,9 +853,10 @@ pub fn cli_request(arguments: &[OsString]) -> Result<(PathBuf, Request), EventsE
     Ok((state_root, parse(&parameters, CLI_MAX_LIMIT)?))
 }
 
-fn run_cli(arguments: &[OsString]) -> Result<Value, EventsError> {
+fn run_cli(arguments: &[OsString], connection: Connection<'_>) -> Result<Value, EventsError> {
     let (state_root, request) = cli_request(arguments)?;
-    let client = RuntimeClient::connect(crate::front::client_config(&state_root))
+    let client = connection
+        .reach(&state_root, identity)
         .map_err(EventsError::Runtime)?;
     // One Status for the whole call, never one per read of the wait (§2.5).
     let instance_id = match &request.instance {

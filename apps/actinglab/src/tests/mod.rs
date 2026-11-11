@@ -102,6 +102,10 @@ mod gate_434_lab5g4a;
 // Workflow #434 LAB-5E: every offered row says in one sentence what it does.
 #[path = "gate_434_lab5e.rs"]
 mod gate_434_lab5e;
+// Workflow #434 LAB-5G1: the moved serving code answers on a kept connection what the CLI module
+// prints.
+#[path = "gate_434_lab5g1.rs"]
+mod gate_434_lab5g1;
 // Workflow #429 R-6: the core row `task stop` reaches `StopInstanceRun`.
 #[path = "gate_429_r6.rs"]
 mod gate_429_r6;

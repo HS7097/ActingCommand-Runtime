@@ -10,8 +10,9 @@
 //   zero wait).
 // Reads only the table this build embeds: no state root, no Runtime, no device, no clock.
 
-use crate::cli_module::{self, Route, core_ops, words};
+use crate::cli_module::{self, Route, words};
 use actingcommand_contract::{RequestId, RuntimeOperationKind};
+use actingcommand_lab_ops::core_ops;
 use serde_json::{Value, json};
 use std::time::Duration;
 
