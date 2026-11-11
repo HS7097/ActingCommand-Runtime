@@ -12647,6 +12647,114 @@ a neutral standard-pack root); `idle2_auto_tests::idle2_auto_c1_the_word_and_the
 test changes. One existing test pins the revision step: `actinglab-architecture`'s
 `the_runtime_declares_each_v0120_interface_revision_once` now pins `actingd-config` [5, 28].
 
+### 1.306 Slice CLI-EV (0.12.55): `events` shows the newest records by default (Workflow #434; the audit of 2026-11-11 named the oldest-first default among what makes the command line unfriendly; the coordinator's rulings of 2026-11-11, not Alice's words; the read-only survey `rd-1111/survey-cli4.md` §4; coordinator work order `rd-1111/brief-cli-events-newest.md`)
+
+1.306 is the next free number on main `e5efe44e`, where #1600 added §1.305 (NEUT-1); the
+coordinator renumbers this section if another open slice takes the number first. [runtime-interface.md](runtime-interface.md) (the `ac_events`
+row) and [lab-operations.json](lab-operations.json) (the `help` of the `events` row) are the
+contract; the tool's description and the usage of `actingctl events` follow it. No persisted shape,
+wire shape, configuration key, outcome code or interface revision is new or changed.
+
+**Why.** `actinglab events`, or `ac_events` called without a position, answered the 20 oldest
+records of the ledger, from sequence 1: never what a person or an agent wants, and on a large ledger
+a read from its far end.
+
+**What** (`crates/lab-ops/src/events.rs`, `Request::newest`, `read_newest`, `Search`).
+
+- **When** (ruling 1): a read that names no `after_sequence`, no cursor, no `through_sequence`, no
+  `since_unix_ms` or `until_unix_ms` and no `run_id`, `request_id` or `correlation_id`. The people's
+  `since` (a duration) is handed on as `since_unix_ms`, so it is a window. Every other read is as
+  before: the same page request, the same query, the same members.
+- **Where** (ruling 2): `events::read`, the one read `actinglab events`, `actingctl events` and
+  `ac_events` share; their callers do not change.
+- **The read** (ruling 3). First the head: one page that selects nothing (its `from_sequence` the
+  largest sequence a parameter takes, no other condition, one row, no run recovery), which the
+  Runtime answers with its snapshot and reads no record for (a page's statements run only while its
+  range is not empty). Then the search, every page pinned to that snapshot (`at_snapshot`), without
+  run recovery, its range written as `from_sequence` and `to_sequence` beside the reader's filters,
+  in the `concise` profile (no payload): the window of 256 sequences that ends at the head, then the
+  part of the window of 4 096 below it, then the part of the window of 65 536 below that (never below
+  sequence 1), each read asking for the records still wanted. A part that answers more than that
+  holds the page's oldest rows; it is narrowed: its top sequences, as many as are wanted, first (where
+  every record matches, they are the page), then halves, the upper half kept when it alone holds more
+  than wanted, else its records taken and the search gone on below it; at most 18 reads. Last, the
+  rows found are read once more, in the `forensic` profile, from the first to the last. A call without
+  `wait_s` sends at most 23 page reads, and none spans more than the largest window, so the ledger is
+  never read from the head backwards without a fixed bound. A read the Runtime's read budget cut short
+  ends the search with what was found. With `wait_s`, an answer that found nothing is searched again
+  every second (the head read again, then a search bounded the same way) among the records appended
+  since.
+- **The answer** (ruling 4): the newest `limit` records the filters match, oldest first within the
+  page, `snapshot_ledger_position` the head; `first_sequence`, the seq of the first row, beside
+  `last_sequence` (`--through-sequence <first_sequence - 1>` reads the records before the page, as a
+  read with a window); and `searched_from_sequence`, the lowest sequence searched, when fewer than
+  `limit` were found and the search stopped above sequence 1 (at the largest window's lower bound, or
+  where a cut read stopped it), so that "no more there" is never read as "none exists". A page has no
+  `next_cursor` unless MCP's output budget cuts it (`truncated`) or the Runtime's response bound cuts
+  the rows' read; the cursor then goes on after the last row kept, at the head's snapshot, bound to
+  the reader's own filters. An exported payload page answers `first_sequence` and
+  `searched_from_sequence` beside `last_sequence`.
+
+**The constants and why** (ruling 3: `NEWEST_FIRST_WINDOW` 256, `NEWEST_WINDOW_FACTOR` 16,
+`NEWEST_LARGEST_WINDOW` 65 536, `NEWEST_WINDOWS` the three; constants of the contract, not
+settings). QP-1 (§1.292) bounds every page by its sequence range: the page reads it in statements
+whose spans double from one sequence up to `ledger_observer.history_scan_rows` (65 536 by default),
+each search inside its span, so a range of `w` sequences takes at most `ceil(log2(w + 1))`
+statements. The first width is the Runtime's page bound, the CLI's largest `limit`: where every
+record matches, the first window holds the page whatever the limit, in nine statements. The largest
+is that default span: no read of the search spans more sequences than one full-size statement may,
+at most seventeen statements. The factor 16 reaches it in two widenings, each four doublings of the
+spans more.
+
+**Settled where the rulings left it open** (the implementer's; for the coordinator to confirm).
+(a) The head is read with a QueryEvents page that selects nothing, not with a Status, which a read
+without an instance does not send. (b) The search counts with `concise` rows and the rows found are
+read once more with their payloads: the search never meets the response bound, and the page's rows
+come from one read. (c) A part that holds more than wanted is narrowed by halving, not paged through,
+so the reads stay a fixed few and each returns at most the rows wanted and one more. (d)
+`searched_from_sequence` is absent when the search reached sequence 1: on a ledger shorter than the
+largest window a short page is every match. (e) A read the read budget cut ends the search, and
+`searched_from_sequence` names where. (f) Pages that do not fit together (another snapshot, a row
+outside its range, the rows found not read back) answer the runtime client's
+`runtime_event_query_pagination_invalid` (no new code, #420 S4). (g) `wait_s` applies (ruling 1 does
+not name it): only the records appended since are searched again. (h) The new members are only on a
+page of the newest records, so every other page is as before.
+
+**Interface.** None raised ([component-interfaces.md](component-interfaces.md)): `runtime-client`
+stays as it is (the query's `from_sequence` and `to_sequence`, the page request's
+`snapshot_position` and `without_run_recovery` (QR-2, since 0.12.23) exist); the two members are the
+CLI's and `ac_events`' own (`result_schema` gains them, optional).
+
+**What changes live.** `actinglab events`, `actingctl events` and `ac_events` without a position or
+a window answer the newest records instead of the oldest, after a few small reads near the head. A
+reader that paged the whole ledger from its start by giving no position now gives `after_sequence`
+0.
+
+**Rollback** (below 0.12.55). Nothing persisted: such a read answers the oldest records again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CLIEV-1 | a read of `events` / `ac_events` without a position or a window answers the newest records | command and tool behaviour | CLI-EV | lab-ops | `since` 0.12.55; ruling 1's members; every other read unchanged |
+| CLIEV-2 | `first_sequence`, `searched_from_sequence` on a page of the newest records and in an exported payload page's answer | `actingctl events` / `ac_events` answer members | CLI-EV | lab-ops | `since` 0.12.55; optional in `ac_events`' result schema |
+| CLIEV-3 | the windows 256, 4 096 and 65 536 that end at the head | contract constants | CLI-EV | — | `NEWEST_WINDOWS`; at most 23 page reads per call without `wait_s` |
+| CLIEV-4 | the `events` row's `help`, the `ac_events` row and description, the usage of `actingctl events` | contract text agrees with the code | CLI-EV | — | the old behaviour named "with a position or a window" |
+
+Tests (apps gate row "#434 CLI-EV"; fakes: the runtime client's scripted Runtime):
+`gate_434_cli_ev::cli_ev_no_position_answers_the_newest_limit_oldest_first`,
+`cli_ev_fewer_matches_than_the_limit_name_the_bound_and_no_read_leaves_the_window`,
+`cli_ev_a_sparse_filter_is_found_by_widening_within_the_fixed_steps` and
+`cli_ev_a_position_or_a_window_reads_as_before`; apps gate 41 (the c4 fake Runtime child):
+`mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_newest_page_without_a_position`.
+The three parity tests of `actingctl events` and `ac_events` give a position and are unchanged.
+Adapted, as the requirement deliberately changes what they pinned (a page without a position from
+the ledger's first record): `mcp_shell`'s helpers `every_page` and `first_cursor` and the first page
+of `gate_an_events_page_over_the_budget_is_truncated_and_its_cursor_resumes_after_its_last_row` now
+give `after_sequence` 0, for that test and for
+`gate_events_pages_follow_next_cursor_without_gap_or_repeat_up_to_the_first_snapshot`,
+`gate_an_events_cursor_sent_with_other_filters_answers_cursor_invalid`,
+`gate_an_events_cursor_from_before_a_runtime_restart_answers_cursor_invalid` and
+`gate_an_events_cursor_of_another_server_process_answers_cursor_invalid`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -100,8 +100,9 @@ fn tool_error(error: EventsError) -> ToolError {
         },
         EventsError::Runtime(error) => super::runtime::client_error(&error),
         // Workflow #434 LAB-5D: a payload page the export could not take is the writer's
-        // `material_export_failed` (or the encoder's), class runtime, as before.
-        EventsError::CursorEncode(_) | EventsError::Export(_) => {
+        // `material_export_failed` (or the encoder's), class runtime, as before. Workflow #434
+        // CLI-EV: pages of a read of the newest records that do not fit together, class runtime.
+        EventsError::CursorEncode(_) | EventsError::Export(_) | EventsError::Pagination => {
             ToolError::outcome("runtime", error.outcome())
         }
         EventsError::Selector { .. } | EventsError::Query(_) | EventsError::CursorInvalid => {
@@ -247,7 +248,10 @@ pub(super) fn result_schema() -> Value {
                     "next_cursor": {"type": "string"},
                     "truncated": {"type": "boolean"},
                     "snapshot_ledger_position": {"type": "integer"},
+                    // Workflow #434 CLI-EV: a page of the newest records.
+                    "first_sequence": {"type": "integer"},
                     "last_sequence": {"type": "integer"},
+                    "searched_from_sequence": {"type": "integer"},
                     "waited_ms": {"type": "integer"},
                 },
                 "required": ["events", "snapshot_ledger_position"],
@@ -266,7 +270,9 @@ pub(super) fn result_schema() -> Value {
                     },
                     "events_count": {"type": "integer"},
                     "next_cursor": {"type": "string"},
+                    "first_sequence": {"type": "integer"},
                     "last_sequence": {"type": "integer"},
+                    "searched_from_sequence": {"type": "integer"},
                 },
                 "required": ["export", "events_count", "last_sequence"],
             },
