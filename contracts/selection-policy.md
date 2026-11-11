@@ -278,7 +278,8 @@ the host writes it under `inventory.list.<name>` at the run's successful end. Th
 from the decision layer's:
 
 - **Whole or not at all.** A list is written only when every position was read; an unread
-  position, a repeated key or more than 256 positions writes nothing (no partial list, no
+  position, a repeated key or more than 1024 positions (S168-LB1a, not built yet; until it 256;
+  [resource-readings.md](resource-readings.md), "Rows") writes nothing (no partial list, no
   truncation, no empty list), and the previous record stays until its expiry. That is what makes
   `absent` sound: a key with no row in a usable list reading was not on the list. A list never
   read, or read too long ago, is unusable under the up-front check above: "not read" never reads
@@ -442,7 +443,9 @@ Each read runs these steps:
 | A pin is unavailable | Unknown, the first fact's reason |
 
 A missing value is never read as 0 and never skipped: only a key the table knows and places
-outside the class adds nothing.
+outside the class adds nothing. A reference that opts in (section "Lower bound of a list
+maximum", S168-LB1b, not built yet) reads what is known as a bound instead of Unknown, and still
+never reads a missing value as 0.
 
 **What the table owes a list maximum.** So a missing row of a class is a statement, never a gap:
 it says the identity is not of the class. A table a list maximum reads, for every class a
@@ -517,7 +520,9 @@ snapshot. The hash moves when a contributing row or a row of any listed list mov
 other row.
 
 **Upper bound.** The read is exact, as a scalar fact is. Unknown, it drops the identity under
-`drop_candidate` and gives `Unbounded` under `abort_evaluation`, as any exact unknown input.
+`drop_candidate` and gives `Unbounded` under `abort_evaluation`, as any exact unknown input. A
+reference that opts in and reads "at least L" is the range [L, +∞) (section "Lower bound of a
+list maximum").
 
 **Scheduling.** As for tables and record lists: `evaluate_collect` and the catalog compile refuse
 a document that uses it (`type_mismatch`).
@@ -526,6 +531,120 @@ a document that uses it (`type_mismatch`).
 `input_sha256`. A reader before S168-5a refuses a document that uses it (an unknown value
 source). In a package it belongs to `package` revision 8, with S168-4's `read_list`
 ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 168").
+
+## Lower bound of a list maximum
+
+Workflow #428 S168-LB1b, not built yet ([v012-register.md](v012-register.md) §1.309; the
+coordinator's rulings 5 to 10 of 11-11, not Alice's words). Under the read above, one key of the
+union without a value (no row in the table, or a null cell of the class) makes the whole read
+Unknown, whatever the other keys hold. Yet the largest value of a group can only grow when a
+missing value becomes known: the values already known bound it from below. A reference opts in
+with one optional member; without it the read is the one above, byte for byte. The names are
+neutral examples:
+
+```json
+{"source": "table_max_over_list", "table_id": "member_values", "value_column": "value",
+ "lower_bound_column": "value_at_least",
+ "pins": [{"column": "domain", "equals": "domain.x"}],
+ "lists": [{"fact_key": "inventory.list.members_kind_a"}],
+ "empty": {"type": "integer", "value": -1}}
+```
+
+| Member | Rule |
+|---|---|
+| `lower_bound_column` | Optional. A column the document declares for the table, of type `integer`, other than `value_column`: the lower bound the table's maker gives a key whose value is not known, read in the same row as the value cell. An undeclared column is a `dangling_reference` validation error, another type or the `value_column` itself a `type_mismatch`, each with the detail `table_max_over_list=lower_bound_column`, as for the other members. `SelectionTables::bind` checks it as it checks `value_column` (`table_mismatch`: `column_absent`, `column_type`). Left out, it is not written, so a document without it keeps its canonical bytes, `policy_sha256` and `input_sha256`; two references that differ only by it are two references ("One read") |
+
+**The opted-in read.** Steps 1 and 2 of "One read" (the lists, the pins) and every Unknown they
+give are as above. Step 3 reads each key of the union, in ascending byte order:
+
+| The key | It adds |
+|---|---|
+| has rows, none of which holds the pins | nothing: it is not of the class, as above |
+| has a row of the class whose value cell holds a value | a known value |
+| has a row of the class whose value cell is null (also by expiry) and whose bound cell holds a value | that bound; the read is no longer exact |
+| has a row of the class whose value cell and bound cell are both null | nothing; the read is no longer exact |
+| has no row in the table | nothing; the read is no longer exact, since the key may be of the class |
+| has a row of the class whose value or bound cell holds another type | the read is Unknown, `type_mismatch`, as above |
+
+Step 4, the value:
+
+| Case | The read |
+|---|---|
+| No key is uncertain: every key of the union is outside the class, or of the class with a value | **exact M**: the largest value, with the smallest key that holds it; `empty` when no key is of the class, the empty union included, as above |
+| A key is uncertain, and at least one value or bound is known | **at least L**: L is the largest of the known values and of the bounds, with the smallest key, in byte order, that gives it |
+| A key is uncertain, and no value and no bound is known | Unknown, `lookup_miss`, as above: nothing is known of the class |
+
+An uncertain key never makes the read Unknown while anything is known of the class; it only makes
+the read "at least". Only a group of which nothing is known is Unknown, as today. A usable union
+with no key of the class reads `empty`, a known value, as today.
+
+**Reading an at-least value.** The read is the range [L, +∞), and every reader takes it so:
+
+- **`integer_compare`.** True or false only where every value of the range gives the same
+  answer; Unknown otherwise, which the gate's `on_unknown` decides as for any Unknown read
+  (`drop_candidate` or `abort_evaluation`), with the reason `lookup_miss`, so no reason word is
+  added. With the list maximum on the left and a known right side, R′ = right × `mul` + `add`:
+  `ge` is true once L ≥ R′ and `gt` once L > R′; `le` and `eq` are false once L > R′ and `lt`
+  once L ≥ R′; `ne` is true once L > R′. On the right the range is [L × `mul` + `add`, +∞), and
+  against a known left side Y: `le` is true once Y ≤ L × `mul` + `add` and `lt` once
+  Y < L × `mul` + `add`; `ge` and `eq` are false once Y < L × `mul` + `add` and `gt` once
+  Y ≤ L × `mul` + `add`; `ne` is true once Y < L × `mul` + `add`. Two at-least sides settle
+  nothing. An exact side and an Unknown side are read as above.
+- **`threshold`.** `then_milli` once L ≥ `at_least`; Unknown otherwise, which the term's
+  `on_unknown` decides.
+- **`identity`.** The term takes L as its value, and the decision says so (the reason below):
+  its contribution is L × `weight_milli` / 1000. With a negative weight that contribution is the
+  most the term can give, not the least.
+- **The upper bound** ("Upper bound" below) takes the range [L, +∞): a gate compares it as the
+  range of a ranged input; `identity` has no finite bound with a positive weight (`Unbounded`)
+  and its bound at L with a negative one; `threshold` gives `then_milli` once L ≥ `at_least` and
+  otherwise the larger of its two contributions. An exact read stays exact and an Unknown one is
+  as above.
+
+**What a person sees.** For a reference that opts in, the read's `selection_table_list_max`
+carries `bound` (a new outcome vocabulary, `list_max_bound`: `exact` or `at_least`) and
+`unknown_count` (the keys of the union with no value: no row, or a null value cell of the class);
+with `exact`, `maximum` and `maximum_identity` as above (neither for `empty`); with `at_least`,
+`lower_bound` (L) and `lower_bound_identity` (the key that gives it) in their place. An Unknown
+read carries `unknown_reason` as above. A reference without the member carries the keys of
+before, byte for byte. A decision made on a lower bound, that is one in which an at-least read
+settled a gate verdict or a term of a candidate (a comparison or a threshold the bound settled,
+an identity term taken at L), carries one info reason more, `selection_decided_on_lower_bound`
+(`rule_id` the first such gate or term in the order of "One read", `count` how many gates and
+terms were), once, in the decision's chain after the candidates' assessment and before the
+outcome's reasons; an `unknown` evaluation carries none. The four keys, the vocabulary and the
+code are proposed names that S168-LB1b registers; the reasons count against the chain's 128
+reasons and the record's 64 KiB as every reason.
+
+**In a judge step** (S168-5b, planned: [selection-graph.md](selection-graph.md), "Judge step",
+"Which key"). A list maximum read as a lower bound is no Unknown read: a comparison the bound
+settles is a known verdict (`ranked` or `gate_rejected`), so the judgment is `judged`; one it
+does not settle is Unknown, so its candidate is `unknown_dropped` (or the evaluation `unknown`)
+and the judgment is `unknown`; a score taken at L is a `ranked` verdict, `judged`, and the record
+carries the bound in the two reasons above. The judge's record gains no member.
+
+**What the table owes a lower bound.** The table's maker writes the bounds, in a nullable integer
+column of the same table (`nullable`, [package-reference.md](package-reference.md), "Tables"):
+for a key of the class whose value is not known, a value it is known to reach; a null bound says
+that nothing is known. The Runtime computes no bound and reads no meaning into the keys or the
+cells. The rules of "What the table owes a list maximum" stay; with the member a key without a
+row makes the read "at least" instead of Unknown, and a row of another class still says that the
+key is not of this class.
+
+**Input identity.** The bound column is a declared column of the table, so each row the read
+took carries its bound cell in the hashed input, as every declared column does; a key without a
+row adds no row, as before.
+
+**Scheduling.** As for the source itself: `evaluate_collect` and the catalog compile refuse a
+document that uses it.
+
+**Compatibility.** A reference without the member reads, hashes and decides byte for byte as
+before. A reader before S168-LB1b refuses a document that writes it at admission
+(`contained_task_select_policy_invalid`: the reference denies unknown members), as it refuses
+any member it does not know, and so does the parser of its build. The selection format has no `requires`-style gate of its own (its
+`schema_version` does not change): the gate is the bundle's declared `package` range and the
+reader's refusal. In a package the member belongs to `package` revision 9
+([component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 S168-LB1").
 
 ## Upper bound
 
@@ -619,6 +738,12 @@ chooser:
 - A document that declares a record list is refused at catalog compile with
   `type_mismatch`: record lists stay unusable to the scheduler, and `keyed_fact`
   is for in-task documents only.
+- From S168-LB1a (not built yet; [v012-register.md](v012-register.md) §1.309) the instance's
+  projection holds no record under `inventory.list.`
+  ([instance-fact-store.md](instance-fact-store.md), "Projection into the evaluation"), and a
+  document that declares a fact under that prefix, of any type, is refused at catalog compile
+  with `type_mismatch`, as a catalog predicate that names one is
+  ([scheduling/README.md](scheduling/README.md), "Record lists and the projection").
 
 ## In-task consumer
 

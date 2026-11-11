@@ -13131,6 +13131,240 @@ is removed with its gate row (R-0c's `PackScheduleView` now answers); and the co
 `a4_each_request_kind_that_completes_has_its_own_success_code` no longer lists the two kinds among
 those that never complete. No golden changes.
 
+### 1.309 Workflow #428 S168-LB1 (contracts only): a list longer than 256 rows can be read, and one entry without a value no longer empties its group (a customer-view audit of 11-11 found both defects in what the S168 slices built, and the coordinator confirmed them; the coordinator's rulings 1 to 10 of 11-11, not Alice's words; read on main `a62434a4`, with the read-only survey `rd-1111/survey-s168-lb1.md`; coordinator work order `rd-1111/brief-s168-lb1-contract.md`)
+
+[resource-readings.md](resource-readings.md) ("List readings": the miss table, the new "Rows",
+"Staleness"), [instance-fact-store.md](instance-fact-store.md) ("List reading facts" with the new
+"Row bound", "Projection into the evaluation" with the new "Left out of the projection", "Reading
+the seeds" with the new "The frame bound with long lists", "Pack schedule facts" and the seeds'
+refusals), [selection-policy.md](selection-policy.md) ("Record lists", "Table maximum over a
+list", the new "Lower bound of a list maximum", "Scheduling consumer"),
+[selection-graph.md](selection-graph.md) ("Select over a scan"; "Judge step", "Which key"),
+[scheduling/README.md](scheduling/README.md) (the new "Record lists and the projection",
+"Bounds") and [component-interfaces.md](component-interfaces.md) (the new "Planned: Workflow #428
+S168-LB1" and the sentences under the planned rows of #434 and of 168) are the contract. The
+section was written on `a62434a4` as §1.305; NEUT-1 took that number and merged first, so with
+main `e5efe44e` merged in it is 1.309, the next free number there (SCHED-C1f1 merged its rows
+under §1.303); the coordinator renumbers it if another open slice takes it first (R-8 takes one
+too).
+
+**S168-LB1 itself.** Contracts only: no code, no test, no schema file, no gate row, no CI file, no
+configuration key, no code of the outcome catalog and no live revision raised. Every rule it adds
+is marked "(S168-LB1a, not built yet)" or "(S168-LB1b, not built yet)". The outcome catalog's
+rows and descriptions, [runtime-interface.md](runtime-interface.md)'s row of
+`InstanceFactSnapshot` and `component-interfaces.json` are written by the code slices. The text
+names no game, resource or value: a roster, a list of holdings, a value table, a group.
+
+**Why.** (1) A list of more than 256 rows is not read at all: the kernel's list reading stops at
+the 257th position, the run succeeds and publishes no list (`contained_task_resource_reading_unresolved`,
+`list_rows_exceeded`). An old account's roster is longer than 256, so the selection that reads it
+has nothing. (2) One entry without a value empties its whole group: `table_max_over_list` reads
+the largest table value among the entries held, and a key the table lacks, or a null cell, makes
+the whole read Unknown (`lookup_miss`; "never skipped"). Yet the largest value of a group can only
+grow when a missing value becomes known: the known values already bound it from below.
+
+**The rulings** (11-11, the coordinator's, not Alice's words), as the contract writes them:
+(1) 1024 rows, the identity dictionary's bound, for a list reading and for a `record_list` fact,
+a constant of its own apart from `MAX_FACT_RECORDS`, every other bound unchanged; (2) the scheduler
+never fails for all instances because one list is long (#419): `inventory.list.` is not in its
+fact projection, and any other record list above the policy's own 256 is left out of that
+instance's projection with a warning; (3) no paging: the whole-instance read keeps its refusal
+past the 1 MiB frame, with the practical bound stated, and a read by key prefix is filtered before
+the frame is built; (4) `ledger` 8 and `runtime-client` 7 for the lift, the planned rows of #434
+and S168-5b joining or taking the next free number, `actingd-config` unchanged, the console on
+`runtime-client` 7 in the same release; (5) the lower bound is opt-in by one optional member;
+(6) exact M, or at least L, Unknown only when nothing is known; (7) comparisons, thresholds and
+scores take the bound only where it settles them, and the upper bound takes [L, +∞); (8) what a
+person sees, and the amendment to S168-5b's judge; (9) the table's maker writes the bounds;
+(10) `package` rises for the member, `ledger` does not.
+
+**Where the contract differs from the rulings or completes them**, each reported to the
+coordinator:
+
+- (a) Ruling 6 counts "no held entry" among the groups that are Unknown "as today"; but today a
+  usable union with no key of the class reads the document's `empty`, a known value
+  ([selection-policy.md](selection-policy.md), the case table; `list_max.rs`, step 4). The
+  contract keeps `empty`, exact; only a group with an uncertain key and nothing known is Unknown.
+- (b) Ruling 7 names `≥`, `>`, `≤`, `<` and `=` with the bound on the left. The contract
+  completes it by the range rule: `ne` is true once L exceeds the right side; the list maximum on
+  the right side of a comparison is the range [L × `mul` + `add`, +∞); two at-least sides settle
+  nothing.
+- (c) Ruling 3 asks whether a read by key prefix is filtered before the frame is built: it is
+  not (the request names only the instance; `actingctl facts --key-prefix` and `ac_facts` drop
+  records after the answer arrived). S168-LB1a adds the request member `key_prefix` and the
+  answer's `records_total`, both `runtime-client` 7 shapes.
+- (d) Ruling 1 keeps the byte bounds. With 1024 rows the observation's 512 KiB binds first for a
+  list wider than about the key and 8 short columns, and that refusal fails the run
+  (`contained_task_resource_reading_rejected`) where a list over the row bound only warns. The
+  coordinator ruled on question 4 that S168-LB1a turns it into a miss of the list
+  (`list_bytes_exceeded`), and the contract is written so.
+- (e) Ruling 1 keeps the scan's bounds too: with at most 128 viewports a list reaches 1024 rows
+  only when each advance brings about 8 new positions.
+- (f) Ruling 2(a) asks what a schedule predicate that names a key under `inventory.list.` gets at
+  compile time. Today nothing: it compiles and reads the record as any record list. The contract
+  proposes a refusal, `type_mismatch` (question 1).
+- (g) Identity: a ledger that holds a list record of at most 256 rows decides as before, but its
+  evaluation's `facts` and `fact_snapshot_id` no longer hold the record; the evaluation's input is
+  byte for byte the same only for a ledger with no record under `inventory.list.`.
+- (h) Two keys whose contracts bound their rows by "the `record_list` bound", the policy instance
+  seeds and the pack schedule, would follow 1024: the seeds do; the pack schedule keeps 256 by its
+  own rule (question 5).
+- (i) The survey names two S168-5a tests as pinning "one entry without a value empties its group";
+  they pin a document without the member, whose read stays today's, so S168-LB1b changes neither.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LB1-1 | the row bound of a `record_list` fact, a constant of its own, 1024 (proposed `MAX_FACT_RECORD_LIST_ROWS`), checked by `FactValue::validate`; `MAX_FACT_RECORDS` stays 256 for the records of an observation, of an `InstanceFactSnapshot` and of an `InstanceFactView` | format bound; ledger shape (`ledger` 8) and wire shape (`runtime-client` 7) | S168-LB1a | actingcommand-contract | each reader and the constant it checks: [instance-fact-store.md](instance-fact-store.md), "Row bound"; the byte bounds do not move; no configuration key |
+| LB1-2 | `MAX_LIST_READING_ROWS` equal to LB1-1's constant, 1024: the 1025th position read stops the scan, `list_rows_exceeded` with `count` 1025 | behaviour (kernel); an outcome value | S168-LB1a | execution-kernel | the catalog's descriptions of `contained_task_resource_reading_unresolved` and of the word `list_rows_exceeded` say 1025th; no `package` raise (proposed) |
+| LB1-3 | the scheduler's fact projection leaves out every record under `inventory.list.` | behaviour (projection) | S168-LB1a | runtime-host, the policy facts' overlay | beside the three classes it leaves out; `facts`, `fact_snapshot_id` and an intent's instance view no longer hold lists; no decision changes |
+| LB1-4 | the catalog compile refuses a member that names a key under `inventory.list.` to read: `type_mismatch` at its `fact_key` | catalog compile refusal (proposed) | S168-LB1a | the catalog compiler | `fact` and `record_deadline` predicates, fact references, a pool's ledger key and fact references, SCHED-C1f1's consumption read from a fact (since 0.12.54), the selection document's `facts[]`; timeline prefixes are not refused; its report says whether a catalog on the resource repositories' `main` names one (question 1) |
+| LB1-5 | any other inline record list of more than 256 rows is left out of the projection for the instances its scope applies to; `policy_fact_rows_exceeded` (warning; `fact_key`, `count`) recorded once for each such record after a start, not on every decision (answer 3) | behaviour (projection); outcome code (proposed) | S168-LB1a | runtime-host | the evaluator's 256 and the schema's `maxItems` stay; the whole input is never refused for it (#419); a predicate that reads it is Unknown for those instances and the key raises no fact refresh demand; the code slice says which unknown reason and how |
+| LB1-5b | a list read whole whose record is over the observation's 512 KiB is a miss of the list: `reading_problem` `list_bytes_exceeded` with `count` the rows read (answer 4) | behaviour (kernel and host); an outcome word (proposed) | S168-LB1a | execution-kernel, runtime-host | the run settles as without the list and the previous record stays; until S168-LB1a the run fails at publication (`contained_task_resource_reading_rejected`) |
+| LB1-6 | `InstanceFactSnapshot`'s optional request member `key_prefix`, applied before the view is built and measured, and the answer's optional `records_total` | wire shapes, `runtime-client` 7 | S168-LB1a | runtime-host; actingctl `facts --key-prefix`, `ac_facts` | absent, a request serializes and is answered as before; the whole read keeps `instance_fact_snapshot_too_large_for_frame` |
+| LB1-7 | `table_max_over_list`'s optional member `lower_bound_column` | selection document format, `package` 9 | S168-LB1b | resource repositories | a declared `integer` column other than `value_column`; `dangling_reference`, `type_mismatch` and `table_mismatch` as for the other members; absent, the canonical bytes are unchanged |
+| LB1-8 | the opted-in read: exact M; at least L; Unknown only when nothing is known of the class | behaviour (selection-policy) | S168-LB1b | selection-policy, `list_max.rs` | a key with no row, or with neither a value nor a bound, makes it "at least"; `empty` stays exact |
+| LB1-9 | reading [L, +∞): `integer_compare` and `threshold` settled only where every value of the range agrees, else Unknown (`lookup_miss`); `identity` takes L; the upper bound takes the range | behaviour (selection-policy) | S168-LB1b | selection-policy, the evaluator and the upper bound | no unknown reason added |
+| LB1-10 | `selection_table_list_max`'s keys `bound` (vocabulary `list_max_bound`: `exact`, `at_least`), `unknown_count`, `lower_bound` and `lower_bound_identity` | outcome keys and vocabulary (proposed names) | S168-LB1b | selection-policy | only for a reference that opts in; a decision reason, no record member |
+| LB1-11 | `selection_decided_on_lower_bound` (info; `rule_id`, `count`), once in a decision made on a lower bound, before the outcome's reasons | outcome code (proposed name) | S168-LB1b | selection-policy | an `unknown` evaluation carries none |
+| LB1-12 | the judge's use: a comparison the bound settles is `judged`, one it does not is `unknown`, a score at L is `judged` with the bound in the reasons | behaviour (S168-5b, planned) | whichever of S168-LB1b and S168-5b merges second | execution-kernel, the judge path | the record gains no member, so `ledger` does not move for it |
+
+**The two code slices.**
+
+| Slice | Repository | Size | What | Depends on | Interfaces |
+|---|---|---|---|---|---|
+| S168-LB1a | Runtime | M | LB1-1 to LB1-6: the row constant and every reader's check; the kernel's bound; the projection's two exclusions and the warning; the compile refusal; the read's key prefix and total; the outcome catalog's rows and descriptions; `runtime-interface.md`'s row; `component-interfaces.json` | this contract | `ledger` [3, 8], `runtime-client` [3, 7]; the console of the same release reads both (the UI repository) |
+| S168-LB1b | Runtime | M | LB1-7 to LB1-11, and LB1-12 when S168-5b merged before it: the member's validation and binding, the read, its readers and the upper bound, the reason's keys and the info reason with their catalog rows; `component-interfaces.json` | this contract; S168-5a (built, 0.12.50); S168-5b (PR #1566, open) for LB1-12 only | `package` [3, 9] |
+
+The two are independent and may run in parallel: they share no interface. Each takes its
+revision as the rows of "Planned: Workflow #428 S168-LB1" say; the planned rows of #434 (LAB-6)
+and S168-5b join a revision of the same release or take the next free one. Neither needs a heavy
+computation.
+
+**Interfaces** ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #428
+S168-LB1"). S168-LB1a: `ledger` 8 and `runtime-client` 7 (ruling 4); no `package` raise, proposed
+(a pack's bytes do not change, and a build before it only warns on a long list);
+`actingd-config` unchanged. S168-LB1b: `package` 9, the next free number on `e5efe44e`, where 8
+is in force and S168-5b's 9 is planned; no `ledger` (its read reaches the ledger only as reasons,
+an unsettled comparison reads the existing `lookup_miss`, and the judge's record gains no member)
+and no `runtime-client`. `runtime-outcomes` stays 1: two codes, four keys and one vocabulary added
+within it.
+
+**What changes live.**
+
+- S168-LB1a: a list of up to 1024 rows is read and written; the scheduler's projection holds no
+  list reading, so a list's publication no longer makes an evaluated intent stale; a long record
+  list of another key leaves only its instances' predicates Unknown, with a warning, where the
+  evaluation would have been skipped for every instance; a read by key prefix is filtered before
+  the frame; a catalog that names a list key to read is refused at compile.
+- S168-LB1b: nothing until a selection document writes the member; then that document's list
+  maximum reads "at least L" where it read Unknown, and its gates, its terms and a judge's key
+  follow the bound.
+
+**Rollback.**
+
+- S168-LB1a: going back below `ledger` 8 is refused by the Rp.max rule once its Runtime has run,
+  whether or not a long list was written. In plain words: after the first list of more than 256
+  rows is written, no build before the raise opens that ledger; it refuses the record at its
+  start and in every page that holds it. The way back is a later build, or a fresh state root;
+  there is no migration. The configuration needs nothing.
+- S168-LB1b: before a pack writes the member, nothing to undo. After, a build before it refuses
+  that document at admission, and a bundle that declares `package` [9, 9] is not placed on it:
+  first replace the pack by one without the member.
+
+**Tests the survey names, and what each slice does with them** (assert the ruled state).
+
+- S168-LB1a changes `execution-kernel`'s `gate_428_s168_4::list_reading_miss_publishes_nothing`
+  (`crates/execution-kernel/src/contained_task/gate_428_s168_4.rs`, about lines 523 to 602),
+  which pins the 257th position and `count` 257: it pins the 1025th and `count` 1025 instead
+  (with the test's 15 positions on the first viewport and 9 more per advance, 1,032 positions on
+  the 114th viewport, after 113 advances, within the 128 viewports). `runtime-host`'s
+  `gate_ed2::ed2_t7_row_257_drops_the_oldest_with_a_warning` pins `MAX_RUN_DURATION_ROWS`, a
+  bound of its own, and does not change. The survey found no test of the general row bound or of
+  the policy's 256; S168-LB1a's work order names its new tests.
+- S168-LB1b changes none: `selection-policy`'s
+  `gate_428_s168_5a::table_list_max_missing_key_is_unknown` and
+  `table_list_max_unknown_follows_the_declared_action` pin a document without the member, whose
+  read stays today's, and `table_list_max_unusable_list_is_unknown` pins an unusable list, which
+  stays Unknown with or without it. S168-5b's judge tests (PR #1566) keep documents without the
+  member. S168-LB1b's work order names its new tests.
+- Each slice also moves `actinglab-architecture`'s
+  `the_runtime_declares_each_v0120_interface_revision_once` to the ranges it declares.
+
+**Identity.** A catalog, a pack and a ledger with no list of more than 256 rows and without the
+member read, hash and decide byte for byte as before, but for two consequences of the rulings: a
+catalog that names a key under `inventory.list.` to read is refused at compile (LB1-4), and the
+evaluation of a ledger that holds a list record no longer carries that record in its `facts` and
+`fact_snapshot_id` (LB1-3), its decisions unchanged.
+
+**Questions the contract could not settle, each with the answer it proposes.**
+
+1. *What does a schedule predicate that names a key under `inventory.list.` get at compile time?*
+   Proposed: a refusal of the whole catalog, `type_mismatch` at the member's `fact_key`, as a
+   selection document that declares a record list or a table is refused. Against: a catalog that
+   names one today stops compiling. The alternative, compiling it and letting the predicate read
+   Unknown, would raise fact refresh demand for a key no mark writes (`fact_refresh_unbound`,
+   `key_not_marked`) at every evaluation.
+2. *The constant's name.* Proposed: `MAX_FACT_RECORD_LIST_ROWS`, public, in `fact.rs`, and
+   `MAX_LIST_READING_ROWS` defined as equal to it.
+3. *The warning of ruling 2(b).* Proposed: `policy_fact_rows_exceeded` (runtime-host, warning;
+   `fact_key`, `count`), one per left-out record on each decision of an instance it applies to,
+   after the evaluator's reasons, as `policy_instance_fact_missing` is carried. Against: every
+   decision of such an instance carries it while the record stands; once per record would be
+   quieter, but an evaluation round is never recorded on its own, so it would need a memory of
+   what was warned.
+4. *A list that grows past the observation's 512 KiB.* Written as the code forces: its run fails
+   (`contained_task_resource_reading_rejected`, `<operation id>:fact_observation_invalid`), where
+   a list over the row bound only warns. Proposed: S168-LB1a turns it into a miss of the list, a
+   new `reading_problem` word `list_bytes_exceeded` with `count` the rows, so that the run settles
+   as without the list; a list that grows with the account would otherwise start failing its run
+   one day. The contract changes only if the coordinator rules so.
+5. *Keys bounded by "the `record_list` bound".* Proposed: the policy instance seeds follow the new
+   1024 (they feed the instance projection, not the scheduler's facts); the pack schedule keeps
+   256 by its own write rule when SR-11 builds it, so that a pack schedule never reaches a length
+   the scheduler's projection leaves out.
+6. *The upper bound of an `identity` term over [L, +∞)*, as ruled, has no finite value with a
+   positive weight, though the evaluator scores every candidate at L; a scan's early stop and an
+   `on_empty` step's check then see `Unbounded` and block more often. Proposed: keep the ruling,
+   the safe side, and revisit it only if a trial shows it blocks a select that should end.
+7. *An `identity` term with a negative weight* takes L, which gives the most the term can give.
+   Proposed: keep the ruling and the reason that says so; a document that needs the safe side
+   compares instead.
+8. *Where `selection_decided_on_lower_bound` stands.* Proposed: once per decision, after the
+   candidates' assessment and before the outcome's reasons, with the first rule and the count.
+9. *The numbers against the open PR #1566 (S168-5b)*, which writes `ledger` 8 and `package` 9 into
+   the revision table. Proposed: whichever merges first declares the revision; a slice of the same
+   release joins it, one of a later release takes the next free number; the coordinator
+   renumbers at the release.
+10. *Is a persisted `fact_snapshot_id` ever recomputed?* The contract assumes not: it is compared
+    between an evaluation and its admission inside one running Runtime. S168-LB1a confirms it
+    before it changes the projection.
+
+**The coordinator's answers (2026-11-11, on reading this contract; the coordinator's, not Alice's
+words).** The differences (a) to (i) above are accepted as written. On the questions:
+
+1. As proposed: the catalog is refused at compile. S168-LB1a first reads the four resource
+   repositories' `main` for a member that names a key under `inventory.list.` to read; if one
+   does, it stops and reports before changing the compiler.
+2. As proposed.
+3. **Not as proposed.** Not a warning on every decision: the host records the warning once for
+   each left-out record after a start, keeping what it has warned of in memory only (nothing on
+   disk; a restart warns once more). A predicate that reads the key is Unknown for that instance
+   and the key raises no fact refresh demand, since a reading cannot shorten a list; S168-LB1a
+   says which unknown reason it carries and how the demand is kept from rising. The contract
+   texts are written so.
+4. As proposed: a miss of the list, `list_bytes_exceeded`. The contract texts are written so
+   (row LB1-5b).
+5. As proposed. R-8 (the pack schedule's code, in flight) checks its rows by the pack schedule's
+   own bound of 256, whichever of the two slices merges first.
+6. As proposed: the ruling stays.
+7. As proposed: the ruling stays.
+8. As proposed.
+9. As proposed.
+10. As proposed; if a persisted `fact_snapshot_id` is recomputed anywhere, S168-LB1a stops and
+    reports before it changes the projection.
+
+**Rollback of this slice.** Nothing to roll back: text only.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -13212,7 +13446,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`, `device.screen_off_timeout_ms` (per instance, a bound handset only, with a lifetime; §1.59 RD5-2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-5b |
 | `session.remedy.choices` (one per scope: instance, server or game; §1.110 B15-6) | instance | yes | #411 B15 R6 |
 | `session.dispatch.parameter.<name>` (an overlay of a run's snapshots only, never stored; the prefix `session.dispatch.` is refused to publishers; §1.110 B15-7) | — (never stored) | — | #411 B15 R5 |
-| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 256 rows; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
+| `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 256 rows, 1024 from S168-LB1a, not built yet, §1.309; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).

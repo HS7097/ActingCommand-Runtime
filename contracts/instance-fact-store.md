@@ -12,7 +12,8 @@ Runtime's facts about itself live in the separate runtime fact store
 
 Every change is one ledger event under the `fact_write_gate`: `fact.published`
 carries one observation (1–256 records of one scope and one
-`source_snapshot_id`), `fact.invalidated` drops one record. The store loads
+`source_snapshot_id`; the rows of a `record_list` record are bounded apart, "List reading
+facts", "Row bound"), `fact.invalidated` drops one record. The store loads
 at startup from the ledger's tagged state (Workflow #422 LN-2; "Start load" below),
 afterwards synchronizes incrementally from
 `last_sequence + 1`, and can replay history at an exact ledger position
@@ -150,8 +151,9 @@ unchanged appends nothing for that instance.
 
 **Failure.** Every refusal fails startup through the normal abort path (Fail
 Loud); only the idempotent path is success. The refusals are the store's own:
-`fact_record_invalid` (for example more than 256 capability or preferred-task
-identifiers, the `record_list` bound), `fact_observation_not_newer`,
+`fact_record_invalid` (for example more capability or preferred-task identifiers than the
+`record_list` row bound: 256, 1024 from S168-LB1a, not built yet; "List reading facts", "Row
+bound"), `fact_observation_not_newer`,
 `fact_store_capacity_exceeded`, `fact_source_snapshot_invalidated` (a seed of
 this snapshot id was invalidated), `policy_fact_authority_conflict` (the
 configured static `facts` declare the same key for the same instance), and the
@@ -321,6 +323,41 @@ instance), the priority offsets for it or for every instance, its own task
 states and outcomes, and every host. A change this contract describes for the
 intent's own instance, server or game still refuses it.
 
+**Left out of the projection (Workflow #428 S168-LB1a, not built yet;
+[v012-register.md](v012-register.md) §1.309; the coordinator's ruling 2 of 11-11, not Alice's
+words; #419: one long list never stops the scheduler for every instance).** The projection of the
+evaluation's `facts`, authoritative and forward alike, already leaves out three classes, each
+consumed by a projection of its own: the policy instance keys, the priority offsets and the
+run-duration samples. It leaves out two more:
+
+1. **Every record under `inventory.list.`**, whatever its rows. A list reading is a selection's
+   input, read by a select or judge step through its own snapshot ("List reading facts"), never
+   the scheduler's. No decision changes: no catalog predicate reads such a key, and a record list
+   is unusable to the scheduler's selection document. The evaluation's `facts`, its
+   `fact_snapshot_id` and an intent's instance view (above) no longer hold the lists, so a list's
+   publication no longer makes an evaluated intent `policy_facts_stale`. The catalog compile
+   refuses a catalog that names a key under the prefix to read
+   ([scheduling/README.md](scheduling/README.md), "Record lists and the projection"), so no
+   predicate meets the gap at evaluation.
+2. **Every other inline `record_list` record of more than 256 rows**, the policy's own bound,
+   which stays: the evaluator's input check (`observed_fact_value_is_bounded`, which refuses the
+   whole input that holds one) and the catalog schema's `maxItems` do not move. The store holds
+   such a record from S168-LB1a on (its row bound is 1024, "List reading facts", "Row bound").
+   The projection leaves it out for every instance its scope applies to (an instance record for
+   its instance, a server or game record for every instance of that server or game), so the
+   evaluation never refuses its whole input for it. The host records one warning
+   `policy_fact_rows_exceeded` (a proposed name the code slice registers; `fact_key`, and `count`
+   the record's rows) for each such record, the first time after a start that the projection
+   leaves it out, and no more in that start: the warning is not carried on every decision (the
+   coordinator's answer to question 3 of §1.309). A predicate that reads the key is Unknown for
+   that instance, and the key raises no fact refresh demand: a reading cannot shorten a list, so a
+   refresh would be asked for at every evaluation and never served. The code slice says which
+   unknown reason the predicate carries and how the demand is kept from rising; every other
+   instance and every other key evaluate as before.
+
+A ledger that holds no record under `inventory.list.` and no record list over 256 rows projects
+byte for byte as before.
+
 ## Policy input authority
 
 `validate_policy_input_authority` compares the registered alias set with the
@@ -477,12 +514,32 @@ The store accepts or refuses it like any other observation.
 
 | Key | Value | Scope |
 | --- | --- | --- |
-| `inventory.list.<name>` | `record_list`, one row `{<key_column>: <string>, <column>: <boolean, integer or string>, …}` per position of the list, at most 256 rows, in ascending byte order of the key | `instance` only |
+| `inventory.list.<name>` | `record_list`, one row `{<key_column>: <string>, <column>: <boolean, integer or string>, …}` per position of the list, at most 1024 rows (S168-LB1a, not built yet; until it 256), in ascending byte order of the key | `instance` only |
 
 - **Family.** The keys are of the `inventory.` family; no family is added. They are the only
   `record_list` records a package's reading writes.
+- **Row bound (S168-LB1a, not built yet; [v012-register.md](v012-register.md) §1.309).** The rows
+  of any `record_list` record of this store are bounded by a constant of their own, 1024 (the
+  proposed name `MAX_FACT_RECORD_LIST_ROWS`, in `crates/actingcommand-contract/src/fact.rs`), no
+  longer by `MAX_FACT_RECORDS`. `MAX_FACT_RECORDS` stays 256 and keeps bounding what it bounds
+  besides: the records of one observation, of an `InstanceFactSnapshot` and of an
+  `InstanceFactView`. The byte bounds do not move: 512 KiB an observation, 64 fields a row,
+  1024 bytes a string, the 1 MiB frame. After S168-LB1a each reader checks:
+
+  | Reader | Rows of a record list | Records |
+  | --- | --- | --- |
+  | the record's own check (`FactValue::validate`): every write and publication, a client's publication (`fact_record_invalid`), the host's check of a list before it publishes (`contained_task_resource_reading_rejected`), the decode of a `fact.published` ledger record (`validate_fact_observation`), a snapshot's and a view's check of each record, the client's check of an `InstanceFactSnapshot` answer | the new constant, 1024 | — |
+  | an observation (`validate_fact_observation`) | — | `MAX_FACT_RECORDS`, 256 |
+  | `InstanceFactSnapshot::validate`, `InstanceFactView::validate` | — | `MAX_FACT_RECORDS`, 256 |
+  | the kernel's list reading (`MAX_LIST_READING_ROWS`) | 1024, equal to the new constant | — |
+  | the scheduler's input (`observed_fact_value_is_bounded`) and the catalog's predicate value (`maxItems`) | 256, the policy's own (the projection leaves a longer list out, "Projection into the evaluation") | — |
+  | a key whose own contract bounds its rows (`session.remedy.choices`, `health.run_duration`) and the runtime fact store, a store of its own (`MAX_RUNTIME_FACT_RECORD_ROWS`, [runtime-fact-store.md](runtime-fact-store.md)) | its own bound, 256 | — |
+
+  A key whose contract states only "the `record_list` bound" takes 1024 with it, unless its own
+  write rule says otherwise ("Pack schedule facts").
 - **Whole or not at all.** A record holds every position the list showed. A list that could not
-  be read whole (an unread position, a repeated key, more than 256 positions) is never written,
+  be read whole (an unread position, a repeated key, more than 1024 positions, until S168-LB1a
+  more than 256) is never written,
   in part or as an empty list: the previous record, or none, stays. So in a usable record a key
   without a row is not present, and a record that is missing, expired, stale or below a reader's
   floor is unknown, never an empty list ([selection-policy.md](selection-policy.md), "Facts and
@@ -500,7 +557,9 @@ The store accepts or refuses it like any other observation.
 - **Projection.** An ordinary instance fact: visible to `InstanceFactSnapshot` and `ac_facts`,
   carried with its rows in the snapshot of a select or judge step whose document declares it,
   and loaded at the start as every tagged instance record. No catalog predicate and no
-  scheduling consumer reads it: record lists stay unusable to the scheduler.
+  scheduling consumer reads it: record lists stay unusable to the scheduler. From S168-LB1a (not
+  built yet) the scheduler's projection leaves the prefix out altogether ("Projection into the
+  evaluation", "Left out of the projection").
 - **Capacity.** One active fact identity per list per instance, however many rows and however
   often they change; booked in the capacity ledger below.
 - **Account data.** The rows say what the instance's account holds. They stay in this store and
@@ -574,6 +633,30 @@ one status read and print `{scope, read_at_unix_ms, snapshot, records_total, rec
 `read_at_unix_ms` is the source's `sampled_completed_at_unix_ms`, against which each record's
 `observed_at_unix_ms` and `expires_at_unix_ms` tell its freshness; `--key-prefix` keeps only
 the records whose key starts with it.
+
+**The frame bound with long lists (Workflow #428 S168-LB1a, not built yet;
+[v012-register.md](v012-register.md) §1.309; the coordinator's ruling 3 of 11-11, not Alice's
+words).** No paging: the read answers one instance whole in one frame, and keeps its explicit
+refusal past it (`instance_fact_snapshot_too_large_for_frame`). What fits, by the read-only
+survey's measurement of the serialized records (register §1.309): all of an instance's records
+together hold about 6,000 list rows of the key and 3 short columns (about 5 lists of 1024 rows) or
+about 2,900 of the key and 8 (about 2 such lists), less what its other records take; a row of the
+key and 63 columns takes about 2.6 KB, and one such list stops at the observation's 512 KiB near
+200 rows ([resource-readings.md](resource-readings.md), "List readings", "Rows").
+
+A read by key prefix must be filtered before the frame is built. **Today it is not:** the request
+names only the instance (`InstanceFactSnapshot{instance}`), the host builds and measures the whole
+view, and `actingctl facts --key-prefix` and `ac_facts` with `key_prefix` drop the other records
+only after the answer arrived, so a prefix read of an instance whose whole view is over the frame
+is refused as the whole read is. S168-LB1a adds the optional request member `key_prefix` (an
+instance fact key prefix, the CLI's and the MCP tool's value): the host keeps only the records
+whose key starts with it, then builds and measures the view, and the answer carries the optional
+`records_total`, the instance's records before the filter, so `records_total` and
+`records_kept` print as before. A request without the member answers and serializes as before.
+Both are `runtime-client` 7 shapes ([component-interfaces.md](component-interfaces.md),
+"Planned: Workflow #428 S168-LB1"). `actinglab replay --facts` still needs the answer read
+without a prefix, so an instance over the frame cannot be replayed with its facts until a later
+slice pages the read.
 
 ## Capacity ledger (Workflow #383 AO-0)
 
@@ -656,9 +739,12 @@ inline `record_list` are refused as the non-fatal request error `session_pack_sc
 (`fact_key`, `field`), before the fact write gate, with nothing appended. `field` is a JSON
 pointer into the list: `/<row>/<member>` for a member (`/<row>/until_unix_ms` for a period that
 ends at or before it starts), `/<row>` for a row that overlaps an earlier row of its package
-(the later row), `""` for the list as a whole. One scope holds at most the `record_list` bound
-of 256 rows, for all its packages together (a published list beyond it is the request's own
-refusal; an edit beyond it is `/rows`).
+(the later row), `""` for the list as a whole. One scope holds at most 256 rows, for all its
+packages together: this key's own bound, which the row rule checks (R-8: a published list beyond
+it is refused with `field` `""`, an edit beyond it with `/rows`), so that the general
+`record_list` row bound rising to 1024 with S168-LB1a (not built yet) does not raise it ("List
+reading facts", "Row bound"); until LB1a a published list beyond 256 rows is already the
+request's own refusal.
 
 **Writing.** One observation writes a scope's whole list, atomically: a `PublishFacts` of the
 key alone, or `EditPackSchedule {scope, package_id, rows, expected_version?}`, which replaces
