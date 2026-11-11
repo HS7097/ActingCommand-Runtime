@@ -2628,6 +2628,14 @@
     "run_origin": {
       "type": "vocab:run_origin",
       "description": "Who started the run a StopInstanceRun refused: the scheduler (a policy run) or the Runtime itself (a startup package, a ladder rung); kept in codes mode (Workflow #429 R-6)."
+    },
+    "trigger_line": {
+      "type": "integer",
+      "description": "A pool's trigger line at the evaluation, in the pool's real units, when the pool writes one: a capped episode begins at a reading at or above it; without one the capacity (#428 SCHED-C1c, contracts/scheduling/README.md \"Pool lines\", \"The trigger line\")."
+    },
+    "least_consumption": {
+      "type": "integer",
+      "description": "The least consumption of one run, in whole units of the pool, among a pool's judged consumers on an instance, by their declared consumption (#428 SCHED-C1c, contracts/scheduling/README.md \"A pool its lines cannot spend\")."
     }
   },
   "vocabularies": {

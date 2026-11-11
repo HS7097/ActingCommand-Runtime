@@ -105,11 +105,16 @@
         "hard_line": {
           "description": "SS-2h: the pool's hard line, below its stop line, written with stop_line: no dispatch the scheduler chooses leaves the pool below it. Without the two lines it is 0.",
           "$ref": "#/$defs/poolLine"
+        },
+        "trigger_line": {
+          "description": "#428 SCHED-C1c: the pool's trigger line, written only beside stop_line and hard_line, at or above the stop line and at most the capacity: a capped episode begins at a reading at or above it. Without it the capacity. A schedule.json that writes it names pool_trigger_line in requires.",
+          "$ref": "#/$defs/poolLine"
         }
       },
       "dependentRequired": {
         "stop_line": ["hard_line"],
-        "hard_line": ["stop_line"]
+        "hard_line": ["stop_line"],
+        "trigger_line": ["stop_line", "hard_line"]
       },
       "additionalProperties": false
     },

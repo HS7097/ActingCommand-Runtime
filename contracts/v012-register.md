@@ -11465,6 +11465,78 @@ start (`config.` is re-observed). Composing, activating and deciding are unchang
 `config.catalog_provenance` is a fact record of an existing shape, which an earlier build reads as
 any other and does not load at its start; its overview shows no such member.
 
+#### Slice SCHED-C1c (0.12.53): a pool's trigger line; lines that cannot spend warn; old triggers are hinted
+
+Coordinator work order `rd-1111/brief-sched-c1c.md`; on main `4e1d9608` (SCHED-C1a merged as PR
+#1585). The contract is [scheduling/README.md](scheduling/README.md) ("Pool lines" with "The
+trigger line" and "A pool its lines cannot spend", "Capped spending order" with "Old triggers on a
+capped pool") and [standard-pack-schedule.md](standard-pack-schedule.md) ("The file", `requires`,
+"Composition", "Tools", "A redundant trigger"), rows SC1-8 to SC1-10 and SC1-5's
+`pool_trigger_line` above. The text names no game, resource or value: the tests' ids are neutral.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| C1C-1 | `PoolSpec::trigger_line` (`Option<PoolLine>`, V2 only, the two forms) (SC1-8) | catalog format addition | SCHED-C1c | `acmodel bindings apply` (RL-R); a raw V2 catalog | `crates/policy/src/schema.rs`; absent it serializes as nothing; `validate_pool_lines` in `validation.rs`: V1 `unknown_field`; a reference by a capacity reference's rules, a constant above 2^53−1 `limit_exceeded`; `pool_lines_invalid` at `trigger_line` without both lines, above the capacity, below the stop line, where the compiler can tell; `v2/pools.schema.json` (`dependentRequired` both lines) |
+| C1C-2 | the episode's start: `capped::Lines::trigger` (`T`, the capacity without one), `at_trigger` (`r ≥ T`) and `spent` (`r ≤ S`, `r < T`); `lines_invalid` for `0 ≤ H < S ≤ T ≤ cap` broken, with `trigger_line`; `capped_spend` with `trigger_line` when the pool writes one | behaviour (evaluation); outcome values | SCHED-C1c | the policy evaluator | `crates/policy/src/evaluator/capped.rs`; the ranks, rounds, plan, stop line, hard line and every other end of the order unchanged |
+| C1C-3 | `pool_lines_unspendable` (warning / none, pending, since 0.12.53; `pool_id`, `pool_capacity`, `stop_line`, `hard_line`, `least_consumption`), the catalog diagnostic of the same code (warning), the keys `least_consumption` and `trigger_line` (`integer`) (SC1-9) | outcome catalog additions (policy) | SCHED-C1c | the policy evaluator and compiler | `capped::plan` before the episode's step; `validation.rs` `unspendable_lines`; `diagnostic.schema.json`; the idle plan (`runtime-host` `schedule_explanation.rs`) counts it as `pool_line_held` |
+| C1C-4 | `standard_pack_line_trigger_redundant` (warning / declaration_error, pending, since 0.12.53; `game`, `task_id`, `pool_id`) (SC1-10) | outcome catalog addition (contract) | SCHED-C1c | the composer, for the tools | `compose.rs` `redundant_triggers`, `StandardPackComposition::redundant_trigger_warnings`; `resource-tooling` appends them to `warnings` after SS-4's |
+| C1C-5 | the always-on row `pool_trigger_line` of `config.subsystems`; `POOL_TRIGGER_LINE_SUBSYSTEM`; `POOL_TRIGGER_LINE_MEMBER` (SC1-5) | new row value of an existing fact | SCHED-C1c | actingd | `apps/actingd/src/config/manifest.rs`; the composer refuses a pool's `trigger_line` without it in `requires` (`schedule_invalid` at the first pool that writes it) |
+
+**Tests.** New: policy rows "#428 SCHED-C1c", `actingcommand-policy::lib::tests::gate_sched_c1c`
+tests 1 to 5 (`sched_c1c_t1_an_episode_starts_at_the_trigger_line`,
+`sched_c1c_t2_the_member_is_refused_at_its_pointer`,
+`sched_c1c_t3_without_the_member_nothing_changes`,
+`sched_c1c_t4_a_pool_its_lines_cannot_spend_warns`,
+`sched_c1c_t5_the_composer_carries_the_member_and_hints_at_old_triggers`), on fakes with a fixed
+clock, no sleep and no thread. No existing test changed; no golden re-recorded (the example
+catalog's golden hashes are asserted unchanged).
+
+**Interface.** None raised (`ledger`, `actingd-config`, `runtime-client`, `package`,
+`runtime-outcomes`): a catalog member and a `schedule.json` member gated by `requires`, a
+subsystem row of an existing fact, a decision reason and a compile diagnostic, outcome values of
+existing reasons and a tools' hint (as §1.289).
+
+**Where SCHED-C1c reads the contract.**
+
+- (a) "Ends once `r ≤ S` and `r < T`" is the one rule `Lines::spent`, which the round's plan reads
+  too ("above `S`, or at `T`"); it differs from SS-2h only for `S = T < cap`, where SS-2h's
+  `r < cap` would begin and end an episode at once.
+- (b) `lines_source` is SCHED-C1e's: `pool_lines_unspendable` and `capped_spend` carry none yet.
+- (c) `pool_lines_unspendable` holds the pool's judged candidates whose `B` is known, as a capped
+  hold whatever their sign; a consumer that is no candidate keeps its own reason. It applies to
+  every valued pool on the instance, with its lines or the defaults (`H` 0), at `r ≥ T`.
+- (d) The compile warning's values are in the diagnostic's text (`pool_id`,
+  `capacity_less_hard_line`, `least_consumption`): a diagnostic carries no outcome values, and
+  `config.catalog_warnings` records its code, game and pointer (CW-1). It is checked only on valid
+  lines of a valued pool; a consumer is a judged task that is no manual request and declares a
+  consumption of the pool, and one entry of the pool pending leaves the compiler unable to tell; a
+  hard line that references the capacity's fact gives `cap − H` = the capacity's offset less the
+  line's.
+- (e) "The first such member in file order (rules, then pools)" is read per subsystem, as for
+  `fact_reference` and `pool_fact_reference`: `benefit_fixed_value`'s check runs first, then
+  `pool_trigger_line`'s at the first pool that writes `trigger_line`.
+- (f) A `trigger_line` beside one line only is refused at both members.
+- (g) The contract names `trigger_line` as a value of `lines_invalid` and `capped_spend` without
+  registering the key: it and `least_consumption` are registered (`integer`).
+- (h) The redundant trigger: "through `all`" is the evaluator's required conditions (nested `all`s;
+  the trigger itself when it is no `all`); the pool's capacity must be a fact reference (a constant
+  capacity has no capacity fact); judged composed rules only (not held), each rule's pools in file
+  order.
+
+**What SCHED-C1c changes live.** Nothing until a `schedule.json` writes `trigger_line` (with
+`pool_trigger_line` in `requires`): a catalog without it keeps its hash, rules digest and
+decisions; `config.subsystems` gains the always-on row `pool_trigger_line`. A valued pool whose
+lines no consumer's run fits under from its capacity now warns instead of beginning and ending an
+episode with `capped_round_empty` (no production pool is valued today), and the tools hint at old
+capacity thresholds on valued pools with lines (none today).
+
+**SCHED-C1c rollback** (to the release before it). The ledger and the configuration need nothing.
+Before a `schedule.json` writes the member: nothing to undo. After: a build without SCHED-C1c
+refuses a pool that writes `trigger_line` at its reader (`unknown_field`) and does not name
+`pool_trigger_line`, so its composer refuses such a `schedule.json` (`schedule_requires_missing`);
+first remove the member and let this build activate a generation without it, as §1.289's rollback
+says for SS-2h's.
+
 ### 1.300 Slice INST-5, first slice (0.12.52): the Lab's rescue module adds an emulator instance, committed as a configuration replacement (Workflow #421; the desktop program's "add account / device" button is disabled with the words "wait for the Runtime's support; edit the configuration file by hand for now", and adding an instance today means editing two places of the file and restarting; the read-only survey of 11-11 found that a first version fits today's interface revisions; the coordinator's ruling of 11-11, not Alice's words, that the new instance starts paused; coordinator work order `rd-1111/brief-inst5.md`, read on main `c0edc8b2`)
 
 [install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh root" ("Instances,

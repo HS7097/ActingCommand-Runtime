@@ -138,6 +138,9 @@ pub enum CatalogDiagnosticCode {
     /// SCHED-C1a (register §1.299): a task's `benefit_fixed_value_milli` beside a `produces` entry
     /// on a pool whose valuation is declared or pending, or beside `benefit_realization: true`.
     FixedValueConflict,
+    /// SCHED-C1c (register §1.299; a warning): a valued pool's lines cannot spend it: every judged
+    /// consumer's run consumes more than the pool's capacity less its hard line.
+    PoolLinesUnspendable,
 }
 
 impl CatalogDiagnosticCode {
@@ -173,6 +176,7 @@ impl CatalogDiagnosticCode {
             Self::PoolLinesInvalid => PolicyCode::PoolLinesInvalid.code(),
             Self::PoolLinesUnvalued => PolicyCode::PoolLinesUnvalued.code(),
             Self::FixedValueConflict => PolicyCode::FixedValueConflict.code(),
+            Self::PoolLinesUnspendable => PolicyCode::PoolLinesUnspendable.code(),
         }
     }
 }
@@ -1062,9 +1066,16 @@ pub const POOL_LINES_SUBSYSTEM: &str = "pool_lines";
 /// (a literal outside the registry would repeat a registered name).
 pub const BENEFIT_FIXED_VALUE_SUBSYSTEM: &str = PolicyCode::BenefitFixedValue.as_str();
 
+/// SCHED-C1c (register §1.299): the configuration-manifest subsystem of a Runtime that reads a
+/// pool's `trigger_line`; a `schedule.json` whose pool writes it names it in `requires` (beside
+/// [`POOL_LINES_SUBSYSTEM`], which its two lines need): a Runtime that names `pool_lines` alone
+/// does not read it.
+pub const POOL_TRIGGER_LINE_SUBSYSTEM: &str = "pool_trigger_line";
+
 /// One of a pool's two lines (SS-2h, register §1.289; Alice's ruling 138 and her answers of
 /// 11-09 17:37 and 17:42: a stop line above a hard line, given by the model, a person or an
-/// agent; the program never computes one): the pool's `stop_line` or `hard_line`.
+/// agent; the program never computes one): the pool's `stop_line` or `hard_line`; SCHED-C1c
+/// (register §1.299): also its `trigger_line`, in the same two forms.
 ///
 /// - [`PoolLine::Fact`]: `{"type": "fact", "fact_key": <key>, "offset": <integer>}`, the integer
 ///   the fact `fact_key` of the pool's own scope holds plus `offset`, the shape of a capacity read
@@ -1168,6 +1179,11 @@ pub struct PoolSpec {
     /// absent, it is 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hard_line: Option<PoolLine>,
+    /// SCHED-C1c (register §1.299; V2 only): the pool's trigger line ([`PoolLine`]), written only
+    /// beside the two lines, at or above the stop line and at most the capacity: the reading at
+    /// which a capped episode begins. Absent, it is the capacity and the catalog keeps its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_line: Option<PoolLine>,
 }
 
 impl PoolSpec {

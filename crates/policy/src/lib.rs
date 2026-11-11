@@ -133,4 +133,7 @@ mod tests {
     // #428 SCHED-C1a (0.12.52; register §1.299): a rule's fixed value written in its pack is its
     // known benefit, less the cost of what it consumes.
     mod gate_sched_c1a;
+    // #428 SCHED-C1c (0.12.53; register §1.299): a pool's trigger line, and a pool its lines cannot
+    // spend.
+    mod gate_sched_c1c;
 }

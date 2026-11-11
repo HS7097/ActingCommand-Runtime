@@ -768,4 +768,9 @@ outcome_keys! {
     // ---- Workflow #429 R-6 (contracts/runtime-interface.md "Workbench request kinds", the row
     // `StopInstanceRun`): who started the run a stop refused; kept in codes mode. ----
     run_origin: vocab(run_origin),
+    // ---- #428 SCHED-C1c (a pool's trigger line, and a pool its lines cannot spend,
+    // contracts/scheduling/README.md "Pool lines"): begin ----
+    trigger_line: integer,
+    least_consumption: integer,
+    // ---- #428 SCHED-C1c: end ----
 }

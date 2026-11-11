@@ -2357,6 +2357,7 @@
         "capped_round": "required",
         "capped_rank": "required",
         "pool_reading": "required",
+        "trigger_line": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -2366,7 +2367,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.46",
-      "description": "Scheduling decision reason (SS-2h, Alice's ruling 138 and her answers of 11-09 17:37, 17:42 and 17:48; contracts/scheduling/README.md \"Capped spending order\"): the dispatch is the head of a capped pool's spending order on its instance. The pool's reading (pool_reading, its projected amount less the consumption its reading does not show yet) reached its capacity (pool_capacity), so the pool is in a capped episode (capped_episode, counted since the Runtime started) and its consumers that could be dispatched were frozen in a round's order (capped_round; the first takes limited tasks too) by the value of a run without the pool's cost per unit of the pool consumed; capped_rank is the dispatch's place in it. The round spends the pool down to its stop line (stop_line); no run leaves it below its hard line (hard_line). The head competes with the instance's other candidates by its tier and B ÷ E, its B charging only the part of its consumption that takes the reading below the stop line.",
+      "description": "Scheduling decision reason (SS-2h, Alice's ruling 138 and her answers of 11-09 17:37, 17:42 and 17:48; contracts/scheduling/README.md \"Capped spending order\"): the dispatch is the head of a capped pool's spending order on its instance. The pool's reading (pool_reading, its projected amount less the consumption its reading does not show yet) reached its capacity (pool_capacity), or its trigger line (trigger_line, #428 SCHED-C1c, when the pool writes one), so the pool is in a capped episode (capped_episode, counted since the Runtime started) and its consumers that could be dispatched were frozen in a round's order (capped_round; the first takes limited tasks too) by the value of a run without the pool's cost per unit of the pool consumed; capped_rank is the dispatch's place in it. The round spends the pool down to its stop line (stop_line); no run leaves it below its hard line (hard_line). The head competes with the instance's other candidates by its tier and B ÷ E, its B charging only the part of its consumption that takes the reading below the stop line.",
       "common_causes": "A pool reached its cap (a regenerating pool filled, or an expired item was converted into it) and its consumers have a positive value without its cost.",
       "handling": "None. Lower or raise the pool's stop_line and hard_line in schedule.json (the model's thresholds, or a person's or an agent's per instance) to spend more or less of it."
     },
@@ -2390,6 +2391,7 @@
         "gate_code": "optional",
         "fact_key": "optional",
         "unknown_reason": "optional",
+        "trigger_line": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -2399,7 +2401,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.46",
-      "description": "Scheduling decision reason (SS-2h, Alice's ruling 138 and her answers of 11-09 17:37, 17:42 and 17:48; contracts/scheduling/README.md \"Pool lines\", \"Capped spending order\"): a pool's lines hold a judged candidate (or, capped_not_dispatchable, a consumer of a capped pool that is no candidate) back this round. pool_line_hold says why: below the cap its run would leave the pool below its hard line (would_cross_hard_line, amount_after); in a capped episode (capped_episode, capped_round) it is no candidate now or was none when the round's order was frozen (capped_not_dispatchable, gate_code its own reason when registered), it is limited and the round is not the first (capped_limited_spent), its run would leave the pool below the hard line in the round's order (capped_would_cross_hard_line, amount_after), the round lists no task and the episode ends (capped_round_empty), or another consumer is the head (capped_not_head, task_id); or the pool's capacity, reading or a line's fact gives no value (capped_cap_unknown, fact_key and unknown_reason) or the lines read break their rules (lines_invalid). The lines constrain the scheduler only: a manual request, a chain successor that rides with its chain and the Runtime's own tasks are not held.",
+      "description": "Scheduling decision reason (SS-2h, Alice's ruling 138 and her answers of 11-09 17:37, 17:42 and 17:48; contracts/scheduling/README.md \"Pool lines\", \"Capped spending order\"): a pool's lines hold a judged candidate (or, capped_not_dispatchable, a consumer of a capped pool that is no candidate) back this round. pool_line_hold says why: below the cap its run would leave the pool below its hard line (would_cross_hard_line, amount_after); in a capped episode (capped_episode, capped_round) it is no candidate now or was none when the round's order was frozen (capped_not_dispatchable, gate_code its own reason when registered), it is limited and the round is not the first (capped_limited_spent), its run would leave the pool below the hard line in the round's order (capped_would_cross_hard_line, amount_after), the round lists no task and the episode ends (capped_round_empty), or another consumer is the head (capped_not_head, task_id); or the pool's capacity, reading or a line's fact gives no value (capped_cap_unknown, fact_key and unknown_reason) or the lines read break their rules (lines_invalid; with trigger_line when the pool writes one, #428 SCHED-C1c). The lines constrain the scheduler only: a manual request, a chain successor that rides with its chain and the Runtime's own tasks are not held.",
       "common_causes": "A pool's reading is near its hard line or at its cap, or a line's fact has not been read.",
       "handling": "None: the candidate is judged again at every evaluation. Revise the pool's stop_line and hard_line in schedule.json if they are wrong; a line read from a fact needs a reading of that fact."
     },
@@ -2485,6 +2487,31 @@
       "description": "Catalog compile diagnostic (#428 SCHED-C1a; contracts/scheduling/README.md \"Fixed values written in the pack\", contracts/scheduling/v2/README.md, benefit_fixed_value_milli): a task's fixed value stands beside a second value, at its benefit_fixed_value_milli (a standard pack's rule at its fixed_value_milli): a produces entry on a pool whose valuation is a declared block or the pending marker (its priced effects), or benefit_realization true (the zero tier reads a modelled value's rounding). Neither may silently win, so the catalog is refused.",
       "common_causes": "A model export priced a rule's effects or marked it a realization and kept its fixed value, or a person wrote a fixed value on a rule whose product is priced.",
       "handling": "Remove the fixed value, or the priced product or the realization mark, in the same change; a model export that prices a rule's effects removes its fixed value."
+    },
+    "pool_lines_unspendable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "pool_id": "required",
+        "pool_capacity": "required",
+        "stop_line": "required",
+        "hard_line": "required",
+        "least_consumption": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.53",
+      "description": "Scheduling decision reason and catalog compile diagnostic, a warning (#428 SCHED-C1c, the coordinator's point 11 of 11-11; contracts/scheduling/README.md \"Pool lines\", \"A pool its lines cannot spend\"): a valued pool's lines cannot spend it on an instance. Every judged consumer of the pool there (each by its declared consumption, whether or not it is a candidate) consumes more in one run than the pool's capacity (pool_capacity) less its hard line (hard_line), so no run can start from the capacity without leaving the pool below its hard line, and the pool stays full; least_consumption is the least consumption among them, stop_line the pool's stop line. At an evaluation where the pool's reading is at or above its trigger line (the capacity without one) no capped episode begins (one under way waits) and the pool's judged candidates are deferred with this reason, which the not-run explanation (ScheduleExplanation) shows; the idle plan counts it neither due nor as a wake of its own, as pool_line_held. Where the compiler can tell (a constant hard line against a constant capacity, or a hard line that references the capacity's own fact, against every consumer's known consumption) the catalog also compiles with this warning at the pool's hard_line, its values in the diagnostic's text, which reaches config.catalog_warnings and the overview.",
+      "common_causes": "The pool's hard line is closer to its capacity than its cheapest consumer's run: the released rule H = S - (the costliest run) was broken by a hard line moved up, a capacity read lower or a consumer's declared consumption raised.",
+      "handling": "Lower the pool's hard_line (or raise its capacity reading) so that at least one consumer's run fits between the capacity and the hard line, or lower a consumer's declared consumption if it is wrong."
     }
   }
 }

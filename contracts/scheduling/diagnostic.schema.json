@@ -38,7 +38,8 @@
         "realization_cycle",
         "pool_lines_invalid",
         "pool_lines_unvalued",
-        "fixed_value_conflict"
+        "fixed_value_conflict",
+        "pool_lines_unspendable"
       ]
     },
     "severity": { "enum": ["error", "warning"] },

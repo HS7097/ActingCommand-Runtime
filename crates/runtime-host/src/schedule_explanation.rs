@@ -189,12 +189,14 @@ impl IdleDraft {
         // SS-4 (register §1.231): so is a pair the no-progress guard holds, which waits for a
         // reading of another value and has no wake of its own.
         // SS-2h (register §1.289): and a judged candidate a pool's lines hold (its hard line, or
-        // a capped pool's order that another consumer heads).
+        // a capped pool's order that another consumer heads); SCHED-C1c (register §1.299): or
+        // whose pool its lines cannot spend.
         let benefit_held = decision.reasons.last().is_some_and(|reason| {
             reason.outcome.is(PolicyCode::BenefitUnknown)
                 || reason.outcome.is(PolicyCode::PolicyBenefitNonpositive)
                 || reason.outcome.is(PolicyCode::PolicyNoProgress)
                 || reason.outcome.is(PolicyCode::PoolLineHeld)
+                || reason.outcome.is(PolicyCode::PoolLinesUnspendable)
         });
         let due = decision.state == SchedulingDecisionState::Selected
             || (eligible

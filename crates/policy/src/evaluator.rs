@@ -54,6 +54,7 @@ mod turns;
 mod capped;
 
 use benefit::KnownBenefit;
+pub(crate) use benefit::manual_request;
 pub use blackout::{
     Blackout, BlackoutEntry, BlackoutSources, BlackoutWindow, DayBoundaryDeferral, blackout_at,
     day_boundary_fit, next_blackout_start,
