@@ -841,8 +841,10 @@ not change.
 
 - no failure streak and no escalation (the pair's failure state keeps its latest real failure, the
   identity a lift compares), no retry or backoff, no `paused_task` (a sensitive task's run
-  included), and no recovery ladder, whatever `recovery_ladder.triggers` lists, also when the
-  stop's reset failed and fenced the instance;
+  included), and no recovery ladder of its own: the stopped run's terminal starts none, whatever
+  `recovery_ladder.triggers` lists, also when the stop's reset failed and fenced the instance; the
+  fence a failed reset leaves is handed on as every fence is (#403, #419), to a `resource_fence`
+  ladder or to a person;
 - never a condition, whatever `scheduling.rerun.condition_codes` lists: it owes no rerun and gives
   back no count;
 - never rewritten as `policy_runtime_budget_exceeded`; the counts its admission took stay taken,

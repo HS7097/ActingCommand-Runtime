@@ -17,8 +17,9 @@
 // - the live settlement of a stopped owed rerun ends it, and nothing promotes it again;
 // - the restart settles a stopped run from its terminal as `stopped`; a run with no terminal as
 //   interrupted, as before;
-// - a failed reset fences only its instance and starts no ladder; the other instance's run goes
-//   on;
+// - a failed reset fences only its instance and the stop starts no ladder of its own (the fence
+//   is handed on as every fence is, to a `resource_fence` ladder or to a person); the other
+//   instance's run goes on;
 // - a stop sent while the run prepares its package reaches it; the run ends at its first check;
 // - a fact refresh read is stopped and is no failure: its snapshot shows `cancelled` with no
 //   failure streak.
@@ -37,8 +38,8 @@ use crate::policy_control::PolicyValueRecord;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ConfigParameterSource, EventAction, InstanceRunReset, InstanceRunStop,
-    PolicyControlStateRecord, RequestId, RoutineSummaryGranularity, RuntimeConfigManifest,
-    RuntimeLifecyclePhase,
+    PolicyControlStateRecord, RecoveryTriggerStage, RequestId, RoutineSummaryGranularity,
+    RuntimeConfigManifest, RuntimeLifecyclePhase,
 };
 use actingcommand_policy::{FACT_REFRESH_TASK_ID, TaskTerminalState};
 use actingcommand_runtime_config::scheduling::RERUN_CONDITION_CODES;
@@ -55,6 +56,8 @@ const OTHER: &str = "r6b2.instance.other";
 const TASK: &str = "fixture.observe";
 const CANCELLED: &str = "contained_task_cancelled";
 const TRIGGERS: &str = "recovery_ladder.triggers";
+/// The id of the task-stage trigger item `stop_naming_manifest` names the stop's code in.
+const STOP_RULE: &str = "stop_named";
 /// How long a test waits for something the host does on another thread.
 const GATE_WAIT: Duration = Duration::from_secs(30);
 
@@ -238,7 +241,7 @@ fn stop_naming_manifest() -> RuntimeConfigManifest {
         &defaults,
         &json!({
             "recovery_ladder": {
-                "triggers": [{"id": "stop_named", "stages": ["task"], "codes": [CANCELLED]}]
+                "triggers": [{"id": STOP_RULE, "stages": ["task"], "codes": [CANCELLED]}]
             },
             "scheduling": {"rerun": {"condition_codes": [CANCELLED]}}
         }),
@@ -456,6 +459,33 @@ fn assert_no_ladder(host: &RuntimeHost, alias: &str) {
         .expect("instance claims");
     assert_ne!(holder, Some(ClaimKind::Ladder));
     assert!(!queued.contains(&ClaimKind::Ladder), "{queued:?}");
+}
+
+/// The stopped run `context` starts no ladder of its own, whatever `recovery_ladder.triggers`
+/// lists: no ladder record, started or suppressed, of the stage `task`, of the trigger item
+/// `stop_named` or naming the run. The fence a failed reset leaves is handed on by the lease sweep
+/// as every fence is (#403, #419), to a `resource_fence` ladder (no rule, no run) or to a person;
+/// that ladder is allowed and not required, so this holds before and after the sweep's tick.
+fn assert_no_ladder_of_the_stop(host: &RuntimeHost, context: &PolicyRunContext) {
+    let run = context.run_id();
+    let events = all_events(host);
+    let own = phases(&events)
+        .into_iter()
+        .filter(|(event, phase)| match phase {
+            RuntimeLifecyclePhase::RecoveryLadderStarted { trigger, .. } => {
+                trigger.stage == RecoveryTriggerStage::Task
+                    || trigger.rule.as_deref() == Some(STOP_RULE)
+                    || trigger.run_id == Some(run)
+                    || event.links().run_id() == Some(&run)
+            }
+            RuntimeLifecyclePhase::RecoveryLadderSuppressed { rule, .. } => {
+                rule.as_deref() == Some(STOP_RULE) || event.links().run_id() == Some(&run)
+            }
+            _ => false,
+        })
+        .map(|(_, phase)| phase)
+        .collect::<Vec<_>>();
+    assert!(own.is_empty(), "the stop's own ladder: {own:#?}");
 }
 
 /// The status row of `alias`.
@@ -838,10 +868,12 @@ fn r6b2_the_restart_settles_a_stopped_run_from_its_terminal_and_one_without_as_i
 
 // R6B-2, #419: the stop's reset fails on X's device. The failure fences X only and is the stop's
 // cause (`instance_resources_fenced`, `reset: failed`); with a ladder trigger naming the stop's
-// code, no ladder starts; the run still settles as a stop; the other instance is not fenced and its
-// run completes; the Runtime is not halted.
+// code, the stopped run's terminal starts no ladder of its own; the fence is handed on as every
+// fence is, to a `resource_fence` ladder of X or to a person, which the test neither requires nor
+// waits for; the run still settles as a stop; the other instance is not fenced and its run
+// completes; the Runtime is not halted.
 #[test]
-fn r6b2_a_failed_reset_fences_only_its_instance_and_starts_no_ladder() {
+fn r6b2_a_failed_reset_fences_only_its_instance_and_its_stop_starts_no_ladder() {
     let fixture = Fixture::start(&policy_sources(1), Some(stop_naming_manifest()));
     let (first, run, error) =
         fixture.stop_at_then(ContainedTaskCheckpointPoint::PackageAdmitted, |device| {
@@ -879,7 +911,7 @@ fn r6b2_a_failed_reset_fences_only_its_instance_and_starts_no_ladder() {
             .is_none(),
         "the other instance is untouched"
     );
-    assert_no_ladder(&fixture.host, X_ALIAS);
+    assert_no_ladder_of_the_stop(&fixture.host, &fixture.context);
     assert_stopped_record(&fixture.host, fixture.context.decision_id());
 
     let ids = IdentifierIssuer::new().expect("identifier issuer");

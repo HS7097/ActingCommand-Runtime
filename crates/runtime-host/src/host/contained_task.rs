@@ -8684,12 +8684,14 @@ impl HostShared {
                             outcome: failure.error.outcome(),
                             severe: false,
                         });
-                        // Workflow #429 R-6b2 (register §1.314 (i), (l)): a stopped policy run
-                        // notes no ladder trigger, whatever `recovery_ladder.triggers` lists, also
-                        // when its reset failed and fenced the instance: its committed terminal
-                        // is taken off its control, so its lease ends as a failed run's and hands
-                        // the instance to no ladder. Its settlement (`stopped`) follows on the
-                        // policy lane.
+                        // Workflow #429 R-6b2 (register §1.314 (i), (l), §1.316): a stopped policy
+                        // run notes no ladder trigger, whatever `recovery_ladder.triggers` lists,
+                        // also when its reset failed and fenced the instance: its committed
+                        // terminal is taken off its control, so its lease ends as a failed run's
+                        // and its terminal starts no ladder of its own. The fence a failed reset
+                        // leaves is handed on as every fence is, by the lease sweep
+                        // (`hand_resource_fences_to_ladders`), to a `resource_fence` ladder or to
+                        // a person. Its settlement (`stopped`) follows on the policy lane.
                         if runtime_stop {
                             control
                                 .take_failed_terminal()

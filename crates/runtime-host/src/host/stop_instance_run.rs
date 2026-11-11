@@ -16,11 +16,12 @@
 //! - **The reset.** The run's end resets the device before its terminal and its lease end
 //!   (`HostShared::reset_stopped_run`): an `Input` `reset` on the run's lease, recorded as every
 //!   input is (`InputReset`, linked to the run). A reset that fails fences the run's instance only
-//!   (#419) and the run's lease ends as a failed run's, handing the instance to no ladder; the
-//!   stop answers `reset: failed` with the fence's failure as its receipt's cause. A run that
-//!   ended without the stop's reset (it ended on its own before its check saw the stop, or its
-//!   deadline or a pause ended it) needed none: `reset: not_needed`, as the client's own
-//!   cancel-and-reset answers it.
+//!   (#419) and the run's lease ends as a failed run's; the stopped run's terminal starts no
+//!   ladder of its own, and the fence is handed on as every fence is, to a `resource_fence`
+//!   ladder or to a person. The stop answers `reset: failed` with the fence's failure as its
+//!   receipt's cause. A run that ended without the stop's reset (it ended on its own before its
+//!   check saw the stop, or its deadline or a pause ended it) needed none: `reset: not_needed`,
+//!   as the client's own cancel-and-reset answers it.
 //! - **The answer.** The request waits up to `wait_ms` for the run's end (the run left the
 //!   registry: its terminal and its lease end written; a policy run's settlement record follows
 //!   on its worker): then `settled: true` and `reset`; after `wait_ms`, `settled: false` and no
@@ -30,11 +31,11 @@
 //! - **Records.** The request is a command (`command.received`, then `command.validated`, or
 //!   `command.rejected` with its refusal); the run's own records, its reset among them, are the
 //!   run's. A stop is no failure of the run's task: the routine summary counts it as an
-//!   interruption, it starts no ladder and owes no rerun. A stopped policy run's terminal is the
-//!   `task.failed` with `contained_task_cancelled` every scheduled cancel writes, and its
-//!   `policy.execution_recorded` is of the kind `stopped`. A stop ends this run only: a task
-//!   whose trigger still holds is dispatched again once its cooldown, counted from its dispatch,
-//!   has passed; a closing row of the pack schedule or a pause keeps it from running.
+//!   interruption, it starts no ladder of its own and owes no rerun. A stopped policy run's
+//!   terminal is the `task.failed` with `contained_task_cancelled` every scheduled cancel writes,
+//!   and its `policy.execution_recorded` is of the kind `stopped`. A stop ends this run only: a
+//!   task whose trigger still holds is dispatched again once its cooldown, counted from its
+//!   dispatch, has passed; a closing row of the pack schedule or a pause keeps it from running.
 
 use super::contained_task::{SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL, StopReset};
 use super::failure_scope::Contained;
