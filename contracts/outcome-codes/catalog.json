@@ -2621,6 +2621,22 @@
       "type": "id",
       "description": "The smallest listed key, in byte order, whose row holds a list maximum's largest value: a business identity, never screen text (Workflow #428 S168-5a)."
     },
+    "bound": {
+      "type": "vocab:list_max_bound",
+      "description": "Whether a list maximum that names a lower_bound_column read an exact value or a lower bound: exact when every listed key of the pinned class has a value, at_least when a key has none (Workflow #428 S168-LB1b, contracts/selection-policy.md \"Lower bound of a list maximum\")."
+    },
+    "unknown_count": {
+      "type": "integer",
+      "description": "The listed keys a list maximum read with no value: a key with no row in the table, or with a null value cell of the pinned class (Workflow #428 S168-LB1b)."
+    },
+    "lower_bound": {
+      "type": "integer",
+      "description": "The lower bound L a list maximum read as at least: the largest of the known values and of the bounds the table gives the keys without a value (Workflow #428 S168-LB1b)."
+    },
+    "lower_bound_identity": {
+      "type": "id",
+      "description": "The smallest listed key, in byte order, that gives a list maximum's lower bound L, by its value or by its bound: a business identity, never screen text (Workflow #428 S168-LB1b)."
+    },
     "fixed_value_milli": {
       "type": "integer",
       "description": "A task's fixed value V in milli of its game's value unit: the value of one run without the cost of the pools it consumes, written in its standard pack (the schedule.json rule member fixed_value_milli, the catalog's benefit_fixed_value_milli); a judged candidate's net benefit is V less the cost of what it consumes (#428 SCHED-C1a, contracts/scheduling/README.md \"Fixed values written in the pack\")."
@@ -3777,6 +3793,17 @@
       "tokens": {
         "track": {
           "description": "The confirmation frame is decided again and its choice stands when its anchor match origin lies within the step's track_px of the evaluated choice's."
+        }
+      }
+    },
+    "list_max_bound": {
+      "description": "How a list maximum that names a lower_bound_column read (Workflow #428 S168-LB1b, contracts/selection-policy.md \"Lower bound of a list maximum\").",
+      "tokens": {
+        "exact": {
+          "description": "Every listed key of the pinned class has a value: the read is the largest value M, or the document's empty when no listed key is of the class."
+        },
+        "at_least": {
+          "description": "A listed key has no value (no row, or a null value cell of the class) and a value or a bound is known: the read is every value from L up."
         }
       }
     },

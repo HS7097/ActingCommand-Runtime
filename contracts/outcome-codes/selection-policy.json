@@ -525,6 +525,10 @@
         "maximum": "optional",
         "maximum_identity": "optional",
         "unknown_reason": "optional",
+        "bound": "optional",
+        "unknown_count": "optional",
+        "lower_bound": "optional",
+        "lower_bound_identity": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -534,7 +538,29 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.50",
-      "description": "A selection evaluation read one list maximum, once before any candidate: the largest integer of the standard-pack table table_id's column table_column over the union of the keys of the record lists fact_keys (count distinct keys), with the smallest key that holds it (maximum, maximum_identity), neither when no listed key is of the pinned class (the document's empty), or the reason the read is unknown (unknown_reason) (Workflow #428 S168-5a).",
+      "description": "A selection evaluation read one list maximum, once before any candidate: the largest integer of the standard-pack table table_id's column table_column over the union of the keys of the record lists fact_keys (count distinct keys), with the smallest key that holds it (maximum, maximum_identity), neither when no listed key is of the pinned class (the document's empty), or the reason the read is unknown (unknown_reason) (Workflow #428 S168-5a). Since 0.12.55 a known read of a list maximum that names a lower_bound_column also says whether it is exact (bound) and how many listed keys have no value (unknown_count); read as at least, it names the lower bound and the key that gives it (lower_bound, lower_bound_identity) in the place of maximum and maximum_identity (Workflow #428 S168-LB1b).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_decided_on_lower_bound": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.55",
+      "description": "A selection decision was made on a lower bound: a list maximum read as at least settled a comparison of a gate, a threshold of a term, or an identity term taken at the bound, for some candidate; rule_id names the first such gate or term in document order (the gates before the terms) and count how many gates and terms were, once per decision, before the outcome's reasons (Workflow #428 S168-LB1b).",
       "common_causes": "TBD",
       "handling": "TBD"
     }

@@ -444,7 +444,7 @@ Each read runs these steps:
 
 A missing value is never read as 0 and never skipped: only a key the table knows and places
 outside the class adds nothing. A reference that opts in (section "Lower bound of a list
-maximum", S168-LB1b, not built yet) reads what is known as a bound instead of Unknown, and still
+maximum", S168-LB1b, since 0.12.55) reads what is known as a bound instead of Unknown, and still
 never reads a missing value as 0.
 
 **What the table owes a list maximum.** So a missing row of a class is a statement, never a gap:
@@ -534,8 +534,10 @@ source). In a package it belongs to `package` revision 8, with S168-4's `read_li
 
 ## Lower bound of a list maximum
 
-Workflow #428 S168-LB1b, not built yet ([v012-register.md](v012-register.md) §1.309; the
-coordinator's rulings 5 to 10 of 11-11, not Alice's words). Under the read above, one key of the
+Workflow #428 S168-LB1b, since 0.12.55 ([v012-register.md](v012-register.md) §1.309, built by
+§1.312; the coordinator's rulings 5 to 10 of 11-11, not Alice's words; the code in
+`crates/selection-policy/src/list_max.rs`, `evaluator.rs` and `bound.rs`; the judge's use, "In a
+judge step" below, is S168-5b's and not built yet). Under the read above, one key of the
 union without a value (no row in the table, or a null cell of the class) makes the whole read
 Unknown, whatever the other keys hold. Yet the largest value of a group can only grow when a
 missing value becomes known: the values already known bound it from below. A reference opts in
@@ -597,7 +599,8 @@ with no key of the class reads `empty`, a known value, as today.
   most the term can give, not the least.
 - **The upper bound** ("Upper bound" below) takes the range [L, +∞): a gate compares it as the
   range of a ranged input; `identity` has no finite bound with a positive weight (`Unbounded`)
-  and its bound at L with a negative one; `threshold` gives `then_milli` once L ≥ `at_least` and
+  and its bound at L with a negative one (or a zero one, whose contribution is 0 whatever the
+  value); `threshold` gives `then_milli` once L ≥ `at_least` and
   otherwise the larger of its two contributions. An exact read stays exact and an Unknown one is
   as above.
 
@@ -606,15 +609,17 @@ carries `bound` (a new outcome vocabulary, `list_max_bound`: `exact` or `at_leas
 `unknown_count` (the keys of the union with no value: no row, or a null value cell of the class);
 with `exact`, `maximum` and `maximum_identity` as above (neither for `empty`); with `at_least`,
 `lower_bound` (L) and `lower_bound_identity` (the key that gives it) in their place. An Unknown
-read carries `unknown_reason` as above. A reference without the member carries the keys of
-before, byte for byte. A decision made on a lower bound, that is one in which an at-least read
-settled a gate verdict or a term of a candidate (a comparison or a threshold the bound settled,
-an identity term taken at L), carries one info reason more, `selection_decided_on_lower_bound`
-(`rule_id` the first such gate or term in the order of "One read", `count` how many gates and
-terms were), once, in the decision's chain after the candidates' assessment and before the
-outcome's reasons; an `unknown` evaluation carries none. The four keys, the vocabulary and the
-code are proposed names that S168-LB1b registers; the reasons count against the chain's 128
-reasons and the record's 64 KiB as every reason.
+read carries `unknown_reason` as above, and neither `bound` nor `unknown_count` (S168-LB1b's
+reading: `bound` names only the two known readings). A reference without the member carries the
+keys of before, byte for byte. A decision made on a lower bound, that is one in which an at-least
+read settled a gate verdict or a term of a candidate (a comparison the bound settled in a gate
+whose verdict is known, a threshold the bound settled, an identity term taken at L), carries one
+info reason more, `selection_decided_on_lower_bound` (`rule_id` the first such gate or term in
+the order of "One read", `count` how many distinct gates and terms were, over every candidate),
+once, in the decision's chain after the candidates' assessment and before the outcome's reasons;
+an `unknown` evaluation carries none. The four keys, the vocabulary and the code are registered
+since 0.12.55 (S168-LB1b, [v012-register.md](v012-register.md) §1.312); the reasons count
+against the chain's 128 reasons and the record's 64 KiB as every reason.
 
 **In a judge step** (S168-5b, planned: [selection-graph.md](selection-graph.md), "Judge step",
 "Which key"). A list maximum read as a lower bound is no Unknown read: a comparison the bound
@@ -643,8 +648,9 @@ before. A reader before S168-LB1b refuses a document that writes it at admission
 (`contained_task_select_policy_invalid`: the reference denies unknown members), as it refuses
 any member it does not know, and so does the parser of its build. The selection format has no `requires`-style gate of its own (its
 `schema_version` does not change): the gate is the bundle's declared `package` range and the
-reader's refusal. In a package the member belongs to `package` revision 9
-([component-interfaces.md](component-interfaces.md), "Planned: Workflow #428 S168-LB1").
+reader's refusal. In a package the member belongs to `package` revision 9, in force since
+0.12.55 ([component-interfaces.md](component-interfaces.md), the row 9 of the `package`
+interface; "Planned: Workflow #428 S168-LB1").
 
 ## Upper bound
 

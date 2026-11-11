@@ -139,11 +139,19 @@ pub fn upper_bound_with_tables(
         return Ok(UpperBound::Unbounded);
     };
     // Workflow #428 S168-5a: a list maximum is exact, as a scalar fact is, and the same for every
-    // identity, so it is read once here too.
-    let list_maxima: Vec<(&ValueRef, Option<ScalarValue>)> =
+    // identity, so it is read once here too. Workflow #428 S168-LB1b: one read as "at least L" is
+    // the range [L, +∞).
+    let list_maxima: Vec<(&ValueRef, MaximumRead)> =
         list_max::read_all(policy, tables, facts, now_unix_ms)
             .into_iter()
-            .map(|read| (read.reference, read.reading.value.ok()))
+            .map(|read| {
+                let at_least = read.reading.at_least();
+                let value = match read.reading.value {
+                    Ok(ScalarValue::Integer(low)) if at_least => MaximumRead::AtLeast(low),
+                    value => MaximumRead::Exact(value.ok()),
+                };
+                (read.reference, value)
+            })
             .collect();
     let facts_by_key: BTreeMap<&str, &FactDeclaration> = policy
         .facts
@@ -185,6 +193,17 @@ enum Reading {
     AnyBoolean,
     /// Every integer in the range.
     Range(i64, i64),
+    /// Workflow #428 S168-LB1b: every integer from L up, a list maximum read as a lower bound.
+    AtLeast(i64),
+}
+
+/// What one list maximum read for the upper bound (Workflow #428 S168-5a, S168-LB1b).
+#[derive(Debug, Clone)]
+enum MaximumRead {
+    /// Exact, as a scalar fact is; `None` when it is unknown.
+    Exact(Option<ScalarValue>),
+    /// At least L: the range [L, +∞).
+    AtLeast(i64),
 }
 
 /// Which truth values a predicate can take over the domains.
@@ -219,8 +238,8 @@ struct Hypothesis<'a> {
     lists: &'a ListIndex<'a>,
     tables: &'a SelectionTables,
     now_unix_ms: u64,
-    /// Workflow #428 S168-5a: what each distinct list maximum read; `None` when unknown.
-    list_maxima: &'a [(&'a ValueRef, Option<ScalarValue>)],
+    /// Workflow #428 S168-5a: what each distinct list maximum read.
+    list_maxima: &'a [(&'a ValueRef, MaximumRead)],
 }
 
 impl Hypothesis<'_> {
@@ -315,12 +334,16 @@ impl Hypothesis<'_> {
                     .value
                     .ok(),
             ),
-            ValueRef::TableMaxOverList { .. } => Reading::Exact(
-                self.list_maxima
-                    .iter()
-                    .find(|(read, _)| *read == reference)
-                    .and_then(|(_, value)| value.clone()),
-            ),
+            ValueRef::TableMaxOverList { .. } => match self
+                .list_maxima
+                .iter()
+                .find(|(read, _)| *read == reference)
+                .map(|(_, value)| value)
+            {
+                Some(MaximumRead::Exact(value)) => Reading::Exact(value.clone()),
+                Some(MaximumRead::AtLeast(low)) => Reading::AtLeast(*low),
+                None => Reading::Exact(None),
+            },
         }
     }
 
@@ -332,26 +355,33 @@ impl Hypothesis<'_> {
         exact: impl Fn(i64) -> bool,
         range: impl Fn(i64, i64) -> (bool, bool),
     ) -> Possible {
-        match self.read(value) {
-            Reading::Exact(Some(ScalarValue::Integer(value))) => Possible::exact(exact(value)),
-            Reading::Range(min, max) => {
-                let (truth, falsity) = range(min, max);
-                Possible {
-                    truth,
-                    falsity,
-                    unknown: false,
-                }
+        let (min, max) = match self.read(value) {
+            Reading::Exact(Some(ScalarValue::Integer(value))) => {
+                return Possible::exact(exact(value));
             }
-            Reading::Exact(_) | Reading::AnyBoolean => Possible::UNKNOWN,
+            Reading::Range(min, max) => (min, max),
+            // Workflow #428 S168-LB1b: validation reads a list maximum only in a comparison of
+            // two values; were it read here, its range would reach the largest integer.
+            Reading::AtLeast(min) => (min, i64::MAX),
+            Reading::Exact(_) | Reading::AnyBoolean => return Possible::UNKNOWN,
+        };
+        let (truth, falsity) = range(min, max);
+        Possible {
+            truth,
+            falsity,
+            unknown: false,
         }
     }
 
-    /// The integers a reference can read: one exact value, or every value of a range; `None`
-    /// when it is unknown or not an integer.
-    fn integer_range(&self, value: &ValueRef) -> Option<(i64, i64)> {
+    /// The integers a reference can read, from the first to the second: one exact value, every
+    /// value of a range, or, with no upper end (`None`), every value from L up of a list maximum
+    /// read as a lower bound (Workflow #428 S168-LB1b); `None` when it is unknown or not an
+    /// integer.
+    fn integer_range(&self, value: &ValueRef) -> Option<(i64, Option<i64>)> {
         match self.read(value) {
-            Reading::Exact(Some(ScalarValue::Integer(value))) => Some((value, value)),
-            Reading::Range(min, max) => Some((min, max)),
+            Reading::Exact(Some(ScalarValue::Integer(value))) => Some((value, Some(value))),
+            Reading::Range(min, max) => Some((min, Some(max))),
+            Reading::AtLeast(min) => Some((min, None)),
             Reading::Exact(_) | Reading::AnyBoolean => None,
         }
     }
@@ -387,7 +417,7 @@ impl Hypothesis<'_> {
                     falsity: true,
                     unknown: false,
                 },
-                Reading::Exact(_) | Reading::Range(..) => Possible::UNKNOWN,
+                Reading::Exact(_) | Reading::Range(..) | Reading::AtLeast(_) => Possible::UNKNOWN,
             },
             Predicate::StringIn { value, allowed } => match self.read(value) {
                 Reading::Exact(Some(ScalarValue::String(value))) => {
@@ -411,8 +441,10 @@ impl Hypothesis<'_> {
                 let scale = |value: i64| {
                     i128::from(value) * i128::from(mul.unwrap_or(1)) + i128::from(add.unwrap_or(0))
                 };
-                let (a, b) = (i128::from(left_min), i128::from(left_max));
-                let (c, d) = (scale(right_min), scale(right_max));
+                // Workflow #428 S168-LB1b: a range with no upper end, [L, +∞), ends above every
+                // scaled 64-bit value, so it compares as the range of a ranged input.
+                let (a, b) = (i128::from(left_min), left_max.map_or(i128::MAX, i128::from));
+                let (c, d) = (scale(right_min), right_max.map_or(i128::MAX, scale));
                 // Equality may hold wherever the ranges meet, and fail unless both sides are
                 // one and the same value.
                 let meet = a <= d && c <= b;
@@ -463,7 +495,8 @@ impl Hypothesis<'_> {
     }
 
     /// Every transform output the term can take; empty when the candidate is dropped, and
-    /// `Err` when an exact unknown input ends the evaluation.
+    /// `Err` when an exact unknown input ends the evaluation or, Workflow #428 S168-LB1b, when
+    /// an `identity` term with a positive weight reads a list maximum read as a lower bound.
     fn outputs(&self, term: &ScoringTerm) -> Result<Vec<i64>, ()> {
         let (mut outputs, unknown, ranged) = match self.read(&term.value) {
             Reading::Exact(Some(value)) => match transform(&term.transform, &value) {
@@ -479,6 +512,18 @@ impl Hypothesis<'_> {
                 let (outputs, miss) = ranged_outputs(&term.transform, None);
                 (outputs, miss, true)
             }
+            // Workflow #428 S168-LB1b: a list maximum read as a lower bound, [L, +∞). `identity`
+            // has no finite bound under a positive weight and is bounded at L under any other;
+            // `threshold` gives `then_milli` once L reaches `at_least`, and both of its values
+            // otherwise.
+            Reading::AtLeast(min) => match term.transform {
+                Transform::Identity if term.weight_milli > 0 => return Err(()),
+                Transform::Identity => (vec![min], false, true),
+                _ => {
+                    let (outputs, miss) = ranged_outputs(&term.transform, Some((min, i64::MAX)));
+                    (outputs, miss, true)
+                }
+            },
         };
         match term.on_unknown {
             // A ranged field may also be read as unknown, so its substitution joins too.

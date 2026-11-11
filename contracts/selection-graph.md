@@ -1260,9 +1260,11 @@ with `unknown_outcome_key`. A candidate that a gate decides against on a known v
 gate's `absent`, a comparison whose operands are known) is a known decision, `gate_rejected`, and
 does not count.
 
-**A list maximum read as a lower bound** (Workflow #428 S168-LB1b, not built yet, amending this
-planned text; [v012-register.md](v012-register.md) §1.309; the coordinator's ruling 8 of 11-11,
-not Alice's words; [selection-policy.md](selection-policy.md), "Lower bound of a list maximum"). A
+**A list maximum read as a lower bound** (Workflow #428 S168-LB1b, amending this planned text:
+the read since 0.12.55, [v012-register.md](v012-register.md) §1.312; this paragraph not built
+yet: S168-5b, not on main when S168-LB1b was built, builds it; §1.309; the coordinator's ruling
+8 of 11-11, not Alice's words; [selection-policy.md](selection-policy.md), "Lower bound of a list
+maximum"). A
 reference that opts in and reads "at least L" is no Unknown read. A comparison the bound settles
 is a known verdict, `ranked` or `gate_rejected`, and does not count against `outcome_key`: the
 judgment is `judged`. A comparison the bound does not settle is Unknown: its candidate is
