@@ -2493,7 +2493,7 @@ impl RuntimeHost {
             // Workflow #373 NAV-6 (M-373 §7): every standard-pack game root, read and recorded;
             // a broken one never stops the start.
             shared.register_standard_packs_on_start()?;
-            // ISO-START-1 (#419; register §1.299): a pair whose settlement facts the store
+            // ISO-START-1 (#419; register §1.301): a pair whose settlement facts the store
             // refuses is that pair's alone: recorded and skipped, never the start's end; one
             // refused for another reason than a stale record holds its instance below.
             let skipped_settlement_facts = shared.record_policy_settlement_facts_on_start()?;
@@ -2533,7 +2533,7 @@ impl RuntimeHost {
             // could not settle is recorded and its instance paused, after the persisted pauses
             // are restored and before any instance is prepared.
             shared.hold_unsettled_dispatches(&unsettled_dispatches)?;
-            // ISO-START-1 (#419; register §1.299): each instance whose pair's settlement facts the
+            // ISO-START-1 (#419; register §1.301): each instance whose pair's settlement facts the
             // start refused for another reason than a stale record is held as those are.
             shared.hold_skipped_settlement_fact_instances(&skipped_settlement_facts)?;
             // Workflow #369 W-2: the instance workers exist before the daemon-start preparation,

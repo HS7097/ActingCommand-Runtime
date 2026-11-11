@@ -460,7 +460,7 @@ the backend self-check facts (source `device-proxy` or `capture`).
   scope and keeps what the ledger holds. Any refusal while recording them
   after a settlement (live, replayed or reconciled) is fatal: the settlement
   is already durable. At the start's derivation (ISO-START-1, since 0.12.52,
-  `v012-register.md` §1.299) a refusal of one pair's facts is that pair's
+  `v012-register.md` §1.301) a refusal of one pair's facts is that pair's
   alone, and the start goes on with the other pairs: a pair whose record the
   store refuses before anything of it is appended (stale, invalid, over
   capacity) or whose value does not fit is recorded once,

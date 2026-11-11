@@ -960,7 +960,7 @@ impl HostShared {
     /// nothing; a pair of an instance no longer registered has no instance scope and is left
     /// as the ledger holds it.
     ///
-    /// ISO-START-1 (#419; register §1.299): one pair's refusal never stops the start. Each pair
+    /// ISO-START-1 (#419; register §1.301): one pair's refusal never stops the start. Each pair
     /// is written with the records and in the order of the live path
     /// ([`Self::record_start_settlement_facts`]). A refusal of that pair alone (a value that does
     /// not fit, or the store's refusal of one of its records before anything of that record is
@@ -1053,7 +1053,7 @@ impl HostShared {
         .is_some_and(|stored| stored == record))
     }
 
-    /// ISO-START-1 (#419; register §1.299): one Warning `runtime.failed`
+    /// ISO-START-1 (#419; register §1.301): one Warning `runtime.failed`
     /// `policy_settlement_facts_skipped` under the instance's links for a pair whose settlement
     /// facts the start did not write: the pair (`task_id`, its catalog task; `instance_id`, the
     /// instance alias), the refused record's `fact_key` and its observation
@@ -1117,7 +1117,7 @@ impl HostShared {
         Ok(())
     }
 
-    /// ISO-START-1 (#419; register §1.299): holds each instance whose pair's settlement facts
+    /// ISO-START-1 (#419; register §1.301): holds each instance whose pair's settlement facts
     /// the start refused for another reason than a stale record
     /// ([`Self::record_policy_settlement_facts_on_start`]), as the start holds the instance of
     /// a dispatch it could not settle (Workflow #369 E3, `hold_unsettled_dispatches`): a

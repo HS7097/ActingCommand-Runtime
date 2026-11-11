@@ -448,7 +448,7 @@ mod gate_419_iso5a;
 // row escalate to a person once; a global failure is still returned; and the evaluation's time is
 // sampled under the gates its inputs are read under.
 mod gate_419_iso_pe;
-// ISO-START-1 (#419, register §1.299): one pair's refused settlement fact no longer stops the
+// ISO-START-1 (#419, register §1.301): one pair's refused settlement fact no longer stops the
 // start: a stale pair is recorded and skipped, a pair refused for its own reason holds only its
 // instance, and a store that cannot be written still fails the start.
 mod gate_419_iso_start1;

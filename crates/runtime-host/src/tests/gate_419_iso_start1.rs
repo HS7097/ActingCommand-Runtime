@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! ISO-START-1 (#419; register §1.299): one pair's refused settlement fact no longer stops the
+//! ISO-START-1 (#419; register §1.301): one pair's refused settlement fact no longer stops the
 //! Runtime's start. The start derives every registered pair's four settlement facts again
 //! (`record_policy_settlement_facts_on_start`): a pair the store refuses as stale is recorded
 //! once and skipped, a pair refused for a reason of its own is recorded and its instance held,
