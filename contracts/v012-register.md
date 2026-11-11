@@ -10602,6 +10602,124 @@ no sleep, no model file). No existing test changed: none called the request path
 `remaining_inference_budget` or the detector's load (`gate_407_gpu1b1`, `gate_407_gpu1b2` and
 `gate_407_gpu1e` build sessions through `ModelSessions` over their own fakes).
 
+### 1.301 Slice R-6, first slice (0.12.52): `StopInstanceRun` stops a client's direct run and the Runtime resets the device itself (Workflow #429 A.2 contract point 2 and the slice row R-6, board #429 6535257381; the desktop program's "close this task" button is disabled because the Runtime answered `not_implemented`, and a run the scheduler started could not be stopped from the Lab or MCP at all; the coordinator's choice of 11-11, option C, not Alice's words: this slice stops direct runs only and refuses a policy run with `run_origin` until `ledger` 8; coordinator work order `rd-1111/brief-r6.md`, read on main `c0edc8b2`)
+
+[runtime-interface.md](runtime-interface.md) ("Workbench request kinds", the row `StopInstanceRun`)
+is the contract; [lab-operations.json](lab-operations.json) (the row `task stop`) and
+[lab-two-entries.md](lab-two-entries.md) (the `ui` entry's list) follow it. The number 1.301 is the
+implementer's, after 1.299 and 1.300 of the open PRs of the same day; the coordinator renumbers it
+if needed. No wire shape, configuration key, ledger shape or interface revision is new: the
+request and its answer are R-0's (§1.213) and the client's method R-0c's (§1.216); one success code
+and one outcome key with its vocabulary are (R6-2, R6-3).
+
+**Why not a policy run (the stop found before writing it).** The spec stops a policy run too and
+settles it "neither a success nor a failure of the task: no failure backoff, no suspension, no
+ladder, not in `scheduling.rerun.condition_codes`". The ledger's `policy.execution_recorded` has no
+legal form for that: `validate_policy_execution_data` (`crates/actingcommand-contract/src/event/payload.rs`)
+requires a failure record without `condition` to count (`consecutive_same_error` and
+`escalation_streak` at least 1, a sensitive task's `paused_task`), the only uncounted form is a
+condition, whose record owes a rerun on every reader (`commit_paced_execution`), and the interrupted
+settlement `policy_settlement_interrupted` is a counted severe failure that only a restart lifts.
+A Runtime of `ledger` 7 replays an execution record against its own settlement and refuses any
+other (`policy_execution_record_mismatch`), and the ledger's own recovery of an unsettled scheduled
+run (`crates/ledger/src/global/storage.rs`) writes a counted failure. A stopped policy run
+therefore needs `ledger` 8 (the planned revision of #434 LAB-6 and #428 S168-5b), which this
+slice may not raise; the coordinator chose to refuse it until then (option C).
+
+**What.**
+
+- **The handler** (`crates/runtime-host/src/host/stop_instance_run.rs`,
+  `HostShared::stop_instance_run`): the instance's registered run of that request is found in the
+  host's run registry (its `activity.request_id`, R-0b). A run no client may stop is refused
+  `scheduled_contained_task_not_client_cancellable` with `run_origin` (`host` for a startup
+  package or a ladder rung, `policy` for a policy run) and the run's `request_id`; nothing is asked
+  of it. A run the instance neither runs nor stopped last is refused
+  `contained_task_cancellation_identity_missing` with the `request_id`. Each refusal follows its
+  `command.received` with `command.rejected`; a stop follows it with `command.validated` (G14, the
+  generic action `runtime_action`, as `AgentWakeTest`). A direct run is asked to stop at its next
+  checkpoint as its client's cancel asks it (`ClientRequested`, a reason a run already ending for
+  its deadline or a pause keeps against it), and the request waits up to `wait_ms` for the run to
+  leave the registry, as a pause's drain waits (a 20 ms poll): `settled: true` with `reset`, or
+  after `wait_ms` `settled: false` with no `reset`, the stop staying asked. The instance's latest
+  stopped run is kept in memory (one per instance), so a later stop of the same run, on any
+  connection, answers its result.
+- **The reset** (`crates/runtime-host/src/host/contained_task.rs`, the cancel branch of
+  `execute_contained_task_with_lease`, and `HostShared::reset_stopped_run`): a run whose client's
+  cancel ended it and whose stop a `StopInstanceRun` asked (`ContainedRunControl::take_runtime_stop`)
+  is reset with the run's own lease before its terminal and its lease end: an `Input` `reset`
+  linked to the run, recorded as every input is (`input.committed`, action `InputReset`). It runs
+  on the run's own thread, so the requesting client's connection plays no part, and the run's
+  client owes no `SafeReset` (`await_client_reset` is skipped). A reset that fails is contained
+  against the run's instance only (#419, `contain_failure`; an operation's failure fences the
+  instance too, since the touch state is unknown), the run's lease ends as a failed run's
+  (`cleanup_token`, `backend_failure`), and the stop answers `reset: failed`: its receipt's success
+  code carries the fence's failure (`instance_resources_fenced`, caused by the reset's) as its
+  cause, which codes mode keeps. A run that ends without the stop's reset (its own end before its
+  check saw the stop, or its deadline or a pause ending it first) answers `reset: not_needed`, as
+  the client's `cancel_contained_task_and_reset` answers `not_needed` for a run its client did not
+  end. The spec's other `not_needed`, a backend that cannot reset (`nemu_ipc`, 10-30), no longer
+  exists: since #402 HS-4 the Nemu input performs `reset` (`reset_with_check`) and every other touch
+  backend did already, so today's client `SafeReset` resets on every backend and the stop does
+  the same.
+- **The settlement.** A stopped direct run settles as before: `contained_task_cancelled`
+  (`ClientRequested`), an interruption in the routine summary (R-12), never a failure; a direct run
+  starts no ladder on a cancel (only a failed end may, under `rules.direct_runs = trigger`) and
+  owes no rerun. **Counts:** a direct run uses no count of the scheduling contract (none is taken at
+  its admission, `contracts/scheduling/README.md`, "Optional run-count bounds" and Alice's ruling
+  100), so a stop uses none either; the refund the contract knows is a condition rerun's
+  ("Condition termination and owed reruns"), which a stop is not. No policy run is stopped, so no
+  policy settlement, streak, rerun or daily count changes.
+- **The Lab's row** `task stop <inst> <request> [--wait <duration>]` (core, slice R-6) is offered:
+  the CLI module serves it (`apps/actinglab/src/cli_module/core_ops.rs`, `task_stop`), resolving the
+  instance by one status read and sending `StopInstanceRun` through `stop_instance_run`; without
+  `--wait` it answers at once (`wait_ms` 0). Its line is the stop's members beside the receipt's
+  outcome, a refusal the refused receipt beside its outcome. `serve --stdio` takes the same call.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R6-1 | `StopInstanceRun {instance_alias, request_id, wait_ms}` → `InstanceRunStopped {stopped: {request_id, settled, reset?}}` | behaviour of an R-0 kind (no shape change; `runtime-client` stays as it is) | R-6 | the host | direct runs only; memory of the latest stopped run per instance (a leaf lock), empty after a restart; `wait_ms` has no bound of its own: the run's deadline and its end grace bound the wait, and a shutdown answers `settled: false` |
+| R6-2 | `request_stop_instance_run_completed` | new success code (contract, `ReceiptCode`) | R-6 | the host | `since` 0.12.52; Workflow #378 A4's one success code per completing kind; a failed reset is its cause |
+| R6-3 | outcome key `run_origin` (`vocab:run_origin`, tokens `policy`, `host`) on `scheduled_contained_task_not_client_cancellable` | new key and vocabulary in `runtime-outcomes` 1 (additive: readers keep values as a free map, and keys are append-only, as 0.12.39 added a value, a vocabulary and a key) | R-6 | the host | kept in codes mode (a vocabulary); the code's entry is pending, so it takes the optional key; `request_id` names the run |
+| R6-4 | the Lab's row `task stop` | operation table row opened (`reserved` → `planned`, `help`, requests add `Status`) | R-6 | — | `BUILT_SLICES` names R-6; served in actinglab's CLI module, not in `lab-ops`' registry (which holds LAB-1 and LAB-1b's rows only) |
+| R6-5 | the row `task run` | slice tag `R-5` → `R-18` (Alice's ruling 113 moved "run once" to the Lab) | R-6 | — | the row is otherwise unchanged (still `reserved`, `opens_with` R-5, entries lab and ui); no test pins the tag |
+
+**Left for later slices.** A policy run's stop and its settlement as an interruption (no ladder, no
+rerun, no streak, counts as the contract will say for it), with `ledger` 8; a host run stays refused
+by design (a pause or a person's hold stops it). R-7b's use of the reset step: a player hold's drain
+cancels a policy run and the Runtime resets it with the run's lease, `reset_stopped_run` being that
+step. R-8's "close this task" (the schedule row, then the stop) and its test of the two steps.
+
+**Interface.** None raised ([component-interfaces.md](component-interfaces.md)): `runtime-client`,
+`ledger`, `actingd-config` and `package` do not move (the request and the answer are R-0's, the
+records are existing input, lease, task and command records with existing actions and members);
+`runtime-outcomes` stays 1 (a success code, a key and a vocabulary added within the revision, as
+§1.264 added a success code and 0.12.39 a key and a vocabulary).
+
+**What an operator sees after deploy.** `actinglab task stop <inst> <request>` and the console's
+"close this task" stop a manual run (`RunContainedTask`, actinglab `run start`, MCP `ac_run_pack`):
+the run ends `contained_task_cancelled`, its record shows one `InputReset` before its lease's
+release, and the stop's answer says `reset: done`. A scheduled run or one the Runtime started is
+refused with `run_origin` (`policy` or `host`) and keeps running: pause the instance, or take it
+with a player hold, to stop it. A failed reset fences only that instance (`Status.resource_fence`),
+which a self-check lifts. `ac_stop_run` and actinglab `run stop` (the client's own cancel and
+reset) are unchanged.
+
+**Rollback** (below 0.12.52): `StopInstanceRun` is refused `not_implemented` again and the row
+`task stop` is not offered; a direct run is stopped with `run stop` and the client's reset, as
+before. Nothing persisted changes, so no state needs undoing.
+
+Tests (exec gate rows "#429 R-6"): `gate_429_r6::r6_stopping_a_direct_run_cancels_it_and_the_runtime_resets_it_before_its_lease_ends`,
+`r6_the_reset_happens_after_the_requesting_client_disconnects`,
+`r6_a_host_run_and_a_policy_run_are_refused_with_their_origin_and_nothing_is_cancelled`,
+`r6_after_wait_ms_the_stop_answers_unsettled_without_a_reset`,
+`r6_a_failed_reset_fences_only_its_instance_and_answers_failed` and
+`r6_a_run_that_ended_on_its_own_needed_no_reset` (the host, on a fake clock and a fake device), and
+actinglab's `gate_429_r6::r6_task_stop_words_and_serve_line_reach_the_same_stop`. Two existing tests
+pinned the request as not built and change with it: `gate_429_r0::r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effect`
+no longer sends `StopInstanceRun`, and the contract's
+`a4_each_request_kind_that_completes_has_its_own_success_code` no longer lists it among the kinds
+that never complete.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

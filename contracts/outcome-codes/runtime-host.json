@@ -3709,7 +3709,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task cancellation identity missing.",
+      "description": "The Runtime host reports contained task cancellation identity missing. Workflow #429 R-6: also StopInstanceRun's refusal (operation stop_instance_run, the request_id it named) of a run the instance neither runs nor stopped last; nothing is changed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

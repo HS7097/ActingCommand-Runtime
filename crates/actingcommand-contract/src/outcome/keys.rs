@@ -762,4 +762,7 @@ outcome_keys! {
     maximum: integer,
     maximum_identity: id,
     // ---- #428 S168-5a: end ----
+    // ---- Workflow #429 R-6 (contracts/runtime-interface.md "Workbench request kinds", the row
+    // `StopInstanceRun`): who started the run a stop refused; kept in codes mode. ----
+    run_origin: vocab(run_origin),
 }

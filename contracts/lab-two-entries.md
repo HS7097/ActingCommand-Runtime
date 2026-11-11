@@ -152,7 +152,8 @@ No roles, users or tokens. It equals the table's `ui_kinds` (section 9), which L
 | `PauseScheduling`, `ResumeScheduling`, `ControlEmulatorInstance`, `SelfCheckInstance`, `RequestShutdown` | write | the console sends them today |
 | `ApplicationLifecycle` | write | the console sends it today; the kind acts only on the instance's assigned application |
 | `ConfigureSettings` | write | the console sends it today; every key `daily` or `advanced` and settable (section 2.3) |
-| `RunInstanceTask`, `StopInstanceRun`, `EditPackSchedule`, `EditResourceTarget`, `AcquirePlayerHold`, `ReleasePlayerHold` | write | on the list before they are built (#429 R-5, R-6, R-8, R-13c, R-7b); until then the Runtime answers them `not_implemented` |
+| `StopInstanceRun` | write | built by #429 R-6's first slice (0.12.52): it stops a client's direct run and the Runtime resets the device itself; a policy run and a host run are refused with `run_origin` (runtime-interface.md, "Workbench request kinds") |
+| `RunInstanceTask`, `EditPackSchedule`, `EditResourceTarget`, `AcquirePlayerHold`, `ReleasePlayerHold` | write | on the list before they are built (#429 R-5, R-8, R-13c, R-7b); until then the Runtime answers them `not_implemented` |
 | `RecordClientAction` | write | transitional: the console's button trace, until UI-L1 ships; LAB-7 takes it off the list, since the G14 record's initiator replaces it |
 
 - **Everything else is refused** on `ui`: a run by path, input and leases, stopping a run with the

@@ -1016,7 +1016,7 @@
       "requests": ["RunInstanceTask"],
       "source": [],
       "new": "#429 R-5 (RunInstanceTask)",
-      "slice": "R-5",
+      "slice": "R-18",
       "status": "reserved",
       "opens_with": "R-5"
     },
@@ -1028,17 +1028,18 @@
         {"name": "request", "form": "positional", "type": "request_id", "required": true},
         {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
       ],
+      "help": "Stops one manual run of an instance and the Runtime lifts its touches with the run's own lease; a scheduled run or one the Runtime started is refused.",
       "output": "the stop (InstanceRunStopped)",
       "writes": true,
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["StopInstanceRun"],
+      "requests": ["StopInstanceRun", "Status"],
       "source": [],
       "new": "#429 R-6 (StopInstanceRun)",
       "slice": "R-6",
-      "status": "reserved",
-      "opens_with": "R-6"
+      "status": "planned",
+      "notes": "#429 R-6 first slice: a client's direct run only; a policy run and a host run are refused with run_origin (policy until ledger 8); requests add Status, the read that resolves <inst>"
     },
     {
       "name": "pack-schedule",

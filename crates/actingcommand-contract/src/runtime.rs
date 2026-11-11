@@ -6010,6 +6010,31 @@ impl RuntimeReceipt {
         Ok(receipt)
     }
 
+    /// Workflow #429 R-6: a completed `StopInstanceRun` receipt. Its outcome is the kind's
+    /// success code; when the Runtime's own reset after the stop failed (`reset: failed`), that
+    /// failure is the success code's cause (`caused_by`), so the caller reads why from the receipt
+    /// alone, in every detail mode (codes mode keeps every link's code). No member is added.
+    pub fn instance_run_stopped(
+        request: &RuntimeRequest,
+        terminal: Option<TerminalEvent>,
+        stopped: InstanceRunStop,
+        reset_failure: Option<Outcome>,
+    ) -> RuntimeContractResult<Self> {
+        let mut receipt = Self::success(
+            request,
+            RuntimeReceiptState::Completed,
+            terminal,
+            RuntimeResult::InstanceRunStopped { stopped },
+        )?;
+        if let Some(failure) = reset_failure {
+            let outcome = receipt_state_outcome(request, RuntimeReceiptState::Completed)?
+                .caused_by(failure);
+            receipt.outcome = receipt_envelope(&outcome, receipt.outcome.detail());
+            receipt.validate()?;
+        }
+        Ok(receipt)
+    }
+
     /// A denied or failed receipt whose outcome is the Runtime error code itself with the
     /// projection's values: a refusal that names no more specific code.
     pub fn error(

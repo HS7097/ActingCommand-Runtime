@@ -15,12 +15,12 @@ use crate::resource_adjustment::{
 use actingcommand_contract::codes::{
     ContractLocation, DeviceSelfCheckFailure, RuntimeErrorCode, SharedCode,
 };
-use actingcommand_contract::outcome::{CauseRelation, Code, CodeStr, Location, Outcome};
+use actingcommand_contract::outcome::{CauseRelation, Code, CodeStr, Location, Outcome, RunOrigin};
 use actingcommand_contract::{
     CaptureBackendName, CaptureExtent, CaptureGeometryObservation, DesignatedEffectTally,
-    SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingDrainSummary, TaskGeometryConclusion,
-    TaskGeometryFailure, TaskGeometryFrame, TaskGeometryObservation, TaskGeometryPhase,
-    TaskGeometryRecheckTrigger, TaskRunIdentity,
+    InstanceRunReset, SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingDrainSummary,
+    TaskGeometryConclusion, TaskGeometryFailure, TaskGeometryFrame, TaskGeometryObservation,
+    TaskGeometryPhase, TaskGeometryRecheckTrigger, TaskRunIdentity,
 };
 use actingcommand_execution_kernel::{
     CaptureGeometrySessionRef, ContainedTaskGuardEvaluation, DesignatedEffectCap,
@@ -615,6 +615,30 @@ pub(super) struct ContainedRunControl {
     /// #411 A64 (ruling C-43): whether a close of the instance's resources at a lease end in the
     /// run's end phase met the lapsed lease and closed nothing (`LAPSED_CLOSE_*`).
     lapsed_close: AtomicU8,
+    /// Workflow #429 R-6 (register §1.301): where a `StopInstanceRun` of this run stands
+    /// (`STOP_*`).
+    runtime_stop: AtomicU8,
+    /// Workflow #429 R-6: how the stop's reset went, set once: by the Runtime's own reset, or
+    /// `not_needed` when the run ended without it.
+    stop_reset: std::sync::OnceLock<StopReset>,
+}
+
+/// Workflow #429 R-6 (register §1.301): how the Runtime's own reset after a `StopInstanceRun`
+/// went, as the stop answers it: `done`, `failed` with the failure that fenced the run's instance
+/// (the receipt's cause), or `not_needed` for a run that ended without the stop's reset.
+#[derive(Debug, Clone)]
+pub(super) struct StopReset {
+    pub(super) reset: InstanceRunReset,
+    pub(super) failure: Option<Outcome>,
+}
+
+impl StopReset {
+    pub(super) const fn not_needed() -> Self {
+        Self {
+            reset: InstanceRunReset::NotNeeded,
+            failure: None,
+        }
+    }
 }
 
 /// #411 A64 (ruling C-43): the end phase of a run that reached its deadline while it held its
@@ -790,6 +814,13 @@ impl ContainedRunControl {
     const LAPSED_CLOSE_OWED: u8 = 1;
     /// #411 A64: the owed close was settled (`HostShared::close_lapsed_run_session_guarded`).
     const LAPSED_CLOSE_SETTLED: u8 = 2;
+    /// Workflow #429 R-6: no `StopInstanceRun` asked the run to stop, and its reset point is ahead.
+    const STOP_NONE: u8 = 0;
+    /// Workflow #429 R-6: a `StopInstanceRun` asked the run to stop; the Runtime owes its reset.
+    const STOP_REQUESTED: u8 = 1;
+    /// Workflow #429 R-6: the run passed its reset point with no stop asked; a later stop finds
+    /// it ending on its own.
+    const STOP_PASSED: u8 = 2;
 
     const fn new(request_id: RequestId, instance_id: InstanceId, client_cancellable: bool) -> Self {
         Self {
@@ -807,7 +838,105 @@ impl ContainedRunControl {
             busy_end: std::sync::OnceLock::new(),
             end_phase: std::sync::OnceLock::new(),
             lapsed_close: AtomicU8::new(Self::LAPSED_CLOSE_NONE),
+            runtime_stop: AtomicU8::new(Self::STOP_NONE),
+            stop_reset: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Workflow #429 R-6 (register §1.301): who started a run that `StopInstanceRun` refuses: the
+    /// Runtime itself (a startup package, a ladder rung) or the scheduler (a policy run, which the
+    /// first slice refuses until `ledger` 8). `None` for a client's direct run, which it stops.
+    pub(super) fn stop_refused_origin(&self) -> Option<RunOrigin> {
+        if self.client_cancellable {
+            None
+        } else if self.is_host_package() {
+            Some(RunOrigin::Host)
+        } else {
+            Some(RunOrigin::Policy)
+        }
+    }
+
+    /// Workflow #429 R-6: a `StopInstanceRun` asks the run to stop at its next checkpoint, as its
+    /// client's cancel does (`ClientRequested`, a reason a run already ending keeps its own
+    /// against), and the Runtime then owes the device's reset. `false` when the run had already
+    /// passed its reset point: it ends on its own and needs no reset.
+    pub(super) fn request_runtime_stop(&self) -> bool {
+        match self.runtime_stop.compare_exchange(
+            Self::STOP_NONE,
+            Self::STOP_REQUESTED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                self.request_cancel();
+                true
+            }
+            Err(current) => current == Self::STOP_REQUESTED,
+        }
+    }
+
+    /// Workflow #429 R-6: at the reset point of a run its client's cancel ended, before its lease
+    /// ends: whether a `StopInstanceRun` asked for the stop, so that the Runtime resets the device
+    /// with the run's lease. A run no stop asked for passes the point: the client that cancelled
+    /// it resets the device, as before R-6, and a later stop finds the run ending on its own.
+    fn take_runtime_stop(&self) -> bool {
+        match self.runtime_stop.compare_exchange(
+            Self::STOP_NONE,
+            Self::STOP_PASSED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => false,
+            Err(current) => current == Self::STOP_REQUESTED,
+        }
+    }
+
+    /// Workflow #429 R-6: notes how the Runtime's reset after the stop went, once.
+    pub(super) fn note_stop_reset(&self, reset: StopReset) {
+        let _ = self.stop_reset.set(reset);
+    }
+
+    /// Workflow #429 R-6: a stopped run that ends without the Runtime's reset (it ended on its own,
+    /// or its deadline or a pause ended it, before its check saw the stop) needed none.
+    fn settle_unreset_stop(&self) {
+        if self.runtime_stop.load(Ordering::Acquire) == Self::STOP_REQUESTED {
+            let _ = self.stop_reset.set(StopReset::not_needed());
+        }
+    }
+
+    /// Workflow #429 R-6: whether the Runtime reset the device after this run's stop (the reset
+    /// done or failed): the run's client owes no `SafeReset` then.
+    fn reset_by_runtime(&self) -> bool {
+        self.stop_reset
+            .get()
+            .is_some_and(|stopped| stopped.reset != InstanceRunReset::NotNeeded)
+    }
+
+    /// Workflow #429 R-6: how the stop's reset went, once the run ended (`None` before, and for a
+    /// run no stop asked for).
+    pub(super) fn stop_reset(&self) -> Option<StopReset> {
+        self.stop_reset.get().cloned()
+    }
+
+    /// Workflow #429 R-6 tests: the control of a run of `instance_id` that no client may stop: a
+    /// host run (`host`) or a policy run.
+    #[cfg(test)]
+    pub(super) fn not_client_cancellable_for_test(
+        request_id: RequestId,
+        instance_id: InstanceId,
+        host: bool,
+    ) -> Self {
+        let control = Self::new(request_id, instance_id, false);
+        if host {
+            control.note_host_package();
+        }
+        control
+    }
+
+    /// Workflow #429 R-6 tests: whether anything asked the run to stop.
+    #[cfg(test)]
+    pub(super) fn stop_asked_for_test(&self) -> bool {
+        self.cancellation_reason.load(Ordering::Acquire) != Self::NONE
     }
 
     /// #411 A64 (ruling C-43): notes the run's end phase, once; a second note keeps the first.
@@ -1168,6 +1297,9 @@ impl PreparedPackageRun<'_> {
 
 impl Drop for ActiveContainedRun<'_> {
     fn drop(&mut self) {
+        // Workflow #429 R-6: a run a stop asked to end that ends without the Runtime's reset
+        // needed none; the stop answers so once the run is gone.
+        self.control.settle_unreset_stop();
         let mut active = self
             .active
             .lock()
@@ -7112,12 +7244,16 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?;
         // Workflow #191 ps2: the client of a cancelled run resets the instance next
         // (`SafeReset` on this connection); an instance pause hands the device back only after
-        // that. Noted while the run is still registered, so a draining pause sees it.
+        // that. Noted while the run is still registered, so a draining pause sees it. Workflow
+        // #429 R-6: a run a `StopInstanceRun` stopped was reset by the Runtime itself, and its
+        // client owes nothing.
         let awaited = match &executed {
             Ok(OperationSuccess {
                 result: RuntimeResult::ContainedTaskCancelled { .. },
                 ..
-            }) => self.await_client_reset(instance_alias, connection_id),
+            }) if !active_run.control.reset_by_runtime() => {
+                self.await_client_reset(instance_alias, connection_id)
+            }
             _ => Ok(()),
         };
         // Workflow #369-3 (coordinator ruling Q1): a direct run (CLI or console task-run, MCP
@@ -8347,6 +8483,21 @@ impl HostShared {
                                 RuntimeErrorCode::RuntimeHalted,
                             ))
                         })?;
+                    // Workflow #429 R-6 (register §1.301): a client's run that `StopInstanceRun`
+                    // stopped is reset by the Runtime with the run's own lease, before its terminal
+                    // and its lease end; its client owes no `SafeReset`. A reset that failed fenced
+                    // the instance only, and the lease ends below as a failed one does.
+                    let reset_failed = !scheduled
+                        && reason == ContainedTaskCancellationReason::ClientRequested
+                        && control.take_runtime_stop()
+                        && self.reset_stopped_run(
+                            request,
+                            &token,
+                            connection_id,
+                            &control,
+                            release_links,
+                            execution_provenance,
+                        )?;
                     let terminal_outcome = if scheduled {
                         TaskOutcome::Failure
                     } else {
@@ -8411,7 +8562,24 @@ impl HostShared {
                             failure,
                         ));
                     }
-                    if let Err(release_failure) = self.release_lease(
+                    if reset_failed {
+                        // Workflow #429 R-6: the fenced instance's lease ends as a failed run's.
+                        let release_reason = LeaseReleaseReason::BackendFailure;
+                        let ended = self
+                            .cleanup_token(&token, connection_id, release_reason)
+                            .and_then(|()| self.close_lapsed_run_session(&token));
+                        if let Err(error) = ended {
+                            return Err(if error.is_fatal() {
+                                RequestFailure::poison_without_terminal(error)
+                            } else {
+                                RequestFailure::request(
+                                    error,
+                                    RuntimeReceiptState::Failed,
+                                    Some(terminal(&task_terminal)),
+                                )
+                            });
+                        }
+                    } else if let Err(release_failure) = self.release_lease(
                         request,
                         original.request_id(),
                         &token,

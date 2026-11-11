@@ -283,6 +283,8 @@ pub use standard_pack_schedule::{
 };
 mod startup_package;
 mod state_control;
+// Workflow #429 R-6: `StopInstanceRun`, a client's direct run stopped and reset by the Runtime.
+mod stop_instance_run;
 mod task_diagnostic;
 mod task_timing;
 
@@ -1985,6 +1987,7 @@ impl RuntimeHost {
                 config.state_root.clone(),
             )),
             contained_runs: Mutex::new(BTreeMap::new()),
+            stopped_runs: stop_instance_run::StoppedRuns::default(),
             instance_activities: instance_activity::InstanceActivities::default(),
             routine_summary: routine_summary::RoutineSummaryShared::new(started_at_unix_ms),
             scheduling_pause: Mutex::new(SchedulingPauseTable::default()),
@@ -5826,6 +5829,8 @@ struct HostShared {
     /// their directory (memory only). A leaf lock: nothing else is taken while it is held.
     display_safe_area: Mutex<crate::display_safe_area::SafeAreaDeclarations>,
     contained_runs: Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
+    // Workflow #429 R-6 (register §1.301): each instance's latest stopped run (memory only).
+    stopped_runs: stop_instance_run::StoppedRuns,
     // Workflow #429 R-0b (register §1.238): what each instance does now, as the status shows it
     // (memory only; never read from the ledger). A leaf lock.
     instance_activities: instance_activity::InstanceActivities,
@@ -6084,7 +6089,8 @@ struct OperationSuccess {
     result: RuntimeResult,
     /// The host's failure behind a result that records one (a material read, a contained Lab
     /// operation), as its receipt outcome: it tops the receipt (Workflow #378 A4, coordinator
-    /// ruling A-M2). `None` for every other result.
+    /// ruling A-M2). Workflow #429 R-6: a stop's failed reset, which is the cause below the stop's
+    /// success code instead. `None` for every other result.
     failure_outcome: Option<actingcommand_contract::outcome::Outcome>,
 }
 
