@@ -13380,6 +13380,97 @@ words).** The differences (a) to (i) above are accepted as written. On the quest
 
 **Rollback of this slice.** Nothing to roll back: text only.
 
+### 1.310 Slice SS-4b (0.12.55): a no-progress guard holds a pair only while the pair is due for the cause the guard served (Workflow #428; a production incident of 11-11, a chain head held by its guard through a later clock slot until a person ran its chain by hand; the coordinator's ruling of 11-11, not Alice's words; coordinator work order `rd-1111/brief-ss4b-guard-cause.md`, read on main `385bb500`)
+
+The number is the coordinator's: four slices are open at once with §1.310 to §1.313.
+[scheduling/README.md](scheduling/README.md) ("No-progress guard": the "Released", "Held",
+"Chains" and "Entry point" bullets and the new "Why a new cause is not held"), one clause of
+[runtime-config.md](runtime-config.md) ("No-progress guard") and the description of
+`policy_no_progress` in [outcome-codes/policy.json](outcome-codes/policy.json) are the contract. No
+persisted shape, wire shape, configuration key, outcome code, value or interface revision is new
+or changed.
+
+**What happened** (production, 11-11). A chain of five tasks on one instance. Its head's trigger is
+an `any` of clock slots (each an `all` of a daily `clock` and a `timeline_active`) and, last, an
+`all` of an `any` of four `fact_time_reached` (`once_per_reading`, four completion-time facts) and
+a `dependency_completed`; only the chain's last task reads those four facts again. At 16:36 the
+head was dispatched because the second completion time had come (the first true child of the
+`any`) and succeeded, and its guard was armed with that one fact. The chain's second task then
+failed (a defect of its package, fixed since), so the last task never ran and no completion time
+was read again. From 16:56, the head's cooldown over, its trigger was true again and the head was
+held with `policy_no_progress` naming that fact with its admission reading; at 18:00 the trigger
+was true by its clock slot, and the head was still held, the whole chain waiting behind it
+(`trigger_unknown`). Nothing would have released it, since the only reader of the fact is the
+chain itself; it ended when a person ran the chain's packages by hand at 18:13.
+
+**The account, checked on the code** (`385bb500`). `NoProgressGuards::hold` compared the armed
+basis readings with the facts and never read the trigger; `NoProgressMemory::observe` released a
+guard only on a changed reading; and the contract's sentence that a dispatch decided by a clock
+alone "has no basis and no guard" was applied by `basis_keys` at capture only, never at a hold. So
+a guard armed by one cause held the pair against every later cause.
+
+**The ruling** (11-11, the coordinator's, not Alice's words). A guard holds a pair only while the
+pair is due for the cause the guard served. At the evaluation that would hold it, the trigger is
+read part by part as at capture, giving the basis keys of the trigger as it is true now (with the
+reserve gate's keys, as at capture): empty, or holding a key the armed basis does not hold, the
+pair is due for another cause, is not held, and its guard is released for good; every key in the
+armed basis (and none reading another value), it is held as before. Everything else of SS-4
+stays: the basis, the arming, the release by a changed reading, failures never held, memory only,
+the switch, the bound of 32 keys, the reason's values.
+
+**What** (`crates/policy/src/evaluator/no_progress.rs`, `NoProgressGuards::hold`, `serves`,
+`NoProgressMemory::forget_released`; the call in `evaluate_scheduling`; the Runtime's call in
+`crates/runtime-host/src/policy_host.rs`).
+
+- `hold` takes the task and what the evaluation read its trigger with (its own last result, its
+  instance's scope, the facts as the resets leave them, the pools and their values, the time and
+  the timeline). After SS-4's checks, `serves` reads the trigger with `basis_keys`, the capture's
+  own reading: the pair is held only when that gives at least one key and every key is a key of
+  the guard's basis. Otherwise it is not held, goes on to placement as any eligible pair, and the
+  pair is noted as released in the guards the evaluation was given.
+- `forget_released` drops each noted guard from the Runtime's memory when the armed guard is still
+  the one the evaluation was given. The Runtime calls it right after every evaluation, whatever
+  the evaluation's result, as `observe` releases before it; the pair's next admitted dispatch arms
+  a new guard (none, when a clock slot decided it).
+- With no guard, with the guard off, and for a pair held for its served cause, every decision is
+  byte for byte the one before.
+
+**Settled where the ruling left it open** (the implementer's; for the coordinator to confirm).
+(a) The reserve gate's keys count in the basis now, as the ruling writes: a task that reserves a
+pool has a basis now of at least those keys, which are in its guard's basis, so such a task due by
+a clock alone is still held (SS-2d test 16 pins this for a task due hourly that reserves its
+pool); only a task without reserves is released at a clock slot. (b) The release is decided inside
+the evaluation and reaches the memory through the guards the Runtime passed (a set of pairs in
+memory, never serialized), so the evaluation's entry points, result and records do not change.
+(c) The hold is reached only on a true trigger and the re-read is that same reading; a re-read that
+did not find it true would hold as before. (d) The release is judged only at the hold, after the
+trigger, the feedback stop and the cooldown: a cause true during the cooldown only, false again at
+its end, releases nothing. (e) The description of `policy_no_progress` (`review: pending`) and
+runtime-config.md's sentence on the key now say that a pair due for another cause is not held.
+
+**What an operator sees after deploy.** `policy_no_progress` on a pair only while the pair is due
+for the cause its guarded run was admitted on. A chain head held on a completion time runs at its
+next clock slot, or when another completion time comes, and its chain follows it; that run arms its
+own guard, or none for a clock slot. A pair whose runs change nothing is still held at every later
+evaluation, a clock beside its reading in an `all` included. One instance's guard is never read or
+released for another (#419).
+
+**Rollback** (below 0.12.55). Nothing persisted: the guard stays in memory only (iron rule 13; no
+ledger record, no state file). The build before holds by the armed guard alone again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS4B-1 | a pair due for another cause than its guard served is not held, and its guard is released | behaviour (policy) | SS-4b | the policy crate, `NoProgressGuards::hold` | `since` 0.12.55; no code, value or key added |
+| SS4B-2 | `NoProgressMemory::forget_released`, called after every evaluation | behaviour (Runtime memory) | SS-4b | runtime-host | memory only; nothing in the ledger |
+
+Tests (policy gate row "#428 SS-4b"; the policy crate's fixtures, fixed instants, no clock read):
+`gate_ss4b::ss4b_t1_the_incident_shape_runs_at_a_new_completion_time_and_at_the_next_clock_slot`,
+`ss4b_t2_a_run_without_progress_is_still_held_beside_a_due_clock`,
+`ss4b_t3_a_subset_of_the_basis_holds_and_a_key_outside_it_releases_for_good` and
+`ss4b_t4_with_the_guard_off_or_no_guard_the_evaluation_is_as_before`. No existing test or golden
+changes: every SS-4 test (`gate_ss4`) and SS-2d's test 16 hold a pair due for its served cause or
+arm no guard. No test is removed or renamed.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

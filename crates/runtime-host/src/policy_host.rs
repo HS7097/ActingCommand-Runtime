@@ -3339,6 +3339,10 @@ impl PolicyHost {
             }),
         );
         self.capped = capped;
+        // SS-4b (register §1.310; `scheduling/README.md`, "No-progress guard"): a guard the
+        // evaluation released because its pair was due for another cause is forgotten, whatever
+        // the evaluation's result, so it stays released.
+        self.no_progress.forget_released(&no_progress_guards);
         let mut evaluation = evaluation?;
         procedure_manifest.bind_evaluation(&mut evaluation)?;
         // Workflow #411 B15 R4 (model-b15 §7.5 to §7.7): the stops, lifts and expiries the plan
