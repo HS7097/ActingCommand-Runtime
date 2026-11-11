@@ -384,7 +384,7 @@ fn sched_c1c_t4_a_pool_its_lines_cannot_spend_warns() {
         code: CatalogDiagnosticCode::PoolLinesUnspendable,
         pointer: "/pools/1/hard_line".to_owned(),
     };
-    assert_eq!(composed.compile_warnings(), [placed.clone()]);
+    assert_eq!(composed.compile_warnings(), std::slice::from_ref(&placed));
     let recorded = placed.to_contract();
     let code = PolicyCode::PoolLinesUnspendable.as_str();
     assert_eq!(recorded.warning, code);
