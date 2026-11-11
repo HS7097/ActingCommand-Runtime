@@ -33,7 +33,9 @@
 //! - **Initiator** (§4.1, §4.2). `Lab-CLI`, or `Lab-制包` / `Lab-救急` from
 //!   `ACTINGCOMMAND_INITIATOR`; any other value is refused before anything is sent or written. A
 //!   Lab recording's steps and marks carry it (open point 6, the coordinator's ruling), and
-//!   `Lab-MCP` when MCP's actinglab child (`--via mcp`) adds them.
+//!   `Lab-MCP` when MCP's actinglab child (`--via mcp`) adds them, or (Workflow #434 LAB-5G4a) a
+//!   `serve --stdio --front mcp` process, an MCP server's child, whose rescue rows take `Lab-MCP`
+//!   too ([`serve::Front`]).
 //! - **The authoring option** (§8.3; Workflow #434 LAB-5F, [`authoring`]): the authoring rows are
 //!   listed and served only where the authoring module is installed; elsewhere a call is refused
 //!   with `lab_command_option_disabled` before anything is sent or written.
@@ -225,9 +227,11 @@ pub(crate) fn table() -> Result<&'static OperationTable, Outcome> {
 }
 
 /// The initiator word every step and mark this process adds to a Lab recording carries (§4.1,
-/// §4.2): `Lab-MCP` when MCP's actinglab child runs the command (`via` `mcp`, LAB-2 fix 1), else
-/// `Lab-CLI`, or the `Lab-制包` / `Lab-救急` of `ACTINGCOMMAND_INITIATOR`. Any other value of the
-/// variable is `actingctl_usage_invalid`, and nothing is written.
+/// §4.2): `Lab-MCP` when MCP's actinglab child runs the command (`via` `mcp`, LAB-2 fix 1) or
+/// `serve --stdio --front mcp` does (Workflow #434 LAB-5G4a: the loop runs the command with `via`
+/// `mcp`, [`serve::Front::via`]), else `Lab-CLI`, or the `Lab-制包` / `Lab-救急` of
+/// `ACTINGCOMMAND_INITIATOR`. Any other value of the variable is `actingctl_usage_invalid`, and
+/// nothing is written.
 pub(crate) fn recording_initiator(via: Option<ChannelVia>) -> Result<&'static str, CliError> {
     if via == Some(ChannelVia::Mcp) {
         return Ok(Initiator::LabMcp.as_str());
@@ -282,7 +286,7 @@ fn agent_channel(words: &[String]) -> Option<ExitCode> {
     if let Err(exit) = admitted() {
         return Some(print(&exit, false));
     }
-    Some(match rescue::answer(&call) {
+    Some(match rescue::answer(&call, None) {
         Answer::Line(exit) => print(&exit, false),
         Answer::Text(text) => {
             let written = {
@@ -318,7 +322,7 @@ pub(crate) fn run_line(words: &[String]) -> Exit {
         Err(outcome) => return cli_line::failure(&outcome, None),
     };
     match words::parse(table, words) {
-        Ok(call) => answer(table, &call),
+        Ok(call) => answer(table, &call, None),
         Err(refusal) => cli_line::failure(&refusal, Some(USAGE)),
     }
 }
@@ -336,7 +340,9 @@ pub(crate) fn admitted() -> Result<(), Exit> {
 
 /// The answer to `call`: an operation of this module its line; one of actinglab's own commands
 /// serves the line its `--json` prints (`serve --stdio`; [`own_line`], Workflow #434 LAB-2b).
-pub(crate) fn answer(table: &OperationTable, call: &Call) -> Exit {
+/// `front` is the front end `serve --stdio --front` named (Workflow #434 LAB-5G4a), `None` on the
+/// command line and without the option.
+pub(crate) fn answer(table: &OperationTable, call: &Call, front: Option<serve::Front>) -> Exit {
     let Some(operation) = table.operation(&call.name) else {
         return cli_line::failure(
             &cli_line::usage_invalid(Some(call.name.as_str()), ArgumentProblem::Unknown),
@@ -349,25 +355,32 @@ pub(crate) fn answer(table: &OperationTable, call: &Call) -> Exit {
     // Workflow #434 LAB-3: the rescue module's rows (offered on Windows only, where it runs).
     #[cfg(windows)]
     if operation.module == OperationModule::Rescue {
-        return rescue::line(rescue::answer(call));
+        return rescue::line(rescue::answer(call, front));
     }
-    engine::line(operation, &call.params)
+    engine::line(operation, &call.params, front)
 }
 
 /// Workflow #434 LAB-3: the rescue module's rows (`crates/lab-rescue`), for the root actinglab
 /// runs from and with this process's initiator.
 #[cfg(windows)]
 mod rescue {
+    use super::serve::Front;
     use super::words::Call;
     use actingcommand_contract::outcome::Outcome;
     use actingcommand_lab_ops::cli_line::{self, Exit};
     use actingcommand_lab_ops::codes::ActingctlCode;
+    use actingcommand_lab_ops::initiator::Initiator;
     use actingcommand_lab_rescue::agent_channel::Answer;
     use serde_json::{Map, Value};
 
-    /// The rescue row `call` names, answered.
-    pub(super) fn answer(call: &Call) -> Answer {
-        match actingcommand_lab_ops::initiator::Initiator::of_this_lab_process() {
+    /// The rescue row `call` names, answered; under `serve --stdio --front mcp` (`front`; Workflow
+    /// #434 LAB-5G4a) with the initiator `Lab-MCP`, else with this process's word (§4.2).
+    pub(super) fn answer(call: &Call, front: Option<Front>) -> Answer {
+        let initiator = match front {
+            Some(Front::Mcp) => Ok(Initiator::LabMcp),
+            None => Initiator::of_this_lab_process(),
+        };
+        match initiator {
             Ok(initiator) => {
                 actingcommand_lab_rescue::rescue::answer_here(&call.name, &call.params, initiator)
             }

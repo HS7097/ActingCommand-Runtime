@@ -11,8 +11,8 @@ use crate::codes::ActingctlCode;
 use crate::locate::locate_from;
 use crate::packs::ROOT_CONFIG_FILE;
 use crate::table::{
-    Entry, ModuleRole, OperationModule, OperationStatus, OperationTable, TABLE_PATH,
-    read_operation_table, request_kind_name,
+    Entry, MAX_HELP_BYTES, ModuleRole, OperationModule, OperationStatus, OperationTable,
+    TABLE_PATH, read_operation_table, request_kind_name,
 };
 use actingcommand_contract::RuntimeOperationKind;
 use serde_json::json;
@@ -38,7 +38,11 @@ fn table_file() -> PathBuf {
 // debugging or authoring module does (actinglab's `gate_434_lab5a` checks that no row it offers
 // does: which rescue rows are served the rescue module knows); every `required_in` names front
 // ends, on a parameter the row does not require; a `disruptive` row writes and is not
-// irreversible.
+// irreversible. Workflow #434 LAB-5E: every `help` is ASCII, 1 to `MAX_HELP_BYTES` bytes on one
+// line (no control character), names no MCP tool (`ac_`), and no two rows share one (actinglab's
+// `gate_434_lab5e` checks that every row it offers, and every row LAB-5's server offers, has one).
+// The words of the neutrality guard are its own test's: it reads the table line by line (each
+// `help` is on its own line), and no test here can reach its list.
 #[test]
 fn lab_ops_table_complete() {
     // Reading the file into typed rows refuses a row without one of the members §9.1 lists (or
@@ -63,6 +67,7 @@ fn lab_ops_table_complete() {
 
     let mut names = BTreeSet::new();
     let mut tools = BTreeSet::new();
+    let mut helps = BTreeMap::new();
     for operation in &table.operations {
         if !names.insert(operation.name.as_str()) {
             violations.push(format!("the name {} is not unique", operation.name));
@@ -76,6 +81,28 @@ fn lab_ops_table_complete() {
         }
         if operation.output.trim().is_empty() {
             violations.push(format!("{} has no output", operation.name));
+        }
+        // Workflow #434 LAB-5E: a row's one sentence.
+        if let Some(help) = &operation.help {
+            if help.is_empty() || help.len() > MAX_HELP_BYTES {
+                violations.push(format!(
+                    "{}'s help has {} bytes, not 1 to {MAX_HELP_BYTES}",
+                    operation.name,
+                    help.len()
+                ));
+            }
+            if !help.is_ascii() || help.chars().any(|character| character.is_ascii_control()) {
+                violations.push(format!(
+                    "{}'s help is not ASCII on one line",
+                    operation.name
+                ));
+            }
+            if help.contains("ac_") {
+                violations.push(format!("{}'s help names an MCP tool (ac_)", operation.name));
+            }
+            if let Some(other) = helps.insert(help.as_str(), operation.name.as_str()) {
+                violations.push(format!("{} has the help of {other}", operation.name));
+            }
         }
         if operation.source.is_empty() && operation.new.is_none() {
             violations.push(format!("{} has neither a source nor new", operation.name));
