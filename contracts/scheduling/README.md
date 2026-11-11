@@ -187,6 +187,18 @@ that declares it (`unknown_field`) and cannot reopen a state root on which such
 a catalog was activated or dispatched, even after its configuration returns to
 an older catalog.
 
+**A valuation written in the pack** (register §1.299, SCHED-C1). Today a `schedule.json` pool may
+already write a declared `valuation` block: the composer copies a pool's V2 members as written,
+and the compiler checks the bounds above and nothing more
+([../standard-pack-schedule.md](../standard-pack-schedule.md), "The file"). So a constant
+valuation the resource side writes by hand is accepted, and every reader reads it as it reads any
+other: its weight is the `W` of the net benefit, its base weight weighs the pool's producers
+(SS-1), and its pool's lines take part ("Pool lines"). Who wrote it, a person in the pack or the
+model's export, is marked by the `schedule.json` pool member `valuation_origin` (SCHED-C1, not built
+yet), which the catalog never carries: a valuation decides the same whoever wrote it, and only the
+reports tell the two apart ([../standard-pack-schedule.md](../standard-pack-schedule.md),
+"Provenance").
+
 ## Expected quantities (v2)
 
 Each effect has exactly one quantity. `amount` is a positive integer in real inventory
@@ -877,7 +889,8 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   ("Capped spending order"), which also gives the head of its order its own `B` (below). Nothing
   here writes a pool weight (the one-way rule, SS-1).
 - **Unknown is never 0.** A judged candidate whose task declares no `produces` and no `consumes`
-  entry, an entry whose `amount` is the pending marker, a pool it touches whose `valuation` is the
+  entry (SCHED-C1, not built yet: and no fixed value, "Fixed values written in the pack" below,
+  which also leaves its `produces` unread), an entry whose `amount` is the pending marker, a pool it touches whose `valuation` is the
   pending marker or absent (for the instance), or a regenerating pool it consumes whose reading is
   unknown or expired (still read, as before, though its cost no longer depends on it) has an
   unknown `B`: the known part is never added up. It is not dispatched:
@@ -986,6 +999,88 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   - *No candidate in the band, no change.* A catalog in which no judged candidate falls within
     tolerance decides, ranks and records byte for byte as before; `benefit_realization` absent, a
     catalog keeps its hash.
+
+## Fixed values written in the pack (SCHED-C1, not built yet)
+
+Register §1.299. Alice, 11-09 15:47 (Workflow #428 comment 6734155178), splits the scoring into two
+kinds: 「这个已经有结论了，就直接用固定值」, and
+「第一个就是在任务包里面已经写明了，这种就直接沿用就行。另一种是需要动态决策的，这种我们在启用打分器，在自己算。」;
+at 15:50, of the model, 「我们的这个数据建模它本身也是一个打分器，只不过它是产出的是离线数据，这个用来解决当前已经固定的。」
+Of SS-2b's benefit rule she said at 15:57 (comment 6734197818)
+「要是阻碍运行或者是不符合预期的话，就直接按照新的方法重写一遍就行。能跑就暂时可以先不用动它」. It now
+blocks running: every judged rule of the standard packs declares no effect, so each would wait
+with `benefit_unknown` (`no_effects`) once business dispatch resumes. What follows is the
+coordinator's ruling of 11-11, not Alice's words; the member names and codes are this draft's.
+
+**Today.** A judged candidate's `B` comes only from its effects ("Net benefit within a tier"): a
+task with no `produces` and no `consumes` is `benefit_unknown` `no_effects`, and every pool an
+entry touches needs a declared valuation. The task member `value_milli` (`0..=1,000,000`, read in
+V1 and V2 documents alike) is no benefit: it is the score stage's utility term, `value_milli ×
+urgency_total_milli / cost_ms`, added to a candidate's `total` whether or not it is judged (and a
+task that writes it enters the score stage); the benefit gate never reads it.
+
+- **The member.** A V2 task may write `benefit_fixed_value_milli`, an integer in
+  `1..=9007199254740991`: `V`, the value of one run of the task without the cost of the pools it
+  consumes, in milli of the value unit its instance's valuations weigh in (the unit of `W`: a
+  weight is the milli of value of `Q` steps of a pool). It requires `benefit_judged: true`.
+  `value_milli` is not reused: its reader, the score stage, multiplies it by urgency and divides it
+  by a duration, for unjudged candidates too, so one number read in two ways would move a rule
+  twice and on two scales. It keeps its meaning and its reader. A standard pack writes the value on
+  its rule as `fixed_value_milli` and the composer writes the task member
+  ([../standard-pack-schedule.md](../standard-pack-schedule.md), "The fixed value"); a raw V2
+  catalog writes the task member itself.
+- **Without a consumption** `B = V`, known: such a rule is never `benefit_unknown` for lack of
+  effects or of a priced pool. A fixed value is exact, so it adds nothing to `ε` ("Within
+  tolerance"); since `V ≥ 1`, the candidate is positive and ranks by `B ÷ E`.
+- **With a consumption** `B = V − Σ_p C_p·W_p/(1000·Q_p)`, the cost term of "Net benefit within a
+  tier" unchanged. So below the cap (below the trigger line, "Pool lines") its net benefit is
+  `V − W·c` as today, and in a capped round its value without the pool's cost is `V` less the cost
+  of the other pools it consumes, ranked by `V ÷ C` as today ("Capped spending order"). A consumed
+  pool must be valued for the instance, as before: `W` comes from a valuation the model writes, or
+  from a constant valuation the pack declares ("A valuation written in the pack" above); without
+  one the candidate stays `benefit_unknown` `valuation_missing` (`valuation_pending` for the
+  marker), and a regenerating pool's unknown reading stays `reading_unknown`. `ε` holds the
+  consumption's terms only. A pool the pack values takes part in the lines and the capped order as
+  any valued pool.
+- **Its `produces`** entries are not read by `B`; they keep their other readers (forward
+  projection, resource targets). A produced pool that is priced is refused (below).
+- **One scale** (the coordinator's point 3). Static and dynamic candidates of one instance are
+  ordered by the keys the business tier already has, with no second stage: `promoted`, the tier,
+  SS-2f's turns across instances, then `B ÷ E` compared exactly (`B·E' > B'·E`), then `affinity`
+  and the tie-break of "Ties and chain heads"; the zero tier last. A static candidate's `B` is `V`,
+  or `V` less its consumption's cost; a dynamic one's is its modelled sum. In a capped round both
+  kinds are listed and frozen by `V ÷ C` alike. They compare because the pack writes its fixed
+  values and its constant valuations in the one value unit of its game, the unit its model's
+  prices use (`B` of two games is never compared: "Turns across instances").
+- **Refused at compile time** (point 4), each at its pointer: in a V1 document the member is
+  `unknown_field`; a value that is no integer `type_mismatch`, one outside `1..=9007199254740991`
+  `limit_exceeded`; without `benefit_judged: true`, `missing_required_field` at `benefit_judged`.
+  With the new diagnostic `fixed_value_conflict` (error) at `benefit_fixed_value_milli`: (a) a
+  `produces` entry on a pool whose `valuation` is a declared block or the pending marker, since the
+  rule would then have two values, the fixed one and its priced effects. Refusal, not precedence:
+  neither may silently win, and a model export that prices a rule's effects removes its fixed value
+  in the same change. (b) `benefit_realization: true`, since the zero tier reads a modelled value's
+  rounding and a product weighed above 0, which a fixed value does not have. A value of 0 is no
+  value: a rule that must not run is held or not written.
+- **What a person sees** (point 5). The decision of a judged candidate whose `B` was computed from
+  a fixed value carries `benefit_fixed_value` (info; `benefit_milli` `B`, `fixed_value_milli` `V`,
+  `expected_duration_ms`) before its other reasons, whether it was dispatched, deferred
+  (`policy_benefit_nonpositive`, `benefit_within_tolerance`), held by a pool's lines or spent by a
+  capped order. A judged winner's `rank_breakdown` detail adds ` fixed_value_milli=<V>` after
+  ` benefit_milli=<B> expected_duration_ms=<E>`. A candidate without a fixed value records as
+  before.
+- **Provenance** (point 6) is the composer's and the workbench's: which rules run on a fixed value
+  and which pools on a valuation, each by who wrote it
+  ([../standard-pack-schedule.md](../standard-pack-schedule.md), "Provenance"). The catalog carries
+  no origin.
+- **Capability.** A Runtime that reads the member reports the always-on subsystem
+  `benefit_fixed_value` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md),
+  its row with the code). A `schedule.json` whose rule writes `fixed_value_milli`, or whose pool
+  writes `valuation_origin`, lists it in `requires`; the composer refuses the file without it, so a
+  Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of
+  reading the rule without its value. An older Runtime given a catalog with the member refuses it
+  at its reader (`unknown_field`).
+- **Identity.** A task without the member serializes, hashes and decides byte for byte as before.
 
 ## Task Reserves (Workflow #411 B16 part 2)
 
@@ -1732,15 +1827,20 @@ A V2 pool may write `stop_line` and `hard_line` ([v2/README.md](v2/README.md);
   less a margin. The Runtime adds the given offset to the fact it reads and computes no line.
 - **A constant**, an integer in `0..=9007199254740991`, the line itself.
 
+SCHED-C1 (register §1.299, not built yet) adds a third member in the same two forms, `trigger_line`,
+written only beside the other two ("The trigger line" below), and lines given for one instance
+("Lines for one instance" below).
+
 - **Without lines** a pool's stop line `S` is its capacity and its hard line `H` is 0 (the
   research channel's proposal the coordinator approved, design §1.6 item 1): it is spent only at
-  its cap, one run at a time, and has no protection of its own.
+  its cap, one run at a time, and has no protection of its own. SCHED-C1: its trigger line `T` is
+  its capacity too, and so is that of a pool that writes the two lines and no `trigger_line`.
 - **At each evaluation** the lines of a valued pool are read on each instance its scope covers and
-  must hold `0 ≤ H < S ≤ cap`. The reading `r` they are checked against is the pool's projected
+  must hold `0 ≤ H < S ≤ cap` (SCHED-C1: `0 ≤ H < S ≤ T ≤ cap`). The reading `r` they are checked against is the pool's projected
   amount less the consumption its reading does not show yet: every task dispatched on the
   instance at or after the reading's observation, by its declared consumption (the reserve gate's
   step 3, "Task Reserves").
-- **Below the cap** a judged candidate that would pass the net-benefit gate (a positive `B`, or
+- **Below the cap** (SCHED-C1: below the trigger line, while no episode is under way) a judged candidate that would pass the net-benefit gate (a positive `B`, or
   released in the zero tier) and whose run would leave `r − ⌈C/1000⌉ < H` is not dispatched:
   deferred with `pool_line_held` (info; `pool_line_hold` `would_cross_hard_line`, `pool_id`,
   `pool_reading`, `pool_capacity`, `stop_line`, `hard_line`, `amount_after`), waking at a
@@ -1751,6 +1851,8 @@ A V2 pool may write `stop_line` and `hard_line` ([v2/README.md](v2/README.md);
   none). Lines read that break `0 ≤ H < S ≤ cap` hold them with `lines_invalid` (`stop_line`,
   `hard_line`, `pool_capacity`). A pool without lines whose reading is unknown has no hard line to
   keep: nothing changes for it (as before; a regenerating one is `benefit_unknown` anyway).
+  SCHED-C1 (not built yet): an unknown value no longer ends a capped episode under way; the
+  episode waits ("Capped spending order", "Episodes survive").
 - **Who is held.** The lines constrain the scheduler only (Alice, 17:42): a judged candidate. A
   manual request, a chain successor that rides with its chain, an unmarked task and the Runtime's
   own reading are never held by them.
@@ -1761,7 +1863,10 @@ A V2 pool may write `stop_line` and `hard_line` ([v2/README.md](v2/README.md);
   where the compiler can tell (a constant above a constant capacity, or a reference to the
   capacity's own fact with a larger offset), and when the stop line is not above the hard line
   where it can tell (two constants, or two references to one fact by their offsets; at
-  `hard_line`). Lines it cannot compare are checked at each evaluation (above).
+  `hard_line`). Lines it cannot compare are checked at each evaluation (above). SCHED-C1 (not
+  built yet): `trigger_line` by the same rules, at `trigger_line`: `pool_lines_invalid` when it is
+  written without both other lines, below the stop line, or above the capacity, where the compiler
+  can tell.
 - **Without a valuation** (SS-2h fix 1): only a valued pool's lines take part. A V2 pool that writes
   both lines but no declared valuation (none, or the pending marker) compiles with the warning
   `pool_lines_unvalued` at its `stop_line` (the first compile warning; "Diagnostics"): the lines are
@@ -1781,13 +1886,84 @@ A V2 pool may write `stop_line` and `hard_line` ([v2/README.md](v2/README.md);
   without it (`schedule_invalid` at the first such member), so a Runtime that does not name the
   subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older
   Runtime given a catalog with either member refuses it at its reader (`unknown_field`).
+  SCHED-C1 (not built yet): `trigger_line` likewise with its own always-on subsystem
+  `pool_trigger_line`, which a `schedule.json` whose pool writes it lists in `requires` (a Runtime
+  that names `pool_lines` alone does not read it).
 - **Identity.** A pool without the members serializes, and hashes, exactly as before.
 - For example, a pool whose cap is read, its stop line 40 below the cap and its hard line 76 below
   it: `"capacity": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": 0}`,
   `"stop_line": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -40}` and
   `"hard_line": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -76}`.
 - A line given for one instance (SS-2h-c, later) will take precedence over the catalog's, and the
-  catalog's over the defaults above.
+  catalog's over the defaults above. SCHED-C1 specifies it ("Lines for one instance" below).
+
+The three parts below are SCHED-C1's (register §1.299), the coordinator's rulings of 11-11, not
+Alice's words; none is built yet.
+
+- **The trigger line** (the coordinator's point 10). A pool that writes both lines may also write
+  `trigger_line`, in either form: the reading at which a capped episode begins ("Capped spending
+  order"). Absent, it is the capacity, and nothing changes from what Alice released: the episode
+  begins at the cap (point 2 of the ten points the coordinator wrote down from her approval of
+  11-09 17:48, #428 comment 6735960127). Present, the lines read must hold `0 ≤ H < S ≤ T ≤ cap`,
+  or the pool's judged consumers are held with `lines_invalid` (which then also carries
+  `trigger_line`); its refusals and its subsystem are above. Below the trigger line, while no
+  episode is under way, the pool is "below the cap" for the rules above: full price, and the hard
+  line held.
+- **Lines for one instance** (point 8; Alice, 11-09 17:42: 「这个红线会随着时间由外部修改」). A person
+  or an agent sets one instance's lines of a pool while the Runtime runs through the Lab's
+  `config set`, and clears them with `config clear` (the rows of
+  [../lab-operations.json](../lab-operations.json); the request `ConfigureSettings`,
+  [../runtime-config.md](../runtime-config.md)), on the per-instance key
+  `instance.<instance id>.scheduling.pool_lines` (in the configuration file the `instances[]`
+  entry's `scheduling.pool_lines`; no default; settable). An existing input, so nothing waits for
+  the resource-targets reader (#429 R-13a). Its value is an object of at most 32 members, each named
+  by a pool id as the instance's `schedule.json` writes it (a composed copy's id without
+  `@<alias>`; in catalog mode the catalog's id), whose value is `{"stop_line", "hard_line",
+  "trigger_line"?}`, each line in the two forms above (a reference reads its fact in the pool's
+  scope).
+  - *Precedence.* For a pool the key names, on that instance, its set replaces the catalog's lines
+    whole (a `trigger_line` it does not write is the capacity, not the catalog's); otherwise the
+    catalog's lines, otherwise the defaults. The catalog's lines stay the default, and no other
+    instance is touched.
+  - *Checks.* The configuration's section check refuses, as `config_value_invalid`
+    (`section_check`, `wrong_type`, `out_of_range`), a value of another shape, a member that is no
+    pool identifier, a set without both lines, and `H < S ≤ T` broken where it can tell (two
+    constants, or two references to one fact by their offsets). The capacity is read, so
+    `S ≤ cap` and `T ≤ cap` are checked at each evaluation (`lines_invalid`). A named pool that the
+    active generation does not give the instance, or gives without a declared valuation, changes
+    nothing (register §1.299, open question 5).
+  - *Lasting.* An instruction value is restored at every start ("Restore at start" there) and is no
+    part of the catalog: it holds across restarts and catalog generations until it is cleared.
+  - *Episodes.* A change ends no episode: the lines are read at the next evaluation, and the episode
+    ends only by its own rule against them ("Capped spending order").
+  - *Who changed it.* Each change is recorded as every instruction is
+    ([../runtime-config.md](../runtime-config.md), "`ConfigureSettings`"): the command's records
+    (`cli.command` or its counter's own, `command.received`, then `command.validated`) and the new
+    `host.config_overrides` row with its `set_unix_ms`, `request_id` and `channel`, the entry it
+    came through (the Lab's command line or MCP, or the console).
+  - *Seen.* `pool_line_held` and `capped_spend` carry the lines in effect, as today, and the new
+    value `lines_source` (`instance`, `catalog` or `default`).
+  - It replaces the design's SS-2h-c (an optional member `pool_lines` of the resource-targets v3
+    document through `ApplyResourceTargets`, waiting for R-13a; design
+    `rd-1031/design-c424-redline-1109.md` §4.3).
+- **A pool its lines cannot spend** (point 11). The released rule `H = S − (the costliest run)`
+  makes every consumer fit from the cap, but nothing checks it today, and lines that break it can
+  leave no consumer that fits. When `⌈C/1000⌉ > cap − H` for every judged consumer of a valued pool
+  on an instance (each by its declared consumption, whether or not it is a candidate), no run can
+  start from the capacity without leaving the pool below its hard line, and the pool stays full.
+  Today each evaluation at the cap then begins and ends an episode with the info reason
+  `pool_line_held` `capped_round_empty`. With SCHED-C1 it is a warning of its own: at an evaluation
+  where the pool is at or above its trigger line, no episode begins (one under way waits), and its
+  consumers are deferred with `pool_lines_unspendable` (warning; `pool_id`, `pool_capacity`,
+  `stop_line`, `hard_line`, `least_consumption` the least `⌈C/1000⌉` among them, `lines_source`).
+  The status read shows it, as the not-run explanation every scheduling read answers
+  (`ScheduleExplanation`: `actingctl schedule`, `ac_schedule`, `ac_overview`'s `not_running`,
+  `ac_diagnose`'s `not_run`), and the idle plan counts it neither due nor as a wake of its own, as
+  it counts `pool_line_held`. Where the compiler can tell (constant lines against a constant
+  capacity, or a hard line that references the capacity's own fact, whose `cap − H` is minus its
+  offset, against every consumer's integer consumption), the catalog also compiles with
+  `pool_lines_unspendable` as a warning at the pool's `hard_line`, which reaches
+  `config.catalog_warnings` and the overview ("Without a valuation" above).
 
 ## Capped spending order (SS-2h)
 
@@ -1797,7 +1973,8 @@ ones only; her answer 172 A ranks by the value of a run per unit of the resource
 16:39) starts at the cap, at the start of the scheduler too, and freezes the order; 17:37 lists
 only the tasks that can be dispatched now and never lets the cost keep one out before the order;
 17:48 approved the layout inside the scheduler (乙, design §1.6 item 4). Only valued pools (a
-declared `valuation` for the instance) and judged consumers (a `benefit_judged` task of the
+declared `valuation` for the instance, the model's or a constant one the pack writes, "Pool
+Valuation") and judged consumers (a `benefit_judged` task of the
 instance that is no manual request and declares a consumption of the pool) take part: a catalog
 without a valuation is untouched.
 
@@ -1809,6 +1986,11 @@ without a valuation is untouched.
   is a candidate at all (each in its cooldown, running, or held by its own conditions) nothing
   could be dispatched in any case: the episode waits for its next round. A new episode begins at
   the cap again; each counts from 1 since the Runtime started (`capped_episode`).
+  SCHED-C1 (register §1.299, not built yet): the episode begins at `r ≥ T`, the pool's trigger
+  line ("Pool lines"; the capacity without one, as now), and ends once `r ≤ S` and `r < T`; it no
+  longer ends on a catalog generation that leaves the pool's consumers unchanged, or on lines or a
+  reading that give no value, and it outlives a start, so its number counts on from the state
+  file's ("Episodes survive" below). A pool its lines cannot spend begins none ("Pool lines").
 - **A round** lists the pool's judged consumers that are candidates of the evaluation now (every
   condition the policy holds passed: the trigger with its counts and preconditions, the feedback
   stop, the cooldown, the no-progress guard, the placement and the score stage) whose value
@@ -1837,7 +2019,7 @@ without a valuation is untouched.
   (the reserve gate, the shared run limits, every pause, hold, blackout and budget of the Runtime)
   is dispatched with `capped_spend` (info; `pool_id`, `pool_capacity`, `stop_line`, `hard_line`,
   `capped_episode`, `capped_round`, `capped_rank` its place in the round's order,
-  `pool_reading`). A block candidate a later gate defers keeps that gate's reason and the next one
+  `pool_reading`; SCHED-C1, not built yet: `trigger_line` when the pool has one and `lines_source`). A block candidate a later gate defers keeps that gate's reason and the next one
   is tried; one behind the dispatched one, or behind its head when a more urgent candidate took
   the instance, waits with `pool_line_held` `capped_not_head` (`task_id` the head), a fallback
   with the hold the round gives it otherwise (`capped_not_head`, or
@@ -1882,12 +2064,59 @@ without a valuation is untouched.
   Runtime's (`CappedMemory`, passed to `evaluate_with_capped_spending`), as the no-progress
   guard's are ("No-progress guard"): no ledger record, state file or decision identity holds
   them. A start begins with none; a pool still at or above its cap then begins a new episode.
-  Every other entry point evaluates with an empty memory.
+  Every other entry point evaluates with an empty memory. (Today; SCHED-C1 keeps them, below.)
+- **Episodes survive** (SCHED-C1, register §1.299, not built yet; the coordinator's point 9, not
+  Alice's words). An episode, with its number, its round number, its frozen order and the members
+  it passed, outlives:
+  - *a start.* The Runtime keeps the memory in a state file of its own,
+    `<state root>/policy/capped-episodes.json` (schema `actingcommand.capped-episodes.v1`), in the
+    policy state directory beside the catalog store's `policy/catalogs/`, never in the ledger. It
+    replaces the file whole after each evaluated cycle that changed the memory (a new file in the
+    same directory, flushed, then renamed over the old one, as the catalog store publishes a
+    generation), and reads it once at start, before the first evaluation. The file names the owner
+    epoch that wrote it: a start whose previous epoch did not write it (a start that kept no file
+    ran in between, such as a rollback's older build) begins with no episode. A file that does not
+    read or is of another shape is reported, `capped_state_failed` (warning; `operation` `load`),
+    and the start begins with no episode, as today; a write that fails is reported the same way
+    (`operation` `store`), the memory stays, and the next change writes the file again. Neither
+    stops the Runtime or an instance. Which tasks a round ran is still read from the task
+    snapshots, which a start restores.
+  - *a new catalog generation that leaves the pool's consumers unchanged*: the same pool id on the
+    instance, and the same consumers, each by its accounting identity (its id, or one its
+    `continues_from` names), its `⌈C/1000⌉` and its `benefit_limited`. A changed value, valuation,
+    line or other task keeps the episode: the round's frozen order stays, and the next round orders
+    by the values then. Any other change of the consumers ends it, as every generation does today;
+    a pool whose id changes (a second instance of its server bound) is another pool.
+  - *an evaluation where the reading, the capacity or a line's fact gives no value* (an expired
+    reading, a reset): the episode waits; while it waits its consumers are held with
+    `pool_line_held` `capped_cap_unknown`, whether or not the pool writes lines, and when the values
+    come back it goes on, or ends by its rule.
+  - *a change of the instance's lines* ("Pool lines", "Lines for one instance").
+
+  It is dropped when it ends by its rule (`r ≤ S` and `r < T`, or a round that lists or plans
+  nothing though a consumer is a candidate), when a generation changes the pool's consumers, when
+  the instance or the pool leaves the catalog or the pool loses its declared valuation, and when
+  the file is not read at a start.
+- **Old triggers on a capped pool** (SCHED-C1, not built yet in the composer; the coordinator's
+  point 12, after point 9 of the ten points of #428 comment 6735960127). A consumer whose trigger
+  requires, through `all`, a reading of the pool of at least its capacity less a margin (a
+  `resource_projection` on the pool, or a `fact` on its reading key, compared
+  `greater_than_or_equal` or `greater_than` with a fact reference to the pool's capacity fact)
+  repeats what the capped order does once the pool is valued and writes its lines: the episode
+  begins at the trigger line and spends down to the stop line by itself. Such a threshold at the
+  stop line repeats it; above it, it ends the rounds early (the consumer stops being a candidate
+  and the episode waits) and keeps the pool between the threshold and its cap; below it, it only
+  limits full-price runs, which the hard line already guards. The evaluator reads the trigger as
+  written; the composer reports each such rule as redundant
+  (`standard_pack_line_trigger_redundant`, [../standard-pack-schedule.md](../standard-pack-schedule.md),
+  "Tools").
 - **Unchanged.** Every other gate and its order, the triggers, the reserves, the shared run
   limits, pauses, blackouts (a time window is only a blacklist), SS-4, the maintenance tier,
   SS-2f's turns across instances and the one dispatch per instance. A catalog without a valuation,
   lines and `benefit_limited` decides, records and hashes byte for byte as before; ruling 116's
-  stop holds (no production pool declares a valuation).
+  stop holds (no production pool declares a valuation). SCHED-C1: a catalog without its members
+  (a fixed value, `trigger_line`) and an instance without `scheduling.pool_lines` decide as before;
+  only the episodes' survival changes what an existing valued pool does.
 
 ## Reset exclusions and the task's own last result (Workflow #411 P19)
 
@@ -2130,6 +2359,7 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Pool valuation name / unit | 128 / 32 UTF-8 bytes |
 | Pool valuation scale | 1..=9,007,199,254,740,991 |
 | Pool valuation base weight / gap weight | 0..=1,000,000 / 1..=1,000,000 milli |
+| A task's fixed value (SCHED-C1, not built yet) | 1..=9,007,199,254,740,991 milli |
 
 Loop budgets are mandatory in V1; in V2 each run-count bound is optional (SS-3, "Optional run-count bounds"). Arrays and strings that exceed their limit reject the entire catalog. Duplicate identifiers, duplicate object keys, and unbounded recursive input are invalid.
 
