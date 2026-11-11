@@ -596,7 +596,7 @@ pub(super) fn expected_duration_ms(candidate: &PlacementCandidate) -> u64 {
 /// tier) or deferred; outside, as before, positive with `B` or `policy_benefit_nonpositive`.
 ///
 /// SS-2h (register §1.289): every judged candidate is judged first; the pools' lines then decide
-/// ([`capped::plan`], with the Runtime's `memory` of the capped episodes under `catalog_hash`):
+/// ([`capped::plan`], with the Runtime's `memory` of the capped episodes):
 /// a consumer a capped round tries is kept with its own `B` whatever its sign, another consumer of
 /// a capped pool is held, and a candidate that would pass but leave a pool below its hard line is
 /// held. Without a valued pool nothing changes.
@@ -609,7 +609,7 @@ pub(super) fn gate(
     weights: &BTreeMap<usize, BTreeMap<String, u64>>,
     refreshing: bool,
     affected: &mut Vec<AffectedCandidate>,
-    (memory, catalog_hash): (&mut CappedMemory, &str),
+    memory: &mut CappedMemory,
 ) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
     // Phase 1: judge every judged candidate.
     let mut judged = Vec::with_capacity(ranked.len());
@@ -669,7 +669,7 @@ pub(super) fn gate(
                 _ => None,
             })
             .collect::<Vec<_>>();
-        capped::plan(context, facts, &ranked, &known, work, memory, catalog_hash)?
+        capped::plan(context, facts, &ranked, &known, work, memory)?
     };
     // Phase 3: decide.
     let mut kept = Vec::with_capacity(ranked.len());

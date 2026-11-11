@@ -1852,8 +1852,9 @@ yet) adds lines given for one instance ("Lines for one instance" below).
   none). Lines read that break `0 ≤ H < S ≤ cap` hold them with `lines_invalid` (`stop_line`,
   `hard_line`, `pool_capacity`). A pool without lines whose reading is unknown has no hard line to
   keep: nothing changes for it (as before; a regenerating one is `benefit_unknown` anyway).
-  SCHED-C1 (not built yet): an unknown value no longer ends a capped episode under way; the
-  episode waits ("Capped spending order", "Episodes survive").
+  SCHED-C1d (register §1.299, since 0.12.53): an unknown value no longer ends a capped episode
+  under way; the episode waits ("Capped spending order", "Episodes survive"). Lines read that break
+  their rules still end it, as SS-2h built.
 - **Who is held.** The lines constrain the scheduler only (Alice, 17:42): a judged candidate. A
   manual request, a chain successor that rides with its chain, an unmarked task and the Runtime's
   own reading are never held by them.
@@ -2000,10 +2001,10 @@ without a valuation is untouched.
   the cap again; each counts from 1 since the Runtime started (`capped_episode`).
   SCHED-C1c (register §1.299, since 0.12.53): the episode begins at `r ≥ T`, the pool's trigger
   line ("Pool lines"; the capacity without one, as before), and ends once `r ≤ S` and `r < T`; a
-  pool its lines cannot spend begins none ("Pool lines"). SCHED-C1 (not built yet): it no longer
-  ends on a catalog generation that leaves the pool's consumers unchanged, or on lines or a
-  reading that give no value, and it outlives a start, so its number counts on from the state
-  file's ("Episodes survive" below).
+  pool its lines cannot spend begins none ("Pool lines"). SCHED-C1d (register §1.299, since
+  0.12.53): it no longer ends on a catalog generation that leaves the pool's consumers unchanged,
+  or on a capacity, a reading or a line's fact that gives no value, and it outlives a start, so its
+  number counts on from the one the start kept ("Episodes survive" below).
 - **A round** lists the pool's judged consumers that are candidates of the evaluation now (every
   condition the policy holds passed: the trigger with its counts and preconditions, the feedback
   stop, the cooldown, the no-progress guard, the placement and the score stage) whose value
@@ -2073,43 +2074,66 @@ without a valuation is untouched.
   (`capped_not_dispatchable`, `gate_code` the code it was refused with), and a consumer that is
   no candidate of the evaluation (`capped_not_dispatchable`, `gate_code` its own last reason when
   registered: no run left, a precondition, a cooldown); it is listed again at the next round.
-- **Memory only.** The episodes, their round numbers, frozen orders and passed members are the
+- **The memory.** The episodes, their round numbers, frozen orders and passed members are the
   Runtime's (`CappedMemory`, passed to `evaluate_with_capped_spending`), as the no-progress
-  guard's are ("No-progress guard"): no ledger record, state file or decision identity holds
-  them. A start begins with none; a pool still at or above its cap then begins a new episode.
-  Every other entry point evaluates with an empty memory. (Today; SCHED-C1 keeps them, below.)
-- **Episodes survive** (SCHED-C1, register §1.299, not built yet; the coordinator's point 9, not
-  Alice's words). An episode, with its number, its round number, its frozen order and the members
-  it passed, outlives:
-  - *a start.* The Runtime keeps the memory in a state file of its own,
-    `<state root>/policy/capped-episodes.json` (schema `actingcommand.capped-episodes.v1`), in the
-    policy state directory beside the catalog store's `policy/catalogs/`, never in the ledger. It
-    replaces the file whole after each evaluated cycle that changed the memory (a new file in the
-    same directory, flushed, then renamed over the old one, as the catalog store publishes a
-    generation), and reads it once at start, before the first evaluation. The file names the owner
-    epoch that wrote it: a start whose previous epoch did not write it (a start that kept no file
-    ran in between, such as a rollback's older build) begins with no episode. A file that does not
-    read or is of another shape is reported, `capped_state_failed` (warning; `operation` `load`),
-    and the start begins with no episode, as today; a write that fails is reported the same way
-    (`operation` `store`), the memory stays, and the next change writes the file again. Neither
-    stops the Runtime or an instance. Which tasks a round ran is still read from the task
-    snapshots, which a start restores.
+  guard's are ("No-progress guard"): no decision identity holds them. Every other entry point
+  evaluates with an empty memory. Before SCHED-C1d a start began with none, and a pool still at or
+  above its cap then began a new episode; since it, a start keeps them (below).
+- **Episodes survive** (SCHED-C1d, register §1.299, since 0.12.53; the coordinator's point 9 and
+  its correction of 11-11, not Alice's words). An episode, with its number, its round number, its
+  frozen order and the members it passed, outlives:
+  - *a start.* Iron rule 13 (Alice: no separate on-disk file for program state; her rulings of
+    10-09 20:2x and 20:5x: tagged ledger records, loaded into memory at a start, replace state
+    files) keeps the memory as the tagged program fact `host.capped_episodes`
+    ([../runtime-fact-store.md](../runtime-fact-store.md)), as `host.idle_state` is kept; the first
+    text of SCHED-C1 named a state file of its own, which contradicted the rule, and the
+    coordinator corrected it on 11-11 (register §1.299, answer 2). The host records the fact
+    through the Runtime's fact store, so the ledger records it as every program fact, after each
+    evaluated cycle that changed an episode, and once by a start that found it, under its own
+    anchor; a Runtime that never has an episode records none. A start reads it before the first
+    evaluation and keeps it by the rule of `host.idle_state` (#405 N-2): only when the start that
+    recorded it, which the fact's writer row names by its start anchor, is the last start that
+    completed its settlement (the anchor `host.contained_settlement` named before this start). A
+    fact another start recorded (a start that kept none ran in between, such as a rollback's older
+    build) is stale; an owner that settled no start in between, such as an offline ledger
+    maintenance, leaves it current. What the start cannot keep is dropped and reported,
+    `capped_state_failed` (warning; `operation` `load_capped_episodes`, `fact_key`
+    `host.capped_episodes`): a value that does not read back as the fact's shape or breaks its
+    rules (the whole value), a stale one (the whole value), and an episode whose instance is not
+    registered or whose pool the active catalog does not give a declared valuation (that episode
+    alone, with `instance_id` and `pool_id`); that pool begins without an episode, as before. A
+    record the fact store refuses for this fact alone is reported the same way (`operation`
+    `store_capped_episodes`, the refusal as the `caused_by` link): the memory stays, and the next
+    change records the fact again. Neither stops the Runtime or an instance; a fatal fault of the
+    store or the ledger is fatal as for every fact. Which tasks a round ran is still read from the
+    task snapshots, which a start restores.
   - *a new catalog generation that leaves the pool's consumers unchanged*: the same pool id on the
     instance, and the same consumers, each by its accounting identity (its id, or one its
-    `continues_from` names), its `⌈C/1000⌉` and its `benefit_limited`. A changed value, valuation,
-    line or other task keeps the episode: the round's frozen order stays, and the next round orders
-    by the values then. Any other change of the consumers ends it, as every generation does today;
-    a pool whose id changes (a second instance of its server bound) is another pool.
+    `continues_from` names), its `⌈C/1000⌉` and its `benefit_limited` (the consumers key, which an
+    episode keeps in place of the catalog hash). A changed value, valuation, line or other task
+    keeps the episode: the round's frozen order stays, and the next round orders by the values
+    then; a consumer that now runs under another id that continues its kept one takes that id in
+    the order. Any other change of the consumers ends it, as every generation did before; a pool
+    whose id changes (a second instance of its server bound) is another pool.
   - *an evaluation where the reading, the capacity or a line's fact gives no value* (an expired
-    reading, a reset): the episode waits; while it waits its consumers are held with
+    reading, a reset): the episode waits; while it waits its judged candidates are held with
     `pool_line_held` `capped_cap_unknown`, whether or not the pool writes lines, and when the values
-    come back it goes on, or ends by its rule.
-  - *a change of the instance's lines* ("Pool lines", "Lines for one instance").
+    come back it goes on, or ends by its rule. Lines read that break their rules end it, as before.
+  - *a change of the instance's lines* ("Pool lines", "Lines for one instance"; SCHED-C1e, not
+    built yet).
 
   It is dropped when it ends by its rule (`r ≤ S` and `r < T`, or a round that lists or plans
   nothing though a consumer is a candidate), when a generation changes the pool's consumers, when
-  the instance or the pool leaves the catalog or the pool loses its declared valuation, and when
-  the file is not read at a start.
+  the instance or the pool leaves the catalog or the pool loses its declared valuation, and when a
+  start does not keep it.
+- **What a person sees.** A resumed episode's decisions carry its kept `capped_episode` and
+  `capped_round` (`capped_spend`, `pool_line_held`), and the next episode of its pair counts on
+  from its number; a waiting one's consumers carry `pool_line_held` `capped_cap_unknown`, which
+  every scheduling read shows as the not-run explanation (`ScheduleExplanation`: `actingctl
+  schedule`, `ac_schedule`, `ac_overview`'s `not_running`, `ac_diagnose`'s `not_run`), as any
+  `pool_line_held`. The rows of `host.capped_episodes` are read with `actingctl facts --program`
+  and `ac_facts`; each `capped_state_failed` is a Warning `runtime.failed` in the ledger
+  (`actingctl events`, `ac_events`) and a `WARN actingd:` line.
 - **Old triggers on a capped pool** (SCHED-C1c, since 0.12.53, in the composer; the coordinator's
   point 12, after point 9 of the ten points of #428 comment 6735960127). A consumer whose trigger
   requires, through `all`, a reading of the pool of at least its capacity less a margin (a

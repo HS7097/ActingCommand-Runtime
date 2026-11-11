@@ -3440,3 +3440,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_rl1b::sched_c1b_b_a_generation_without_values_records_no_fact",
 ]
 incident = ["#428 SCHED-C1b"]
+
+# #428 SCHED-C1d (0.12.53; register §1.299 SC1-11; brief rd-1111/brief-sched-c1d.md with the coordinator's correction of 11-11 13:4x under iron rule 13): the capped spending order's episodes are the tagged program fact host.capped_episodes. A start keeps the episodes the last start that completed its settlement recorded (episode 2, round 1 of the capped pool on A, its consumer and its order), holds them as recorded, reports nothing and records the fact again under its own start anchor, and the next start keeps them again; a value it cannot keep (a row of no kind, an episode number 0, a writer that is not the last settled start, a pool the active catalog does not have, an instance that is not registered) is one Warning runtime.failed capped_state_failed (operation load_capped_episodes, fact_key host.capped_episodes, and instance_id and pool_id for one episode), the start completes with no host fault and no episode and records the fact again with no episode row; a record the fact store refuses (injected: a record list too large) is the same warning with operation store_capped_episodes and the refusal as its caused_by link, the start completes with the episode in memory and the fact keeps its earlier record; a Runtime that never has an episode (catalog-a, an evaluated cycle) records no such fact across a restart and reports nothing
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_sched_c1d::sched_c1d_h1_a_start_keeps_the_episodes_of_the_last_settled_start",
+    "actingcommand-runtime-host::lib::tests::gate_sched_c1d::sched_c1d_h2_a_value_the_start_cannot_keep_warns_and_the_start_goes_on",
+    "actingcommand-runtime-host::lib::tests::gate_sched_c1d::sched_c1d_h3_a_record_the_store_refuses_warns_and_the_runtime_goes_on",
+    "actingcommand-runtime-host::lib::tests::gate_sched_c1d::sched_c1d_h4_a_runtime_that_never_has_an_episode_records_no_fact",
+]
+incident = ["#428 SCHED-C1d"]
