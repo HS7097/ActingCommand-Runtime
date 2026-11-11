@@ -11248,6 +11248,112 @@ start (`config.` is re-observed). Composing, activating and deciding are unchang
 `config.catalog_provenance` is a fact record of an existing shape, which an earlier build reads as
 any other and does not load at its start; its overview shows no such member.
 
+### 1.300 Slice INST-5, first slice (0.12.52): the Lab's rescue module adds an emulator instance, committed as a configuration replacement (Workflow #421; the desktop program's "add account / device" button is disabled with the words "wait for the Runtime's support; edit the configuration file by hand for now", and adding an instance today means editing two places of the file and restarting; the read-only survey of 11-11 found that a first version fits today's interface revisions; the coordinator's ruling of 11-11, not Alice's words, that the new instance starts paused; coordinator work order `rd-1111/brief-inst5.md`, read on main `c0edc8b2`)
+
+[install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh root" ("Instances,
+the first slice") and "The Lab's rescue module", [lab-two-entries.md](lab-two-entries.md) §5 and
+§7, and the row `instance add` of [lab-operations.json](lab-operations.json) are the contract. The
+number is 1.300 (on `c0edc8b2` §1.298 is VIS-LOAD-1, and open PR #1582, SCHED-C1, held 1.299);
+the section stands between §1.299 and §1.301 (ISO-START-1), where the release snapshot of
+0.12.52 moved it, text unchanged, from after §1.243, where the slice had put it to avoid a
+conflict. No persisted ledger shape, wire shape, configuration key or shape, code, location or
+vocabulary is new.
+
+**What it does.** `actinglab instance add <alias> --game <g> --server <s> --mumu-index <n>
+--touch-backend <b> --capture-backend <b>` (the rescue module, entry `lab` only; the UI starts it
+as a child with the initiator `Lab-救急`), every parameter required, none with a default. It reads
+the selected configuration, refuses before writing anything an alias either place has, an
+emulator index an entry binds, a game no game root of `standard_packs.root` binds by a
+`bundle.json` the contract crate reads, a server none of that bundle's packs names, and a
+configuration without a policy row to take the host and the capabilities from (each
+`instance_invalid`), and with no Runtime running `runtime_not_running`. It then composes the
+candidate: the entry `{alias, instance_id, instance_index, touch_backend, capture_backend}` and the
+row `{instance_id: <alias>, server_id, game_id, host_id, available: true,
+capability_operation_ids, preferred_task_ids: []}` together (both places, until INST-R), the
+`instance_id` minted and checked against the live file's ids and those the root's journals
+recorded as added. The candidate is written beside the live file
+(`actingd.config.json.new-<ms>.part`) and committed by `config replace`'s path, not a second one:
+check-config (its refusal relayed whole as `config_refused_by_target`'s cause), the hold of every
+unpaused instance (`lab-instance-<ms>`), the close, the swap (the candidate is the swap's part;
+the replaced file kept as `actingd.config.json.prev-<ms>`), the start and its checks, all one
+`config_replace` journal with the initiator and the input `instance_add`. After the start and
+before `alive` and the release, the new instance is paused with its own reason `instance.added`
+(the reason's form: [scheduling-pause.md](scheduling-pause.md), `pause_reason`); the release hands
+back only the hold's pauses, so the new instance stays paused until a person resumes it, and every
+pause that existed before, of any holder, is there after the restart unchanged.
+
+**Why it starts paused** (the coordinator's ruling of 11-11): a new account must not start running
+tasks the moment it is added, and an installation whose other instances are paused must not gain
+an unpaused one by this command. **The window that remains**: between the new Runtime's readiness
+and the pause (the post-start checks and one status read) the new instance is not paused; a
+stopped Runtime takes no pause of an alias it never registered, and only a start that knows the
+instance (INST-R's Runtime half) can start it held. If the instance cannot be paused (the started
+Runtime did not register it, or refused the pause) the command ends `post_check_failed` (`alias`,
+`count` 1) with the hold kept and `next.pause_added`, the core pause as actingctl runs it.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): `install-cli`
+takes the instance commands into revision 1 without a raise (its row), the configuration's shape
+does not change (the entry and the row are existing members), and the journal stays
+`actingcommand.install-operation.v1` with one more input of an existing kind (the LAB-3 ruling of
+2026-11-10: no `install-root` raise for single-location journals). The outcome catalog:
+`install_command_refused` takes the existing keys `server` and `instance_index`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| INST5-1 | the rescue row `instance add` (six parameters, `help`, irreversible, Runtime required, the requests of `config replace`) | operation table row opened | INST-5 | `crates/lab-rescue` (`rescue::SERVED`) | `since` 0.12.52; no `params_more`; `instance remove` stays reserved |
+| INST5-2 | the configuration candidate `actingd.config.json.new-<ms>.part` beside the live file | installer file (a kept part when refused) | INST-5 | `install::instance_add::stage` | consumed by the swap on success |
+| INST5-3 | the journal input `instance_add {alias, instance_id, game, server, instance_index, touch_backend, capture_backend, capabilities_from, pause_reason}` of a `config_replace` journal | installer journal member | INST-5 | `install::config_swap::open` | read back to keep minted ids unique |
+| INST5-4 | the pause of the added instance, reason `instance.added` | behaviour (a `PauseScheduling` on the CLI channel) | INST-5 | `rescue::pause_added` | the Runtime records it as every pause (`host.scheduling_pause`); no ledger record of the installer's own |
+| INST5-5 | `install_command_refused` values `server`, `instance_index` | outcome catalog addition (existing keys) | INST-5 | `install::instance_add` | `instance_invalid` only |
+
+**At deploy.** The rescue module offers `instance add` (`actinglab instance add …` and `serve
+--stdio`); nothing else changes, no configuration key, no interface. Production keeps adding instances by hand until the coordinator says otherwise (the
+rescue module's composites are not used on the production root before LAB-7, install-cli.md,
+"Journals across versions").
+
+**What an operator sees after deploy.** On a root whose Runtime runs: one line, `install_command_done`
+(`install_instance_add`, the operation id, `alias`, `game`), with the steps `check_config`, `swap`,
+`pause_added`, `alive` and `release`, the `backup` (the kept `actingd.config.json.prev-<ms>`) and
+`added` (the alias, the minted `instance_id`, game, server, index, backends, the row the
+capabilities came from); the configuration names the instance in `instances` and
+`policy.facts.instances`; the status shows it paused with `instance.added` and every other instance
+as before the command. A refusal changes nothing of the installation: the file, the journals and
+the Runtime stay as they were (a candidate check-config refused stays beside the live file and
+`leftovers` lists it). To let the new account run: resume it from the console, or `actingctl resume
+--state-root <s> --instance <alias>`.
+
+**Rollback.** Of the instance: `config restore <backup>` puts the kept file back by the same path
+and restarts under a hold; its post-start checks judge the configuration and the pauses from before
+the restore, so the instance it removes fails `bindings` and `pauses`: it ends `post_check_failed`
+with the previous configuration running and its hold kept, and `release-hold <its reason>` hands
+the hold back (the Runtime drops the pause of the alias no longer registered). Of the release (to
+0.12.51): nothing persisted changes shape; a configuration that gained an instance stays valid
+(both places are written), the instance's pause stays restored at every start, and an installer
+of 0.12.51 reads the `config_replace` journal as before (its `inputs` are free JSON).
+
+Tests (apps gate row "#421 INST-5"), on the fake host and Runtime of `fixture.rs`, which gains
+`registers_at_start` (the aliases the next start registers; none by default, no existing test
+changes): `gate_421_inst5::inst5_the_added_instance_is_registered_and_paused_after_the_restart`,
+`inst5_a_duplicate_alias_or_index_is_refused_and_nothing_changes`,
+`inst5_a_candidate_check_config_refuses_changes_nothing`,
+`inst5_the_prev_file_is_kept_and_equals_the_old_file`,
+`inst5_a_pause_from_before_stays_with_its_reason_and_revision` and
+`inst5_the_journal_carries_the_initiator_and_what_was_added`. No existing test changed.
+`config replace` and `config restore` run the same code as before through the shared commit
+(`rescue::commit`), with no `instance_add` input and the same steps, members and outcomes.
+
+**Fix round 1** (coordinator brief `rd-1111/brief-inst5-fix1.md`; main `d70edfb9` merged in). The
+outcome guard's G3 refuses a `json!` key named `code`, `reason`, `category`, `operation`, `stage`
+or `boundary`, or ending `_code`, `_reason`, `_operation` or `_stage`; the result of the step
+`pause_added` (`reason`, six places) and `added` (`pause_reason`) were such keys. Both are now
+serde records whose reason is the name type `SchedulingPauseReason`, as the hold's records keep a
+reason (`install::hold`: `PauseRecord`, `HoldReport`, `ReleaseEvidence`): `rescue::PauseAddedResult`
+and `install::instance_add::AddedRecord`, made JSON by `install::hold::record_value` (now
+`pub(crate)`); `Added` carries the reason it records. Every member keeps its name, place and value
+(the step's `alias`, `reason`, `set`, `runtime`, `registered`, `already_paused`, `drained`;
+`added.pause_reason` and the journal input's), so no reader, test or text changes, and the guard's
+allow list is not touched.
+
 ### 1.301 Slice ISO-START-1 (0.12.52): one pair's refused settlement fact no longer stops the start (#419; Alice's requirement on board #419 of 10-24: one emulator's fault must not bring down the whole Runtime; the debt the coordinator logged on 11-11, #421 6774483473 and #428 6770731970: isolate only that pair; the coordinator's ruling on the three cases, not Alice's words: coordinator work order `rd-1111/brief-iso-start-1.md`)
 
 [runtime-fact-store.md](runtime-fact-store.md) ("Settlement facts" and "Typed codes") and the
@@ -11546,110 +11652,6 @@ an overview near the budget starts cutting a little earlier, in the order it alr
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | R0B2-1 | `instances[].activity?` | `actingctl overview` / `ac_overview` answer | R-0b2 | R-0b2 | `since` 0.12.36; from the one Status read; never cut |
-
-### 1.300 Slice INST-5, first slice (0.12.52): the Lab's rescue module adds an emulator instance, committed as a configuration replacement (Workflow #421; the desktop program's "add account / device" button is disabled with the words "wait for the Runtime's support; edit the configuration file by hand for now", and adding an instance today means editing two places of the file and restarting; the read-only survey of 11-11 found that a first version fits today's interface revisions; the coordinator's ruling of 11-11, not Alice's words, that the new instance starts paused; coordinator work order `rd-1111/brief-inst5.md`, read on main `c0edc8b2`)
-
-[install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh root" ("Instances,
-the first slice") and "The Lab's rescue module", [lab-two-entries.md](lab-two-entries.md) §5 and
-§7, and the row `instance add` of [lab-operations.json](lab-operations.json) are the contract. The
-number is 1.300 and the section stands here, after §1.243, because open PR #1582 (SCHED-C1)
-holds 1.299 at the end of section 1; on `c0edc8b2` §1.298 is VIS-LOAD-1. No persisted ledger
-shape, wire shape, configuration key or shape, code, location or vocabulary is new.
-
-**What it does.** `actinglab instance add <alias> --game <g> --server <s> --mumu-index <n>
---touch-backend <b> --capture-backend <b>` (the rescue module, entry `lab` only; the UI starts it
-as a child with the initiator `Lab-救急`), every parameter required, none with a default. It reads
-the selected configuration, refuses before writing anything an alias either place has, an
-emulator index an entry binds, a game no game root of `standard_packs.root` binds by a
-`bundle.json` the contract crate reads, a server none of that bundle's packs names, and a
-configuration without a policy row to take the host and the capabilities from (each
-`instance_invalid`), and with no Runtime running `runtime_not_running`. It then composes the
-candidate: the entry `{alias, instance_id, instance_index, touch_backend, capture_backend}` and the
-row `{instance_id: <alias>, server_id, game_id, host_id, available: true,
-capability_operation_ids, preferred_task_ids: []}` together (both places, until INST-R), the
-`instance_id` minted and checked against the live file's ids and those the root's journals
-recorded as added. The candidate is written beside the live file
-(`actingd.config.json.new-<ms>.part`) and committed by `config replace`'s path, not a second one:
-check-config (its refusal relayed whole as `config_refused_by_target`'s cause), the hold of every
-unpaused instance (`lab-instance-<ms>`), the close, the swap (the candidate is the swap's part;
-the replaced file kept as `actingd.config.json.prev-<ms>`), the start and its checks, all one
-`config_replace` journal with the initiator and the input `instance_add`. After the start and
-before `alive` and the release, the new instance is paused with its own reason `instance.added`
-(the reason's form: [scheduling-pause.md](scheduling-pause.md), `pause_reason`); the release hands
-back only the hold's pauses, so the new instance stays paused until a person resumes it, and every
-pause that existed before, of any holder, is there after the restart unchanged.
-
-**Why it starts paused** (the coordinator's ruling of 11-11): a new account must not start running
-tasks the moment it is added, and an installation whose other instances are paused must not gain
-an unpaused one by this command. **The window that remains**: between the new Runtime's readiness
-and the pause (the post-start checks and one status read) the new instance is not paused; a
-stopped Runtime takes no pause of an alias it never registered, and only a start that knows the
-instance (INST-R's Runtime half) can start it held. If the instance cannot be paused (the started
-Runtime did not register it, or refused the pause) the command ends `post_check_failed` (`alias`,
-`count` 1) with the hold kept and `next.pause_added`, the core pause as actingctl runs it.
-
-**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): `install-cli`
-takes the instance commands into revision 1 without a raise (its row), the configuration's shape
-does not change (the entry and the row are existing members), and the journal stays
-`actingcommand.install-operation.v1` with one more input of an existing kind (the LAB-3 ruling of
-2026-11-10: no `install-root` raise for single-location journals). The outcome catalog:
-`install_command_refused` takes the existing keys `server` and `instance_index`.
-
-| # | Shape | Kind | Code slice | First writer | Notes |
-|---|---|---|---|---|---|
-| INST5-1 | the rescue row `instance add` (six parameters, `help`, irreversible, Runtime required, the requests of `config replace`) | operation table row opened | INST-5 | `crates/lab-rescue` (`rescue::SERVED`) | `since` 0.12.52; no `params_more`; `instance remove` stays reserved |
-| INST5-2 | the configuration candidate `actingd.config.json.new-<ms>.part` beside the live file | installer file (a kept part when refused) | INST-5 | `install::instance_add::stage` | consumed by the swap on success |
-| INST5-3 | the journal input `instance_add {alias, instance_id, game, server, instance_index, touch_backend, capture_backend, capabilities_from, pause_reason}` of a `config_replace` journal | installer journal member | INST-5 | `install::config_swap::open` | read back to keep minted ids unique |
-| INST5-4 | the pause of the added instance, reason `instance.added` | behaviour (a `PauseScheduling` on the CLI channel) | INST-5 | `rescue::pause_added` | the Runtime records it as every pause (`host.scheduling_pause`); no ledger record of the installer's own |
-| INST5-5 | `install_command_refused` values `server`, `instance_index` | outcome catalog addition (existing keys) | INST-5 | `install::instance_add` | `instance_invalid` only |
-
-**At deploy.** The rescue module offers `instance add` (`actinglab instance add …` and `serve
---stdio`); nothing else changes, no configuration key, no interface. Production keeps adding instances by hand until the coordinator says otherwise (the
-rescue module's composites are not used on the production root before LAB-7, install-cli.md,
-"Journals across versions").
-
-**What an operator sees after deploy.** On a root whose Runtime runs: one line, `install_command_done`
-(`install_instance_add`, the operation id, `alias`, `game`), with the steps `check_config`, `swap`,
-`pause_added`, `alive` and `release`, the `backup` (the kept `actingd.config.json.prev-<ms>`) and
-`added` (the alias, the minted `instance_id`, game, server, index, backends, the row the
-capabilities came from); the configuration names the instance in `instances` and
-`policy.facts.instances`; the status shows it paused with `instance.added` and every other instance
-as before the command. A refusal changes nothing of the installation: the file, the journals and
-the Runtime stay as they were (a candidate check-config refused stays beside the live file and
-`leftovers` lists it). To let the new account run: resume it from the console, or `actingctl resume
---state-root <s> --instance <alias>`.
-
-**Rollback.** Of the instance: `config restore <backup>` puts the kept file back by the same path
-and restarts under a hold; its post-start checks judge the configuration and the pauses from before
-the restore, so the instance it removes fails `bindings` and `pauses`: it ends `post_check_failed`
-with the previous configuration running and its hold kept, and `release-hold <its reason>` hands
-the hold back (the Runtime drops the pause of the alias no longer registered). Of the release (to
-0.12.51): nothing persisted changes shape; a configuration that gained an instance stays valid
-(both places are written), the instance's pause stays restored at every start, and an installer
-of 0.12.51 reads the `config_replace` journal as before (its `inputs` are free JSON).
-
-Tests (apps gate row "#421 INST-5"), on the fake host and Runtime of `fixture.rs`, which gains
-`registers_at_start` (the aliases the next start registers; none by default, no existing test
-changes): `gate_421_inst5::inst5_the_added_instance_is_registered_and_paused_after_the_restart`,
-`inst5_a_duplicate_alias_or_index_is_refused_and_nothing_changes`,
-`inst5_a_candidate_check_config_refuses_changes_nothing`,
-`inst5_the_prev_file_is_kept_and_equals_the_old_file`,
-`inst5_a_pause_from_before_stays_with_its_reason_and_revision` and
-`inst5_the_journal_carries_the_initiator_and_what_was_added`. No existing test changed.
-`config replace` and `config restore` run the same code as before through the shared commit
-(`rescue::commit`), with no `instance_add` input and the same steps, members and outcomes.
-
-**Fix round 1** (coordinator brief `rd-1111/brief-inst5-fix1.md`; main `d70edfb9` merged in). The
-outcome guard's G3 refuses a `json!` key named `code`, `reason`, `category`, `operation`, `stage`
-or `boundary`, or ending `_code`, `_reason`, `_operation` or `_stage`; the result of the step
-`pause_added` (`reason`, six places) and `added` (`pause_reason`) were such keys. Both are now
-serde records whose reason is the name type `SchedulingPauseReason`, as the hold's records keep a
-reason (`install::hold`: `PauseRecord`, `HoldReport`, `ReleaseEvidence`): `rescue::PauseAddedResult`
-and `install::instance_add::AddedRecord`, made JSON by `install::hold::record_value` (now
-`pub(crate)`); `Added` carries the reason it records. Every member keeps its name, place and value
-(the step's `alias`, `reason`, `set`, `runtime`, `registered`, `already_paused`, `drained`;
-`added.pause_reason` and the journal input's), so no reader, test or text changes, and the guard's
-allow list is not touched.
 
 ### 5.1 Capacity of `config.parameters`
 
