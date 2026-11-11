@@ -13660,6 +13660,66 @@ nothing. A console of `runtime-client` 6 cannot read event pages that hold a sto
 
 **Rollback of this slice.** Nothing to roll back: text only.
 
+### 1.315 Slice R-6b1 (code): the `stopped` result of a scheduled run, its check and its readers (Workflow #429 R-6b, §1.314; the coordinator's split into R-6b1 and R-6b2 and its answers to the eight questions; coordinator work order `rd-1111/brief-r6b1-form-readers.md`; built on the contract head `92390b85`, stacked on its pull request)
+
+**What it builds.** The form of §1.314 and every reader of it, and nothing that writes it:
+`StopInstanceRun` still refuses a policy run exactly as in 0.12.53, so no record of the kind exists
+until R-6b2. A ledger with no stopped record reads, replays, projects and decides byte for byte as
+before: every new branch is taken only on a `stopped` record, and the one rule that is not a match
+arm (the journal keeps, and the value record names, a pair's latest settled run while its latest
+run is a stopped one) is empty without one. No record type, table, index, SQLite format,
+`actingcommand.event.v3`, configuration key, outcome code or vocabulary changes.
+
+| Row | This slice (R-6b1) | Left to R-6b2 |
+|---|---|---|
+| R6B-1 | nothing | `StopInstanceRun` of a policy run, a fact refresh read included; `stop_target`, `stop_refused_origin` |
+| R6B-2 | nothing | the reset of a stopped policy run with its lease, a failed reset's fence |
+| R6B-3 | built: `PolicyExecutionOutcome::Stopped {outcome, runtime_ms}` (`crates/actingcommand-contract/src/event/payload.rs`), serialized `{"kind": "stopped", "outcome", "runtime_ms"}`; its check in `validate_policy_execution_data` asks only that `outcome` is a code (its type); the kind's members are closed, so a record without `outcome` or naming a member of a failure does not decode; its stored severity is its outcome's category (`PayloadDetail::outcome`); the public projection's `policy_execution_outcome` carries it codes only (`codes_only`) | nothing |
+| R6B-4 | nothing (no input a run produces: `PolicyExecutionInput` has no `Stopped`) | the live settlement, `PolicyExecutionInput::Stopped`, the scheduled cancel branch's settlement |
+| R6B-5 | built where a record is committed to the memory, `PolicyControlState::commit_paced_execution`: a stopped record is rebuilt from its own members by `preview_stopped_settlement` (`policy_execution_record_mismatch` otherwise) and then sets no streak, escalation, backoff, retry or pause (a sensitive task included) and no `failure_settled` order, is never a condition and owes no rerun, takes no count back, counts its runtime in the task's and the activity's windows as a success's, is never rewritten as `policy_runtime_budget_exceeded`, removes the pair's owed rerun and ends the round of its accounting group as at `policy_retry_round_ended` (`withdraw_immediate_retry`); the remedy journal settles it as a failed run (`remedy_settlement`: a retry closes its round, a provider's request is used). The replay at a start passes the same place | calling the same place live |
+| R6B-6 | built: the task snapshot shows `terminal_state` `cancelled` with its `completed_window` (`snapshot_terminal`); `fold_settlements_by` takes a stopped run as no settlement (the key's latest success or failure settles it); `failures_through` keeps the previous run's count for a stopped run, so a later run counts on from the pair's previous success or failure; `latest_settlement_for_decision` answers none for a stopped run, so its settlement records no settlement fact; the outcome projection (`recover_authoritative_policy_outcomes`, the admission's outcome check in `policy_dispatch.rs`) projects no outcome for a stopped run, as for a failed one; the dispatch journal (`prune_journal`) keeps, and the value record (`journal_records_of`) names, the pair's latest settled run behind a stopped latest one (`settled_behind_a_stop`), so the snapshot's `last_duration_ms` and `failure_streak` survive a restart from the value records | nothing |
+| R6B-7 | the ledger half: `crates/ledger/src/global/storage.rs`, the recovery of a scheduled settlement, accepts `stopped` from a `task.failed` terminal whose outcome is `contained_task_cancelled`, with the terminal's code and `runtime_ms` measured as a failure's, never as a rewrite, and from no other terminal | the runtime-host half: the start's and the abandoned run's reconciliation that write it |
+| R6B-8 | built: the frame retention's `settlement_matches` matches a stopped record with its `task.failed` terminal only; `actingd suspended` (`suspension_report.rs`) leaves a stopped execution out of its pairs, as a late settlement, so no stopped run is listed as a failure or a pause; `ac_diagnose` and `actingctl diagnose` (lab-ops `diagnose.rs`) list none (no code change: `failures_grouped` takes a paused failure only); the client's run summary (`runtime-client`, `run_summary_terminal`, `validate_task_terminal`) reads it beside its `task.failed` terminal (`simulated_failed`, `failed`, the record in `outcome.policy`); the routine summary needs nothing (R-12's `RunEnd::of_terminal` counts the terminal under `interruptions`) | nothing |
+| R6B-9 | nothing: every text that says a policy run is refused stays, the refusal being true | the `help` of `task stop`, the comments, the catalog's descriptions |
+| R6B-10 | nothing: `component-interfaces.json`, the architecture test of the revisions and the "Planned" rows are untouched | the declarations |
+
+**A reader the contract does not name.** The maintenance evidence of a planning query
+(`crates/runtime-host/src/planning.rs`, `collect_maintenance_evidence`) takes no duration sample
+from a stopped run, whose time a person cut short, as the run-duration samples take none.
+
+**Settled by this slice** (each in the contract's sense, reported to the coordinator): the form is
+rebuilt from its own members, not from an input, so `PolicyExecutionInput` stays two kinds until
+R-6b2; a stopped run ends the round of its accounting group whatever dispatch it was (a normal
+dispatch's round included), since the failure state it keeps would otherwise offer the pair at once
+again; the journal and the value record keep the pair's latest settled run behind a stopped latest
+one (the only change of what a value record names, and only with a stopped record).
+
+**For R-6b2.** `execution_input_matches` (`policy_host.rs`), `policy_recovery_outcome_matches`
+(`policy_outcome.rs`) and `recorded_failure_input` (`failure_settlement.rs`) have no stopped arm
+yet (a catch-all refuses, or reads a failure); the live settlement and the replayed one call
+`latest_settlement` and refuse `policy_settlement_missing` when it answers none, which a pair whose
+only run was stopped does; a stopped record whose dispatch is not completed at a start reaches
+`reconcile_scheduled_policy_settlement` with the record already in the ledger.
+
+**Declarations.** None here. Another slice of the same train, S168-LB1a, raises `ledger` to [3, 8]
+and `runtime-client` to [3, 7]; this slice merges only after it and joins those revisions, which
+cover the new kind (§1.314, "Interfaces").
+
+**Tests** (gate rows `#429 R-6b1` in `contracts/test-gates/contract.toml`, `ledger.toml`,
+`host.toml` and `apps.toml`): the form, its check, its severity and its projection, and the two
+existing kinds serializing as before; the ledger's recovery rule and the retention's match; the
+replay of a stopped record (a stopped immediate rerun, a sensitive task's, a stopped owed rerun,
+condition codes naming the stop's code); the projections, the journal behind 70 stops and the
+remedy settlement; `actingd suspended`, the diagnose and the run summary. Six existing test
+helpers that enumerate the kinds of the result name the third, which reads as no failure there
+(`gate_373_nav5`, `gate_373_nav6`, `gate_386_sr2b1`, `gate_390_exec3`, two in
+`instance_workers`); no golden or schema lists the kinds.
+
+**What an operator sees after deploy.** Nothing: no record of the kind exists until R-6b2.
+
+**Rollback.** A revert of the code. Nothing is written, so no state root, ledger record or
+configuration changes; the revisions are S168-LB1a's (and §1.314's rollback rule applies to them).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

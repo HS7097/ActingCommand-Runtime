@@ -1284,7 +1284,8 @@ fn b43_recorded_failure(
                 EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
                     match payload.policy_result() {
                         PolicyExecutionOutcome::Failed { failure } => Some(failure.clone()),
-                        PolicyExecutionOutcome::Succeeded { .. } => None,
+                        PolicyExecutionOutcome::Succeeded { .. }
+                        | PolicyExecutionOutcome::Stopped { .. } => None,
                     }
                 }
                 _ => None,

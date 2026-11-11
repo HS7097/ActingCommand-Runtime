@@ -2698,7 +2698,8 @@ fn recorded_failure_code(events: &[PersistedEvent], run_id: &RunId) -> Option<St
                         .clone()
                         .unwrap_or_else(|| failure.outcome.code().as_str().to_owned()),
                 ),
-                PolicyExecutionOutcome::Succeeded { .. } => None,
+                PolicyExecutionOutcome::Succeeded { .. }
+                | PolicyExecutionOutcome::Stopped { .. } => None,
             }
         }
         _ => panic!("execution payload"),
@@ -2756,7 +2757,8 @@ fn assert_retry_backoff_passed(events: &[PersistedEvent], run_id: &RunId) {
         {
             match payload.policy_result() {
                 PolicyExecutionOutcome::Failed { failure } => failure.retry_at_unix_ms,
-                PolicyExecutionOutcome::Succeeded { .. } => None,
+                PolicyExecutionOutcome::Succeeded { .. }
+                | PolicyExecutionOutcome::Stopped { .. } => None,
             }
         }
         _ => None,

@@ -3499,3 +3499,20 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_sched_c1e::sched_c1e_h1_an_instruction_sets_an_instances_lines_and_a_restart_keeps_them",
 ]
 incident = ["#428 SCHED-C1e"]
+
+# Workflow #429 R-6b1 (0.12.55; register §1.314 R6B-5, R6B-6 and R6B-8, questions 3, 4 and 7, §1.315; brief rd-1111/brief-r6b1-form-readers.md; contracts/policy-suspension.md, "A stopped run"): the readers of a stopped run's record, built with the contract's own types (nothing writes it yet). The decision memory, where the replay at a start commits every execution record: a stopped immediate rerun of a pair that failed once keeps the real failure's state (streak 1, its backoff, no pause), takes no count back, counts its 1,000 ms runtime, ends the round so the pair is no longer rerun at once, and a fresh state replaying the same records rebuilds the same memory, the next failure counting 2; a sensitive task's stopped run pauses nothing; a stopped owed rerun is owed no more; with scheduling.rerun.condition_codes naming contained_task_cancelled a stopped record is no condition, owes nothing, gives no count back and is not re-judged over its runtime budget. The projections: a stopped run shows cancelled in its pair's snapshot while last_duration_ms, failure_streak and the four settlement facts stay those of the run before (none when it was the pair's only run), a later failure counts on from that run, and the journal keeps that run behind 70 stops while the value record names it. The remedy journal settles a stopped run as a failed one (a retry's round closes, a request is used). actingd suspended lists neither a pair whose only run was stopped nor a stopped run after a pause, which stays listed by its paused run
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::policy_control::tests::r6b1_m1_the_replay_of_a_stopped_record_sets_no_failure_state_and_ends_the_round",
+    "actingcommand-runtime-host::lib::policy_control::tests::r6b1_m2_a_sensitive_tasks_stopped_run_is_not_paused",
+    "actingcommand-runtime-host::lib::policy_control::tests::r6b1_m3_a_stopped_owed_rerun_is_owed_no_more",
+    "actingcommand-runtime-host::lib::policy_control::tests::r6b1_m4_condition_codes_naming_the_stop_do_not_make_a_stopped_record_a_condition",
+    "actingcommand-runtime-host::lib::tests::gate_429_r6b1::r6b1_p1_a_stopped_run_shows_cancelled_and_keeps_the_settlement_of_the_run_before",
+    "actingcommand-runtime-host::lib::tests::gate_429_r6b1::r6b1_p2_a_pair_whose_only_run_was_stopped_has_no_settlement",
+    "actingcommand-runtime-host::lib::tests::gate_429_r6b1::r6b1_p3_the_journal_keeps_the_settled_run_behind_many_stops",
+    "actingcommand-runtime-host::lib::tests::gate_429_r6b1::r6b1_p4_a_stopped_remedy_run_ends_its_round_as_a_failed_run_does",
+    "actingcommand-runtime-host::lib::tests::gate_429_r6b1::r6b1_p5_actingd_suspended_lists_no_stopped_run_as_a_failure_or_a_pause",
+    "actingcommand-runtime-client::lib::client::run_summary_stopped_tests::r6b1_s1_the_run_summary_reads_a_stopped_record_beside_its_failed_terminal",
+]
+incident = ["#429 R-6b1"]

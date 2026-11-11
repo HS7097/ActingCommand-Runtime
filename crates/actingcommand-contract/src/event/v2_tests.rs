@@ -4221,3 +4221,7 @@ mod sh2;
 // Workflow #336 PKG-S2: the package facts and records without a package digest (register §2).
 #[path = "pkg_s2_tests.rs"]
 mod pkg_s2;
+// Workflow #429 R-6b1: the `stopped` result of a scheduled run, its check and its projection
+// (register §1.314 R6B-3, §1.315).
+#[path = "gate_429_r6b1.rs"]
+mod gate_429_r6b1;

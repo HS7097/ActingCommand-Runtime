@@ -902,6 +902,12 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
             )? {
                 continue;
             }
+            // Workflow #429 R-6b (register §1.314 R6B-8): a stopped run is neither a failure nor
+            // a pause of its pair; the report lists the pair as its latest success or failure
+            // leaves it, as the decision memory does.
+            if matches!(execution.outcome, PolicyExecutionOutcome::Stopped { .. }) {
+                continue;
+            }
             pairs
                 .entry((
                     payload.task_id().to_owned(),
@@ -1094,7 +1100,8 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
         let Some((previous, previous_failure)) =
             previous.and_then(|previous| match &previous.outcome {
                 PolicyExecutionOutcome::Failed { failure } => Some((previous, failure)),
-                PolicyExecutionOutcome::Succeeded { .. } => None,
+                PolicyExecutionOutcome::Succeeded { .. }
+                | PolicyExecutionOutcome::Stopped { .. } => None,
             })
         else {
             continue;
@@ -1411,7 +1418,9 @@ fn execution_disposition(outcome: &PolicyExecutionOutcome) -> Value {
         PolicyExecutionOutcome::Failed {
             failure: PolicyFailureRecord { disposition, .. },
         } => wire(disposition),
-        PolicyExecutionOutcome::Succeeded { .. } => Value::Null,
+        PolicyExecutionOutcome::Succeeded { .. } | PolicyExecutionOutcome::Stopped { .. } => {
+            Value::Null
+        }
     }
 }
 

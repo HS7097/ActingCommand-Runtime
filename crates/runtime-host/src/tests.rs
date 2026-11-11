@@ -346,6 +346,9 @@ mod gate_429_r12;
 mod gate_429_r6;
 // Workflow #429 R-8: a task package switched on or off for one instance.
 mod gate_429_r8;
+// Workflow #429 R-6b1: the readers of a stopped run's record (its projections, the remedy
+// journal and `actingd suspended`).
+mod gate_429_r6b1;
 // Workflow #429 R-7a: the player hold's two kinds answer `not_implemented` on every channel.
 mod gate_429_r7a;
 // Workflow #429 R-7a2: every dispatch site takes its code from the one order of the control gates.

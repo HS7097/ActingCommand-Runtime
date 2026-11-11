@@ -6267,14 +6267,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             "completed_sequence": completed_event.sequence
         }));
     }
-    let (task_event_type, status, result) = match execution.policy_result() {
-        PolicyExecutionOutcome::Succeeded { .. } => {
-            (EventType::TaskCompleted, "simulated_completed", None)
-        }
-        PolicyExecutionOutcome::Failed { .. } => {
-            (EventType::TaskFailed, "simulated_failed", Some("failed"))
-        }
-    };
+    let (task_event_type, status, result) = run_summary_terminal(execution.policy_result());
     let task_event = exactly_one_run_event(events, task_event_type)?;
     if task_event.links.lease_id() != Some(&lease_id) {
         return Err(RuntimeClientError::fatal(
@@ -6375,6 +6368,23 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
     Ok(summary)
 }
 
+/// The terminal a fixture run's summary reads beside its execution record, with the summary's
+/// `status` and `result`. Workflow #429 R-6b (register §1.314 R6B-8, question 6): a stopped
+/// run's terminal is the `task.failed` every scheduled cancel writes, so its summary reads that
+/// terminal as a failed run's does; its `outcome.policy` shows the `stopped` record.
+fn run_summary_terminal(
+    execution: &PolicyExecutionOutcome,
+) -> (EventType, &'static str, Option<&'static str>) {
+    match execution {
+        PolicyExecutionOutcome::Succeeded { .. } => {
+            (EventType::TaskCompleted, "simulated_completed", None)
+        }
+        PolicyExecutionOutcome::Failed { .. } | PolicyExecutionOutcome::Stopped { .. } => {
+            (EventType::TaskFailed, "simulated_failed", Some("failed"))
+        }
+    }
+}
+
 fn validate_task_terminal(
     task_event: &ProjectedEvent,
     execution: &PolicyExecutionOutcome,
@@ -6409,6 +6419,18 @@ fn validate_task_terminal(
                     .map(actingcommand_contract::scheduled_failure_code_str)
                     .is_some_and(|code| {
                         code == actingcommand_contract::scheduled_failure_code_str(&failure.outcome)
+                    })
+        }
+        // Workflow #429 R-6b: a stopped run's record names its `task.failed` terminal's code.
+        PolicyExecutionOutcome::Stopped {
+            outcome: stopped, ..
+        } => {
+            *task_result == actingcommand_contract::TaskOutcome::Failure
+                && outcome
+                    .as_ref()
+                    .map(actingcommand_contract::scheduled_failure_code_str)
+                    .is_some_and(|code| {
+                        code == actingcommand_contract::scheduled_failure_code_str(stopped)
                     })
         }
     };
@@ -7422,5 +7444,111 @@ mod run_summary_settlement_tests {
         assert!(!is_policy_settlement_interrupted(
             &PolicyExecutionOutcome::Failed { failure }
         ));
+    }
+}
+
+// Workflow #429 R-6b1 (register §1.314 R6B-8, §1.315): the client's run summary of a fixture run
+// reads a stopped run's record beside its `task.failed` terminal, as a failed run's: the terminal
+// it looks for, and the terminal's code against the record's. Nothing writes the kind yet, so the
+// records are built with the contract's own types.
+#[cfg(test)]
+mod run_summary_stopped_tests {
+    use super::{run_summary_terminal, validate_task_terminal};
+    use crate::codes::ClientCode;
+    use actingcommand_contract::outcome::Outcome;
+    use actingcommand_contract::{
+        AuditInput, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity,
+        EventSource, EventType, IdentifierIssuer, OriginModule, PolicyExecutionOutcome,
+        ProjectedEvent, ProjectionPayload, RuntimeErrorCode, SanitizationError, SecretField,
+        SecretFingerprinter, Sha256Fingerprint, TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
+    };
+
+    struct NoSecrets;
+
+    impl SecretFingerprinter for NoSecrets {
+        fn fingerprint(
+            &self,
+            _field: SecretField,
+            _original: &str,
+        ) -> Result<Sha256Fingerprint, SanitizationError> {
+            panic!("the summary fixture holds no secret")
+        }
+    }
+
+    /// A run's terminal of `task_result` with `outcome`, as a full read projects it.
+    fn terminal(task_result: TaskOutcome, outcome: Option<Outcome>) -> ProjectedEvent {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let sanitized = EventDraft::new(
+            issuer.mint_event_id().expect("event id"),
+            7,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            EventLinksDraft::default(),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    task_result,
+                    final_page: None,
+                    executed_steps: Some(1),
+                    outcome,
+                    failure_severe: false,
+                    scheduling_disposition: None,
+                    task_timing: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        )
+        .sanitize(&NoSecrets)
+        .expect("a terminal fixture");
+        ProjectedEvent {
+            views: Vec::new(),
+            artifact_evictions: Vec::new(),
+            schema_version: sanitized.schema_version().to_owned(),
+            sequence: 7,
+            event_id: *sanitized.event_id(),
+            timestamp_unix_ms: sanitized.timestamp_unix_ms(),
+            event_type: sanitized.event_type(),
+            severity: sanitized.severity(),
+            sensitivity: sanitized.sensitivity(),
+            origin: sanitized.origin().clone(),
+            links: sanitized.links().clone(),
+            payload_schema: sanitized.payload_schema().to_owned(),
+            payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
+            artifacts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn r6b1_s1_the_run_summary_reads_a_stopped_record_beside_its_failed_terminal() {
+        let cancelled = Outcome::new(RuntimeErrorCode::ContainedTaskCancelled);
+        let stopped = PolicyExecutionOutcome::Stopped {
+            outcome: cancelled.clone(),
+            runtime_ms: 1_000,
+        };
+        assert_eq!(
+            run_summary_terminal(&stopped),
+            (EventType::TaskFailed, "simulated_failed", Some("failed")),
+            "the summary looks for the run's task.failed terminal"
+        );
+        let failed = terminal(TaskOutcome::Failure, Some(cancelled));
+        assert_eq!(failed.event_type, EventType::TaskFailed);
+        validate_task_terminal(&failed, &stopped)
+            .expect("the stopped record reads beside its task.failed terminal");
+
+        for other in [
+            terminal(TaskOutcome::Success, None),
+            terminal(
+                TaskOutcome::Failure,
+                Some(Outcome::new(RuntimeErrorCode::CaptureFailed)),
+            ),
+        ] {
+            let error = validate_task_terminal(&other, &stopped)
+                .expect_err("another terminal does not match a stopped record");
+            assert_eq!(error.code(), ClientCode::RunSummaryPolicyMismatch.code());
+        }
     }
 }
