@@ -11192,7 +11192,8 @@ build activate a generation without them, as §1.289's rollback says for SS-2h's
 #### Slice SCHED-C1b (0.12.52): the workbench records where a catalog's values come from
 
 Coordinator work order `rd-1111/brief-sched-c1b.md`; on the SCHED-C1a branch
-`claude/428-sched-c1a-fixed-value` at `a6ca4160` (Runtime PR #1585). The contract is
+`claude/428-sched-c1a-fixed-value` at `a6ca4160` (Runtime PR #1585), with main `4e1d9608` merged
+in once that PR had merged. The contract is
 [standard-pack-schedule.md](standard-pack-schedule.md) ("Provenance", "The scheduler workbench"),
 row SC1-7 above, and CW-1's `config.catalog_warnings` (§1.290), whose shape, limits and place the
 fact follows. The text names no game, resource or value: the tests' ids are neutral.
