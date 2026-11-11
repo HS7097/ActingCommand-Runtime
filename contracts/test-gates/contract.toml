@@ -847,3 +847,13 @@ tests = [
     "actingcommand-contract::lib::fact::gate_428_s168_lb1a::lb1a_the_instance_fact_read_names_its_new_members_only_when_used",
 ]
 incident = ["#428 S168-LB1a"]
+
+# Workflow #429 R-6b1 (0.12.55; register §1.314 R6B-3, §1.315; brief rd-1111/brief-r6b1-form-readers.md; contracts/policy-suspension.md, "A stopped run"): policy.execution_recorded's third result kind stopped {outcome, runtime_ms}, built with the contract's own types (nothing writes it yet). A stopped record whose outcome is a code validates, its stored severity is its outcome's category, it reads back unchanged and its result holds kind, outcome and runtime_ms only; without outcome, or naming any member of a failure, it does not decode; the public projection carries its outcome codes only (a duration value left out, the code and category kept); a success and a failure serialize as before ({"kind":"succeeded","runtime_ms":...} and {"kind":"failed","failure":...}) and decode as themselves
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::tests::gate_429_r6b1::r6b1_c1_a_stopped_record_validates_and_reads_back_and_a_malformed_one_is_refused",
+    "actingcommand-contract::lib::event::tests::gate_429_r6b1::r6b1_c2_the_public_projection_carries_a_stopped_outcome_codes_only",
+    "actingcommand-contract::lib::event::tests::gate_429_r6b1::r6b1_c3_the_two_existing_kinds_serialize_as_before",
+]
+incident = ["#429 R-6b1"]

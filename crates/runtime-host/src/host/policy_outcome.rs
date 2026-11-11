@@ -3305,7 +3305,12 @@ pub(super) fn recover_authoritative_policy_outcomes(
     let mut outcomes = BTreeMap::new();
     for run in completed {
         let key = (run.catalog_task_id.clone(), run.instance_alias.clone());
-        if matches!(run.execution_outcome, PolicyExecutionOutcome::Failed { .. }) {
+        // Workflow #429 R-6b (register §1.314 R6B-6): a stopped run projects no outcome record,
+        // as a failed run projects none; its terminal is a `task.failed`.
+        if matches!(
+            run.execution_outcome,
+            PolicyExecutionOutcome::Failed { .. } | PolicyExecutionOutcome::Stopped { .. }
+        ) {
             outcomes.remove(&key);
             continue;
         }

@@ -3322,13 +3322,28 @@ impl<'de> Deserialize<'de> for PolicyFailureRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PolicyExecutionOutcome {
-    Succeeded { runtime_ms: u64 },
-    Failed { failure: PolicyFailureRecord },
+    Succeeded {
+        runtime_ms: u64,
+    },
+    Failed {
+        failure: PolicyFailureRecord,
+    },
+    /// Workflow #429 R-6b (register §1.314 R6B-3; `contracts/policy-suspension.md`, "A stopped
+    /// run"): a scheduled run a `StopInstanceRun` stopped, neither a success nor a failure of its
+    /// task. `outcome` is its terminal outcome's top node, `runtime_ms` the run's wall time. It
+    /// carries no failure identity, class, streak, retry, disposition, sensitivity, performance
+    /// context or `condition`; the kind's members are closed, so a record that names one of
+    /// them, or lacks `outcome`, does not decode.
+    Stopped {
+        outcome: Outcome,
+        runtime_ms: u64,
+    },
 }
 
 impl PolicyExecutionOutcome {
     /// This result as the public projection carries it (Workflow #378 A2-P, register E9): a
-    /// failure's outcome is codes only, as the record's own projected `outcome` is.
+    /// failure's outcome is codes only, as the record's own projected `outcome` is, and so is a
+    /// stopped run's (Workflow #429 R-6b).
     fn codes_only(&self) -> Self {
         match self {
             Self::Succeeded { runtime_ms } => Self::Succeeded {
@@ -3339,6 +3354,13 @@ impl PolicyExecutionOutcome {
                     outcome: failure.outcome.codes_only(),
                     ..failure.clone()
                 },
+            },
+            Self::Stopped {
+                outcome,
+                runtime_ms,
+            } => Self::Stopped {
+                outcome: outcome.codes_only(),
+                runtime_ms: *runtime_ms,
             },
         }
     }
@@ -6863,10 +6885,13 @@ impl PayloadDetail for PolicyExecutionPayload {
     }
 
     /// A failed execution carries its failure (Workflow #378 A2-P), so the record's severity
-    /// is the failure's category; a success carries none (its event type's category).
+    /// is the failure's category; a success carries none (its event type's category). A
+    /// stopped run carries its terminal's outcome, so its severity is that outcome's category,
+    /// as for every result-bearing record (Workflow #429 R-6b).
     fn outcome(&self) -> Option<&Outcome> {
         match &self.policy_result {
             PolicyExecutionOutcome::Failed { failure } => Some(&failure.outcome),
+            PolicyExecutionOutcome::Stopped { outcome, .. } => Some(outcome),
             PolicyExecutionOutcome::Succeeded { .. } => None,
         }
     }
@@ -8073,6 +8098,8 @@ fn validate_policy_execution_data(
             ));
         }
     }
+    // Workflow #429 R-6b (register §1.314 R6B-3): a stopped run's record asks only that its
+    // `outcome` is a code, which its type is; its kind has no member of a failure to check.
     Ok(())
 }
 

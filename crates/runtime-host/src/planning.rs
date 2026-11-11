@@ -171,6 +171,10 @@ pub(crate) fn collect_maintenance_evidence(
                     actingcommand_contract::PolicyExecutionOutcome::Failed { failure } => {
                         failure.runtime_ms
                     }
+                    // Workflow #429 R-6b (register §1.314): a stopped run's time is cut short by
+                    // a person, no duration of its task: it adds no sample, as it adds no
+                    // run-duration sample.
+                    actingcommand_contract::PolicyExecutionOutcome::Stopped { .. } => continue,
                 };
                 durations.push(DurationEvidence {
                     ledger_sequence: event.sequence(),

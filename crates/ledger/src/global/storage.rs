@@ -23,7 +23,7 @@ use actingcommand_contract::{
     EventSource, EventType, IdentifierIssuer, IssuedActionId, LeasePayload, LedgerPayload,
     LedgerPayloadDraft, LedgerSource, OriginModule, OwnerEpoch, PolicyDispatchEventData,
     PolicyDispatchPayload, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass,
-    PolicyFailureDisposition, PolicyPayload, PolicyPayloadDraft, RecoveryReason,
+    PolicyFailureDisposition, PolicyPayload, PolicyPayloadDraft, RecoveryReason, RuntimeErrorCode,
     SanitizedEventDraft, ScheduledPolicyRecoveryContinuation, Sensitivity, TaskOutcome,
     TaskPayload, TaskSemanticFact, record_severity, scheduled_failure_class,
     scheduled_failure_code_str,
@@ -1678,6 +1678,20 @@ impl<B: DurableStorage> EventStore<B> {
                             ContractLocation::RecoverPolicyExecution.location(),
                         )
                     })?;
+                // Workflow #429 R-6b (register §1.314 R6B-7; `policy-suspension.md`, "A stopped
+                // run"): on a scheduled run only a `StopInstanceRun` asks the cancel whose
+                // terminal carries `contained_task_cancelled`, so that terminal also settles the
+                // run as `stopped`: the terminal's code, `runtime_ms` measured as a failure's, and
+                // never a runtime-budget rewrite. No other terminal settles a run `stopped`.
+                let stopped_valid = failure_outcome.is(RuntimeErrorCode::ContainedTaskCancelled)
+                    && matches!(
+                        execution.policy_result(),
+                        PolicyExecutionOutcome::Stopped {
+                            outcome,
+                            runtime_ms: actual,
+                        } if scheduled_failure_code_str(outcome) == failure_code
+                            && *actual == runtime_ms
+                    );
                 if terminal != source_fact
                     || !same_task_run_chain(source_fact.links(), recovered_links)
                     || !terminal_lease_end_valid(source_fact, true)
@@ -1691,7 +1705,8 @@ impl<B: DurableStorage> EventStore<B> {
                                 && failure.original_class == class
                                 && !failure.reported_success
                                 && failure.runtime_ms == runtime_ms
-                    ) || runtime_rewrite_valid(false, runtime_ms))
+                    ) || runtime_rewrite_valid(false, runtime_ms)
+                        || stopped_valid)
                 {
                     return Err(GlobalLedgerError::settlement_refusal(
                         LedgerCode::ScheduledExecutionRecoveryFailureConflict.code(),

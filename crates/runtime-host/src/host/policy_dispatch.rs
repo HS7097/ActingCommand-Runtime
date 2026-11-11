@@ -1736,9 +1736,10 @@ impl HostShared {
             let Some(expected_keys) = outcome_keys.keys.get(task_id) else {
                 continue;
             };
+            // Workflow #429 R-6b: a stopped run projects no outcome, as a failed one projects none.
             if matches!(
                 expected_run.execution_outcome,
-                PolicyExecutionOutcome::Failed { .. }
+                PolicyExecutionOutcome::Failed { .. } | PolicyExecutionOutcome::Stopped { .. }
             ) {
                 if authoritative_outcomes.contains_key(key) {
                     return Err(RuntimeHostError::fatal(
