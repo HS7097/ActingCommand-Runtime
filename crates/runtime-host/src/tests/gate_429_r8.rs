@@ -20,7 +20,8 @@
 //   change and layer below, and the scopes' versions; an unknown package's row is not listed and
 //   is reported once per cycle;
 // - "close this task": a closing row, then `StopInstanceRun` stops a client's direct run of the
-//   package and refuses a scheduler's run, whose package the next cycle does not select.
+//   package and (since R-6b2) asks a scheduler's run to stop, whose package the next cycle does
+//   not select.
 // Every alias, package and id is neutral.
 
 use super::gate_369s5::direct_run_package;
@@ -1311,9 +1312,9 @@ fn stopped(receipt: &RuntimeReceipt) -> InstanceRunStop {
 
 // The workbench's "close this task" is two steps: a closing row of the task's package on the
 // instance, then `StopInstanceRun` of its run. A client's direct run of the package is stopped
-// (`contained_task_cancelled`, the Runtime's reset done); a run the scheduler started is refused
-// `scheduled_contained_task_not_client_cancellable` with `run_origin` `policy` and nothing is
-// cancelled, while the closed row keeps the package from the next cycle's selection.
+// (`contained_task_cancelled`, the Runtime's reset done); since R-6b2 (adapted, its policy half
+// only) a run the scheduler started is asked to stop too, while the closed row keeps the package
+// from the next cycle's selection.
 #[test]
 fn r8_closing_a_task_then_stopping_its_run() {
     let root = TempDir::new().expect("tempdir");
@@ -1381,29 +1382,30 @@ fn r8_closing_a_task_then_stopping_its_run() {
         }
     );
 
-    // A run the scheduler started: refused with its origin, nothing asked of it.
+    // A run the scheduler started (Workflow #429 R-6b2, register §1.316): asked to stop too, the
+    // stop recorded and answering at once while the run is still registered.
     let policy_run = *ids.mint_request_id().expect("request id").transport();
     fixture
         .host
-        .begin_unstoppable_run_for_test(policy_run, fixture.instance, false)
+        .begin_uncancellable_run_for_test(policy_run, fixture.instance, false)
         .expect("a scheduler's run");
-    let refused = stop(address, ALIAS, policy_run, 1_000);
-    assert_eq!(refused.state(), RuntimeReceiptState::Denied, "{refused:?}");
+    let asked = stop(address, ALIAS, policy_run, 0);
     assert_eq!(
-        refused.outcome().code().as_str(),
-        "scheduled_contained_task_not_client_cancellable"
+        stopped(&asked),
+        InstanceRunStop {
+            request_id: policy_run,
+            settled: false,
+            reset: None,
+        }
     );
-    assert_eq!(
-        refused.outcome().value("run_origin"),
-        Some(&json!("policy"))
-    );
+    assert!(asked.terminal().is_some(), "the stop is recorded");
     assert_eq!(
         fixture
             .host
-            .end_unstoppable_run_for_test(policy_run)
+            .end_uncancellable_run_for_test(policy_run)
             .expect("the run registry"),
-        Some(false),
-        "nothing asked the scheduler's run to stop"
+        Some(true),
+        "the stop asked the scheduler's run to stop"
     );
 
     // The closed row keeps the package from the next cycle's selection.

@@ -3,16 +3,17 @@
 // Workflow #429 R-6, first slice (register §1.302; contracts/runtime-interface.md, "Workbench
 // request kinds", the row `StopInstanceRun`; coordinator work order rd-1111/brief-r6.md, option C):
 // a client's direct run is stopped and the Runtime resets the device itself, with the run's own
-// lease; a host run and a policy run are refused with their origin. Through the host, on a fake
-// clock and a fake device:
+// lease; a host run is refused with its origin (a policy run too until R-6b2, which stops it:
+// `gate_429_r6b2`). Through the host, on a fake clock and a fake device:
 // - a stopped direct run ends `contained_task_cancelled` (ClientRequested); the Runtime commits one
 //   `InputReset` on the run's lease before that lease's release; a later stop answers settled with
 //   `reset: done` and no cause; the routine summary counts an interruption and no failure; the
 //   instance is neither fenced nor busy afterwards, and the Runtime is not halted;
 // - the requesting client disconnects right after its stop is sent: the reset still happens;
-// - a host run and a policy run are Denied `scheduled_contained_task_not_client_cancellable` with
-//   their `run_origin` and request, recorded, and nothing asked them to stop; a run the instance
-//   neither runs nor stopped is Denied `contained_task_cancellation_identity_missing`;
+// - a host run is Denied `scheduled_contained_task_not_client_cancellable` with its `run_origin`
+//   and request, recorded, and nothing asked it to stop; since R-6b2 (register §1.316) a policy
+//   run is asked to stop instead; a run the instance neither runs nor stopped is Denied
+//   `contained_task_cancellation_identity_missing`;
 // - `wait_ms` elapses while the run is held at its checkpoint: `settled: false` and no `reset`,
 //   and the stop stays asked (the run ends cancelled);
 // - the reset fails: `reset: failed` with the fence as the receipt's cause, that instance fenced,
@@ -322,46 +323,66 @@ fn r6_the_reset_happens_after_the_requesting_client_disconnects() {
     host.close().expect("close host");
 }
 
+// Adapted by Workflow #429 R-6b2 (register §1.316), its policy half only: a policy run is no longer
+// refused; the stop asks it to stop (the stop is recorded, the run is asked, `settled: false`
+// while it is still registered). The host half is unchanged.
 #[test]
-fn r6_a_host_run_and_a_policy_run_are_refused_with_their_origin_and_nothing_is_cancelled() {
+fn r6_a_host_run_is_refused_with_its_origin_and_a_policy_run_is_asked_to_stop() {
     let root = TempDir::new().expect("tempdir");
     let a = instance_id();
     let host = start_host(&root, vec![(ALIAS, a, Arc::new(FakeState::default()))]);
     let address = host.runtime_info().socket_addr().expect("runtime address");
     let ids = IdentifierIssuer::new().expect("identifier issuer");
-    for (host_run, origin) in [(true, "host"), (false, "policy")] {
-        let run = *ids.mint_request_id().expect("request id").transport();
-        host.begin_unstoppable_run_for_test(run, a, host_run)
-            .expect("a run no client may stop");
-        let refused = stop(address, ALIAS, run, 1_000);
-        assert_eq!(refused.state(), RuntimeReceiptState::Denied, "{refused:?}");
-        assert_eq!(
-            refused.outcome().code().as_str(),
-            "scheduled_contained_task_not_client_cancellable",
-            "{origin}"
-        );
-        assert_eq!(
-            refused.outcome().value("run_origin"),
-            Some(&json!(origin)),
-            "{refused:?}"
-        );
-        assert_eq!(
-            refused.outcome().value("request_id"),
-            Some(&serde_json::to_value(run).expect("the run's id")),
-            "{refused:?}"
-        );
-        assert!(refused.result().is_none(), "{origin}");
-        assert!(
-            refused.terminal().is_some(),
-            "{origin}: the refusal is recorded"
-        );
-        assert_eq!(
-            host.end_unstoppable_run_for_test(run)
-                .expect("the run's registry"),
-            Some(false),
-            "{origin}: nothing asked the run to stop"
-        );
-    }
+
+    // A host run: refused with its origin, nothing asked of it.
+    let run = *ids.mint_request_id().expect("request id").transport();
+    host.begin_uncancellable_run_for_test(run, a, true)
+        .expect("a host run");
+    let refused = stop(address, ALIAS, run, 1_000);
+    assert_eq!(refused.state(), RuntimeReceiptState::Denied, "{refused:?}");
+    assert_eq!(
+        refused.outcome().code().as_str(),
+        "scheduled_contained_task_not_client_cancellable"
+    );
+    assert_eq!(
+        refused.outcome().value("run_origin"),
+        Some(&json!("host")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.outcome().value("request_id"),
+        Some(&serde_json::to_value(run).expect("the run's id")),
+        "{refused:?}"
+    );
+    assert!(refused.result().is_none());
+    assert!(refused.terminal().is_some(), "the refusal is recorded");
+    assert_eq!(
+        host.end_uncancellable_run_for_test(run)
+            .expect("the run's registry"),
+        Some(false),
+        "nothing asked the host run to stop"
+    );
+
+    // A policy run: asked to stop, still registered when the stop answers at once.
+    let run = *ids.mint_request_id().expect("request id").transport();
+    host.begin_uncancellable_run_for_test(run, a, false)
+        .expect("a policy run");
+    let asked = stop(address, ALIAS, run, 0);
+    assert_eq!(
+        stopped(&asked),
+        InstanceRunStop {
+            request_id: run,
+            settled: false,
+            reset: None,
+        }
+    );
+    assert!(asked.terminal().is_some(), "the stop is recorded");
+    assert_eq!(
+        host.end_uncancellable_run_for_test(run)
+            .expect("the run's registry"),
+        Some(true),
+        "the stop asked the policy run to stop"
+    );
 
     let unknown = *ids.mint_request_id().expect("request id").transport();
     let refused = stop(address, ALIAS, unknown, 0);

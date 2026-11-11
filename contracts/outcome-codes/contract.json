@@ -16549,7 +16549,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners use with one meaning (contract-owned, A2a D3): a scheduled contained task cannot be cancelled by a client. Workflow #429 R-6: StopInstanceRun refuses a run the scheduler or the Runtime itself started with it, naming run_origin (policy or host) and the run's request_id; nothing is cancelled.",
+      "description": "A code several owners use with one meaning (contract-owned, A2a D3): a scheduled contained task cannot be cancelled by a client. A client's own CancelContainedTask refuses every scheduled run with it. Workflow #429 R-6: StopInstanceRun refuses with it a run the Runtime itself started, naming run_origin host and the run's request_id; nothing is cancelled. Since 0.12.55 (Workflow #429 R-6b2) StopInstanceRun stops a run the scheduler started instead of refusing it (0.12.53 refused it with run_origin policy).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -18053,7 +18053,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.53",
-      "description": "A completed receipt of a StopInstanceRun request: the stop, settled with how the Runtime's own reset went or still stopping after wait_ms; a failed reset's failure is this code's cause (caused_by). Workflow #378 A4: one success code per request kind (Workflow #429 R-0 adds the kind; R-6 first completes it).",
+      "description": "A completed receipt of a StopInstanceRun request: the stop of a client's direct run or, since 0.12.55 (Workflow #429 R-6b2), of a run the scheduler started, settled with how the Runtime's own reset went or still stopping after wait_ms; a failed reset's failure is this code's cause (caused_by). Workflow #378 A4: one success code per request kind (Workflow #429 R-0 adds the kind; R-6 first completes it).",
       "common_causes": "The request succeeded; the run was asked to stop, or had stopped.",
       "handling": "Read settled and reset; with reset failed, the cause names the fence of the instance, which a self-check lifts."
     },

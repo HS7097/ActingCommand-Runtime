@@ -48,15 +48,24 @@ pub enum PolicyExecutionInput {
         failure_identity: Option<String>,
         class: PolicyFailureClass,
     },
+    /// Workflow #429 R-6b2 (register §1.314 R6B-4, §1.316; `contracts/policy-suspension.md`, "A
+    /// stopped run"): a scheduled run a `StopInstanceRun` stopped, settled from its `task.failed`
+    /// terminal with `contained_task_cancelled`: `outcome` is that terminal outcome's top node.
+    /// Neither a success nor a failure of its task: it carries no failure identity and no class,
+    /// is never a condition and is never re-judged as over its runtime budget.
+    Stopped {
+        outcome: Outcome,
+    },
 }
 
 impl PolicyExecutionInput {
     /// Whether `failure` records this input's failure: the same failure code
     /// ([`scheduled_failure_code_str`]), the same failure identity and the same class. The
-    /// outcomes' other values are not compared, as a failure streak does not compare them.
+    /// outcomes' other values are not compared, as a failure streak does not compare them. A
+    /// success and a stop name no failure.
     pub(crate) fn names_failure(&self, failure: &PolicyFailureRecord) -> bool {
         match self {
-            Self::Succeeded => false,
+            Self::Succeeded | Self::Stopped { .. } => false,
             Self::Failed {
                 outcome,
                 failure_identity,
@@ -1197,6 +1206,18 @@ impl PolicyControlState {
         perf_context: &PerformanceContext,
         condition: Option<PolicyConditionSettlement>,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        // Workflow #429 R-6b2 (register §1.314 R6B-4): a stopped run's record is built where its
+        // replay rebuilds it ([`Self::preview_stopped_settlement`]): never a condition, never
+        // re-judged as over its runtime budget, whatever its budget time.
+        if let PolicyExecutionInput::Stopped { outcome } = input {
+            if condition.is_some() {
+                return Err(fatal(
+                    HostCode::PolicyExecutionRecordMismatch,
+                    HostLocation::ClassifyPolicyOutcome,
+                ));
+            }
+            return self.preview_stopped_settlement(catalog, intent, timing, outcome);
+        }
         let PolicyExecutionTiming {
             observed_at_unix_ms,
             runtime_ms,
@@ -1241,6 +1262,13 @@ impl PolicyControlState {
         };
         let outcome = match effective_input {
             PolicyExecutionInput::Succeeded => PolicyExecutionOutcome::Succeeded { runtime_ms },
+            // Built above, before any rewrite: a stopped input does not reach here.
+            PolicyExecutionInput::Stopped { .. } => {
+                return Err(fatal(
+                    HostCode::PolicyExecutionRecordMismatch,
+                    HostLocation::ClassifyPolicyOutcome,
+                ));
+            }
             // SCHED §4.2 items 1 and 2: a run a condition ended adds to no failure streak and
             // escalates nothing. Its record keeps the pair's previous counters (0 when there are
             // none) and continues.
@@ -1398,7 +1426,9 @@ impl PolicyControlState {
     /// when that one expires at the same window end, else 1. `expires_at_unix_ms` is the end of
     /// the activity window the run was admitted in (the pair's bookkeeping window). A count
     /// above `max_per_occurrence` is [`ConditionDecision::Exhausted`]. The decision is written
-    /// into the run's record; a replay settles by the record and never calls this.
+    /// into the run's record; a replay settles by the record and never calls this. Workflow #429
+    /// R-6b2 (register §1.314 (i)): a stopped run is never judged here, whatever `rule` lists (its
+    /// stop's `contained_task_cancelled` included): it is [`ConditionDecision::Ordinary`].
     pub(crate) fn decide_condition(
         &self,
         catalog: &CompiledCatalog,
@@ -1407,6 +1437,7 @@ impl PolicyControlState {
         input: &PolicyExecutionInput,
         rule: &ConditionRule,
     ) -> RuntimeHostResult<ConditionDecision> {
+        // A success, a severe failure and a stop are never a condition.
         let PolicyExecutionInput::Failed {
             outcome,
             class: PolicyFailureClass::Recoverable,
@@ -4340,6 +4371,223 @@ mod tests {
                 .budget
                 .map(|denial| denial.dimension),
             Some(PolicyBudgetDimension::TaskDaily)
+        );
+    }
+
+    // ---- Workflow #429 R-6b2 (register §1.314 R6B-4, questions 3 and 4, §1.316): the live
+    // input of a stopped run, `PolicyExecutionInput::Stopped`, which the policy lane passes for a
+    // scheduled run whose terminal carries the stop's code.
+
+    /// The live input of a stopped run.
+    fn stopped_input() -> PolicyExecutionInput {
+        PolicyExecutionInput::Stopped {
+            outcome: stop_outcome(),
+        }
+    }
+
+    /// Admits `intent` at `now` (an immediate rerun when `immediate`), builds its run's record
+    /// after `runtime_ms` from the live input of a stop, checks that it is the record its replay
+    /// rebuilds, and commits both.
+    fn stop_live_at(
+        state: &mut PolicyControlState,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        now: u64,
+        runtime_ms: u64,
+        immediate: bool,
+    ) -> (PolicyAdmissionRecord, PolicyExecutionEventData) {
+        let admission = state
+            .preview_admission(catalog, intent, now)
+            .expect("admission");
+        state
+            .commit_admission(catalog, intent, &admission, immediate)
+            .expect("commit the admission");
+        let timing = PolicyExecutionTiming {
+            observed_at_unix_ms: now + runtime_ms,
+            runtime_ms,
+        };
+        let live = state
+            .preview_execution(
+                catalog,
+                intent,
+                &admission,
+                timing,
+                &stopped_input(),
+                &unavailable(now + runtime_ms),
+            )
+            .expect("the live record of a stop");
+        assert_eq!(
+            live,
+            state
+                .preview_stopped_settlement(catalog, intent, timing, &stop_outcome())
+                .expect("the record its replay rebuilds"),
+            "the live record is the one its replay rebuilds"
+        );
+        state
+            .commit_execution(catalog, intent, &admission, &live)
+            .expect("commit the stopped record");
+        (admission, live)
+    }
+
+    // Question 3, live: the Runtime's own reruns the stopped dispatch served end with it. A pair
+    // failed once with an identity R22 reruns at once; its immediate rerun is stopped: the round
+    // ends and the pair is no longer rerun at once. A remedy retry that dispatch served is closed
+    // by the record the live settlement wrote, as a failed run's closes it. A run a condition
+    // ended owes its pair a rerun; the owed rerun is stopped: it is owed no more.
+    #[test]
+    fn r6b2_m5_a_live_stop_ends_the_reruns_its_dispatch_served() {
+        let catalog = catalog();
+        let mut state = PolicyControlState::default();
+        let first = intent(&catalog, 1);
+        let (first_admission, failed) = settle(
+            &mut state,
+            &catalog,
+            &first,
+            NOW,
+            100,
+            &identified_failure(),
+            None,
+        );
+        let PolicyExecutionOutcome::Failed { failure } = &failed.outcome else {
+            panic!("expected a failure")
+        };
+        let retry_at = failure.retry_at_unix_ms.expect("a retry");
+        let rerun_at = retry_at.max(first_admission.activity.next_eligible_unix_ms);
+        let pair = (first.task_id.clone(), first.instance_id.clone());
+        assert!(
+            state
+                .immediate_retry_pairs(&catalog, rerun_at)
+                .expect("the rerun pairs")
+                .contains(&pair),
+            "before the stop the pair is rerun at once"
+        );
+        let (rerun_admission, stopped) = stop_live_at(
+            &mut state,
+            &catalog,
+            &intent(&catalog, 2),
+            rerun_at,
+            1_000,
+            true,
+        );
+        assert!(
+            state
+                .immediate_retry_pairs(&catalog, rerun_admission.activity.next_eligible_unix_ms)
+                .expect("the rerun pairs")
+                .is_empty(),
+            "the round the stopped rerun served has ended"
+        );
+        assert_eq!(pair_record(&state).retry_round, None);
+        assert_eq!(
+            crate::policy_host::remedy_settlement(Some(&stopped.outcome), || {
+                panic!("a stopped run names no key")
+            }),
+            actingcommand_policy::RemedySettlement::Failed,
+            "a remedy retry the stopped dispatch served closes its round"
+        );
+
+        let mut state = PolicyControlState::default();
+        let condition = PolicyConditionSettlement {
+            refunded: false,
+            count: 1,
+            expires_at_unix_ms: window_end(&catalog, NOW),
+        };
+        let (first_admission, _) = settle(
+            &mut state,
+            &catalog,
+            &first,
+            NOW,
+            100,
+            &sampling_ended(),
+            Some(condition),
+        );
+        assert!(
+            state.condition_reruns().contains_key(&pair),
+            "the condition owes a rerun"
+        );
+        stop_live_at(
+            &mut state,
+            &catalog,
+            &intent(&catalog, 2),
+            first_admission.activity.next_eligible_unix_ms,
+            1_000,
+            false,
+        );
+        assert!(
+            state.condition_reruns().is_empty(),
+            "the stopped rerun is owed no more"
+        );
+    }
+
+    // Question (i) and 4, live: `scheduling.rerun.condition_codes` naming the stop's code decides
+    // nothing for the live input of a stop (`Ordinary`); the live record of a run far past its
+    // runtime budget, on its budget time too, is not rewritten; a condition passed with a stop is
+    // refused as a record that cannot be.
+    #[test]
+    fn r6b2_m6_the_live_input_of_a_stop_is_never_a_condition_nor_over_its_budget() {
+        let catalog = catalog();
+        let rule = ConditionRule {
+            condition_codes: BTreeSet::from([stop_outcome().code().as_str().to_owned()]),
+            max_per_occurrence: 1,
+            refund_counts: true,
+        };
+        let mut state = PolicyControlState::default();
+        let first = intent(&catalog, 1);
+        let admission = state
+            .preview_admission(&catalog, &first, NOW)
+            .expect("admission");
+        assert_eq!(
+            state
+                .decide_condition(&catalog, &first, &admission, &stopped_input(), &rule)
+                .expect("the decision"),
+            ConditionDecision::Ordinary
+        );
+        state
+            .commit_admission(&catalog, &first, &admission, false)
+            .expect("commit the admission");
+        // Far past the task's 300,000 ms runtime budget.
+        let runtime_ms = 900_000;
+        let timing = PolicyExecutionTiming {
+            observed_at_unix_ms: NOW + runtime_ms,
+            runtime_ms,
+        };
+        let live = state
+            .preview_paced_settlement(
+                &catalog,
+                &first,
+                &admission,
+                timing,
+                Some(runtime_ms),
+                &stopped_input(),
+                &unavailable(NOW + runtime_ms),
+                None,
+            )
+            .expect("the live record");
+        assert_eq!(
+            live.outcome,
+            PolicyExecutionOutcome::Stopped {
+                outcome: stop_outcome(),
+                runtime_ms,
+            },
+            "never rewritten as over its runtime budget"
+        );
+        let error = state
+            .preview_settlement(
+                &catalog,
+                &first,
+                &admission,
+                timing,
+                &stopped_input(),
+                &unavailable(NOW + runtime_ms),
+                Some(PolicyConditionSettlement {
+                    refunded: true,
+                    count: 1,
+                    expires_at_unix_ms: window_end(&catalog, NOW),
+                }),
+            )
+            .expect_err("a stop is never a condition");
+        assert_eq!(
+            error.code(),
+            HostCode::PolicyExecutionRecordMismatch.as_str()
         );
     }
 }

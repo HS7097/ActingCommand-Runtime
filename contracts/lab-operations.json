@@ -1028,7 +1028,7 @@
         {"name": "request", "form": "positional", "type": "request_id", "required": true},
         {"name": "wait", "form": "option", "type": "duration", "required": false, "note": "wait for the end up to this long; absent: answer at once"}
       ],
-      "help": "Stops one manual run of an instance and the Runtime lifts its touches with the run's own lease; a scheduled run or one the Runtime started is refused.",
+      "help": "Stops one manual or scheduled run of an instance and resets its touches. It ends this run only; its task runs again after its cooldown unless closed or paused.",
       "output": "the stop (InstanceRunStopped)",
       "writes": true,
       "irreversible": false,
@@ -1039,7 +1039,7 @@
       "new": "#429 R-6 (StopInstanceRun)",
       "slice": "R-6",
       "status": "planned",
-      "notes": "#429 R-6 first slice: a client's direct run only; a policy run and a host run are refused with run_origin (policy until #429 R-6b, not built yet, register 1.314, with ledger 8; the help line changes with it); requests add Status, the read that resolves <inst>"
+      "notes": "#429 R-6 first slice (0.12.53): a client's direct run; #429 R-6b (since 0.12.55, register 1.314 and 1.316, with ledger 8): a policy run too, a fact refresh read included, settled as a stop, neither a success nor a failure of its task; only a run the Runtime started for itself is refused, with run_origin host. A stop ends this run only: a task whose trigger still holds is dispatched again once its cooldown has passed, at the next evaluation when the stopped run outlasted it; a closing row (pack-schedule set) or a pause keeps it from running. Requests add Status, the read that resolves <inst>"
     },
     {
       "name": "pack-schedule",
