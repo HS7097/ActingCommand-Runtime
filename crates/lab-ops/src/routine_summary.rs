@@ -21,6 +21,7 @@
 use crate::budget::{self, Budget, Fitted};
 use crate::cli_line;
 use crate::codes::ArgumentProblem;
+use crate::front::Connection;
 use crate::instance_selector::{self, SelectorMiss};
 use actingcommand_contract::codes::ReceiptCode;
 use actingcommand_contract::outcome::{Detail, Outcome};
@@ -121,10 +122,19 @@ pub enum Ended {
 
 /// The `routine-summary` command, when it is the first word.
 pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit> {
+    dispatch_on(arguments, detail, Connection::per_call())
+}
+
+/// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
+pub fn dispatch_on(
+    arguments: &[OsString],
+    detail: Detail,
+    connection: Connection<'_>,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
-    Some(match answer(arguments, detail) {
+    Some(match answer_on(arguments, detail, connection) {
         Ok(members) => {
             cli_line::success(members, &Outcome::new(ReceiptCode::RoutineSummaryCompleted))
         }
@@ -148,14 +158,22 @@ pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit
 /// The members the line prints beside its outcome for `arguments` (`routine-summary` and its
 /// flags): the page's, read on a connection with the CLI's (Cli, Cli) origin; or why it ended.
 pub fn answer(arguments: &[OsString], detail: Detail) -> Result<Map<String, Value>, Ended> {
+    answer_on(arguments, detail, Connection::per_call())
+}
+
+/// Workflow #434 LAB-5G1: [`answer`] on the caller's `connection`.
+fn answer_on(
+    arguments: &[OsString],
+    detail: Detail,
+    connection: Connection<'_>,
+) -> Result<Map<String, Value>, Ended> {
     let parsed = parse(arguments).map_err(Ended::Usage)?;
-    let config = crate::front::client_config(&parsed.state_root);
-    let config = match detail {
-        Detail::Codes => config.with_detail(Detail::Codes),
-        Detail::Full => config,
-    };
-    let client =
-        RuntimeClient::connect(config).map_err(|error| Ended::Failure(Failure::Runtime(error)))?;
+    let client = connection
+        .reach(&parsed.state_root, |config| match detail {
+            Detail::Codes => config.with_detail(Detail::Codes),
+            Detail::Full => config,
+        })
+        .map_err(|error| Ended::Failure(Failure::Runtime(error)))?;
     let page = read(
         &client,
         parsed.instance.as_deref(),

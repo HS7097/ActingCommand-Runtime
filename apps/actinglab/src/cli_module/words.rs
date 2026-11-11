@@ -38,11 +38,13 @@
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_lab_ops::cli_line;
 use actingcommand_lab_ops::codes::ArgumentProblem;
+// Workflow #434 LAB-5G1: moved with the core rows' serving code into `lab-ops`, which reads them
+// there; the words read them from it.
+pub(crate) use actingcommand_lab_ops::core_ops::{MORE_WORDS, further_flags, parse_duration};
 use actingcommand_lab_ops::table::{
     Operation, OperationModule, OperationStatus, OperationTable, Param, ParamForm, ParamType,
 };
 use serde_json::{Map, Value};
-use std::time::Duration;
 
 /// The slices whose operations this program serves: the core rows LAB-1 and LAB-1b moved into
 /// `lab-ops` and the rows of LAB-2. The rescue module's rows are those `crates/lab-rescue` serves
@@ -62,10 +64,6 @@ pub(crate) fn rescue_served(name: &str) -> bool {
         false
     }
 }
-
-/// The member that holds the further words of a row of [`LENIENT_ON_COMMAND_LINE`] on the command
-/// line.
-pub(crate) const MORE_WORDS: &str = "words";
 
 /// Workflow #434 LAB-5A: the rows whose command line hands every further flag and word on to
 /// their command, which ignores a flag it does not read, as before LAB-5A. A debt: a later slice
@@ -337,38 +335,6 @@ fn not_a_flag(value: &Value, member: &str) -> Result<(), Outcome> {
         return Err(usage(Some(member), ArgumentProblem::NotRecognised));
     }
     Ok(())
-}
-
-/// The members of `params` the row does not declare: on the command line, the global options, a
-/// lenient row's further flags and the undeclared flags of [`KEPT_FLAGS`] handed on (never
-/// [`MORE_WORDS`]), in the map's order.
-pub(crate) fn further_flags<'a>(
-    operation: &Operation,
-    params: &'a Map<String, Value>,
-) -> Vec<(&'a str, &'a Value)> {
-    params
-        .iter()
-        .filter(|(name, _)| {
-            name.as_str() != MORE_WORDS
-                && !operation.params.iter().any(|param| &param.name == *name)
-        })
-        .map(|(name, value)| (name.as_str(), value))
-        .collect()
-}
-
-/// A duration as the table writes it: a whole number with `ms`, `s`, `m` or `h`.
-pub(crate) fn parse_duration(text: &str) -> Option<Duration> {
-    let (number, unit) = text
-        .find(|character: char| !character.is_ascii_digit())
-        .map(|split| text.split_at(split))?;
-    let number = number.parse::<u64>().ok()?;
-    match unit {
-        "ms" => Some(Duration::from_millis(number)),
-        "s" => Some(Duration::from_secs(number)),
-        "m" => number.checked_mul(60).map(Duration::from_secs),
-        "h" => number.checked_mul(3600).map(Duration::from_secs),
-        _ => None,
-    }
 }
 
 /// A decimal number as written: finite, as Rust reads an `f64`.
