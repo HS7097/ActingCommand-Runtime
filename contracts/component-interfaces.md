@@ -380,6 +380,26 @@ wrote them.
   names). `install-selection`, `install-control`, `install-cli`, `install-root`, `player-hold`
   and `tools-layout`: untouched.
 
+### Planned: Workflow #429 R-6b ([v012-register.md](v012-register.md) §1.314)
+
+Planned rows, **not in force**: no build declares them. Main at `385bb500` declares `ledger`
+[3, 7] and `runtime-client` [3, 6]. R-6b's contract, which writes these rows, raises nothing. R-6b
+ships in the release of S168-LB1a (0.12.55) and shares its revisions.
+
+| Interface | Rev | Meaning | Anchor | Slice |
+|---|---|---|---|---|
+| `ledger` | 8 (shared) | revision 7 plus a third result kind of `policy.execution_recorded`, `stopped` `{outcome, runtime_ms}` (proposed spelling; [policy-suspension.md](policy-suspension.md), "A stopped run"): a scheduled run a `StopInstanceRun` stopped, neither a success nor a failure of its task; and the ledger's own recovery rule that settles a scheduled run whose `task.failed` terminal carries `contained_task_cancelled` as `stopped`. A reader of revision 7 refuses such a record (the result kind is closed and has no catch-all, `corrupt_ledger_record`) wherever it reads it. SQLite format 2, `actingcommand.event.v3`, the record types, the tables, the indexes and every view's type list are unchanged, so the Runtime still reads revisions 3 to 7 and declares [3, 8], with no fresh state root and no migration. One way by the Rp.max rule (R\*), as every row of revision 8 says: once the Runtime that declares it has run, going back below it is refused, whether or not a stop was recorded; and the Runtime combines only with a console whose `ledger` range holds 8. When S168-LB1a (or another slice of the release that takes 8: LAB-6, S168-5b) merged first, R-6b joins that revision and raises nothing; when R-6b merges first, it raises `ledger` to [3, 8] and they join it: one raise for the release | `crates/actingcommand-contract/src/event/payload.rs`, `PolicyExecutionOutcome` (planned `Stopped`) and `validate_policy_execution_data`; `crates/ledger/src/global/storage.rs`, the recovery of a scheduled settlement; `distribution/windows/component-interfaces.json` | R-6b |
+| `runtime-client` | 7 (shared) | revision 6 plus the same kind in the event reads: a query page carries a record's `policy_result` (codes only in the public projection's `policy_execution_outcome`, whole in a full read), so a client of revision 6 cannot decode a page that holds a stopped run's record (`runtime_receipt_decode_failed`), whichever read asked for it (`actingctl events`, `diagnose`, `ac_events`, the console's event reads). No request or answer of the workbench changes: `StopInstanceRun` and `InstanceRunStopped` keep their shapes. By itself R-6b leaves `min` at 3, so the Runtime declares [3, 7]; actingctl (MCP included) and actinglab of the same build speak 7 through the same contract crate, and the console of the release reads 7, as S168-LB1a's row asks. When S168-LB1a merged first, R-6b joins its 7; when R-6b merges first, it raises `runtime-client` to [3, 7] and S168-LB1a joins it | `crates/actingcommand-contract/src/event/payload.rs`, the public projection's `policy_execution_outcome`; `distribution/windows/component-interfaces.json` | R-6b |
+
+- **Not moved.** `package`: no member of a pack or a bundle changes. `actingd-config`: no key;
+  `scheduling.rerun.condition_codes` and `recovery_ladder.triggers` keep their shapes and values,
+  and a stop takes precedence over both ([policy-suspension.md](policy-suspension.md), "A stopped
+  run"). `runtime-outcomes`: stays 1 and gains no code; the descriptions of
+  `scheduled_contained_task_not_client_cancellable`, of the key `run_origin` and its vocabulary
+  (whose token `policy` stays registered, no longer produced by `StopInstanceRun`) and of
+  `request_stop_instance_run_completed` change within it. `install-selection`, `install-control`,
+  `install-cli`, `install-root`, `player-hold` and `tools-layout`: untouched.
+
 ## Bump rule
 
 - A revision rises when a peer that speaks the previous revision can no longer

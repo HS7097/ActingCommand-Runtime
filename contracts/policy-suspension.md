@@ -14,7 +14,9 @@ carries the run's failure as `outcome` and the failure identity as `failure_iden
 
 The last three sections ("Task package suspension", "Condition termination and owed reruns" and
 their configuration) are the scheduling rules of Workflow #386, specified ahead of their code;
-unlike the rest of this document, the condition termination adds one persisted member.
+unlike the rest of this document, the condition termination adds one persisted member. The
+section after them, "A stopped run" (Workflow #429 R-6b, not built yet), adds a third result kind
+of `policy.execution_recorded`, beside a success and a failure.
 
 ## Catalog
 
@@ -799,3 +801,84 @@ SR-3 the `pack_admission` keys. check-config lists each key with its effective v
 source in `config_manifest.parameters`. A key the key table marks settable can also be changed
 while the Runtime runs (Workflow #387, `ConfigureSettings`); the others change through the
 configuration file and a restart.
+
+## A stopped run (Workflow #429 R-6b, not built yet)
+
+**Status.** Written ahead of its code ([v012-register.md](v012-register.md) §1.314), for `ledger`
+8, shared with the slices of the same release ([component-interfaces.md](component-interfaces.md),
+"Planned: Workflow #429 R-6b"). Until R-6b, `StopInstanceRun` refuses a policy run
+([runtime-interface.md](runtime-interface.md), "Workbench request kinds") and nothing here is
+written. Every rule of this section is R-6b's, not built yet.
+
+**Which runs.** A policy run (a catalog task's dispatch, a fact refresh read included) that a
+`StopInstanceRun` stopped. The stop asks the run's control `ClientRequested`, which on a scheduled
+run only that stop asks (a client's `CancelContainedTask` refuses a scheduled run), so the run's
+terminal is the `task.failed` every scheduled cancel writes, with `contained_task_cancelled`. A run
+the stop found already ending for its deadline or a pause's drain keeps that end (an ordinary
+failure, `contained_task_deadline_exceeded`, or a condition, `contained_task_paused`), and a run
+that ended on its own before its check saw the stop keeps its own result.
+
+**The record.** Its `policy_result` is a third kind (the spelling is proposed), beside a success's
+`{"kind": "succeeded", "runtime_ms"}` and a failure's `{"kind": "failed", "failure"}`:
+
+```text
+{"kind": "stopped", "outcome": <the terminal outcome's top node>, "runtime_ms": <the run's wall time>}
+```
+
+It carries no failure identity, class, streak, retry, disposition, sensitivity, performance context
+or `condition`: none of them applies to a stop. Its `outcome` is codes only in the public
+projection, as a failure's is; its stored severity is its outcome's category, as for every
+result-bearing record; the payload's `wall_elapsed_ms` and `budget_elapsed_ms` (#385 P-k) are
+written as for any run, and nothing compares them. The record's check asks only that `outcome` is a
+code. SQLite's format, `actingcommand.event.v3`, the record types, the tables and the indexes do
+not change.
+
+**Settlement.** Neither a success nor a failure of the task:
+
+- no failure streak and no escalation (the pair's failure state keeps its latest real failure, the
+  identity a lift compares), no retry or backoff, no `paused_task` (a sensitive task's run
+  included), and no recovery ladder, whatever `recovery_ladder.triggers` lists, also when the
+  stop's reset failed and fenced the instance;
+- never a condition, whatever `scheduling.rerun.condition_codes` lists: it owes no rerun and gives
+  back no count;
+- never rewritten as `policy_runtime_budget_exceeded`; the counts its admission took stay taken,
+  and its runtime counts in the task's and the activity's windows as a success's does (proposed,
+  register §1.314 question 4);
+- the Runtime's own reruns its dispatch served end with it (proposed, question 3): an immediate
+  rerun's round (R22) ends as at `policy_retry_round_ended`, an owed rerun is removed, a remedy
+  retry closes its round as a failed retry does but without a failure, and a provider's request is
+  used;
+- it projects no outcome record, as a failed run projects none, adds no run-duration sample, and
+  adds nothing to the failure count of the pair's later runs, which counts on from the pair's
+  previous success or failure, as for a late settlement (UNSET-2).
+
+**Replay.** The settlement rebuilds the record from its own members and requires it to come out
+again, as for the two other kinds (`policy_execution_record_mismatch` otherwise); replaying it ends
+the same reruns, so a restarted Runtime holds the same decision memory.
+
+**After a restart.**
+
+- The run's terminal is in the ledger, its execution record is not: the start's reconciliation,
+  and the reconciliation of a run its worker abandoned, settle it from its terminal as `stopped`,
+  the terminal's code being the stop's mark. The ledger's own check of a recovered settlement
+  accepts `stopped` from a `task.failed` whose outcome is `contained_task_cancelled`, with
+  `runtime_ms` measured as a failure's, and from no other terminal.
+- No terminal (the Runtime ended between the stop's request and the run's next checkpoint): the
+  ledger cannot tell that a stop was asked. The stop's own records (`command.received`,
+  `command.validated`) name the stop's request and the instance, not the run, and a stop answered
+  from the instance's latest stopped run writes the same `command.validated`. The run settles as
+  interrupted (`policy_settlement_interrupted`), as today, which the restart lifts when it is the
+  pair's first in a row (proposed, question 2).
+
+**Readers.** The decision memory (above); the task snapshot, which shows `terminal_state`
+`cancelled` (the evaluator's existing word) with its `completed_window`, and keeps
+`last_duration_ms` and `failure_streak` of the pair's latest success or failure
+([scheduling/README.md](scheduling/README.md), "Settlement Feedback And Eligibility Age"); the
+settlement facts ([runtime-fact-store.md](runtime-fact-store.md)); the frame retention, which
+matches the record with its `task.failed` terminal; `actingd suspended` and `ac_diagnose`, which
+list no stopped run as a failure or a pause; the routine summary, which counts it under
+`interruptions` already (R-12, a scheduled failure terminal with `contained_task_cancelled`); the
+event query pages, which carry it in `PublicPayload.policy_execution_outcome` (`runtime-client` 7);
+and the client's run summary of a fixture run, which reads it beside its `task.failed` terminal. A
+Runtime of `ledger` 7 and a client of `runtime-client` 6 cannot decode the kind (the result has no
+catch-all), which is why both revisions move and `ledger` 8 is one way.
