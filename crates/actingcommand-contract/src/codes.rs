@@ -199,6 +199,8 @@ crate::outcome_codes! {
         // Workflow #429 R-12 (register §1.264): the routine summary's read first answers
         // completed.
         RoutineSummaryCompleted => "request_routine_summary_completed": success / none,
+        // Workflow #429 R-6 (register §1.302): a stop first answers completed.
+        StopInstanceRunCompleted => "request_stop_instance_run_completed": success / none,
     }
 }
 

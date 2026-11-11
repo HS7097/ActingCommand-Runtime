@@ -765,4 +765,7 @@ outcome_keys! {
     // ---- #428 SCHED-C1a (a rule's fixed value, contracts/scheduling/README.md "Fixed values
     // written in the pack"): the value `V` a judged candidate's net benefit was computed from. ----
     fixed_value_milli: integer,
+    // ---- Workflow #429 R-6 (contracts/runtime-interface.md "Workbench request kinds", the row
+    // `StopInstanceRun`): who started the run a stop refused; kept in codes mode. ----
+    run_origin: vocab(run_origin),
 }

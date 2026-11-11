@@ -1416,3 +1416,11 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5f::lab5f_serve_answers_as_the_command_line",
 ]
 incident = ["#434 LAB-5F"]
+
+# Workflow #429 R-6, first slice (0.12.53; register §1.302; contracts/lab-operations.json, the row task stop): the core row task stop is offered with its help and names StopInstanceRun; its command line is the CLI module's; its words (task stop <inst> <request> --wait 2s) and the serve --stdio line with the same parameters give the same call, the run's request and a two-second wait, and without --wait the stop answers at once (a zero wait)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_429_r6::r6_task_stop_words_and_serve_line_reach_the_same_stop",
+]
+incident = ["#429 R-6"]
