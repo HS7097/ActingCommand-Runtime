@@ -12442,10 +12442,10 @@ name `consumption_fact`, so its composer refuses such a `schedule.json` (`schedu
 first replace the form by a constant `amount` and let this build activate a generation without it,
 as §1.289's rollback says for SS-2h's.
 
-### 1.304 Slice NEUT-1 (0.12.54): the core's tests and fixtures name no real game (Workflow #434; Alice's hard constraint of 10-10 that the program itself is game-neutral, in code, contracts, configuration, code tables and tests, with game content only in the resource repositories; coordinator work order `rd-1111/brief-neut1.md`, read on main `ae15bb5f`)
+### 1.305 Slice NEUT-1 (0.12.54): the core's tests and fixtures name no real game (Workflow #434; Alice's hard constraint of 10-10 that the program itself is game-neutral, in code, contracts, configuration, code tables and tests, with game content only in the resource repositories; coordinator work order `rd-1111/brief-neut1.md`, read on main `ae15bb5f`)
 
-1.304 is the next free number on `ae15bb5f`, where §1.303 is SCHED-C1f; the coordinator renumbers
-it if another open slice takes it first. Tests, fixtures, one golden and one guard only: no product
+The slice was written on `ae15bb5f` as §1.304; IDLE-2 took that number and merged first, so the
+coordinator renumbered this section to 1.305 on 2026-11-11. Tests, fixtures, one golden and one guard only: no product
 code, behaviour, assertion, contract text, wire shape, configuration key, ledger shape, outcome
 code or interface revision changes. No register precedent for a change across many tests was
 found, so the note is a section of its own.
