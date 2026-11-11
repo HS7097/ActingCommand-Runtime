@@ -17,11 +17,15 @@
 //! - **Table-driven** ([`TABLE_DRIVEN_ROWS`]): what reaches the code is the row's declared words.
 //! - **No command** ([`NO_COMMAND_ROWS`]): no command of actinglab serves the row yet.
 //!
-//! The test `gate_434_lab5b2` holds each strict row equal to what its command accepts, in both
-//! directions, and every planned row of the two modules in exactly one kind; `gate_434_lab5b3`
-//! holds each row of [`READ_LIST_ROWS`] equal to its command's read list, in both directions. Only
-//! the tests and the test-only recording of `flag_args` read this register, so it is built for the
-//! tests only.
+//! Beside the four kinds (Workflow #434 LAB-5F fix 1), [`CORE_STRICT_ROWS`]: rows of the core
+//! module that actinglab's own command serves, checked against lists in code as the strict rows
+//! are (`standard-pack check`).
+//!
+//! The test `gate_434_lab5b2` holds each strict row and each row of [`CORE_STRICT_ROWS`] equal to
+//! what its command accepts, in both directions, and every planned row of the two modules in
+//! exactly one kind; `gate_434_lab5b3` holds each row of [`READ_LIST_ROWS`] equal to its command's
+//! read list, in both directions. Only the tests and the test-only recording of `flag_args` read
+//! this register, so it is built for the tests only.
 
 use crate::commands::{device_commands, navigation_recovery, session_record};
 use crate::flag_args::reads::FlagReads;
@@ -33,8 +37,9 @@ use crate::{
     standard_pack_cli,
 };
 
-/// The strict rows: [`accepted`] answers for each of them and for no other row.
-pub(crate) const STRICT_ROWS: [&str; 31] = [
+/// The strict rows: [`accepted`] answers for each of them and, beside them, for the rows of
+/// [`CORE_STRICT_ROWS`] only.
+pub(crate) const STRICT_ROWS: [&str; 30] = [
     "tap",
     "swipe",
     "long-tap",
@@ -60,7 +65,6 @@ pub(crate) const STRICT_ROWS: [&str; 31] = [
     "resource validate",
     "resource verify",
     "resource restore",
-    "standard-pack check",
     "standard-pack compose",
     "scheduling compile",
     "scheduling timeline",
@@ -116,6 +120,14 @@ pub(crate) const TABLE_DRIVEN_ROWS: [&str; 6] = [
 /// The rows no command of actinglab serves yet: `record draft`, MCP's `ac_binding_draft` until
 /// LAB-5 builds its command.
 pub(crate) const NO_COMMAND_ROWS: [&str; 1] = ["record draft"];
+
+/// Workflow #434 LAB-5F fix 1: the rows of the core module that actinglab's own command serves
+/// and that are held equal to it as the strict rows are, [`accepted`] answering for them:
+/// `standard-pack check`, a core row since the coordinator's ruling of 2026-11-11 (the rescue
+/// module's `place` runs it as its post-check). Not one of the four kinds, which are the
+/// debugging and authoring modules'. `app launch|restart|stop`, core rows actinglab's own
+/// `session app` serves, are slice B1's.
+pub(crate) const CORE_STRICT_ROWS: [&str; 1] = ["standard-pack check"];
 
 /// How many positional words a command checks it is given: at least `least`, at most `most`
 /// (`None`: it checks no most).
@@ -190,15 +202,15 @@ fn from_lists(
     }
 }
 
-/// What the own command of the strict row `row` accepts, from the constants its check uses;
-/// `None` for every row that is not strict. For `observe`, `do`, `ensure` and `wait`, whose flags
-/// depend on the path the command line takes, the union of their paths' lists. Workflow #434
-/// LAB-5B4: the switches of the commands that have them are the code's constants
-/// (`lab2_cli::LAB2_SWITCHES`, `session_record::RECORD_MARK_SWITCHES` and `RECORD_STOP_SWITCHES`,
-/// `package_tool::FMT_SWITCHES`, `package_build::LOADING_SWITCHES`), which their parse reads
-/// (`FlagArgs::parse_switches`); and the commands that checked no count of positionals check the
-/// ones they read (`observe`, `do`, `ensure`, `wait`, `package preflight`, `resource catalog`,
-/// `resource validate`).
+/// What the own command of the strict row `row` (or of a row of [`CORE_STRICT_ROWS`]) accepts,
+/// from the constants its check uses; `None` for every other row. For `observe`, `do`, `ensure`
+/// and `wait`, whose flags depend on the path the command line takes, the union of their paths'
+/// lists. Workflow #434 LAB-5B4: the switches of the commands that have them are the code's
+/// constants (`lab2_cli::LAB2_SWITCHES`, `session_record::RECORD_MARK_SWITCHES` and
+/// `RECORD_STOP_SWITCHES`, `package_tool::FMT_SWITCHES`, `package_build::LOADING_SWITCHES`), which
+/// their parse reads (`FlagArgs::parse_switches`); and the commands that checked no count of
+/// positionals check the ones they read (`observe`, `do`, `ensure`, `wait`, `package preflight`,
+/// `resource catalog`, `resource validate`).
 pub(crate) fn accepted(row: &str) -> Option<Accepted> {
     let none = Positionals::exactly(0);
     Some(match row {

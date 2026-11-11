@@ -146,7 +146,8 @@ fn lab5a_rows_take_what_they_took() {
     }
 
     // The router: every row actinglab's own command serves (the debugging and authoring rows but
-    // the four the module serves, and `app launch|restart|stop`) has one entry in
+    // the four the module serves, `app launch|restart|stop` and, a core row since Workflow #434
+    // LAB-5F fix 1, `standard-pack check`) has one entry in
     // `engine::COMMANDS`, each entry an offered row; the rows whose command line is read as
     // declared are those that never took their command's further flags.
     let module_rows = ["run start", "run stop", "reset", "drill"];
@@ -177,7 +178,9 @@ fn lab5a_rows_take_what_they_took() {
             OperationModule::Debugging | OperationModule::Authoring => {
                 !module_rows.contains(&operation.name.as_str())
             }
-            OperationModule::Core => operation.name.starts_with("app "),
+            OperationModule::Core => {
+                operation.name.starts_with("app ") || operation.name == "standard-pack check"
+            }
             OperationModule::Rescue => false,
         };
         assert_eq!(

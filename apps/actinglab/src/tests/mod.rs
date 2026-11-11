@@ -114,6 +114,10 @@ mod gate_434_lab5e;
 // prints.
 #[path = "gate_434_lab5g1.rs"]
 mod gate_434_lab5g1;
+// Workflow #434 LAB-5F: the authoring rows are listed only where the option lists them, and
+// served everywhere (fix 2).
+#[path = "gate_434_lab5f.rs"]
+mod gate_434_lab5f;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

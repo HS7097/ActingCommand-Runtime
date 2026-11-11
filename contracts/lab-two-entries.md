@@ -124,8 +124,8 @@ capture, pacing, host shutdown handling) is no request and never passes the gate
   `UpgradeState` and `UpgradeStateStatus`, with their results.
 - `ChannelVia` and every `via` member.
 - The Lab options' part in the gate: `lab_module_debugging` retires and `lab_module_authoring`
-  means only "installed" (section 8.3). The host then emits neither `lab_module_not_installed` nor
-  `lab_module_option_disabled` (section 12).
+  means only "listed by default" (section 8.3). The host then emits neither
+  `lab_module_not_installed` nor `lab_module_option_disabled` (section 12).
 
 ### 2.6 What a refusal answers and records
 
@@ -349,7 +349,7 @@ Alice's answer 4. From LAB-3, in the rescue module:
 |---|---|---|---|
 | Lab core: the operation layer, the CLI, the debugging operations, the rescue module | `actinglab.exe` in the runtime member, where actingctl was | no | the one command line and the one installer; the debugging operations stay with it (Alice's answer 2) |
 | MCP | `actinglab-mcp.exe` and the MCP entry `g2` | yes | not installed, or not registered with a client; the CLI does not depend on it |
-| Authoring | `crates/lab`, through the cargo feature `authoring`, in `actinglab.exe` | yes | `lab_module_authoring` absent or `false` (section 8.3), or a build without the feature |
+| Authoring | `crates/lab`, through the cargo feature `authoring`, in `actinglab.exe` | yes | a build without the feature; `lab_module_authoring` absent or `false` only leaves its operations unlisted (section 8.3) |
 | Watchdog | `tools\actingwatch.exe` | its own program | `watchdog uninstall` removes its scheduled task |
 
 The table's `modules` lists them with the module id each operation names (`core`, `debugging`,
@@ -388,20 +388,38 @@ from their core rows.
 ### 8.3 The authoring option
 
 - `lab_module_authoring` (optional boolean, absent `false`) stays in the configuration file and
-  means one thing: the authoring module is installed (Alice's answer 2). The Runtime decides
-  nothing by it.
-- The Lab reads it from the selected configuration. `true`, in a build with the feature: the
-  authoring operations are listed and served. Otherwise they are not listed (CLI help, MCP
-  `tools/list`), and a call is refused locally with `lab_command_option_disabled` (`lab_option`
-  `authoring`, `operation` the operation); nothing is sent to the Runtime.
+  means one thing: the authoring module's operations are listed by default (Alice's answer 2;
+  the coordinator's ruling of 2026-11-11, LAB-5F fix 2). The Runtime decides nothing by it.
+- The Lab reads it from the selected configuration. A build that has the authoring code serves
+  its operations whatever the key says. Where the key is absent or `false` inside an installation
+  root they are left out of the listings (CLI help, `list commands`, `capabilities`, the MCP
+  server's default `tools/list`), and a call still runs: not listed is not refused.
+- **Where the Lab runs** (the coordinator's ruling of 2026-11-10 on #434, point 15; LAB-5F). A
+  Lab program inside an installation root (one §9.3's default location finds: started through a
+  root's selection, or from a kept build's or a single-location root's `runtime\` or `tools\`)
+  follows the key of that root's selected configuration, read at each listing. A Lab program
+  outside any installation root has no configuration to read: there the authoring operations are
+  listed (an unpacked Tools package, as the resource repositories' CI and scripts and the
+  coordinator's deployment tools run it). A selection or selected configuration that cannot be
+  read, that is no JSON object or whose key is not a boolean leaves them unlisted, and the command
+  that lists says why once, on its developer line (`config_read_failed` or `config_decode_failed`
+  with the configuration's `path`, and the cause); it refuses nothing because of it, and it is
+  never read as listed. `null` reads as absent, as actingd reads it. The decision is one function
+  of the operation layer, `lab_ops::locate::authoring_module`, which every front end calls. Main
+  has no cargo feature `authoring` yet: every build has the module and serves its operations.
+- **Which operations** (LAB-5F fix 1, the coordinator's ruling of 2026-11-11): the key lists
+  exactly the rows of module `authoring`. `standard-pack check`, which the rescue module's `place`
+  runs as its post-check (section 7), is a row of the core module: it is listed and served
+  wherever the Lab runs, whatever the key says, so that an installation without the authoring
+  module still places packages. `standard-pack compose` stays an authoring row.
 - `lab_module_debugging` retires (`actingd-config` 28): still accepted when a boolean, with no
   effect, noted with the caveat `config_key_retired` by the commands that read it, as
   `install.guard.blocked_windows` is. The debugging operations are always there.
 - Its writers are the rescue module's `new` (`--lab-authoring true|false`) and
   `config file lab-options --authoring true|false`, and through them the installer's check box
-  (UI-L2). `--lab-debugging` and `--debugging` are refused as unknown options. The console shows
-  the key read only (`advanced`, not settable); the `lab_module_debugging` row leaves the tier table
-  (LAB-6).
+  (UI-L2): they set what is listed. `--lab-debugging` and `--debugging` are refused as unknown
+  options. The console shows the key read only (`advanced`, not settable); the
+  `lab_module_debugging` row leaves the tier table (LAB-6).
 - Installing the MCP module is no key: it is installed when `actinglab-mcp.exe` is and the
   client's entry is registered (`mcp config`).
 
@@ -481,10 +499,10 @@ sentence fails that test.
 - The root is located from the program's own place (a slot's `…\runtime\actinglab.exe`, or a fixed
   entry); the state root comes from the selected configuration. No operation takes the
   installation's root or its state root as `--root` or `--state-root` (`new` names its new root).
-  Four offline authoring rows take options of those names that name something else, as their
-  consumers pass them (LAB-5A): `standard-pack check` and `standard-pack compose` take `--root`, a
-  game's package root, and `resource restore` and `regression` take `--state-root`, a Runtime state
-  root the offline command reads. One command line keeps a `--root` that is no parameter of its
+  Four offline rows take options of those names that name something else, as their consumers pass
+  them (LAB-5A): `standard-pack check` (a core row since LAB-5F fix 1) and the authoring row
+  `standard-pack compose` take `--root`, a game's package root, and the authoring rows `resource
+  restore` and `regression` take `--state-root`, a Runtime state root the offline command reads. One command line keeps a `--root` that is no parameter of its
   row (LAB-5A fix 1): `actinglab devices bind <alias> <handle> --root <r>` still hands it to the
   command, as before LAB-5A, which takes it only when the program runs outside an installed root;
   the row does not declare it, and `serve --stdio` refuses it.
@@ -679,9 +697,9 @@ No new code. The codes this contract uses:
 - `channel_request_refused` (`operation`, `channel`), with `config_key` for a refused setting: an
   optional value LAB-6 adds to its catalog entry;
 - `channel_binding_missing`, `channel_binding_exists`, `invalid_bind_channel`;
-- `lab_command_option_disabled` (`operation`, `lab_option`) for an authoring operation that is not
-  installed (section 8.3), a local refusal: the design's `lab_module_not_installed` is a host code,
-  and the host no longer judges modules;
+- `lab_command_option_disabled` (`operation`, `lab_option`): registered, and not emitted for the
+  authoring option, whose key only lists (section 8.3; LAB-5F fix 2): the design's
+  `lab_module_not_installed` is a host code, and the host no longer judges modules;
 - `actingctl_usage_invalid` (`argument`, `variable`) for a bad option or `ACTINGCOMMAND_INITIATOR`;
   LAB-7 moves actingctl's codes into actinglab's fragment
   (`contracts/outcome-codes/actingctl.json` into `actinglab.json`);

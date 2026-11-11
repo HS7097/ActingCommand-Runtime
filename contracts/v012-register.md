@@ -8992,6 +8992,15 @@ and `serve --stdio` answers as before.
 
 **LAB-5B2 rollback** (to the release before it). Nothing persisted: code only.
 
+**After LAB-5F fix 1** (the coordinator's ruling of 2026-11-11; "Slice LAB-5F" below):
+`standard-pack check` is a row of the core module. It left `STRICT_ROWS` (now 30) for a fifth list
+beside the four kinds, `CORE_STRICT_ROWS` (the core rows actinglab's own command serves that are
+held equal to their command as the strict rows are: `standard-pack check` alone; `app
+launch|restart|stop` are B1's), and `accepted` still answers for it from
+`standard_pack_cli::CHECK_FLAGS`. `strict_rows_match_their_commands` walks the strict rows, then
+that list; `every_debugging_and_authoring_row_has_one_kind` checks that its rows are planned core
+rows, each once, and that among the core rows the register answers for exactly these.
+
 #### Slice LAB-5B3 (0.12.52): each lenient command declares the flags it reads, held equal to its row
 
 Coordinator work order `rd-1108/arch-013/brief-lab5b3.md`, after the read-only survey
@@ -9327,6 +9336,23 @@ positional (`--instance <alias>` names the instance), and `do --capture <target>
 --capture <page>`, `wait --capture <page>` now run the capture path with that target or page. A
 script that relied on an ignored flag fails loud; the table above lists an example per command.
 
+**Merged with main after LAB-5F** (coordinator work order
+`rd-1108/arch-013/brief-lab5b4-merge-main1.md`; main `aa2db24c`, LAB-5F #1576 with its fixes 1
+and 2). What LAB-5F changed that this slice now carries: fix 1 made `standard-pack check` a row of
+the core module, so in the register (`cli_module::own_flags`) it is in `CORE_STRICT_ROWS` and not
+in `STRICT_ROWS` (30 rows, this slice's 31 less one), `accepted` still answers for it from
+`standard_pack_cli::CHECK_FLAGS`, and the module doc keeps LAB-5F's `CORE_STRICT_ROWS` paragraph,
+its sentence on the tests naming `READ_LIST_ROWS` where it named the lenient rows; LAB-5B2's
+`strict_rows_match_their_commands` walks `CORE_STRICT_ROWS` after the strict rows with this
+slice's checks (the first positional too), and `every_debugging_and_authoring_row_has_one_kind`
+holds this slice's four kinds and LAB-5F's check of the core rows. The two hand-written switch
+lists main still kept in the register stay gone (the code's constants, above). LAB-5F's own tests
+(`gate_434_lab5f`) were read line by line against this slice's rules: each passes only flags and
+positionals its command reads, and no switch of theirs is followed by a plain word, so none
+changed; LAB-5F added nothing under `apps/actinglab/tests/`. `standard-pack check` is none of the
+commands this slice changes: it refuses an unknown flag and a positional by its own check, as
+before.
+
 **LAB-5B4 rollback** (to the release before it). Nothing persisted: code, the register and the
 contract text only. Rolling back makes the 28 commands ignore an unknown flag again.
 
@@ -9549,6 +9575,125 @@ location or revision is added.
 **What LAB-5G1 changes live.** Nothing a person, a client or the Runtime sees.
 
 **LAB-5G1 rollback** (to the release before it). Nothing persisted: code only.
+
+#### Slice LAB-5F (0.12.52): the Lab reads the authoring option
+
+Coordinator work order `rd-1108/arch-013/brief-lab5f.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` §8 (on `76006500`), on main `5041d952`. The contract is
+[lab-two-entries.md](lab-two-entries.md) §8.3 and its new paragraph "Where the Lab runs", the
+coordinator's ruling of 2026-11-10 on #434 (comment 6769399787, point 15): inside an installation
+root the selected configuration's key decides; outside any root the authoring module counts as
+installed. Since fix 2 (the coordinator's ruling of 2026-11-11) the key decides only whether the
+authoring operations are listed by default: a build that has the authoring code serves them
+everywhere.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5F-1 | what decides "installed": `lab_ops::locate::authoring_module()` and `authoring_module_from(program, process)`, answering `AuthoringModule::{Unrooted, Configured {config, installed}}` or the failure | behaviour, operation layer | LAB-5F | actinglab | public in `crates/lab-ops`, so that the later MCP server (G), another program, calls the same function. The places are `locate`'s (a root's selection, a kept build, a single-location root's `runtime\` or `tools\`; `locate_from` now shares `installed_place` and `selected_config` with it, unchanged in what it answers). Outside them: `Unrooted`, installed. Inside: the selected configuration's `lab_module_authoring` (`AUTHORING_KEY`, the key of `runtime-config`'s `lab_module`), read at each call: `true` installed; absent, `null` (as actingd reads it) or `false` not installed. A selection that cannot be read is the contract's install code; a configuration that cannot be read (or, under a selection, whose bytes are not those the selection names) `config_read_failed`, one that is no JSON object or whose key is not a boolean `config_decode_failed`, each with `path`, the failure as cause: not installed, never read as installed |
+| L5F-2 | no refusal: a call of an authoring row reaches its command wherever the Lab runs, whatever the key says | behaviour | LAB-5F fix 2 | — | the coordinator's ruling of 2026-11-11 (after an outside audit): in a build that has the authoring code the authoring operations are always served; the key decides only whether they are listed by default, and not listed is not refused. Removed in fix 2: `cli_module::authoring::admit` (with `row_of` and the refusal's builder) and its call first in `crate::execute`, which refused a call of an authoring row with `lab_command_option_disabled` inside a root whose key was absent or `false` or could not be read. Why: every build has the authoring code (there is no cargo feature), and nothing can write the key (the rescue module's writers are not built; `config set` refuses a key read at assembly), so a person would have had to edit the configuration file by hand to use a command already in the program: a switch that refused with no way to turn it, and not what Alice's answer 2 on #434 asks. Every call of an authoring row now reaches its command: actinglab's own words, a row's short words, `serve --stdio` (`engine::line`) and MCP's `--via` child |
+| L5F-3 | where rows are not listed: `cli_module::authoring::listed_help` and `listed` | behaviour | LAB-5F | — | `help` (its `commands`, `command_options` and `compatibility_notes`), `list commands` and `capabilities`' `commands` leave out, where the module is not installed, every entry whose command words begin with an authoring row's own command, and a group one word shorter than one (`record`, `session record`). The other listings and `help_data()` itself are unchanged. `serve --stdio` lists nothing; actinglab has no other place that lists operations by module. `actingctl mcp-serve`'s `tools/list` lists by tier and is not changed (its author tools start actinglab, which serves them). Fix 2: where the place's option cannot be read (a selection or configuration that does not read, a key that is no boolean) the rows are left out and the command that lists writes one developer line, `WARN actinglab: <the failure with its path and its cause> …` (`authoring::unread_option_line`), as actinglab's other warnings beside an answer are written; it refuses nothing because of it |
+| L5F-4 | the rows listed by the key | — | LAB-5F | — | exactly the offered rows whose `module` is `authoring`: 34 since fix 1 (`observe`; `record start`, `mark`, `status`, `stop`, `candidates`, `amend`, `step`; `package check`, `preflight`, `validate`, `inspect`, `bundle`, `loading`, `fmt`, `edit`; `resource catalog`, `validate`, `verify`, `restore`, `compile-maa`; `standard-pack compose`; `scheduling compile`, `timeline`; `operation validate`, `inspect`, `explain`; `regression`; `replay`; `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`). `record draft` (LAB-5) and the four reserved rows are not offered. `standard-pack check` is a core row since fix 1 (L5F-7), listed everywhere |
+| L5F-5 | `lab_command_option_disabled` | outcome catalog | LAB-5F | — | not emitted: since fix 2 no code path emits it for the authoring option. Its catalog entry is main's again, text and all (the first round had rewritten its description, causes and handling for the refusal); its values stay `operation` and `lab_option` |
+| L5F-6 | contract text | contract | LAB-5F | — | §8.3, "Where the Lab runs"; fix 1: §8.3, "Which operations", and §9.3's four offline rows that take `--root` or `--state-root` (one core, three authoring); fix 2: §8.3's first two bullets, "Where the Lab runs" and the writers' bullet (they set what is listed), and, for the same meaning, §2.5's sentence on the key, §8.1's row of the authoring module and §12's line on the code |
+| L5F-7 | `standard-pack check`'s `module`: `core` (was `authoring`) | contract table | LAB-5F fix 1 | — | the coordinator's ruling of 2026-11-11: an operation the Lab core needs, since the rescue module's `place` runs it as its post-check; nothing else of the row changes. What follows from it in the code: `core_ops::serves` leaves it to actinglab's own command, as it leaves `app launch\|restart\|stop` (else `serve --stdio` would hand it to `lab-ops`); `engine::COMMANDS` keeps its entry (its description names it among the core rows); the listings (`authoring::own_commands`) no longer take it, as they follow the table; LAB-5B2's register moves it to `own_flags::CORE_STRICT_ROWS`. `lab_ops_table_complete` (its `entries` stay `["lab"]`: it sends no request) and `lab_ops_core_rows_served_by_lab_ops` (slice `LAB-2`, not `LAB-1` or `LAB-1b`) are unaffected. Its command line `standard-pack check --root <dir>` and its short words accept, refuse and print what they do on main |
+
+**What an operator sees after deploy** (since fix 2). The authoring operations are served
+everywhere, inside an installation root or outside any, whatever the key says: recording, package
+and resource checks and the other authoring operations run through the installed actinglab (also
+by today's MCP author tools, which start it). They are listed (`help`, `list commands`,
+`capabilities`) only with the key: outside any root, or inside one whose selected configuration
+says `lab_module_authoring: true`. Production's key is true, so nothing a person or a client sees
+changes there. On an installation without the key the authoring rows are not listed in `help` and
+still run; where its configuration cannot be read, a listing says so on its developer line.
+`standard-pack check`, a core row since fix 1, is listed and served everywhere. To list the
+module, the selected configuration gets `"lab_module_authoring": true` (the installer's Lab page;
+until the rescue module's writers exist, through the configuration replace the deploy uses); it is
+read at the next listing, no restart needed. An unpacked Tools package outside any root is
+unaffected.
+
+**`standard-pack check` is a row of the core module** (fix 1; the coordinator's ruling of
+2026-11-11). The rescue module's `place` (and `actingctl install pack place`, the same code,
+`crates/lab-rescue/src/install/place.rs`) runs `<root>\tools\actinglab.exe --json standard-pack
+check --root <game root>` as its post-check, and an installation without the authoring module must
+still place packages (§8.1: the authoring module is detachable, the rescue module part of the Lab
+core). So the row's `module` is `core` (L5F-7): it is always listed and served, whatever the key
+says, and 34 rows are listed by the key (L5F-4); `standard-pack compose` stays an authoring row.
+`place.rs`'s post-check needs no change: its command line is that row's, and since fix 2 nothing
+stands before any command (L5F-2), so the check reaches its command wherever the root's key
+stands.
+Nothing else of the rescue or core module starts actinglab with an authoring row: the rescue
+module's other children are actingd (`unlock`) and, for `--detach`, its own rescue row run again;
+`lab-ops`' `app launch|restart|stop` run actinglab's `session app`, a core row's command (MCP's
+author tools, in actingctl's MCP front, start actinglab with authoring rows, as "What an operator
+sees after deploy" says). The debugging
+and core lines that add to a recording (`do --capture --record`, `capture --record`, `session app
+--record`) are listed everywhere; they need a recording `record start` began.
+
+**Not in this slice** (main at the base): `lab_module_debugging` is still read by actingd and the
+key table, with no retirement (`actingd-config` stays 27; 28 is later); the rescue module's
+writers (`new --lab-authoring`, `config file lab-options`) are planned rows with `params_more`,
+not offered, and `actingctl install config lab-options` is documented with its codes registered
+but has no code; the installer's check box and the console are in the UI's repository (the key
+table lists both options at `advanced`); main has no cargo feature `authoring`.
+
+**Tests.** New: apps row "#434 LAB-5F", `gate_434_lab5f::lab5f_authoring_rows_follow_the_installed_module`
+and `gate_434_lab5f::lab5f_serve_answers_as_the_command_line` (actinglab's binary tests; made-up
+installation roots in a temporary folder, read through a test-only seam
+`cli_module::authoring::test_place`; no Runtime, no device, no clock, no sleep). No existing test
+changed, and none calls an authoring row inside a made-up root without the key: the in-crate
+tests and the integration tests run outside any root (`resource_production_retirement` names a
+root with a selection that does not read, and its lines are refused by the parser first). Fix 1
+adds to both: in every place, the key absent, `false` and a configuration that cannot be read
+included, `standard-pack check` is listed (`help`'s commands and options, `list commands`,
+`capabilities`) and its call reaches its command, on the command line and in `serve --stdio`
+(its own `standard_pack_root_invalid` for a game folder with no root file, the same line on
+both); `standard-pack compose` is listed only where the module is installed and refused, writing
+nothing, where it is not (the case of `help`'s options that named `standard-pack check` among the
+authoring commands names `standard-pack compose`). Adapted by fix 1, since the row's module
+changes on purpose: `gate_434_lab5a::lab5a_rows_take_what_they_took` (the core rows actinglab's
+own command serves are `app launch|restart|stop` and now `standard-pack check`) and the two tests
+of `gate_434_lab5b2` (the fifth list, "After LAB-5F fix 1" under LAB-5B2 above). Fix 2 changes
+the slice's two tests only, since the requirement they pin changes on purpose (the ruling, L5F-2):
+where they asserted a refusal (the key absent or `false`, a value that is no boolean, a
+configuration that is no JSON or missing) they assert that the same call reaches its command, with
+the exit and outcome code it has outside any root and never `lab_command_option_disabled`
+(`package fmt` writes, on the line and through MCP's `--via` child; `regression` by its short
+words, `standard-pack compose` and `observe --capture` answer their commands; `record start` makes
+its state directory; `serve --stdio` answers `package fmt --check` with the command line's line,
+its command's `package_fmt_check_failed`, and `standard-pack compose` with its command's code);
+the listings still leave the rows out there; where the option cannot be read, the developer line
+names the failure with the configuration's path (`authoring::unread_option_line`). The checks of
+what each place reads as (`authoring::module()`, so `lab_ops::locate::authoring_module_from`) stay.
+
+**Interface.** None raised: no request, key, schema or wire shape changes; no code, key, location
+or vocabulary token is added.
+
+**LAB-5F fix 1** (coordinator work order `rd-1108/arch-013/brief-lab5f-fix1.md`): main merged
+(LAB-5B2 #1574, LAB-5C #1573, VIS-LOAD-1 #1572), both sides kept in this register (main's
+subsections first), in `apps.toml`, in `tests/mod.rs` and in `cli_module.rs`; `standard-pack
+check` made a row of the core module (L5F-7), so 34 rows are gated (L5F-4); LAB-5B2's register
+given its fifth list; the texts corrected (§8.3, §9.3, this subsection, `apps.toml`'s rows of
+LAB-5B2 and LAB-5F). Fix 1 adds no row, code, key or interface, and no command line changes what
+it accepts, refuses or prints but by the gate, which no longer takes `standard-pack check`.
+
+**LAB-5F fix 2** (coordinator work order `rd-1108/arch-013/brief-lab5f-fix2.md`; the coordinator's
+ruling of 2026-11-11, L5F-2): main merged (LAB-5G4a and LAB-5E, #1580), both sides kept: in this
+register main's subsections LAB-5G4a and LAB-5E, then this one (the note "After LAB-5F fix 1"
+stays under LAB-5B2), `apps.toml`'s rows, `tests/mod.rs`'s `mod` lines and `cli_module.rs`'s
+description, main's first; `contracts/lab-operations.json` merged by itself, LAB-5E's `help` lines
+and `standard-pack check`'s `module` `core` both kept (this slice adds no row, so LAB-5E's test,
+which wants a `help` on every offered row, needs nothing more). The refusal removed (L5F-2):
+`cli_module::authoring` keeps only what the listing needs (`module`, the own commands of the
+authoring rows, `listed`, `listed_help`, the developer line of an option that cannot be read, the
+test seam). `lab_command_option_disabled`'s catalog entry and its declaration in
+`apps/actinglab/src/codes.rs` are main's again (L5F-5). The texts corrected (§8.3 and the
+sentences that restate it, L5F-6; L5F-2 to L5F-7 and this subsection; `apps.toml`'s row). Fix 2
+adds no row, code, key or interface; no command line changes what it accepts, refuses or prints
+but the authoring rows' calls, which reach their command where the first round refused them, and
+a listing whose option cannot be read, which writes its developer line.
+
+**LAB-5F rollback** (to the release before it). Nothing persisted: the build before it does not
+read the key and lists every row.
 
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
@@ -10731,10 +10876,14 @@ records, followed by a start of v0.12.50. That start's re-alignment commits the 
 under its older rule, as the pair's latest failure, and its value record then names the late
 dispatch as the pair's latest completed one (by completion order; alone, for a task outside the
 remedy journal). That start starts. In R the start after it fails with `runtime_fact_stale`,
-which is fatal, on either version: it loads only the late run and records that run's settlement
-facts over the later run's newer ones; only a run the pair completes in between avoids it. In N
-it does not fail. Hence the operating rule: after a deploy of 0.12.51, do not go back to v0.12.50
-before one start of 0.12.51 has completed after the settlement.
+which is fatal, on v0.12.50 and 0.12.51: it loads only the late run and records that run's
+settlement facts over the later run's newer ones; only a run the pair completes in between
+avoids it. In N it does not fail. Hence the operating rule: after a deploy of 0.12.51, do not go
+back to v0.12.50 before one start of 0.12.51 has completed after the settlement. From 0.12.52
+(ISO-START-1, §1.301) a start of 0.12.52 or later in that place starts: it records the pair's
+refused record once (`policy_settlement_facts_skipped`, Warning, `failure_code`
+`runtime_fact_stale`), keeps the later run's newer facts, writes none of the late run's and
+holds nothing; a start of v0.12.50 or 0.12.51 there still fails.
 
 **The online path.** The changed check also serves the online settlement of abandoned and inactive
 runs (`reconcile_scheduled_policy_outcomes_for` with no start, #427-A). A run with its own
@@ -10774,9 +10923,10 @@ a task that declares a remedy or provides a capability when the pair ran since: 
 reads the late run as the pair's latest, and the pair's outcome key is missing until the pair's
 next completion. The edge: a settling start of 0.12.51 cut after the settlement and before its
 value records, followed by a start of v0.12.50: that start starts, and when the pair ran since,
-the start after it fails with `runtime_fact_stale`, on either version, unless the pair completed
-a run in between. Operating rule: after a deploy of 0.12.51, do not go back to v0.12.50 before
-one start of 0.12.51 has completed after the settlement.
+the start after it fails with `runtime_fact_stale`, on v0.12.50 and 0.12.51 (a start of 0.12.52
+or later records the pair's skip and starts, §1.301), unless the pair completed a run in
+between. Operating rule: after a deploy of 0.12.51, do not go back to v0.12.50 before one start
+of 0.12.51 has completed after the settlement.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -11175,6 +11325,137 @@ the capacity, data the pack or a person sets).
 `schedule.json` writes the members or a person or an agent sets an instance's lines, except
 SCHED-C1d: a valued pool's episode then survives a start, a generation and an unknown reading (no
 production pool is valued today).
+
+### 1.301 Slice ISO-START-1 (0.12.52): one pair's refused settlement fact no longer stops the start (#419; Alice's requirement on board #419 of 10-24: one emulator's fault must not bring down the whole Runtime; the debt the coordinator logged on 11-11, #421 6774483473 and #428 6770731970: isolate only that pair; the coordinator's ruling on the three cases, not Alice's words: coordinator work order `rd-1111/brief-iso-start-1.md`)
+
+[runtime-fact-store.md](runtime-fact-store.md) ("Settlement facts" and "Typed codes") and the
+catalog entries of `policy_settlement_facts_skipped` and `runtime_fact_stale` are the contract.
+1.301 is this slice's number, after SCHED-C1's section on main `09a615f3` (PR #1582) and 1.300,
+which the open INST-5 (PR #1584) takes. No persisted ledger shape, wire shape, configuration key,
+location or vocabulary is new or changed; one outcome code is new, and one pending code gains an
+optional value.
+
+**Why.** Once per start the host derives the four settlement facts (Workflow #308 slice 5b) of
+every registered (task, instance) pair again (`record_policy_settlement_facts_on_start`, after
+the standard packs are registered). It wrote each pair through the live path's
+`record_policy_settlement_facts`, which turns every refusal fatal ("the settlement itself is
+already durable"), so one pair whose record the store refused (`precheck_runtime_fact`: an older
+or equal observation is `runtime_fact_stale`) failed the start of the whole Runtime, for every
+instance. UNSET-2 (§1.296) names such a start: after its rollback edge, the start derives a
+pair's facts from the late run over the later run's newer ones and fails with
+`runtime_fact_stale`.
+
+**What changed: the three cases.** The start's derivation writes each pair with the records and
+in the order of the live path (`settlement_fact_records`, which both paths now share:
+`last_duration_ms`, `last_outcome`, `failure_streak`, `completed_at_unix_ms`, instance scope,
+source `policy`, no lifetime, observed at the settlement time) and decides per pair
+(`HostShared::record_start_settlement_facts` and `record_policy_settlement_facts_on_start`,
+`crates/runtime-host/src/host/runtime_facts.rs`):
+
+1. **Stale.** The store refuses a record of the pair as `runtime_fact_stale`: it holds a record
+   of that key observed at the settlement time or later, so nothing is lost by not writing. The
+   start writes nothing more of the pair, records one Warning `runtime.failed`
+   `policy_settlement_facts_skipped` (below) with `failure_code` `runtime_fact_stale`, holds
+   nothing and goes on with the next pair and the rest of its steps.
+2. **Another refusal of the pair alone.** A value that does not fit an integer fact
+   (`policy_settlement_fact_overflow`, decided before the pair's first record, as on the live
+   path) or the store's refusal of one record before anything of it is appended (a key it cannot
+   form, `invalid_runtime_fact_key`, `runtime_fact_family_unknown`; a full store,
+   `runtime_fact_capacity_exceeded`; an unregistered instance scope,
+   `runtime_fact_instance_unknown`, which the start's own check of the instance leaves
+   unreachable). The start writes nothing more of the pair, records the same Warning with that
+   code as `failure_code`, and holds the pair's instance (below); the other instances start.
+3. **A fault of no one pair.** A fatal failure of the write (the ledger's append, a lock, the
+   store and the ledger disagreeing, `runtime_fact_store_desync`), and a request-class failure
+   after a record's commit (the store holds the record after all: a failure of the instance fact
+   store's synchronization behind the write, which every later write meets too), fails the start
+   as before: the error, made fatal, is latched and returned.
+
+**How the code tells case 2 from case 3.** By the failure's class and the store's state after it.
+A fatal failure is case 3. A request-class failure is the store's refusal of that one record (its
+rules are applied, `precheck_runtime_fact`, under the fact write gate before the record is
+appended), so case 1 or 2 by its code, unless the store holds exactly that record afterwards, in
+which case the failure came after the commit and is case 3. Only a failure that would also break
+every other pair's write is case 3.
+
+**The record.** `runtime.failed` (an existing record; `DiagnosticCode::RuntimeDiagnostic`, effect
+`not_performed`, the diagnostic detail of the start's settlement records: `policy_settlement`,
+stage `runtime_lifecycle_policy_initialization`), Warning, under the instance's links (system links with the
+registered instance), once per refused pair and start, written at the pair's place in the step:
+`operation` `record_policy_settlement_facts`, `task_id` the pair's catalog task, `instance_id`
+the instance alias, `fact_key` the refused record's key, `observed_at_unix_ms` its observation
+(the settlement time), `failure_code` the refusal's code, and the refusal as the `caused_by`
+link; for `runtime_fact_stale` that link carries `observed_at_unix_ms`, the observation of the
+record the store holds for the key. It is handed to the daemon's log as a warning too, and the
+ledger's event reads (`actingctl events`, the MCP's `ac_events`) show it under the instance.
+
+**The hold (case 2).** The start's existing hold of an instance it cannot make ready to schedule:
+the hold of an instance whose dispatch the start could not settle (Workflow #369 E3,
+`hold_unsettled_dispatches` through `hold_instance_pause_at_start`). It fits because the cause is
+the same kind: the pair's settled state is missing from what the scheduler reads (its settlement
+facts), and a rule that reads them would decide without them. It is a persisted instance pause
+(`host.scheduling_pause`, stage `released`), with `policy_settlement_facts_skipped` as its reason,
+taken right after the unsettled dispatches' holds (after the persisted pauses are restored, before
+any instance is prepared; the daemon-start preparation then leaves the instance unprepared), once
+per instance, unless the instance is paused already (that pause stays as it is). The status read
+shows it as the instance's `pause` with that reason. A person lifts it after looking (`actingctl
+resume`). No new kind of hold. The refusal is not persisted, so a later start that meets the same
+refusal records it and holds the instance again, as E3 did before UNSET-1.
+
+**What stays.** For every pair that passes, the start writes the records main writes, byte for
+byte, in main's order, and appends nothing for a stored identical record. The live path
+(`record_policy_settlement_facts`: a live settlement, a replayed completion, the reconciliation
+tick) keeps "any refusal is fatal". The order of the start's steps stays; the hold is one step
+added after `hold_unsettled_dispatches`. UNSET-2's behaviour (which dispatches are settled, with
+which values) is unchanged.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): `ledger`: a
+new code of an existing record (the reader checks a code's spelling, never whether it is
+registered), a new optional value of a pending code on a link, and a pause row whose reason is a
+name; `runtime-outcomes`: one new code and one optional key of an existing pending code, in the
+catalog only; `runtime-client` and the protocol: no request kind, no member; no configuration
+key.
+
+**What an operator sees after deploy.** Ordinarily nothing: every pair's facts derive as before
+and no record is new. After the UNSET-2 rollback edge (§1.296) a start of 0.12.52 or later
+records one Warning `policy_settlement_facts_skipped` (`failure_code` `runtime_fact_stale`, the
+pair's task, instance and key) in the ledger and as a `WARN actingd:` line, and starts; the
+pair's newer facts stand and nothing is paused. A pair refused for another reason gives the same
+Warning with its own code, and its instance shows a scheduling pause with reason
+`policy_settlement_facts_skipped` in `actingctl status` and `ac_overview`, while every other
+instance runs. A ledger or store fault fails the start as before.
+
+**Rollback** (below 0.12.52). A start of 0.12.51 or earlier fails again at a refused pair (every
+refusal is fatal there, `runtime_fact_stale` included). A pause with reason
+`policy_settlement_facts_skipped` that 0.12.52 persisted is restored by an earlier build as any
+instance pause and lifted by a person's resume; an earlier build reads the new records as a code
+it does not act on. Nothing else to undo.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ISOS1-1 | `runtime.failed` with `policy_settlement_facts_skipped` (warning, `none`; `failure_code`, `fact_key`, `instance_id`, `observed_at_unix_ms`, `task_id`, `operation`) | new code of an existing record (host gate row "#419 ISO-START-1") | ISO-START-1 | ISO-START-1 | `since` 0.12.52; once per refused pair and start, under the instance's links |
+| ISOS1-2 | `runtime_fact_stale` with the optional value `observed_at_unix_ms` | optional key of a pending code (catalog only) | ISO-START-1 | ISO-START-1 | only as the `caused_by` link of ISOS1-1: the observation of the record the store holds |
+| ISOS1-3 | the start's derivation of the settlement facts: a refusal of one pair is that pair's alone (`record_policy_settlement_facts_on_start`, `record_start_settlement_facts`) | rule (no shape; corrects [runtime-fact-store.md](runtime-fact-store.md), "Settlement facts") | ISO-START-1 | — | the live path stays fatal; a fault of no one pair stays fatal at start |
+| ISOS1-4 | the start's instance pause with reason `policy_settlement_facts_skipped` (`hold_skipped_settlement_fact_instances`, through E3's `hold_instance_pause_at_start`) | rule (the existing pause row; a reason is a name) | ISO-START-1 | ISO-START-1 | case 2 only; after `hold_unsettled_dispatches`; an instance paused already keeps its pause |
+
+Tests (host gate row "#419 ISO-START-1", `gate_419_iso_start1`):
+`iso_start1_a_stale_pair_is_skipped_once_and_the_two_others_are_written` (three pairs, the
+stale one between the two others; a later run's record of its first key, newer than its
+settlement, written by the first start; the restart completes with no host fault, writes the two
+others' facts as main writes them, keeps the newer record, writes none of the stale pair's,
+records the skip once with `runtime_fact_stale`, the key and both observations, and holds
+nothing); `iso_start1_a_pair_refused_for_its_own_reason_holds_only_its_instance` (A's pair names
+a catalog task of 128 bytes, so the store cannot form its keys, `invalid_runtime_fact_key`; A is
+held with `policy_settlement_facts_skipped` in the status read, its pair recorded once and none
+of its records written; B's pair is written as main writes it and B is not held); and
+`iso_start1_a_store_that_cannot_be_written_still_fails_the_start` (the step's first write fails
+as an append the ledger cannot make; the start fails with `ledger_failure`, fatal). The pairs come
+from settlements a test-only hook adds to the step after the recovered ones
+(`START_SETTLEMENT_FACTS_FOR_TEST`; a pair with no dispatch in the ledger), and test 3's append
+failure is injected at the step; the refusals of tests 1 and 2 are the store's own. Two test-only
+helpers write and read the Runtime's fact store (`record_runtime_fact_for_test`,
+`runtime_fact_for_test`). No existing test changed: main had no test that pinned "any refusal is
+fatal" at the start, nor a start whose settlement-fact write failed.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

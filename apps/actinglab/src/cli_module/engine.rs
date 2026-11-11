@@ -2,7 +2,8 @@
 
 //! The operations actinglab's own commands serve (Workflow #434 LAB-2; register §1.287, LAB-2
 //! row): the debugging and authoring rows, the core rows `app launch|restart|stop` (actinglab's
-//! `session app`) and the two `user-config` rows. [`COMMANDS`] names each row's command
+//! `session app`) and `standard-pack check` (a core row since Workflow #434 LAB-5F fix 1) and the
+//! two `user-config` rows. [`COMMANDS`] names each row's command
 //! (Workflow #434 LAB-5A: before it, a row named its command in `params_more`). The operation's
 //! short words are given to that command: its words, the row's positional words, then the
 //! instance as `--instance`, the row's options and switches and the further flags the command

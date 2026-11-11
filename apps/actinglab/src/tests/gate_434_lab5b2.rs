@@ -11,14 +11,17 @@
 //   declared by the row in the same form, a global option in any form (the instance as the row's
 //   positional) and a flag the command reads in place of a positional as that positional; and the
 //   row's positionals (the instance, handed on as `--instance`, not among them) fit the count the
-//   command checks. A failure names the row, the flag and the direction.
+//   command checks. A failure names the row, the flag and the direction. Workflow #434 LAB-5F
+//   fix 1: the same for the core rows of `own_flags::CORE_STRICT_ROWS` (`standard-pack check`).
 // - `every_debugging_and_authoring_row_has_one_kind`: every planned row of the two modules (every
 //   row actinglab offers there, and `record draft`, which LAB-5 offers) is in exactly one of the
 //   four kinds (strict, strict by its read list, table-driven, no command; Workflow #434 LAB-5B4:
 //   the second was "lenient" until that slice made its commands refuse a flag they do not read),
 //   each kind lists only such rows, once, and the register answers for exactly the strict rows.
 //   LAB-5B4 also: the positionals of `ensure` and `wait` count the page each reads in place of
-//   `--page` (`own_flags::Accepted::first_positional`).
+//   `--page` (`own_flags::Accepted::first_positional`). LAB-5F fix 1: the rows of
+//   `own_flags::CORE_STRICT_ROWS` are planned core rows, each once, and among the core rows the
+//   register answers for exactly these.
 // The operation table this build embeds and the code's constants only: no Runtime, no device, no
 // file, no clock.
 
@@ -79,7 +82,11 @@ pub(super) fn with_first_positional(
 fn strict_rows_match_their_commands() {
     let table = cli_module::table().expect("the operation table");
     let mut failures = Vec::new();
-    for name in own_flags::STRICT_ROWS {
+    // Workflow #434 LAB-5F fix 1: and the core rows held equal as the strict rows are.
+    for name in own_flags::STRICT_ROWS
+        .into_iter()
+        .chain(own_flags::CORE_STRICT_ROWS)
+    {
         let operation = table
             .operation(name)
             .unwrap_or_else(|| panic!("{name} is a row of the table"));
@@ -211,6 +218,39 @@ fn every_debugging_and_authoring_row_has_one_kind() {
                      module"
                 ));
             }
+        }
+    }
+    // Workflow #434 LAB-5F fix 1: the core rows held equal as the strict rows are
+    // (`own_flags::CORE_STRICT_ROWS`) are planned rows of the core module, each listed once, in
+    // none of the four kinds (the loop above), and among the core rows the register answers for
+    // exactly these.
+    let core = table
+        .operations
+        .iter()
+        .filter(|operation| {
+            operation.module == OperationModule::Core
+                && operation.status == OperationStatus::Planned
+        })
+        .collect::<Vec<_>>();
+    let mut listed = BTreeSet::new();
+    for row in own_flags::CORE_STRICT_ROWS {
+        if !listed.insert(row) {
+            failures.push(format!("the core strict rows list {row} twice"));
+        }
+        if !core.iter().any(|operation| operation.name == row) {
+            failures.push(format!(
+                "the core strict rows list {row}, which is no planned row of the core module"
+            ));
+        }
+    }
+    for operation in &core {
+        let name = operation.name.as_str();
+        let held = own_flags::CORE_STRICT_ROWS.contains(&name);
+        if own_flags::accepted(name).is_some() != held {
+            failures.push(format!(
+                "{name}: the register answers it: {}, a core strict row: {held}",
+                own_flags::accepted(name).is_some()
+            ));
         }
     }
     assert!(

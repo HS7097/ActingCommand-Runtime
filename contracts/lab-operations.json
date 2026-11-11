@@ -2382,7 +2382,7 @@
     },
     {
       "name": "standard-pack check",
-      "module": "authoring",
+      "module": "core",
       "params": [
         {"name": "root", "form": "option", "type": "dir", "required": true, "note": "a game's package root, not the installation's"}
       ],
