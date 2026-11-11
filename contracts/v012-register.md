@@ -12513,9 +12513,10 @@ an entry whose file is gone or holds none of the words fails. It does not read t
 root files or `docs`, `benchmarks` and `resources`, which hold third-party attributions, an
 upstream manifest and dated reports, not the program.
 
-**Not renamed.** Game abbreviations used as instance names and game values in actinglab's tests
-(`ark`, `ak`, `ba`, `azur` and instance ids built from them) are outside the work order's word
-list; the C2 guard forbids them in the Runtime domain only. They are left for a later slice.
+**Not renamed.** The four game abbreviations that actinglab's tests use as instance names and game
+values (and the instance ids built from them) are outside the work order's word list. They are the
+short words of the C2 guard's own list, which forbids them in the Runtime domain only, this
+register included; so this note does not spell them. They are left for a later slice.
 
 **Interface.** None raised ([component-interfaces.md](component-interfaces.md)): nothing a reader
 or writer of any interface sees changes.
