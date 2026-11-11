@@ -9159,7 +9159,17 @@ re-exports the names that test reads.
 --wait` closed its connection before it waited for the Runtime to end (`shutdown::wait`); on a kept
 connection it drops only a clone, and the caller's connection stays open while the wait reads the
 shutdown. Served so, not reconnected; the server's slice decides whether its front closes its
-connection first. No other row differs.
+connection first. **What one call leaves on a kept connection for the next:**
+
+- The client holds the connection for each whole exchange, so on a kept connection a long exchange
+  blocks every other call that shares it: `run start` until its receipt, `run stop` without
+  `--cancel-only` up to the longest deadline a run may have, and a `--wait` that expired and left
+  its worker waiting for the receipt on a clone of the connection.
+- A failed exchange leaves the connection answering that failure to every later call.
+- So a caller that keeps connections (the MCP server) gives each write its own connection and drops
+  a connection after a failure, as today's MCP server does (`apps/actingctl/src/mcp/operator.rs`,
+  `begin_write`; `runtime.rs`, `connect_fresh` and `failure`). With a connection made for each
+  call, which is all actinglab uses, none of this arises.
 
 **Left for the second slice** (the work order's cut): the budget (`Option<&Budget>` into `answer`
 and the steps of the eleven reads that shape, the line carrying `Fitted.exported` as a warning);
@@ -9171,7 +9181,15 @@ equals the configuration `apps/actingctl/src/mcp/runtime.rs` builds). **Rows wit
 shaping** (for the server's slice to bound): every row of `core_ops` but `status`, `diagnose`,
 `events`, `schedule`, `runs`, `run evidence`, `codes` (cut), `facts` (whose read `config` shares),
 `packs`, `remedy` (the read, MCP's `ac_remedy_get`; `remedy set|lift` have none) and `summary`
-(export).
+(export). The second slice must also settle:
+
+- `Caller.completed`: the code `lab_operation_completed` is actinglab's own
+  (`apps/actinglab/src/codes.rs`), so another program cannot build it today; a registry decision.
+- A caller must refuse the members a row does not declare itself, as actinglab's words do; the
+  moved code does not refuse them on every row.
+- `status` answers `watchdog: null` unless the caller sets the watchdog block
+  (`overview::set_watchdog_block`), as actinglab does on Windows.
+- Relative paths in parameters resolve against the caller's current directory.
 
 **Tests.** New: apps row "#434 LAB-5G1" (`gate_434_lab5g1` in actinglab's binary tests, against the
 runtime client's scripted Runtime, `test_support::ScriptedRuntime`; no device, no clock, no sleep):
