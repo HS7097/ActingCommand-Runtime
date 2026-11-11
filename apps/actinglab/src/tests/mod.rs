@@ -91,6 +91,17 @@ mod gate_434_lab5a;
 // changes.
 #[path = "gate_434_lab5c.rs"]
 mod gate_434_lab5c;
+// Workflow #434 LAB-5B2: each strict command's flag list is one constant, held equal to its row,
+// and every debugging and authoring row has one kind.
+#[path = "gate_434_lab5b2.rs"]
+mod gate_434_lab5b2;
+// Workflow #434 LAB-5G4a: `serve --stdio --front mcp` records `Lab-MCP`; serve refuses a value
+// that begins with `--`.
+#[path = "gate_434_lab5g4a.rs"]
+mod gate_434_lab5g4a;
+// Workflow #434 LAB-5E: every offered row says in one sentence what it does.
+#[path = "gate_434_lab5e.rs"]
+mod gate_434_lab5e;
 // Workflow #434 LAB-5G1: the moved serving code answers on a kept connection what the CLI module
 // prints.
 #[path = "gate_434_lab5g1.rs"]

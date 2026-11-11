@@ -1749,6 +1749,30 @@ impl Lab2Path {
     }
 }
 
+/// Workflow #434 LAB-5B2: every flag some path of the verb `verb` (`observe`, `do`, `ensure` or
+/// `wait`) reads, the flags every path reads first, each once: the union of the lists
+/// `refuse_unread_flags` checks, which the verb's row is held equal to
+/// (`cli_module::own_flags`). `None` for another word.
+#[cfg(test)]
+pub(crate) fn verb_reads(verb: &str) -> Option<Vec<&'static str>> {
+    let paths: &[&Lab2Path] = match verb {
+        "observe" => &OBSERVE_PATHS,
+        "do" => &DO_PATHS,
+        "ensure" => &ENSURE_PATHS,
+        "wait" => &WAIT_PATHS,
+        _ => return None,
+    };
+    let mut flags = LAB2_EVERY_PATH_READS.to_vec();
+    for path in paths {
+        for &flag in path.reads {
+            if !flags.contains(&flag) {
+                flags.push(flag);
+            }
+        }
+    }
+    Some(flags)
+}
+
 /// The path `do` takes: an operation the package declares with `--operation` (#412 Lab B-3
 /// S2), online with `--capture` (planned with `--dry-run`), else offline.
 fn do_path(flags: &FlagArgs, dry_run: bool) -> &'static Lab2Path {

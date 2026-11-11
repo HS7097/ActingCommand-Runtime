@@ -8903,6 +8903,231 @@ defaults and names completed (S3), when `offset` and `max_bytes` beside `out` ar
 
 **LAB-5C rollback** (to the release before it). Nothing persisted: code and the table's text.
 
+#### Slice LAB-5B2 (0.12.52): each strict command's flag list is one constant, held equal to its row
+
+Coordinator work order `rd-1108/arch-013/brief-lab5b2.md`, after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` (§1 "Who parses what today", §3 kind T3), read against
+main `af7e2557`, where LAB-5A had completed the rows. The contract is
+[lab-two-entries.md](lab-two-entries.md) §9.1; the table is [lab-operations.json](lab-operations.json).
+The rule of the slice: no command line changes what it accepts, refuses or prints. Since LAB-5A
+the table governs these rows only in `serve --stdio` (and LAB-5's MCP): on the command line their
+own command parses them; until this slice nothing tied the row to the list the command checks.
+
+**The four kinds** (`apps/actinglab/src/cli_module/own_flags.rs`, built for the tests only). Every
+planned row of the debugging and authoring modules (each row actinglab offers there, and `record
+draft`) is in exactly one:
+
+| Kind | Constant | Rows | Its own test |
+|---|---|---|---|
+| strict | `STRICT_ROWS` | 31: `tap`, `swipe`, `long-tap`, `key`, `text`, `observe`, `do`, `ensure`, `wait`, `watch`, `signatures register\|match\|retire`, `unpin`, `record mark`, `record stop`, `package check\|preflight\|loading\|fmt\|edit`, `resource catalog\|validate\|verify\|restore`, `standard-pack check\|compose`, `scheduling compile\|timeline`, `regression`, `replay`: the own command checks its flags against lists in code | this slice |
+| lenient | `LENIENT_ROWS` | 24: `touch-probe`, `recover`, `tap-target`, `navigate`, `debug-package`, `export-evidence`, `recognize-artifact`, `record start\|status\|candidates\|amend\|step`, `package validate\|inspect\|bundle`, `resource compile-maa`, `operation validate\|inspect\|explain`, `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`: the own command ignores a flag it does not read | B3 gives each a read list |
+| table-driven | `TABLE_DRIVEN_ROWS` | 6: `run start`, `run stop`, `reset`, `drill` (the CLI module serves them itself), `user-config`, `user-config set` (their own command is given only the row's declared positionals, `engine::Line::Declared`) | B1 |
+| no command | `NO_COMMAND_ROWS` | `record draft` (MCP's `ac_binding_draft` until LAB-5 builds its command) | LAB-5 |
+
+The survey's 31 and 24 are main's, row for row. It placed neither `user-config` row (they never
+had `params_more`, so they were in neither list); this slice puts them under table-driven.
+
+**The constants** (each the one list its command's check uses; made `pub(crate)` where the register
+reads it; no list changed a flag):
+
+| # | Rows | File (`apps/actinglab/src/`) | Constant | Before |
+|---|---|---|---|---|
+| L5B2-1 | `tap`, `swipe`, `long-tap`; `key`, `text` | `commands/device_commands.rs` | `DIRECT_TOUCH_FLAGS`, `DIRECT_INPUT_FLAGS` (both empty) | `FlagArgs::reject_flags(command)`, which refused every flag; it now takes the command's list, `reject_flags(command, accepted)`, and refuses every flag outside it with the same text (`flag_args.rs`) |
+| L5B2-2 | `observe`, `do`, `ensure`, `wait` | `lab2_cli.rs` | `LAB2_EVERY_PATH_READS` and each path's `Lab2Path` (`OBSERVE_PATHS`, `DO_PATHS`, `ENSURE_PATHS`, `WAIT_PATHS`), unchanged; `verb_reads` (tests only) gives a verb's union | already constants |
+| L5B2-3 | `watch` | `runtime_debug.rs` | `WATCH_QUERY_FLAGS`, `WATCH_CURSOR_FLAGS` (new) | the cursor flags were a `matches!` arm and, again, a literal in `watch_options` (the capability listing, the same JSON) |
+| L5B2-4 | `unpin` | `runtime_debug.rs` | `UNPIN_FLAGS` | a local array |
+| L5B2-5 | `signatures register\|match\|retire` | `signature_cli.rs` | `DEFINITION`, `LIFECYCLE`, `REGISTRATION`, `MATCH_FLAGS` through `options`, unchanged | already constants |
+| L5B2-6 | `record mark`, `record stop` | `commands/session_record.rs` | `RECORD_MARK_SHORTCUT_FLAGS`, `RECORD_MARK_REQUEST_FLAGS` (new), `RECORD_STOP_FLAGS` | mark's four other flags were a `matches!` arm |
+| L5B2-7 | `package check`, `package preflight` | `package_cli.rs` | `CHECK_FLAGS`, `PREFLIGHT_FLAGS` | a comparison, a `matches!` arm |
+| L5B2-8 | `package loading` | `package_build.rs` | `LOADING_FLAGS`, `LOADING_SWITCHES` (new) | its two switches were a local array |
+| L5B2-9 | `package fmt`, `package edit` | `package_tool.rs` | `FMT_FLAGS`, `EDIT_FLAGS` | already constants |
+| L5B2-10 | `resource catalog`, `validate`, `verify`, `restore` | `resource_runtime_support.rs`, `resource_declarations.rs`, `resource_verify.rs`, `resource_restore.rs` | `CATALOG_FLAGS`, `VALIDATE_FLAGS`, `FLAGS`, `RESTORE_FLAGS` | `matches!` arms; `verify`'s was a constant |
+| L5B2-11 | `standard-pack check`, `compose` | `standard_pack_cli.rs` | `CHECK_FLAGS`, `COMPOSE_FLAGS` | a comparison, a local array |
+| L5B2-12 | `scheduling compile`, `timeline` | `scheduling_cli.rs` | `COMPILE_FLAGS`, `TIMELINE_FLAGS` | two local arrays |
+| L5B2-13 | `regression`, `replay` | `recognition_regression.rs`, `replay_cli.rs` | `REGRESSION_FLAGS`, `REPLAY_FLAGS` | `matches!` arms |
+
+**The register.** `cli_module::own_flags::accepted(row)` answers for exactly the strict rows: the
+command's options and switches (`--name-with-dashes`), read from the constants above (for the four
+verbs whose flags depend on the path the command line takes, the union of their paths' lists),
+the flags it reads in place of a positional the row declares (`do --target`, read as `do`'s
+`<target>` by `target_argument`), and the positionals it checks, least and most: `tap` 2, `swipe`
+5, `long-tap` 3, `key` 1, `text` at least 1, exactly none for the others, and no count for `observe`,
+`do`, `ensure`, `wait` (each reads its first positional, if any, as its target or page),
+`package preflight`, `resource catalog` and `resource validate`. Which flags take no value the
+lists do not say; the register says it beside them: `LAB2_SWITCHES` (read with `FlagArgs::bool`)
+and `RECORD_MARK_SWITCHES` (read with `record_flag_switch`) in `own_flags.rs`, `record stop
+--dry-run`, `package fmt --check`, and `package loading`'s `LOADING_SWITCHES` from its code. Some
+lists hold actinglab's global options (`--instance`, `--verbose` and `--dry-run` in the four
+verbs', `--instance`, `--game`, `--server` and `--dry-run` in `record stop`'s), which actinglab's
+parser takes before the command sees its flags; they stay, as the rule of the slice keeps every
+list as it was.
+
+**Corrections of the table (work order point 5).** None: on main the 31 rows declare exactly what
+their commands accept, in both directions, and their positionals fit the counts the commands check.
+
+**Tests.** New: apps row "#434 LAB-5B2": `gate_434_lab5b2::strict_rows_match_their_commands` (for
+each strict row, in both directions: every option and switch the row declares, but actinglab's
+global options, is an option or a switch of its command; every flag of the command is declared by
+the row in the same form, a global option in any form, `do --target` as its positional; the row's
+positionals, the instance not among them since the command line hands it on as `--instance`, fit
+the least the command checks and its most where it checks one; a failure names the row, the flag
+and the direction) and `gate_434_lab5b2::every_debugging_and_authoring_row_has_one_kind` (every
+planned row of the two modules in exactly one kind, each kind listing only such rows, once, and
+the register answering for exactly the strict rows); actinglab's binary tests, the embedded table
+and the code's constants only, no Runtime, device, file or clock. No existing test is changed;
+`lab_ops_table_complete` and `gate_434_lab5a` are untouched.
+
+**Interface.** None raised. No row, type, member, code, key or location is added; the table is
+unchanged.
+
+**Left to other slices.** B1: the table-driven rows (the names `core_ops` and the rescue module read
+by literal name, the rescue module's installer and agent lists). B3: the 24 lenient commands, each
+to get a read list a test holds equal to its row, which also checks the positionals of the
+commands that count none. C, E, F, G as their work orders say.
+
+**What LAB-5B2 changes live.** Nothing: every command line accepts, refuses and prints as before,
+and `serve --stdio` answers as before.
+
+**LAB-5B2 rollback** (to the release before it). Nothing persisted: code only.
+
+#### Slice LAB-5G4a (0.12.52): `serve --stdio --front mcp` records `Lab-MCP`; `serve` refuses values that begin with `--`
+
+Coordinator work order `rd-1108/arch-013/brief-lab5g4a.md`, after the read-only survey
+`rd-1108/arch-013/lab5g-step0-survey.md` (§2, on `5041d952`); the coordinator's rulings on board
+#434: 6769399787 points 9 and 10 (an option only `serve --stdio` takes says that the front end is
+MCP; the child then records `Lab-MCP` and binds on the wire as today's `--via mcp` child does,
+until LAB-6; the variable's rule does not change) and 6775192250 point 16 (`serve` refuses values
+that begin with `--`). On main `4116cbf4`, with LAB-5C (#1573) merged in before the tests. The
+contract is [lab-two-entries.md](lab-two-entries.md) §4.2, §4.3 and §8.2. G4a of the survey's
+§10: nothing starts `serve` with the option until the MCP server's children (G4b).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G4a-1 | `serve --stdio --front mcp` (`cli_module::serve::front`, `serve::Front`) | behaviour | LAB-5G4a | the MCP server's children (G4b) | without `--front` the words after `serve` are checked as before, byte for byte (only `--stdio`; its refusals and their texts, `serve::stdio_only`); with it, `--stdio` once and `--front mcp` once, in either order. Another value (`--front ui`: `argument` `ui`), the option twice and the option without `--stdio` (`argument` `--front`), and any other word, are `actingctl_usage_invalid` `unknown`, as `serve` refuses an unknown word; the option without a value is `value_missing` (deviation (a)). With the option, `ACTINGCOMMAND_INITIATOR` set to anything, an empty value too, is `actingctl_usage_invalid` with `variable` `ACTINGCOMMAND_INITIATOR`, before the installation and initiator check and before the loop. Each refusal is the one line `{outcome}`, exit 1, with its developer line, as `serve`'s refusals are. No other command and no row's words take the option |
+| L5G4a-2 | the process's initiator under the option | behaviour | LAB-5G4a | — | the loop (`serve::serve_as`) hands the front end to `cli_module::answer`. A row actinglab's own command serves runs with its invocation's `via` set to `mcp` (`engine::line`), as the line of MCP's `--via mcp` child sets it, so `cli_module::recording_initiator` gives `Lab-MCP` on each step and mark the command adds (`record start\|mark\|step\|stop\|amend`, and `--record` where a row passes it); a rescue row (Windows) is answered with `Initiator::LabMcp` (`cli_module::rescue::answer`), so its journal carries `Lab-MCP`. The line stays the CLI module's (`own_line::exit`): the envelope is printed only on `main`'s path for a command line with `--via`. `recording_initiator` and `Initiator::of_lab_process` are main's: `ACTINGCOMMAND_INITIATOR=Lab-MCP` stays refused (§4.2) |
+| L5G4a-3 | the binding under the option | behaviour | LAB-5G4a | — | `serve::main` sets `CHANNEL_VIA` to `mcp` (`serve::Front::via`) before the loop, so `lab_client_config` gives every connection actinglab's own commands open the configuration of MCP's `--via mcp` child: the Lab channel, `via` `mcp`, the envelope (Lab, Lab) (deviation (b)). Without the option it stays unset, as on main |
+| L5G4a-4 | a value that begins with `--` (`cli_module::words::from_json`, `not_a_flag`) | behaviour | LAB-5G4a | — | for each member a row declares, after its type is checked: a string that begins with `--`, or a list holding one (a `repeat` parameter, a `list<string>`, a `json` list), is `actingctl_usage_invalid` with the member as `argument` and `argument_problem` `not_recognised`, answered as a line, and the loop goes on. Numbers, booleans, objects and strings that begin with one dash pass. It holds for every row whichever code serves it (`core_ops`, the rescue module, actinglab's own commands), since the loop reads the line before any of them. The command line (`words::parse`) does not change |
+
+**The problem chosen** (the work order asks which and why): `not_recognised`, "text that is none
+of the spellings or forms it may take", which main gives text of a form its parameter does not
+take (the command line's words for a word outside an `enum`; the operation layer for `gap --why`
+with a control character). The value is a string, so `wrong_type` ("not of the type it must
+have") would say something untrue, and it is given, so `value_missing`, which the command line
+answers when a word that begins with `--` follows an option (LAB-5A fix 1), would too; today's
+MCP server refuses the same value with the same problem (`apps/actingctl/src/mcp/lab.rs`,
+`not_a_flag`), so a client of the new server sees what it sees today.
+
+**Tests.** New: apps row "#434 LAB-5G4a": `gate_434_lab5g4a::serve_front_mcp_records_lab_mcp` and
+`gate_434_lab5g4a::serve_refuses_values_that_begin_with_two_dashes` (actinglab's binary tests; an
+empty configuration and a recording folder in a temporary folder; no Runtime, no device, no clock,
+no sleep). The loop is driven with a front end through `serve::serve_as`; `serve::serve`, which
+LAB-2's and LAB-2b's tests drive, is now that loop without one, compiled for tests only. No
+existing test changed.
+
+**Interface.** None raised: `Lab-MCP` is already one of the recording's and the journal's words
+(§4.1); no code, key, location, record or vocabulary token is added, and `actingctl_usage_invalid`
+with `argument`, `argument_problem` and `variable` is main's.
+
+**Where LAB-5G4a differs from its work order's letter.**
+
+- (a) The option without a value is refused `value_missing`, the module's problem for a flag
+  without its value; the work order names no problem for it. The option is taken before or after
+  `--stdio`.
+- (b) "The connection the process binds": the core rows `lab-ops` serves connect through
+  `lab_ops::front::client_config` as without the option (the Lab channel, no `via`). Today's
+  `--via mcp` child serves none of them (its command line is actinglab's own), so it binds no such
+  connection to copy, and the MCP server serves them in its own process (the survey's §2).
+- (c) Found, not changed: a rescue row run with `--detach` under the option starts its detached
+  run with `ACTINGCOMMAND_INITIATOR=Lab-MCP` (`rescue::detach`, `install::host::detach_with_wmi`
+  give a detached run the initiator through the variable), which that run refuses by §4.2's rule;
+  the caller gets `detached: true` and the run's log the refusal. The same holds wherever the rescue
+  module runs with `Lab-MCP`, as the survey plans for the MCP server's own process (`deploy` and
+  `rollback` detached through MCP, §5). How a detached run carries `Lab-MCP` is for the server's
+  slices; nothing starts `serve --front mcp` yet.
+
+**What LAB-5G4a changes live.** Nothing a person or a client sees: nothing starts `serve` with
+`--front mcp` yet. `serve --stdio` refuses a string value that begins with `--`, which before
+reached the row's command as a flag. The command line and today's MCP server do not change.
+
+**LAB-5G4a rollback** (to the release before it). Nothing persisted that an older build cannot
+read: a recording or journal written under the option carries `Lab-MCP`, one of the six words.
+
+#### Slice LAB-5E (0.12.52): every offered row says in one sentence what it does
+
+Coordinator work order `rd-1108/arch-013/brief-lab5e.md`, after the read-only surveys
+`rd-1108/arch-013/lab5a-step0-survey.md` §7 and `rd-1108/arch-013/lab5g-step0-survey.md` §1 and
+§6; on main `39c0c935`. The coordinator's ruling (board #434, 6769399787, point 13): the rules that
+hold for every tool are written once, in the MCP server's instructions (a later slice); each row
+gets one short sentence of its own, optional in the schema, shared by the command line's help and
+the MCP description; long usage goes to the manual. The contract is
+[lab-two-entries.md](lab-two-entries.md) §9.1 and §9.2. No command prints anything new.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5E-1 | the operation's member `help` (string, optional) | contract table, reader | LAB-5E | — | `table::Operation::help` and `table::MAX_HELP_BYTES` (160); the reader takes it and refuses nothing it took before; in the file on its own line directly before the row's `output`, away from the lines other slices change (`module`, `params`) |
+| L5E-2 | one sentence on every offered row | contract table text | LAB-5E | — | 138 rows: core 45, debugging 26, authoring 36, rescue 31 (every row actinglab offers, `words::offered`, the rescue module's 29 on Windows, where it runs, and the three planned rows of slice LAB-5 that LAB-5's server offers itself: `record draft`, `mcp config`, `mcp entries`); 13,624 bytes in all, the longest 139 (`status`). A row no program offers (reserved, or planned and not served) has none |
+
+**The rules of a sentence** (the work order's point 2, now §9.1's): English, plain ASCII, at most
+160 bytes, one sentence or two short ones, beginning with a verb in the third person ("Reads…",
+"Pauses…", "Lists…"); it says what the operation does and on what and, where a caller must know it
+to use the row at all, what comes back or what to call next ("…; run evidence pages what it did
+step by step"); no rule every row shares (budgets, handles in general, exports, cursors, what
+`irreversible` means: the instructions); no MCP tool name (`ac_…`; a row is named by its words); no
+game word; no path of a machine; nothing the row's parameters already say. Sources: the row's
+`output`, `notes`, `source` and parameters, the code that serves it, and the description of the
+MCP tool it replaces (`apps/actingctl/src/mcp/tools.rs` and the tools' files), whose first sentence
+was usually kept.
+
+**Where today's MCP description and the code disagreed** (the code won; no row's other members
+change):
+
+- `pause`: `ac_pause` answers `{paused, owner_epoch}` and names them for `ac_resume`; the row's line
+  answers the Runtime's result without `owner_epoch` (`core_ops`, `pause`). The sentence names no
+  answer member.
+- `resume`: `ac_resume` lifts only the pause the caller read; the row without `expect` lifts the
+  scope's pause, whatever it is. The sentence says the scope's pause.
+- `run start`: `ac_run_pack` answers a handle at once; the row's line waits for the run's receipt.
+  The sentence says the receipt.
+- `frame`: `ac_observe` always exports the frame; the row answers its material ref and writes a
+  file only with `out`. The sentence says the ref.
+
+Two rows whose `output` and code differ, without an MCP tool: `monitor set|clear` answer the
+instance's monitor status (`configure::set_monitor`, `configure::clear_monitor`), where `output`
+says the policy; `run show` answers the run's status without steps (`run_show::answer`, as its
+notes say), where `output` names steps. Each sentence follows the code; `output` is left as it is.
+
+**Where the command line could show it later** (not decided here): `command_cap`
+(`apps/actinglab/src/commands/capabilities.rs`) builds each entry of `command_capabilities()`, the
+list that `help` (`cli_information::help_data`), `list commands` (`cli_information::run_list`) and
+`capabilities` (`capabilities::run_capabilities`) print. The table's rows have no entry there today
+(the CLI module's refusal names the table, `cli_module::USAGE`); an entry could take its row's
+`help`, or the offered rows could gain entries of their own. `actinglab help`, `list commands`,
+`capabilities` and every row's line print byte for byte what they printed.
+
+**Readers of the table.** Only `crates/lab-ops`' reader parses it (`table::operation_table`, the
+embedded copy, and `table::read_operation_table`): actinglab's CLI module (`cli_module::table`,
+`words`, `serve`) and the tests of `lab-ops` and actinglab use its rows; the neutrality guard reads
+the file as text. None refuses the member. The console's repository reads its own pinned copy: a
+strict reader there must accept `help` when it next raises its pin.
+
+**Tests.** Changed: `lab_ops_table_complete` (LAB-1) also checks every `help`: ASCII, 1 to
+`MAX_HELP_BYTES` bytes on one line (no control character), no `ac_`, no two rows alike; the
+requirement it pins grows by the work order's point 3. New: apps row "#434 LAB-5E",
+`gate_434_lab5e::lab5e_offered_rows_have_help` (actinglab's binary tests; the embedded table only):
+every row actinglab offers and every planned row of slice LAB-5 has a `help` that is not blank. The
+neutrality guard's words: no test of `lab-ops` or actinglab can reach its list (neither depends on
+`tools/actinglab-architecture`, and a copy of its words in a guarded crate would trip the guard), so
+the guard's own test `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral`, which
+reads `contracts/lab-operations.json` line by line, checks each sentence on its own line.
+
+**Interface.** None raised: an optional member; the schema string stays; no code, key, location or
+vocabulary token is added.
+
+**What LAB-5E changes live.** Nothing a person, a client or the Runtime sees; nothing reads `help`
+yet but the table's tests.
+
+**LAB-5E rollback** (to the release before it). Nothing persisted: code and the table's text.
+
 #### Slice LAB-5G1 (0.12.52): the core rows' serving code moves into the operation layer and takes its connection from its caller
 
 Coordinator work order `rd-1108/arch-013/brief-lab5g1.md`, after the read-only survey
