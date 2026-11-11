@@ -13579,6 +13579,36 @@ coordinator:
    a direct run's is registered before its lease, and the run ends at its first checkpoint; if that
    is not cheap, the refusal stays and the console sends the stop again.
 
+**The coordinator's answers (2026-11-11, on reading this contract; the coordinator's, not Alice's
+words).** The differences (a) to (n) above are accepted as written, and every answer the contract
+proposes stands: each "(proposed)" in the texts of this slice reads as settled, and the code slice
+drops the mark where it builds the rule. On the questions:
+
+1. As proposed: `stopped`.
+2. As proposed: a restart with no terminal settles the run as interrupted, as today. The stop's
+   own records do not learn to name the run.
+3. As proposed: the Runtime's own reruns the stopped dispatch served end with it, by the record,
+   so that replay agrees. A person's stop is not undone by a rerun the Runtime owes itself; the
+   pair then waits for its own trigger and cooldown.
+4. As proposed: the counts stay taken and the runtime counts; no refund, no runtime-budget
+   rewrite.
+5. As proposed: the cooldown counts from the dispatch. The code slice says plainly where a person
+   reads it (the row `StopInstanceRun` of runtime-interface.md and the `help` of the row
+   `task stop`) that a stop ends this run only: a task whose trigger still holds is dispatched
+   again once its cooldown has passed, at the next evaluation when the stopped run outlasted it,
+   and a closing row (R-8) or a pause keeps it from running. A cooldown from the stop is not
+   built; if use shows the need, it is a slice of its own.
+6. As proposed: the terminal stays `task.failed` with `contained_task_cancelled`, and this slice
+   changes no run view; the console words such a run as stopped, from its code.
+7. As proposed.
+8. As proposed: the code slice registers a policy run's control before its package's preparation.
+   If the code shows that this cannot be done without changing how a failed preparation ends, the
+   refusal stays, the register says so, and the console sends the stop again once.
+
+The code slice is built as the two the contract offers, R-6b1 (the form, its check, every reader
+and the ledger's recovery rule) and then R-6b2 (the stop and the settlement that write it), in the
+same release.
+
 **The code slice.**
 
 | Slice | Repository | Size | What | Depends on | Interfaces |
