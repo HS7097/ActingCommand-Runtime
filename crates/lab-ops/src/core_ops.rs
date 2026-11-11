@@ -104,15 +104,21 @@ pub struct Caller<'a> {
     pub connection: Connection<'a>,
 }
 
-/// The operations of this module: the core rows and `run start`, `run stop`, `reset`, `drill`.
+/// The operations of this module: the core rows (but those actinglab's own command serves) and
+/// `run start`, `run stop`, `reset`, `drill`.
 pub fn serves(operation: &Operation) -> bool {
     let name = operation.name.as_str();
     if matches!(name, "run start" | "run stop" | "reset" | "drill") {
         return true;
     }
-    // `app launch|restart|stop` are actinglab's own `session app` (the engine).
+    // `app launch|restart|stop` are actinglab's own `session app` (the engine), and (Workflow #434
+    // LAB-5F fix 1, a core row since the coordinator's ruling of 2026-11-11) `standard-pack check`
+    // is actinglab's own `standard-pack check`.
     operation.module == crate::table::OperationModule::Core
-        && !matches!(name, "app launch" | "app restart" | "app stop")
+        && !matches!(
+            name,
+            "app launch" | "app restart" | "app stop" | "standard-pack check"
+        )
 }
 
 /// The operation `operation` with `params`, as its line, for `caller`.
