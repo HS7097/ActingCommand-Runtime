@@ -335,6 +335,9 @@ use policy_outcome::{
 // #419 SUB-LAG-1, tests: the hook right after an event subscription registered.
 #[cfg(test)]
 pub(crate) use read_events::AFTER_SUBSCRIBE_FOR_TEST;
+// ISO-START-1 (#419), tests: what the next start adds to its settlement-fact step.
+#[cfg(test)]
+pub(crate) use runtime_facts::{START_SETTLEMENT_FACTS_FOR_TEST, StartSettlementFactsForTest};
 // Workflow #383 AO-7.
 pub(crate) use policy_wake::PolicyWakeSignal;
 pub use policy_wake::{PolicyWakes, policy_trigger_for_event, policy_trigger_for_family};
@@ -2490,7 +2493,10 @@ impl RuntimeHost {
             // Workflow #373 NAV-6 (M-373 §7): every standard-pack game root, read and recorded;
             // a broken one never stops the start.
             shared.register_standard_packs_on_start()?;
-            shared.record_policy_settlement_facts_on_start()?;
+            // ISO-START-1 (#419; register §1.301): a pair whose settlement facts the store
+            // refuses is that pair's alone: recorded and skipped, never the start's end; one
+            // refused for another reason than a stale record holds its instance below.
+            let skipped_settlement_facts = shared.record_policy_settlement_facts_on_start()?;
             // Workflow #386 SR-2b-1 (fix round 1, review L3): the `policy_rerun_exhausted`
             // records the start's reconciliation queued, recorded here so a stop before the first
             // evaluation cannot lose them. Those runs are settled already, so a failure here is
@@ -2527,6 +2533,9 @@ impl RuntimeHost {
             // could not settle is recorded and its instance paused, after the persisted pauses
             // are restored and before any instance is prepared.
             shared.hold_unsettled_dispatches(&unsettled_dispatches)?;
+            // ISO-START-1 (#419; register §1.301): each instance whose pair's settlement facts the
+            // start refused for another reason than a stale record is held as those are.
+            shared.hold_skipped_settlement_fact_instances(&skipped_settlement_facts)?;
             // Workflow #369 W-2: the instance workers exist before the daemon-start preparation,
             // so a failed preparation's ladder already has one.
             host_claims::spawn_instance_workers(&shared)?;
