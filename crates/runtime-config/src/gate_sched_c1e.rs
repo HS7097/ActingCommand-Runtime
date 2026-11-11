@@ -112,7 +112,8 @@ fn fact_line(offset: i64) -> PoolLineValue {
 // none. An instruction sets B's (over no base) and clears it again.
 #[test]
 fn sched_c1e_c1_the_key_is_read_from_the_file_and_set_and_cleared_by_an_instruction() {
-    let (row, instance) = find_row(&key(INSTANCE_A)).expect("the key is in the key table");
+    let name = key(INSTANCE_A);
+    let (row, instance) = find_row(&name).expect("the key is in the key table");
     assert_eq!(instance, Some(INSTANCE_A));
     assert_eq!(row.name, KeyName::PerInstance(INSTANCE_POOL_LINES));
     assert_eq!(row.file_path, FilePath::InstanceMember);
