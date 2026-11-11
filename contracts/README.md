@@ -364,7 +364,13 @@ starts the one stage that lists an operation whose `from` is that page or (Workf
 #411 B14) lists the page in its `entry_pages`; a stage that lists the page in its
 `end_pages` (B20) is a start of its own, on which the run ends at once. The run
 enters at the stage of the page it
-matched; static reachability is checked from every such start. A single entry page
+matched; static reachability is checked from every such start. Workflow #428 NAV-L1
+(since 0.12.55; [v012-register.md](v012-register.md) §1.319): so does a layer the
+host runs for another package's entry (a prerequisite package, a navigation edge, a
+shared interrupt's handler, a return-home or entry recovery package, a step of a
+navigation recovery chain), when the first page it observes is a page of its set; a
+layer whose first page is no page of its set starts at the first stage. Which first
+page a layer accepts and how long it waits for it are unchanged. A single entry page
 still starts the first stage. Admission refuses a set with
 `contained_task_entry_pages_invalid` and its `entry_problem` (`empty`, `too_many`,
 `duplicate`, `any_in_set`, `unresolved`, `phase_start_missing`,
