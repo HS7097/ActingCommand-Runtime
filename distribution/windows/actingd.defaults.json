@@ -427,7 +427,8 @@
         "host.config_overrides",
         "host.contained_settlement",
         "host.idle_state",
-        "host.agent_wake"
+        "host.agent_wake",
+        "host.capped_episodes"
       ],
       "reobserve_prefixes": [
         "device.",

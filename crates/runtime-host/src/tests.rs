@@ -452,6 +452,10 @@ mod gate_419_iso_pe;
 // start: a stale pair is recorded and skipped, a pair refused for its own reason holds only its
 // instance, and a store that cannot be written still fails the start.
 mod gate_419_iso_start1;
+// #428 SCHED-C1d (register §1.299 SC1-11): the capped episodes are the tagged program fact
+// `host.capped_episodes`, kept across a start by the anchor rule; what a start cannot keep and a
+// record the store refuses are warnings, and a Runtime without an episode records none.
+mod gate_sched_c1d;
 // #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
 // the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
 mod gate_411_a35;

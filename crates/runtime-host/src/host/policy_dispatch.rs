@@ -1396,6 +1396,11 @@ impl HostShared {
                 blackout_holds,
             )
         };
+        // #428 SCHED-C1d (register §1.299 SC1-11): an evaluated cycle that changed a capped
+        // episode records `host.capped_episodes`; a record the store refuses is a warning.
+        if cycle.evaluation.is_some() {
+            self.keep_capped_episodes(RuntimeLifecycleFailureStage::PolicyDriver)?;
+        }
         attach_eligible_since_unknown_reasons(&mut cycle, &eligibility_unknown_pairs);
         attach_missing_instance_fact_reasons(
             &mut cycle,

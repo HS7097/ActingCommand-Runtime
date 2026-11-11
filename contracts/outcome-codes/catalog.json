@@ -2583,7 +2583,7 @@
     },
     "capped_episode": {
       "type": "integer",
-      "description": "Which capped episode of the pool on the instance, counted from 1 since the Runtime started: an episode begins when the reading reaches the cap (SS-2h, contracts/scheduling/README.md \"Capped spending order\")."
+      "description": "Which capped episode of the pool on the instance, counted from 1 since the Runtime started: an episode begins when the reading reaches the cap (SS-2h, contracts/scheduling/README.md \"Capped spending order\"); since SCHED-C1d (0.12.53) an episode a start keeps (host.capped_episodes) keeps its number, and the next one counts on from it."
     },
     "capped_round": {
       "type": "integer",
@@ -3861,7 +3861,7 @@
           "description": "Capped: another consumer of the pool is the head of the round's order (task_id), or this one already ran in the round; one consumer of the pool is dispatched at a time."
         },
         "capped_cap_unknown": {
-          "description": "The pool's capacity, its reading or a fact a line reads gives no value (fact_key and unknown_reason when a fact gives none), so its written lines cannot be kept and it enters no capped state."
+          "description": "The pool's capacity, its reading or a fact a line reads gives no value (fact_key and unknown_reason when a fact gives none), so its written lines cannot be kept and it enters no capped state; since SCHED-C1d (0.12.53) an episode under way waits instead of ending, its consumers held with this token whether or not the pool writes lines, and goes on, or ends by its rule, once the values come back."
         },
         "lines_invalid": {
           "description": "The lines read at the evaluation break their rules: the stop line not above the hard line, or a line above the capacity or below 0 (stop_line, hard_line, pool_capacity)."
@@ -9425,7 +9425,8 @@
       "runtime-host"
     ],
     "capped_": [
-      "policy"
+      "policy",
+      "runtime-host"
     ],
     "capture_": [
       "actingd",

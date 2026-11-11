@@ -11018,7 +11018,12 @@ draft's, for the coordinator's review), each with its section:
 8. Lines for one instance through the Lab's `config set` and `config clear`, the key
    `instance.<instance id>.scheduling.pool_lines` (scheduling/README.md, "Lines for one instance").
 9. Episodes survive a start, a generation with unchanged consumers and an unknown reading, in the
-   state file `policy/capped-episodes.json` ("Episodes survive").
+   state file `policy/capped-episodes.json` ("Episodes survive"). **Corrected on 11-11 by the
+   coordinator** (SCHED-C1d): that state file contradicted iron rule 13 (Alice: no separate
+   on-disk file for program state) and her rulings of 10-09 20:2x and 20:5x (tagged ledger records,
+   loaded into memory at a start, replace state files); the episodes are the tagged program fact
+   `host.capped_episodes`, kept across a start by the anchor rule of `host.idle_state` (answer 2
+   below, row SC1-11).
 10. An optional `trigger_line`, absent the capacity ("The trigger line").
 11. A pool its lines cannot spend is the warning `pool_lines_unspendable`, in the status read ("A
     pool its lines cannot spend").
@@ -11059,7 +11064,7 @@ draft's, for the coordinator's review), each with its section:
 | SC1-8 | a V2 pool's `trigger_line` (two forms) | catalog format addition | SCHED-C1c | `acmodel bindings apply` (RL-R) | only beside both lines; `pool_lines_invalid`; `0 ≤ H < S ≤ T ≤ cap` |
 | SC1-9 | `pool_lines_unspendable` (warning; `pool_id`, `pool_capacity`, `stop_line`, `hard_line`, `least_consumption`, `lines_source`) as a decision reason and a compile warning; the key `least_consumption` | outcome catalog addition (policy) | SCHED-C1c | the policy evaluator and compiler | shown by `ScheduleExplanation`; the compile warning reaches `config.catalog_warnings` |
 | SC1-10 | `standard_pack_line_trigger_redundant` (warning; `game`, `task_id`, `pool_id`) | outcome catalog addition (shared) | SCHED-C1c | the composer, for the tools | a hint; the workbench does not record it |
-| SC1-11 | the episodes kept: `<state root>/policy/capped-episodes.json` (`actingcommand.capped-episodes.v1`: owner epoch; per instance and pool the episode number, rounds, consumers key, round start, starting reading, order and passed members); the consumers key instead of the catalog hash; waiting on an unknown value; `capped_state_failed` (warning; `operation` `load` or `store`) | Runtime-owned state file (no ledger shape); behaviour; outcome addition (runtime-host) | SCHED-C1d | runtime-host policy host | no peer reads it; prefix `capped_` registered for runtime-host too |
+| SC1-11 | the episodes kept: the tagged program fact `host.capped_episodes` (Runtime scope, a record list: the writer's start anchor; per instance and pool the episode number, rounds, consumers key, round start, starting reading, order and passed members); the consumers key instead of the catalog hash; waiting on an unknown value; `capped_state_failed` (warning; `operation` `load_capped_episodes` or `store_capped_episodes`). **Corrected on 11-11 by the coordinator:** the first text named a Runtime-owned state file, `<state root>/policy/capped-episodes.json` (`actingcommand.capped-episodes.v1`, the owner epoch that wrote it), which contradicted iron rule 13 and Alice's rulings of 10-09 20:2x and 20:5x; the anchor rule of `host.idle_state` (#405 N-2) takes the owner epoch's place | runtime fact (a new key of the `host.` family, tagged: one entry in the default of `ledger_observer.tag.workbench_patterns`; no ledger shape); behaviour; outcome addition (runtime-host) | SCHED-C1d | runtime-host policy host | no peer reads it; prefix `capped_` registered for runtime-host too |
 | SC1-12 | the per-instance key `instance.<instance id>.scheduling.pool_lines` (object of at most 32 pools); the value `lines_source` (vocabulary `instance`, `catalog`, `default`) on `pool_line_held`, `capped_spend` and `pool_lines_unspendable` | configuration key; outcome value and vocabulary | SCHED-C1e | the Lab's `config set` and `config clear`, the console | settable, no default; in the file the entry's `scheduling.pool_lines` |
 
 **The code slices, in order.**
@@ -11069,7 +11074,7 @@ draft's, for the coordinator's review), each with its section:
 | SCHED-C1a | Runtime | M–L | SC1-1 to SC1-6 but `pool_trigger_line`: the task member and its refusals, `judge` reading `V`, the reason and the rank detail, the composer's members, coverage and provenance answers, the subsystem; `v2/README.md`, `v2/tasks.schema.json`, `actingd-check-config.md` rows | this contract | none: catalog and `schedule.json` additions gated by `requires`, outcome additions (as §1.289) |
 | SCHED-C1b | Runtime | S | SC1-7 | SCHED-C1a | none (as §1.290) |
 | SCHED-C1c | Runtime | M | SC1-8 to SC1-10 and `pool_trigger_line` | this contract | none |
-| SCHED-C1d | Runtime | M | SC1-11 | SCHED-C1c (the episode's rule reads `T`) | none: a file only the Runtime writes and reads; a rollback's build ignores it, and the next start of this one drops it (owner epoch) |
+| SCHED-C1d | Runtime | M | SC1-11 | SCHED-C1c (the episode's rule reads `T`) | none: a tagged program fact only the Runtime writes and reads (a new `host.` key, its tag a default entry, as `host.idle_state` and `host.agent_wake` were added); a rollback's build neither reads nor records it, and the next start of this one drops it by the anchor rule (corrected on 11-11: it said "a file only the Runtime writes and reads", dropped by the owner epoch) |
 | SCHED-C1e | Runtime | M | SC1-12: the key and its section check in `runtime-config` (the instance's valued pools of the active generation in its context), the host's read at every evaluated cycle into the evaluation, `capped::lines` reading an instance's set first, `lines_source`; `runtime-config.md` rows | SCHED-C1c | `actingd-config` by one (a new member of an `instances[]` entry), once, released together with the console's matching range |
 
 Order: SCHED-C1a first, since it is what lets a game's daily rules run once ruling 116's stop is
@@ -11085,7 +11090,13 @@ open questions, the draft accepted as written).
    states the unit and who named it beside the game's `schedule.json`, and this contract says only
    "one unit per game, the unit of its valuations".
 2. *Where episodes are kept:* the new file `policy/capped-episodes.json`, as written; not the
-   ledger.
+   ledger. **Corrected on 11-11 (13:4x) by the coordinator:** this answer contradicted iron rule 13
+   ("no separate on-disk file is opened for program state") and Alice's rulings of 10-09 20:2x and
+   20:5x (tagged ledger records, loaded into memory at a start, replace state files); it was the
+   coordinator's, not hers, and no exception is asked for. The episodes are kept as the tagged
+   program fact `host.capped_episodes`, which the ledger records as every program fact and a start
+   loads before the first evaluation, by the anchor rule of `host.idle_state` (#405 N-2), as
+   "Slice SCHED-C1d" below builds.
 3. *Per-instance lines:* the configuration key through `ConfigureSettings`, as written, replacing
    design §4.3; SCHED-C1e raises `actingd-config` once and is released together with the console's
    matching range.
@@ -11260,6 +11271,93 @@ refuses a pool that writes `trigger_line` at its reader (`unknown_field`) and do
 `pool_trigger_line`, so its composer refuses such a `schedule.json` (`schedule_requires_missing`);
 first remove the member and let this build activate a generation without it, as §1.289's rollback
 says for SS-2h's.
+
+#### Slice SCHED-C1d (0.12.53): a capped episode survives a start, a generation and an unknown reading
+
+Coordinator work order `rd-1111/brief-sched-c1d.md`, with the coordinator's correction of 11-11
+13:4x (not Alice's words) in place of its points 1 and 2: no file; the episodes are one tagged
+program fact, as `host.idle_state` is kept (iron rule 13; Alice's rulings of 10-09 20:2x and 20:5x;
+answer 2 and row SC1-11 above, corrected). On SCHED-C1c's branch at `2dcea47b` (PR #1589). The
+contract is [scheduling/README.md](scheduling/README.md) ("Pool lines", "Capped spending order"
+with "Episodes survive" and "What a person sees") and
+[runtime-fact-store.md](runtime-fact-store.md) (`host.capped_episodes`), row SC1-11 above. The text
+names no game, resource or value: the tests' ids are neutral.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| C1D-1 | the runtime fact `host.capped_episodes` (Runtime scope, a record list, source `runtime`, no lifetime): the writer row `start_anchor`; per episode a row `instance_alias`, `pool_id`, `capped_episode`, `capped_round`, while a round is under way `round_started_at_unix_ms`, `pool_reading`; its rows `consumer_task_id`, `consumed`, `limited`; while a round is under way its rows `member_task_id`, `consumed`, `passed`?, `gate_code`? in the frozen order (SC1-11) | runtime fact (new key of the `host.` family) | SCHED-C1d | the host (`crates/runtime-host/src/host/capped_episodes.rs`) | recorded after an evaluated cycle that changed an episode (`keep_capped_episodes`, `policy_dispatch.rs`) and once by a start that found it, under its own anchor; read at start by `restore_capped_episodes`, after `restore_idle_state` and before any evaluation; none without an episode |
+| C1D-2 | `host.capped_episodes` in the default of `ledger_observer.tag.workbench_patterns` (`[&str; 14]`; `actingd.defaults.json`) | default of a list key | SCHED-C1d | — | as AGT-1a added `host.agent_wake` (AGT1A-5): no key, no revision; `config.parameters.ledger_observer` lists one entry more and the shipped defaults file's digest in `config.selection` changes |
+| C1D-3 | `CappedMemory::kept`, `CappedMemory::restore`, `KeptEpisode`, `KeptConsumer`, `KeptRound`, `KeptMember`, `CappedRestore`, `CappedStateProblem` (`crates/policy/src/evaluator/capped/kept.rs`) | policy crate API (no shape of its own) | SCHED-C1d | — | the shape and the rules of an episode; the host owns the fact's rows |
+| C1D-4 | an episode's consumers key (`Episode::consumers`, `Episode::keep_consumers`) in place of its catalog hash; a generation that keeps the pool's consumers (each by its accounting identity, its `⌈C/1000⌉` and its `benefit_limited`) keeps the episode, a continued consumer taking its new id in the frozen order; an unknown capacity, reading or line's fact makes an episode under way wait, its judged candidates held with `pool_line_held` `capped_cap_unknown` | behaviour (evaluation) | SCHED-C1d | the policy evaluator | `crates/policy/src/evaluator/capped.rs` `plan`, `step`; `capped::plan`, `benefit::gate` and `apply_priority_selection` no longer take the catalog hash; every other end of the order unchanged |
+| C1D-5 | `capped_state_failed` (warning / none, pending, since 0.12.53; `operation` required, `fact_key` required, `instance_id`, `pool_id` optional), the locations `load_capped_episodes` and `store_capped_episodes`, the prefix `capped_` held by runtime-host too | outcome catalog additions (runtime-host) | SCHED-C1d | the host | one `runtime.failed` record at Warning under the system links per dropped value or episode and per refused record, handed to the daemon's log too |
+
+**Tests.** New: policy rows "#428 SCHED-C1d", `actingcommand-policy::lib::tests::gate_sched_c1d`
+tests 1 to 5 (`sched_c1d_t1_a_restart_continues_the_round_from_the_kept_episodes`,
+`sched_c1d_t2_a_generation_keeps_the_episode_while_its_consumers_are_the_same`,
+`sched_c1d_t3_an_unknown_reading_waits_and_the_next_known_one_goes_on`,
+`sched_c1d_t4_the_restore_refuses_broken_episodes_and_drops_an_unvalued_pool`,
+`sched_c1d_t5_without_an_episode_nothing_is_kept`), on fakes with a fixed clock, no sleep and no
+thread; host row "#428 SCHED-C1d", `actingcommand-runtime-host::lib::tests::gate_sched_c1d` tests 1
+to 4 (`sched_c1d_h1_a_start_keeps_the_episodes_of_the_last_settled_start`,
+`sched_c1d_h2_a_value_the_start_cannot_keep_warns_and_the_start_goes_on`,
+`sched_c1d_h3_a_record_the_store_refuses_warns_and_the_runtime_goes_on`,
+`sched_c1d_h4_a_runtime_that_never_has_an_episode_records_no_fact`), each a Runtime started on fakes
+and started again on the same state root on a manual Runtime clock (the harness of `host.idle_state`'s
+and ISO-START-1's restarts); the episodes the first start keeps are a record of the fact through the
+host's one writer (`record_runtime_fact_for_test`), and test 3's refusal is injected at the record
+(`CAPPED_EPISODES_STORE_REFUSED_FOR_TEST`, a record list too large for the store). Changed, the
+approved behaviour change (as AGT-1a's): `ledger_observer_tests`' `WORKBENCH_PATTERNS`
+(`actingcommand-runtime-config`) gains `host.capped_episodes`. No other existing test changed: the
+SS-2h tests that end an episode at a new generation add a consumer (`ss2h_t16`), and none pinned an
+unknown reading's end; no golden re-recorded.
+
+**Interface.** None raised: `ledger` (a new key of an existing record, `runtime.fact_recorded`, and
+its index row as every tagged key's), `actingd-config` (one default entry of an existing list key,
+as AGT-1a's), `runtime-client`, `package`, `runtime-outcomes` (one code and two locations in the
+catalog).
+
+**Where SCHED-C1d reads the contract.**
+
+- (a) A record row holds scalars only, so "one row per instance and pool" is one episode row,
+  followed by its consumer rows and its member rows.
+- (b) The anchor rule is `host.idle_state`'s: the fact is kept only when its writer is the anchor
+  `host.contained_settlement` named before this start. A start that found the fact records it again
+  under its own anchor, kept or not, so an episode a start kept and no cycle changed survives the next
+  start too, and a dropped value is not reported again; without a start anchor the record is fatal
+  (`contained_settlement_anchor_invalid`), as for `host.idle_state`.
+- (c) What a start drops: a value of another shape (not the Runtime's record list, no writer row
+  first, a row of no kind or of another member, a member row of an episode without a round, a gate
+  code this build does not register) or against the rules (a pair twice, an episode number 0, no
+  consumer, a consumption 0, a task twice, a round without a round number or without members, a
+  member that is no consumer, a gate code on a member not passed): the whole value; a stale one: the
+  whole value; an episode of an instance that is not registered or of a pool the active catalog does
+  not give a declared valuation: that episode alone. Its consumers are compared with the catalog at
+  the first evaluation, by the generation rule.
+- (d) Only an unknown value makes an episode wait; lines read that break their rules end it, as
+  SS-2h built. While it waits, every judged candidate of the pool whose `B` is known is held,
+  whatever its sign, as a capped hold.
+- (e) A restored episode's number is its pair's count of episodes begun, so the next counts on from
+  it; a pair whose episode ended before the start is not kept and counts from 1 again.
+- (f) `operation`'s values are registered locations, `load_capped_episodes` and
+  `store_capped_episodes` (a location takes the form with an underscore, so `load` and `store` are
+  not registrable); the warning also names the fact (`fact_key`).
+- (g) A refused record counts as the episodes' last record, so no cycle records them again before the
+  next change; the warning keeps the refusal as its `caused_by` link.
+
+**What SCHED-C1d changes live.** No production pool is valued, so no episode begins and no
+`host.capped_episodes` is recorded; `config.parameters.ledger_observer` lists the new tag entry and
+the shipped defaults file's digest changes. With a valued pool: an episode survives a start (the
+Runtime's restart, a deploy), a catalog generation that leaves its consumers unchanged, and an
+unknown reading; a start after a rollback finds a stale record and reports it once. A configuration
+file that sets `ledger_observer.tag.workbench_patterns` itself, without the new entry, keeps the fact
+untagged: a start then finds none and keeps no episode, as before.
+
+**SCHED-C1d rollback** (to the release before it). The ledger and the configuration need nothing. A
+build before it neither reads nor records `host.capped_episodes` and begins every pool without an
+episode, as before; the last record stays in the ledger. Its start completes its settlement and moves
+the start anchor, so the next start of 0.12.53 or later finds that record stale by the anchor rule,
+drops it with `capped_state_failed` (`operation` `load_capped_episodes`) and records the fact again
+with no episode.
 
 ### 1.301 Slice ISO-START-1 (0.12.52): one pair's refused settlement fact no longer stops the start (#419; Alice's requirement on board #419 of 10-24: one emulator's fault must not bring down the whole Runtime; the debt the coordinator logged on 11-11, #421 6774483473 and #428 6770731970: isolate only that pair; the coordinator's ruling on the three cases, not Alice's words: coordinator work order `rd-1111/brief-iso-start-1.md`)
 
@@ -11458,6 +11556,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.contained_settlement` (an integer: the start event of the last start that completed the settlement of open direct runs; [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #411 A65) | #411 A65 |
 | `host.idle_state` (a record list: the instances the idle action closed or is closing, with their action and wake; since 0.12.25 its writer row names the start anchor, not the owner epoch (#405 N-2), and a woken instance stays in it, `woken`, until its startup package has run (#405 O-2); [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #405 IDLE-1P) | #405 IDLE-1P |
 | `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
+| `host.capped_episodes` (a record list: the writer's start anchor, then per instance and pool with an open or waiting capped episode its episode row, consumer rows and member rows; [runtime-fact-store.md](runtime-fact-store.md); §1.299 SC1-11, C1D-1) | workbench | yes (added to `tag.workbench_patterns` by SCHED-C1d) | #428 SCHED-C1d |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.catalog_warnings` (count and place rows of the active composed generation's compile warnings; §1.290 CW1-2) | workbench | no (`config.` is re-observed) | #428 CW-1 |
 | `config.parameters.touch` (a section fact of the `config.parameters.<section>` family, five rows; §1.136 T12-4) | workbench | no (`config.` is re-observed) | #406 T12 |

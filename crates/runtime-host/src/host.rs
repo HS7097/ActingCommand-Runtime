@@ -170,6 +170,11 @@ mod backend_open;
 mod backend_switch;
 // Workflow #386 SR-4a3: complete silence at the host's own entries, read from the blackouts.
 mod blackout_silence;
+// #428 SCHED-C1d (register §1.299 SC1-11): the capped episodes kept across a start as the tagged
+// program fact `host.capped_episodes`.
+mod capped_episodes;
+#[cfg(test)]
+pub(crate) use capped_episodes::CAPPED_EPISODES_STORE_REFUSED_FOR_TEST;
 // Workflow #411 B41: the resting pages and package entries the chain handover reads.
 mod chain_handover;
 pub(crate) use chain_handover::chain_entry_holds_page;
@@ -2525,6 +2530,10 @@ impl RuntimeHost {
             // that start's anchor, not to the latest owner), every instance with an idle action
             // counts as closed, never as open.
             shared.restore_idle_state(previous_owner_epoch, start_anchors)?;
+            // #428 SCHED-C1d (register §1.299 SC1-11): the capped episodes of `host.capped_episodes`
+            // the start keeps by the anchor rule, before the first evaluation; a value it drops is
+            // a warning and never stops the start.
+            shared.restore_capped_episodes(start_anchors)?;
             // Workflow #432 AGT-1b: the rows of `host.agent_wake`; one left in `sending` is
             // `unknown` and is never sent again. A record this build cannot read never stops a
             // start.

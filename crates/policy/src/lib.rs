@@ -136,4 +136,7 @@ mod tests {
     // #428 SCHED-C1c (0.12.53; register §1.299): a pool's trigger line, and a pool its lines cannot
     // spend.
     mod gate_sched_c1c;
+    // #428 SCHED-C1d (0.12.53; register §1.299 SC1-11): a capped episode survives a start, a
+    // generation with the same consumers and an unknown reading.
+    mod gate_sched_c1d;
 }

@@ -59,7 +59,10 @@ pub use blackout::{
     Blackout, BlackoutEntry, BlackoutSources, BlackoutWindow, DayBoundaryDeferral, blackout_at,
     day_boundary_fit, next_blackout_start,
 };
-pub use capped::CappedMemory;
+pub use capped::{
+    CappedMemory, CappedRestore, CappedStateProblem, KeptConsumer, KeptEpisode, KeptMember,
+    KeptRound,
+};
 pub use chain_handover::{ChainEntryHolds, ChainHandoverInputs, RestingPage};
 pub(crate) use expected_runtime::snapshot_expected_runtime;
 pub use expected_runtime::{
@@ -1405,9 +1408,10 @@ pub fn evaluate_with_no_progress<E: From<PolicyEvaluationError>>(
 /// cap enters a capped episode on its instance; each round freezes the pool's consumers that can
 /// be dispatched by their value per unit consumed and spends the pool down to its stop line, one
 /// dispatch at a time, never below its hard line; below the cap a judged candidate never leaves a
-/// pool below its hard line. Every other entry point evaluates with an empty memory, as after a
-/// start. A catalog without a valued pool evaluates as `evaluate_with_no_progress` does, byte for
-/// byte.
+/// pool below its hard line. Every other entry point evaluates with an empty memory. SCHED-C1d
+/// (register §1.299): the Runtime keeps the memory across a start ([`CappedMemory::kept`],
+/// [`CappedMemory::restore`]). A catalog without a valued pool evaluates as
+/// `evaluate_with_no_progress` does, byte for byte.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_with_capped_spending<E: From<PolicyEvaluationError>>(
     catalog: &CompiledCatalog,
@@ -1912,7 +1916,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         &mut work,
         &target_policies,
         refresh_inputs.is_some(),
-        (&mut *capped, catalog.catalog_hash()),
+        &mut *capped,
     )?;
     affected.extend(scored_affected);
     // Workflow #411 B15 R2: a remedy request or retry ranks among the promoted candidates.
@@ -3826,8 +3830,9 @@ struct StagedCandidate {
 /// gate's own views and pending consumption, and its goals' gaps; a selected dispatch hands them
 /// its run.
 ///
-/// SS-2h (register §1.289): the benefit gate reads and updates the capped episodes `capped`
-/// (the memory and the catalog generation it is kept under).
+/// SS-2h (register §1.289): the benefit gate reads and updates the capped episodes `memory`;
+/// SCHED-C1d (register §1.299): an episode is kept by its pool's consumers, not by the catalog
+/// generation.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn apply_priority_selection(
     catalog: &CompiledCatalog,
@@ -3837,7 +3842,7 @@ fn apply_priority_selection(
     work: &mut [TaskWork],
     target_policies: &BTreeMap<String, InstanceTargetPolicy>,
     refreshing: bool,
-    (memory, catalog_hash): (&mut CappedMemory, &str),
+    memory: &mut CappedMemory,
 ) -> PolicyEvaluationResult<(
     Vec<PlacementCandidate>,
     Vec<AffectedCandidate>,
@@ -3886,7 +3891,7 @@ fn apply_priority_selection(
             &BTreeMap::new(),
             refreshing,
             &mut affected,
-            (memory, catalog_hash),
+            memory,
         )?;
         return Ok((ranked, affected, BTreeMap::new()));
     }
@@ -4363,7 +4368,7 @@ fn apply_priority_selection(
         &weights,
         refreshing,
         &mut affected,
-        (memory, catalog_hash),
+        memory,
     )?;
     // The consumption the reserved pools' readings do not show yet: the gate's step 3 and, SS-6,
     // the allowances read the same entries.
