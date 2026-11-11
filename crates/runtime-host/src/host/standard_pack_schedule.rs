@@ -829,9 +829,10 @@ impl HostShared {
             .collect::<Vec<_>>();
         let provenance = ConfigCatalogProvenance::of(&entries);
         let record = provenance.to_fact_record(0, OriginModule::Policy);
-        let unchanged = match lock(&self.runtime_facts, HostLocation::StandardPackRead)?
-            .get(&RuntimeFactScope::Runtime, CONFIG_CATALOG_PROVENANCE_FACT_KEY)
-        {
+        let unchanged = match lock(&self.runtime_facts, HostLocation::StandardPackRead)?.get(
+            &RuntimeFactScope::Runtime,
+            CONFIG_CATALOG_PROVENANCE_FACT_KEY,
+        ) {
             Some(stored) => stored.value == record.value,
             None => provenance.is_empty(),
         };
