@@ -6,6 +6,7 @@ members = [
     "apps/actingctl",
     "apps/actingd",
     "apps/actinglab",
+    "apps/actinglab-mcp",
     "apps/actingwatch",
     "apps/ledger-forensics",
     "apps/mcp-entry",

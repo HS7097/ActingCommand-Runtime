@@ -10047,6 +10047,69 @@ Nothing else a person, a client or the Runtime sees changes.
 
 **LAB-5G1b rollback** (to the release before it). Nothing persisted: code and catalog text only.
 
+#### Slice LAB-5G2a (0.12.57): the new MCP server's shell and its tool list from the operation table
+
+Coordinator work order `rd-1112/brief-lab5g2a.md` with `rd-1112/brief-lab5g-common.md`, after the
+read-only survey `rd-1108/arch-013/lab5g-step0-survey.md` (§1, §5, §6, §8 and its §10 row G2a);
+the coordinator's rulings on board #434, 6775192250 (points 13 to 15, 19, 20 and 22) as amended by
+6784514298 (points 1 and 2); on main `dffd6263`. The contract is
+[lab-two-entries.md](lab-two-entries.md) §8.1, §8.3, §9.3 ("The server's shell") and §12. The rule
+of the slice: nothing existing changes. No file under `apps/actingctl/` changes; actinglab's lines
+and `serve --stdio` are untouched; the program is in no release and no Tools archive (G6 packages
+it).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G2a-1 | `apps/actinglab-mcp` (package `actingcommand-actinglab-mcp`, binary `actinglab-mcp`, version 0.1.0; no lib target) | workspace member | LAB-5G2a | — | tested in the CI job `apps`; depends on `actingcommand-contract`, `actingcommand-lab-ops`, `actingcommand-lab-rescue` (which rescue rows the rescue module serves, on Windows) and `serde_json`, `tempfile` for its tests; not in `windows-remote-build.yml`'s `--bin` list or `$toolFiles`, `scripts/windows-tools/` or the installer's fixtures (slice G6) |
+| L5G2a-2 | the protocol and the loop (`protocol.rs`, `server.rs`) | copied code | LAB-5G2a | — | copied from `apps/actingctl/src/mcp/protocol.rs` (whole; the server's name `actinglab-mcp` and its instructions differ) and the generic part of `server.rs` (the stdin reader of 4 MiB lines, the ordered stdout writer, the two eras, batches under 2025-03-26, `ping`, `server/discover`, progress, `notifications/cancelled`, request ids in flight, the 2 s grace at stdin EOF, `actingcommand/entryStatus`), without the tiers, the Runtime connection, the session identity and the jobs; as many workers as the start option `--workers` says (L5G2a-4; default eight, 6775192250 points 20 and 22), where the original has a constant; `entryStatus` answers no handle, as this build issues none, and its calls in flight |
+| L5G2a-3 | `tools::Catalog`: one tool per offered row | behaviour | LAB-5G2a | — | offered: a planned row of a slice actinglab's words offer (`tools::ACTINGLAB_SLICES`, held equal to actinglab's `BUILT_SLICES` by the test) or of slice LAB-5; a rescue row only on Windows, one the rescue module serves (`lab_rescue::rescue::serves`) or of slice LAB-5. Name: the table's rule (`Operation::mcp_tool`) but `tools::NAMED`, one place: `frame` → `ac_frame`, `observe` (authoring) → `ac_lab_observe`; no tool is `ac_observe`. Definition: `name`, `description` (the row's `help`), `inputSchema` (one property per parameter in the row's order, by the survey's type table; a switch a boolean; a repeated parameter an array of at least one; `default` typed, a default its type does not read ending the start with `foreign_data_error` and the table's `path`; the `note` its `description`; `required` the row's required parameters and those whose `required_in` names `mcp`; `additionalProperties: false`), `annotations` (`readOnlyHint` not `writes`, `destructiveHint` `irreversible` or `disruptive`, `openWorldHint` false); no `title`, no `outputSchema`, no `idempotentHint`; the same in every protocol version |
+| L5G2a-4 | the command line: `--list <module>[,<module>...]`, `--workers <n>`, `--list-tools`; `--tier` refused | behaviour | LAB-5G2a | — | `--workers` (the coordinator's ruling of 2026-11-12 on #1639: a tunable is a start option with a default, and this slice's loop reads it) is the number of threads that run `tools/call`, a whole number from 1 to 64, 8 when not given; 0, 65 or a negative number is `actingctl_usage_invalid` (`argument` `--workers`, `out_of_range`, `range_min` 1, `range_max` 64), a word that is no whole number `wrong_type`, the option twice `repeated`, without its value `value_missing`, beside `--list-tools` (which runs no call) `conflicting`; ruling 20's two other start options (children, idle time) come with the slice that uses them. `--list` takes the ids of the table's module rows of role `operations` (`core`, `debugging`, `authoring`, `rescue`); another word or an empty one is `actingctl_usage_invalid` (`argument` `--list`, `not_recognised`), a word twice `repeated`, the option twice `repeated`, without its value `value_missing`. Without `--list`: core, debugging, rescue and, where `lab_ops::locate::authoring_module` lists it (read at each listing), authoring; an option that cannot be read leaves it out with one `WARN actinglab-mcp:` developer line naming the failure. `--list-tools` prints the `tools/list` result `{tools}` (pretty JSON) for the listing and exits 0. `--tier` (and `--tier=…`) is `actingctl_usage_invalid` (`argument` `--tier`, `unknown`) with a developer text that says the server has no tiers; any other word `unknown`; nothing on stdout, exit 1. `ACTINGCOMMAND_DETAIL` is read as `actingctl mcp-serve` reads it without `--detail` |
+| L5G2a-5 | `tools/call` | behaviour | LAB-5G2a | — | the name of any offered row's tool, listed or not (not listed is never refused; ruling 2, LAB-5F), runs on a worker and answers `mcp_operation_unsupported` with `mcp_tool`, as the CLI line of a refusal, `{outcome}`: the text content and, from 2025-06-18 on, `structuredContent`, `isError` true; nothing is sent, run or written, and the arguments (an object, or absent) are not read. A name that is no offered row's tool (`ac_observe` too) answers as today's server answers an unknown tool: -32602 `mcp_params_invalid`, `name`, `not_recognised` |
+| L5G2a-6 | `mcp_operation_unsupported` (error, ladder class `none`, value `mcp_tool` required, pending, its texts written) | outcome catalog | LAB-5G2a | — | the first code of the new owner `actinglab-mcp` (fragment `contracts/outcome-codes/actinglab-mcp.json`, registry `apps/actinglab-mcp/src/codes.rs`); the header's `fragments` names it and the domain `mcp_` gains it beside `actingctl`; the index regenerated (`ci/outcome_codes_index.py`). No existing code means "listed, not served by this build". The JSON-RPC errors and usage refusals stay actingctl's codes, as today's server answers them |
+| L5G2a-7 | the instructions (`tools::INSTRUCTIONS`, 1,696 bytes) | text | LAB-5G2a | — | the survey's draft (§6) with the names of 6784514298 point 1 (`ac_frame`, `ac_lab_observe`, no `ac_observe`), the authoring option read as LAB-5F fix 2 reads it (a module left out of the list still answers its tools' calls), and one sentence for this build: it serves no call yet |
+
+**Measured** (computed from the table this build embeds by the generation's rules; compact JSON,
+UTF-8, the 2025-06-18/2025-11-25 framing, the 2026-07-28 framing in brackets): on Windows every
+module lists **142 tools** (core 49, debugging 26, authoring 35, rescue 32) in **86,385 bytes**
+(86,532); without the authoring module **107 tools** in **60,756 bytes** (60,903). Elsewhere 110
+and 75 tools. Today's server: 198,337 bytes (the survey's §1). The largest definition is `events`
+(2,466 bytes); the longest name `ac_standard_pack_compose`.
+
+**Tests.** New: apps row "#434 LAB-5G2a": `gate_434_lab5g2a::mcp_tools_from_op_table`,
+`mcp_tool_names_keep_two_exceptions` and `mcp_list_option_and_authoring_gate` (the binary's unit
+tests; the embedded table, a doctored copy of it and made-up installation roots in a temporary
+folder; the last also reads `--workers`: its default, given values and its refusals), and `server_stdio::mcp_tier_refused`, `mcp_calls_refused_unsupported_and_an_unknown_tool`
+and `mcp_loop_initialize_list_batch_and_cancel` (the program over pipes, as today's server's
+`mcp_shell` drives it; no Runtime). No existing test changed. The outcome guard's allow list gains
+one standing G3 entry, the copy's `error_response` (JSON-RPC's `error.code`), beside actingctl's.
+
+**Interface.** None raised: nothing on the wire, in the ledger or in a file a released peer reads
+changes; the program is in no release; the MCP entry's `entry_protocol` is G5a's. One code is added
+(L5G2a-6); no key, location or vocabulary token.
+
+**A tool left out of the list is callable** (the coordinator's ruling of 2026-11-12 on #1639,
+which confirms the amended ruling 6784514298 point 2 over the work order's point 6): a tool that
+belongs to an offered row but is left out of the list by `--list` or by the authoring key is
+called like a listed one, and only a name that belongs to no offered row is an unknown tool.
+
+**Where LAB-5G2a differs from its work order's letter.**
+
+- (a) The instructions keep the draft's rules for the slices to come (handles, the budget, cursors)
+  beside the sentence that this build serves no call (accepted by the coordinator on #1639); G7
+  writes them finally.
+- (b) The rescue module's rows of slice LAB-5 (`mcp config`, `mcp entries`) and the authoring row
+  `record draft` are listed as offered rows (§9.2); no slice serves them yet.
+- (c) "Offered" restates actinglab's rule, as actinglab is a program without a library; the test
+  reads actinglab's `BUILT_SLICES` from its source and holds the two equal.
+- (d) `--workers` (L5G2a-4) was added after the first round, by the coordinator's ruling on #1639,
+  where the first round had a constant.
+
+**What LAB-5G2a changes live.** Nothing: the program is built and tested in CI and is in no release
+or Tools archive until G6.
+
+**LAB-5G2a rollback** (to the release before it). Nothing persisted: code, the table's readers and
+one catalog entry.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

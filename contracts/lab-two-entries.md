@@ -378,6 +378,10 @@ would reach `g1\` by that copy, and a rollback would make one file name mean two
 Placing the second program stays a manual step until an installer step exists, which creates
 under `g2\` only.
 
+The MCP module's program exists since LAB-5G2a as the server's shell (section 9.3, "The server's
+shell"): it lists its tools and serves no call yet, and it is in no release and no Tools archive
+until slice G6 packages it, so no installation has it; the MCP entry `g2` is slice G5a's.
+
 ### 8.2 `actinglab serve --stdio`
 
 A resident mode of the Lab core (LAB-2): it reads one `{op, params}` per line on stdin and answers
@@ -712,6 +716,35 @@ sentence fails that test.
   and the shared rules written once in its instructions (#410 item 3); no tiers (`--tier` goes);
   the 24 KiB answer budget and `handle` with `wait_s` stay as runtime-interface.md,
   "MCP (counter `mcp`)", has them.
+  - **The server's shell** (Workflow #434 LAB-5G2a, 0.12.57; register §1.287, "Slice LAB-5G2a";
+    the coordinator's rulings on board #434, 6775192250 and 6784514298, not the owner's words).
+    `actinglab-mcp` (`apps/actinglab-mcp`) speaks MCP over stdio with the protocol and the loop
+    of `actingctl mcp-serve`, copied (both eras, batches under 2025-03-26, progress, cancellation,
+    `actingcommand/entryStatus`), and lists one tool for each row it offers: the rows actinglab
+    offers (the rescue module's on Windows only) and the planned rows of slice LAB-5. A tool is
+    `ac_` and the row's words with spaces and `-` as `_`, but for two rows held in one place: the
+    frame's tool is `ac_frame` and the authoring observe's `ac_lab_observe`; no tool is
+    `ac_observe`, a name that is never reused with another meaning. Its description is the row's
+    `help`; its input schema has one property per parameter (the parameter's `note` its
+    description, its `default` typed, `required` the row's and those whose `required_in` names
+    `mcp`, no other property); its hints are `readOnlyHint` (the row does not write),
+    `destructiveHint` (irreversible or disruptive) and `openWorldHint` false; no title, no
+    `outputSchema`, no `idempotentHint`. `--list <module>[,<module>...]` names the modules whose
+    tools are listed (the ids of the table's module rows of role `operations`); without it every
+    installed module is, the authoring module where section 8.3's key lists it, read at each
+    listing. A tool left out of the list is callable as a listed one; only a name that belongs to
+    no offered row is an unknown tool. `--workers <n>` is the number of threads that run
+    `tools/call` (1 to 64, 8 when not given; a value outside the range or no whole number is
+    refused as a usage error). `--list-tools` prints the `tools/list` result. `--tier` is refused
+    (`actingctl_usage_invalid`; the server has no tiers).
+  - **Not yet:** no call is served. Every `tools/call` of an offered row's tool answers
+    `mcp_operation_unsupported` (`mcp_tool`) as the CLI line of a refusal, `{outcome}`, nothing
+    sent, run or written; a name that is no offered row's tool answers as today's server answers
+    an unknown tool (-32602 `mcp_params_invalid`). Serving the core and rescue rows, the answer
+    budget and the export (LAB-5G2b), jobs, handles and cursors (G3), the `serve --stdio --front
+    mcp` children (G4b), the rescue module's MCP rows (G5b), packaging into the Tools archive and
+    the installer (G6) and the manual (G7) come with their slices; until G6 the program is in no
+    release and no Tools archive, and nothing a person installs changes.
 - **The answer budget is the caller's** (Workflow #434 LAB-5D, 0.12.52; register §1.287, "Slice
   LAB-5D"). The reads whose answer can outgrow a caller's budget (`status`, `diagnose`, `events`,
   `schedule`, `runs`, `run evidence`, `codes`; `facts`, `packs`, `remedy`, `summary`) take, in
@@ -842,7 +875,9 @@ only add: actingctl stays until LAB-7.
 
 ## 12 Codes
 
-No new code. The codes this contract uses:
+One new code: `mcp_operation_unsupported` (`mcp_tool`; LAB-5G2a, the first of the owner
+`actinglab-mcp`), every call of the MCP server's shell, which serves none (section 9.3). The codes
+this contract uses:
 
 - `channel_request_refused` (`operation`, `channel`), with `config_key` for a refused setting: an
   optional value LAB-6 adds to its catalog entry;
