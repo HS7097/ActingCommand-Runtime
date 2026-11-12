@@ -2,7 +2,7 @@
 
 Task file:
 
-- `C:\合作工作区\ActingCommand\FIX-P6.5-A-punchlist-6ca6b0c.md`
+- `%WORKSPACE%\ActingCommand\FIX-P6.5-A-punchlist-6ca6b0c.md`
 
 Baseline:
 

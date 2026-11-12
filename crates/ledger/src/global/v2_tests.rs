@@ -12,7 +12,7 @@ use tempfile::TempDir;
 const ARTIFACT_SECRETS: [&str; 5] = [
     "token-secret-artifact-ledger",
     "account-secret-artifact-ledger@example.invalid",
-    r"C:\Users\Alice\private\artifact.png",
+    r"C:\Users\example\private\artifact.png",
     "127.0.0.1:16384",
     "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 ];

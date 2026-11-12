@@ -4,7 +4,7 @@ Date: 2026-07-03
 
 ## Scope
 
-This report records the C1 slice from `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
+This report records the C1 slice from `%WORKSPACE%\ActingCommand\TASK-Lab-selfheal-chain.md`.
 
 Implemented scope:
 

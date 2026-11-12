@@ -1,6 +1,6 @@
 # ACCEPTANCE · AK MAA Data Fidelity M6 Offline Calibration
 
-Task file: `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md`
+Task file: `%WORKSPACE%\ActingCommand\TASK-AK-maa-data-fidelity.md`
 
 ## Scope
 
@@ -20,9 +20,9 @@ remote `origin/main` heads before local calibration changes:
 
 | Repository | Path | Base commit |
 | --- | --- | --- |
-| Arknights | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` | `0b318bf8517344e45eeea502b5da0d3ea78b2dd7` |
-| AzurLane | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane` | `ea5246ac13985f19ba774863a59539f7d6f4b443` |
-| BlueArchive | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive` | `dae51cf1227445ffffd76acd71ba8a22af88b3bf` |
+| Arknights | `%USERPROFILE%\Documents\Azur\ActingCommand-Resources-Arknights` | `0b318bf8517344e45eeea502b5da0d3ea78b2dd7` |
+| AzurLane | `%USERPROFILE%\Documents\Azur\ActingCommand-Resources-AzurLane` | `ea5246ac13985f19ba774863a59539f7d6f4b443` |
+| BlueArchive | `%USERPROFILE%\Documents\Azur\ActingCommand-Resources-BlueArchive` | `dae51cf1227445ffffd76acd71ba8a22af88b3bf` |
 
 The Runtime repository was also fetched before the 2026-07-04 continuation and
 was aligned with `origin/main` at `169ad688a64ab42ee577ae6ea1af633c2df04969`.
@@ -44,17 +44,17 @@ The current local retained-frame corpus found for AK page calibration contains:
 
 | Label | Expected page result | Path |
 | --- | --- | --- |
-| `home_retest` | `arknights/home` | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\ak16416-retest-current.png` |
-| `home_run` | `arknights/home` | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\runs-retest\lab1y-20260625_051921_950\output\screenshots\20260625_051922_653.png` |
-| `mission_result` | no generated page should match | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\ak16416-current.png` |
-| `terminal_stage_map` | `arknights/terminal` | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\runs\lab1y-20260625_050455_365\output\screenshots\20260625_050456_022.png` |
-| `operator_positive` | `arknights/operator` | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\p2_2_smoke\capture-16416.png` |
-| `depot_positive` | `arknights/depot` | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\akpg_depot.png` |
-| `friends_positive` | `arknights/friends` | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\akpg_friends.png` |
-| `mission_positive` | `arknights/mission` | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\akpg_mission.png` |
-| `signin_modal` | no generated page should match | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\wf_arknights_recruit.png` |
-| `announcement_modal` | no generated page should match | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\recak_close0.png` |
-| `quickswitch_dropdown_positive` | `arknights/quickswitch_dropdown` | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\akqs_overlay.png` |
+| `home_retest` | `arknights/home` | `%USERPROFILE%\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\ak16416-retest-current.png` |
+| `home_run` | `arknights/home` | `%USERPROFILE%\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\runs-retest\lab1y-20260625_051921_950\output\screenshots\20260625_051922_653.png` |
+| `mission_result` | no generated page should match | `%USERPROFILE%\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\ak16416-current.png` |
+| `terminal_stage_map` | `arknights/terminal` | `%USERPROFILE%\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\runs\lab1y-20260625_050455_365\output\screenshots\20260625_050456_022.png` |
+| `operator_positive` | `arknights/operator` | `%USERPROFILE%\Documents\Azur\ActingCommand-Runtime\target\p2_2_smoke\capture-16416.png` |
+| `depot_positive` | `arknights/depot` | `%USERPROFILE%\AppData\Local\Temp\claude\%WORKSPACE%\scratchpad\akpg_depot.png` |
+| `friends_positive` | `arknights/friends` | `%USERPROFILE%\AppData\Local\Temp\claude\%WORKSPACE%\scratchpad\akpg_friends.png` |
+| `mission_positive` | `arknights/mission` | `%USERPROFILE%\AppData\Local\Temp\claude\%WORKSPACE%\scratchpad\akpg_mission.png` |
+| `signin_modal` | no generated page should match | `%USERPROFILE%\AppData\Local\Temp\claude\%WORKSPACE%\scratchpad\wf_arknights_recruit.png` |
+| `announcement_modal` | no generated page should match | `%USERPROFILE%\AppData\Local\Temp\claude\%WORKSPACE%\scratchpad\recak_close0.png` |
+| `quickswitch_dropdown_positive` | `arknights/quickswitch_dropdown` | `%USERPROFILE%\AppData\Local\Temp\claude\%WORKSPACE%\scratchpad\akqs_overlay.png` |
 
 ## Calibration decision
 
