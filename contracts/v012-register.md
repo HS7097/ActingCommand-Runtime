@@ -17111,6 +17111,132 @@ there: an intent apart from its admission (the live admission records both under
 dispatch a start could not settle (it needs a start that refuses the run's settlement). No existing
 test changes.
 
+### 1.333 Slice SBUD-1 (0.12.57): admission refuses a step whose declared sampling need cannot fit its deadline (Workflow #448; a released package whose select step failed at every run in production on v0.12.54, though `standard-pack check` and the Runtime's admission had passed it; the coordinator's rulings of 11-13 on board #448, not the owner's words; coordinator work order `rd-1113/brief-448-sbud-1.md`, read on main `a01fac44`)
+
+1.333 is the coordinator's number: 1.332 belongs to a pull request not merged yet.
+[business-identity-consensus.md](business-identity-consensus.md) (the select step's budget),
+[selection-graph.md](selection-graph.md) ("Select step", the admission checks),
+[resource-readings.md](resource-readings.md) ("List readings", "Declaration") and
+[policy-suspension.md](policy-suspension.md) ("What is suspended") gain sentences. No outcome code,
+value key, configuration key, persisted shape, wire shape or closed vocabulary is added, and no
+interface revision moves. The catalog's text of `recognition_sample_budget_invalid` speaks of
+declared sampling in general (its causes name "consensus or candidate sampling declarations" and
+"a package written for an older kernel whose budget rule was looser"), not of consensus only, so it
+does not change and the index is not regenerated.
+
+**The defect.** A released package changed the candidate layout of a select step: it gained OCR
+features that read an integer, four rows read at a time, each target declaring `timeout_ms` 5 000,
+with no consensus. The package declares no step timeout, so the step's deadline is the default
+5 000 ms. `standard-pack check` passed it and the Runtime admitted it; at that step every run failed
+after one frame with `candidate_sample_budget_insufficient`, `{required_ms: 20000, remaining_ms:
+4997}`, and nothing said so before a run.
+
+**The cause** (main `a01fac44`, `crates/execution-kernel/src/`):
+
+1. At a select step's start (`contained_task/selection.rs`, `select_attempt`) the run compares
+   `sampling_budget_ms` with what is left of the step's deadline; that function answers only when
+   the pack declares target consensus or the layout consensus.
+2. The projection (`project_transaction_placed`) samples a layout that has consensus or a feature
+   with an identity or an integer, and compares its declared worst provider time plus waits
+   (`CandidateLayout::maximum_provider_and_wait_ms`, less the waits between its frames) with what is
+   left. The production failure came from here: 4 × 5 000 = 20 000.
+3. Load (`contained_task.rs`, `prepare_bundle`) compared only `sampling_budget_ms` with each
+   operation's limit (the smaller of the step and task timeouts; a scan's `max_ms`), so a layout
+   without consensus was never compared.
+4. The same projection runs on each viewport of a select over a scan (`scan/online.rs`) and of a
+   list reading, whose `sampling_budget_ms` reads only `operation.select`.
+5. `standard-pack check`, `package check` and `package preflight` admit through the same load, so
+   they passed what the Runtime admitted.
+
+**The one function and its two users.** `selection::candidate_provider_need_ms(layout, evaluator)`
+answers, for a layout that has consensus or a feature that reads an identity or an integer, its
+declared worst provider time plus waits less the waits between its frames, and `None` for any other
+layout, which is projected on the step's frame alone. The run's check (`project_transaction_placed`)
+takes from it both whether the layout is sampled and checked and the need it compares, at the same
+point as before: the same refusal, `candidate_sample_budget_insufficient` with the same
+`required_ms`. Admission takes it through `selection::step_provider_need_ms(operation, evaluator)`,
+on the layout of a prepared select step (single-frame or over a scan) or of a prepared list reading,
+and compares it in `prepare_bundle`'s loop with the operation's limit as the loop computes it: the
+smaller of the step and task timeouts, or a scan's `max_ms` capped by the task's `timeout_ms`. A
+larger need is `recognition_sample_budget_invalid` with `required_ms`, `limit_ms` and
+`pack_operation_id`, as the loop's existing refusal carries them, and the developer detail
+`operation=<id> requires <n>ms across candidate provider calls and waits; limit=<m>ms`; a need equal
+to the limit is admitted. `sampling_budget_ms` does not change: its answer decides the run at its
+other two callers.
+
+**Item 4 of the investigation, verified real.** Every capture of a list reading's scan takes the
+step's timing, whose deadline is the scan's `max_ms`; in a pack with target consensus each one
+samples its page and first checks that what is left holds
+`selection::page_recognition_budget_ms(…, None)` (`capture_frame_gated`,
+`recognition_sample_budget_insufficient`). Load compared that need with the step and task timeouts
+only, and the list reading's `sampling_budget_ms` counts its guard alone. Admission now compares it
+with the list reading's limit too (detail `… across page calls and waits`), before the projection's
+need, the order a run meets them in. A select over a scan needs no such change: its
+`sampling_budget_ms` holds the page term whenever the pack declares consensus and was compared with
+its `max_ms` already.
+
+**What it leaves as it was.** For a layout with consensus the existing comparison of
+`sampling_budget_ms` (twice the layout's provider time and waits, and more) is at least this need,
+so the new comparison refuses nothing more there. A `linear_steps` task declares no select step and
+no list reading.
+
+**What an author sees.** `standard-pack check` (and `package check`, `package preflight`) of such a
+package refuses it before any run: `package_invalid`, caused by `recognition_sample_budget_invalid`
+naming the operation (`pack_operation_id`), the need (`required_ms`) and the limit (`limit_ms`),
+instead of a package that passes and a run that fails at the step. The remedy is the package's: a
+step timeout (for a scan, a `max_ms`) above the need, or fewer or shorter provider reads. The
+bound is necessary, not sufficient: a run compares the same need with what is left of the step
+once its first frame is taken and its page recognized, so a limit exactly at the need is admitted
+and is still refused in a run (the production case had 4 997 ms left of 5 000). An author leaves
+room for that first capture; how much depends on the device, so admission does not fix a margin.
+
+**What older builds do.** A build before 0.12.57 admits such a package and ends every run at the
+step with `candidate_sample_budget_insufficient` (`required_ms`, `remaining_ms`), which the default
+`scheduling.rerun.condition_codes` reruns, to fail the same way. A package whose step timeout covers
+its need runs on every build.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md), "Bump rule"): no
+member of a pack or a bundle is added, removed, renamed or given another meaning, and no record or
+document an older reader refuses is written. Admission refuses more of an already admitted shape,
+as LOAD-4 (§1.262) and LOAD-4b (§1.265) did with `package` staying. Unlike theirs, the refused shape
+is in a released package, which already failed at every run; from this build on it is refused, and
+suspended under the default `scheduling.pack_admission.suspend_codes`, until its content changes.
+`actingd-config`, `ledger`, `runtime-client`, `runtime-outcomes`, `install-*`, `player-hold` and
+`tools-layout`: untouched.
+
+**At deploy.** Packages that declare a need over their deadline are refused at admission and by the
+offline checks, and the Runtime suspends them instead of failing their step at every run. Before a
+deploy every installed package root is checked with the new build's Lab (`standard-pack check`).
+**Rollback** (below 0.12.57): such a package is admitted again and fails at its step as before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SB1-1 | `recognition_sample_budget_invalid` (`required_ms`, `limit_ms`, `pack_operation_id`): a select step's, single-frame or over a scan, or a list reading's candidate provider need over the step's limit | stricter admission rule (existing code and values) | SBUD-1 | execution-kernel | `since` 0.12.57; the need of `selection::candidate_provider_need_ms`, the run's own; a need at the limit is admitted |
+| SB1-2 | the same refusal for a list reading's page recognition over its scan's `max_ms`, in a pack with target consensus | stricter admission rule (existing code and values) | SBUD-1 | execution-kernel | `since` 0.12.57; compared before SB1-1 |
+| SB1-3 | the run's provider check of a candidate projection | behaviour unchanged, its rule shared | SBUD-1 | — | the same layouts, need, refusal and point |
+| SB1-4 | the sampling budget at admission in four contracts | contract sentences | SBUD-1 | — | the files named above |
+
+Tests (exec gate row "#448 SBUD-1"), in `crates/execution-kernel/src/contained_task/gate_448_sbud1.rs`
+over synthetic `neutral` packages: `admission_refuses_integer_layout_over_step_deadline` (a
+single-frame select over four slots that each read an integer by OCR, 2 000 ms each, no consensus,
+need 8 000 ms: refused with no step timeout, limit 5 000, and with 7 999, each with the need, the
+limit and `pick`; admitted with 8 000, and the run's check at the start of a fresh step of 8 000 ms
+on the scripted clock lets the projection go on), `admission_refuses_scan_select_over_max_ms` (a
+select over a scan of a card list, need 32 000 ms: refused within `max_ms` 31 999, admitted within
+32 000 though the step timeout is 10 000), `admission_refuses_list_reading_over_limit` (a list
+reading of the same list likewise; with target consensus on its list page, three frames 1 000 ms
+apart, its page recognition of 2 000 ms refused within 1 999 and fitting within 2 000, where the
+projection's 32 000 is refused), `admission_and_run_time_share_one_need` (the need admission refuses
+with is the `required_ms` of the run's `candidate_sample_budget_insufficient` at a fresh step of
+5 000 ms, `remaining_ms` 5 000, and the function's answer for the layout); and
+`package_cli::gate_448_sbud1::package_check_refuses_integer_layout_over_step_deadline` (actinglab's
+bin: `package check` of the integer package as an assembled ZIP answers `package_invalid`, exit 2,
+`details.code` `recognition_sample_budget_invalid`, the need, the limit and the operation). One
+existing fixture newly refused gets the step timeout its need asks for, no assertion changed: the
+package of `gate_308_l4b_admission.rs` (10 000 ms to 32 000 ms), whose
+`l4b_admission_refuses_on_empty_where_the_step_cannot_end_the_run_normally` admits a single-frame
+select over the card list (32 000 ms) without `on_empty`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

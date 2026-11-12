@@ -193,6 +193,10 @@ mod gate_428_nav_l1;
 // Workflow #428 DIAG-SI (register §1.320): `contained_task_state_invalid` says what was invalid.
 #[cfg(test)]
 mod gate_428_diag_si;
+// Workflow #448 SBUD-1 (register §1.333): admission compares a select step's and a list
+// reading's candidate provider need with the step's limit, by the run's own rule.
+#[cfg(test)]
+mod gate_448_sbud1;
 // Workflow #396 REC-6.
 #[cfg(test)]
 mod value_test_tests;
@@ -3363,22 +3367,43 @@ impl PreparedContainedTask {
             let admission_limit = operation.scan_max_ms().map_or(admission_limit, |max_ms| {
                 max_ms.min(control.task_timeout().milliseconds)
             });
-            if let Some(required_ms) =
-                selection::sampling_budget_ms(operation, &evaluator, &detector)?
-                && required_ms > admission_limit
-            {
-                return Err(sample_budget_invalid(
+            let refuse = |required_ms: u64, calls: &str| {
+                sample_budget_invalid(
                     ContainedTaskError::with_detail(
                         ExecutionKernelCode::RecognitionSampleBudgetInvalid.code(),
                         format!(
-                            "operation={} requires {required_ms}ms across page/candidate/guard calls and waits; limit={admission_limit}ms",
+                            "operation={} requires {required_ms}ms across {calls}; limit={admission_limit}ms",
                             operation.id
                         ),
                     ),
                     required_ms,
                     admission_limit,
                     Some(operation.id.as_str()),
-                ));
+                )
+            };
+            if let Some(required_ms) =
+                selection::sampling_budget_ms(operation, &evaluator, &detector)?
+                && required_ms > admission_limit
+            {
+                return Err(refuse(required_ms, "page/candidate/guard calls and waits"));
+            }
+            // Workflow #448 SBUD-1 (register §1.333): a list reading's every capture recognizes
+            // its page against the scan's deadline, sampled when the pack declares target
+            // consensus, as `capture_frame_gated` checks it in a run.
+            if operation.prepared_list.is_some() && !evaluator.pack().target_consensus.is_empty() {
+                let required_ms =
+                    selection::page_recognition_budget_ms(&evaluator, &detector, None)?;
+                if required_ms > admission_limit {
+                    return Err(refuse(required_ms, "page calls and waits"));
+                }
+            }
+            // Workflow #448 SBUD-1: the candidate projection's provider check of a select step,
+            // single-frame or over a scan, and of a list reading, whose need and layouts are the
+            // run's own rule (`selection::candidate_provider_need_ms`). A need at the limit fits.
+            if let Some(required_ms) = selection::step_provider_need_ms(operation, &evaluator)?
+                && required_ms > admission_limit
+            {
+                return Err(refuse(required_ms, "candidate provider calls and waits"));
             }
         }
         let entry_page = program.required_entry(&control, &detector)?;
