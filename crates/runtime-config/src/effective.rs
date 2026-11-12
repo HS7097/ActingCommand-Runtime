@@ -16,6 +16,7 @@ use crate::action_gap::{self, ActionGapConfig};
 use crate::agent_wake::AgentWakeConfig;
 use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_scalar;
+use crate::device_group::{self, DeviceAction};
 use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
 use crate::display_safe_area::DisplaySafeAreaConfig;
@@ -44,7 +45,8 @@ use crate::{
 use actingcommand_contract::outcome::{BlackoutSource, Outcome};
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, ConfigSubsystem,
-    ConfiguredSetting, FactScalar, RuntimeConfigManifest, config_parameter_section,
+    ConfiguredSetting, FactScalar, InstanceDeviceKind, RecoveryRung, RuntimeConfigManifest,
+    config_parameter_section,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -844,6 +846,101 @@ impl EffectiveConfig {
         scheduling::instance_random_delay(&|key: &str| self.value_or_shipped(key), instance_id)
     }
 
+    /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "The configuration form"): the device
+    /// groups of several members, each `device_group` value two or more instances name, with
+    /// those instances' registry ids in the order of the file's `instances`. A value one instance
+    /// names alone is a group of one and is not listed.
+    pub fn device_groups_of_several(&self) -> BTreeMap<String, Vec<String>> {
+        let mut groups = BTreeMap::<String, Vec<String>>::new();
+        for setting in &self.settings {
+            if setting.row.name == KeyName::PerInstance(device_group::DEVICE_GROUP)
+                && let Some(instance) = setting.instance.as_deref()
+                && let Some((FactScalar::String(name), _)) = self.effective(setting)
+            {
+                groups
+                    .entry(name.clone())
+                    .or_default()
+                    .push(instance.to_owned());
+            }
+        }
+        groups.retain(|_, members| members.len() > 1);
+        groups
+    }
+
+    /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "Device-level actions"): the first
+    /// device-level action the first slice does not make group-aware that the instance whose
+    /// registry id is `instance_id` turns on with the values in effect, with the key whose value
+    /// turns it on; `None` when it turns none on. In order: `start_emulator` `true` (the
+    /// instance's key); an `idle.action` in effect other than `none` (the instance's own key, or
+    /// the section's `idle.action` when the instance takes it); a ladder profile in effect whose
+    /// rungs hold `emulator_restart`: the instance's own `recovery_ladder_profile` (its key),
+    /// else its kind's profile (`recovery_ladder.kind_profiles`), else the section's
+    /// `recovery_ladder.rungs`.
+    pub fn device_action_in_effect(
+        &self,
+        instance_id: &str,
+        context: &CheckContext,
+    ) -> Result<Option<(DeviceAction, String)>, ConfigFailure> {
+        let start_key = instance_key(instance_id, instance::START_EMULATOR);
+        if self.value(&start_key) == Some(&FactScalar::Boolean(true)) {
+            return Ok(Some((DeviceAction::StartEmulator, start_key)));
+        }
+        let idle_key = instance_key(instance_id, idle::ACTION);
+        let (action, action_key) = match self
+            .setting(&idle_key)
+            .and_then(|setting| self.effective(setting))
+        {
+            Some((value, ConfigParameterSource::Default)) => {
+                (Some(value.clone()), idle::ACTION.to_owned())
+            }
+            Some((value, _)) => (Some(value.clone()), idle_key),
+            None => (self.value_or_shipped(idle::ACTION), idle::ACTION.to_owned()),
+        };
+        let none = FactScalar::String(device_group::IDLE_ACTION_NONE.to_owned());
+        if action.as_ref() != Some(&none) {
+            return Ok(Some((DeviceAction::IdleAction, action_key)));
+        }
+        let ladder = self.recovery_ladder(context)?;
+        let kind = match self.value(&instance_key(instance_id, instance::DEVICE_KIND)) {
+            Some(FactScalar::String(kind)) if kind == instance::HANDSET => {
+                InstanceDeviceKind::Handset
+            }
+            _ => InstanceDeviceKind::Emulator,
+        };
+        let profile_key = instance_key(instance_id, instance::RECOVERY_LADDER_PROFILE);
+        let own_profile = self.value(&profile_key).is_some();
+        let (rungs, rungs_key) = match ladder.profile_for(instance_id, kind) {
+            Some(profile) if own_profile => (&profile.rungs, profile_key),
+            Some(profile) => (&profile.rungs, recovery_ladder::KIND_PROFILES.to_owned()),
+            None => (&ladder.rungs, recovery_ladder::RUNGS.to_owned()),
+        };
+        if rungs
+            .iter()
+            .any(|rung| rung.action() == RecoveryRung::EmulatorRestart)
+        {
+            return Ok(Some((DeviceAction::EmulatorRestartRung, rungs_key)));
+        }
+        Ok(None)
+    }
+
+    /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "The configuration form"): the
+    /// whole-instance check of the device groups. A member of a group of several that turns on a
+    /// device-level action with the values in effect is `config_value_invalid` (`section_check`)
+    /// on the key whose value turns it on ([`Self::device_action_in_effect`]).
+    fn check_device_groups(&self, context: &CheckContext) -> Result<(), ConfigFailure> {
+        for members in self.device_groups_of_several().values() {
+            for member in members {
+                if let Some((_, key)) = self.device_action_in_effect(member, context)? {
+                    return Err(ConfigFailure::invalid_value(
+                        key,
+                        ConfigValueProblem::SectionCheck,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The instruction value of `key`, when one is in effect.
     pub fn instruction(&self, key: &str) -> Option<&InstructionValue> {
         self.setting(key)
@@ -1064,6 +1161,15 @@ impl EffectiveConfig {
             for instance in instances {
                 self.loading_mode(instance)?;
             }
+        }
+        // Workflow #437 MAPP-1: a member of a group of several turns on no device-level action
+        // the first slice refuses there; a change of an instance's keys, of the `idle` section or
+        // of the `recovery_ladder` section may turn one on.
+        if sections.contains(INSTANCE_SECTION)
+            || sections.contains(idle::SECTION)
+            || sections.contains(recovery_ladder::SECTION)
+        {
+            self.check_device_groups(context)?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

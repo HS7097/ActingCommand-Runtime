@@ -3582,5 +3582,6 @@ tests = [
     "actingcommand-lab-ops::lib::gate_438_held::held_t9_actingd_suspended_and_diagnose_list_an_instance_held_records",
     "actingcommand-runtime-host::lib::tests::gate_438_held::held_t10_the_fact_refresh_waits_of_one_key_keep_one_clock",
     "actingcommand-runtime-host::lib::tests::gate_438_held::held_t11_a_start_leaves_the_held_records_it_cannot_read_back_and_goes_on",
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t12_a_member_that_waits_for_its_device_is_held",
 ]
 incident = ["#438 HELD-1"]

@@ -800,4 +800,9 @@ outcome_keys! {
     held_for_ms: duration_ms,
     held_after_ms: duration_ms,
     // ---- Workflow #438 HELD-1: end ----
+    // ---- Workflow #437 MAPP-1 (contracts/device-group.md): which rule of device groups a
+    // configuration breaks, and why a member of a device group waits for its device; both kept
+    // in codes mode. ----
+    device_group_problem: vocab(device_group_problem),
+    device_group_wait: vocab(device_group_wait),
 }

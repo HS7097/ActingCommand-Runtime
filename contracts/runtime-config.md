@@ -1695,32 +1695,40 @@ MCP `ac_config_set` (observer tier, as every key but the backends); the console.
 ("Console tiers" below). No `actingd-config` step: the entry's member is unchanged, and an
 instruction row is no file shape.
 
-## Device groups (Workflow #437 MAPP, not built yet)
+## Device groups (Workflow #437 MAPP; MAPP-1 built, register §1.328)
 
-The contract is [device-group.md](device-group.md). What it changes in this mechanism
-(MAPP, not built yet):
+The contract is [device-group.md](device-group.md). What it changes in this mechanism (the
+switch cooldown is MAPP-2's, not built yet):
 
-- **The entry's member `device_group`** (`actingd-config` 29, planned) is a file member read at
-  assembly, not a key of the key table and not settable. The manifest reports it as the row
+- **The entry's member `device_group`** (`actingd-config` 29, in force from Runtime 0.12.56) is a
+  file member read at assembly and not settable. The manifest reports it as the row
   `instance.<instance id>.device_group` (section `instance`, not settable, read at assembly), only
-  for an entry that names it. Its `ui_tier` row (read only) is the code slice's.
+  for an entry that names it; so it is a row of the key table (`device_group::ROW`, default none,
+  `NotSettable::ReadAtAssembly`), as `device_kind` is, because every manifest row is one. Its
+  console tier is `hidden` (`advanced` holds its eight keys; how the console shows a group is the
+  console slice's). A value that is not a name of 1 to 64 bytes under the alias rules is refused
+  at assembly, first of the group checks (`device_group_config_invalid`, `config_key`
+  `device_group`, `name_invalid`; MAPP-1).
 - **Keys a member of a group of several may not turn on**, refused at assembly
-  (`device_group_config_invalid`, `device_action_unsupported`, proposed):
+  (`device_group_config_invalid`, `device_action_unsupported`; MAPP-1):
   `instance.<id>.start_emulator` `true`; `idle.action` in effect other than `none`, the instance's
   or the section's (the defaults file's `close_app` included, so a member names `none`); and a ladder
   profile in effect whose rungs hold `emulator_restart` (the member's `recovery_ladder_profile`,
   else its kind's profile, else the section's `rungs`). A conflicting setting is refused, never
-  overridden. MAPP-1 adds to the defaults file's `recovery_ladder.profiles` a neutrally named
-  profile without `emulator_restart` for members to name (a value of the existing key).
+  overridden. MAPP-1 adds to the defaults file's `recovery_ladder.profiles` the profile
+  `without_emulator_restart` (`return_home`, `application_restart`) for members to name (a value of
+  the existing key).
 - **Instructions.** The whole-instance check applies the same rule to the values in effect, so an
   instruction that would break it is `config_value_invalid` with `config_value_problem`
-  `section_check` on the key, and the configuration in effect stays. The keys concerned are
-  `instance.<id>.start_emulator`, `instance.<id>.idle.action`, the section's `idle.action` while a
-  member takes it, `instance.<id>.recovery_ladder_profile`, and `recovery_ladder.rungs`,
-  `recovery_ladder.profiles` and `recovery_ladder.kind_profiles` where a member climbs by them.
+  `section_check` on the key, and the configuration in effect stays (MAPP-1,
+  `EffectiveConfig::device_action_in_effect`). The key the refusal names is the one whose value
+  turns the action on: `instance.<id>.start_emulator`, `instance.<id>.idle.action`, the section's
+  `idle.action` while a member takes it, `instance.<id>.recovery_ladder_profile` (also when a
+  change of `recovery_ladder.profiles` puts `emulator_restart` into the profile it names), and
+  `recovery_ladder.kind_profiles` or `recovery_ladder.rungs` where a member climbs by them.
 - **Until the slice "order within one device"**, every group of several is refused at assembly
-  (`device_group_config_invalid`, `config_key` `device_group`, `several_members_unsupported`,
-  proposed), after the rules above; a group of one is accepted
+  (`device_group_config_invalid`, `config_key` `device_group`, `several_members_unsupported`;
+  MAPP-1), after the rules above; a group of one is accepted
   ([device-group.md](device-group.md), "The configuration form" and "Release").
 - **The switch cooldown** (MAPP-2): `scheduling.device_group.switch_failure_cooldown_ms`
   (proposed), milliseconds `1..=3600000`, default `300000`, a member of the `scheduling` section
@@ -1729,10 +1737,14 @@ The contract is [device-group.md](device-group.md). What it changes in this mech
   with `dispatch_instance_cooldown`, as during a takeover cooldown, while the other members go on;
   a change applies to cooldowns that start after it. No per-instance or per-group form
   ([device-group.md](device-group.md), "The switch before a run").
-- **A group of one is unchanged:** none of these rules applies to it, and no key, default or row of
-  today changes for it. The switch cooldown's key is one more row of the `scheduling` section on
-  every root, in the manifest and in `config.parameters.scheduling`, which a group of one never
-  meets: it makes no switch.
+- **A group of one is unchanged:** none of these rules applies to it but the name's, and no key of
+  today changes for it. The switch cooldown's key is one more row of the `scheduling`
+  section on every root, in the manifest and in `config.parameters.scheduling`, which a group of
+  one never meets: it makes no switch. The default of `recovery_ladder.profiles` gains
+  `without_emulator_restart`: on a root that leaves the key at its default, the row's value, the
+  program fact `config.parameters.recovery_ladder` and the ladder's `config_digest` change, and
+  nothing climbs by the profile unless an entry names it ([device-group.md](device-group.md), "A
+  group of one is today").
 
 ## Facts
 

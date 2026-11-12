@@ -37,10 +37,11 @@ pub(crate) const HELD_SIGNAL_PREFIX: &str = "signal:task_held:held:";
 /// `<hex>`.
 pub(crate) const ENDED_SIGNAL_PREFIX: &str = "signal:task_held:ended:";
 
-/// The census's codes that are held whatever their values (register §1.322, settled 10): eleven
-/// due (eligibility `true`), two undecidable (`unknown`) and the four fact refresh waits (either).
-/// The held set is closed: a code a later slice adds is never held until the census names it.
-pub(crate) const HELD_CODES: [Code; 17] = [
+/// The census's codes that are held whatever their values (register §1.322, settled 10; §1.328
+/// for `device_group_waiting`): twelve due (eligibility `true`), two undecidable (`unknown`) and
+/// the four fact refresh waits (either). The held set is closed: a code a later slice adds is
+/// never held until the census names it.
+pub(crate) const HELD_CODES: [Code; 18] = [
     // Held, due.
     PolicyCode::PolicyNoProgress.code(),
     PolicyCode::InstanceUnavailable.code(),
@@ -53,6 +54,10 @@ pub(crate) const HELD_CODES: [Code; 17] = [
     ApplicationUpdateCode::Pending.code(),
     PolicyCode::SelectionInputUnknown.code(),
     SchedulingRulePolicyCode::DecisionReasonMissing.code(),
+    // Workflow #437 MAPP-1a (register §1.328): a member of a device group that waits for its
+    // device, whatever its `device_group_wait`; the device's form of `instance_already_selected`
+    // and `dispatch_instance_held`.
+    PolicyCode::DeviceGroupWaiting.code(),
     // Held, undecidable.
     PolicyCode::TriggerUnknown.code(),
     PolicyCode::FeedbackStopUnknown.code(),

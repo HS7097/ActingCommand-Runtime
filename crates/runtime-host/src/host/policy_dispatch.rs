@@ -95,6 +95,43 @@ impl HostShared {
         Ok(occupancy)
     }
 
+    /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "One pick per device per round"): the
+    /// device each registered member of a device group of several runs on, by alias, as the
+    /// scheduler keys it (the text of its device key), for the evaluator's one pick per device.
+    /// An instance alone on its device is not named, and the evaluator keys it by its own alias
+    /// as before; memory only.
+    fn policy_device_groups(&self) -> RuntimeHostResult<actingcommand_policy::DeviceGroups> {
+        let instances = lock(
+            &self.registered_instances,
+            HostLocation::ReadPolicyInstanceRegistry,
+        )?
+        .values()
+        .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
+        .collect::<Vec<_>>();
+        let devices = {
+            let scheduler = lock(&self.scheduler, HostLocation::ReadPolicyInstanceOccupancy)?;
+            instances
+                .iter()
+                .map(|(instance_id, alias)| (scheduler.device_key(*instance_id), alias.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut members = BTreeMap::<InstanceId, Vec<String>>::new();
+        for (device, alias) in devices {
+            members.entry(device).or_default().push(alias);
+        }
+        let by_alias = members
+            .into_iter()
+            .filter(|(_, aliases)| aliases.len() > 1)
+            .flat_map(|(device, aliases)| {
+                let device = crate::failure_identity::identifier_text(&device);
+                aliases
+                    .into_iter()
+                    .map(move |alias| (alias, device.clone()))
+            })
+            .collect();
+        Ok(actingcommand_policy::DeviceGroups::new(by_alias))
+    }
+
     /// Q-3 (6): policy dispatches only to an instance with no holder, no eligible waiting claim
     /// and no takeover cooldown. Read under the scheduler lock, with the routine gate read
     /// just before it.
@@ -1312,6 +1349,8 @@ impl HostShared {
         // Workflow #369 W-1: every instance's one queue as this cycle starts; a held instance's
         // candidates are deferred, and nothing is written for them.
         let occupancy = self.policy_instance_occupancy(time.unix_ms)?;
+        // Workflow #437 MAPP-1: the device each member of a group of several runs on.
+        let device_groups = self.policy_device_groups()?;
         // Workflow #336 L6 (§12.7): a paused pair is judged against the startup configuration;
         // PKG-S3: a due paused pair's packages are measured (at most once per interval).
         let suspension_lift = self.suspension_lift_view(&procedure_manifest)?;
@@ -1400,6 +1439,7 @@ impl HostShared {
                     no_progress_enabled: &no_progress_context,
                     pool_lines: &pool_lines_context,
                     task_held: &task_held_context,
+                    device_groups: &device_groups,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {

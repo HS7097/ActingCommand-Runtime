@@ -2548,6 +2548,31 @@
       "description": "Scheduling decision reason, a warning (#428 SCHED-C1f1, register §1.303, the coordinator's rulings of 11-11 on its nine questions; contracts/scheduling/README.md \"A run's consumption read from a fact\"): the task's consumption of the pool pool_id is read from the instance fact fact_key, with a fallback, and the instance holds a record of it that is present and current but not usable: unknown_reason fact_low_confidence for a confidence of 0, or type_mismatch for a value of another kind, a record list or an integer outside 1..=2^53-1 or above a constant capacity of the pool. The evaluation reads the fallback, and consumption is the task's whole consumption of the pool in whole units it reads with it. It is the first reason of each decision of the task on the instance in the evaluation, once per pool, before benefit_fixed_value, and never settles a decision. A record that is missing, past its own expiry or invalidated by a reset gives the fallback with no warning; the pool's reasons say so with consumption_source fallback.",
       "common_causes": "The pack wrote the fact with a value of another kind or out of range, or with a confidence of 0; or a person set it so through an instruction.",
       "handling": "Correct the reading the task's pack writes for the key (ac_facts shows the record), or the fallback in schedule.json if the usual amount differs; the next usable record is read at the next evaluation."
+    },
+    "device_group_waiting": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "alias": "required",
+        "device_group_wait": "required",
+        "task_id": "optional",
+        "holder_kind": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.56",
+      "description": "Scheduling decision reason (Workflow #437 MAPP-1, contracts/device-group.md, \"One pick per device per round\"): a candidate of a member of a device group does not run because another member of its device has the device. instance_id is the candidate's alias, alias the member that has the device, and device_group_wait why: selected (that member's candidate, task_id, won the device this round), held (a claim or run of that member holds the device or waits for it first; task_id with a run, holder_kind the claim kind), player_hold (a person holds the device through that member) or fenced (that member is fenced). It takes the place of the code a lone instance's candidate would give (instance_already_selected, dispatch_instance_held, a control gate's code) and has no wake of its own: the other member's settlement, release or lifting wakes the next evaluation. A group of one never gives it.",
+      "common_causes": "Several applications on one device, each due at once; a run, a ladder, a person's hold or a fence of another application of the same device.",
+      "handling": "None: the candidate runs once the device is free and it wins a round. A member's own holder or gate keeps its own code."
     }
   }
 }

@@ -48,6 +48,9 @@ use std::time::{Duration, Instant};
 
 pub(super) mod ac_adb;
 mod device_binding;
+// Workflow #437 MAPP-1: the device groups, derived at assembly.
+mod device_group;
+pub(crate) use device_group::DeviceGroups;
 // Workflow #384 D2-S2.
 pub(super) mod recognition_package;
 pub(crate) use device_binding::DeviceRefusal;
@@ -84,6 +87,10 @@ mod gate_hs1;
 // record and its check-config report, over a fake adapter source and a fixture runtime pin.
 #[cfg(test)]
 mod gate_407_gpu1d;
+// Test-only: Workflow #437 MAPP-1, the device groups' form, rules and map at assembly and after a
+// fake discovery.
+#[cfg(test)]
+mod gate_mapp1;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -1146,6 +1153,14 @@ struct InstanceConfig {
     execution: Option<actingcommand_runtime_config::InstanceExecutionFile>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
+    /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "The configuration form"): the device
+    /// group this entry is a member of, a name of 1 to 64 bytes under the alias rules that names no
+    /// device value; entries naming one value are one group (`config/device_group.rs`). Read once
+    /// at assembly, not settable; reported as `instance.<id>.device_group`.
+    // Interface anchor `actingd-config` revision 29: a Runtime before MAPP-1 refuses an entry that
+    // names it, because the entry denies unknown members (`config_decode_failed`).
+    #[serde(default)]
+    device_group: Option<String>,
     /// Workflow #398 RD-1b (model-398 v1.1 §3.1): the kind of device the instance drives,
     /// `{kind, transport}`; absent is an emulator.
     #[serde(default)]
@@ -1252,6 +1267,9 @@ pub(super) struct RuntimeAssembly {
     /// RB-2: the `host` section in effect, the memory and I/O priority the start gives its own
     /// process before the Runtime host starts (`crate::process_priority`).
     pub(super) process_priority: actingcommand_runtime_config::HostProcessConfig,
+    /// Workflow #437 MAPP-1: the device groups the entries name, derived here and never stored;
+    /// `host` holds their member → device key map, and `check-config` reports each entry's group.
+    pub(super) device_groups: DeviceGroups,
 }
 
 /// A refused `resource_package`: the code, the offending instance and path and, for
@@ -1386,6 +1404,9 @@ pub(super) struct ConfiguredProvider {
     mumu_root: Option<PathBuf>,
     /// The injected environment fallbacks for discovery and the vision provider.
     env_overrides: EnvOverrides,
+    /// Workflow #437 MAPP-1: the device groups, which the start's discovery checks for undeclared
+    /// sharing and whose groups of several get their daemon line once the registry is built.
+    device_groups: DeviceGroups,
 }
 
 /// The discovery binding key of one deferred instance.
@@ -1668,12 +1689,15 @@ impl ActingdConfigFile {
             .iter()
             .filter_map(|instance| instance.application_id.clone())
             .collect::<BTreeSet<_>>();
+        // Workflow #437 MAPP-1: what the device groups' rules read of each entry, in
+        // configuration order.
+        let mut group_entries = Vec::with_capacity(instances.len());
         for instance in &mut instances {
-            if instance.fixture_backend.is_none()
+            let handset = instance.fixture_backend.is_none()
                 && device_binding::check_device(instance)
                     .map_err(|_| ActingdCode::DeviceConfigInvalid.code())?
-                    == DeviceKind::Handset
-            {
+                    == DeviceKind::Handset;
+            if handset {
                 handsets.push(instance.alias.clone());
             }
             instance.device_paths = device_paths.clone();
@@ -1706,6 +1730,21 @@ impl ActingdConfigFile {
             }
             let instance_id = manifest::instance_id_text(instance.instance_id)?;
             instance_aliases.push((instance.alias.clone(), instance_id.clone()));
+            // Workflow #437 MAPP-1: the entry's group is a name of 1 to 64 bytes under the alias
+            // rules, the first of the group checks (`name_invalid`).
+            if let Some(refusal) = instance
+                .device_group
+                .as_deref()
+                .and_then(|name| device_group::name_refusal(&instance.alias, name))
+            {
+                *refused = Some(refusal.outcome());
+                return Err(refusal.code());
+            }
+            group_entries.push(device_group::GroupEntry::of(
+                instance,
+                instance_id.clone(),
+                handset,
+            ));
             let mut members = serde_json::Map::new();
             members.insert(
                 "instance_id".to_owned(),
@@ -1806,6 +1845,12 @@ impl ActingdConfigFile {
                         .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
                 );
             }
+            // Workflow #437 MAPP-1: reported as `instance.<id>.device_group` when the file names
+            // it.
+            members.insert(
+                actingcommand_runtime_config::DEVICE_GROUP.to_owned(),
+                serde_json::json!(instance.device_group),
+            );
             // Workflow #384 D2-S2: the location is reported as
             // `instance.<id>.recognition_package`, resolved as it is used. An empty path stays
             // empty, so the binding check reports it unreadable.
@@ -1868,7 +1913,15 @@ impl ActingdConfigFile {
             .vision
             .map(|vision| vision.assemble(&self.source_root, self.install_root.as_deref()))
             .transpose()?;
-        let provider = ConfiguredProvider::new(instances, self.mumu_root, vision, env_overrides);
+        // Workflow #437 MAPP-1: derived from the entries, never stored.
+        let device_groups = DeviceGroups::new(group_entries);
+        let provider = ConfiguredProvider::new(
+            instances,
+            self.mumu_root,
+            vision,
+            env_overrides,
+            device_groups.clone(),
+        );
         let policy = self
             .policy
             .map(|policy| policy.assemble(&self.source_root))
@@ -2055,6 +2108,36 @@ impl ActingdConfigFile {
             instances_startup_package_count,
             mechanism_parameters,
         })?;
+        // Workflow #437 MAPP-1 (`contracts/device-group.md`, "The configuration form"): the
+        // device groups' rules with the values in effect, before the whole-section checks, in
+        // check-config and at start alike. Until the slice "order within one device" they refuse
+        // every group of several, so the whole-instance rule of a member (`section_check`) is met
+        // only by an instruction.
+        {
+            let effective = actingcommand_runtime_config::EffectiveConfig::from_manifest(&manifest)
+                .map_err(|failure| {
+                    *refused = Some(failure.outcome());
+                    failure.failure_code().code()
+                })?;
+            let context = actingcommand_runtime_config::CheckContext::new(
+                host.scheduler().maximum_client_heartbeat_interval_ms,
+                actingcommand_runtime_host::recovery_ladder_device_bounds(),
+            )
+            .with_backends(actingcommand_runtime_host::backend_kind_rules());
+            device_groups
+                .check(&effective, &context)
+                .map_err(|failure| match failure {
+                    device_group::GroupCheckFailure::Group(refusal) => {
+                        *refused = Some(refusal.outcome());
+                        refusal.code()
+                    }
+                    device_group::GroupCheckFailure::Config(failure) => {
+                        *refused = Some(failure.outcome());
+                        failure.failure_code().code()
+                    }
+                })?;
+        }
+        host = host.with_device_keys(device_groups.device_keys());
         // Workflow #387 D1b: the whole-section checks of the file layer, with the facts of other
         // crates they read (§5.3); a start and check-config refuse the same way.
         // RB-2: the start applies the `host` section to its own process right after this.
@@ -2136,6 +2219,7 @@ impl ActingdConfigFile {
             unused_device_bindings,
             emulator_autostart,
             process_priority,
+            device_groups,
         })
     }
 
@@ -2928,6 +3012,7 @@ impl ConfiguredProvider {
         mumu_root: Option<PathBuf>,
         vision: Option<ConfiguredVision>,
         env_overrides: EnvOverrides,
+        device_groups: DeviceGroups,
     ) -> Self {
         let mut specs = Vec::new();
         let mut deferred = Vec::new();
@@ -2943,6 +3028,7 @@ impl ConfiguredProvider {
             vision,
             mumu_root,
             env_overrides,
+            device_groups,
         }
     }
 

@@ -383,6 +383,34 @@ impl InstanceHolds {
     }
 }
 
+/// Workflow #437 MAPP-1 (`contracts/device-group.md`, "One pick per device per round"): the
+/// device each instance runs on, by alias. The members of one device group share one device key,
+/// and a round selects at most one candidate per device: the device's first candidate in the
+/// allocation order wins it, and every later candidate of another member waits with
+/// `device_group_waiting` (`selected`, the winner's alias and task). An instance the map does not
+/// name is a device of its own, as every instance was before MAPP-1. The Runtime derives the map
+/// from its configuration at the start and passes it beside the instance holds
+/// ([`evaluate_with_device_groups`]); memory only, never part of the facts, a snapshot or a
+/// decision identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeviceGroups {
+    devices: BTreeMap<String, String>,
+}
+
+impl DeviceGroups {
+    /// The device key of each member, by its alias.
+    pub fn new(devices: BTreeMap<String, String>) -> Self {
+        Self { devices }
+    }
+
+    /// The device key of `instance_id`: its own alias when the map names it not.
+    fn device<'a>(&'a self, instance_id: &'a str) -> &'a str {
+        self.devices
+            .get(instance_id)
+            .map_or(instance_id, String::as_str)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluationTime {
@@ -1158,6 +1186,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         &mut CappedMemory::default(),
         &InstancePoolLines::default(),
         &LeftOutFacts::default(),
+        &DeviceGroups::default(),
         eligibility,
     )
 }
@@ -1196,6 +1225,7 @@ pub fn evaluate_with_fact_refresh<E: From<PolicyEvaluationError>>(
         &mut CappedMemory::default(),
         &InstancePoolLines::default(),
         &LeftOutFacts::default(),
+        &DeviceGroups::default(),
         eligibility,
     )
 }
@@ -1240,6 +1270,7 @@ pub fn evaluate_with_remedies<E: From<PolicyEvaluationError>>(
         &mut CappedMemory::default(),
         &InstancePoolLines::default(),
         &LeftOutFacts::default(),
+        &DeviceGroups::default(),
         eligibility,
     )
 }
@@ -1582,6 +1613,61 @@ pub fn evaluate_with_left_out_facts<E: From<PolicyEvaluationError>>(
     capped: &mut CappedMemory,
     instance_lines: &InstancePoolLines,
     left_out: &LeftOutFacts,
+    entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    evaluate_with_device_groups(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        fact_refresh,
+        remedies,
+        chain_handover,
+        run_slots,
+        owed_reruns,
+        instance_holds,
+        no_progress,
+        capped,
+        instance_lines,
+        left_out,
+        &DeviceGroups::default(),
+        entry_holds,
+        eligibility,
+    )
+}
+
+/// Workflow #437 MAPP-1 (`contracts/device-group.md`, "One pick per device per round"):
+/// `evaluate_with_left_out_facts` with the device each instance runs on ([`DeviceGroups`]). A
+/// round selects at most one candidate per device: the device's first candidate in the
+/// allocation order wins it, and every later candidate of another member of the device waits
+/// with `device_group_waiting` (`device_group_wait` `selected`, `alias` the winning member,
+/// `task_id` its task), with exactly the state, the eligibility and the wake (none of its own)
+/// of a candidate that waits behind its own instance's winner with `instance_already_selected`;
+/// a later candidate of the winning member keeps that code. Members rank by today's scores,
+/// unchanged. With no device of several members the evaluation is the one
+/// `evaluate_with_left_out_facts` gives.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_with_device_groups<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    fact_refresh: &FactRefreshInputs,
+    remedies: &RemedyPlan,
+    chain_handover: &ChainHandoverInputs,
+    run_slots: &RunSlots,
+    owed_reruns: &OwedReruns,
+    instance_holds: &InstanceHolds,
+    no_progress: &NoProgressGuards,
+    capped: &mut CappedMemory,
+    instance_lines: &InstancePoolLines,
+    left_out: &LeftOutFacts,
+    device_groups: &DeviceGroups,
     mut entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
     eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
@@ -1603,6 +1689,7 @@ pub fn evaluate_with_left_out_facts<E: From<PolicyEvaluationError>>(
         capped,
         instance_lines,
         left_out,
+        device_groups,
         eligibility,
     )
 }
@@ -1625,6 +1712,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     capped: &mut CappedMemory,
     instance_lines: &InstancePoolLines,
     left_out: &LeftOutFacts,
+    device_groups: &DeviceGroups,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
@@ -2184,6 +2272,8 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     // Workflow #427-B: the dispatches chosen so far in the round against the shared run limits.
     let mut round_slots = RoundSlots::default();
     let mut selected_instances = BTreeSet::new();
+    // Workflow #437 MAPP-1: the member and task that won each device this round, by device key.
+    let mut selected_devices = BTreeMap::<String, (String, String)>::new();
     // SS-2h: the capped block (pool) and task of each instance's selected candidate, when it is
     // one; a later candidate of the same block waits for it as for its head.
     let mut selected_blocks = BTreeMap::<String, (String, String)>::new();
@@ -2288,6 +2378,40 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                     candidate.work_index,
                     RefreshGate::Temporary {
                         gate: Some(PolicyCode::InstanceAlreadySelected.code()),
+                        wake: None,
+                    },
+                );
+            }
+            continue;
+        }
+        // Workflow #437 MAPP-1 (`contracts/device-group.md`, "One pick per device per round"):
+        // another member of the candidate's device won the device this round; the candidate
+        // waits for it with no wake of its own, as one behind its own instance's winner does.
+        if let Some((winner, winner_task)) =
+            selected_devices.get(device_groups.device(&candidate.instance_id))
+        {
+            if let Some(hold) = instance_hold {
+                hold_unasked(
+                    hold,
+                    refresh,
+                    candidate.work_index,
+                    &mut work,
+                    &mut refresh_gates,
+                );
+                continue;
+            }
+            work[candidate.work_index]
+                .reasons
+                .push(device_group_selected_reason(
+                    &candidate.instance_id,
+                    winner,
+                    winner_task,
+                ));
+            if refresh {
+                refresh_gates.insert(
+                    candidate.work_index,
+                    RefreshGate::Temporary {
+                        gate: Some(PolicyCode::DeviceGroupWaiting.code()),
                         wake: None,
                     },
                 );
@@ -2499,6 +2623,10 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         {
             handover.settle(true);
         }
+        selected_devices.insert(
+            device_groups.device(&candidate.instance_id).to_owned(),
+            (candidate.instance_id.clone(), candidate.task_id.clone()),
+        );
         selected_instances.insert(candidate.instance_id.clone());
         selected.push((reason_chains.len(), candidate.work_index));
         reason_chains.push(DecisionReasonChain {
@@ -7651,6 +7779,27 @@ fn reason_with(outcome: Outcome, detail: impl Into<String>) -> DecisionReason {
         outcome,
         detail: detail.into(),
     }
+}
+
+/// Workflow #437 MAPP-1 (`contracts/device-group.md`, "One pick per device per round"): the
+/// reason of a candidate of `instance_id` whose device `winner`'s candidate of `winner_task` won
+/// this round: `device_group_waiting`, `selected`.
+fn device_group_selected_reason(
+    instance_id: &str,
+    winner: &str,
+    winner_task: &str,
+) -> DecisionReason {
+    reason_with(
+        Outcome::new(PolicyCode::DeviceGroupWaiting)
+            .instance_id(instance_id)
+            .alias(winner)
+            .device_group_wait(crate::codes::DeviceGroupWait::Selected)
+            .task_id(winner_task),
+        format!(
+            "device_group_wait=selected alias={winner} task_id={winner_task}: another member of \
+             the device won it for the evaluation round"
+        ),
+    )
 }
 
 fn normalize_suggestions(suggestions: &mut Vec<DetectionSuggestion>) {

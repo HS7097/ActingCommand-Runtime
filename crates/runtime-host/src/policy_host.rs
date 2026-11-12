@@ -60,7 +60,7 @@ use actingcommand_policy::{
     MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, NoProgressMemory, PolicyEvaluation,
     REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement,
     RunSlots, SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
-    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_left_out_facts,
+    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_device_groups,
     instance_valued_pool_ids, plan_remedies,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
@@ -317,6 +317,10 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// instance of the snapshot, by alias, as the cycle starts; an instance it does not name writes
     /// no new held record. Read only after the evaluation, by the held records.
     pub(crate) task_held: &'a BTreeMap<String, actingcommand_runtime_config::TaskHeldConfig>,
+    /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "One pick per device per round"): the
+    /// device each member of a device group of several runs on, by alias; an instance it does
+    /// not name is a device of its own.
+    pub(crate) device_groups: &'a actingcommand_policy::DeviceGroups,
 }
 
 /// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
@@ -3250,6 +3254,7 @@ impl PolicyHost {
             no_progress_enabled,
             pool_lines,
             task_held,
+            device_groups,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -3392,7 +3397,9 @@ impl PolicyHost {
         // `scheduling.pool_lines` in effect gives its pools as the cycle starts; #428 S168-LB1a:
         // with the keys the projection left out for their record list's rows.
         let left_out = fact_refresh.left_out;
-        let evaluation = evaluate_with_left_out_facts::<RuntimeHostError>(
+        // Workflow #437 MAPP-1: with one pick per device, each member of a group of several
+        // keyed by its device.
+        let evaluation = evaluate_with_device_groups::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
@@ -3411,6 +3418,7 @@ impl PolicyHost {
             &mut capped,
             pool_lines,
             left_out,
+            device_groups,
             |task, _instance_id, page_id| {
                 Ok(crate::host::chain_entry_holds_page(
                     procedure_manifest,

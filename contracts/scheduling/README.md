@@ -1632,14 +1632,18 @@ written. 114-A freezes the shapes, the index keys and every vocabulary of the re
 read `ScheduleHistory`, and writes nothing: until 114-B, this table is still not written to the
 ledger.
 
-**A member that waits for another member of its device** (Workflow #437 MAPP, not built yet;
-[device-group.md](../device-group.md), "One pick per device per round"). In a device group of
-several, a candidate of a member that does not get the device because another member has it is
-deferred with `device_group_waiting` (proposed; info; `instance_id` the alias, `alias` the member
+**A member that waits for another member of its device** (Workflow #437 MAPP; MAPP-1 builds the
+evaluator's one pick per device and `selected`, register §1.328; `held`, `player_hold` and
+`fenced`, which the host's gates give, are not built yet; [device-group.md](../device-group.md),
+"One pick per device per round"). In a device group of
+several, a candidate of a member that does not get the device because another member has it
+waits with `device_group_waiting` (registered; info; `instance_id` the alias, `alias` the member
 that has the device, `device_group_wait` `selected`, `held`, `player_hold` or `fenced`, optional
 `task_id` and `holder_kind`) and no wake of its own. This takes the place of
 `instance_already_selected`, `dispatch_instance_held` or a control gate's code, which a candidate
-of a lone instance gets, and a member's own holder or gate keeps its own code. It is the `why` of
+of a lone instance gets; with `selected` the candidate has exactly the state, the eligibility and
+the wake of one behind its own instance's winner (`instance_already_selected`), and only the code
+and its values differ. A member's own holder or gate keeps its own code. It is the `why` of
 the member's not-running row while it waits. In a group of one it never occurs.
 After a failed switch (`application_switch_failed`, proposed) the member's own candidates wait out
 its switch cooldown, `scheduling.device_group.switch_failure_cooldown_ms` (proposed, default
@@ -2014,7 +2018,9 @@ that hold ended.
     `heavy_scene_budget_exhausted`, `heavy_scene_budget_deferred`,
     `policy_concurrent_runs_deferred`, `instance_already_selected`,
     `policy_chain_handover_waiting`, `dispatch_instance_held` (whatever its `holder_kind`),
-    `application_update_pending`, `selection_input_unknown`, `decision_reason_missing`.
+    `application_update_pending`, `selection_input_unknown`, `decision_reason_missing`,
+    `device_group_waiting` (whatever its `device_group_wait`; classed by Workflow #437 MAPP-1a,
+    [v012-register.md](../v012-register.md) §1.328).
   - *Held, undecidable* (eligibility `unknown`): `trigger_unknown`, `feedback_stop_unknown`.
   - *Held, either* (by the row's eligibility): `fact_refresh_pending`, `fact_refresh_unresolved`,
     `fact_refresh_exhausted`, `fact_refresh_unbound`.
@@ -2029,8 +2035,10 @@ that hold ended.
     takeover cooldown, an interval, a backoff, a random delay, an owed rerun, a remedy round); and a
     row that is not due (`trigger_false`, `feedback_stop_true`).
   - A wait behind a run in flight (`dispatch_instance_held`, the heavy-scene and shared-limit
-    waits, `instance_already_selected`) stays held (settled by the coordinator on 11-12): only so
-    is a registration left open with no time and no other record seen. A queue of short runs
+    waits, `instance_already_selected`, and `device_group_waiting`, the wait of a member of a
+    device group for the device another member has) stays held (settled by the coordinator on
+    11-12): only so is a registration left open with no time and no other record seen, and only so
+    does a member that another member of its device starves for hours leave a record. A queue of short runs
     changes the code at each run and never reaches the threshold; an instance whose runs are long
     gets its own `after_ms`, and a wake rule may leave such codes out (its `codes`,
     [agent-wake.md](../agent-wake.md), "Rules").
@@ -2748,8 +2756,11 @@ finishes and is settled there whatever the switch says afterwards.
   to actingd's host handle, so the host is released and closed, and its close joins the
   workers: a run a worker took finishes and is settled, one still queued is refused
   (`runtime_stopping`) and settled as interrupted, as above.
-- **Device groups (Workflow #437 MAPP, not built yet; [device-group.md](../device-group.md)).**
-  Several instances on one device are one device group. The group is derived from the
+- **Device groups (Workflow #437 MAPP; [device-group.md](../device-group.md)).** MAPP-1 (register
+  §1.328) builds the derived map, the scheduler state keyed by the device key and the round's one
+  pick per device; the one worker, the in-flight registration across the group and the switch are
+  not built yet, and the load refuses every group of several until the slice "order within one
+  device". Several instances on one device are one device group. The group is derived from the
   configuration at assembly and never stored.
   - A group has one lane: one scheduler state (one lease, one queue, one cooldown), keyed by the
     group's device key, and one worker. The in-flight registration of any member's run holds the

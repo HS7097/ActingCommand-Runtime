@@ -83,10 +83,12 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   is one raise for two slices: #428 SCHED-C1e (register §1.299 SC1-12) adds an instance
 ///   entry's `scheduling.pool_lines`, and IDLE-2 (register §1.304) adds the `idle.action` value
 ///   `auto` and the keys `idle.return_home_min_gap_ms` and `idle.stop_emulator_min_gap_ms`
-///   (section and per instance); revisions 5 to 27 are still read, so [5, 28]. Workflow #438
-///   HELD-1 (0.12.56, register §1.322, §1.327): revision 29 adds the member `task_held`
-///   (`enabled`, `after_ms`) of the `scheduling` section and of an instance entry's `scheduling`;
-///   revisions 5 to 28 are still read, so [5, 29].
+///   (section and per instance); revisions 5 to 27 are still read, so [5, 28]. Revision 29
+///   (0.12.56) is one raise for two slices: Workflow #438 HELD-1 (register §1.322, §1.327) adds
+///   the member `task_held` (`enabled`, `after_ms`) of the `scheduling` section and of an instance
+///   entry's `scheduling`, and Workflow #437 MAPP-1 (register §1.328) adds an instance entry's
+///   `device_group` and check-config's report member `device_group`; revisions 5 to 28 are still
+///   read, so [5, 29].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow

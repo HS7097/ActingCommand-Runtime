@@ -107,6 +107,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         // RB-2: check-config checks the `host` section (its rows are in the manifest) and
         // applies nothing; only the start sets its own priorities.
         process_priority: _,
+        device_groups,
     } = file.assemble_or_refusal().map_err(|(code, refusal)| {
         let error = match device.filter(|device| device.code() == code) {
             Some(device) => {
@@ -232,6 +233,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         vision,
         unused_device_bindings,
         emulator_autostart,
+        device_groups: device_groups.names(),
     };
     let (mut report, mut notes) = summarize(&config_path, &checked, &resource_packages)
         .map_err(|(code, stage)| staged(ActingdError::config(code), stage))?;
@@ -478,6 +480,8 @@ struct CheckedAssembly {
     unused_device_bindings: Vec<String>,
     /// Workflow #369 S6a: the instances whose `start_emulator` is `true`.
     emulator_autostart: Vec<String>,
+    /// Workflow #437 MAPP-1: the device group of each entry that names one, by alias.
+    device_groups: BTreeMap<String, String>,
 }
 
 /// Workflow #361 C3: `policy_plan`, startup's catalog plan as previewed from the ledger.
@@ -779,6 +783,13 @@ fn summarize(
             .and_then(|alias| resource_packages.get(alias))
         {
             entry["resource_package"] = json!(package);
+        }
+        // Workflow #437 MAPP-1: the device group, only on an entry that names one.
+        if let Some(group) = entry["alias"]
+            .as_str()
+            .and_then(|alias| checked.device_groups.get(alias))
+        {
+            entry["device_group"] = json!(group);
         }
     }
     // Workflow #336 PKG-S1: every `resource_package` directory is admitted in full by its path,

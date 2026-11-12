@@ -1535,3 +1535,20 @@ tests = [
     "actingcommand-actinglab::completion_callback::completion_callback_prints_on_stdout_only_and_exits_zero",
 ]
 incident = ["#434 CLI-COMP"]
+
+# Workflow #437 MAPP-1 (0.12.56; register §1.323 MAPP-1's tests, §1.328; brief rd-1112/brief-437-mapp-1.md; contracts/device-group.md, "The configuration form", "Undeclared sharing", "A group of one is today", "Derived, never stored"): the same entry with and without a lone device_group assembles the same, the manifest differing by the one row instance.<id>.device_group (explicit, not settable), the device key the entry's own id and no group of several (1); the entry takes device_group and still denies an unknown member, and an empty name, a name of 65 bytes and a name the alias rules refuse are each refused device_group_config_invalid name_invalid on the entry's alias and config_key device_group (2); each rule of a group of several is refused device_group_config_invalid with its device_group_problem, aliases and config_key (device_mismatch by port and by key, handset_member, fixture_member, application_shared, startup_package_missing, device_action_unsupported for the defaults' idle action, the section's rungs and start_emulator), and a group of several that keeps every rule, bound by port or by discovery, is refused several_members_unsupported (3); two entries outside one group on one host and port, index or name are refused undeclared_shared_device naming the shared key, a member of a group of one beside an entry without one or another group too, and two devices are accepted (4); an index and a name of one emulator, and an explicit endpoint beside a discovery-bound entry, pass the assembly and are refused after a scripted discovery as the provider startup failure of the discovery stage, whose discovery record names the index's first entry by alias (5); after the discovery only entries outside one group share undeclared (6); the row instance.<id>.device_group is reported only for an entry that names it and is not settable, and the configuration in effect lists the groups of several (7); an instruction that would turn start_emulator, an idle action or a ladder profile with emulator_restart on for a member of a group of several is config_value_invalid section_check on the member's key, and passes on a lone instance (8); the device-level actions in effect name the key that turns each on, the section's idle.action and recovery_ladder.rungs for an instance that takes them (9)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_mapp1::mapp1_a_lone_device_group_assembles_as_the_entry_without_it",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_mapp1::mapp1_the_entry_takes_device_group_and_still_denies_unknown_members",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_mapp1::mapp1_each_group_rule_is_refused_with_its_problem_and_a_valid_group_of_several_too",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_mapp1::mapp1_undeclared_sharing_is_refused_at_assembly",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_mapp1::mapp1_two_serials_are_two_devices_whatever_their_host_and_port",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_mapp1::mapp1_undeclared_sharing_is_refused_after_the_starts_discovery",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_mapp1::mapp1_after_the_discovery_only_entries_outside_one_group_share_undeclared",
+    "actingcommand-runtime-config::lib::gate_mapp1::mapp1_device_group_row_is_reported_only_for_an_entry_that_names_it_and_is_not_settable",
+    "actingcommand-runtime-config::lib::gate_mapp1::mapp1_an_instruction_that_turns_a_device_level_action_on_for_a_member_is_refused_section_check",
+    "actingcommand-runtime-config::lib::gate_mapp1::mapp1_the_device_level_actions_in_effect_name_the_key_that_turns_each_on",
+]
+incident = ["#437 MAPP-1"]
