@@ -2,18 +2,23 @@
 
 //! Workflow #421 MCP-ENTRY, test rows E-1 to E-11, fix round 1's E-13, E-14, E-16 and E-18 to
 //! E-23, and #411 P49's E-24 and E-25: the entry's logic with a fake child and a fake clock (no
-//! process, no sleep).
+//! process, no sleep). Copied with the second generation (Workflow #434 LAB-5G5a) and adapted to
+//! it: its child `actinglab-mcp.exe` and that server's words and tool names, a plan of protocol
+//! 2, its codes and its generation; the tests of what generation 2 changes follow at the end.
 
 use crate::logic::{ClientKind, Core, EntryConfig, Host, PlanEnd, Stamp};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
 struct FakeHost {
     now: u64,
     stamp: Stamp,
+    /// The server program the host would find now; [`SERVER`] when `None`.
+    server: Option<String>,
     busy: bool,
     fail_spawn: bool,
     next_pid: u32,
@@ -32,6 +37,10 @@ impl Host for FakeHost {
 
     fn stamp(&self) -> Stamp {
         self.stamp.clone()
+    }
+
+    fn default_exe(&self) -> String {
+        self.server.clone().unwrap_or_else(|| SERVER.to_owned())
     }
 
     fn busy(&mut self) -> bool {
@@ -73,7 +82,11 @@ impl Host for FakeHost {
     fn note(&mut self, _text: &str) {}
 }
 
-const ARGS: [&str; 3] = ["mcp-serve", "--tier", "observer,operator"];
+/// The words after `--`: the server's own option.
+const ARGS: [&str; 2] = ["--list", "core,rescue"];
+/// The server program found in `tools\`, and the same program once it is in `runtime\`.
+const SERVER: &str = "ROOT/tools/actinglab-mcp.exe";
+const SERVER_IN_RUNTIME: &str = "ROOT/runtime/actinglab-mcp.exe";
 const OLD: &str = "1111111111111111111111111111111111111111";
 const NEW: &str = "2222222222222222222222222222222222222222";
 /// #411 P49: a third build, installed while a switch to `NEW` waits (review L10).
@@ -102,16 +115,20 @@ static TUNABLES: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
         "drain_max_ms": 60_000, "refused_retry_max_ms": 12_000})
 });
 
-fn plan(switch: bool, commit: &str) -> Value {
+/// A plan's answer of `protocol` whose child is `child` (only its first word is read).
+fn answer(switch: bool, commit: &str, protocol: u64, child: Value) -> Value {
     json!({
         "switch": switch,
-        "reason": if switch { "build_changed" } else { "same_build" },
         "build": {"commit": commit, "manifest_sha256": "a".repeat(64)},
-        "child": ["ROOT/runtime/actingctl.exe", "mcp-serve", "--tier", "observer,operator"],
+        "child": child,
         "tunables": TUNABLES.clone(),
-        "entry_protocol": 1,
+        "entry_protocol": protocol,
         "outcome": {},
     })
+}
+
+fn plan(switch: bool, commit: &str) -> Value {
+    answer(switch, commit, 2, json!([SERVER]))
 }
 
 fn line(value: &Value) -> Vec<u8> {
@@ -187,7 +204,7 @@ fn legacy_session(entry: &mut Core<FakeHost>) {
         entry,
         1,
         &json!({"jsonrpc": "2.0", "id": 0, "result": {"protocolVersion": "2025-11-25",
-            "capabilities": {"tools": {"listChanged": false}}, "serverInfo": {"name": "actingctl-mcp"}}}),
+            "capabilities": {"tools": {"listChanged": false}}, "serverInfo": {"name": "actinglab-mcp"}}}),
     );
     client(
         entry,
@@ -235,12 +252,7 @@ fn e1_the_entry_pipes_both_ways_and_keeps_ids() {
     assert_eq!(entry.host.spawned.len(), 1);
     assert_eq!(
         entry.host.spawned[0].1,
-        vec![
-            "ROOT/runtime/actingctl.exe",
-            "mcp-serve",
-            "--tier",
-            "observer,operator"
-        ],
+        vec![SERVER, "--list", "core,rescue"],
         "the child takes the arguments after -- unchanged"
     );
     legacy_session(&mut entry);
@@ -249,7 +261,7 @@ fn e1_the_entry_pipes_both_ways_and_keeps_ids() {
     assert_eq!(init["result"]["capabilities"]["tools"]["listChanged"], true);
 
     let call = json!({"jsonrpc": "2.0", "id": "call-7", "method": "tools/call",
-        "params": {"name": "ac_overview", "arguments": {}}});
+        "params": {"name": "ac_status", "arguments": {}}});
     client(&mut entry, &call);
     assert_eq!(received(&entry, 1).last(), Some(&call));
     let progress = json!({"jsonrpc": "2.0", "method": "notifications/progress",
@@ -308,7 +320,7 @@ fn e3_a_switch_happens_only_between_calls() {
     legacy_session(&mut entry);
     client(
         &mut entry,
-        &json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "ac_overview"}}),
+        &json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "ac_status"}}),
     );
     plan_switch(&mut entry);
     assert_eq!(
@@ -368,15 +380,23 @@ fn e5_a_child_that_dies_mid_call_gives_outcome_unknown_and_is_never_resent() {
     let mut entry = entry();
     legacy_session(&mut entry);
     let call = json!({"jsonrpc": "2.0", "id": 41, "method": "tools/call",
-        "params": {"name": "ac_run_pack", "arguments": {}}});
+        "params": {"name": "ac_run_start", "arguments": {}}});
     client(&mut entry, &call);
     entry.child_exited(1);
     let error = entry.host.client.last().expect("an answer").clone();
     assert_eq!(error["id"], 41);
-    assert_eq!(error["error"]["message"], "mcp_entry_outcome_unknown");
+    assert_eq!(error["error"]["message"], "mcp_entry_g2_outcome_unknown");
+    assert_eq!(
+        error["error"]["data"]["outcome"]["code"],
+        "mcp_entry_g2_outcome_unknown"
+    );
+    assert_eq!(
+        error["error"]["data"]["outcome"]["values"]["mcp_tool"],
+        "ac_run_start"
+    );
     assert_eq!(
         error["error"]["data"]["inspect_with"],
-        json!(["ac_get_run", "ac_overview"])
+        json!(["ac_run_show", "ac_status"])
     );
     assert_eq!(entry.current_child(), None);
 
@@ -412,7 +432,7 @@ fn e6_outstanding_handles_defer_the_switch_until_they_reach_zero() {
     legacy_session(&mut entry);
     client(
         &mut entry,
-        &json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "ac_lab_do"}}),
+        &json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "ac_do"}}),
     );
     child(
         &mut entry,
@@ -460,7 +480,7 @@ fn e7_a_child_without_entry_status_counts_as_zero() {
     legacy_session(&mut entry);
     client(
         &mut entry,
-        &json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "ac_overview"}}),
+        &json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "ac_status"}}),
     );
     child(
         &mut entry,
@@ -595,8 +615,8 @@ fn e11_the_status_file_says_what_the_entry_runs() {
         status["schema_version"],
         "actingcommand.mcp-entry-status.v1"
     );
-    assert_eq!(status["entry_generation"], 1);
-    assert_eq!(status["entry_protocol"], 1);
+    assert_eq!(status["entry_generation"], 2, "the second generation");
+    assert_eq!(status["entry_protocol"], 2);
     assert_eq!(status["pid"], 77);
     assert_eq!(status["client"]["configured"], "codex");
     assert_eq!(status["client"]["name"], "codex-mcp-client");
@@ -621,8 +641,7 @@ fn e11_the_status_file_says_what_the_entry_runs() {
 
 fn config() -> EntryConfig {
     EntryConfig {
-        default_exe: "ROOT/runtime/actingctl.exe".to_owned(),
-        child_args: ARGS.iter().map(|word| (*word).to_owned()).collect(),
+        child_args: owned(&ARGS),
         client_kind: Some(ClientKind::Codex),
         pid: 77,
         process_created_at_unix_ms: Some(PROCESS_CREATED_MS),
@@ -706,7 +725,6 @@ fn e14_an_unfinished_operation_file_alone_does_not_hold_the_entry_back() {
     let (events, _receiver) = std::sync::mpsc::channel();
     let mut host = crate::RealHost {
         root: root.path().to_path_buf(),
-        child_args: Vec::new(),
         events,
         children: HashMap::new(),
         status_path: root.path().join("entry-1.json"),
@@ -724,7 +742,7 @@ fn e14_an_unfinished_operation_file_alone_does_not_hold_the_entry_back() {
 fn e16_the_status_names_the_outstanding_handles() {
     let mut entry = entry();
     legacy_session(&mut entry);
-    answered_call(&mut entry, 5, "ac_lab_do");
+    answered_call(&mut entry, 5, "ac_do");
     plan_switch(&mut entry);
     serve_internal(
         &mut entry,
@@ -885,7 +903,7 @@ fn e22_the_status_drops_an_answered_call_at_once() {
     legacy_session(&mut entry);
     client(
         &mut entry,
-        &json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "ac_overview"}}),
+        &json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "ac_status"}}),
     );
     assert_eq!(entry.host.status["calls_in_flight"], 1);
     child(
@@ -902,10 +920,10 @@ fn e22_the_status_drops_an_answered_call_at_once() {
 fn e23_a_zero_count_is_ignored_after_a_call_reached_the_child() {
     let mut entry = entry();
     legacy_session(&mut entry);
-    answered_call(&mut entry, 5, "ac_overview");
+    answered_call(&mut entry, 5, "ac_status");
     plan_switch(&mut entry);
     let query = status_query_of(&entry, 1);
-    answered_call(&mut entry, 6, "ac_lab_do");
+    answered_call(&mut entry, 6, "ac_do");
     let zero = json!({"outstanding_handles": 0, "kinds": [], "handles": [], "calls_in_flight": 0});
     child(
         &mut entry,
@@ -962,7 +980,7 @@ fn e24_the_status_records_the_entry_process_creation_time() {
 fn e25_a_newer_install_during_a_deferred_switch_is_planned_again() {
     let mut entry = entry();
     legacy_session(&mut entry);
-    answered_call(&mut entry, 5, "ac_lab_do");
+    answered_call(&mut entry, 5, "ac_do");
     plan_switch(&mut entry);
     serve_internal(
         &mut entry,
@@ -1019,4 +1037,271 @@ fn e25_a_newer_install_during_a_deferred_switch_is_planned_again() {
     entry.tick();
     assert_eq!(entry.host.plans.len(), 3);
     assert_eq!(entry.host.spawned.len(), 2);
+}
+
+// ---- Workflow #434 LAB-5G5a: where the second generation differs ----------------------------
+
+fn owned(words: &[&str]) -> Vec<String> {
+    words.iter().map(|word| (*word).to_owned()).collect()
+}
+
+/// Writes `<root>\<folder>\<name>` holding `bytes`.
+fn put(root: &Path, folder: &str, name: &str, bytes: &[u8]) {
+    let folder = root.join(folder);
+    std::fs::create_dir_all(&folder).expect("the folder");
+    std::fs::write(folder.join(name), bytes).expect("the file");
+}
+
+/// The real host of an entry started for `root`; it starts nothing here.
+fn real_host(root: &Path) -> crate::RealHost {
+    let (events, _receiver) = std::sync::mpsc::channel();
+    crate::RealHost {
+        root: root.to_path_buf(),
+        events,
+        children: HashMap::new(),
+        status_path: root.join("entry-1.json"),
+        stdout: io::stdout(),
+    }
+}
+
+/// The register's `mcp_entry_g2_child` (§1.287, LAB-5): the entry starts `actinglab-mcp.exe`,
+/// looked for under `runtime\`, then `tools\`, again at each fresh start, with the words after
+/// `--` unchanged.
+#[test]
+fn mcp_entry_g2_child() {
+    let root = tempfile::TempDir::new().expect("tempdir");
+    let in_tools = root.path().join("tools").join("actinglab-mcp.exe");
+    let in_runtime = root.path().join("runtime").join("actinglab-mcp.exe");
+    let host = real_host(root.path());
+    assert_eq!(
+        crate::find_program(root.path(), crate::SERVER_PROGRAM),
+        in_tools,
+        "found nowhere: the last place looked, which a failed start names"
+    );
+    put(root.path(), "tools", "actinglab-mcp.exe", b"tools");
+    assert_eq!(host.default_exe(), in_tools.to_string_lossy());
+    put(root.path(), "runtime", "actinglab-mcp.exe", b"runtime");
+    assert_eq!(
+        host.default_exe(),
+        in_runtime.to_string_lossy(),
+        "runtime first, looked for again at each start"
+    );
+
+    // The core starts what the host finds at that moment, with the words after `--`.
+    let mut entry = entry();
+    assert_eq!(
+        entry.host.spawned[0].1,
+        vec![SERVER, "--list", "core,rescue"]
+    );
+    entry.host.server = Some(SERVER_IN_RUNTIME.to_owned());
+    entry.child_exited(1);
+    client(
+        &mut entry,
+        &json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}),
+    );
+    assert_eq!(entry.host.spawned.len(), 2);
+    assert_eq!(
+        entry.host.spawned[1].1,
+        vec![SERVER_IN_RUNTIME, "--list", "core,rescue"],
+        "a fresh child starts from where the program is now"
+    );
+}
+
+/// LAB-5G5a (the coordinator's ruling 7, board #434 6775192250): `--client` stays the entry's,
+/// recorded in its status file and given to no child; every word after `--` reaches the server
+/// unchanged, `--tier` and a word `--client` there included (the server refuses what it does not
+/// take), and none is allowed.
+#[test]
+fn g2_client_is_kept_and_the_other_words_pass_unchanged() {
+    let parsed = crate::parse(&owned(&[
+        "--root",
+        "C:\\ActingCommand",
+        "--client",
+        "codex",
+        "--",
+        "--tier",
+        "observer",
+        "--client",
+        "dsh",
+    ]))
+    .expect("the entry's words parse");
+    assert_eq!(parsed.root, std::path::PathBuf::from("C:\\ActingCommand"));
+    assert_eq!(parsed.client, Some(ClientKind::Codex));
+    assert_eq!(parsed.child, vec!["--tier", "observer", "--client", "dsh"]);
+    let bare = crate::parse(&owned(&["--root", "C:\\ActingCommand", "--"]))
+        .expect("no server words is allowed");
+    assert!(bare.child.is_empty());
+    assert_eq!(bare.client, None);
+    assert!(
+        crate::parse(&owned(&["--root", "C:\\ActingCommand"])).is_none(),
+        "`--` ends the entry's own words"
+    );
+    assert!(
+        crate::parse(&owned(&[
+            "--root",
+            "C:\\ActingCommand",
+            "--client",
+            "other",
+            "--"
+        ]))
+        .is_none(),
+        "an unknown client is refused"
+    );
+
+    let mut entry = entry();
+    legacy_session(&mut entry);
+    plan_switch(&mut entry);
+    assert_eq!(entry.host.spawned.len(), 2);
+    for (_, command) in &entry.host.spawned {
+        assert!(
+            !command
+                .iter()
+                .any(|word| word == "--client" || word == "codex"),
+            "no child is given the client: {command:?}"
+        );
+        assert_eq!(command[1..], ARGS);
+    }
+    assert_eq!(entry.host.status["client"]["configured"], "codex");
+}
+
+/// LAB-5G5a: the stamp watches the Runtime's build manifest and the server program the entry
+/// would start now, no longer the first generation's `runtime\actingctl.exe`.
+#[test]
+fn g2_watched_files_are_the_manifest_and_the_server() {
+    let root = tempfile::TempDir::new().expect("tempdir");
+    let manifest = root.path().join("runtime").join("BUILD-MANIFEST.json");
+    put(root.path(), "runtime", "BUILD-MANIFEST.json", b"{}");
+    put(root.path(), "runtime", "actingctl.exe", b"first");
+    put(root.path(), "tools", "actinglab-mcp.exe", b"one");
+    assert_eq!(
+        crate::watched_files(root.path()),
+        [
+            manifest.clone(),
+            root.path().join("tools").join("actinglab-mcp.exe")
+        ]
+    );
+    let host = real_host(root.path());
+    let before = host.stamp();
+    assert_eq!(before.files.len(), 2);
+    assert_eq!(before.files[0].map(|(size, _)| size), Some(2));
+    assert_eq!(before.files[1].map(|(size, _)| size), Some(3));
+    put(root.path(), "runtime", "actingctl.exe", b"first, changed");
+    assert_eq!(
+        host.stamp(),
+        before,
+        "the first generation's child is not watched"
+    );
+
+    put(root.path(), "runtime", "actinglab-mcp.exe", b"second");
+    assert_eq!(
+        crate::watched_files(root.path()),
+        [
+            manifest,
+            root.path().join("runtime").join("actinglab-mcp.exe")
+        ]
+    );
+    let after = host.stamp();
+    assert_eq!(after.files[1].map(|(size, _)| size), Some(6));
+    assert_ne!(
+        after, before,
+        "the program the entry would start now changed"
+    );
+}
+
+/// LAB-5G5a: the plan is `actinglab.exe --json mcp plan --entry-protocol 2 [--current-build
+/// <commit>]`, with no `--root` (the rescue module acts on its own root) and no server words, and
+/// its program is found as the server is: `runtime\`, then `tools\`.
+#[test]
+fn g2_the_plan_is_asked_of_actinglab_with_protocol_2() {
+    assert_eq!(
+        crate::plan_words(None),
+        vec!["--json", "mcp", "plan", "--entry-protocol", "2"]
+    );
+    assert_eq!(
+        crate::plan_words(Some(OLD)),
+        vec![
+            "--json",
+            "mcp",
+            "plan",
+            "--entry-protocol",
+            "2",
+            "--current-build",
+            OLD
+        ]
+    );
+    let root = tempfile::TempDir::new().expect("tempdir");
+    put(root.path(), "tools", "actinglab.exe", b"tools");
+    assert_eq!(
+        crate::find_program(root.path(), crate::LAB_PROGRAM),
+        root.path().join("tools").join("actinglab.exe")
+    );
+    put(root.path(), "runtime", "actinglab.exe", b"runtime");
+    assert_eq!(
+        crate::find_program(root.path(), crate::LAB_PROGRAM),
+        root.path().join("runtime").join("actinglab.exe")
+    );
+}
+
+/// LAB-5G5a: what the entry reads of the plan's answer. `entry_protocol` must be 2, else the
+/// answer is a refusal (no build taken, no switch, its tunables taken); then `switch`, `build`,
+/// `child[0]` (the rest of `child` is not read; the entry's own words follow it), `tunables` and
+/// `outcome`.
+#[test]
+fn g2_the_plan_answer_is_read_for_protocol_2_only() {
+    let host = FakeHost {
+        now: 1_000_000,
+        stamp: Stamp {
+            files: vec![Some((10, 1))],
+        },
+        ..FakeHost::default()
+    };
+    let mut entry = Core::new(host, config());
+    entry.start();
+    // The first plan answers protocol 1: the child's build stays unknown, the plan is refused.
+    entry.plan_done(PlanEnd::Answered(answer(false, OLD, 1, json!([SERVER]))));
+    assert_eq!(entry.host.status["child"]["build"], Value::Null);
+    assert_eq!(entry.host.status["deferred"]["kind"], "plan_refused");
+    assert_eq!(entry.host.status["last_plan"]["build"], Value::Null);
+    assert_eq!(entry.host.status["plan_refusals"]["consecutive"], 1);
+    // After the wait, protocol 2 names the child's build.
+    entry.host.now += 5_000;
+    entry.tick();
+    assert_eq!(entry.host.plans, vec![None, None]);
+    entry.plan_done(PlanEnd::Answered(plan(false, OLD)));
+    assert_eq!(entry.host.status["child"]["build"], OLD);
+    assert_eq!(entry.host.status["deferred"], Value::Null);
+    assert_eq!(entry.host.status["last_plan"]["outcome"], json!({}));
+
+    // A switch planned with protocol 1 starts no candidate.
+    entry.host.stamp = Stamp {
+        files: vec![Some((20, 2))],
+    };
+    entry.tick();
+    entry.host.now += 5_000;
+    entry.tick();
+    assert_eq!(entry.host.plans.len(), 3);
+    entry.plan_done(PlanEnd::Answered(answer(true, NEW, 1, json!([SERVER]))));
+    assert_eq!(
+        entry.host.spawned.len(),
+        1,
+        "no candidate for an answer of protocol 1"
+    );
+    assert_eq!(entry.host.status["last_plan"]["switch"], Value::Null);
+    // With protocol 2 the candidate is the answer's `child[0]` with the entry's own words.
+    entry.host.now += 5_000;
+    entry.tick();
+    assert_eq!(entry.host.plans.len(), 4);
+    entry.plan_done(PlanEnd::Answered(answer(
+        true,
+        NEW,
+        2,
+        json!([SERVER_IN_RUNTIME, "--not-read"]),
+    )));
+    assert_eq!(entry.host.spawned.len(), 2);
+    assert_eq!(
+        entry.host.spawned[1].1,
+        vec![SERVER_IN_RUNTIME, "--list", "core,rescue"]
+    );
+    assert_eq!(entry.host.status["last_plan"]["switch"], true);
+    assert_eq!(entry.host.status["last_plan"]["build"]["commit"], NEW);
 }

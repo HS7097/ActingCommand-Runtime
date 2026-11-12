@@ -7906,7 +7906,7 @@ catalog, and no live revision raised.
 | LAB-2 | Runtime | M | the CLI module: short words, output for people, `--json`; `actinglab serve --stdio`; actinglab's debugging and authoring commands on the table; its retired and reserved command words deleted; the CLI app prints the result and developer lines and `lab-ops` returns them, and the `STDERR_ALLOW_LIST` entry for `crates/lab-ops/src/cli_line.rs` (LAB-1) goes; actinglab registers the overview's watchdog block (`overview::set_watchdog_block`) as actingctl does, unless LAB-4 has merged first (without it the block is null) | LAB-1b | `cli_json_matches_op_output`, `cli_short_words_parse`, `serve_answers_same_as_cli` | none |
 | LAB-3 | Runtime | L | the rescue and installation module; `deploy`, `config replace`, `place`, `alive`; the journal's `initiator`; the confirmation parameters gone and `unlock` without one (contract §5); guards that report and `--ack-guard` gone (contract §6, §7 Q4) | LAB-1 | `rescue_without_actingd`: without `runtime-info.json`, `op status`, `up` and `rollback` go through. `irreversible_journal_initiator`: the journals of `deploy`, `rollback`, `clean` and `config replace` carry the initiator, and a confirmation parameter (`--accept-ledger-one-way`, `--ui-confirmed`, `--ack-guard`) is `actingctl_usage_invalid` (`unknown`), the code renamed with LAB-7. `deploy_steps_in_order`: on fake seams, stage → plan → stop → apply → start → alive → release | none: `actingctl install` keeps the `install-cli` 1 face |
 | LAB-4 | Runtime | M | `crates/watchdog`; `actingwatch.exe` with its own tick, `status`, `install` and `uninstall` | — | the watchdog's existing gate tests move with the code (paths only, each listed); `actingwatch_tick_in_process` | none |
-| LAB-5 | Runtime | M | `actinglab-mcp.exe`: tools generated from the table, no tiers; the MCP entry `g2` | LAB-1, LAB-1b, LAB-3 | `mcp_tools_from_op_table`: `tools/list` equals the installed modules' operations, with the CLI's parameters. `mcp_entry_g2_child`: the entry starts actinglab-mcp and passes `--client` down | the MCP entry's `entry_protocol` 2 |
+| LAB-5 | Runtime | M | `actinglab-mcp.exe`: tools generated from the table, no tiers; the MCP entry `g2`, a second program (LAB-5G5a below) | LAB-1, LAB-1b, LAB-3 | `mcp_tools_from_op_table`: `tools/list` equals the installed modules' operations, with the CLI's parameters. `mcp_entry_g2_child`: the second program starts actinglab-mcp, looked for under `runtime\` then `tools\`, with the words after `--` unchanged; `--client` stays the entry's and is not passed down (the coordinator's ruling 7, board #434 6775192250; corrected by LAB-5G5a) | the MCP entry's `entry_protocol` 2 |
 | LAB-6 | Runtime | M | the door: the two entries, the decision, the UI list, the envelope fixed by the channel; the origin gates and the five kinds deleted; receipts and G14 carry `initiator`; every `ConfigureSettings` writes `initiator` beside `channel` in its `host.config_overrides` rows (G4, U2-5; contract §4.3), `channel` only `lab` or `ui`; the restore at start takes a row written before LAB-6 as written, without `initiator`, keeps accepting the four channel values of U2-5, and stops the start with `host_config_overrides_fact_invalid` on an `initiator` that is not one of the six words, as on a bad channel | LAB-5 | `gate_two_entries`: `lab` takes everything; `ui` refuses a kind off the list with `channel_request_refused` and records a refused write `command.rejected`; an unbound connection gets `channel_binding_missing`; binding `cli` or `mcp` is refused; `ui_allows` equals the table's `ui_kinds`. `ui_settings_within_tiers`: a `hidden` key is refused with its `config_key`. `initiator_in_g14`. `config_override_initiator`: a `ConfigureSettings` on `lab` with `Lab-MCP` writes a row whose `initiator` is `Lab-MCP`; a row restored without `initiator`, with channel `mcp`, starts | `runtime-client` 7, `ledger` 8, `actingd-config` 28 |
 | UI-L1 | UI | M | design §5.3: the pin to LAB-6's merge commit; `packs`, the watchdog status, the start and the unlock through `actinglab --json` children (no `--confirm-resources-released`); no `RecordClientAction`; the fixed entries forward `actinglab.exe` and `actinglab-mcp.exe`; the command-line tool row gone; refusals shown by code and operation; one press for the buttons that stop or restart an emulator or restart a game (§7 Q4), and the note today's second press shows when stopping an emulator stays beside the button as plain text: it says the emulator will be started again (the UI channel's 「看护会拉起」; acui's `rescue_confirm_stop_watched` and `rescue_confirm_stop_maybe_watched` on UI main `c03d18ea`), asks nothing and is not a confirmation (contract §6); the settings page shows a `host.config_overrides` row's initiator where it has one, else its channel (contract §4.3); the two READMEs (English and Chinese) name the rescue module's command where they say "Until then, install with `actingctl install`", since LAB-7 deletes actingctl; every Lab child started with `ACTINGCOMMAND_INITIATOR` (contract §4.2) | LAB-6 merged | `tools_run_actinglab` | the UI's `runtime-client` [7, 7], a `ledger` range that holds 8, `install-cli` [2, 2] |
 | LAB-7 | Runtime | M | `apps/actingctl` deleted (actingwatch already stands alone); the manifests, the release flow, the fixed entries and the agent hook's path; actingctl's codes moved into actinglab's fragment; actingd's `--confirm-resources-released` gone; `RecordClientAction` off the UI list | UI-L1 merged | `runtime_manifest_without_actingctl`; the release package check | `install-cli` 2; `install-control` no longer declared; `tools-layout` 5 |
@@ -9864,6 +9864,98 @@ a listing whose option cannot be read, which writes its developer line.
 
 **LAB-5F rollback** (to the release before it). Nothing persisted: the build before it does not
 read the key and lists every row.
+
+#### Slice LAB-5G5a (0.12.57): the MCP entry's second generation is a second program, `actingcommand-mcp-entry-g2`, that starts `actinglab-mcp.exe`
+
+Coordinator work orders `rd-1112/brief-lab5g5a.md` and `rd-1112/brief-lab5g-common.md`, after the
+read-only survey `rd-1108/arch-013/lab5g-step0-survey.md` (§7 and §8, on `5041d952`) and the
+read-only survey of 2026-11-12 of how a deploy places the entry (`rd-1112/agent-report-lab5g5a-step0.txt`,
+on `dffd6263`); on main `dffd6263`. The contract is [install-cli.md](install-cli.md), "The MCP
+entry", and [lab-two-entries.md](lab-two-entries.md) §8.1.
+
+**The ruling** (the coordinator's of 2026-11-12 on board #434, not the owner's words; it replaces
+ruling 6 of 6775192250, "the entry in the repository becomes generation 2 and the placed g1 is never
+touched"): the second generation is a **second program with its own file name**. `apps/mcp-entry`
+and the file `actingcommand-mcp-entry.exe` stay byte for byte generation 1 (child
+`actingctl mcp-serve`, plan `actingctl mcp-entry plan --entry-protocol 1`), and the bytes at
+`tools\actingcommand-mcp-entry.exe` are generation 1 in every build; generation 2 goes only into
+`mcp-entry\g2\`, never into `g1\`; `actingctl mcp-serve` and `mcp-entry plan --entry-protocol 1`
+stay until the slice that removes actingctl, after the owner's registrations have moved. **Its
+reason** (the survey of 11-12): no code of the installer writes under `<root>\mcp-entry\` (a deploy's
+file plan covers `tools\` and `runtime\` only); placing `g1` is a copy of
+`tools\actingcommand-mcp-entry.exe` by hand, as install-cli.md and the release notes of every
+earlier build say. Had that Tools file become generation 2, a person or a script following those
+documents would put generation 2 into `g1\`, where the registered words (`mcp-serve --tier …`)
+would reach a server that refuses tiers, and a rollback would make one file name mean two
+generations.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G5a-1 | `apps/mcp-entry-g2`: the binary `actingcommand-mcp-entry-g2` and its test helper `actingcommand-mcp-entry-g2-fake-child` | new program | LAB-5G5a | a client registered with it (after LAB-5G5b's snippet and LAB-5G6's packaging) | copied byte for byte from `apps/mcp-entry` in its own commit (`Cargo.toml`, `src/main.rs`, `src/logic.rs`, `src/codes.rs`, `src/tests.rs`, `src/fake_child.rs`, `tests/entry_process.rs`), then changed only where L5G5a-2 to L5G5a-7 say. A member of the workspace (`Cargo.toml`, `Cargo.lock`) and of CI's `apps` job (`CI_PACKAGES`); in **no** list that decides what a release or the Tools archive carries (`windows-remote-build.yml`'s `--bin` and `$toolFiles`, `scripts/windows-tools/`, the installer's fixtures: LAB-5G6). `apps/mcp-entry`, `apps/actingctl` and `crates/lab-rescue` are not changed |
+| L5G5a-2 | `GENERATION` 2, `ENTRY_PROTOCOL` 2 | constants | LAB-5G5a | — | `--generation` prints 2; the status file says `entry_generation` 2 and `entry_protocol` 2; the probe `initialize` it sends a candidate when the client sent none names `actingcommand-mcp-entry-g2`, version 2. Its stderr lines begin `actingcommand-mcp-entry-g2:` and are otherwise the first generation's |
+| L5G5a-3 | the child: `actinglab-mcp.exe` (`find_program`, `Host::default_exe`) | behaviour | LAB-5G5a | — | `<root>\runtime\actinglab-mcp.exe` when it is a file, else `<root>\tools\actinglab-mcp.exe` (the last place looked, which a failed start names). Looked for at each fresh start (the first generation took `runtime\actingctl.exe` once, at its start): `EntryConfig.default_exe` became the host's `default_exe`, so a program a deploy moved from `tools\` to `runtime\` is started where it is. A candidate for a switch runs the plan's `child[0]`, as before |
+| L5G5a-4 | the watched files (`watched_files`) | behaviour | LAB-5G5a | — | the size and time of `runtime\BUILD-MANIFEST.json` and of the `actinglab-mcp.exe` L5G5a-3 finds now; no longer `runtime\actingctl.exe`. The writer lock rule is the first generation's |
+| L5G5a-5 | the plan (`plan_words`, `start_plan`) | behaviour | LAB-5G5a | the rescue row `mcp plan` (LAB-5G5b) | `actinglab.exe --json mcp plan --entry-protocol 2 [--current-build <commit>]`, `actinglab.exe` found as L5G5a-3 finds the server; no `--root` (the rescue module refuses it and acts on the root of the program that runs it) and no server words. Its last non-empty stdout line is the answer, read as below |
+| L5G5a-6 | the words (`parse`) | behaviour | LAB-5G5a | — | `--root <root>` once and `--client <name>` at most once before `--`, as before; `--client` stays the entry's (the status file's `client.configured` and the refresh entry) and is given to no child (the coordinator's ruling 7, board #434 6775192250); every word after `--` goes to every child unchanged, `--tier` included (the server refuses it). Unlike the first generation, no word after `--` is required: the server's options (`--list`) are optional. A command line without `--` is still `…_usage_invalid` |
+| L5G5a-7 | `mcp_entry_g2_outcome_unknown`, `mcp_entry_g2_child_unavailable`, `mcp_entry_g2_usage_invalid` (error, ladder class `none`, pending); the fragment owner `mcp-entry-g2` (`apps/mcp-entry-g2`) and its domain `mcp_entry_g2_` | outcome catalog | LAB-5G5a | — | the first generation's three codes, emitted where it emits them and with the same values (`mcp_tool` optional), under the second program's own names: the outcome guard's G1 registers a spelling once, in the crate whose fragment owns it, every workspace member needs a fragment owner, and the writing spec forbids emitting another owner's code and another crate's prefix, so the copied registry cannot keep `mcp_entry_…`. The answer to a request lost in flight names the server's tools of the rows `run show` and `status`, `inspect_with: ["ac_run_show", "ac_status"]` (the first generation names `ac_get_run` and `ac_overview`, today's MCP server's). The index is regenerated |
+
+**What the entry reads of the plan's answer** (for LAB-5G5b, which builds the row `mcp plan` to
+it; the answer is the CLI module's `--json` line, the members at its top level):
+
+- `entry_protocol`: an unsigned integer that must be 2; any other value, or none, makes the whole
+  answer a refusal (no build taken, no switch, the doubling wait of a refusal).
+- `switch`: a boolean, whether the installed build differs from the `--current-build` given.
+- `build`: `{commit, manifest_sha256}`, both strings; other members are not read. `commit` is the
+  build the status file records for the child, and compared with the next plan's.
+- `child`: an array whose first element is a string, the path of the server program to start for
+  a switch (found as L5G5a-3 finds it); later elements are not read, and the entry's own words
+  follow it.
+- `tunables`: `{poll_ms, settle_ms, verify_timeout_ms, drain_max_ms, refused_retry_max_ms}`, five
+  unsigned integers (`install.mcp_entry.*`); read from a refusal too, which then sets the wait.
+- `outcome`: any value, kept as the status file's `last_plan.outcome`.
+- Not read: `reason`, and every other member. Any of the first five missing or of another type
+  makes the answer a refusal, as in the first generation.
+
+**Today's reader of the status files** (`crates/lab-rescue/src/install/mcp_entry.rs`, `list_with`,
+read only): it lists every `entry-*.json` of `mcp-entry\state\` as JSON, judges only `pid`,
+`process_created_at_unix_ms` and `started_at_unix_ms` (the same members the second generation
+writes), and prints the rest as `status`; it checks neither `schema_version` nor
+`entry_generation`. So a file of generation 2 is listed beside generation 1's, neither refused nor
+misread; the reader is not changed.
+
+**Left for later slices.** The rescue row `mcp plan` and the second generation's registration
+snippet (`mcp config`) are LAB-5G5b's. Packaging (the build's `--bin` and `$toolFiles`, the exact
+Tools file list of `scripts/windows-tools/`, which an older copy refuses an extra file by, and the
+installer's fixtures) is LAB-5G6's, as is the installer's side: its reconnect notice counts running
+entries by the first program's image name (`install/plan.rs`), and a running `actinglab-mcp.exe`
+under the root blocks a deploy that replaces it (the survey's §7, the coordinator's ruling 5).
+Placing the program in `g2\` is a manual step until an installer step exists, which creates under
+`g2\` only.
+
+**Tests.** New: apps row "#434 LAB-5G5a". The first generation's logic tests, copied with the
+package and adapted to it (`src/tests.rs`: E-1 to E-11, E-13, E-14, E-16, E-18 to E-25; its child,
+the server's words and tool names, a plan of protocol 2, its codes and inspect list, generation 2
+in E-11), and five new ones: `mcp_entry_g2_child` (the register's named test, LAB-5 row above:
+`runtime\` then `tools\`, looked for again at each fresh start, the words after `--` unchanged),
+`g2_client_is_kept_and_the_other_words_pass_unchanged`, `g2_watched_files_are_the_manifest_and_the_server`,
+`g2_the_plan_is_asked_of_actinglab_with_protocol_2` and `g2_the_plan_answer_is_read_for_protocol_2_only`;
+the process test, copied and adapted (`tests/entry_process.rs`,
+`mcp_entry_g2_process_pipes_a_session_and_switches_once`: the real binary with the fake as
+`tools\actinglab-mcp.exe` and `tools\actinglab.exe` of a temporary root prints generation 2, gives
+the server the words after `--` and not `--client`, writes a status file of generation 2 and
+switches once). No existing test changed: the first generation's tests run unchanged.
+
+**Interface.** None raised: `entry_protocol` 2 is the contract between the second program and the
+plan row LAB-5G5b builds, not a declared interface; the status file keeps its place, name, schema
+and members; three codes in the catalog only (`runtime-outcomes` stays 1). Nothing on the wire, in
+the ledger or in a file a released peer reads changes.
+
+**What LAB-5G5a changes live.** Nothing: the program is built and tested in CI and is in no release
+or Tools archive until LAB-5G6; the placed first-generation entry and every registration keep
+working as they do.
+
+**LAB-5G5a rollback** (to the release before it). Nothing persisted: a status file the program
+wrote would be listed by the build before it as any other.
 
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 

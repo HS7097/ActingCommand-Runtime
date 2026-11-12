@@ -9,6 +9,7 @@ members = [
     "apps/actingwatch",
     "apps/ledger-forensics",
     "apps/mcp-entry",
+    "apps/mcp-entry-g2",
     "apps/vision-provider-check",
     "crates/actingcommand-contract",
     "crates/agent-forward",

@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! `actingcommand-mcp-entry` (Workflow #421 MCP-ENTRY): the one stable MCP entry every client
-//! starts, from `<root>\mcp-entry\g<generation>\`.
+//! `actingcommand-mcp-entry-g2` (Workflow #434 LAB-5G5a): the MCP entry's second generation, a
+//! program of its own beside the first (`actingcommand-mcp-entry`, unchanged), which every client
+//! registered with it starts from `<root>\mcp-entry\g2\`. Copied from the first generation and
+//! changed only where generation 2 differs.
 //!
-//! usage: `actingcommand-mcp-entry --root <root> [--client claude|codex|antigravity|dsh] --
-//! <child arguments>`, or `actingcommand-mcp-entry --generation`.
+//! usage: `actingcommand-mcp-entry-g2 --root <root> [--client claude|codex|antigravity|dsh] --
+//! [<server arguments>]`, or `actingcommand-mcp-entry-g2 --generation`.
 //!
-//! Everything after `--` is passed verbatim to every child, `<root>\runtime\actingctl.exe`
-//! (`mcp-serve --tier …`). The entry decides nothing about builds: it asks the current
-//! install's `actingctl mcp-entry plan` (see `logic`). It writes
-//! `<root>\mcp-entry\state\entry-<pid>.json` and never deletes a status file.
+//! Everything after `--` (none is allowed) is passed verbatim to every child, the MCP server
+//! `actinglab-mcp.exe`, looked for at each start in `<root>\runtime\`, then in `<root>\tools\`.
+//! `--client` stays the entry's: its status file records it and no child is given it. The entry
+//! decides nothing about builds: it asks the current install's `actinglab.exe --json mcp plan`,
+//! found the same way (see `logic`). It writes `<root>\mcp-entry\state\entry-<pid>.json`, the
+//! first generation's place and name, and never deletes a status file.
 
 mod codes;
 mod logic;
@@ -35,7 +39,11 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const USAGE: &str = "usage: actingcommand-mcp-entry --root <root> [--client claude|codex|antigravity|dsh] -- <child arguments>\nusage: actingcommand-mcp-entry --generation";
+const USAGE: &str = "usage: actingcommand-mcp-entry-g2 --root <root> [--client claude|codex|antigravity|dsh] -- [<server arguments>]\nusage: actingcommand-mcp-entry-g2 --generation";
+/// The second generation's child, the MCP server (Workflow #434 LAB-5G5a).
+const SERVER_PROGRAM: &str = "actinglab-mcp.exe";
+/// The program whose rescue row `mcp plan` answers the plan.
+const LAB_PROGRAM: &str = "actinglab.exe";
 /// How long the entry waits, after the client closed its input, for the current child to
 /// answer what it still owes and end.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -69,7 +77,7 @@ fn main() -> ExitCode {
     let Some(arguments) = parse(&words) else {
         let outcome = Outcome::new(EntryCode::UsageInvalid);
         eprintln!(
-            "ERROR actingcommand-mcp-entry: {} {USAGE}",
+            "ERROR actingcommand-mcp-entry-g2: {} {USAGE}",
             serde_json::to_string(&outcome.envelope(Detail::Full))
                 .unwrap_or_else(|_| EntryCode::UsageInvalid.as_str().to_owned())
         );
@@ -78,12 +86,11 @@ fn main() -> ExitCode {
     run(arguments)
 }
 
+/// The entry's own words before `--`, `--root` once and `--client` at most once; every word after
+/// it is the server's, none included (the server's options are its own; it refuses `--tier`).
 fn parse(words: &[String]) -> Option<Arguments> {
     let split = words.iter().position(|word| word == "--")?;
     let (flags, child) = (&words[..split], &words[split + 1..]);
-    if child.is_empty() {
-        return None;
-    }
     let mut root = None;
     let mut client = None;
     let mut index = 0;
@@ -109,7 +116,6 @@ fn run(arguments: Arguments) -> ExitCode {
     let pid = std::process::id();
     let host = RealHost {
         root: arguments.root.clone(),
-        child_args: arguments.child.clone(),
         events: sender.clone(),
         children: HashMap::new(),
         status_path: arguments
@@ -119,16 +125,9 @@ fn run(arguments: Arguments) -> ExitCode {
             .join(format!("entry-{pid}.json")),
         stdout: io::stdout(),
     };
-    let default_exe = arguments
-        .root
-        .join("runtime")
-        .join("actingctl.exe")
-        .to_string_lossy()
-        .into_owned();
     let mut entry = Core::new(
         host,
         EntryConfig {
-            default_exe,
             child_args: arguments.child,
             client_kind: arguments.client,
             pid,
@@ -154,7 +153,7 @@ fn own_creation_time(pid: u32) -> Option<u64> {
         ProcessProbe::Running { created_at_unix_ms } => Some(created_at_unix_ms),
         other => {
             eprintln!(
-                "ERROR actingcommand-mcp-entry: cannot read its own process creation time ({other:?}); the status file records none"
+                "ERROR actingcommand-mcp-entry-g2: cannot read its own process creation time ({other:?}); the status file records none"
             );
             None
         }
@@ -212,7 +211,7 @@ fn read_client(events: &Sender<Event>) {
             }
             Ok(None) => break,
             Err(error) => {
-                eprintln!("ERROR actingcommand-mcp-entry: the client's input failed: {error}");
+                eprintln!("ERROR actingcommand-mcp-entry-g2: the client's input failed: {error}");
                 break;
             }
         }
@@ -253,7 +252,6 @@ struct Running {
 
 struct RealHost {
     root: PathBuf,
-    child_args: Vec<String>,
     events: Sender<Event>,
     children: HashMap<u64, Running>,
     status_path: PathBuf,
@@ -272,6 +270,44 @@ fn command(program: &str) -> Command {
     {
         Command::new(program)
     }
+}
+
+/// Where the second generation finds a program of the install: `<root>\runtime\<name>` when it
+/// is a file, else `<root>\tools\<name>`, the last place it looks, which a failed start then
+/// names. Looked for at each use, so a program the install moved is found where it is.
+fn find_program(root: &Path, name: &str) -> PathBuf {
+    let runtime = root.join("runtime").join(name);
+    if runtime.is_file() {
+        return runtime;
+    }
+    root.join("tools").join(name)
+}
+
+/// The files whose size and time make the stamp: the Runtime's build manifest and the server
+/// program the entry would start now.
+fn watched_files(root: &Path) -> [PathBuf; 2] {
+    [
+        root.join("runtime").join("BUILD-MANIFEST.json"),
+        find_program(root, SERVER_PROGRAM),
+    ]
+}
+
+/// The plan's words after the program: the Lab's rescue row `mcp plan` acts on the root of the
+/// program that runs it (no `--root`) and needs no server words, since only the server program,
+/// `child[0]`, is read of its answer.
+fn plan_words(current_build: Option<&str>) -> Vec<String> {
+    let mut words = vec![
+        "--json".to_owned(),
+        "mcp".to_owned(),
+        "plan".to_owned(),
+        "--entry-protocol".to_owned(),
+        ENTRY_PROTOCOL.to_string(),
+    ];
+    if let Some(build) = current_build {
+        words.push("--current-build".to_owned());
+        words.push(build.to_owned());
+    }
+    words
 }
 
 fn file_stamp(path: &Path) -> Option<(u64, u128)> {
@@ -294,7 +330,7 @@ fn end_due(stopped_at: Option<Instant>, now: Instant, grace: Duration) -> bool {
 fn kill(running: &mut Running) {
     if let Err(error) = running.process.kill() {
         eprintln!(
-            "ERROR actingcommand-mcp-entry: cannot end child pid {}: {error}",
+            "ERROR actingcommand-mcp-entry-g2: cannot end child pid {}: {error}",
             running.process.id()
         );
     }
@@ -368,17 +404,20 @@ impl Host for RealHost {
     }
 
     fn stamp(&self) -> Stamp {
-        let runtime = self.root.join("runtime");
+        let [manifest, server] = watched_files(&self.root);
         Stamp {
-            files: vec![
-                file_stamp(&runtime.join("BUILD-MANIFEST.json")),
-                file_stamp(&runtime.join("actingctl.exe")),
-            ],
+            files: vec![file_stamp(&manifest), file_stamp(&server)],
         }
     }
 
+    fn default_exe(&self) -> String {
+        find_program(&self.root, SERVER_PROGRAM)
+            .to_string_lossy()
+            .into_owned()
+    }
+
     /// Only the writer lock (fix round 1, review M1): whether an unfinished operation blocks a
-    /// switch is the plan's decision (`operation_unfinished`), in the hot-switchable `actingctl`.
+    /// switch is the plan's decision (`operation_unfinished`), in the hot-switchable plan row.
     fn busy(&mut self) -> bool {
         let lock = self.root.join("install").join("writer.lock");
         let Ok(file) = File::open(&lock) else {
@@ -389,7 +428,7 @@ impl Host for RealHost {
             Err(TryLockError::WouldBlock) => true,
             Err(TryLockError::Error(error)) => {
                 eprintln!(
-                    "ERROR actingcommand-mcp-entry: cannot probe {}: {error}; the switch waits",
+                    "ERROR actingcommand-mcp-entry-g2: cannot probe {}: {error}; the switch waits",
                     lock.display()
                 );
                 true
@@ -453,22 +492,10 @@ impl Host for RealHost {
         self.reap(id);
     }
 
+    /// `actinglab.exe --json mcp plan`, the program found as the server is.
     fn start_plan(&mut self, current_build: Option<&str>, timeout_ms: u64) {
-        let exe = self.root.join("runtime").join("actingctl.exe");
-        let mut words = vec![
-            "mcp-entry".to_owned(),
-            "plan".to_owned(),
-            "--root".to_owned(),
-            self.root.to_string_lossy().into_owned(),
-            "--entry-protocol".to_owned(),
-            ENTRY_PROTOCOL.to_string(),
-        ];
-        if let Some(build) = current_build {
-            words.push("--current-build".to_owned());
-            words.push(build.to_owned());
-        }
-        words.push("--".to_owned());
-        words.extend(self.child_args.iter().cloned());
+        let exe = find_program(&self.root, LAB_PROGRAM);
+        let words = plan_words(current_build);
         let events = self.events.clone();
         thread::spawn(move || {
             let end = run_plan(&exe, &words, Duration::from_millis(timeout_ms));
@@ -483,21 +510,21 @@ impl Host for RealHost {
             .and_then(|()| output.write_all(b"\n"))
             .and_then(|()| output.flush());
         if let Err(error) = written {
-            eprintln!("ERROR actingcommand-mcp-entry: cannot write to the client: {error}");
+            eprintln!("ERROR actingcommand-mcp-entry-g2: cannot write to the client: {error}");
         }
     }
 
     fn write_status(&mut self, status: &Value) {
         if let Err(error) = write_atomic(&self.status_path, status) {
             eprintln!(
-                "ERROR actingcommand-mcp-entry: cannot write {}: {error}",
+                "ERROR actingcommand-mcp-entry-g2: cannot write {}: {error}",
                 self.status_path.display()
             );
         }
     }
 
     fn note(&mut self, text: &str) {
-        eprintln!("actingcommand-mcp-entry: {text}");
+        eprintln!("actingcommand-mcp-entry-g2: {text}");
     }
 }
 
@@ -513,8 +540,8 @@ fn write_atomic(path: &Path, value: &Value) -> io::Result<()> {
     fs::rename(&temporary, path)
 }
 
-/// Runs `mcp-entry plan`; its last stdout line is its answer. A plan that does not end within
-/// `timeout` is ended and reported.
+/// Runs `mcp plan`; its last stdout line, the `--json` line, is its answer. A plan that does not
+/// end within `timeout` is ended and reported.
 fn run_plan(exe: &Path, words: &[String], timeout: Duration) -> PlanEnd {
     let spawned = command(&exe.to_string_lossy())
         .args(words)

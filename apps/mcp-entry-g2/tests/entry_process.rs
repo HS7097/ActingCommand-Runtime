@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #421 MCP-ENTRY, the process test: the real entry binary with an in-tree fake child
-//! (`actingcommand-mcp-entry-fake-child`, copied to `<root>\runtime\actingctl.exe` of a temporary
-//! root) pipes a session both ways and switches once when the install's manifest names another
-//! build: the client gets `notifications/tools/list_changed` and the next `tools/list` comes from
-//! the new child.
+//! Workflow #434 LAB-5G5a, the second generation's process test, copied from the first's
+//! (Workflow #421 MCP-ENTRY): the real entry binary with an in-tree fake
+//! (`actingcommand-mcp-entry-g2-fake-child`, copied to `<root>\tools\actinglab-mcp.exe` and
+//! `<root>\tools\actinglab.exe` of a temporary root) says its generation, pipes a session both
+//! ways, gives the server the words after `--` and not `--client`, writes a status file of
+//! generation 2, and switches once when the install's manifest names another build: the client
+//! gets `notifications/tools/list_changed` and the next `tools/list` comes from the new child.
 
 use serde_json::{Value, json};
 use std::fs;
@@ -71,28 +73,28 @@ fn wait_status(root: &Path, pid: u32, ready: impl Fn(&Value) -> bool) -> Value {
 }
 
 #[test]
-fn mcp_entry_process_pipes_a_session_and_switches_once() {
+fn mcp_entry_g2_process_pipes_a_session_and_switches_once() {
+    let generation = Command::new(env!("CARGO_BIN_EXE_actingcommand-mcp-entry-g2"))
+        .arg("--generation")
+        .output()
+        .expect("--generation runs");
+    assert!(generation.status.success());
+    assert_eq!(String::from_utf8_lossy(&generation.stdout).trim(), "2");
+
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = root.path().join("runtime");
+    let tools = root.path().join("tools");
     fs::create_dir_all(&runtime).expect("runtime directory");
-    fs::copy(
-        env!("CARGO_BIN_EXE_actingcommand-mcp-entry-fake-child"),
-        runtime.join("actingctl.exe"),
-    )
-    .expect("the fake child as actingctl.exe");
+    fs::create_dir_all(&tools).expect("tools directory");
+    let fake = env!("CARGO_BIN_EXE_actingcommand-mcp-entry-g2-fake-child");
+    fs::copy(fake, tools.join("actinglab-mcp.exe")).expect("the fake as actinglab-mcp.exe");
+    fs::copy(fake, tools.join("actinglab.exe")).expect("the fake as actinglab.exe");
     write_manifest(&runtime, OLD, "first");
 
-    let mut entry = Command::new(env!("CARGO_BIN_EXE_actingcommand-mcp-entry"))
+    let mut entry = Command::new(env!("CARGO_BIN_EXE_actingcommand-mcp-entry-g2"))
         .arg("--root")
         .arg(root.path())
-        .args([
-            "--client",
-            "claude",
-            "--",
-            "mcp-serve",
-            "--tier",
-            "observer",
-        ])
+        .args(["--client", "claude", "--", "--list", "core"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -134,8 +136,26 @@ fn mcp_entry_process_pipes_a_session_and_switches_once() {
     );
     let first = next(&lines, |message| message["id"] == 2);
     assert_eq!(first["result"]["tools"][0]["name"], "fake_11111111");
+
+    // The server got the words after `--` and nothing of the entry's own.
+    send(
+        &mut stdin,
+        &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "fake_11111111", "arguments": {}}}),
+    );
+    let call = next(&lines, |message| message["id"] == 3);
+    let served = call["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .expect("the fake server's own answer");
+    assert_eq!(served["args"], json!(["--list", "core"]));
+
     let before = wait_status(root.path(), pid, |status| status["child"]["build"] == OLD);
+    assert_eq!(before["entry_generation"], 2);
+    assert_eq!(before["entry_protocol"], 2);
+    assert_eq!(before["client"]["configured"], "claude");
     let first_child = before["child"]["pid"].clone();
+    assert_eq!(served["pid"], first_child);
 
     write_manifest(&runtime, NEW, "second, a longer note");
     next(&lines, |message| {
@@ -143,9 +163,9 @@ fn mcp_entry_process_pipes_a_session_and_switches_once() {
     });
     send(
         &mut stdin,
-        &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}),
+        &json!({"jsonrpc": "2.0", "id": 4, "method": "tools/list"}),
     );
-    let second = next(&lines, |message| message["id"] == 3);
+    let second = next(&lines, |message| message["id"] == 4);
     assert_eq!(second["result"]["tools"][0]["name"], "fake_22222222");
     let after = wait_status(root.path(), pid, |status| {
         status["notice"]["tools_list_after"] == true
@@ -154,6 +174,7 @@ fn mcp_entry_process_pipes_a_session_and_switches_once() {
     assert_ne!(after["child"]["pid"], first_child);
     assert_eq!(after["previous_children"][0]["pid"], first_child);
     assert_eq!(after["last_switch"]["to_build"], NEW);
+    assert_eq!(after["entry_generation"], 2);
 
     drop(stdin);
     let deadline = Instant::now() + WAIT;

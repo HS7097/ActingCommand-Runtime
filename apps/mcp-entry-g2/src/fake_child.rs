@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Test helper of `tests/entry_process.rs` (Workflow #421 MCP-ENTRY): a fake `actingctl`.
-//! Copied to `<root>\runtime\actingctl.exe` of a temporary root, it answers
-//! `mcp-entry plan --root <root> [--current-build <commit>] -- <arguments>` from
-//! `<root>\runtime\BUILD-MANIFEST.json`, and otherwise serves a minimal MCP whose one tool is
-//! named after the build it started with. Never shipped.
+//! Test helper of `tests/entry_process.rs` (Workflow #434 LAB-5G5a, copied from the first
+//! generation's): a fake of the second generation's two programs. Copied to
+//! `<root>\tools\actinglab.exe` of a temporary root, it answers
+//! `--json mcp plan --entry-protocol 2 [--current-build <commit>]` for the root it is in from
+//! `<root>\runtime\BUILD-MANIFEST.json`, naming the `actinglab-mcp.exe` the entry would find as
+//! the child. Copied to `<root>\tools\actinglab-mcp.exe`, it serves a minimal MCP whose one tool
+//! is named after the build it started with and whose call answers its pid and its arguments.
+//! Never shipped.
 
 use serde_json::{Value, json};
 use std::io::{self, BufRead, Write};
@@ -12,15 +15,34 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     let words = std::env::args().skip(1).collect::<Vec<_>>();
-    if words.first().map(String::as_str) == Some("mcp-entry") {
+    let plan_words =
+        words.len() >= 3 && words[0] == "--json" && words[1] == "mcp" && words[2] == "plan";
+    if plan_words {
         plan(&words);
         return;
     }
-    serve();
+    serve(&words);
 }
 
-fn manifest_commit(runtime: &Path) -> String {
-    std::fs::read(runtime.join("BUILD-MANIFEST.json"))
+/// The root of the program: the folder above the `runtime\` or `tools\` it runs from.
+fn own_root() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().and_then(Path::parent).map(Path::to_path_buf))
+        .unwrap_or_default()
+}
+
+/// `<root>\runtime\<name>` when it is a file, else `<root>\tools\<name>`, as the entry finds it.
+fn find_program(root: &Path, name: &str) -> PathBuf {
+    let runtime = root.join("runtime").join(name);
+    if runtime.is_file() {
+        return runtime;
+    }
+    root.join("tools").join(name)
+}
+
+fn manifest_commit(root: &Path) -> String {
+    std::fs::read(root.join("runtime").join("BUILD-MANIFEST.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .and_then(|manifest| {
@@ -33,22 +55,19 @@ fn manifest_commit(runtime: &Path) -> String {
 }
 
 fn plan(words: &[String]) {
-    let flag = |name: &str| {
-        words
-            .iter()
-            .position(|word| word == name)
-            .and_then(|index| words.get(index + 1))
-            .cloned()
-    };
-    let root = PathBuf::from(flag("--root").unwrap_or_default());
-    let runtime = root.join("runtime");
-    let commit = manifest_commit(&runtime);
-    let current = flag("--current-build");
+    let current = words
+        .iter()
+        .position(|word| word == "--current-build")
+        .and_then(|index| words.get(index + 1))
+        .cloned();
+    let root = own_root();
+    let commit = manifest_commit(&root);
     let switch = current.as_ref().is_some_and(|current| *current != commit);
-    let mut child = vec![runtime.join("actingctl.exe").to_string_lossy().into_owned()];
-    if let Some(split) = words.iter().position(|word| word == "--") {
-        child.extend(words[split + 1..].iter().cloned());
-    }
+    let child = vec![
+        find_program(&root, "actinglab-mcp.exe")
+            .to_string_lossy()
+            .into_owned(),
+    ];
     println!(
         "{}",
         json!({
@@ -56,17 +75,13 @@ fn plan(words: &[String]) {
             "build": {"commit": commit, "manifest_sha256": "0".repeat(64)},
             "child": child,
             "tunables": {"poll_ms": 50, "settle_ms": 0, "verify_timeout_ms": 10_000, "drain_max_ms": 60_000, "refused_retry_max_ms": 300_000},
-            "entry_protocol": 1,
+            "entry_protocol": 2,
         })
     );
 }
 
-fn serve() {
-    let runtime = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        .unwrap_or_default();
-    let commit = manifest_commit(&runtime);
+fn serve(arguments: &[String]) {
+    let commit = manifest_commit(&own_root());
     let tool = format!("fake_{}", commit.get(..8).unwrap_or(&commit));
     let stdin = io::stdin();
     let mut stdout = io::stdout();
@@ -91,7 +106,8 @@ fn serve() {
             }),
             "tools/list" => json!({"tools": [{"name": tool, "inputSchema": {"type": "object"}}]}),
             "tools/call" => {
-                json!({"content": [{"type": "text", "text": std::process::id().to_string()}]})
+                let served = json!({"pid": std::process::id(), "args": arguments});
+                json!({"content": [{"type": "text", "text": served.to_string()}]})
             }
             "actingcommand/entryStatus" => {
                 json!({"outstanding_handles": 0, "kinds": [], "calls_in_flight": 0})

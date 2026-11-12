@@ -1,20 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! The entry's logic (Workflow #421 MCP-ENTRY, D1 to D6), driven by events through a [`Host`]
-//! so the tests run it with a fake child and a fake clock.
+//! so the tests run it with a fake child and a fake clock. Copied from the first generation
+//! (`apps/mcp-entry`) by Workflow #434 LAB-5G5a and changed only where generation 2 differs: the
+//! constants, the child (`actinglab-mcp.exe`, which the host looks for at each fresh start), the
+//! plan (`actinglab mcp plan`), the codes and the answers' inspect list.
 //!
 //! - It pipes JSON-RPC between the client and one current child, ids unchanged, and keeps the
 //!   client's handshake (the legacy `initialize` and `notifications/initialized`, or the
 //!   2026-07-28 `_meta`) to replay it.
 //! - It watches cheap metadata of the install; a change that stays put for `settle_ms` makes it
-//!   ask the current install's `actingctl mcp-entry plan` which build to run.
+//!   ask the current install's `actinglab mcp plan` which build to run.
 //! - A planned switch waits for a moment between calls with no process-local handle outstanding
 //!   in the current child (`actingcommand/entryStatus`; a child before it answers "method not
 //!   found", which counts as none when no call is in flight). Then it starts a candidate,
 //!   replays the handshake, checks the protocol version and `tools/list`, and only then makes it
 //!   current. A failed candidate is reported and the current child keeps serving.
-//! - A request in flight when its child ends gets `mcp_entry_outcome_unknown` and is never sent
-//!   again; the next request goes to a fresh child.
+//! - A request in flight when its child ends gets `mcp_entry_g2_outcome_unknown` and is never
+//!   sent again; the next request goes to a fresh child.
 //! - After a switch the client gets the change notice of its generation: legacy
 //!   `notifications/tools/list_changed`, or the same notification on each open
 //!   `subscriptions/listen` stream (the entry owns those streams across children). Whether
@@ -29,10 +32,12 @@ use std::collections::{BTreeMap, VecDeque};
 use std::io;
 
 /// The entry's generation: the `g<N>` directory it is placed in. It changes only when the
-/// contract between the entry and its children changes.
-pub(crate) const GENERATION: u32 = 1;
-/// The contract version the entry asks `mcp-entry plan` for.
-pub(crate) const ENTRY_PROTOCOL: u32 = 1;
+/// contract between the entry and its children changes; each generation is a program of its own
+/// (Workflow #434 LAB-5G5a: this is the second, placed in `g2\` only).
+pub(crate) const GENERATION: u32 = 2;
+/// The contract version the entry asks `mcp plan` for; an answer of another version is a
+/// refusal.
+pub(crate) const ENTRY_PROTOCOL: u32 = 2;
 pub(crate) const STATUS_SCHEMA: &str = "actingcommand.mcp-entry-status.v1";
 const INTERNAL_PREFIX: &str = "actingcommand-entry:";
 const ENTRY_STATUS_METHOD: &str = "actingcommand/entryStatus";
@@ -70,14 +75,15 @@ impl Tunables {
 }
 
 /// The cheap metadata the entry watches: size and modification time of the install's Runtime
-/// manifest and `actingctl.exe` (`None` while a file is missing).
+/// manifest and of the `actinglab-mcp.exe` it would start now (`None` while a file is missing).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Stamp {
     pub(crate) files: Vec<Option<(u64, u128)>>,
 }
 
 /// The client a configuration registered the entry for (`--client`): it names the refresh
-/// entry of a client that does not fetch `tools/list` after the notice.
+/// entry of a client that does not fetch `tools/list` after the notice. It stays the entry's:
+/// the status file records it, and no child is given it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ClientKind {
@@ -131,6 +137,9 @@ pub(crate) trait Host {
     fn now_ms(&self) -> u64;
     /// The watched metadata now.
     fn stamp(&self) -> Stamp;
+    /// The server program to start now when no plan names one (a fresh child): looked for at
+    /// each call, so a program the install moved is found where it is.
+    fn default_exe(&self) -> String;
     /// Whether an install operation holds the writer lock. An unfinished operation is the
     /// plan's refusal (`operation_unfinished`, review M1), not the entry's decision.
     fn busy(&mut self) -> bool;
@@ -141,7 +150,7 @@ pub(crate) trait Host {
     fn send(&mut self, id: u64, line: &[u8]) -> bool;
     /// Closes child `id`'s input and makes sure it ends.
     fn stop(&mut self, id: u64);
-    /// Runs `mcp-entry plan` in the background; its answer arrives as [`Core::plan_done`].
+    /// Runs `mcp plan` in the background; its answer arrives as [`Core::plan_done`].
     fn start_plan(&mut self, current_build: Option<&str>, timeout_ms: u64);
     fn to_client(&mut self, line: &[u8]);
     fn write_status(&mut self, status: &Value);
@@ -303,7 +312,7 @@ struct Deferral {
     outstanding_handles: Option<u64>,
     handle_kinds: Vec<String>,
     /// Fix round 1 (review M2): the outstanding handles, to collect a stuck one with
-    /// `ac_get_run`.
+    /// `ac_run_show`.
     handles: Vec<String>,
     past_drain_max: bool,
 }
@@ -346,11 +355,11 @@ struct Notice {
     tools_list_at_unix_ms: Option<u64>,
 }
 
-/// What the entry was started with.
+/// What the entry was started with. The child before any plan names one is the host's
+/// [`Host::default_exe`].
 pub(crate) struct EntryConfig {
-    /// `<root>\runtime\actingctl.exe`: the child before any plan names one.
-    pub(crate) default_exe: String,
-    /// Everything after `--`, passed to every child unchanged.
+    /// Everything after `--`, passed to every child unchanged; `--client` is the entry's own and
+    /// never among them.
     pub(crate) child_args: Vec<String>,
     pub(crate) client_kind: Option<ClientKind>,
     pub(crate) pid: u32,
@@ -717,10 +726,11 @@ impl<H: Host> Core<H> {
             serde_json::to_value(outcome.envelope(Detail::Full)).unwrap_or(Value::Null),
         );
         if code == EntryCode::OutcomeUnknown {
-            // Inspect before anything is sent again (D3 rule 3).
+            // Inspect before anything is sent again (D3 rule 3), with the server's tools of the
+            // rows `run show` and `status`.
             data.insert(
                 "inspect_with".to_owned(),
-                json!(["ac_get_run", "ac_overview"]),
+                json!(["ac_run_show", "ac_status"]),
             );
         }
         let reply = RpcErrorReply {
@@ -1122,7 +1132,7 @@ impl<H: Host> Core<H> {
             PlanEnd::Answered(answer) => answer,
             PlanEnd::Failed(failure) => {
                 self.host
-                    .note(&format!("mcp-entry plan did not answer: {failure}"));
+                    .note(&format!("mcp plan did not answer: {failure}"));
                 self.last_plan = Some(PlanRecord {
                     at_unix_ms: now,
                     switch: None,
@@ -1142,7 +1152,7 @@ impl<H: Host> Core<H> {
         });
         self.dirty = true;
         let Some(plan) = plan else {
-            self.host.note(&format!("mcp-entry plan refused: {answer}"));
+            self.host.note(&format!("mcp plan refused: {answer}"));
             // Review M4: a refusal carries the tunables, so the retry policy stays the plan's.
             if let Some(tunables) = parse_tunables(&answer) {
                 self.tunables = tunables;
@@ -1302,7 +1312,7 @@ impl<H: Host> Core<H> {
     }
 
     fn start_fresh(&mut self) {
-        let exe = self.config.default_exe.clone();
+        let exe = self.host.default_exe();
         match self.spawn_slot(&exe, None) {
             Ok(slot) => self.begin(slot, Purpose::Fresh),
             Err(error) => {
@@ -1430,7 +1440,7 @@ impl<H: Host> Core<H> {
                     json!({
                         "protocolVersion": PROBE_VERSION,
                         "capabilities": {},
-                        "clientInfo": {"name": "actingcommand-mcp-entry", "version": GENERATION.to_string()},
+                        "clientInfo": {"name": "actingcommand-mcp-entry-g2", "version": GENERATION.to_string()},
                     })
                 }),
             ),
@@ -1586,7 +1596,7 @@ impl<H: Host> Core<H> {
         self.dirty = true;
     }
 
-    /// The held requests were never sent: each gets `mcp_entry_child_unavailable`.
+    /// The held requests were never sent: each gets `mcp_entry_g2_child_unavailable`.
     fn fail_held(&mut self) {
         let held = std::mem::take(&mut self.held);
         for (_, requests) in held {
