@@ -370,8 +370,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingctl overview or ac_overview could not read the install's build manifest.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "<root>\\runtime\\BUILD-MANIFEST.json exists, but it could not be read within its size bound or is not JSON; the caused_by link says which.",
+      "handling": "The overview leaves build (commit_sha, source_artifact_name) out of its install block and reads the rest as usual. Check the file at path, which belongs to the deployed runtime folder."
     },
     "install_state_root_unresolved": {
       "category": "error",
@@ -637,8 +637,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "An answer larger than the output budget was written whole to an export file.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "An answer of actingctl mcp-serve (a read such as ac_facts, ac_packs or ac_events, or a Lab job's result) did not fit the call's output budget, so the server wrote it whole as <sha256>.json to its export directory and answered its header with export. A caller without a budget, such as the CLI, gets the whole answer instead.",
+      "handling": "Nothing is lost: read the whole answer from the file the value path names (actual_sha256 and actual_bytes describe it where given; count is the number of warnings an exported packs answer holds)."
     },
     "client_action_without_req_id": {
       "category": "warning",
@@ -651,8 +651,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actinglab's answer carried no req_id for the call's client.action.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "actinglab ran to its end for an ac_lab_observe or ac_lab_do call with capture, but its envelope held no req_id (in data on success, in the error's details on failure), or its stdout held no envelope.",
+      "handling": "Nothing to redo: the client.action is still recorded, without the req_id, so the record does not name the Lab request it belongs to."
     },
     "client_action_not_recorded": {
       "category": "warning",
@@ -665,8 +665,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Recording the call's client.action in the Runtime failed after actinglab answered.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "After actinglab answered an ac_lab_observe or ac_lab_do call with capture, connecting to the Runtime of the state root or recording the call's client.action there failed: the state root is not known, the Runtime is not running or not reachable, or it refused the interaction or the record. The failure is the caused_by link.",
+      "handling": "The Lab command ran, its answer stands and it is not run again; only the ledger lacks this call's client.action. Read the caused_by link for why."
     },
     "binding_requires_unavailable": {
       "category": "warning",
@@ -679,8 +679,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "ac_binding_draft: the answer carries no binding_requires.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The record_stop handed to ac_binding_draft holds no binding_requires in its lab parts (absent or null): only the ac_record_stop answer of the stop that generated the package carries it.",
+      "handling": "The draft's binding_requires is null and its manual_steps hold only the fixed manual step, so what the binding needs is not listed: pass the ac_record_stop answer of the stop that generated the package, or work out the requirements by hand before binding it."
     },
     "preflight_failed": {
       "category": "warning",
@@ -695,8 +695,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "ac_binding_draft: actinglab package preflight did not pass the recorded package.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "actinglab package preflight did not pass the package that the record_stop's binding_example names (its scheduled_execution.package_path): the preflight refused it, or actinglab failed or gave no answer.",
+      "handling": "The draft's admission holds preflight_error with actinglab's failure. Fix the package or its path and ask for the draft again before binding it."
     },
     "check_config_unavailable": {
       "category": "warning",
@@ -711,8 +711,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "ac_binding_draft: actingd check-config gave no report.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "ac_binding_draft ran <root>\\runtime\\actingcommand-actingd.exe check-config on the configuration in force (path) and got no report: the program could not be started or waited for, its stdout could not be exported, or its stdout was not JSON.",
+      "handling": "The draft's check_config member holds the error (check_config_failed with its cause, exit code and actingd's stderr where there were any, or the export's failure); fix what it names and ask for the draft again. The draft's other parts are complete."
     },
     "check_config_failed": {
       "category": "error",
@@ -1098,8 +1098,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Watchdog decision: the Runtime's last start ended fatally; it is held until an external fix.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The newest actingd log written since the owner journal's last record (or, behind a close that no log covers, the newest log of an earlier owner) ends in a terminal outcome of category fatal, its last OUTCOME actingd: or OUTCOME acforward: line. The watchdog reads only that outcome's category.",
+      "handling": "Read the terminal outcome (the hold's caused_by link, the report's terminal member) and the log the value log names, and fix its cause. The watchdog starts nothing while it holds: start the Runtime formally afterwards (for example actingctl start --root <root>)."
     },
     "watchdog_formal_start_observed": {
       "category": "info",
@@ -1158,8 +1158,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The watchdog set its state file aside and started a fresh state.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "run-once or install found <root>\\watchdog\\state.json of another schema version (the version 1 of an older build included) and renamed it state.json.other-schema-<ms>; install also renames an unreadable one state.json.unreadable-<ms>.",
+      "handling": "Nothing to do: the watchdog goes on with a fresh state, so its start records and its restart budget begin anew. The file named in the log line's set_aside field stays for inspection."
     },
     "watchdog_config_unreadable": {
       "category": "error",
@@ -1686,8 +1686,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingctl packs or ac_packs found a package binding of the selected configuration whose path does not exist or cannot be read (a package folder bound as a startup package also needs a control.json naming its package_id); the row says readable false and the rest of the answer is read as usual. alias names the instance of a per-instance binding. Workflow #429 R-11 (since 0.12.36): also a composed package's control.json that cannot be read, is larger than 1 MiB or does not decode (path the control file; the row has no irreversible), and a game root's ui.json that exists but cannot be read (path the file; the root is listed as without it), each with the failure beneath it as its cause where there is one.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A path the selected configuration binds does not exist or cannot be read: an instance's startup or resource package (alias names the instance), a procedure's scheduled package_path, a composed procedure's folder or the standard-pack root; or a startup package folder has no control.json that names its package_id. Also a bound package's control.json that cannot be read, is larger than 1 MiB or does not decode, and a file of a game root (its bundle, pages, interrupts, navigation, display layout or ui.json) that exists but cannot be read.",
+      "handling": "Correct the path in actingd.config.json, or restore the package or file at path; the caused_by link, where there is one, gives the read failure. The row reads readable false and the rest of the answer is read as usual."
     },
     "config_generation_mismatch": {
       "category": "warning",
@@ -1702,8 +1702,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingctl overview or ac_overview found that the configuration generation actingd runs is not the one the installation selects now, or that the selected configuration file's sha256 is not the one actingd read at its start (also on an installation without generations); path is the selected configuration, which takes effect only when actingd is restarted. The rest of the overview is read as usual.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The selected configuration changed after actingd started: the installation now selects another configuration generation than the one actingd runs, or actingd.config.json was edited, so its sha256 is not the config_sha256 actingd recorded in config.selection at its start.",
+      "handling": "The running Runtime keeps what it read at its start. Restart it (for example actingctl restart --root <root>) when the selected configuration (path) should take effect, or undo the edit if it was not meant."
     },
     "outcome_codes_reported": {
       "category": "success",
@@ -2687,8 +2687,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime refused mcp-serve's governance identity card (governance.allowed_clients); the write went ahead without it and the refusal is the caused_by link.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "actingd's governance.allowed_clients does not admit actingctl-mcp, so the Runtime refused mcp-serve's governance identity card as a client not allowed when the server recorded a tool call's client.action.",
+      "handling": "The write went ahead and the Runtime recorded its own warning event. To stop it, the person adds actingctl-mcp to governance.allowed_clients in actingd.config.json, which actingd reads at its start (mcp_blocker person_action)."
     },
     "watchdog_start_due": {
       "category": "info",
@@ -2731,8 +2731,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Watchdog status attention: the owner lock has been held for elapsed_ms (10 minutes or more) without an answering owner.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The owner lock in the state root has been held for 10 minutes or more (elapsed_ms) while no owner answers a health request: an actingd held by an error-report dialog, a start that never publishes runtime-info, or a long maintenance owner.",
+      "handling": "The watchdog starts nothing while the lock is held. Find the process that holds <state root>\\owner.lock and what keeps it from answering; the next tick decides again once the lock is released."
     },
     "watchdog_formal_close_unlogged": {
       "category": "warning",
@@ -2747,8 +2747,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Watchdog status attention: no Runtime log covers the formally closed owner epoch, so a fatal stop of an unlogged start may be hidden.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The watchdog's status decided a formal close, but no candidate actingd-*.log (in the root, in <root>\\watchdog or in %LOCALAPPDATA%\\ActingCommand\\logs) was modified between the closed epoch's start and its close plus 2 s: the Runtime was started by hand in a terminal or by another starter that writes no such log.",
+      "handling": "Nothing restarts the Runtime, as is right for a formal close, but a fatal stop of that run would not show. Start the Runtime through a starter that writes an actingd-*.log (for example actingctl start) so that its end is visible."
     },
     "watchdog_last_start_failed": {
       "category": "warning",
@@ -2763,8 +2763,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Watchdog status attention: the last watchdog start (at_unix_ms) failed; its start result is the caused_by link.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "No owner answers, and the last start the watchdog made since the last formal start ended other than started: it timed out (start_timeout), the process exited during startup, or the spawn or a probe failed. Its start result is the caused_by link.",
+      "handling": "Read the caused_by link and that start's log under <root>\\watchdog (actingd-<ms>.log) for why the Runtime did not come up, and fix it; further starts count against the watchdog's budget of 3 starts in 30 minutes."
     },
     "watchdog_restarts_repeated": {
       "category": "warning",
@@ -2779,8 +2779,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Watchdog status attention: the watchdog started the Runtime count times (2 or more) within a day.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The watchdog started, or tried to start, the Runtime count times (2 or more) within 24 hours and since the last formal start: the Runtime keeps going away without a formal close (a crash, a closed console window, an ended process, a reboot), or its starts end in errors.",
+      "handling": "Read watchdog.log and the start logs under <root>\\watchdog for why the Runtime goes away, and fix that cause. The count covers only the starts since the last formal start."
     },
     "watchdog_task_missing": {
       "category": "warning",
@@ -2795,8 +2795,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Watchdog status attention: no watchdog task (name) is registered for this root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The watchdog's status found no Task Scheduler task registered for this root (name, ActingCommand Runtime watchdog <fp12>): watchdog install was never run for this root, or the task was removed.",
+      "handling": "If the Runtime of this root should be supervised, run actingctl watchdog install --root <root> (or <root>\\tools\\actingwatch.exe install); without the task nothing starts the Runtime again after it goes away."
     },
     "watchdog_install_refused": {
       "category": "error",

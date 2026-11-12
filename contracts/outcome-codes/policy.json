@@ -866,8 +866,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Scheduling decision reason: a resource target record that the formal entry did not write is ignored.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A session.resource_targets record of server or game scope covers the instance. Only the formal entry writes a policy, scoped to one instance; such a record, which an ordinary fact publication of an older build wrote, is never a policy.",
+      "handling": "The record has no effect on scheduling. Apply the instance's targets through the formal entry (ac_targets_set, or actingctl agent-apply-resource-targets) if they should apply."
     },
     "resource_target_policy_unreadable": {
       "category": "warning",
@@ -886,8 +886,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Scheduling decision reason: the instance's stored resource target policy cannot be read, and the instance runs base scheduling.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The instance's own session.resource_targets record cannot be decoded, or holds targets without an expiry; the reason's detail names the decode code.",
+      "handling": "The instance runs base scheduling, without its targets, until a readable policy replaces the record: apply its policy again through ac_targets_set or actingctl agent-apply-resource-targets."
     },
     "resource_target_policy_expired": {
       "category": "info",
@@ -926,8 +926,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Scheduling decision reason: some tasks the resource target policy names cannot be evaluated.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "Under the instance's active policy some targets cannot be weighed against the active catalog: a named task the catalog does not know, that lies out of the instance's scope or is disabled; a target without tasks whose resource the catalog does not know, cannot observe or scopes elsewhere; or a target whose resource no task of the instance produces (no_producing_task). The reason's detail lists them as target/task:why or target@resource:why.",
+      "handling": "The other targets still apply, and a disabled named task keeps its coverage. Apply a policy that names only what the active catalog resolves (ac_targets_set or actingctl agent-apply-resource-targets) when the listed targets should count."
     },
     "resource_targets_parser_code_unexpected": {
       "category": "error",
@@ -1066,8 +1066,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Forward projection evidence gap: the evaluation step budget ran out before the horizon.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A forward projection used all max_steps evaluation steps of its configuration before it reached the end of its horizon (horizon_ms).",
+      "handling": "The steps it returned stand and its completeness is evidence_insufficient. To reach the horizon, request the projection again with a larger max_steps (at most 4096) or a shorter horizon_ms."
     },
     "effect_evidence_insufficient": {
       "category": "warning",
@@ -1086,8 +1086,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Forward projection evidence gap: a dispatched task's effects are only expected, inferred or not fully confident.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A task that a forward projection would dispatch declares a consumed or produced effect that is only expected (expected_amount_milli), still pending, of a confidence below 1000 or inferred, so the projection stops before that round; the gap names the task (task_id).",
+      "handling": "The projection is valid up to that round and its completeness is evidence_insufficient. It goes further only when the task's catalog declares those effects as exact, observed amounts at full confidence, which is the catalog author's to change."
     },
     "strategy_report_invalid": {
       "category": "error",

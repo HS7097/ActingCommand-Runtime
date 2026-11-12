@@ -597,9 +597,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The runtime database reports sqlite backup busy.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd ledger-maintenance backup: a step of SQLite's online backup of the runtime database answered SQLITE_BUSY. The backup waits and steps again, at most three times within its deadline, and fails with backup_busy_exhausted after that; the first busy or locked step of a backup records this warning or sqlite_backup_locked in the backup's warnings.",
+      "common_causes": "SQLite's online backup step of the runtime database answered SQLITE_BUSY: the locks it needs could not be acquired, as when another connection holds the database.",
+      "handling": "Nothing to do when the backup finished: it waited and stepped again, and this warning stays in the backup's warnings. When it ended in backup_busy_exhausted instead, run the backup again once nothing else has the database open."
     },
     "sqlite_backup_locked": {
       "category": "warning",
@@ -617,9 +617,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The runtime database reports sqlite backup locked.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd ledger-maintenance backup: a step of SQLite's online backup of the runtime database answered SQLITE_LOCKED. The backup waits and steps again, at most three times within its deadline, and fails with backup_busy_exhausted after that; the first busy or locked step of a backup records this warning or sqlite_backup_busy in the backup's warnings.",
+      "common_causes": "SQLite's online backup step of the runtime database answered SQLITE_LOCKED: a lock on the source or the destination database could not be obtained.",
+      "handling": "Nothing to do when the backup finished: it waited and stepped again, and this warning stays in the backup's warnings. When it ended in backup_busy_exhausted instead, run the backup again once nothing else has the database open."
     },
     "state_connection_busy": {
       "category": "error",
