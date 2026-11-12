@@ -14,16 +14,23 @@
 //   (`cursor_invalid`, nothing read) under another; `codes` answers the same line, its cursor
 //   bound to no session, whatever the binding, and the cursor is taken as before; `runs` refuses a
 //   cursor of its own form the same way under either binding.
+// - `lab5g1b_the_errors_page_of_diagnose_is_bound_to_the_callers_binding`: the cursor of the
+//   errors page a `diagnose` answer carries names the caller's binding; `events` of the errors
+//   view of the diagnosis' window takes it under that binding and refuses it (`cursor_invalid`,
+//   nothing read) under another.
 // Fakes only: the runtime client's scripted Runtime on loopback in a temporary state root, made-up
-// ledger records, a temporary configuration; no device, no clock, no sleep.
+// ledger records, a temporary configuration; no device, no clock, no sleep (`diagnose` takes its
+// window from its own clock, and the test reads the window from its answer).
 
 use super::*;
 use crate::cli_module::{self, words};
 use actingcommand_contract::{
     AuditInput, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
     EventPayloadDraft, EventSeverity, EventSource, IdentifierIssuer, OriginModule, ProjectedEvent,
-    ProjectionPayload, RuntimeOperation, RuntimePayloadDraft, SanitizationError, SecretField,
-    SecretFingerprinter, Sha256Fingerprint,
+    ProjectionPayload, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryCursor,
+    RuntimeEventQueryPage, RuntimeOperation, RuntimePayloadDraft, RuntimeReceiptState,
+    RuntimeRequest, RuntimeResult, SanitizationError, SecretField, SecretFingerprinter,
+    Sha256Fingerprint,
 };
 use actingcommand_lab_ops::budget::Budget;
 use actingcommand_lab_ops::cli_line::Exit;
@@ -34,7 +41,9 @@ use actingcommand_lab_ops::front::Connection;
 use actingcommand_lab_ops::initiator::ENVIRONMENT_VARIABLE;
 use actingcommand_lab_ops::material_export;
 use actingcommand_lab_ops::table::{Operation, OperationTable};
-use actingcommand_runtime_client::test_support::{ScriptedConnection, ScriptedRuntime};
+use actingcommand_runtime_client::test_support::{
+    ScriptedAnswer, ScriptedConnection, ScriptedRuntime,
+};
 use serde_json::{Map, Value, json};
 use std::ffi::OsString;
 use std::path::Path;
@@ -134,11 +143,16 @@ struct Served {
 /// `run` (given the state root) on a scripted Runtime whose one connection answers its event
 /// queries from `records`; the call makes that one connection.
 fn on_ledger(records: Vec<ProjectedEvent>, run: impl FnOnce(&Path) -> Exit) -> Served {
+    served_on(ScriptedConnection::new().ledger(records), run)
+}
+
+/// `run` (given the state root) on a scripted Runtime whose one connection answers as `script`
+/// says; the call makes that one connection.
+fn served_on(script: ScriptedConnection, run: impl FnOnce(&Path) -> Exit) -> Served {
     let temp = TempDir::new().unwrap();
     let state = temp.path().join("state");
     fs::create_dir_all(&state).unwrap();
-    let runtime =
-        ScriptedRuntime::start(&state, |_| vec![ScriptedConnection::new().ledger(records)]);
+    let runtime = ScriptedRuntime::start(&state, |_| vec![script]);
     let exit = {
         let _state_root = use_runtime_state_root(&state);
         run(&state)
@@ -172,6 +186,73 @@ fn cursor_words(state: &Path, cursor: &str) -> Vec<OsString> {
         OsString::from("--cursor"),
         OsString::from(cursor),
     ]
+}
+
+/// The words of `events` that take `cursor` of `diagnose`'s errors page: the errors view of the
+/// diagnosis' window, from `since_unix_ms`, on the state root `state`.
+fn errors_words(state: &Path, since_unix_ms: u64, cursor: &str) -> Vec<OsString> {
+    vec![
+        OsString::from("events"),
+        OsString::from("--state-root"),
+        state.as_os_str().to_owned(),
+        OsString::from("--view"),
+        OsString::from("errors"),
+        OsString::from("--since-unix-ms"),
+        OsString::from(since_unix_ms.to_string()),
+        OsString::from("--cursor"),
+        OsString::from(cursor),
+    ]
+}
+
+/// A refusal of the Runtime: denied, `lease_busy`; the diagnosis goes on without the part it
+/// refused.
+fn denied(request: &RuntimeRequest) -> ScriptedAnswer {
+    ScriptedAnswer::failed(
+        request,
+        RuntimeReceiptState::Denied,
+        RuntimeErrorProjection::new(RuntimeErrorCode::LeaseBusy, false).receipt_outcome(None, None),
+    )
+}
+
+/// A diagnosis' errors page: the one made-up `row`, at a snapshot one past it, with the cursor
+/// after it to the rest of the snapshot, for the query the page was asked for.
+fn errors_page(
+    row: ProjectedEvent,
+) -> impl FnOnce(&RuntimeRequest) -> ScriptedAnswer + Send + 'static {
+    move |request| {
+        let RuntimeOperation::QueryEvents {
+            query,
+            profile,
+            page,
+        } = request.operation()
+        else {
+            panic!(
+                "the errors page is read first, got {:?}",
+                request.operation()
+            );
+        };
+        let snapshot = row.sequence + 1;
+        let next = RuntimeEventQueryCursor::new(snapshot, row.sequence, query, *profile)
+            .expect("the errors page's next cursor");
+        let page = RuntimeEventQueryPage::new(vec![row], snapshot, page.limit(), true, Some(next))
+            .expect("the errors page");
+        ScriptedAnswer::completed(request, RuntimeResult::EventPage { page })
+    }
+}
+
+/// The page a cursor continues to: empty, at the cursor's snapshot; a read without a cursor fails
+/// the script.
+fn rest_of_snapshot(request: &RuntimeRequest) -> ScriptedAnswer {
+    let RuntimeOperation::QueryEvents { page, .. } = request.operation() else {
+        panic!("a page is read, got {:?}", request.operation());
+    };
+    let snapshot = page
+        .cursor()
+        .expect("the read goes on from the cursor it was given")
+        .snapshot_ledger_position();
+    let page = RuntimeEventQueryPage::new(Vec::new(), snapshot, page.limit(), false, None)
+        .expect("the rest of the snapshot");
+    ScriptedAnswer::completed(request, RuntimeResult::EventPage { page })
 }
 
 /// The seq of each row of an `events` line.
@@ -471,4 +552,101 @@ fn lab5g1b_the_callers_cursor_binding_binds_events_and_no_other_cursor() {
         assert_eq!(served.queries, 0, "{}", served.line);
     }
     assert_eq!(refused[0].line, refused[1].line);
+}
+
+#[test]
+fn lab5g1b_the_errors_page_of_diagnose_is_bound_to_the_callers_binding() {
+    let _guard = env_lock();
+    unsafe {
+        env::remove_var(ENVIRONMENT_VARIABLE);
+    }
+    let table = cli_module::table().expect("the operation table");
+
+    // `diagnose` of every instance, its window the command's own: the errors page (one made-up
+    // row, more after it) is its first read; the Runtime refuses the four reads that follow it
+    // (the failure records' first page, the schedule explanation and the runtime facts of
+    // `not_run`, the window's run listing), and the diagnosis answers without those parts. No
+    // instance, so no status read; no install root, so no `actingd suspended` child.
+    let (operation, params) = called(table, &["diagnose"]);
+    let row = ledger(1).remove(0);
+    let script = ScriptedConnection::new()
+        .request(errors_page(row))
+        .request(denied)
+        .request(denied)
+        .request(denied)
+        .request(denied);
+    let diagnosed = served_on(script, |state| {
+        let here = || Place {
+            state_root: Ok(state.to_path_buf()),
+            root: None,
+        };
+        core_ops::answer(
+            operation,
+            &params,
+            &Caller {
+                place: &here,
+                cursor: BOUND,
+                ..cli_module::core_ops::caller()
+            },
+        )
+    });
+    assert_eq!(
+        (diagnosed.code, &diagnosed.line["outcome"]["code"]),
+        (0, &json!("runtime_diagnosis_reported")),
+        "{}",
+        diagnosed.line
+    );
+    assert_eq!(diagnosed.queries, 3, "{}", diagnosed.line);
+    let cursor = diagnosed.line["errors_page"]["next_cursor"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no errors page cursor: {}", diagnosed.line))
+        .to_owned();
+    let bound = format!("v1.{:016x}.{}.", BOUND.session, BOUND.generation);
+    assert!(
+        cursor.starts_with(&bound),
+        "{cursor} is not bound to {bound}"
+    );
+    let since = diagnosed.line["window"]["since_unix_ms"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("no window: {}", diagnosed.line));
+
+    // `events` of the errors view of the same window takes it under the same binding: one read,
+    // from the cursor.
+    let taken = served_on(
+        ScriptedConnection::new().request(rest_of_snapshot),
+        |state| {
+            events::dispatch_within(
+                &errors_words(state, since, &cursor),
+                Connection::per_call(),
+                None,
+                BOUND,
+            )
+            .expect("the words of events")
+        },
+    );
+    assert_eq!(
+        (taken.code, &taken.line["outcome"]["code"]),
+        (0, &json!("runtime_events_reported")),
+        "{}",
+        taken.line
+    );
+    assert_eq!(taken.queries, 1, "{}", taken.line);
+
+    // Under another binding: `cursor_invalid`, and nothing is read.
+    let refused = served_on(ScriptedConnection::new(), |state| {
+        events::dispatch_within(
+            &errors_words(state, since, &cursor),
+            Connection::per_call(),
+            None,
+            OTHER,
+        )
+        .expect("the words of events")
+    });
+    assert_eq!(
+        (refused.code, &refused.line["outcome"]["code"]),
+        (1, &json!("cursor_invalid")),
+        "{}",
+        refused.line
+    );
+    assert_eq!(refused.queries, 0, "{}", refused.line);
 }
