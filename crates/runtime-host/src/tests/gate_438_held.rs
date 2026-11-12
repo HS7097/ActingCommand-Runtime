@@ -1524,7 +1524,12 @@ fn held_t8_the_records_round_trip_through_the_ledger_the_projection_and_an_event
         .iter()
         .filter_map(|event| {
             let signal_id = match &event.payload {
-                ProjectionPayload::Public(public) => public.policy_signal_id().map(str::to_owned),
+                ProjectionPayload::Public(public) => match public.as_ref() {
+                    PublicEventPayload::Policy(policy) => {
+                        policy.policy_signal_id().map(str::to_owned)
+                    }
+                    _ => None,
+                },
                 ProjectionPayload::Full(payload) => match &**payload {
                     EventPayload::Policy(PolicyPayload::PlanningSignalObserved(signal)) => {
                         Some(signal.signal_id().to_owned())
