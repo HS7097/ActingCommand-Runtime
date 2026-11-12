@@ -21,6 +21,8 @@ const MAX_PROCEDURE_TOKEN_BYTES: usize = 256;
 const SHA256_PREFIX: &str = "sha256:";
 /// The domain of the binding tuple v3 (Workflow #336 PKG-S3): no package content.
 const BINDING_DOMAIN: &str = "actingcommand.procedure-binding.v3";
+/// The domain of a manifest's digest (Workflow #442 REM-1): its bindings and their locations.
+const MANIFEST_DOMAIN: &str = "actingcommand.procedure-manifest.v1";
 
 /// Immutable binding of a procedure alias to its operation and yield points, with the location
 /// of its package when the configuration schedules it.
@@ -156,6 +158,29 @@ impl ProcedureManifest {
     /// package admission reads).
     pub(crate) fn bindings(&self) -> impl Iterator<Item = &ProcedureBinding> {
         self.bindings.values()
+    }
+
+    /// Workflow #442 REM-1 (`contracts/remedies.md` section 7.1): the digest of every binding
+    /// with its package location, in procedure alias order, as `sha256:<hex>`. Two manifests that
+    /// bind the same procedures at the same places have the same digest; the remedy table keeps
+    /// the one it was built from, and is built again when the manifest in place has another.
+    /// Memory only: it is compared within one process and written only to the log.
+    pub(crate) fn digest(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(MANIFEST_DOMAIN.as_bytes());
+        for binding in self.bindings.values() {
+            let location = binding.package_path.as_deref();
+            for part in [
+                binding.procedure_ref.as_str(),
+                binding.binding_digest.as_str(),
+                location.unwrap_or_default(),
+            ] {
+                hasher.update(part.len().to_le_bytes());
+                hasher.update(part.as_bytes());
+            }
+            hasher.update([u8::from(location.is_some())]);
+        }
+        format!("{SHA256_PREFIX}{:x}", hasher.finalize())
     }
 
     pub(crate) fn bind_evaluation(

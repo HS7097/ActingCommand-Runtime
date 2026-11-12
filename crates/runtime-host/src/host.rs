@@ -2334,6 +2334,11 @@ impl RuntimeHost {
                     timed(&mut startup_recovery.policy_outcomes_ms, || {
                         recover_authoritative_policy_outcomes(&policy, &shared.ledger)
                     })?;
+                // Workflow #442 REM-1 (register §1.326): in composer mode the procedure bindings of
+                // the active composed generation, put in place as the scheduler workbench's first
+                // check puts them, so the remedy table below is built from the composed packages;
+                // that check then does not adopt the generation again.
+                shared.adopt_standard_pack_generation_on_start(&policy)?;
                 // Workflow #411 B15 R4 (model-b15 §7.8, §9.1): the remedy table, the outcome keys
                 // of the latest runs of tasks that declare a remedy and the remedy signals, once
                 // the dispatches are settled.
