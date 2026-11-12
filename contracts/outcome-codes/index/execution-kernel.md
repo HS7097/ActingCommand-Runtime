@@ -35,14 +35,14 @@ it by hand. The [summary](README.md) says what each column means. 203 codes.
 | `contained_task_designated_effect_cap_unresolved` | error | declaration_error | 0.12.0 | active | pending | TBD | Workflow #390 OUT-2: a member of a task's designated effect set (pack_operation_id) takes its repeat cap from the instance fact fact_key, and before the run's… |
 | `contained_task_destination_conflict` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task operation declares conflicting destination pages. |
 | `contained_task_entry_pages_invalid` | error | declaration_error | 0.12.0 | active | pending | written | Admission refuses a contained task's entry page set (Workflow #373 NAV-3b): it is empty, names more than 16 pages, names a page twice, names any, names a page… |
-| `contained_task_error_page_reached` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A page-graph step reached a declared error page and its operation decided to fail; or (#411 A45) a page-graph run observed a page it declares as an error page… |
+| `contained_task_error_page_reached` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | A page-graph step reached a declared error page and its operation decided to fail; or (#411 A45) a page-graph run observed a page it declares as an error page… |
 | `contained_task_feature_locked` | warning | planned_stop | 0.12.0 | active | pending | written | A run recognised a page (page_id) that its task's feature_locks declaration names as the sign of a locked feature, and stopped there with no input. |
 | `contained_task_frame_invalid` | error | environment_fault | 0.12.0 | active | pending | TBD | A captured frame could not be converted for contained task recognition. |
 | `contained_task_frame_resolution_mismatch` | error | declaration_error | 0.12.0 | retired, replaced by `display_map_unresolved` | pending | written | Retired (Workflow #392 DA-2a, model 392 v1.2 §0.2 C10). |
 | `contained_task_guard_invalid` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task operation's guard is invalid. |
 | `contained_task_guard_missing` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task operation that needs a guard declares none. |
 | `contained_task_guard_page_mismatch` | warning | none | 0.12.0 | active | pending | written | A contained task operation's guard target was not evaluated because the observed page is not the guard's page. |
-| `contained_task_guard_refused` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A contained task operation's guard did not pass before its input. |
+| `contained_task_guard_refused` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | A contained task operation's guard did not pass before its input. |
 | `contained_task_guard_skipped` | info | none | 0.12.0 | active | pending | TBD | A contained task operation declares unguarded_trusted_coordinate, so no guard target was evaluated before its input. |
 | `contained_task_guard_target_invalid` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task operation's guard target is not usable. |
 | `contained_task_guard_target_missing` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task operation's guard names no target. |
@@ -55,7 +55,7 @@ it by hand. The [summary](README.md) says what each column means. 203 codes.
 | `contained_task_linear_intermediate_unobserved` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A linear step's declared intermediate page was not observed. |
 | `contained_task_linear_invalid` | error | declaration_error | 0.12.0 | active | pending | TBD | A linear-steps task program breaks a rule. |
 | `contained_task_observation_stability_unconfirmed` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A page-graph operation declared a stable observation window, and no destination of the operation passed on that many consecutive frames before the window… |
-| `contained_task_operation_candidates_exhausted` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | Workflow #390 EXEC-1: on a frame of the page page_id, every candidate operation of a page-graph task was passed over, count of them: its when did not hold, or… |
+| `contained_task_operation_candidates_exhausted` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | Workflow #390 EXEC-1: on a frame of the page page_id, every candidate operation of a page-graph task was passed over, count of them: its when did not hold, or… |
 | `contained_task_operation_invalid` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task operation breaks a rule. |
 | `contained_task_operation_missing` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task package names an operation that it does not declare. |
 | `contained_task_operation_runs_capped` | info | none | 0.12.10 | active | pending | written | Workflow #411 B16 part 1: the page-graph operation pack_operation_id declares max_runs (limit_count) and on_max_runs with an outcome_key; the run had dispatched… |
@@ -81,7 +81,7 @@ it by hand. The [summary](README.md) says what each column means. 203 codes.
 | `contained_task_post_admission_ocr_truth_missing` | error | declaration_error | 0.12.0 | active | pending | TBD | A post-admission OCR truth set is missing. |
 | `contained_task_prerequisite_cycle` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task's prerequisite chain repeats a package. |
 | `contained_task_prerequisite_depth_exceeded` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task's prerequisite chain is deeper than allowed. |
-| `contained_task_prerequisite_entry_unmatched` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A linear task's first page was not seen within its budget after its prerequisite package ran. |
+| `contained_task_prerequisite_entry_unmatched` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | A package's entry (a linear_steps package's first page, a navigable_route package's entry page or entry page set) was not seen within its step timeout after its… |
 | `contained_task_prerequisite_mismatch` | error | declaration_error | 0.12.0 | active | pending | TBD | A loaded prerequisite package declares another package ID than its link. |
 | `contained_task_prerequisite_unbound` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task's prerequisite package is not bound. |
 | `contained_task_primitive_unsupported` | error | declaration_error | 0.12.0 | active | pending | TBD | A contained task operation uses an input primitive the kernel does not support. |
@@ -167,7 +167,7 @@ it by hand. The [summary](README.md) says what each column means. 203 codes.
 | `offline_simulation_executed_step_invariant` | error | none | 0.12.0 | active | pending | TBD | An offline simulation reported an executed step, which it never performs. |
 | `offline_simulation_frame_copy_failed` | error | none | 0.12.0 | active | pending | TBD | An offline simulation fixture frame could not be copied. |
 | `offline_simulation_multiple_effects` | error | none | 0.12.0 | active | pending | TBD | An offline simulation planned more than one effect. |
-| `page_confirmation_failed` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A step's expected page was not confirmed after its input. |
+| `page_confirmation_failed` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | A step's expected page was not confirmed after its input. |
 | `png_invalid` | error | none | 0.12.0 | active | pending | TBD | A failure frame could not be decoded or measured. |
 | `preparation_deadline_exceeded` | error | budget_or_permission | 0.12.0 | active | pending | TBD | A session preparation step passed its deadline. |
 | `recognition_sample_budget_insufficient` | error | budget_or_permission | 0.12.0 | active | pending | written | A running task had less time left (remaining_ms) than the next page recognition needs (required_ms), so it ended before sampling. |
@@ -190,11 +190,11 @@ it by hand. The [summary](README.md) says what each column means. 203 codes.
 | `selection_fact_context_mismatch` | error | none | 0.12.0 | active | pending | TBD | A select step's fact snapshot names another game or server than the package. |
 | `selection_identity_mismatch` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | An expect_identity did not read the business ID its choice_of select step chose in this run on the destination page (stage select_expect_identity), through its… |
 | `selection_identity_unconfirmed` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A scan select's fresh confirmation frame did not show the chosen business ID at the chosen member's content position (stage select_confirm): no actionable… |
-| `selection_not_selected` | error | none | 0.12.0 | active | pending | TBD | A select step's selection policy selected no candidate. |
+| `selection_not_selected` | error | none | 0.12.0 | active | pending | written | A select step's selection policy selected no candidate. |
 | `selection_page_changed` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A select step's confirmation frame shows another page. |
-| `selection_projection_mismatch` | error | none | 0.12.0 | active | pending | TBD | A select step's confirmation candidate set differs from the evaluated one. |
-| `selection_result_blocked` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A select step's decision did not stand because positions it could not read might change it (rules 2 and 3 of the frozen selector model S0 §3.2, stage… |
-| `selection_scan_alignment_rejected` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A select step's scan session found no single shift for a frame: not exactly one consistent cluster of anchor pairs lay inside the window its motion admits… |
+| `selection_projection_mismatch` | error | none | 0.12.0 | active | pending | written | A select step's confirmation candidate set differs from the evaluated one. |
+| `selection_result_blocked` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | A select step's decision did not stand because positions it could not read might change it (rules 2 and 3 of the frozen selector model S0 §3.2, stage… |
+| `selection_scan_alignment_rejected` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | A select step's scan session found no single shift for a frame: not exactly one consistent cluster of anchor pairs lay inside the window its motion admits… |
 | `selection_scan_bounds_exceeded` | error | budget_or_permission | 0.12.0 | active | pending | TBD | A select step's scan session ran out of a declared bound (scan_bound): its coverage viewports or its rewind and return viewports (limit_count), or its time… |
 | `selection_scan_end_unconfirmed` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A select step's scan session advanced twice without the list moving (two consecutive forward viewports repeated the one before them) and without the declared… |
 | `selection_scan_gap_detected` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A select step's scan session left a gap in its coverage: after the one corrective reverse advance of that gap, a coverage band still started gap_px later than… |
@@ -203,7 +203,7 @@ it by hand. The [summary](README.md) says what each column means. 203 codes.
 | `selection_scan_position_unread` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A select step's scan session tracked a position that never entered the readable band of any coverage viewport, so the coverage cannot be complete;… |
 | `selection_scan_replay_frame_missing` | error | none | 0.12.0 | active | pending | TBD | A scan dry run over a saved frame sequence needed a frame the sequence does not hold: a corrective or rewind move (stage), or a capture after its last frame. |
 | `selection_scan_settle_incomplete` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A select step's scan session captured frames at the declared settle interval, and no two consecutive captures gave the same core anchor set before the settle… |
-| `selection_scan_start_unconfirmed` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A select step's scan session could not prove the start of its list: the declared start check failed on the settled first frame and the scan declares no rewind,… |
+| `selection_scan_start_unconfirmed` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | A select step's scan session could not prove the start of its list: the declared start check failed on the settled first frame and the scan declares no rewind,… |
 | `selection_state_unavailable` | error | none | 0.12.0 | active | pending | TBD | The runtime has no instance fact snapshot or instant for a select step. |
 | `size_changed` | info | none | 0.12.0 | active | pending | TBD | Two failure frames differ because their sizes differ. |
 | `unallowed_value` | error | none | 0.12.0 | active | pending | TBD | An environment detection value is not one of its allowed values. |

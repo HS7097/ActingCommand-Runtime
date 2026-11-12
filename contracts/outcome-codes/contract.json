@@ -1344,9 +1344,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The diagnostic code of a ledger diagnostic record: runtime diagnostic.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The diagnostic code the Runtime gives most runtime.failed records and every failed, cancelled or refused task terminal, beside an outcome that is the failure itself; only a record written without such an outcome carries this code as its outcome too.",
+      "common_causes": "It names no cause of its own; the outcome beside it is the failure. It is the outcome itself only on a record written before the failure's code, such as the command.rejected of a request refused because its instance's emulator is stopped, its input was refused, or its discovery, emulator control or monitor change failed, a refused monitor probe's monitor.probe_failed, or the task.failed of a Lab run the Lab reported failed.",
+      "handling": "Read the record's outcome and look that code up (actingctl codes <code>). When the outcome is runtime_diagnostic itself, read the records of the same request (actingctl events --request-id <request_id> --detail summary): the runtime.failed record written with it carries the failure's code (for a Lab run, the Lab's own answer does); nothing needs doing about runtime_diagnostic itself."
     },
     "lease_fencing_denied": {
       "category": "error",
@@ -1384,9 +1384,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The diagnostic code of a ledger diagnostic record: lease queue cancelled.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A lease request waiting in an instance's queue was withdrawn before its grant; the scheduler.denied record that ends its wait carries this code as its diagnostic code and its outcome.",
+      "common_causes": "Its client withdrew it (CancelQueuedLease), an install drain cancelled the waiting entries, or the Runtime withdrew a claim of its own: a startup package's claim on an emulator stop, a failed reconnect or self-check or a newer startup claim, a recovery ladder's claim when a blackout began, or a ladder's continuation not granted after its rung.",
+      "handling": "Nothing to repair: the queued work did not run, and the withdrawal ended its wait as intended. A client that withdrew its own request asks for the instance again when it still needs it."
     },
     "lease_queue_disconnected": {
       "category": "error",
@@ -1505,9 +1505,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The diagnostic code of a ledger diagnostic record: command rejected. On the record of a failed Lab observe, do, ensure or wait, failure_code names the code the Lab failed with (LAB-OBS-1, since 0.12.33).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The diagnostic code of a command.rejected record: a request the Runtime refused, or a Lab operation that failed. On the record of a failed Lab observe, do, ensure or wait, failure_code names the code the Lab failed with (LAB-OBS-1, since 0.12.33).",
+      "common_causes": "It classifies the record and is no reason of its own: a refused configuration change, stop of an instance's run, recovery ladder drill or agent wake test carries the refusal itself as the record's outcome. It is the outcome itself for a failed Lab operation, one the Lab reports (with the Lab's code as failure_code) or a do the Runtime ran for the Lab, and for a refused package debug request.",
+      "handling": "Read the record's outcome (actingctl events --event-type command.rejected --detail summary): a specific code is the reason, and on command_rejected its failure_code, when present, is; look it up with actingctl codes <code>. Without a failure_code the reason is in the request's answer: a Lab do's terminal record (an artifact of the request, with its failure's code and stage), or for a package debug only the receipt."
     },
     "policy_rejected": {
       "category": "error",
@@ -2067,9 +2067,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): contained task home recovery package incompatible.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A run whose required entry page was not on the screen named a recovery package of its own, and that package declares what a home recovery package may not run with; it is refused before it runs.",
+      "common_causes": "The recovery package given with the run (ac_run_pack's recovery_package, or the recovery package of actingctl task-run) declares a prerequisite package, a stability termination, post-admission OCR or fields, resource readings or adjustments, list readings, a select on_empty, stage end_pages, a keyed on_max_runs or on_guard_refused, or a designated operation in its scheduling_outcome.",
+      "handling": "Run without that recovery package, so that the run takes the return-home package the standard pack registry names for its game and server, or name a package without those declarations; changing the package is its author's. Nothing ran on the device after the entry check."
     },
     "contained_task_post_admission_ocr_failed": {
       "category": "error",
@@ -2107,9 +2107,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): contained task recognition failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A recognition evaluation of a contained task ended in an error that is not the vision provider's: a page evaluation of its frame, or the evaluation of a when, select, scan or expected identity target.",
+      "common_causes": "An evaluation returned an error rather than a match or no match: an OCR region that does not resolve on the frame, a text read that refuses to conclude, a target kind the pack cannot evaluate, or no vision provider for it. A failure of the provider itself is contained_task_vision_provider_failed instead.",
+      "handling": "Read the failing target and its cause in the run's task diagnostic records (the overlay of actingctl run evidence --run-id <run_id>, read with ac_material); the target's declaration is the pack author's to fix. A scheduled run's failure starts the default recovery ladder (trigger pack_logic) for the instance."
     },
     "current_page_unknown": {
       "category": "error",
@@ -2327,9 +2327,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): input backend operation failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An input action on an instance's open input backend session failed.",
+      "common_causes": "The input backend returned an error while it executed a tap, swipe, key or text: its command did not succeed or the device stopped answering, as when the emulator stopped, restarted or lost its adb link during the step. The failure keeps the backend's message and, when adb was recovered first, that recovery's report.",
+      "handling": "Read the backend's message, which the failure's runtime.failed record keeps as raw_text, and check the instance with actingctl selfcheck <alias>: it is the device's or the emulator's condition, not the pack's. In a scheduled run it never pauses the task by repetition, unless the failure poisoned the run."
     },
     "install_selection_unavailable": {
       "category": "error",
@@ -2913,8 +2913,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A required OCR field's text resolved, but its observation's confidence was missing or below the minimum_confidence its OCR target declares, so the field stayed unresolved and the fields task failed (Workflow R-11). The kernel emits it; the client reads it as a fields-failure terminal.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A required field of the package's fields_v1 declaration read a legal value, but the OCR observation reported no confidence, or one below the minimum_confidence its OCR target declares, so the value was dropped and the field stayed unresolved; the run then fails.",
+      "handling": "Read the field's raw_text and its reason low_confidence in the run's OCR fields report, and the frame it was read on: a right value read with a low confidence calls for a lower minimum_confidence on that target, a wrong or partial read for a better region; both are the pack author's. A scheduled run's failure starts the default recovery ladder (trigger pack_logic) for the instance."
     },
     "ocr_fields_declaration_invalid": {
       "category": "error",
@@ -8954,9 +8954,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Event or record sanitization refused a value: selection record too large.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A select step's decision record (task.selection_evaluated) is larger than its write bound, 64 KiB of compact JSON, and is refused whole before the step's input.",
+      "common_causes": "The record holds the step's whole projection, every candidate's verdict and the decision's reasons: many candidates, each with many features or policy terms, take it past 64 KiB.",
+      "handling": "Make what the step records smaller: fewer candidates in its layout, or fewer features or policy terms per candidate; that is the pack author's. The kernel refuses the record before any tap and the run fails; the Runtime host refuses one it meets unchecked as a fatal error."
     },
     "invalid_task_selection_record": {
       "category": "error",
@@ -15565,9 +15565,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): contained task page unknown. STILL-1: held_ms and limit_ms are present when a page wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when a page wait ended on a transition frame after the package's loading allowance was spent under execution.loading.mode on.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "No frame of a contained task's wait for a page of its package matched one of its pages. STILL-1: held_ms and limit_ms are present when a page wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when a page wait ended on a transition frame after the package's loading allowance was spent under execution.loading.mode on.",
+      "common_causes": "The wait ran out (at the run's start, before an input, on the fresh frame before it, or after an operation that names no destination page) without a frame of a declared page: the screen shows a page or a dialog the package does not declare, a declared page whose targets no longer match it, or a loading screen (loading_ms) or an unchanged one (held_ms) past its limit. Frames of shared interrupt pages are handled while it waits.",
+      "handling": "Look at the run's last frames and the overlay's target scores (actingctl run evidence --run-id <run_id>, or ac_run_evidence, then ac_material): a page the package lacks needs declaring and a declared page that no longer matches needs its targets fixed, both the pack author's; loading_ms or held_ms at its limit means the application stayed on that screen. A scheduled run's failure starts the default recovery ladder (trigger pack_logic) for the instance."
     },
     "contained_task_prerequisite_incompatible": {
       "category": "error",
