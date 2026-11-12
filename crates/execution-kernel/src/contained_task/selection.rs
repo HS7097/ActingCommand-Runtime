@@ -715,6 +715,62 @@ pub(super) fn sampling_budget_ms(
     Ok(Some(required))
 }
 
+/// Workflow #448 SBUD-1 (register §1.333): the one rule of a candidate projection's provider
+/// check, for its two users. A layout that has consensus, or a feature that reads an identity or
+/// an integer, is projected through its candidate sampling, which checks, once its frames are
+/// taken, that what is left of the step's deadline holds the layout's declared worst provider time
+/// plus waits ([`CandidateLayout::maximum_provider_and_wait_ms`]) less the waits between its
+/// frames, spent by then: that need is the answer. Any other layout is projected on the step's
+/// frame alone, unchecked: `None`. The run compares the need with what is left
+/// (`project_transaction`); admission with the step's limit ([`step_provider_need_ms`]).
+pub(super) fn candidate_provider_need_ms(
+    layout: &CandidateLayout,
+    evaluator: &RecognitionEvaluator,
+) -> Option<u64> {
+    let sampled = layout.has_consensus()
+        || layout
+            .features
+            .iter()
+            .any(|feature| feature.identity.is_some() || feature.integer.is_some());
+    sampled.then(|| {
+        layout
+            .maximum_provider_and_wait_ms(evaluator)
+            .saturating_sub(
+                layout.required_frames().saturating_sub(1) as u64
+                    * u64::from(layout.sample_interval_ms),
+            )
+    })
+}
+
+/// Workflow #448 SBUD-1 (register §1.333): what admission compares with a step's limit for its
+/// candidate projection, [`candidate_provider_need_ms`] of the layout the step projects in a run:
+/// a select step's, single-frame or over a scan, and a list reading's. `None` for any other step
+/// and for a layout the check does not apply to. Admission calls it once the select steps and
+/// the list readings are prepared, so the layout is the recognition pack's.
+pub(super) fn step_provider_need_ms(
+    operation: &TaskOperation,
+    evaluator: &RecognitionEvaluator,
+) -> Result<Option<u64>, ContainedTaskError> {
+    let layout_id = match (
+        operation.prepared_select.as_deref(),
+        operation.prepared_list.as_deref(),
+    ) {
+        (Some(select), _) => select.layout_id(),
+        (None, Some(list)) => list.layout_id(),
+        (None, None) => return Ok(None),
+    };
+    let layout = evaluator.candidate_layout(layout_id).ok_or_else(|| {
+        ContainedTaskError::with_detail(
+            SELECT_INVALID,
+            format!(
+                "operation={} layout={layout_id} is not a candidate layout of the recognition pack",
+                operation.id
+            ),
+        )
+    })?;
+    Ok(candidate_provider_need_ms(layout, evaluator))
+}
+
 /// The selection-policy crate's own reading: the byte limit, the typed decode, the canonical
 /// form (no floats, no unsafe integers, no duplicate keys) and the document validation.
 fn read_policy(bytes: &[u8]) -> Result<SelectionPolicy, String> {
@@ -1217,15 +1273,12 @@ impl PreparedContainedTask {
         (CandidateProjection, Vec<PackPoint>, Option<PageObservation>),
         ContainedTaskRunError<R::Error>,
     > {
-        let enhanced = layout.has_consensus()
-            || layout
-                .features
-                .iter()
-                .any(|feature| feature.identity.is_some() || feature.integer.is_some());
-        if !enhanced {
+        // Workflow #448 SBUD-1 (register §1.333): which layouts are sampled and checked, and the
+        // need the check below compares, are the rule admission compares with the step's limit.
+        let Some(provider_ms) = candidate_provider_need_ms(layout, &self.evaluator) else {
             let (projection, origins) = project_placed(&self.evaluator, &first.scene, &layout.id)?;
             return Ok((projection, origins, None));
-        }
+        };
         // Workflow #386 SR-1 (scheduling model §2.1): the deadline is compared on the
         // observation clock; past it the candidate sampling timed out. #385 P-k (performance
         // model v1.4.2 §5.2–§5.3): `deadline` is a budget instant of `timing`'s budget clock, and
@@ -1318,12 +1371,6 @@ impl PreparedContainedTask {
         let scenes = std::iter::once(&first.scene)
             .chain(frames.iter().map(|frame| &frame.scene))
             .collect::<Vec<_>>();
-        let provider_ms = layout
-            .maximum_provider_and_wait_ms(&self.evaluator)
-            .saturating_sub(
-                layout.required_frames().saturating_sub(1) as u64
-                    * u64::from(layout.sample_interval_ms),
-            );
         let now = super::budget_observation_now(runtime, pace);
         if Duration::from_millis(provider_ms) > deadline.saturating_duration_since(now) {
             return Err(insufficient(provider_ms, now).into());

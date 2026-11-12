@@ -139,6 +139,12 @@ mod gate_411_e1;
 #[path = "tests/gate_411_e4.rs"]
 mod gate_411_e4;
 
+// Workflow #448 SBUD-1 (register §1.333): `package check` refuses a select step whose declared
+// candidate provider need exceeds its step's limit, as admission does.
+#[cfg(test)]
+#[path = "tests/gate_448_sbud1.rs"]
+mod gate_448_sbud1;
+
 pub(super) fn is_offline_command(args: &[String]) -> bool {
     matches!(args, [group, command, ..] if group == "package" && matches!(command.as_str(), "dry-run" | "preflight"))
 }

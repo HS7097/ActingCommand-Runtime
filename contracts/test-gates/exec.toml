@@ -2902,3 +2902,15 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_428_diag_si::diag_si_t4_the_codes_only_projection_keeps_the_token",
 ]
 incident = ["#428 DIAG-SI"]
+
+# Workflow #448 SBUD-1 (0.12.57; register §1.333; brief rd-1113/brief-448-sbud-1.md; contracts/business-identity-consensus.md, the select step's budget): admission compares a candidate projection's provider need by the run's own rule (selection::candidate_provider_need_ms: a layout with consensus or with a feature that reads an identity or an integer, its declared provider time and waits less the waits between its frames) with the step's limit, and refuses a larger need with recognition_sample_budget_invalid, required_ms, limit_ms and pack_operation_id: a single-frame select over four integer slots without consensus (8000 ms) is refused with no step timeout (5000 ms) and with 7999 ms, and admitted with 8000 ms, where the run's check at the start of a fresh step of 8000 ms lets the projection go on; a select over a scan of a card list (32000 ms) is refused within max_ms 31999 and admitted within 32000, whatever the step timeout; a list reading of that list likewise, and in a pack with target consensus its page recognition (2000 ms) is refused within 1999 and fits within 2000; the need admission refuses with is the required_ms of the run's candidate_sample_budget_insufficient (remaining_ms 5000) and the function's answer; actinglab package check refuses the integer package package_invalid with details.code recognition_sample_budget_invalid and the need, the limit and the operation
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_448_sbud1::admission_refuses_integer_layout_over_step_deadline",
+    "actingcommand-execution-kernel::lib::contained_task::gate_448_sbud1::admission_refuses_scan_select_over_max_ms",
+    "actingcommand-execution-kernel::lib::contained_task::gate_448_sbud1::admission_refuses_list_reading_over_limit",
+    "actingcommand-execution-kernel::lib::contained_task::gate_448_sbud1::admission_and_run_time_share_one_need",
+    "actingcommand-actinglab::bin:actinglab::package_cli::gate_448_sbud1::package_check_refuses_integer_layout_over_step_deadline",
+]
+incident = ["#448 SBUD-1"]

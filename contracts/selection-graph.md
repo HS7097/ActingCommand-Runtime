@@ -620,6 +620,18 @@ entry names a template target of the pack (`template=not_template`) that no othe
 rect for every entry (`template=regions_differ`). Each refusal is `contained_task_select_invalid`
 with the detail token shown.
 
+Workflow #448 SBUD-1 (since 0.12.57; [v012-register.md](v012-register.md) §1.333): admission also
+compares the candidate projection's provider need of every select step with the step's limit,
+the smaller of its step and task timeouts, or for a select over a scan its `max_ms` capped by the
+task's `timeout_ms`. The need is the run's own rule
+([business-identity-consensus.md](business-identity-consensus.md), the select step's budget): a
+layout with consensus, or with a feature that reads an identity or an integer, needs its declared
+provider timeouts and waits less the waits between its frames; any other layout is projected on
+the step's frame alone and is not compared. A larger need is refused with
+`recognition_sample_budget_invalid` (`required_ms`, `limit_ms`, `pack_operation_id`), a suspend
+code by default ([policy-suspension.md](policy-suspension.md)); a need equal to the limit is
+admitted.
+
 ### Derived documents
 
 - A select step becomes no navigation edge and no page operation, so no route passes one.
