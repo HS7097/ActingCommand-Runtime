@@ -4,8 +4,8 @@
 # first (`apps/mcp-entry`, generation 1, unchanged), copied from it and changed only where
 # generation 2 differs. It pipes JSON-RPC to one current `actinglab-mcp.exe` child and switches
 # it, between calls, to the install's current build (contracts/install-cli.md, "The MCP entry").
-# A client runs it from `<root>\mcp-entry\g2\` only. In no release or Tools archive yet: packaging
-# is slice LAB-5G6.
+# A client runs it from `<root>\mcp-entry\g2\` only. Shipped in the Tools half since slice LAB-5G6
+# (0.12.57); placing it in `g2\` is a manual step.
 
 [package]
 name = "actingcommand-mcp-entry-g2"

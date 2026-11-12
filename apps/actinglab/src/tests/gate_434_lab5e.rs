@@ -5,8 +5,8 @@
 // operation table says in one sentence what it does.
 // - `lab5e_offered_rows_have_help`: every row actinglab offers (`words::offered`; the rescue
 //   module's on Windows, where it runs) and every planned row of slice LAB-5, which LAB-5's MCP
-//   server offers itself (`record draft`, `mcp config`, `mcp entries`), has a `help` that is not
-//   blank. The form of every `help` (ASCII, 1 to 160 bytes on one line, no MCP tool name, no two
+//   server offers itself (`record draft`, `mcp config`, `mcp entries`, `mcp plan`), has a `help`
+//   that is not blank. The form of every `help` (ASCII, 1 to 160 bytes on one line, no MCP tool name, no two
 //   rows alike) is `lab_ops_table_complete`'s, in `crates/lab-ops`.
 // Reads only the table this build embeds: no state root, no Runtime, no device, no clock.
 

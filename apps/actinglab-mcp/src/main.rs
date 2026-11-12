@@ -17,8 +17,9 @@
 //!   answers the line `actinglab --json` prints, within today's answer budget, on one kept
 //!   Runtime connection of `lab_ops::front`'s `Front::Mcp` (a write on a connection of its own,
 //!   after today's provenance); every other call is refused with `mcp_operation_unsupported`
-//!   ([`codes`]) until a later slice serves it. It is in no release and no Tools archive until it
-//!   is packaged.
+//!   ([`codes`]) until a later slice serves it. It ships in the Tools archive since LAB-5G6
+//!   (0.12.57); nothing starts it until a client is registered with the MCP entry's second
+//!   generation.
 //!
 //! The command line: `--list <module>[,<module>...]` names the modules whose tools `tools/list`
 //! lists (the ids of the table's module rows of role `operations`); without it every installed

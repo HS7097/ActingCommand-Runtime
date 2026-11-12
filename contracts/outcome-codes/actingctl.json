@@ -3503,6 +3503,14 @@
       "status": "active",
       "since": "0.12.48",
       "description": "The operation of the Lab's rescue module's ledger verify: actingd ledger-maintenance verify of the root's configuration (Workflow #434 LAB-3)."
+    },
+    "install_mcp_config": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.57",
+      "description": "The operation of the Lab's rescue module's mcp config: the registration snippet of the MCP entry's second generation for one client, printed only (Workflow #434 LAB-5G5b; contracts/install-cli.md, The MCP entry)."
     }
   }
 }

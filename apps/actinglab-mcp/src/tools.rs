@@ -53,7 +53,8 @@ pub(crate) const INSTRUCTIONS: &str = "ActingCommand Lab over MCP (actinglab-mcp
 /// (`apps/actinglab/src/cli_module/words.rs`), which this server's test holds equal.
 pub(crate) const ACTINGLAB_SLICES: [&str; 5] = ["LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8"];
 /// The slice whose planned rows this server offers itself (§9.2): `record draft`, `mcp config`,
-/// `mcp entries`; later slices serve them (Workflow #434 LAB-5G2b: refused here, [`serving`]).
+/// `mcp entries` and, since LAB-5G5b, `mcp plan`; later slices serve them in this server
+/// (Workflow #434 LAB-5G2b: refused here, [`serving`]).
 pub(crate) const OWN_SLICE: &str = "LAB-5";
 /// This front end: the id of its `modules` row of role `front_end`, which a parameter's
 /// `required_in` names where MCP requires the parameter although the row does not.

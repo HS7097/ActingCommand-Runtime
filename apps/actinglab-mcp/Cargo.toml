@@ -5,8 +5,8 @@
 # LAB-5G2a is its shell: the protocol and the loop copied from `actingctl mcp-serve` and the tool
 # list generated from the table. LAB-5G2b ("Slice LAB-5G2b") serves in its own process the calls of
 # the rows `lab_ops::core_ops` serves; every other call is refused with `mcp_operation_unsupported`
-# until a later slice serves it. It is in no release and no Tools archive until slice G6 packages
-# it.
+# until a later slice serves it. It ships in the Tools archive since slice LAB-5G6 (0.12.57);
+# nothing starts it until a client is registered with the MCP entry's second generation.
 
 [package]
 name = "actingcommand-actinglab-mcp"

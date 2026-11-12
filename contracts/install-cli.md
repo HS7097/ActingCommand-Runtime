@@ -297,15 +297,18 @@ stopped, and until INST-3 it leaves the configuration alone.
 - **Running state.** An `actingcommand-actingd.exe` under the root (`runtime_running`) or a held
   owner lock (`owner_lock_held`) refuses unless `--preview`; a running state that cannot be read
   (the process probe, the state root's owner journal) refuses `processes_unreadable`. Images under the root that would be
-  replaced while running: `actingctl.exe` is renamed aside and keeps running (listed as
-  `running_renamed`); `adb.exe` is never moved and any other image waits
+  replaced while running: `actingctl.exe` and, since 0.12.57 (Workflow #434 LAB-5G6), the Lab's
+  MCP server `actinglab-mcp.exe`, in `tools\` or `runtime\`, are renamed aside and keep running
+  (listed as `running_renamed`); `adb.exe` is never moved and any other image waits
   (`running_image_blocks`, `path`, `pid`). A `.part` of another operation under
   `runtime\` or `tools\` refuses `foreign_part` (`path`).
 - **Notice block** for the person's notice before the change: what changes, whether MCP servers
   must reconnect, and whether the rollback window will be bounded (a one-way ledger edge).
-  `mcp_clients_reconnect` counts only a renamed `mcp-serve` image whose parent process is not an
-  MCP entry running under the root (`actingcommand-mcp-entry.exe`): an entry switches its own
-  child to the live build ("The MCP entry"; #411 P49, v0.12.25).
+  `mcp_clients_reconnect` counts only a renamed image that serves MCP (an `mcp-serve` command
+  line, or since 0.12.57 the image `actinglab-mcp.exe`, "Running images") whose parent process
+  is not an MCP entry running under the root (`actingcommand-mcp-entry.exe`, and since 0.12.57
+  `actingcommand-mcp-entry-g2.exe`): an entry switches its own child to the live build ("The MCP
+  entry"; #411 P49, v0.12.25).
 
 **Apply.** Steps in order, each journalled:
 
@@ -600,9 +603,10 @@ does not read the journals of kind `stop` or `start` or with `rollback` (review 
   at once (done, `installation_changed: false`, `pid`, `log`; `next` names `install status`).
   A stale `--plan` or a refusing guard still shows only in that log.
 - **MCP servers on old images.** `install status` lists `mcp_servers_on_old_images: [{pid,
-  path, mcp_serve}]`, the running `mcp-serve` processes under the root whose image an update
-  renamed aside (`<file>.old-<ms>`); their clients reconnect, except an MCP entry's child, which
-  its entry switches.
+  path, mcp_serve}]`, the running processes under the root that serve MCP (an `mcp-serve`
+  command line, or since 0.12.57 the image `actinglab-mcp.exe`, "Running images") whose image an
+  update renamed aside (`<file>.old-<ms>`); their clients reconnect, except an MCP entry's child,
+  which its entry switches.
 
 ### The post-start checks (INST-2)
 
@@ -967,7 +971,7 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
 
 | Command | Runtime | owner.lock | writer.lock | Other |
 |---|---|---|---|---|
-| `update` / `rollback apply` without `--stop` | stopped: no actingd under the root | unlocked | taken | no unfinished operation; no `.part` of another operation; no running image that would change but `actingctl.exe`; a running `adb.exe` never changes |
+| `update` / `rollback apply` without `--stop` | stopped: no actingd under the root | unlocked | taken | no unfinished operation; no `.part` of another operation; no running image that would change but `actingctl.exe` and `actinglab-mcp.exe`; a running `adb.exe` never changes |
 | with `--stop` (INST-2) | running (stop is step 3) | — | taken before the hold | as above after the stop |
 | `config commit apply` (INST-3) | stopped, or `--while-running` | — | taken | candidate base = live |
 | `pack place` (INST-4) | any (cold when stopped; `--hot` when running) | — | taken | hot: its guards |
@@ -1005,7 +1009,19 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
 `adb.exe` is never moved and `adb kill-server` is never used; any other running image under the
 root that would change refuses (`running_image_blocks`); unchanged files are never
 touched; MCP servers left on renamed images are listed so the person reconnects them (an MCP
-entry switches its own child; #411 P49). The Lab's rescue module (LAB-3 fix 1): the image of the
+entry switches its own child; #411 P49). The Lab's MCP server (Workflow #434 LAB-5G6, 0.12.57;
+the coordinator's ruling 5 on board #434): an `actinglab-mcp.exe` image, in `tools\` or
+`runtime\`, is renamed aside as an `actingctl.exe` image is, by the same rule (the file name), and
+listed with them (`running.renamed` in the plan, `running_renamed` and the caveat
+`mcp_clients_on_previous_build` after apply). It serves MCP by its image name, whatever its
+command line: the process probe's one predicate marks `mcp_serve` for an `mcp-serve` command line
+and for an image named `actinglab-mcp.exe`, also once renamed aside (`actinglab-mcp.exe.old-<ms>`),
+so `install status` lists it among `mcp_servers_on_old_images` and the notice's
+`mcp_clients_reconnect` counts it as an `actingctl.exe mcp-serve`; and the second MCP entry,
+`actingcommand-mcp-entry-g2.exe`, is an entry as the first is, so a server it started asks no
+client to reconnect (the coordinator's ruling of 2026-11-12). The rows keep their members (`pid`,
+`path`, `mcp_serve`): `path` names the program. The Lab's rescue module (LAB-3 fix 1): the image
+of the
 process that plans, matched by its process id (`<root>\tools\actinglab.exe` running the module),
 is renamed aside the same way and listed as `running.renamed_own`; another running
 `actinglab.exe` still refuses. `actingctl install`'s planning is unchanged: its own image is
@@ -1302,7 +1318,7 @@ Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry inst
     {commit, manifest_sha256}`, `child[0]` (the server program to start; the rest of `child` is
     not read, and the entry's own words follow it), `tunables` (the five members above; a
     refusal's too) and `outcome` (kept in the status file's `last_plan`); `reason` is not read.
-    The rescue row `mcp plan` is slice LAB-5G5b's, built to this.
+    The rescue row `mcp plan` answers it (LAB-5G5b, the last bullet of this section).
   - Its own refusals are `mcp_entry_g2_outcome_unknown` (inspect with `ac_run_show` or
     `ac_status`), `mcp_entry_g2_child_unavailable` and `mcp_entry_g2_usage_invalid`: the meanings
     of `g1`'s three codes, owned by the second program.
@@ -1313,6 +1329,53 @@ Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry inst
     `g2\` is a manual step until an installer step exists. `actingctl mcp-serve` and
     `actingctl mcp-entry plan --entry-protocol 1` stay until the slice that removes actingctl,
     which comes after the owner's registrations have moved to `g2\`.
+- **The rescue module's rows** (Workflow #434 LAB-5G5b, 0.12.57; register §1.287, "Slice
+  LAB-5G5b"). Three rows of the operation table, read only, which `actinglab <row>` and `actinglab
+  serve --stdio` serve on the root of the `actinglab.exe` that runs them (no `--root`, "The Lab's
+  rescue module"). The first generation's `actingctl mcp-entry plan|list` and `mcp-config` answer
+  as before.
+  - **`mcp plan --entry-protocol 2 [--current-build <commit>]`** is the second generation's plan
+    (operation `install_mcp_entry_plan`), and answers exactly what that entry reads: `{switch,
+    build {commit, manifest_sha256}, child [server], tunables {poll_ms, settle_ms,
+    verify_timeout_ms, drain_max_ms, refused_retry_max_ms}, entry_protocol 2, outcome}`, no
+    `reason` and no other member. `switch` is true when `--current-build` names another build
+    than the installed one (case-insensitive), false when it names the installed one or is not
+    given. `child` has one element and takes no words: the server program `actinglab-mcp.exe` of
+    the installed build, `<root>\runtime\actinglab-mcp.exe` when the Runtime member's manifest
+    lists it, else `<root>\tools\actinglab-mcp.exe` when the Tools member's does (where the entry
+    itself looks, in its order; a listed file is checked against its manifest with the rest of
+    the build). Its rules and refusals are the first generation's plan's: the same order of
+    checks, `layout_ab_unsupported`, `not_single_location`, `config_unreadable`,
+    `install_section_invalid`, then with `tunables` `operation_unfinished`, `writer_lock_failed`,
+    `live_build_invalid`, `live_build_modified`. A build whose manifests list no
+    `actinglab-mcp.exe` (every build before the packaging slice) refuses
+    `install_command_refused` with `install_refusal` `mcp_server_not_in_build` (`commit_sha` the
+    build, `path` the last place looked), with `tunables`: never a path that does not exist,
+    never `actingctl.exe`. Another `--entry-protocol` is refused `actingctl_usage_invalid`
+    (`--entry-protocol`, `not_recognised`), as `actingctl mcp-entry plan` refuses one other than
+    its own 1.
+  - **The sample.** `crates/lab-rescue/tests/fixtures/mcp-plan-entry-protocol-2.json` is one
+    answer of `mcp plan`, for a made-up root `C:\ActingCommand` whose build carries the server in
+    its Tools member and a current build of another commit. The row's test produces it from such
+    a root and compares; the second generation's test reads the same file with the entry's own
+    reader and accepts it. The file is the contract between the two programs: a change to what
+    the row answers or to what the entry reads changes it, and both tests.
+  - **`mcp entries [--all]`** (operation `install_mcp_entry_list`) lists the entries' status files
+    as `actingctl mcp-entry list` lists them, both generations side by side (the same file, the
+    same members), each row with `generation` when its file states one (`entry_generation`).
+  - **`mcp config --client claude|codex|antigravity|dsh [--list <module>[,<module>...]]`**
+    (operation `install_mcp_config`) prints the second generation's registration snippet, in
+    the shapes `actingctl mcp-config --entry` prints for the first:
+    `<root>\mcp-entry\g2\actingcommand-mcp-entry-g2.exe --root <root> --client <client> --`, no
+    `--tier` (the server has no tiers), and `--list <modules>` after `--` when `list` is given.
+    `list` takes the
+    server's `--list` words, the ids of the table's module rows of role `operations`: another
+    word, an empty one or no word is refused `not_recognised`, a word twice `repeated`, each as
+    `actingctl_usage_invalid` naming `--list`; an unknown client `--client` `not_recognised`. The
+    answer is `{client, entry, snippet}` (the snippet's text as the client takes it); it writes no
+    client file and reads none. While the program is not placed in `g2\`, the answer still gives
+    the snippet and carries the warning `install_caveat_noted` (`install_caveat`
+    `mcp_entry_not_placed`, the program as `path`), a `note` of its outcome and its `warnings`.
 
 ## The A/B layout (Workflow #429 R-15b, frozen; built by R-15c to R-15e)
 
@@ -2385,6 +2448,12 @@ the fragment registers, names the command.
 - **Workflow #421 INST-5** (since 0.12.52; "Instances, the first slice"): `install_command_refused`
   takes the existing keys `server` and `instance_index` (`instance_invalid`); no code, location,
   key or word is new.
+- **Workflow #434 LAB-5G5b** (since 0.12.57; "The MCP entry", "The rescue module's rows"): the
+  location `install_mcp_config` (the rescue module's `mcp config`); `install_refusal`
+  `mcp_server_not_in_build` (`commit_sha`, `path`), which only the rescue module's `mcp plan`
+  answers; `install_caveat` `mcp_entry_not_placed` (`path`). `mcp plan` and `mcp entries` answer
+  with the existing locations `install_mcp_entry_plan` and `install_mcp_entry_list`; no code or key
+  is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

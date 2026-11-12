@@ -33,7 +33,7 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 | LAB-2 | Runtime | the CLI module: short words, output for people, `--json`, `actinglab serve --stdio`; actinglab's debugging and authoring commands on the table; its retired command words deleted |
 | LAB-3 | Runtime | the rescue and installation module (section 7): the journal's initiator, no confirmation parameters (section 5), guards that report (section 6) |
 | LAB-4 | Runtime | `crates/watchdog`; `actingwatch.exe` does its own tick |
-| LAB-5 | Runtime | `actinglab-mcp.exe`: tools from the table, no tiers; the MCP entry `g2`, a second program (section 8.1) |
+| LAB-5 | Runtime | `actinglab-mcp.exe`: tools from the table, no tiers; the MCP entry `g2`, a second program (section 8.1); both in the Tools archive inside `tools-layout` 3, and a running server never blocks a deploy (LAB-5G6, section 8.1) |
 | LAB-6 | Runtime | the door of section 2 and the UI list of section 3; the initiator in receipts, G14 and the `host.config_overrides` rows (section 4.3); `runtime-client` 7, `ledger` 8, `actingd-config` 28 |
 | UI-L1 | UI | the console on `runtime-client` 7: Lab children instead of actingctl, refusals shown, no second press (the stop note stays beside the button, section 6); the settings page shows a row's initiator, else its channel (section 4.3); the READMEs' install line names the rescue module's command |
 | LAB-7 | Runtime | `apps/actingctl` deleted; `install-cli` 2 |
@@ -333,6 +333,16 @@ Alice's answer 4. From LAB-3, in the rescue module:
   root"); until LAB-6 the module's requests to a running Runtime go on the CLI channel, as
   `actingctl install`'s do, since the Runtime refuses a pause, a resume and a shutdown from a Lab
   envelope until LAB-6 deletes those origin gates (§2.4).
+- **The MCP rows** (Workflow #434 LAB-5G5b, 0.12.57; register §1.287, "Slice LAB-5G5b";
+  [install-cli.md](install-cli.md), "The MCP entry", "The rescue module's rows"). The module also
+  serves three read-only rows of slice LAB-5, through the table as its other rows, on the CLI and
+  in `serve --stdio`: `mcp plan --entry-protocol 2 [--current-build <commit>]`, the plan the MCP
+  entry's second generation asks (its child the server `actinglab-mcp.exe` of the installed
+  build; a build without it refuses `mcp_server_not_in_build`; one checked-in sample of its answer
+  is the contract between the row and that entry); `mcp entries [--all]`, the entries' status
+  files of both generations side by side, each with its generation; and `mcp config --client <c>
+  [--list <modules>]`, the second generation's registration snippet, which writes no client file.
+  The first generation's `actingctl mcp-entry plan|list` and `mcp-config` stay as they are.
 - **"Only the operation's own hold"** (§5), as LAB-3 fix 1 and 2 build it
   ([install-cli.md](install-cli.md), "The Lab's rescue module"): `release-hold <reason>` hands back
   only a hold that a journal of the module in this root recorded in its pause step, only the
@@ -380,9 +390,21 @@ under `g2\` only.
 
 The MCP module's program exists since LAB-5G2a as the server's shell (section 9.3, "The server's
 shell"): it lists its tools and, since LAB-5G2b, serves in its own process the calls of the rows
-the CLI module serves (section 9.3, "Calls served in the server's process"); it is in no release
-and no Tools archive until slice G6 packages it, so no
-installation has it; the MCP entry `g2` is slice G5a's.
+the CLI module serves (section 9.3, "Calls served in the server's process"); the MCP entry `g2` is
+slice G5a's.
+
+**Packaging** (Workflow #434 LAB-5G6, 0.12.57; register §1.287, "Slice LAB-5G6"; the
+coordinator's rulings 5 and 21 on board #434, not the owner's words). Every build's Tools archive
+carries `actinglab-mcp.exe` and `actingcommand-mcp-entry-g2.exe`, each an entry of the Tools
+`BUILD-MANIFEST.json` (`size_bytes`, `sha256`) written by the step that writes the others, so a
+deploy puts both in `<root>\tools\`. They are added inside `tools-layout` 3
+(`platform-tools-v3`), as the first entry was in v0.12.18: no reader of the archive stops working
+([component-interfaces.md](component-interfaces.md), "Bump rule"). Nothing starts either program:
+no registration names them until the owner registers a client with the second entry (G7), and
+placing that entry in `<root>\mcp-entry\g2\` stays the manual step above; no installer code writes
+under `<root>\mcp-entry\`. A running `actinglab-mcp.exe` never blocks a deploy that replaces its
+file: it is renamed aside as `actingctl.exe` is ([install-cli.md](install-cli.md), "Running
+images"); a running `actinglab.exe` other than the process that plans still blocks.
 
 ### 8.2 `actinglab serve --stdio`
 
@@ -746,10 +768,11 @@ sentence fails that test.
       `standard-pack check`, and `run start`, `run stop`, `reset`, `drill`) is served by it in the
       server's process. Every other call answers `mcp_operation_unsupported` as below: the three
       `app` rows and `standard-pack check`, the debugging and authoring rows actinglab's own
-      commands serve (the `serve` children, G4b), `record draft`, the rescue module's rows of
-      slice LAB-5 (`mcp config`, `mcp entries` and the entry's plan, G5b), and the other rescue
-      rows, which the slice's second part serves in the server's process (the rescue module, the
-      initiator `Lab-MCP`, its requests on the module's own channel until LAB-6, section 7).
+      commands serve (the `serve` children, G4b), `record draft`, and every rescue row, which the
+      slice's second part serves in the server's process (the rescue module, the initiator
+      `Lab-MCP`, its requests on the module's own channel until LAB-6, section 7): the rescue
+      module's MCP rows `mcp config`, `mcp entries` and `mcp plan`, which actinglab serves since
+      LAB-5G5b, with them.
     - *The answer* is the line `actinglab --json` prints for the same row and parameters (its
       members, `outcome`, `warnings`): the text content and, from 2025-06-18 on,
       `structuredContent`; `isError` is true exactly when the command line would exit non-zero
@@ -796,11 +819,12 @@ sentence fails that test.
   - **Not yet:** a call of a row the server does not serve answers `mcp_operation_unsupported`
     (`mcp_tool`) as the CLI line of a refusal, `{outcome}`, its arguments unread, nothing sent,
     run or written; a name that is no offered row's tool answers as today's server answers an
-    unknown tool (-32602 `mcp_params_invalid`). The rescue rows (LAB-5G2b's second part), jobs,
-    handles and taking cursors back (G3), the `serve --stdio --front mcp` children (G4b), the
-    rescue module's MCP rows (G5b), packaging into the Tools archive and the installer (G6) and
-    the manual (G7) come with their slices; until G6 the program is in no release and no Tools
-    archive, and nothing a person installs changes.
+    unknown tool (-32602 `mcp_params_invalid`). The rescue rows (LAB-5G2b's second part; the
+    server lists the tools of the rescue module's MCP rows, `ac_mcp_config`, `ac_mcp_entries` and
+    `ac_mcp_plan`, and serves their calls with the other rescue rows'), jobs, handles and taking
+    cursors back (G3), the `serve --stdio --front mcp` children (G4b) and the manual (G7) come
+    with their slices. The program is in the Tools archive since LAB-5G6 (0.12.57; section 8.1,
+    "Packaging"); nothing starts it until a client is registered with the second entry (G7).
 - **The answer budget is the caller's** (Workflow #434 LAB-5D, 0.12.52; register §1.287, "Slice
   LAB-5D"). The reads whose answer can outgrow a caller's budget (`status`, `diagnose`, `events`,
   `schedule`, `runs`, `run evidence`, `codes`; `facts`, `packs`, `remedy`, `summary`) take, in
@@ -909,9 +933,11 @@ when a member's meaning changes.
 
 Planned, not in force: [component-interfaces.md](component-interfaces.md), "Planned: Workflow
 #434". LAB-6 raises `runtime-client` to 7, `ledger` to 8 and `actingd-config` to 28; LAB-7
-`install-cli` to 2. `install-control` retires, `tools-layout` becomes 5, `install-selection` does
-not move, and the MCP entry's second generation, a program of its own (section 8.1), speaks
-`entry_protocol` 2 while the first keeps 1 (LAB-5). LAB-0 changes no declaration.
+`install-cli` to 2. `install-control` retires, `tools-layout` becomes 5 as that section plans it,
+`install-selection` does not move, and the MCP entry's second generation, a program of its own
+(section 8.1), speaks `entry_protocol` 2 while the first keeps 1 (LAB-5). `actinglab-mcp.exe` and
+the second entry raise no layout: LAB-5G6 adds them inside `tools-layout` 3 (section 8.1). LAB-0
+changes no declaration.
 
 ## 11 What this replaces, and from when
 
