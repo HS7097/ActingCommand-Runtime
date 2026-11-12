@@ -1,0 +1,51 @@
+{
+  "owner": "mcp-entry-g2",
+  "codes": {
+    "mcp_entry_g2_outcome_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "mcp-entry-g2",
+      "layer": "process",
+      "uncertain": true,
+      "values": {
+        "mcp_tool": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.57",
+      "description": "The second-generation MCP entry's child ended while this request was in flight, so whether it ran is unknown; the entry never sends it again, and the next request goes to a fresh child.",
+      "common_causes": "The actinglab-mcp child exited or was ended while it was answering.",
+      "handling": "Inspect before anything is sent again: ac_run_show for a run's request_id, otherwise ac_status."
+    },
+    "mcp_entry_g2_child_unavailable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "mcp-entry-g2",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "mcp_tool": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.57",
+      "description": "The second-generation MCP entry could not start or reach an actinglab-mcp child for this request, which was not sent.",
+      "common_causes": "Neither <root>\\runtime\\actinglab-mcp.exe nor <root>\\tools\\actinglab-mcp.exe exists or starts, or the child refused the replayed handshake.",
+      "handling": "Read the entry's status file (mcp-entry list) and stderr; the next request tries a fresh child."
+    },
+    "mcp_entry_g2_usage_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "mcp-entry-g2",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.57",
+      "description": "The second-generation MCP entry was started without --root, with an unknown flag or client, or without the -- that ends its own words.",
+      "common_causes": "A client configuration that does not follow the second generation's registration.",
+      "handling": "Register the entry as contracts/install-cli.md, \"The MCP entry\", gives it: --root <root>, optionally --client <client>, then -- and the server's own words."
+    }
+  }
+}

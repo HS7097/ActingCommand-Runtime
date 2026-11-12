@@ -15,16 +15,16 @@ every code of its fragment, retired ones included, sorted by code, with its cate
 `since`, status (a retired code with the code that replaces it, where it names one), review, text
 (`written` when both texts are written, else `TBD`) and the first sentence of its description, cut
 at a space within 160 characters and then ending in `…`. The index holds codes only: the catalog's
-1750 locations are not in it, and 10 of the header's 39 owners have no fragment file and so no file
+1750 locations are not in it, and 10 of the header's 40 owners have no fragment file and so no file
 here.
 
 ## Codes by status
 
 | Status | Codes |
 |---|---:|
-| active | 3900 |
+| active | 3903 |
 | retired | 18 |
-| all | 3918 |
+| all | 3921 |
 
 ## Active codes by category
 
@@ -33,19 +33,19 @@ here.
 | success | 126 |
 | info | 208 |
 | warning | 147 |
-| error | 3405 |
+| error | 3408 |
 | fatal | 14 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 706 |
+| `common_causes` and `handling` both written | 709 |
 | one of the two written, the other `TBD` or empty | 3 |
 | neither written (`TBD` or empty) | 3191 |
 | `settled` | 171 |
-| `pending` | 3729 |
-| all active codes | 3900 |
+| `pending` | 3732 |
+| all active codes | 3903 |
 
 ## By owner
 
@@ -66,6 +66,7 @@ here.
 | [ledger](ledger.md) | 293 | 292 | 26 | 0 |
 | [ledger-forensics](ledger-forensics.md) | 52 | 52 | 0 | 0 |
 | [mcp-entry](mcp-entry.md) | 3 | 3 | 3 | 0 |
+| [mcp-entry-g2](mcp-entry-g2.md) | 3 | 3 | 3 | 0 |
 | [pack-containment](pack-containment.md) | 40 | 40 | 0 | 0 |
 | [page-detector](page-detector.md) | 2 | 2 | 2 | 0 |
 | [policy](policy.md) | 117 | 115 | 54 | 0 |
@@ -80,4 +81,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3918 | 3900 | 706 | 171 |
+| all | 3921 | 3903 | 709 | 171 |
