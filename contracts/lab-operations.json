@@ -3512,7 +3512,8 @@
       "name": "mcp config",
       "module": "rescue",
       "params": [
-        {"name": "client", "form": "option", "type": "string", "required": true, "note": "a client of install-cli.md, The MCP entry"}
+        {"name": "client", "form": "option", "type": "string", "required": true, "note": "a client of install-cli.md, The MCP entry"},
+        {"name": "list", "form": "option", "type": "list<string>", "required": false, "note": "module ids, as the server's --list takes them (the ids of the module rows of role operations); given, the snippet carries --list <modules> after --, and a word the server would refuse is refused"}
       ],
       "help": "Prints the MCP registration snippet for one client without writing any client file.",
       "output": "the registration snippet; no client file written; no tier",
@@ -3541,6 +3542,26 @@
       "source": ["actingctl mcp-entry list"],
       "slice": "LAB-5",
       "status": "planned"
+    },
+    {
+      "name": "mcp plan",
+      "module": "rescue",
+      "params": [
+        {"name": "entry_protocol", "form": "option", "type": "unsigned", "required": true, "note": "the entry's protocol: 2, the second generation's; another is refused (protocol 1 is actingctl mcp-entry plan's)"},
+        {"name": "current_build", "form": "option", "type": "string", "required": false, "note": "the commit of the entry's current child; switch is true when the installed build is another"}
+      ],
+      "help": "Tells the second generation of the MCP entry which build is installed and which server program of it to start.",
+      "output": "{switch, build {commit, manifest_sha256}, child [the server program], tunables, entry_protocol 2, outcome}: what the second generation of the MCP entry reads (install-cli.md, The MCP entry)",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": [],
+      "new": "#434 LAB-5G5b (the MCP entry's second generation, entry_protocol 2)",
+      "slice": "LAB-5",
+      "status": "planned",
+      "notes": "LAB-5G5b: the plan actingcommand-mcp-entry-g2 asks as actinglab.exe --json mcp plan --entry-protocol 2; the rules of actingctl mcp-entry plan hold; a build whose manifests list no actinglab-mcp.exe refuses mcp_server_not_in_build; crates/lab-rescue/tests/fixtures/mcp-plan-entry-protocol-2.json is the sample both programs test against"
     }
   ]
 }

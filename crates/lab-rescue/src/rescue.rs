@@ -47,6 +47,13 @@
 //!   a pause, a resume and a shutdown from a Lab envelope until LAB-6 deletes those origin gates
 //!   (§2.4), and `BindChannel` takes no initiator before `runtime-client` 7. The journal records
 //!   the initiator now; the binding carries it from LAB-6.
+//! - **The MCP rows** (Workflow #434 LAB-5G5b; register §1.287, "Slice LAB-5G5b";
+//!   `contracts/install-cli.md`, "The MCP entry"), read only, on the module's own root: `mcp plan`
+//!   (the plan the entry's second generation asks, `entry_protocol` 2,
+//!   `crate::install::mcp_entry::plan_g2`), `mcp entries` (the entries' status files of both
+//!   generations, `crate::install::mcp_entry::entries`) and `mcp config` (the second
+//!   generation's registration snippet, `crate::install::mcp_config`). The first generation's
+//!   `actingctl mcp-entry plan|list` and `mcp-config` answer as before.
 
 use crate::agent_channel::{self, Answer as Answered};
 use crate::cli_line::{self, Exit};
@@ -83,8 +90,8 @@ const USAGE: &str = "usage: actinglab [--json] <rescue operation> [<positionals>
      rescue; no --root, no --state-root: the root is the one actinglab runs from";
 
 /// The rows of module `rescue` this slice serves, by the table's name (Workflow #421 INST-5: and
-/// `instance add`).
-pub const SERVED: [&str; 30] = [
+/// `instance add`; Workflow #434 LAB-5G5b: and the three MCP rows).
+pub const SERVED: [&str; 33] = [
     "up",
     "restart",
     "down",
@@ -115,6 +122,9 @@ pub const SERVED: [&str; 30] = [
     "agent claude-hook",
     "agent claude-register",
     "agent notice",
+    "mcp config",
+    "mcp entries",
+    "mcp plan",
 ];
 
 /// Whether this slice serves the rescue row `name`.
@@ -240,6 +250,9 @@ pub(crate) fn answer_with(
         "ledger verify" => ledger_verify(context),
         "watchdog install" => watchdog(context, crate::watchdog::Asked::Install),
         "watchdog uninstall" => watchdog(context, crate::watchdog::Asked::Uninstall),
+        "mcp plan" => mcp_plan(context, params),
+        "mcp entries" => mcp_entries(context, params),
+        "mcp config" => mcp_config(context, params),
         _ => cli_line::failure(
             &cli_line::usage_invalid(Some(name), ArgumentProblem::Unknown),
             Some(USAGE),
@@ -1935,6 +1948,85 @@ fn watchdog(context: &Context<'_>, asked: crate::watchdog::Asked) -> Exit {
         );
     }
     cli_line::finish(Some(members), &answered.outcome, false, None)
+}
+
+/// Workflow #434 LAB-5G5b: `mcp plan`'s parameter that names the entry's protocol.
+const ENTRY_PROTOCOL: &str = "entry_protocol";
+
+/// Workflow #434 LAB-5G5b: `mcp plan --entry-protocol 2 [--current-build <commit>]`, the plan the
+/// MCP entry's second generation asks of the module's own root
+/// (`crate::install::mcp_entry::plan_g2`). Another protocol is `actingctl_usage_invalid`
+/// (`--entry-protocol`, `not_recognised`), as `actingctl mcp-entry plan` refuses one other than
+/// its own; the first generation's protocol is that command's.
+fn mcp_plan(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+    const PLAN: InstallLocation = InstallLocation::McpEntryPlan;
+    let protocol = params.get(ENTRY_PROTOCOL);
+    if protocol.and_then(Value::as_u64) != Some(install::mcp_entry::ENTRY_PROTOCOL_G2) {
+        let problem = match protocol {
+            None => ArgumentProblem::Required,
+            Some(_) => ArgumentProblem::NotRecognised,
+        };
+        return module_refusal(&cli_line::usage_invalid(Some("--entry-protocol"), problem));
+    }
+    let planned = context
+        .paths(PLAN)
+        .and_then(|paths| install::mcp_entry::plan_g2(&paths, text(params, "current_build")));
+    line(context, planned.unwrap_or_else(Answer::new))
+}
+
+/// Workflow #434 LAB-5G5b: `mcp entries [--all]`, the entries' status files of the module's own
+/// root, both generations side by side (`crate::install::mcp_entry::entries`).
+fn mcp_entries(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+    let listed = context
+        .paths(InstallLocation::McpEntryList)
+        .and_then(|paths| install::mcp_entry::entries(&paths, switch(params, "all")));
+    line(context, listed.unwrap_or_else(Answer::new))
+}
+
+/// Workflow #434 LAB-5G5b: `mcp config --client <client> [--list <modules>]`, the second
+/// generation's registration snippet for the module's own root (`crate::install::mcp_config`);
+/// it writes nothing.
+fn mcp_config(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+    let Some(client) = text(params, "client") else {
+        return module_refusal(&cli_line::usage_invalid(
+            Some("--client"),
+            ArgumentProblem::Required,
+        ));
+    };
+    let list = match list_words(params) {
+        Ok(list) => list,
+        Err(refused) => return module_refusal(&refused),
+    };
+    let root = files::plain(&context.location.root);
+    match install::mcp_config::snippet(&root, client, list.as_deref()) {
+        Ok(answer) => line(context, answer),
+        Err(refused) => module_refusal(&refused),
+    }
+}
+
+/// `mcp config`'s `list`: the words of the server's `--list`, in their order; `None` when it is
+/// not given. A value that is no list of strings (the table's parser gives none) is `wrong_type`.
+fn list_words(params: &Map<String, Value>) -> Result<Option<Vec<String>>, Outcome> {
+    let Some(value) = params.get("list") else {
+        return Ok(None);
+    };
+    let wrong = || cli_line::usage_invalid(Some("--list"), ArgumentProblem::WrongType);
+    value
+        .as_array()
+        .ok_or_else(wrong)?
+        .iter()
+        .map(|item| item.as_str().map(str::to_owned).ok_or_else(wrong))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+/// The line of a refusal of the module that has no members: `{outcome}`, with the module's usage
+/// as the developer text of a usage refusal.
+fn module_refusal(refused: &Outcome) -> Exit {
+    let usage = refused
+        .is(ActingctlCode::ActingctlUsageInvalid)
+        .then_some(USAGE);
+    cli_line::failure(refused, usage)
 }
 
 /// `agent <sub>`: `agent-channel <sub>` with `claude-hook`'s action word, the root's state root

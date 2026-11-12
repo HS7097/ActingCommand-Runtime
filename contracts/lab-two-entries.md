@@ -333,6 +333,16 @@ Alice's answer 4. From LAB-3, in the rescue module:
   root"); until LAB-6 the module's requests to a running Runtime go on the CLI channel, as
   `actingctl install`'s do, since the Runtime refuses a pause, a resume and a shutdown from a Lab
   envelope until LAB-6 deletes those origin gates (§2.4).
+- **The MCP rows** (Workflow #434 LAB-5G5b, 0.12.57; register §1.287, "Slice LAB-5G5b";
+  [install-cli.md](install-cli.md), "The MCP entry", "The rescue module's rows"). The module also
+  serves three read-only rows of slice LAB-5, through the table as its other rows, on the CLI and
+  in `serve --stdio`: `mcp plan --entry-protocol 2 [--current-build <commit>]`, the plan the MCP
+  entry's second generation asks (its child the server `actinglab-mcp.exe` of the installed
+  build; a build without it refuses `mcp_server_not_in_build`; one checked-in sample of its answer
+  is the contract between the row and that entry); `mcp entries [--all]`, the entries' status
+  files of both generations side by side, each with its generation; and `mcp config --client <c>
+  [--list <modules>]`, the second generation's registration snippet, which writes no client file.
+  The first generation's `actingctl mcp-entry plan|list` and `mcp-config` stay as they are.
 - **"Only the operation's own hold"** (§5), as LAB-3 fix 1 and 2 build it
   ([install-cli.md](install-cli.md), "The Lab's rescue module"): `release-hold <reason>` hands back
   only a hold that a journal of the module in this root recorded in its pause step, only the
@@ -754,9 +764,12 @@ sentence fails that test.
     sent, run or written; a name that is no offered row's tool answers as today's server answers
     an unknown tool (-32602 `mcp_params_invalid`). Serving the core and rescue rows, the answer
     budget and the export (LAB-5G2b), jobs, handles and cursors (G3), the `serve --stdio --front
-    mcp` children (G4b), the rescue module's MCP rows (G5b), packaging into the Tools archive and
-    the installer (G6) and the manual (G7) come with their slices; until G6 the program is in no
-    release and no Tools archive, and nothing a person installs changes.
+    mcp` children (G4b) and the manual (G7) come with their slices. The program is in the Tools
+    archive since LAB-5G6 (0.12.57; section 8.1, "Packaging"); nothing starts it until a client is
+    registered with the second entry (G7). The rescue module's MCP rows `mcp plan`, `mcp entries` and
+    `mcp config` (section 7) are served by actinglab since LAB-5G5b; the server lists their tools
+    (`ac_mcp_config`, `ac_mcp_entries`, `ac_mcp_plan`) and serves their calls with the other
+    rescue rows' (G2b).
 - **The answer budget is the caller's** (Workflow #434 LAB-5D, 0.12.52; register §1.287, "Slice
   LAB-5D"). The reads whose answer can outgrow a caller's budget (`status`, `diagnose`, `events`,
   `schedule`, `runs`, `run evidence`, `codes`; `facts`, `packs`, `remedy`, `summary`) take, in
