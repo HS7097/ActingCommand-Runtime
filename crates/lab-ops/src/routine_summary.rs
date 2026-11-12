@@ -211,6 +211,13 @@ fn page_on(
     Ok(json!(page))
 }
 
+/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_within`]
+/// is given, if any.
+#[cfg(test)]
+pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
+    parse(arguments).err()
+}
+
 /// `routine-summary` and the flags `flags_of` names for it, each once: exactly one of `--hour`
 /// and `--day`, which take no value; `--instance`, `--since` (a revision, a whole number) and
 /// `--state-root` (required) with a value. Any other word is `unknown`.

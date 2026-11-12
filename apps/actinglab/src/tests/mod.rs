@@ -158,6 +158,10 @@ mod gate_428_lab_ocr_dl;
 // ported.
 #[path = "gate_434_lab5g4c.rs"]
 mod gate_434_lab5g4c;
+// Workflow #434 LAB-5B1: the table-driven rows; every planned core row and every table-driven row
+// in one list; LAB-5C's cases its tests did not cover.
+#[path = "gate_434_lab5b1.rs"]
+mod gate_434_lab5b1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

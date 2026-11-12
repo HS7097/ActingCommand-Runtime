@@ -10888,6 +10888,108 @@ slice.
 **Rollback** (to the release before it). Nothing persisted but the check-config reports exported,
 as today's tool exports them.
 
+#### Slice LAB-5B1 (0.12.57): the parameters the table-driven rows read are held equal to the table
+
+Coordinator work order `rd-1113/brief-lab5b1.md` with `rd-1112/brief-lab5g-common.md`, on main
+`abee78ed` (LAB-5G4b, both parts, and LAB-5G4c merged), after the read-only survey
+`rd-1108/arch-013/lab5a-step0-survey.md` §1 and §3 (kinds T1 and T2), read against main, which
+wins. The last of the drift tests the coordinator's ruling of 11-11 cut into three (B1
+table-driven, B2 strict, B3 lenient; board #434). The rule of the slice: no behaviour changes;
+every line every command prints, on the command line, in `serve --stdio` and through both MCP
+servers, what each accepts and refuses and what each sends to the Runtime, stays byte for byte.
+
+**Cut at the module boundary** (the work order's "If it is too large"; the core part alone is
+well past 1,200 changed lines): this slice holds the core rows (points 1, 3, 4 and their part of
+6). **Left out, for a later slice:** the rescue module's rows (point 2 and its part of 6): the rows
+`lab_rescue::rescue` reads in its process, the installer's flag lists (`crates/lab-rescue/src/install/`)
+and the agent channel's (`agent_channel.rs`, `crates/agent-forward`), each to be one constant held
+equal to its row or rows. Seen while reading, for that slice: `config restore` reads `sha`, which
+its row does not declare (`rescue::config_swap` serves `config replace` and `config restore`), the
+same kind as L5B1-3's shared arms.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5B1-1 | `lab_ops::core_reads` (new): one constant per planned row `core_ops` serves | code | LAB-5B1 | — | `READ_HERE` (30 rows whose parameters `core_ops` reads in its process: the 26 core rows served by `served` and `shutdown_line`, and `run start`, `run stop`, `reset`, `drill`), each `Reads {row, names}`; `HANDED` (16 rows whose answer is the command line of a parser of `lab-ops` with the state root: `status`, `summary`, `events`, `runs`, `run evidence`, `diagnose`, `remedy`, `remedy set`, `remedy lift`, `frame` (only with `out`), `preset`, `preset set`, `evidence read`, `devices`, `devices bind`, `devices unbind`) and `OFFLINE` (`codes`, `gap`, `packs`), each `Handed {row, command, only_with, parts}`: the command line in order, each parameter as the word or flag it becomes (`Written`: a word, a flag with its value, a switch, a joined list, LAB-5A's options as written, `since` as `--since-unix-ms` from now, `run evidence`'s id as `--run-id` or `--request-id`, `remedy set`'s rows beside the words), beside the module's own `--state-root` and `--root` and `devices`' further flags (`Part`). This is the one mapping from parameter to flag: `offline_words` and `handed_words` build the command line from it |
+| L5B1-2 | every read by name through the row's constant | code | LAB-5B1 | — | `core_reads::Params` (crate-private) wraps a call's parameters with its row's constant; `core_ops`' readers (`text`, `required_text`, `switch`, `unsigned`, `list_of`, `duration`, `get`, `contains_key`, the words a row hands on) take it. A read of a name the constant does not hold, and no exception names, fails a debug assertion naming the row and the name. The steps other programs call with the parameters alone (`stop_target`, `pack_schedule_rows`, `run_start_prepared`, `material_read`) read through their row's constant. Same names, same order, same forms as before |
+| L5B1-3 | the shared arms | code | LAB-5B1 | — | `remedy`, `remedy set`, `remedy lift` and `devices`, `devices bind`, `devices unbind` had one arm each; per row now. The arms read names their row does not declare: `game` and `file` on `remedy` and `remedy lift`, `instance` and `handle` on `devices`, `handle` on `devices unbind`. No front can give such a member (the words and `serve --stdio` refuse an undeclared member, the command line's kept flags are `run show`/`run evidence` `id`, `devices bind` `root` and the rescue rows', the new MCP server refuses an undeclared argument), and the parser of each would refuse it (`remedy get|lift` take `--state-root` and `--instance`, `devices list` no word, `devices unbind` one): those reads are no longer made. `EVENTS_OPTIONS` and `Argv::options_of` are gone into the constants |
+| L5B1-4 | the parsers' flag lists `flags_of` does not cover | code | LAB-5B1 | — | `overview::FLAGS`, `diagnose::FLAGS`, `run_list::FLAGS`, `observe_export::FLAGS`, `packs::FLAGS`: each parser refuses a flag outside its list as `unknown` before its match, with the same refusal its match gave (`argument` the flag as given) |
+| L5B1-5 | test builds only | code | LAB-5B1 | — | `parse_refusal` beside the parser of each command a row hands words to (13 modules; `events` has `cli_request`): its refusal of the words its dispatcher is given |
+| L5B1-6 | `cli_module::own_flags` (LAB-5B2's register, tests only) | code | LAB-5B1 | — | `DECLARED_ROWS`: the rows whose command line reaches an own command as their declared words (`engine::Line::Declared`), with that command's read list: `app launch|restart|stop` (`session app`) and the table-driven `user-config`, `user-config set` (`user-config get|set`); `DECLARED_EXCEPTIONS` |
+
+**How a read outside a constant fails in CI** (point 1): a debug assertion in the one reader,
+`Params::get`/`contains_key`. Not LAB-5B3/5B4's recording: that mechanism holds an own command's
+flags (`flag_args::FlagArgs`, in actinglab), which `lab-ops` cannot reach, and a `cfg(test)`
+recording in `lab-ops` would be off while actinglab's and actinglab-mcp's tests run this code; the
+debug assertion is on in every test build that reaches it. The shape is theirs: one list per row,
+used by the code, a read outside it failing with the row and the name. The CI jobs that run these
+tests build with debug assertions: `.github/workflows/ci.yml` runs `cargo test` without
+`--release` or `--profile` in `host-lab` (lab-ops, actinglab) and `apps` (actinglab-mcp); the
+workspace `Cargo.toml` has no `[profile.*]` section and the repository no `.cargo/config.toml`; the
+only profile variable set is `CARGO_PROFILE_DEV_DEBUG` (debug information). The test profile
+inherits the dev profile, whose debug assertions are on; `lab_ops_a_read_outside_its_constant_fails`
+fails in a build without them.
+
+**Exceptions** (point 1; `core_reads::EXCEPTIONS`, `own_flags::DECLARED_EXCEPTIONS`, each with its
+reason): `words`, which no row declares, read on every row `core_ops` serves in its process to
+refuse it by name; `devices bind`'s `root`, the command line's kept flag, handed on undeclared
+after the module's own `--root`; the `--cursor` of `codes`' and `events`' parsers, which the rows
+do not declare (the MCP front keeps these cursors, LAB-5C); `session app`'s `--record`, which the
+core rows `app launch|restart|stop` do not reach (L5C-7). No declared parameter of these rows is
+read elsewhere: every one is read by its row's code (actinglab's global options reach no row
+`core_ops` serves, and the MCP front's own members are taken out before it calls).
+
+**Corrections of the table** (point 5): none. On main every planned row `core_ops` serves declares
+exactly what its code reads, but the reads of L5B1-3, which the table rightly does not declare (the
+parsers refuse them); no row declares a parameter its code does not read; every flag a row's
+command line carries is its parser's, and its parser takes nothing more than the row carries but
+the exceptions.
+
+**LAB-5C's cases its tests did not cover** (point 4; the review of LAB-5C's pull request), as the
+code answers them today, on the command line and in `serve --stdio`:
+
+- both starting points of a read at once: `events`, `runs` and `diagnose` with `since` and
+  `since_unix_ms` are refused `actingctl_usage_invalid`, `--since-unix-ms` `repeated`, before any
+  connection (`since` goes on as `--since-unix-ms` first);
+- a wait outside its range: `events --wait-s 21` is refused `out_of_range`, `range_min` 0,
+  `range_max` 20, naming the parameter `wait_s` as MCP names it; `events --wait-s -1` is
+  `--wait-s` `wrong_type` (the flag's value is no unsigned integer), where today's MCP server
+  answers `out_of_range`: the two look inconsistent and stay as they are (reported to the
+  coordinator);
+- through the CLI module, not only through `core_ops`: each of `events`' parameters LAB-5C added
+  (its twelve filters, `detail`, `wait_s`) reaches the Runtime's connection
+  (`runtime_info_unavailable` on a state root without one); `material --out <dir> --offset 5`
+  answers the connection's failure, not `conflicting` (LAB-5C fix 1, N1); `packs --role startup`
+  reaches `packs`, which refuses no `--role`.
+
+**Where main differs from the survey.** T1 reads 30 rows in this process (the survey's 24 core
+rows and four debugging rows, before LAB-5C, R-6 and R-8 added rows and parameters); T2 is the
+survey's 16 rows and three offline ones, `frame` in both (served here without `out`); `runs`' list
+was its parser's match, not a constant; no core row has `params_more` since LAB-5A (the survey's
+differences 1 and 6 are gone).
+
+**Tests.** New: apps row "#434 LAB-5B1". In `lab-ops` (`crates/lab-ops/src/gate_434_lab5b1.rs`,
+the embedded table and the constants only): `lab_ops_read_here_rows_read_what_they_declare`,
+`lab_ops_handed_rows_hand_what_they_declare`, `lab_ops_handed_flags_are_what_the_parsers_take`,
+`lab_ops_parsers_refuse_no_declared_parameter` (each parser fed the command line its row builds for
+each declared parameter with a made-up value of its type, beside the required ones: none refused
+`unknown`), `lab_ops_exceptions_are_outside_the_table`, `lab_ops_a_read_outside_its_constant_fails`.
+In actinglab (`apps/actinglab/src/tests/gate_434_lab5b1.rs`): `declared_rows_match_their_commands`,
+`every_table_driven_row_has_one_list` (every planned core row and LAB-5B2's table-driven rows in
+exactly one of `READ_HERE`, `HANDED`, `OFFLINE`, `DECLARED_ROWS`, `CORE_STRICT_ROWS`; `core_ops`
+serves exactly the rows of the first three), `lab5c_both_starting_points_are_refused_as_repeated`,
+`lab5c_a_wait_outside_its_range_is_refused`, `lab5c_parameters_reach_lab_ops_through_the_module`
+(a state root in a temporary folder on which no Runtime runs; `--since` makes `core_ops` read the
+clock, and those cases are refused whatever it reads). No existing test is changed.
+
+**Interface.** None raised: nothing on the wire, in the ledger or in a file a released peer reads
+changes; the operation table is unchanged; no code, key or location is added.
+[lab-two-entries.md](lab-two-entries.md) is unchanged (no sentence of it became untrue).
+
+**What LAB-5B1 changes live.** Nothing: every command line, `serve --stdio` line and MCP call
+answers as before.
+
+**Rollback** (to the release before it). Nothing persisted: code only.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

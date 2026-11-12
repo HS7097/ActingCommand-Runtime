@@ -282,6 +282,13 @@ pub fn dispatch_on(
     })
 }
 
+/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_on`] is
+/// given, if any.
+#[cfg(test)]
+pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
+    parse(arguments).err()
+}
+
 /// `evidence confirm-read` and the flags `flags_of` names for it, each once with a value: exactly
 /// one of `--artifact` and `--run`, and `--state-root`. Any other word is `unknown`; an id that is
 /// not one is `not_recognised`.

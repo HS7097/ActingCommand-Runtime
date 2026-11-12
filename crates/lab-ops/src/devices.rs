@@ -422,6 +422,13 @@ struct Parsed {
     root: Option<PathBuf>,
 }
 
+/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch`] is given
+/// (its command's word first), if any.
+#[cfg(test)]
+pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
+    parse(&arguments[1..]).err()
+}
+
 /// `devices <list|bind <alias> <handle>|unbind <alias>>` and the flags `flags_of` names for the
 /// action, each at most once and with a value; any other word, a repeated flag or a missing value
 /// is `actingctl_usage_invalid` naming it (`argument`, `argument_problem`; Workflow #382

@@ -1175,6 +1175,10 @@ struct Flags {
     role: Option<Role>,
 }
 
+/// Workflow #434 LAB-5B1: the flags `packs` takes, each with a value; [`parse`] refuses any other
+/// as `unknown`.
+pub const FLAGS: [&str; 3] = ["--root", "--instance", "--role"];
+
 /// Each flag at most once and with its value; any other argument is a usage error naming the
 /// flag (`argument`) and what is wrong with it (`argument_problem`).
 fn parse(arguments: &[OsString]) -> Result<Flags, PacksError> {
@@ -1184,6 +1188,10 @@ fn parse(arguments: &[OsString]) -> Result<Flags, PacksError> {
         let flag = arguments[index]
             .to_str()
             .ok_or_else(|| PacksError::usage(&arguments[index], ArgumentProblem::NotUtf8))?;
+        // Workflow #434 LAB-5B1: the flags it takes are [`FLAGS`].
+        if !FLAGS.contains(&flag) {
+            return Err(PacksError::usage(flag, ArgumentProblem::Unknown));
+        }
         let given = match flag {
             "--root" => flags.root.is_some(),
             "--instance" => flags.instance.is_some(),
@@ -1217,6 +1225,13 @@ fn parse(arguments: &[OsString]) -> Result<Flags, PacksError> {
         index += 2;
     }
     Ok(flags)
+}
+
+/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_within`]
+/// is given (its command's word first), if any.
+#[cfg(test)]
+pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
+    parse(&arguments[1..]).err().map(|error| error.outcome())
 }
 
 /// The CLI's document: the bindings and their warnings, each `{outcome}` in this process's

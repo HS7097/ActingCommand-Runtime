@@ -31,6 +31,12 @@
 //! one group ([`REFUSING_COMMANDS`], [`TABLE_COMMANDS`], [`WORK_LIST`], [`NO_WORD_COMMANDS`]), and
 //! for each command of the work list the read lists its command line is parsed by since the
 //! slice; `gate_434_lab5b5` holds the census to the inventory and the lists to their commands.
+//!
+//! Workflow #434 LAB-5B1 ("Slice LAB-5B1"): the table-driven rows. Those `lab_ops::core_ops`
+//! serves have their constants in `lab_ops::core_reads`; the rows whose command line reaches an
+//! own command as their declared words are [`DECLARED_ROWS`]. `gate_434_lab5b1` holds the latter to
+//! their commands' read lists and every planned core row, and every table-driven row, in exactly
+//! one list.
 
 use crate::commands::{
     capabilities, device_commands, navigation_recovery, session_contracts, session_record,
@@ -137,8 +143,33 @@ pub(crate) const NO_COMMAND_ROWS: [&str; 0] = [];
 /// `standard-pack check`, a core row since the coordinator's ruling of 2026-11-11 (the rescue
 /// module's `place` runs it as its post-check). Not one of the four kinds, which are the
 /// debugging and authoring modules'. `app launch|restart|stop`, core rows actinglab's own
-/// `session app` serves, are slice B1's.
+/// `session app` serves, are slice B1's ([`DECLARED_ROWS`]).
 pub(crate) const CORE_STRICT_ROWS: [&str; 1] = ["standard-pack check"];
+
+/// Workflow #434 LAB-5B1 (register §1.287, "Slice LAB-5B1"): the rows whose command line reaches
+/// actinglab's own command as the row's declared words only (`engine::Line::Declared`), each with
+/// the read list that command's line is parsed by (Workflow #434 LAB-5B5): the core rows `app
+/// launch|restart|stop` (`session app <action>`) and the table-driven rows `user-config` and
+/// `user-config set` (`user-config get|set`). The other table-driven rows and the core rows
+/// `lab_ops::core_ops` serves have their constants in `lab_ops::core_reads`. `gate_434_lab5b1`
+/// holds each row here equal to its list, but [`DECLARED_EXCEPTIONS`].
+pub(crate) const DECLARED_ROWS: [(&str, &FlagReads); 5] = [
+    ("app launch", &session_management::SESSION_APP_READS),
+    ("app restart", &session_management::SESSION_APP_READS),
+    ("app stop", &session_management::SESSION_APP_READS),
+    ("user-config", &cli_information::USER_CONFIG_GET_READS),
+    ("user-config set", &cli_information::USER_CONFIG_SET_READS),
+];
+
+/// Workflow #434 LAB-5B1: the flags a list of [`DECLARED_ROWS`] reads that its rows do not declare,
+/// by design, each with its reason (the list's row, the flag, why).
+pub(crate) const DECLARED_EXCEPTIONS: [(&str, &str, &str); 1] = [(
+    "session app",
+    "--record",
+    "the core rows do not reach the authoring module's recording (Workflow #434 LAB-5C, L5C-7, \
+     the coordinator's ruling of 2026-11-11); `session app <action> --record` stays actinglab's \
+     own command line",
+)];
 
 /// How many positional words a command checks it is given: at least `least`, at most `most`
 /// (`None`: it checks no most).

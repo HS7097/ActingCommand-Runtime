@@ -107,6 +107,13 @@ pub fn record(log: &Path, capability: &str, why: &str, via: &str) -> Result<Valu
     Ok(json!({"path": log.display().to_string(), "gap": gap}))
 }
 
+/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch`] is given
+/// (its command's word first), if any.
+#[cfg(test)]
+pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
+    parse(&arguments[1..]).err()
+}
+
 /// `capability-gap --capability <text> --why <text>`: the flags `flags_of` names, each exactly
 /// once, with a value. Any other word, a repeated flag or a missing or malformed value is
 /// `actingctl_usage_invalid` naming the word (`argument`) and what is wrong with it

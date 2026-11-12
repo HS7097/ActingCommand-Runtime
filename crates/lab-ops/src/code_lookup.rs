@@ -370,6 +370,15 @@ fn usage(argument: Option<&str>, problem: ArgumentProblem) -> Refusal {
     Refusal::Usage(cli_line::usage_invalid(argument, problem))
 }
 
+/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_within`]
+/// is given (its command's word first), if any.
+#[cfg(test)]
+pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
+    parse(&arguments[1..])
+        .err()
+        .map(|refusal| refusal.outcome().clone())
+}
+
 /// `codes <code>`, or the list flags `flags_of` names for `codes`, each at most once and with a
 /// value. The code is the first word, and nothing else may follow it. Any other word, a repeated
 /// flag, a malformed value or a code with a list flag is `actingctl_usage_invalid` with the word
