@@ -128,7 +128,9 @@ pub(crate) struct BuiltTable {
 }
 
 impl BuiltTable {
-    /// Workflow #442 REM-1: the catalog tasks without a package location, in catalog order.
+    /// Workflow #442 REM-1: the catalog tasks without a package location, in catalog order. Read
+    /// by the tests only: the product reads the list through the two developer lines below.
+    #[cfg(test)]
     pub(crate) fn unbound_tasks(&self) -> &[String] {
         &self.unbound_tasks
     }
