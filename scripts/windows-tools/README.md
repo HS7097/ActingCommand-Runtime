@@ -86,8 +86,8 @@ pwsh -NoProfile -File scripts/windows-tools/Get-ExactBuildArtifact.ps1 `
   -Repository HS7097/ActingCommand-Runtime `
   -SourceSha 0123456789abcdef0123456789abcdef01234567 `
   -ArtifactKind Tools `
-  -TaskRoot D:\task\runtime-check `
-  -OutputPath D:\task\runtime-check\artifacts\tools
+  -TaskRoot D:\ActingCommand\runtime-check `
+  -OutputPath D:\ActingCommand\runtime-check\artifacts\tools
 ```
 
 Supply `-RunId` when more than one successful run exists for the exact SHA. The
@@ -142,8 +142,8 @@ requires both an ordinal and stable identity. Example:
 
 ```powershell
 pwsh -NoProfile -File scripts/windows-tools/Materialize-TaskToolCache.ps1 `
-  -TaskRoot D:\task\runtime-check `
-  -CacheRoot D:\task\runtime-check\cache\platform-tools `
+  -TaskRoot D:\ActingCommand\runtime-check `
+  -CacheRoot D:\ActingCommand\runtime-check\cache\platform-tools `
   -Component platform-tools-37.0.1 `
   -AcceptAndroidSdkLicense
 ```

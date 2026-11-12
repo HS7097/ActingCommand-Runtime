@@ -27,8 +27,8 @@ pwsh -NoProfile -File scripts/windows-tools/Get-ExactBuildArtifact.ps1 `
   -SourceSha <exact-40-character-commit-sha> `
   -ArtifactKind Runtime `
   -RunId <exact-successful-run-id> `
-  -TaskRoot D:\task\runtime-install `
-  -OutputPath D:\task\runtime-install\artifacts\runtime
+  -TaskRoot D:\ActingCommand\runtime-install `
+  -OutputPath D:\ActingCommand\runtime-install\artifacts\runtime
 ```
 
 Replace the bracketed values before use. With an output directory named

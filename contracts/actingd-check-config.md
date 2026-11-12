@@ -1304,7 +1304,7 @@ acsetup reinstalls (`tools_dir`) and every file that is not as pinned
 to do is the code's catalog `handling`, and the developer line names it.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v2","outcome":{"schema_version":"actingcommand.outcome.v1","code":"adb_install_mismatch","category":"fatal","values":{"adb_path":"\\\\?\\D:\\AC\\tools\\platform-tools\\adb.exe","aliases":["node.a"],"tools_dir":"\\\\?\\D:\\AC\\tools","files":[{"path":"\\\\?\\D:\\AC\\tools\\platform-tools\\adb.exe","state":"sha256_mismatch","expected_sha256":"sha256:<64 hex>","actual_sha256":"sha256:<64 hex>"}],"stage":"config_assemble"}}}
+{"schema_version":"actingcommand.actingd.check-config.v2","outcome":{"schema_version":"actingcommand.outcome.v1","code":"adb_install_mismatch","category":"fatal","values":{"adb_path":"\\\\?\\C:\\ActingCommand\\tools\\platform-tools\\adb.exe","aliases":["node.a"],"tools_dir":"\\\\?\\C:\\ActingCommand\\tools","files":[{"path":"\\\\?\\C:\\ActingCommand\\tools\\platform-tools\\adb.exe","state":"sha256_mismatch","expected_sha256":"sha256:<64 hex>","actual_sha256":"sha256:<64 hex>"}],"stage":"config_assemble"}}}
 ```
 
 A file that cannot be read is `{"path":"...","state":"missing"}` when it is

@@ -452,7 +452,11 @@ mod tests {
 
     #[test]
     fn the_task_query_answers_in_json() {
-        let xml = definition_xml(Path::new(r"F:\AC"), "S-1-5-21-1", "2026-10-07T06:50:13Z");
+        let xml = definition_xml(
+            Path::new(r"C:\ActingCommand"),
+            "S-1-5-21-1",
+            "2026-10-07T06:50:13Z",
+        );
         let output = serde_json::json!({
             "exists": true,
             "others": "ActingCommand Runtime watchdog 000000000000",
@@ -468,7 +472,7 @@ mod tests {
         let Registration::Present(definition, run) = registration else {
             panic!("expected a registered task");
         };
-        assert!(mismatches(&definition, Path::new(r"F:\AC")).is_empty());
+        assert!(mismatches(&definition, Path::new(r"C:\ActingCommand")).is_empty());
         assert_eq!(
             (run.state.as_deref(), run.last_result),
             (Some("Ready"), Some(0))
@@ -482,15 +486,18 @@ mod tests {
     #[test]
     fn names_csv_and_console_output_are_read_as_windows_prints_them() {
         assert_eq!(
-            task_name(Path::new(r"F:\AC")),
-            task_name(Path::new(r"f:\ac"))
+            task_name(Path::new(r"C:\ActingCommand")),
+            task_name(Path::new(r"c:\actingcommand"))
         );
         assert_eq!(
-            task_name(Path::new(r"F:\AC")),
-            task_name(Path::new(r"F:\AC\"))
+            task_name(Path::new(r"C:\ActingCommand")),
+            task_name(Path::new(r"C:\ActingCommand\"))
         );
-        assert!(task_name(Path::new(r"F:\AC")).starts_with("ActingCommand Runtime watchdog "));
-        assert_eq!(task_name(Path::new(r"F:\AC")).len(), 31 + 12);
+        assert!(
+            task_name(Path::new(r"C:\ActingCommand"))
+                .starts_with("ActingCommand Runtime watchdog ")
+        );
+        assert_eq!(task_name(Path::new(r"C:\ActingCommand")).len(), 31 + 12);
         assert_eq!(
             csv_fields(
                 r#""HOST","\Task, one","N/A","Ready","Interactive only","2026/10/7 6:50:13","0""#

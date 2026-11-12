@@ -2,7 +2,7 @@
 
 ## Scope
 
-Implemented the sixth slice of `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`: C3 automatic login and wake resource wiring for monitor recovery resources.
+Implemented the sixth slice of `%WORKSPACE%\ActingCommand\TASK-Lab-selfheal-chain.md`: C3 automatic login and wake resource wiring for monitor recovery resources.
 
 This increment keeps recovery actions behind the Session Layer signal boundary. It does not add direct device execution, UI, OCR, SQLite, scheduler behavior, game logic, or live emulator recovery.
 
@@ -12,9 +12,9 @@ Resource repositories were refreshed before reading recovery/login resources.
 
 | Resource repository | Commit |
 | --- | --- |
-| `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` | `2ab7ccddd63054ee16d3441ff71683a3feae1a6a` |
-| `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane` | `e778cc7c8576c57bfc8f4df72b0c86efb5f65fb4` |
-| `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive` | `7cf3bae27d473d29efde1f5605f106b28a2df9fb` |
+| `%USERPROFILE%\Documents\Azur\ActingCommand-Resources-Arknights` | `2ab7ccddd63054ee16d3441ff71683a3feae1a6a` |
+| `%USERPROFILE%\Documents\Azur\ActingCommand-Resources-AzurLane` | `e778cc7c8576c57bfc8f4df72b0c86efb5f65fb4` |
+| `%USERPROFILE%\Documents\Azur\ActingCommand-Resources-BlueArchive` | `7cf3bae27d473d29efde1f5605f106b28a2df9fb` |
 
 ## Behavior
 
