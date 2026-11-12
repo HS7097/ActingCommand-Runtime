@@ -22,30 +22,30 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3894 |
+| active | 3899 |
 | retired | 18 |
-| all | 3912 |
+| all | 3917 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
 | success | 126 |
-| info | 205 |
-| warning | 146 |
-| error | 3403 |
+| info | 208 |
+| warning | 147 |
+| error | 3404 |
 | fatal | 14 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 700 |
+| `common_causes` and `handling` both written | 705 |
 | one of the two written, the other `TBD` or empty | 3 |
 | neither written (`TBD` or empty) | 3191 |
 | `settled` | 171 |
-| `pending` | 3723 |
-| all active codes | 3894 |
+| `pending` | 3728 |
+| all active codes | 3899 |
 
 ## By owner
 
@@ -53,7 +53,7 @@ here.
 |---|---:|---:|---:|---:|
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
 | [actingctl](actingctl.md) | 198 | 197 | 38 | 11 |
-| [actingd](actingd.md) | 150 | 149 | 94 | 86 |
+| [actingd](actingd.md) | 152 | 151 | 96 | 86 |
 | [actinglab](actinglab.md) | 41 | 40 | 40 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 2 | 0 |
@@ -68,16 +68,16 @@ here.
 | [mcp-entry](mcp-entry.md) | 3 | 3 | 3 | 0 |
 | [pack-containment](pack-containment.md) | 40 | 40 | 0 | 0 |
 | [page-detector](page-detector.md) | 2 | 2 | 2 | 0 |
-| [policy](policy.md) | 116 | 114 | 53 | 0 |
+| [policy](policy.md) | 117 | 115 | 54 | 0 |
 | [recognition](recognition.md) | 6 | 6 | 0 | 0 |
 | [recognition-pack](recognition-pack.md) | 22 | 22 | 0 | 0 |
 | [resource-tooling](resource-tooling.md) | 83 | 83 | 7 | 0 |
 | [runtime-client](runtime-client.md) | 211 | 210 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1145 | 1141 | 186 | 12 |
+| [runtime-host](runtime-host.md) | 1147 | 1143 | 188 | 12 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3912 | 3894 | 700 | 171 |
+| all | 3917 | 3899 | 705 | 171 |

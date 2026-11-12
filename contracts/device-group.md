@@ -1,9 +1,18 @@
 # Device groups: several applications on one device (MAPP, not built yet)
 
 Workflow #437 MAPP-C (contracts only; [v012-register.md](v012-register.md) §1.323). **Every rule of
-this file is (MAPP, not built yet)**: no code, key, code, value key or word named here exists until
-the code slices of §1.323 build it, and every code, value key and vocabulary word below is
-proposed. The other contracts point here instead of repeating the rules.
+this file is (MAPP, not built yet)** unless its section names MAPP-1 ([v012-register.md](v012-register.md)
+§1.328, Runtime 0.12.56): no code, key, code, value key or word named here exists until the code
+slices of §1.323 build it, and every code, value key and vocabulary word below is proposed but
+those MAPP-1 registers: `device_group`, `instance.<instance id>.device_group`,
+`device_group_config_invalid` with the vocabulary `device_group_problem`,
+`device_group_assembled`, and `device_group_waiting` with the vocabulary `device_group_wait`.
+MAPP-1 builds the configuration form and its checks, the refusal of every group of several, the
+member → device key map, the scheduler keyed by device and the evaluator's one pick per device; the
+host's worker, occupancy, admission guard and pause per device, the gates of the group, the
+session rule and the refusals of device-level actions are not built yet: the coordinator cut
+MAPP-1 in two, and these are slice MAPP-1b's ([v012-register.md](v012-register.md) §1.328,
+"MAPP-1b"; MAPP-1a built the rest). The other contracts point here instead of repeating the rules.
 
 Alice settled the direction on 2026-11-11 (board #437): one device may hold several applications
 that the scheduler serves in turn; one application is in front at any time; one device has one
@@ -29,10 +38,11 @@ are settled; each answer stands in the section it belongs to, and §1.323 lists 
   application; the Runtime does not model it.) How the console and the command line show a device
   with its applications is a later slice ("Later slices").
 
-## The configuration form (MAPP, not built yet)
+## The configuration form (MAPP-1, built)
 
 An `instances[]` entry takes one optional member, `device_group` (`actingd-config` revision 29,
-planned: [component-interfaces.md](component-interfaces.md), "Planned: Workflow #437 MAPP"):
+in force from Runtime 0.12.56: [component-interfaces.md](component-interfaces.md), row 29 and
+"Planned: Workflow #437 MAPP"):
 
 ```json
 {"alias": "neutral.a", "instance_id": "instance_<32 hex>",
@@ -44,7 +54,8 @@ planned: [component-interfaces.md](component-interfaces.md), "Planned: Workflow 
 ```
 
 - `device_group` is a name of 1 to 64 bytes under the alias rules (`validate_alias`,
-  `crates/runtime-host/src/provider.rs`). It names no device value: no serial, no port, no index.
+  `crates/runtime-host/src/provider.rs`); any other value is refused with `name_invalid` (below).
+  It names no device value: no serial, no port, no index.
   Entries that name the same value are one group. An entry that names it alone is a group of one
   and behaves as an entry without it.
 - It is read once at assembly and is not settable. The manifest reports it as the row
@@ -59,12 +70,16 @@ planned: [component-interfaces.md](component-interfaces.md), "Planned: Workflow 
 
 **A group of several** (two or more entries with one `device_group`) is assembled only when every
 rule below holds. Each broken rule refuses the configuration at stage `assemble`, in check-config
-and at start alike, with `device_group_config_invalid`. That code is proposed: error, ladder class
-`none`, owner `actingd`. Its values are `aliases` (the entries concerned), `config_key` (the member
-that breaks the rule) and `device_group_problem` (a proposed vocabulary).
+and at start alike, with `device_group_config_invalid`. That code is registered (MAPP-1): error,
+ladder class `none`, owner `actingd`. Its values are `aliases` (the entries concerned), `config_key`
+(the member that breaks the rule) and `device_group_problem` (a registered vocabulary). MAPP-1
+checks the name first, on every entry that names a group (`name_invalid`), then the kind rules
+(`handset_member`, `fixture_member`) before `device_mismatch`, then the table's order
+([v012-register.md](v012-register.md) §1.328, points 1 and 4).
 
 | Rule | `config_key` | `device_group_problem` |
 |---|---|---|
+| Every entry that names `device_group` names it by a name of 1 to 64 bytes under the alias rules: not empty, at most 64 bytes, no control character. It applies to a group of one too, and `aliases` is the entry: its alias is right, its member is not | `device_group` | `name_invalid` |
 | Every member names the same device by the same key with the same value: all the same `instance_index`, all the same `instance_name`, or all the same `host` and `port` (and the same `serial` when one is named). check-config never runs discovery ([actingd-check-config.md](actingd-check-config.md), "Discovery-bound instances"), so it cannot prove that an index and a name reach one emulator | the key that differs | `device_mismatch` |
 | No member is a handset (`device.kind` `handset`). The private binding file binds one serial to one alias ([device-binding.md](device-binding.md), "The private binding file", `duplicate_serial`); a group-aware binding is a later slice | `device` | `handset_member` |
 | No member is a fixture entry | `fixture_backend` | `fixture_member` |
@@ -78,7 +93,7 @@ corrected by a person (fail loud).
 **Until the slice "order within one device"** ("Later slices", "Release"), a build refuses every
 group of several at stage `assemble`, in check-config and at start alike, with
 `device_group_config_invalid`, `config_key` `device_group` and `device_group_problem`
-`several_members_unsupported` (proposed). It is checked after the rules of the table, so a group
+`several_members_unsupported` (MAPP-1). It is checked after the rules of the table, so a group
 that breaks one of them is refused with that rule's problem first. A group of one is accepted. The
 slice that builds the order within one device removes this refusal.
 
@@ -102,11 +117,17 @@ From MAPP on, two or more entries that are not one group and name the same devic
 the shared key. The check runs in two places:
 
 - **At assembly and in check-config**, when the entries name the same `instance_index`,
-  `instance_name`, `serial`, or `host` and `port`.
+  `instance_name`, `serial`, or `host` and `port`. An explicit entry that names a `serial` is
+  addressed by it, and its `host` and `port` are the daemon's defaults when it names none: two
+  explicit entries are one device when both name the same serial, or when neither names a
+  serial and their `host` and `port` are equal; a serial beside another serial or beside an
+  endpoint proves no sharing ([v012-register.md](v012-register.md) §1.328, point 10).
 - **At start, after the discovery**, when entries of different groups resolve to the same
   discovered index or ADB port: an explicit `HOST:PORT` beside a discovery-bound entry, or an index
-  and a name of one emulator. It is recorded as every discovery refusal is, as a Provider startup
-  failure ([provider-startup.md](provider-startup.md)).
+  and a name of one emulator. An explicit entry that names a `serial` is left out of this
+  comparison (its endpoint may be the daemon's default, the first emulator's port). It is
+  recorded as every discovery refusal is, as a Provider startup failure
+  ([provider-startup.md](provider-startup.md)).
 
 Handsets are already covered: the private binding file refuses one serial bound to two aliases.
 This refusal is the one difference a configuration without `device_group` can see, and only a
@@ -118,12 +139,14 @@ no production root meets the refusal at its start unannounced.
 
 - check-config: the `instances[]` report row of a member that names `device_group` carries
   `device_group`, the name. A row of an entry without it is as today.
-- The start: one daemon line per group of several, `device_group_assembled` (proposed; info;
-  values `aliases`, `device_label`). It goes to the daemon log only, and nothing new is recorded in
-  the ledger: each member records its own `runtime.instance_bound`, with the same endpoint.
+- The start: one daemon line per group of several, `device_group_assembled` (MAPP-1; info;
+  values `aliases`, `device_label`, the latter the `HOST:PORT` the first member is bound to and
+  absent while that endpoint is pending). It goes to the daemon log only, and nothing new is
+  recorded in the ledger: each member records its own `runtime.instance_bound`, with the same
+  endpoint.
 - A group of one prints nothing new.
 
-## A group of one is today (MAPP, not built yet)
+## A group of one is today (MAPP-1)
 
 **The rule the code slices are tested against.** With no entry declaring a shared device, every
 decision, every record, every key and every byte the Runtime persists is what it is today, and no
@@ -134,7 +157,8 @@ data is migrated. It holds because:
   today's keys and values ("One queue, one worker, one lease per device").
 - The new reason (`device_group_waiting`), the switch and its cooldown exist only when another
   member has the device, which a group of one never has. The group rules of the form apply only to
-  a group of several.
+  a group of several, but the name's (`name_invalid`), which a file without `device_group` never
+  meets.
 - No record type, payload member, phase word, fact key, tag or closed vocabulary of the ledger is
   added ("Interfaces").
 - A file without `device_group` keeps its revision (28 or lower). check-config's report and the
@@ -144,16 +168,29 @@ data is migrated. It holds because:
   `crates/scheduler/src/lib.rs:2585-2593`, written by `persist_active_instances`,
   `crates/runtime-host/src/host/lease.rs:3242-3247`).
 
-There are two exceptions:
+There are three exceptions:
 
 - the refusal of undeclared sharing above;
 - the switch cooldown's key `scheduling.device_group.switch_failure_cooldown_ms` ("The switch
   before a run"). From MAPP-2 on, like every key of the `scheduling` section, it is a row of the
   manifest and of the program fact `config.parameters.scheduling` on every root, with its default
   ([runtime-config.md](runtime-config.md), "The `scheduling` section"). Nothing a group of one does
-  reads it.
+  reads it;
+- the defaults file's ladder profile `without_emulator_restart` (MAPP-1, "The configuration
+  form"), a member of the default of `recovery_ladder.profiles`. On a root whose file and
+  instructions leave that key at its default (a profile set the file names replaces the default
+  whole), three things change, and only these: the value of the manifest's row
+  `recovery_ladder.profiles`, which gains the profile; the program fact
+  `config.parameters.recovery_ladder`, which carries that row; and the ladder's configuration
+  digest, `config_digest` of `recovery_ladder_started`, the SHA-256 of the section's values in
+  effect ([runtime-config.md](runtime-config.md), "The recovery ladder section"). A root whose
+  instruction set the key keeps the instruction's value, and its start notes
+  `config_override_base_changed` on the key, as for any default that changed under an
+  instruction. Nothing climbs by the profile unless an entry names it
+  (`instance.<id>.recovery_ladder_profile`): the defaults' `kind_profiles` do not name it, so
+  every ladder climbs the rungs it climbs today.
 
-## Derived, never stored (MAPP, not built yet)
+## Derived, never stored (MAPP-1: the map, the scheduler and the evaluator; the workers and the guards, not built yet)
 
 At assembly the configuration gives one map, member → device key. A group's device key is the
 smallest instance id of its members (`InstanceId` order); a group of one's is the member's own id.
@@ -169,7 +206,7 @@ keeps the member ids it keeps today. The next start maps each listed id to its g
 configuration in effect and gives the whole group the takeover cooldown (`SeedScheduler::new`,
 lib.rs:923-939).
 
-## One queue, one worker, one lease per device (MAPP, not built yet)
+## One queue, one worker, one lease per device (MAPP-1: the scheduler; the worker, the in-flight registration, the admission guard and the pause's wait, not built yet)
 
 Today "the queue" of an instance is three things, each keyed by its instance id:
 
@@ -216,7 +253,7 @@ So a group of several has one queue (the device's claims and the one pick of a r
 and one lease. Every other key stays the member's: decisions, facts, counters, pauses, holds and
 history are keyed by the member's alias or id, as today.
 
-## One pick per device per round (MAPP, not built yet)
+## One pick per device per round (MAPP-1: the one pick and `selected`; the host's `held`, `player_hold` and `fenced`, not built yet)
 
 Today an evaluation selects at most one candidate per instance: `selected_instances`
 (`crates/policy/src/evaluator.rs:2186`), checked at 2236 (reason `instance_already_selected`,
@@ -254,16 +291,19 @@ device", which ranks the members of one device by the normalized weight with the
 a cost ("Later slices", "Release"), and until then a group of several is refused at load ("The
 configuration form").
 
-**The reason a member waits: `device_group_waiting`** (proposed; info, ladder class `none`, owner
-`policy`). A candidate of a member that does not get the device because another member has it
+**The reason a member waits: `device_group_waiting`** (registered by MAPP-1; info, ladder class
+`none`, owner `policy`). A candidate of a member that does not get the device because another member has it
 carries this reason. It takes the place of the code a lone instance would give
 (`instance_already_selected`, `dispatch_instance_held`, the control gates' codes) and has no wake
 of its own: the other member's settlement, release or lifting wakes the next evaluation, as today.
-Its values:
+With `selected` the candidate waits with exactly the state, the eligibility and the wake of a
+candidate behind its own instance's winner (`instance_already_selected`); only the code and its
+values differ (settled by the coordinator, [v012-register.md](v012-register.md) §1.328). Its
+values:
 
 - `instance_id` (required): the candidate's alias, as the policy's reasons name it.
 - `alias` (required): the member that has the device.
-- `device_group_wait` (required; proposed vocabulary):
+- `device_group_wait` (required; a vocabulary registered by MAPP-1):
   - `selected`: the other member's candidate won the device this round;
   - `held`: a claim or a run of the other member holds the device, or waits for it first;
   - `player_hold`: a person holds the device through the other member ("Pause and hold");
@@ -277,7 +317,7 @@ It travels where reasons travel today: the decision; the not-run explanation (`a
 the not-run history. When a member's own holder or gate holds it, that holder or gate keeps its
 own code.
 
-## Never interrupted (MAPP, not built yet)
+## Never interrupted (MAPP-1: a client `QueueLease`'s preemption rule; the rest, not built yet)
 
 A running task package of one member is never stopped for another member's task. A policy dispatch
 is never queued (lib.rs:111), only a client `QueueLease` may ask for a preemption (lib.rs:605-606),
@@ -512,9 +552,9 @@ them, and it comes before the first real use of a group of several.
 
 ## Interfaces (MAPP, not built yet)
 
-- **`actingd-config` 29** (planned; [component-interfaces.md](component-interfaces.md), "Planned:
-  Workflow #437 MAPP"): the entry member `device_group` and check-config's report member
-  `device_group` (MAPP-1), and the `scheduling` section's member
+- **`actingd-config` 29** ([component-interfaces.md](component-interfaces.md), row 29 and
+  "Planned: Workflow #437 MAPP"): the entry member `device_group` and check-config's report member
+  `device_group` (MAPP-1, in force from Runtime 0.12.56), and the `scheduling` section's member
   `device_group.switch_failure_cooldown_ms` (MAPP-2, same release). A build before it refuses a
   file that names either member (`config_decode_failed`: the entry and the section deny unknown
   members). A file that names neither keeps its revision, so the Runtime reads 5 to 29 and declares
@@ -593,23 +633,23 @@ them, and it comes before the first real use of a group of several.
 - The slice "device-level actions by device" comes before the first real use of a group of
   several.
 
-## Proposed codes, value keys and words
+## Codes, value keys and words (MAPP-1 registers the first three codes and two vocabularies; the rest proposed)
 
-| Code | Owner | Category, ladder class | Values |
-|---|---|---|---|
-| `device_group_config_invalid` | `actingd` | error, `none` | `aliases`, `config_key`, `device_group_problem` |
-| `device_group_assembled` | `actingd` | info, `none` | `aliases`, `device_label` |
-| `device_group_waiting` | `policy` | info, `none` | `instance_id`, `alias`, `device_group_wait`, `task_id`?, `holder_kind`? |
-| `application_switch_failed` | `runtime-host` | error, `none` | `alias`, `application_switch_step`, `failure_code`, `application_id` |
-| `device_group_action_refused` | `runtime-host` | error, `none` | `alias`, `operation` |
+| Code | Owner | Category, ladder class | Values | State |
+|---|---|---|---|---|
+| `device_group_config_invalid` | `actingd` | error, `none` | `aliases`, `config_key`, `device_group_problem` | registered, MAPP-1 |
+| `device_group_assembled` | `actingd` | info, `none` | `aliases`, `device_label`? | registered, MAPP-1 |
+| `device_group_waiting` | `policy` | info, `none` | `instance_id`, `alias`, `device_group_wait`, `task_id`?, `holder_kind`? | registered, MAPP-1 |
+| `application_switch_failed` | `runtime-host` | error, `none` | `alias`, `application_switch_step`, `failure_code`, `application_id` | proposed (MAPP-2) |
+| `device_group_action_refused` | `runtime-host` | error, `none` | `alias`, `operation` | proposed (not built yet) |
 
-New value keys, each with a proposed vocabulary:
+New value keys, each with its vocabulary:
 
-- `device_group_problem`: `device_mismatch`, `handset_member`, `fixture_member`,
-  `application_shared`, `startup_package_missing`, `device_action_unsupported`,
-  `undeclared_shared_device`, `several_members_unsupported`.
-- `device_group_wait`: `selected`, `held`, `player_hold`, `fenced`.
-- `application_switch_step`: `foreground_read`, `stop`, `startup_package`.
+- `device_group_problem` (registered, MAPP-1): `name_invalid`, `device_mismatch`,
+  `handset_member`, `fixture_member`, `application_shared`, `startup_package_missing`,
+  `device_action_unsupported`, `undeclared_shared_device`, `several_members_unsupported`.
+- `device_group_wait` (registered, MAPP-1): `selected`, `held`, `player_hold`, `fenced`.
+- `application_switch_step` (proposed, MAPP-2): `foreground_read`, `stop`, `startup_package`.
 
 Every other key is an existing key of the one key table
 (`crates/actingcommand-contract/src/outcome/keys.rs`).

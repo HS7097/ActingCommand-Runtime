@@ -3,6 +3,7 @@
 use super::*;
 use actingcommand_contract::{IdentifierIssuer, IssuedHolderId};
 
+mod gate_mapp1;
 mod gate_p1;
 mod scenario;
 

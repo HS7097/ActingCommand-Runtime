@@ -600,7 +600,7 @@
     },
     "gate_code": {
       "type": "code",
-      "description": "The code of the gate that refused a clock slot."
+      "description": "The code of the gate that held back a clock slot or a candidate (since 0.12.56, Workflow #438 HELD-1: of a held record and its end, the not-run explanation row's why code)."
     },
     "budget_dimension": {
       "type": "vocab:budget_dimension",
@@ -2672,6 +2672,34 @@
     "phase_id": {
       "type": "id",
       "description": "The declared id of a stage of a phased route (a task's phases[].id): the stage the run was in (#428 DIAG-SI, since 0.12.55)."
+    },
+    "held_state": {
+      "type": "vocab:held_state",
+      "description": "How a held pair stood when task_held reported it: the not-run explanation row's eligibility (Workflow #438 HELD-1, since 0.12.56). Kept in codes mode."
+    },
+    "held_end": {
+      "type": "vocab:held_end",
+      "description": "How a hold that task_held reported ended, the value of task_held_ended (Workflow #438 HELD-1, since 0.12.56). Kept in codes mode."
+    },
+    "held_since_unix_ms": {
+      "type": "unix_ms",
+      "description": "The start of a hold: the not-run explanation row's since_unix_ms, the first evaluation of the run of evaluations in which the pair kept its why code (Workflow #438 HELD-1, since 0.12.56)."
+    },
+    "held_for_ms": {
+      "type": "duration_ms",
+      "description": "How long a pair has been held: the evaluation time less held_since_unix_ms, at the held record or at the evaluation that found the hold ended (Workflow #438 HELD-1, since 0.12.56)."
+    },
+    "held_after_ms": {
+      "type": "duration_ms",
+      "description": "The threshold in effect for the instance when a held record was written, scheduling.task_held.after_ms (Workflow #438 HELD-1, since 0.12.56)."
+    },
+    "device_group_problem": {
+      "type": "vocab:device_group_problem",
+      "description": "Which rule of device groups the instances[] entries that share one device break (Workflow #437 MAPP-1, since 0.12.56)."
+    },
+    "device_group_wait": {
+      "type": "vocab:device_group_wait",
+      "description": "Why a member of a device group waits for its device: what another member of the device does (Workflow #437 MAPP-1, since 0.12.56)."
     }
   },
   "vocabularies": {
@@ -9155,6 +9183,98 @@
           "description": "A state the run's layers or a package registry hold is not one the host can use: the run's navigation or interrupt state, a layer package the run admitted, or a registry's return-home entry without a listed package."
         }
       }
+    },
+    "held_state": {
+      "description": "How a held pair stood when task_held reported it, the not-run explanation row's eligibility (Workflow #438 HELD-1, contracts/scheduling/README.md \"Held records\"). A held code never comes with eligibility false.",
+      "review": "pending",
+      "tokens": {
+        "due": {
+          "description": "Eligibility true: the pair is due (its trigger true and its stop false) and the held code holds it."
+        },
+        "undecidable": {
+          "description": "Eligibility unknown: whether the pair is due cannot be decided (an unknown trigger or stop, or a fact refresh wait after one)."
+        }
+      }
+    },
+    "held_end": {
+      "description": "How a hold that task_held reported ended, the value of task_held_ended (Workflow #438 HELD-1, contracts/scheduling/README.md \"Held records\", \"The end\").",
+      "review": "pending",
+      "tokens": {
+        "selected": {
+          "description": "The evaluation selected the pair's decision; whether its intent is then admitted is the dispatch records'."
+        },
+        "why_changed": {
+          "description": "The pair's row carries another why code, held or not (a trigger turned false, a package closed, a pause), or a fact refresh wait of another fact_key; a move between the three waits for one fact's refresh of the same fact_key is none."
+        },
+        "row_gone": {
+          "description": "The instance has rows and none of the pair: the task left the catalog generation, or its package left the composed catalog."
+        },
+        "instance_gone": {
+          "description": "The evaluation decided nothing for the instance: it left the snapshot."
+        },
+        "restarted": {
+          "description": "The hold was reported by an earlier run of the Runtime: the start ended it before recording its settlement anchor; held_for_ms is absent."
+        }
+      }
+    },
+    "device_group_problem": {
+      "description": "Which rule of device groups the instances[] entries that share one device break, the value device_group_problem of device_group_config_invalid (Workflow #437 MAPP-1, register 1.323 and 1.328, contracts/device-group.md \"The configuration form\", since 0.12.56).",
+      "review": "pending",
+      "source": {
+        "file": "apps/actingd/src/codes.rs",
+        "enum": "DeviceGroupProblem"
+      },
+      "tokens": {
+        "name_invalid": {
+          "description": "An entry's device_group is not a name of 1 to 64 bytes under the alias rules (empty, longer than 64 bytes, or holding a control character). The first of the group checks, on every entry that names a group, before the kind rules; aliases is the entry and config_key is device_group."
+        },
+        "device_mismatch": {
+          "description": "The members of a group of several name the device by different keys or values: all must name the same instance_index, all the same instance_name, or all the same host and port (and serial when one is named). config_key is the key that differs."
+        },
+        "handset_member": {
+          "description": "A member of a group of several is a handset (device.kind handset): the private binding file binds one serial to one alias. config_key is device."
+        },
+        "fixture_member": {
+          "description": "A member of a group of several is a fixture entry. config_key is fixture_backend."
+        },
+        "application_shared": {
+          "description": "Two members of a group of several have one application_id; the members are told apart by package name. config_key is application_id."
+        },
+        "startup_package_missing": {
+          "description": "A member of a group of several declares no startup_package, the one way the Runtime reaches a member's home. config_key is startup_package."
+        },
+        "device_action_unsupported": {
+          "description": "A member of a group of several turns on a device-level action the first slice does not make group-aware: start_emulator true, an idle.action in effect other than none, or a ladder profile in effect whose rungs hold emulator_restart. config_key is start_emulator, idle.action or recovery_ladder_profile."
+        },
+        "undeclared_shared_device": {
+          "description": "Two entries outside one device group name the same device: the same instance_index, instance_name, serial, or host and port at assembly, or the same discovered index or ADB port after the start's discovery. config_key is the shared key."
+        },
+        "several_members_unsupported": {
+          "description": "A group of several that breaks no other rule, refused at load by every build before the slice \"order within one device\". config_key is device_group."
+        }
+      }
+    },
+    "device_group_wait": {
+      "description": "Why a member of a device group waits for its device, the value device_group_wait of device_group_waiting (Workflow #437 MAPP-1, contracts/device-group.md \"One pick per device per round\", since 0.12.56).",
+      "review": "pending",
+      "source": {
+        "file": "crates/policy/src/codes.rs",
+        "enum": "DeviceGroupWait"
+      },
+      "tokens": {
+        "selected": {
+          "description": "The other member's candidate (task_id) won the device this round."
+        },
+        "held": {
+          "description": "A claim or a run of the other member holds the device, or waits for it first (holder_kind the claim kind; task_id with a run)."
+        },
+        "player_hold": {
+          "description": "A person holds the device through the other member."
+        },
+        "fenced": {
+          "description": "The other member is fenced; its fence holds the whole group until it is lifted."
+        }
+      }
     }
   },
   "domains": {
@@ -9886,6 +10006,7 @@
       "actingd",
       "contract",
       "device",
+      "policy",
       "runtime-host"
     ],
     "diagnosed_": [

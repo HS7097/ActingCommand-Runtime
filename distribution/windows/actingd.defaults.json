@@ -107,6 +107,9 @@
     "profiles": {
       "handset": {
         "rungs": [{"action": "return_home"}, {"action": "application_restart"}]
+      },
+      "without_emulator_restart": {
+        "rungs": [{"action": "return_home"}, {"action": "application_restart"}]
       }
     },
     "kind_profiles": {
@@ -375,6 +378,10 @@
     },
     "no_progress": {
       "enabled": true
+    },
+    "task_held": {
+      "enabled": true,
+      "after_ms": 1800000
     }
   },
   "ledger_observer": {

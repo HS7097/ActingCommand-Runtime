@@ -66,6 +66,9 @@ pub mod action_gap;
 pub mod agent_wake;
 mod codes;
 mod defaults;
+// Workflow #437 MAPP-1: an instance entry's `device_group` and the device-level actions a member
+// of a group of several may not turn on.
+pub mod device_group;
 pub mod device_link;
 pub mod device_state;
 pub mod display_safe_area;
@@ -106,6 +109,7 @@ pub use codes::{ConfigCode, ConfigValueProblem};
 pub use defaults::{
     DefaultsFile, DefaultsInvalid, SHIPPED_DEFAULTS, sha256_text, shipped_defaults_sha256,
 };
+pub use device_group::{DEVICE_GROUP, DeviceAction};
 pub use device_link::{DeviceLinkConfig, DeviceLinkFile, OfflineAction};
 pub use device_state::{DeviceStateConfig, DeviceStateFile, KeyguardInsecureAction, ThermalLevel};
 pub use display_safe_area::{
@@ -148,7 +152,7 @@ pub use scheduling::{
     EvaluationRetryConfig, ExpectedRuntimeConfig, FactRefreshConfig, FeatureLockConfig,
     InstancePoolLineSet, InstanceSchedulingFile, PacingStage, PackAdmissionConfig, PoolLineValue,
     QuietHorizon, RandomDelay, RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry,
-    SchedulingConfig, SchedulingFile,
+    SchedulingConfig, SchedulingFile, TaskHeldConfig,
 };
 pub use standard_packs::{
     CACHED_GENERATIONS as STANDARD_PACKS_CACHED_GENERATIONS,
@@ -282,3 +286,8 @@ mod gate_bx1;
 // instruction's valued pools and the restore at start.
 #[cfg(test)]
 mod gate_sched_c1e;
+
+// Workflow #437 MAPP-1 (register §1.328): the `device_group` row and the instruction rule of a
+// member of a group of several.
+#[cfg(test)]
+mod gate_mapp1;

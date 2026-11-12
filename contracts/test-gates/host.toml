@@ -3565,3 +3565,23 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_442_rem1::remedy_table_names_unbound_tasks",
 ]
 incident = ["#442 REM-1"]
+
+# Workflow #438 HELD-1 (0.12.56; register §1.322 rows HELD-R1 to HELD-R9 and "The code slices", §1.327; brief rd-1112/brief-438-held-1.md; contracts/scheduling/README.md, "Held records"; contracts/policy-suspension.md, `held`): a candidate row of the not-run explanation held by one code of the census's held set (eligibility true or unknown; never the fact refresh read, never a pair in flight) past scheduling.task_held.after_ms of its instance leaves one goal_missed planning signal signal:task_held:held:<hex> (task_held, warning, with gate_code, held_state, held_since_unix_ms, held_for_ms, held_after_ms and the row's why as its one caused_by link), checked against the projection so a hold is reported once, and its end one signal:task_held:ended:<hex> (task_held_ended, info, held_end selected, why_changed, row_gone or instance_gone, with held_for_ms) whatever the switch; the clock is the row's since_unix_ms, with the three fact refresh waits of one fact_key sharing one; what a person, the configuration or the values said, what waits for its own time and what is not due is never reported; the switch and the threshold per instance (off writes no new record and still the ends, a lower threshold reports at the next evaluation, a higher one withdraws nothing); a start ends the holds the runs since the last settled start left open (restarted, no held_for_ms) before it records its anchor, and counting begins again; with the record on and off every decision, intent and other record of the cycle is the same; the records round-trip through the ledger, the projection and an event page; actingd suspended lists them under held with their ends, and ac_diagnose carries the instance's held rows and marks held_reported on the not_run row an open record names
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t1_a_chain_head_held_by_its_guard_and_its_unknown_followers_are_reported_once_after_the_threshold_and_end_when_the_head_runs",
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t2_a_pair_said_no_waiting_for_its_own_time_or_not_due_is_never_reported",
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t3_one_hold_is_reported_once_and_a_start_ends_the_holds_left_open",
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t4_another_why_code_ends_a_reported_hold_and_starts_a_new_count",
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t5_the_switch_and_the_threshold_per_instance",
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t6_the_decisions_are_the_same_with_the_record_on_and_off",
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t7_a_pair_in_flight_and_the_fact_refresh_read_are_never_reported",
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t8_the_records_round_trip_through_the_ledger_the_projection_and_an_event_page",
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t9_actingd_suspended_and_diagnose_list_an_instance_held_records",
+    "actingcommand-lab-ops::lib::gate_438_held::held_t9_actingd_suspended_and_diagnose_list_an_instance_held_records",
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t10_the_fact_refresh_waits_of_one_key_keep_one_clock",
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t11_a_start_leaves_the_held_records_it_cannot_read_back_and_goes_on",
+    "actingcommand-runtime-host::lib::tests::gate_438_held::held_t12_a_member_that_waits_for_its_device_is_held",
+]
+incident = ["#438 HELD-1"]
