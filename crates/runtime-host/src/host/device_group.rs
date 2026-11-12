@@ -132,7 +132,7 @@ impl HostShared {
         // from its hand-off to its settlement, also once its lease is released.
         let run = self.policy_run_of_members(&members)?;
         let scheduler = lock(&self.scheduler, HostLocation::ReadPolicyInstanceOccupancy)?;
-        let count = scheduler.eligible_count(instance_id, &gate_of, now_monotonic_ms);
+        let count = scheduler.eligible_count(instance_id, gate_of, now_monotonic_ms);
         // A lapsed holder is no hold: the sweep, or the admission's own expiry, ends it.
         let lease = scheduler
             .active_lease(instance_id)
@@ -155,7 +155,7 @@ impl HostShared {
                 task_id: Some(task_id.clone()),
             }),
             (None, None) => scheduler
-                .first_eligible_claim(instance_id, &gate_of, now_monotonic_ms)
+                .first_eligible_claim(instance_id, gate_of, now_monotonic_ms)
                 .map(|(member, kind)| DeviceHolder {
                     member,
                     kind,
@@ -230,10 +230,10 @@ impl HostShared {
             task_id: None,
             holder_kind: None,
         };
-        if let Some(alias) = others.iter().copied().find(|alias| player_held(*alias)) {
+        if let Some(alias) = others.iter().copied().find(|alias| player_held(alias)) {
             return Ok(Some(gate(DeviceGroupWait::PlayerHold, alias)));
         }
-        if let Some(alias) = others.iter().copied().find(|alias| fenced(*alias)) {
+        if let Some(alias) = others.iter().copied().find(|alias| fenced(alias)) {
             return Ok(Some(gate(DeviceGroupWait::Fenced, alias)));
         }
         let Some(holder) = device.holder else {

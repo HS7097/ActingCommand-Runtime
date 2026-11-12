@@ -504,7 +504,9 @@ fn mapp1b_a_member_waits_held_behind_the_others_holder_and_runs_after_it() {
 
 /// A scheduling pause of B completes while A's lease holds the device: B's pause waits only for
 /// B's own work. B's task then waits with its own pause's code, A's with its own holder's code
-/// (A is not paused), and once A's lease is released A's task is dispatched while B stays paused.
+/// (A is not paused), and once A's lease is released A's task is dispatched while B stays paused:
+/// in that round B's task waits behind A's (`device_group_waiting` `selected`), and with A's lease
+/// back it waits with its own pause's code again.
 #[test]
 fn mapp1b_a_pause_of_one_member_waits_only_for_its_own_work_and_leaves_the_other_scheduled() {
     let group = Group::start(300, 200, false);
@@ -542,8 +544,32 @@ fn mapp1b_a_pause_of_one_member_waits_only_for_its_own_work_and_leaves_the_other
     release(&mut holder, token);
     let after = group.evaluate(t0 + MINUTE_MS);
     assert_eq!(intents(&after), vec![pair(TASK_A, A)]);
-    let still = last_reason(&after, TASK_B, B);
-    assert!(still.is(HostCode::DispatchPausedInstance), "{still:?}");
+    // A's candidate won the device this round, so B's waits behind it as a candidate behind its
+    // own instance's winner does, which the round asks no gate of ("One pick per device per
+    // round": `selected`; register §1.328, point 9).
+    assert_waits(
+        last_reason(&after, TASK_B, B),
+        &[
+            ("instance_id", json!(B)),
+            ("alias", json!(A)),
+            (
+                "device_group_wait",
+                json!(DeviceGroupWait::Selected.as_str()),
+            ),
+            ("task_id", json!(TASK_A)),
+        ],
+    );
+    // B stays paused: while A's lease holds the device again, B's task waits with its own
+    // pause's code, which comes before another member's holder.
+    let (_, token) = holder.acquire(A);
+    let still = group.evaluate(t0 + 2 * MINUTE_MS);
+    assert!(intents(&still).is_empty(), "{:#?}", intents(&still));
+    let own_pause = last_reason(&still, TASK_B, B);
+    assert!(
+        own_pause.is(HostCode::DispatchPausedInstance),
+        "{own_pause:?}"
+    );
+    release(&mut holder, token);
     drop(holder);
     drop(client);
     group.close();

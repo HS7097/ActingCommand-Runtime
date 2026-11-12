@@ -16017,7 +16017,13 @@ file is added.
 1. *The order of a member's waits.* The member's own control gates come first, then its own
    holder (each with its own code); then another member's player hold, another member's fence
    (the one order of the control gates; the other members in alias order) and another member's
-   holder; then the device's takeover cooldown (`dispatch_instance_cooldown`, as before).
+   holder; then the device's takeover cooldown (`dispatch_instance_cooldown`, as before). These
+   are the eligibility's waits. A candidate behind the round's winner of its device waits
+   `selected` before any of them is asked, as one behind its own instance's winner waits
+   `instance_already_selected` (§1.328, point 9): so a paused member's candidate waits `selected`
+   in a round another member wins, and with its own pause's code in a round no member wins (test
+   `mapp1b_a_pause_of_one_member_waits_only_for_its_own_work_and_leaves_the_other_scheduled`,
+   corrected in fix round 1: it expected the pause's code in both).
 2. *The admission's refusal* is `device_group_waiting` with the waiting member's alias as
    `instance_id` (as the policy's reasons name it, where `dispatch_instance_held` names the opaque
    identifier), the hold's values and `operation` `admit_policy_dispatch`, at info, as the catalog
@@ -16058,12 +16064,27 @@ file is added.
     grant waits for it. Before the guard frees the device, the member's session is closed
     (`close_keyless_session_of_group`, after each frame, so between two frames of a sequence
     the device is free and holds no session): through a dedicated close lease, as a lease end
-    closes it (row 6); a close that fails fails the observation, its records written by the close
-    path; a close lease that the member's own waiting claim refuses leaves the session to that
-    claim's lease end, recorded once (another member's waiting claim refused the observation). A
-    device a lease of the member holds (a ladder's settle probe) leaves the session to that
-    lease's end. An instance alone on its device keeps its session as before. Test
+    closes it (row 6), and the lease ends as the other closes of a session a lease-free path
+    retained end theirs (`close_device_link_session`, `close_lapsed_run_session_guarded`:
+    `LeaseReleaseReason::BackendFailure`, which hands the key to a claim queued meanwhile, else
+    releases it). A close that fails fails the observation, its records written by the close
+    path. A device a lease of the member holds (a ladder's settle probe) leaves the session to
+    that lease's end. An instance alone on its device keeps its session as before. Test
     `mapp1b_a_keyless_observation_of_a_member_keeps_no_session_and_no_other_member_runs_under_it`.
+    *Fix round 1 (CI of pull request #1635):* the first build ended the close lease as an
+    explicit release (`LeaseReleaseReason::Explicit`), which the scheduler takes only from a
+    client's release request (`release_owned` refuses it); the lease end was refused with the
+    lease still held (`scheduler_cleanup_state_mismatch`, `cleanup_runtime_lease`), and the member
+    was fenced (`instance_resources_fenced`). *Open, for the slice "order within one device":* a
+    close lease that a waiting claim refuses (`lease_transfer_not_safe`: the member's own claim,
+    or a claim of any member queued while the capture ran, which meets the device's guard and
+    waits) leaves the session to the member's next lease end, recorded once; when that claim is
+    another member's, the member's session stays open while the claim's lease runs, so two
+    members' sessions are open on the device for that time. In the device's takeover cooldown the
+    close lease is refused (`lease_cooldown`) and the observation fails with it after its capture,
+    the session left open likewise. Closing either needs a close lease that a queued claim or a
+    cooldown does not refuse, or the capture held under a lease of its own; neither is this
+    slice's.
 
 **The held set.** `device_group_waiting` is held, due, whatever its `device_group_wait` (§1.328,
 point 11). The waits `held`, `player_hold` and `fenced` carry it, so a member that waits past

@@ -519,10 +519,16 @@ impl HostShared {
     /// 15; register §1.330): a keyless observation of a member of a device group of several,
     /// served on a free device under the device's admission guard (`admission`), keeps no
     /// session: the member's session is closed before the guard frees the device, through a
-    /// dedicated close lease, as a lease end closes it. A device a lease holds (the member's own:
-    /// another member's refused the observation) leaves the session to that lease's end; a close
-    /// lease the member's own waiting claim refuses leaves it to that claim's lease end, recorded
-    /// once. An instance alone on its device keeps its session, as before.
+    /// dedicated close lease, as a lease end closes it. The close lease ends as the other closes
+    /// of a session a lease-free path retained end theirs (`close_device_link_session`,
+    /// `close_lapsed_run_session_guarded`): `BackendFailure`, which hands the key to a claim queued
+    /// meanwhile, else releases it. (An explicit release is a client's release request; the
+    /// scheduler refuses it here, `scheduler_cleanup_state_mismatch`, and that fenced the member.)
+    /// A device a lease holds (the member's own: another member's refused the observation) leaves
+    /// the session to that lease's end; a close lease a waiting claim refuses (the member's own, or
+    /// any member's queued while the capture ran: register §1.330, point 11) leaves it to the
+    /// member's next lease end, recorded once. An instance alone on its device keeps its session,
+    /// as before.
     pub(super) fn close_keyless_session_of_group(
         &self,
         instance_id: InstanceId,
@@ -548,7 +554,7 @@ impl HostShared {
             instance_id,
             links.clone(),
             false,
-            LeaseReleaseReason::Explicit,
+            LeaseReleaseReason::BackendFailure,
             admission,
         ) {
             Ok(Ok(())) => Ok(()),
