@@ -1359,3 +1359,11 @@ tests = [
     "actingcommand-policy::lib::tests::gate_mapp1::mapp1_without_a_device_of_several_the_evaluation_is_byte_for_byte_the_one_before",
 ]
 incident = ["#437 MAPP-1"]
+
+# Workflow #437 MAPP-1b (0.12.57; register §1.328 point 8, §1.330; brief rd-1112/brief-437-mapp-1b.md; contracts/device-group.md, "Never interrupted"): a chain handover's successor goes before the candidates of its device's other members that outranked it, which wait behind it with device_group_waiting selected naming its member and task; without a handover the device goes to its first candidate in the allocation order, and without the groups each instance runs its own candidate (1)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_mapp1b::mapp1b_a_chain_successor_goes_before_the_other_members_of_its_device",
+]
+incident = ["#437 MAPP-1b"]

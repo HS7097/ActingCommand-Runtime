@@ -2255,6 +2255,8 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     // Workflow #411 B41: on an instance where a chain step hands over on its page, the successor
     // is allocated before the candidates that ranked ahead of it. A deferral under one of
     // `successor_waits` (the Runtime's random delay) is part of the successor's dispatch.
+    // Workflow #437 MAPP-1b: the handovers are keyed by device, and the successor goes before
+    // the candidates of its device's other members too.
     let successor_waits = chain
         .as_ref()
         .map_or_else(Vec::new, |(inputs, _)| inputs.successor_wait_codes.clone());
@@ -2264,6 +2266,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             entry_holds,
             &catalog_bundle.tasks.tasks,
             &task_states,
+            device_groups,
             &mut candidates,
         )?,
         None => BTreeMap::new(),
@@ -2291,7 +2294,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         let instance_hold = instance_holds.held(&candidate.task_id, &candidate.instance_id);
         // Workflow #411 B41: a candidate the instance's chain step goes before waits for it while
         // it is dispatched; the successor counts as not dispatched until it is selected below.
-        if let Some(handover) = handovers.get_mut(candidate.instance_id.as_str()) {
+        // Workflow #437 MAPP-1b: the handover of the candidate's device; only the successor's own
+        // instance's candidates wait under its reason.
+        if let Some(handover) = handovers.get_mut(device_groups.device(&candidate.instance_id)) {
             if handover.holds(candidate.work_index) {
                 if let Some(hold) = instance_hold {
                     hold_unasked(
@@ -2546,7 +2551,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             // Workflow #411 B41: a successor that only waits for its dispatch (its random delay)
             // still goes first; any other deferral lets the candidates it went before run.
             if let Some(handover) = handovers
-                .get_mut(candidate.instance_id.as_str())
+                .get_mut(device_groups.device(&candidate.instance_id))
                 .filter(|handover| handover.is_successor(candidate.work_index))
                 && successor_waits.iter().any(|code| reason.outcome.is(*code))
             {
@@ -2618,7 +2623,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         ]);
         round_slots.choose(&candidate.host_id, candidate.load);
         if let Some(handover) = handovers
-            .get_mut(candidate.instance_id.as_str())
+            .get_mut(device_groups.device(&candidate.instance_id))
             .filter(|handover| handover.is_successor(candidate.work_index))
         {
             handover.settle(true);

@@ -42,6 +42,9 @@ pub(super) struct FakeState {
     capture_open_count: AtomicUsize,
     capture_open_error: std::sync::Mutex<Option<DeviceError>>,
     capture_count: AtomicUsize,
+    // Workflow #437 MAPP-1b: runs inside the next capture (taken once), while the capture is in
+    // flight under its device's admission guard, as another member's admission meets it.
+    capture_hook: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
     capture_delay_ms: AtomicU64,
     // Workflow #369 E6 (#670 final review M-3): when not 0, a capture waits while at least this
     // many captures are done (raising it lets more through).
@@ -385,6 +388,10 @@ impl CaptureBackend for FakeCapture {
     fn capture(&mut self) -> DeviceResult<Frame> {
         if self.state.panic_capture_once.swap(false, Ordering::AcqRel) {
             panic!("injected capture panic inside the session thread");
+        }
+        let hook = self.state.capture_hook.lock().expect("capture hook").take();
+        if let Some(hook) = hook {
+            hook();
         }
         loop {
             let hold_after = self.state.capture_hold_after.load(Ordering::Acquire);

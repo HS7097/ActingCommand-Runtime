@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::outcome::{Code, Outcome};
 
-use super::{DecisionReason, PlacementCandidate, TaskRuntimeSnapshot, reason_with};
+use super::{DecisionReason, DeviceGroups, PlacementCandidate, TaskRuntimeSnapshot, reason_with};
 use crate::codes::PolicyCode;
 use crate::{PredicateSpec, TaskSpec, TaskTerminalState};
 
@@ -79,6 +79,9 @@ pub(super) struct Handover {
     page_id: String,
     /// The candidates of the instance that ranked ahead of the successor.
     ahead: BTreeSet<usize>,
+    /// Workflow #437 MAPP-1b: the candidates of the successor's device that ranked ahead of it,
+    /// its own instance's (`ahead`) and the device's other members'; it is moved before them.
+    before: BTreeSet<usize>,
     allocation: Allocation,
 }
 
@@ -128,16 +131,27 @@ impl Handover {
 
 /// Finds each instance's handover among the ranked `candidates`, the first candidate in rank
 /// order that hands over, and moves its successor ahead of every candidate of its instance.
+///
+/// Workflow #437 MAPP-1b (`contracts/device-group.md`, "Never interrupted"; register §1.328,
+/// point 8): the handovers are keyed by the device of their instance (`devices`), and the
+/// successor also moves ahead of every candidate of the device's other members that outranked
+/// it, so those wait behind it as candidates ranked after it do (`device_group_waiting`
+/// `selected` once it is dispatched). A device has at most one handover, the first in rank
+/// order: a later successor of another member of the device is an ordinary candidate. The
+/// candidates that wait under `policy_chain_handover_waiting` stay those of the successor's own
+/// instance. For an instance alone on its device the device is the instance, as before.
 pub(super) fn plan<E>(
     inputs: &ChainHandoverInputs,
     entry_holds: &mut ChainEntryHolds<'_, E>,
     tasks: &[TaskSpec],
     task_states: &BTreeMap<(&str, &str), &TaskRuntimeSnapshot>,
+    devices: &DeviceGroups,
     candidates: &mut Vec<PlacementCandidate>,
 ) -> Result<BTreeMap<String, Handover>, E> {
     let mut handovers = BTreeMap::<String, Handover>::new();
     for (index, candidate) in candidates.iter().enumerate() {
-        if handovers.contains_key(&candidate.instance_id) {
+        let device = devices.device(&candidate.instance_id);
+        if handovers.contains_key(device) {
             continue;
         }
         let Some(page) = inputs.resting_pages.get(&candidate.instance_id) else {
@@ -159,13 +173,19 @@ pub(super) fn plan<E>(
             .filter(|other| other.instance_id == candidate.instance_id)
             .map(|other| other.work_index)
             .collect();
+        let before = candidates[..index]
+            .iter()
+            .filter(|other| devices.device(&other.instance_id) == device)
+            .map(|other| other.work_index)
+            .collect();
         handovers.insert(
-            candidate.instance_id.clone(),
+            device.to_owned(),
             Handover {
                 successor_work_index: candidate.work_index,
                 successor_task_id: task.id.clone(),
                 page_id: page.page_id.clone(),
                 ahead,
+                before,
                 allocation: Allocation::Pending,
             },
         );
@@ -173,7 +193,7 @@ pub(super) fn plan<E>(
     for handover in handovers.values() {
         let first = candidates
             .iter()
-            .position(|candidate| handover.ahead.contains(&candidate.work_index));
+            .position(|candidate| handover.before.contains(&candidate.work_index));
         let successor = candidates
             .iter()
             .position(|candidate| handover.is_successor(candidate.work_index));

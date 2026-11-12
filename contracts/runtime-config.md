@@ -1732,7 +1732,8 @@ switch cooldown is MAPP-2's, not built yet):
   ([device-group.md](device-group.md), "The configuration form" and "Release").
 - **The switch cooldown** (MAPP-2): `scheduling.device_group.switch_failure_cooldown_ms`
   (proposed), milliseconds `1..=3600000`, default `300000`, a member of the `scheduling` section
-  (`actingd-config` 29, planned), settable, default `file`, read at every policy cycle. After a
+  (planned: it comes with MAPP-2 and takes the next free revision of `actingd-config`; 0.12.56
+  ships revision 29 without it), settable, default `file`, read at every policy cycle. After a
   failed switch (`application_switch_failed`) the member's candidates are deferred for that long
   with `dispatch_instance_cooldown`, as during a takeover cooldown, while the other members go on;
   a change applies to cooldowns that start after it. No per-instance or per-group form

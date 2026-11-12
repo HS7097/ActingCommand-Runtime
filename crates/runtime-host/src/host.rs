@@ -181,6 +181,9 @@ pub(crate) use chain_handover::chain_entry_holds_page;
 mod client_events;
 mod contained_task;
 mod device_diagnostic;
+// Workflow #437 MAPP-1b: the host's half of a device group: its members, its holder, the waits
+// of its members and the refusals of device-level actions.
+mod device_group;
 // Workflow #398 RD-2: the wired device link of the handsets, its wait and restore.
 mod device_link;
 // Workflow #398 RD-5b: the device state of the handsets, its holds and the start gate.
@@ -609,6 +612,10 @@ pub struct RuntimeHostConfig {
     /// device key map actingd derives at assembly; an instance it does not name keys its own id
     /// (a group of one). Memory only: the scheduler and the evaluator take it at the start.
     device_keys: BTreeMap<InstanceId, InstanceId>,
+    /// Workflow #437 MAPP-1b (`contracts/device-group.md`, "One queue, one worker, one lease per
+    /// device"): the `device_group` each entry that names one names, by alias; the worker of a
+    /// device group of several is named after it. Memory only.
+    device_group_names: BTreeMap<String, String>,
     /// Per instance alias: the default resource package the daemon admitted from its
     /// configuration (slice #324-r1). Reported by instance status only; never opened here.
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
@@ -727,6 +734,7 @@ impl RuntimeHostConfig {
             startup_packages: BTreeMap::new(),
             emulator_autostart: Vec::new(),
             device_keys: BTreeMap::new(),
+            device_group_names: BTreeMap::new(),
             resource_packages: BTreeMap::new(),
             stuck_recovery: BTreeMap::new(),
             recognition_packages: BTreeMap::new(),
@@ -1091,6 +1099,16 @@ impl RuntimeHostConfig {
     /// did before MAPP-1. Never stored.
     pub fn with_device_keys(mut self, device_keys: BTreeMap<InstanceId, InstanceId>) -> Self {
         self.device_keys = device_keys;
+        self
+    }
+
+    /// Workflow #437 MAPP-1b (`contracts/device-group.md`, "One queue, one worker, one lease per
+    /// device"): installs the `device_group` each entry that names one names, by alias, as
+    /// actingd read them at assembly. The one worker of a device group of several is the thread
+    /// `actingd-device-<device_group>`; an instance alone on its device keeps
+    /// `actingd-instance-<alias>`, whether or not it names a group. Never stored.
+    pub fn with_device_group_names(mut self, device_group_names: BTreeMap<String, String>) -> Self {
+        self.device_group_names = device_group_names;
         self
     }
 
@@ -2074,6 +2092,8 @@ impl RuntimeHost {
             #[cfg(test)]
             config_persist_failure_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
+            device_keys: config.device_keys,
+            device_group_names: config.device_group_names,
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
             ladder_busy_holds: Mutex::new(BTreeMap::new()),
@@ -5979,6 +5999,13 @@ struct HostShared {
     config_persist_failure_for_test: AtomicBool,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
+    // Workflow #437 MAPP-1b (`contracts/device-group.md`, "Derived, never stored"): the member →
+    // device key map of this start's configuration, as the scheduler keys its state (an instance it
+    // does not name is alone on its device), and the `device_group` each entry that names one
+    // names, by alias. Read only; the workers, the admission guards, the occupancy and the gates of
+    // a group read them (`device_group.rs`).
+    device_keys: BTreeMap<InstanceId, InstanceId>,
+    device_group_names: BTreeMap<String, String>,
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults) and the
     // per-instance ladder window.
     stuck_recovery: OnceLock<BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>>,
