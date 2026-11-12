@@ -641,6 +641,49 @@ fn held_t4_another_why_code_ends_a_reported_hold_and_starts_a_new_count() {
     );
 }
 
+/// Workflow #437 MAPP-1a (register §1.328, point 11): a member of a device group that waits for
+/// its device behind another member (`device_group_waiting`) is held, due, as a candidate behind
+/// its own instance's winner is: nothing before the threshold, then one held record whose link is
+/// the reason whole, with the member that has the device and its task.
+#[test]
+fn held_t12_a_member_that_waits_for_its_device_is_held() {
+    let waiting = || {
+        why(
+            PolicyCode::DeviceGroupWaiting,
+            json!({
+                "instance_id": ALIAS,
+                "alias": OTHER,
+                "device_group_wait": "selected",
+                "task_id": FIRST,
+            }),
+        )
+    };
+    let mut held = Harness::new();
+    held.cycle(T0, vec![row(HEAD, EligibilityState::True, waiting())]);
+    assert!(
+        held.cycle(
+            T0 + 29 * MINUTE_MS,
+            vec![row(HEAD, EligibilityState::True, waiting())]
+        )
+        .is_empty(),
+        "the wait has not lasted the threshold"
+    );
+    let reported = T0 + 30 * MINUTE_MS;
+    let signals = held.cycle(reported, vec![row(HEAD, EligibilityState::True, waiting())]);
+    assert_eq!(signals.len(), 1, "{signals:#?}");
+    assert_held(
+        &signals[0],
+        ALIAS,
+        HEAD,
+        PolicyCode::DeviceGroupWaiting.code(),
+        HeldState::Due,
+        T0,
+        reported,
+        DEFAULT.after_ms,
+        &waiting(),
+    );
+}
+
 /// The switch and the threshold, per instance. Off: no new held record, and the end of a hold
 /// already reported is still written. A lower threshold reports at the next evaluation every run
 /// already past it; a higher one withdraws nothing, and the hold's end is still written.

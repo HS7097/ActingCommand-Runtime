@@ -2018,7 +2018,9 @@ that hold ended.
     `heavy_scene_budget_exhausted`, `heavy_scene_budget_deferred`,
     `policy_concurrent_runs_deferred`, `instance_already_selected`,
     `policy_chain_handover_waiting`, `dispatch_instance_held` (whatever its `holder_kind`),
-    `application_update_pending`, `selection_input_unknown`, `decision_reason_missing`.
+    `application_update_pending`, `selection_input_unknown`, `decision_reason_missing`,
+    `device_group_waiting` (whatever its `device_group_wait`; classed by Workflow #437 MAPP-1a,
+    [v012-register.md](../v012-register.md) §1.328).
   - *Held, undecidable* (eligibility `unknown`): `trigger_unknown`, `feedback_stop_unknown`.
   - *Held, either* (by the row's eligibility): `fact_refresh_pending`, `fact_refresh_unresolved`,
     `fact_refresh_exhausted`, `fact_refresh_unbound`.
@@ -2033,8 +2035,10 @@ that hold ended.
     takeover cooldown, an interval, a backoff, a random delay, an owed rerun, a remedy round); and a
     row that is not due (`trigger_false`, `feedback_stop_true`).
   - A wait behind a run in flight (`dispatch_instance_held`, the heavy-scene and shared-limit
-    waits, `instance_already_selected`) stays held (settled by the coordinator on 11-12): only so
-    is a registration left open with no time and no other record seen. A queue of short runs
+    waits, `instance_already_selected`, and `device_group_waiting`, the wait of a member of a
+    device group for the device another member has) stays held (settled by the coordinator on
+    11-12): only so is a registration left open with no time and no other record seen, and only so
+    does a member that another member of its device starves for hours leave a record. A queue of short runs
     changes the code at each run and never reaches the threshold; an instance whose runs are long
     gets its own `after_ms`, and a wake rule may leave such codes out (its `codes`,
     [agent-wake.md](../agent-wake.md), "Rules").
