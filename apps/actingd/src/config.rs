@@ -2137,7 +2137,10 @@ impl ActingdConfigFile {
                     }
                 })?;
         }
-        host = host.with_device_keys(device_groups.device_keys());
+        // Workflow #437 MAPP-1b: with each entry's group name, which names a group's one worker.
+        host = host
+            .with_device_keys(device_groups.device_keys())
+            .with_device_group_names(device_groups.names());
         // Workflow #387 D1b: the whole-section checks of the file layer, with the facts of other
         // crates they read (§5.3); a start and check-config refuse the same way.
         // RB-2: the start applies the `host` section to its own process right after this.

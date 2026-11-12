@@ -20,9 +20,10 @@ running instance (`ApplicationLifecycle`) is unchanged.
   sets in motion: a configuration-declared, fully ledgered contained task, not a restart.
 - The instance must be a registered physical instance (`fixture_execution_scope_forbidden`
   otherwise).
-- (Workflow #437 MAPP, not built yet; [device-group.md](device-group.md), "Device-level actions".)
-  A member of a device group of several is refused before any device step with
-  `device_group_action_refused` (proposed; `alias`, `operation`). A control of one member would
+- (Workflow #437 MAPP-1b, since 0.12.57; [device-group.md](device-group.md), "Device-level
+  actions"; [v012-register.md](v012-register.md) §1.330.) A member of a device group of several is
+  refused before any device step and before its intent with `device_group_action_refused`
+  (`alias` the member, `operation` `control_emulator_instance`). A control of one member would
   rebind and refresh that member only and leave the other members' endpoints and device facts as
   they were. In the same group, the configured start (`start_emulator`), the idle action and the
   ladder's `emulator_restart` rung are refused at assembly, so no path of the first slice stops or

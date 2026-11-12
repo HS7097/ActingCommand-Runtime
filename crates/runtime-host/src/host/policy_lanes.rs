@@ -145,6 +145,9 @@ pub(super) struct PolicyRunsInFlight {
 
 struct InFlightPolicyRun {
     decision_id: String,
+    /// Workflow #437 MAPP-1b: the run's catalog task, which another member of its device group
+    /// names when it waits for the device (`device_group_waiting` `held`, `task_id`).
+    task_id: String,
     epoch: u64,
     /// No worker holds the run any more (a panic, a settlement that failed without stopping the
     /// Runtime): the instance stays occupied until the reconciliation settles the run, once its
@@ -404,6 +407,7 @@ impl HostShared {
                 instance_id,
                 InFlightPolicyRun {
                     decision_id: context.decision_id().to_owned(),
+                    task_id: context.catalog_task_id().to_owned(),
                     epoch,
                     abandoned: false,
                 },
@@ -461,6 +465,25 @@ impl HostShared {
         )?
         .runs
         .contains_key(&instance_id))
+    }
+
+    /// Workflow #437 MAPP-1b (`contracts/device-group.md`, "One queue, one worker, one lease per
+    /// device"): the first of `members` (in the order given) with a policy run registered, in
+    /// flight or abandoned, and that run's catalog task. The registration stays per member; a
+    /// member's occupancy reads it across its group.
+    pub(super) fn policy_run_of_members(
+        &self,
+        members: &[InstanceId],
+    ) -> RuntimeHostResult<Option<(InstanceId, String)>> {
+        let runs = lock(
+            &self.policy_runs_in_flight,
+            HostLocation::ReadPolicyRunsInFlight,
+        )?;
+        Ok(members.iter().find_map(|member| {
+            runs.runs
+                .get(member)
+                .map(|run| (*member, run.task_id.clone()))
+        }))
     }
 
     /// Workflow #427-A: whether a worker still holds a policy run on `instance_id` (registered
