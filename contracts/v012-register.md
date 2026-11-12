@@ -10504,6 +10504,42 @@ registration starts it until G7.
 **LAB-5G3 rollback** (to the release before it). Nothing persisted: the jobs live in the process's
 memory.
 
+#### Slice LAB-5G3, second part (0.12.57): cursors taken back by the new MCP server
+
+The work order's point 6 (`rd-1112/brief-lab5g3.md`), cut from "Slice LAB-5G3" above as its
+"Size" says, and opened by the coordinator's ruling of 2026-11-12 on board #434 (not the owner's
+words) as its own pull request, stacked on the first part's (Runtime pull request #1646). The code
+is the first part's commit that took it out, reverted; the first part's documents stay as they
+are, and this subsection says what the second part adds. The rule: nothing existing changes but
+this program's answers; today's MCP server and actinglab's lines are untouched. The ruling of
+2026-11-11 recorded in "Slice LAB-5G1b" holds: `runs`' and `codes`' cursors carry their own
+position and bind to no session.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G3b-1 | `events` and `codes` `cursor` in the front's added members (`tools::ADDED`, `tools::Added::Cursor`) | behaviour, schema | LAB-5G3 (second part) | — | a text property after the row's parameters (no row declares `cursor` for these two; `runs` does, and keeps its own); read and taken out with the waits (`calls::front_members`, `calls::FrontMembers::cursor`): another JSON type `arguments_invalid` `wrong_type`, a value that begins with `--` refused as `serve` refuses it (`actingctl_usage_invalid`, `not_recognised`) |
+| L5G3b-2 | a cursor given back (`calls::Service::taken_back`) | behaviour | LAB-5G3 (second part) | the job of an `ac_events` or `ac_codes` call that gives one | `events`: `events::dispatch_within` with the command's words (`core_ops::handed_words`) and `--cursor`, on the kept connection, under `{session: the server's, generation: the kept connection's}` (L5G1b-3), so a cursor issued before the connection was made again is `cursor_invalid` and nothing is read; a Runtime that does not answer the kept connection leaves it to the command's own connection, as `Service::line` does. `codes`: `code_lookup::dispatch_within` with its words (`core_ops::offline_words`) and `--cursor`, bound to no session. Each within this server's budget, as a job like every served call. `runs` takes its row's `cursor` as before |
+| L5G3b-3 | the instructions | text | LAB-5G3 (second part) | — | the sentence on cursors says which bind: an `events` cursor belongs to the process and its Runtime connection (`cursor_invalid` after a reconnect), a `codes` or `runs` cursor carries its own position |
+
+**Tests.** New, apps row "#434 LAB-5G3, second part": `serve_calls::mcp_cursor_bound_to_connection`
+(over pipes, the runtime client's scripted Runtime with made-up ledger records): a page of two of
+four records issues an `events` cursor naming the server's first connection; taken back on that
+connection it gives the rest of the page; after the scripted Runtime answers the next `Health` by
+closing (the connection made again) the same cursor is `cursor_invalid` and no event query is
+sent; a `codes` cursor gives the page `code_lookup` gives the command line for it; a `runs` cursor
+gives the line the command line's code gives. **Adapted** (the first part's tests, where they pin
+the added members): `gate_434_lab5g3::mcp_job_start_options` (the one table holds the two cursors
+too, and `ac_events`, `ac_codes` and `ac_runs` have a text `cursor`) and
+`gate_434_lab5g2a::mcp_tools_from_op_table`'s helper `assert_definition_from_row` (an added cursor
+is text, an added wait an integer).
+
+**Interface.** None raised: nothing on the wire, in the ledger or in a file a released peer reads
+changes; no code, key, location or vocabulary token is added.
+
+**What the second part changes live.** Nothing: no registration starts the program until G7.
+
+**Rollback** (to the release before it). Nothing persisted.
+
 #### Slice LAB-5G2b, second part (0.12.57): the new MCP server serves the rescue rows in its own process
 
 Coordinator work order `rd-1112/brief-lab5g2b2.md` with `rd-1112/brief-lab5g-common.md`, on the

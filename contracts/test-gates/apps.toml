@@ -1636,6 +1636,14 @@ tests = [
 ]
 incident = ["#434 LAB-5G3"]
 
+# Workflow #434 LAB-5G3, its second part (0.12.57; register §1.287, "Slice LAB-5G3, second part"; brief rd-1112/brief-lab5g3.md point 6; contracts/lab-two-entries.md §9.3, "Cursors taken back"): over pipes against the runtime client's scripted Runtime with made-up ledger records, an events cursor issued on the server's kept connection (its generation 1) is taken back there and gives the rest of the page, and once the connection was made again (the scripted Runtime closes it at the next Health) the same cursor is cursor_invalid and no event query is sent; a codes cursor gives the page the command line gives for it, bound to no session; a runs cursor, its row's own, gives the line the command line's code gives
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-mcp::serve_calls::mcp_cursor_bound_to_connection",
+]
+incident = ["#434 LAB-5G3"]
+
 # Workflow #434 LAB-5G2b, second part (0.12.57; register §1.287, "Slice LAB-5G2b, second part"; brief rd-1112/brief-lab5g2b2.md; contracts/lab-two-entries.md §5 and §9.3, "Calls served in the server's process"; the coordinator's rulings on board #434, 6775192250 point 17 and of 2026-11-12): the new MCP server serves on Windows the rescue rows the rescue module serves, in its own process with the initiator Lab-MCP. Over pipes, from a copy of the program in a made-up single-location root whose build carries it in tools\ (listed with its size and SHA-256), adopted, no Runtime: ac_mcp_plan answers the line the rescue module's code gives for mcp plan on that root, in the members of LAB-5G5b's checked-in sample, its one child the server's own file; ac_deploy and ac_rollback, whose run the front forces detached, answer mcp_operation_unsupported with their tool and the root holds the same files after them (no detached log, no journal); an undeclared member of ac_leftovers (unknown) and a relative dir of ac_release_stage (not_absolute) are arguments_invalid, which the module never answers, with the argument, and the root holds the same files after them
 [[gate]]
 coverage = "Y"
