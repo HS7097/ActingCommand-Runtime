@@ -16,7 +16,9 @@
 //!   `lab_ops::core_ops` serves is served here and
 //!   answers the line `actinglab --json` prints, within today's answer budget, on one kept
 //!   Runtime connection of `lab_ops::front`'s `Front::Mcp` (a write on a connection of its own,
-//!   after today's provenance); every other call is refused with `mcp_operation_unsupported`
+//!   after today's provenance); on Windows a rescue row the rescue module serves is served here
+//!   by the module, with the initiator `Lab-MCP` (LAB-5G2b's second part), but `deploy` and
+//!   `rollback`; every other call is refused with `mcp_operation_unsupported`
 //!   ([`codes`]) until a later slice serves it. It ships in the Tools archive since LAB-5G6
 //!   (0.12.57); nothing starts it until a client is registered with the MCP entry's second
 //!   generation.
