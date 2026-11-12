@@ -18,7 +18,7 @@
 // A failure names the row, the parameter and the direction. The embedded table and the constants
 // only: no Runtime, no file, no device. Left for one more slice (the work order's "Size"): the
 // flags each command line writes held to what its receiver takes, and each receiver fed every
-// declared parameter.
+// declared parameter; done by Workflow #434 LAB-5B1c (`gate_434_lab5b1c`).
 
 use crate::rescue;
 use crate::rescue_reads::{self, AGENT, EXCEPTIONS, INSTALLER, READ_HERE};
@@ -229,7 +229,8 @@ fn rescue_a_read_outside_its_constant_fails() {
     }
     let params = Map::new();
     let alive = rescue_reads::read_here("alive", &params).expect("alive is read here");
-    // A declared parameter, a handed row's, and an exception.
+    // A declared parameter, a handed row's, and `config restore`'s `sha` (an exception until
+    // Workflow #434 LAB-5B1c, which the row declares since).
     assert_eq!(alive.get("wait"), None);
     let status = rescue_reads::installer("op status").expect("op status hands a line");
     assert_eq!(

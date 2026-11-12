@@ -1234,7 +1234,8 @@ fn replaced_build(context: &Context<'_>, paths: &Paths, loaded: &Loaded) -> Opti
     operation.journal().previous.live.clone()
 }
 
-/// `config replace <file> [--sha <sha256>]` and `config restore <backup>`.
+/// `config replace <file> [--sha <sha256>]` and `config restore <backup> [--sha <sha256>]`
+/// (Workflow #434 LAB-5B1c: the second row declares `sha`, which this code read for it before).
 fn config_swap(context: &Context<'_>, params: Params<'_>, restore: bool) -> Exit {
     let command = if restore {
         InstallLocation::ConfigRestore

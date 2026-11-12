@@ -60,7 +60,7 @@ use super::postcheck;
 use super::programs::{self, Deadline};
 use super::state::{self, KindLocation, OperationKind, Paths};
 use super::update;
-use super::{Answer, Flags};
+use super::{Answer, FlagLists, Flags};
 use crate::codes::{
     InstallCaveat, InstallGuard, InstallLocation, InstallRefusal, RollbackGatePart,
 };
@@ -1760,6 +1760,13 @@ pub(crate) fn open_composite<'h>(
     Ok(Ok(opened))
 }
 
+/// The flags `install stop` takes (Workflow #434 LAB-5B1c).
+pub(crate) static STOP_FLAGS: FlagLists = FlagLists {
+    with_value: &["--root", "--hold"],
+    lists: &["--known-pause", "--ack-guard"],
+    switches: &[],
+};
+
 /// `install stop --root <root> --hold <reason> [--known-pause ALIAS=REASON]... [--ack-guard
 /// <id>]...`. Workflow #434 LAB-3: the rescue module's `down` runs it with its face.
 pub(crate) fn stop_command(
@@ -1768,12 +1775,7 @@ pub(crate) fn stop_command(
     face: super::Face,
 ) -> Result<Answer, Outcome> {
     const STOP: InstallLocation = InstallLocation::Stop;
-    let flags = Flags::parse_lists(
-        words,
-        &["--root", "--hold"],
-        &["--known-pause", "--ack-guard"],
-        &[],
-    )?;
+    let flags = Flags::parse_by(words, &STOP_FLAGS)?;
     let paths = super::resolve_root(&flags)?;
     let hold = match hold::parse_hold(&flags)? {
         Some(hold) => hold,
@@ -1886,6 +1888,13 @@ fn last_stop(host: &dyn Host, paths: &Paths) -> Option<(String, journal::S0, Opt
     None
 }
 
+/// The flags `install start` takes (Workflow #434 LAB-5B1c).
+pub(crate) static START_FLAGS: FlagLists = FlagLists {
+    with_value: &["--root"],
+    lists: &["--ack-guard"],
+    switches: &[],
+};
+
 /// `install start --root <root> [--ack-guard <id>]...`. Workflow #434 LAB-3: the rescue module's
 /// `up` runs it with its face.
 pub(crate) fn start_command(
@@ -1894,7 +1903,7 @@ pub(crate) fn start_command(
     face: super::Face,
 ) -> Result<Answer, Outcome> {
     const START: InstallLocation = InstallLocation::Start;
-    let flags = Flags::parse_lists(words, &["--root"], &["--ack-guard"], &[])?;
+    let flags = Flags::parse_by(words, &START_FLAGS)?;
     let paths = super::resolve_root(&flags)?;
     let acks = guards::parse_acks(&flags.list("--ack-guard"))?;
     journal::refuse_unfinished(START, &paths)?;
@@ -1967,6 +1976,13 @@ pub(crate) fn start_command(
     update::run(operation, &loaded)
 }
 
+/// The flags `install release-hold` takes (Workflow #434 LAB-5B1c).
+pub(crate) static RELEASE_HOLD_FLAGS: FlagLists = FlagLists {
+    with_value: &["--root", "--reason"],
+    lists: &[],
+    switches: &[],
+};
+
 /// `install release-hold --root <root> --reason <reason>`. Workflow #434 LAB-3: the rescue
 /// module's `release-hold` runs it with its face.
 pub(crate) fn release_hold_command(
@@ -1975,7 +1991,7 @@ pub(crate) fn release_hold_command(
     face: super::Face,
 ) -> Result<Answer, Outcome> {
     const RELEASE: InstallLocation = InstallLocation::ReleaseHold;
-    let flags = Flags::parse(words, &["--root", "--reason"], &[])?;
+    let flags = Flags::parse_by(words, &RELEASE_HOLD_FLAGS)?;
     let paths = super::resolve_root(&flags)?;
     let reason = SchedulingPauseReason::new(flags.required("--reason")?)
         .map_err(|_| super::unusable("--reason"))?;
@@ -2036,6 +2052,13 @@ pub(crate) fn release_hold_command(
     update::run(operation, &loaded)
 }
 
+/// The flags `install guards` takes (Workflow #434 LAB-5B1c).
+pub(crate) static GUARDS_FLAGS: FlagLists = FlagLists {
+    with_value: &["--root", "--for", "--hold"],
+    lists: &["--known-pause"],
+    switches: &[],
+};
+
 /// `install guards --root <root> --for stop|start [--hold <reason>] [--known-pause
 /// ALIAS=REASON]...`: the guards the command would evaluate now; nothing changes. A hot
 /// placement's guards come with INST-4. `count` is how many guards would refuse. Workflow #434
@@ -2047,12 +2070,7 @@ pub(crate) fn guards_command(
     face: super::Face,
 ) -> Result<Answer, Outcome> {
     const GUARDS: InstallLocation = InstallLocation::GuardsReport;
-    let flags = Flags::parse_lists(
-        words,
-        &["--root", "--for", "--hold"],
-        &["--known-pause"],
-        &[],
-    )?;
+    let flags = Flags::parse_by(words, &GUARDS_FLAGS)?;
     let paths = super::resolve_root(&flags)?;
     let loaded = plan::load(&paths, GUARDS)?;
     let runtime = host.runtime();

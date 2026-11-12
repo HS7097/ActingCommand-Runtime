@@ -6,9 +6,11 @@
 //! LAB-5B1 made for the core rows (`actingcommand_lab_ops::core_reads`), which that code reads the
 //! row's parameters through ([`Params`], with its debug assertion on a read outside the constant)
 //! and builds the command line from. The slice's tests hold each equal to its row's declared
-//! parameters in both directions. Left for one more slice (the work order's "Size"): the flags each
-//! command line writes held to what its receiver takes (the installer's lists and the agent
-//! channel's, each lifted to one constant), and each receiver fed every declared parameter.
+//! parameters in both directions. Workflow #434 LAB-5B1c (register §1.287, "Slice LAB-5B1c"): and
+//! the flags each command line writes held to what its receiver takes (the installer's lists,
+//! `crate::install::FlagLists` beside each command, and the agent channel's,
+//! `actingcommand_agent_forward::cli::*_FLAGS`, each one constant its parse reads), each receiver
+//! fed every declared parameter; nothing is left for a later slice.
 //!
 //! - **Read in this process** ([`READ_HERE`]): the rows whose parameters the module reads itself
 //!   ([`Reads`]): the composites, the reads, the starts and the MCP rows.
@@ -17,7 +19,7 @@
 //! - **Handed to the agent channel** ([`AGENT`]): the `agent` rows, each with the words after
 //!   `agent-channel` (`crate::agent_channel::run`).
 //! - **Exceptions** ([`EXCEPTIONS`]): the names outside the operation table that the code reads,
-//!   each with its reason.
+//!   each with its reason; none since LAB-5B1c.
 //!
 //! A handed row's parts are written in their place, but its `Written::Each` parameters and
 //! `Part::Further`: those come last, together, member by member in the order the caller gave them
@@ -38,7 +40,8 @@ pub static READ_HERE: [Reads; 16] = [
     reads("deploy", &["target", "plan", "detach", "dir"]),
     reads("rollback", &["plan", "detach", "to"]),
     reads("config replace", &["file", "sha"]),
-    reads("config restore", &["backup"]),
+    // Workflow #434 LAB-5B1c: the row declares `sha`, which `rescue::config_swap` reads for it.
+    reads("config restore", &["backup", "sha"]),
     reads(
         "instance add",
         &[
@@ -188,15 +191,10 @@ pub static AGENT: [Handed; 6] = [
     handed("agent notice", &["notice"], &[Part::Further]),
 ];
 
-/// The exceptions, each with its reason.
-pub static EXCEPTIONS: [Exception; 1] = [Exception {
-    rows: &["config restore"],
-    name: "sha",
-    why: "read by `rescue::config_swap`, the arm `config replace` shares, and handed to \
-          `install::config_swap::candidate`, which checks the file's SHA-256 against it: no front \
-          gives it (the row does not declare it), but its receiver acts on it, so the arm and the \
-          row stay as they are and the coordinator decides (LAB-5B1b, point 4)",
-}];
+/// The exceptions, each with its reason: none. Workflow #434 LAB-5B1c: LAB-5B1b's one exception,
+/// `config restore`'s `sha`, is gone, since the row declares the parameter (the coordinator's
+/// decision on LAB-5B1b's open point; the table follows the code).
+pub static EXCEPTIONS: [Exception; 0] = [];
 
 /// The parameters `map` of the row `name` the module reads in its process, read through its
 /// constant; `None` for another row.

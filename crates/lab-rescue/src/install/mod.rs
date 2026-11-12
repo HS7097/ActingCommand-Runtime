@@ -108,6 +108,10 @@ mod gate_434_lab5b1b_lines;
 // Test-only: Workflow #434 LAB-5B1b, the rescue rows' constants held to their rows.
 #[cfg(test)]
 mod gate_434_lab5b1b;
+// Test-only: Workflow #434 LAB-5B1c, the handed rows' flags held to their receivers' lists, and
+// `config restore`'s `sha`.
+#[cfg(test)]
+mod gate_434_lab5b1c;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
@@ -318,6 +322,17 @@ fn usage(outcome: Outcome) -> Answer {
     }
 }
 
+/// Workflow #434 LAB-5B1c: the flags one command takes, one constant beside the command, which
+/// its parse reads ([`Flags::parse_by`]): those that take the next word, the list flags and the
+/// switches. The lists its parse call gave inline before, unchanged; the rescue module's test
+/// holds the flags its rows write to them (`gate_434_lab5b1c`).
+#[derive(Debug)]
+pub(crate) struct FlagLists {
+    pub(crate) with_value: &'static [&'static str],
+    pub(crate) lists: &'static [&'static str],
+    pub(crate) switches: &'static [&'static str],
+}
+
 /// The flags of one command: each at most once, but a list flag (Workflow #421 INST-2:
 /// `--known-pause`, `--ack-guard`) as often as it is given.
 pub(crate) struct Flags<'a> {
@@ -335,6 +350,11 @@ impl<'a> Flags<'a> {
         switches: &[&'static str],
     ) -> Result<Self, Outcome> {
         Self::parse_lists(words, with_value, &[], switches)
+    }
+
+    /// Workflow #434 LAB-5B1c: [`Self::parse_lists`] by the command's constant `taken`.
+    pub(crate) fn parse_by(words: &[&'a str], taken: &FlagLists) -> Result<Self, Outcome> {
+        Self::parse_lists(words, taken.with_value, taken.lists, taken.switches)
     }
 
     /// [`Self::parse`] with list flags: each of `lists` takes the next word, and may be given
@@ -449,12 +469,19 @@ pub(crate) fn refuse_ab(operation: InstallLocation, paths: &Paths) -> Result<(),
     Ok(())
 }
 
+/// The flags `install resume` takes (Workflow #434 LAB-5B1c; the rescue module's `op resume`).
+pub(crate) static RESUME_FLAGS: FlagLists = FlagLists {
+    with_value: &["--root", "--operation"],
+    lists: &[],
+    switches: &[],
+};
+
 /// `install resume --root <root> --operation <id>`: continues the unfinished operation from its
 /// journal; each step's postcondition is checked on disk first. An operation whose end (or its
 /// undo's) is in its journal while `current.json` still names it (a crash before the rename,
 /// review S1 F5) only has `current.json` retired and answers the end it recorded.
 fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
-    let flags = Flags::parse(words, &["--root", "--operation"], &[])?;
+    let flags = Flags::parse_by(words, &RESUME_FLAGS)?;
     let paths = resolve_root(&flags)?;
     let operation_id = flags.required("--operation")?;
     match state::read_current(&paths) {

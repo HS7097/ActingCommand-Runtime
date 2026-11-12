@@ -9,7 +9,7 @@ use super::journal::{self, Operation};
 use super::plan::{self, PlanInputs, PlanKind};
 use super::state::{self, CurrentState, Paths, StateProblem};
 use super::update;
-use super::{Answer, Flags};
+use super::{Answer, FlagLists, Flags};
 use crate::codes::{InstallLocation, InstallRefusal};
 use actingcommand_contract::outcome::Outcome;
 use serde::Serialize;
@@ -163,11 +163,25 @@ fn leftovers_of(paths: &Paths) -> Result<Vec<std::path::PathBuf>, Outcome> {
     Ok(found)
 }
 
+/// The flags `install leftovers` takes (Workflow #434 LAB-5B1c).
+pub(crate) static LEFTOVERS_FLAGS: FlagLists = FlagLists {
+    with_value: &["--root"],
+    lists: &[],
+    switches: &[],
+};
+
+/// The flags `install status` takes (Workflow #434 LAB-5B1c).
+pub(crate) static STATUS_FLAGS: FlagLists = FlagLists {
+    with_value: &["--root", "--operation"],
+    lists: &[],
+    switches: &["--check-rollback"],
+};
+
 /// `install leftovers --root <root>`: every kept file and folder with its operation, size and
 /// whether a running process holds it. Nothing is deleted.
 pub(crate) fn leftovers(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     const LEFTOVERS: InstallLocation = InstallLocation::Leftovers;
-    let flags = Flags::parse(words, &["--root"], &[])?;
+    let flags = Flags::parse_by(words, &LEFTOVERS_FLAGS)?;
     let paths = super::resolve_root(&flags)?;
     let images = host.processes_under(&paths.root).map_err(|cause| {
         super::refusal(LEFTOVERS, InstallRefusal::ProcessesUnreadable).caused_by(cause)
@@ -201,7 +215,7 @@ pub(crate) fn leftovers(words: &[&str], host: &dyn Host) -> Result<Answer, Outco
 /// `install status --root <root> [--operation <id>] [--check-rollback]`.
 pub(crate) fn status(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     const STATUS: InstallLocation = InstallLocation::Status;
-    let flags = Flags::parse(words, &["--root", "--operation"], &["--check-rollback"])?;
+    let flags = Flags::parse_by(words, &STATUS_FLAGS)?;
     let paths = super::resolve_root(&flags)?;
     let layout = if paths.selection().exists() {
         "ab"
