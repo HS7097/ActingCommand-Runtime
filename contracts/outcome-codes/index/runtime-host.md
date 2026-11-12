@@ -474,7 +474,7 @@ hand. The [summary](README.md) says what each column means. 1147 codes.
 | `instance_idle_action` | info | none | 0.12.13 | active | pending | written | IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): an instance with no task soon. |
 | `instance_idle_action_unsupported` | warning | none | 0.12.13 | active | pending | written | IDLE-1 (Fail Loud): the instance's idle action in effect (idle_action, close_app or stop_emulator) cannot work, because the instance cannot be brought back… |
 | `instance_lock_poisoned` | error | none | 0.12.12 | active | pending | TBD | A lock of one instance alone that guards no data (its admission guard or its queue-order lock) was left poisoned by a panic (ISO-M #419, R8). |
-| `instance_not_running` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports instance not running. |
+| `instance_not_running` | error | none | 0.12.0 | active | pending | written | A request, a Runtime claim or a probe that would open an instance's device session, or a self-check, found the instance's emulator stopped: its discovery… |
 | `instance_resources_fence_awaiting_person` | warning | none | 0.12.9 | active | pending | written | A fenced instance (instance_id) began to wait for a person (#411 A38): the recovery ladder that held its fence ended without proving the close, no ladder could… |
 | `instance_resources_fence_lifted` | info | none | 0.12.0 | active | pending | written | A preparation of a fenced instance (instance_id) passed its self-check after the unconfirmed close, which proves the close: the resource fence is lifted, the… |
 | `instance_resources_fence_recheck_failed` | warning | none | 0.12.9 | active | pending | written | A periodic self-check (recheck) of a fenced instance (instance_id) that waits for a person failed (#411 A38): attempts is its number, limit_count the most… |
@@ -496,7 +496,7 @@ hand. The [summary](README.md) says what each column means. 1147 codes.
 | `lab_arrival_clock_regressed` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports lab arrival clock regressed. |
 | `lab_arrival_deadline_overflow` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports lab arrival deadline overflow. |
 | `lab_arrival_observation_failed` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports lab arrival observation failed. |
-| `lab_arrival_page_absent` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | The Runtime host reports lab arrival page absent. |
+| `lab_arrival_page_absent` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | A Lab do names an arrival page (after_page) that is not an exact page id of its package; it is refused before any input. |
 | `lab_arrival_shutdown` | error | planned_stop | 0.12.0 | active | pending | TBD | The Runtime host reports lab arrival shutdown. |
 | `lab_frame_hash_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports lab frame hash invalid. |
 | `lab_frame_id_issue_failed` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports lab frame id issue failed. |

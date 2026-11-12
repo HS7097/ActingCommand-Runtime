@@ -15914,6 +15914,72 @@ ends at 28 does not pair with this build's [5, 29] until the UI repository raise
 `config_decode_failed`). Nothing is persisted by MAPP-1: no record type, payload member, fact,
 tag or state file; the owner journal's ids are member ids an older build reads as before.
 
+### 1.329 Slice CODES-T2 (0.12.56): the error codes production met say what causes them and what to do (Workflow #439; the owner's approval of 11-12 to fill the catalog's texts in batches; coordinator work order `rd-1112/brief-codes-t2.md`, read on main `a21571c4`)
+
+1.329 is the coordinator's number, appended after §1.326 on main `a21571c4`; §1.327 and §1.328
+belong to pull requests not merged yet. This second batch takes the codes production met: on
+11-12 the coordinator read the last seven days of the five production instances (`actingctl
+diagnose`, read only) and took every failure code it grouped, 28 codes, 7 of which had their
+texts. This section writes `common_causes` and `handling` of the other 21, all active error
+codes. Each text says only what the places that raise the code support; the pull request lists
+those places by file and line, and the catalog holds none.
+
+Active codes with both texts written (`common_causes` and `handling` neither empty nor `TBD`),
+by category:
+
+| Category | Active | Before | After |
+|---|---|---|---|
+| fatal | 14 | 14 | 14 |
+| error | 3403 | 342 | 363 |
+| warning | 146 | 144 | 144 |
+| info | 205 | 93 | 93 |
+| success | 126 | 86 | 86 |
+| all | 3894 | 679 | 700 |
+
+- **Written:** 21 codes, all error: contract 9 (`command_rejected`,
+  `contained_task_home_recovery_package_incompatible`, `contained_task_page_unknown`,
+  `contained_task_recognition_failed`, `input_backend_operation_failed`, `lease_queue_cancelled`,
+  `ocr_field_low_confidence`, `runtime_diagnostic`, `selection_record_too_large`),
+  execution-kernel 10 (`contained_task_error_page_reached`, `contained_task_guard_refused`,
+  `contained_task_operation_candidates_exhausted`, `contained_task_prerequisite_entry_unmatched`,
+  `page_confirmation_failed`, `selection_not_selected`, `selection_projection_mismatch`,
+  `selection_result_blocked`, `selection_scan_alignment_rejected`,
+  `selection_scan_start_unconfirmed`), runtime-host 2 (`instance_not_running`,
+  `lab_arrival_page_absent`).
+- **The two carriers:** `runtime_diagnostic` is the `diagnostic_code` of most `runtime.failed`
+  records and of every failed, cancelled or refused task terminal, beside an outcome that is the
+  failure itself. It is the record's outcome too only where the record was written without the
+  failure's own code (the `command.rejected` of a refused input, of a request on an instance whose
+  emulator is stopped, of a refused discovery, emulator control or monitor change; a refused
+  monitor probe; a Lab run the Lab reported failed), and then the `runtime.failed` record written
+  with it carries the code. `command_rejected` classifies the refusal of a configuration change, a
+  run stop, a ladder drill or an agent wake test, whose outcome is the refusal, and is the outcome
+  itself of a failed Lab operation (with `failure_code` when the Lab reports it) and of a refused
+  package debug. Both are raised today; neither is written only for records of an older shape.
+- **Descriptions rewritten** (11): the generated sentences that only restated the name, of
+  `runtime_diagnostic`, `lease_queue_cancelled`,
+  `contained_task_home_recovery_package_incompatible`, `contained_task_recognition_failed`,
+  `input_backend_operation_failed`, `selection_record_too_large`, `instance_not_running` and
+  `lab_arrival_page_absent`; the generated first sentence of `command_rejected` and of
+  `contained_task_page_unknown`, whose LAB-OBS-1, STILL-1 and LOAD-3 sentences stay word for word;
+  and the first sentence of `contained_task_prerequisite_entry_unmatched`, which named only a
+  linear task's first page and "its budget", where a `navigable_route` package that declares a
+  prerequisite package meets the code too and the wait is the package's step timeout.
+- **Not written, nothing raises them:** none; each of the 21 is raised on main `a21571c4`.
+- **Seen, not changed:** the runtime host attaches the kernel's detail of a task failure only for
+  `linear_steps` packages and a short list of codes (`contained_task_step_unconfirmed`,
+  `contained_task_error_page_reached`, `page_confirmation_failed`, the prerequisite
+  incompatibility), so a page-graph run's failure with `contained_task_guard_refused`,
+  `contained_task_operation_candidates_exhausted` or `selection_not_selected` carries no detail;
+  their texts point at the outcome's values and the run's records instead. `contained_task_return_home_entry_unmatched`, outside this
+  batch, keeps the same narrow first sentence ("A linear task's first page").
+
+No interface, shape, code or behaviour changes: only texts of pending entries change (eleven
+descriptions included); every category, ladder class, owner, layer, value, `since`, status and
+review (`pending`) stays, `runtime-outcomes` stays 1, and no release file changes, since a release
+file holds no text. The index under `contracts/outcome-codes/index/` is regenerated with
+`ci/outcome_codes_index.py` in the same pull request.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

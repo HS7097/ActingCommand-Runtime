@@ -1749,9 +1749,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A linear task's first page was not seen within its budget after its prerequisite package ran. Workflow #411 B39 (A part): layer_outcome_key is the outcome key of the scheduling outcome mapping the prerequisite layer's run ended on, when its final page is a terminal page of one of its package's mappings.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A package's entry (a linear_steps package's first page, a navigable_route package's entry page or entry page set) was not seen within its step timeout after its prerequisite package ran. Workflow #411 B39 (A part): layer_outcome_key is the outcome key of the scheduling outcome mapping the prerequisite layer's run ended on, when its final page is a terminal page of one of its package's mappings.",
+      "common_causes": "The prerequisite package a package declares (prerequisite_package_id) ran and ended, and the package's own entry page then did not pass within its step timeout: the prerequisite ended on another page than the one the package starts from (layer_outcome_key names the mapping key it ended on, when it ended on a mapped page), or that page's targets did not match.",
+      "handling": "Compare the prerequisite's final page (the run's task.entry_preflight records: actingctl events --run-id <run_id> --event-type task.entry_preflight --detail payload) with the page the package starts from: the two packages must meet on that page, and whichever does not is its author's to fix. The default recovery ladder does not start for it (exclude_codes contained_task_prerequisite_*)."
     },
     "contained_task_return_home_entry_unmatched": {
       "category": "error",
@@ -1937,8 +1937,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A contained task operation's guard did not pass before its input. page_id is the page of the frame the guard judged on and artifact_id that frame, the run's GuardRejection pin (#411 A30).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "On the frame before an input, the page recognised is not the guard's page, or the guard's target was evaluated on that page and did not pass: the screen is not in the state the operation expects, or the target no longer matches it. No on_guard_refused passed the operation over or ended the run with a key, and no on_error recovery was requested.",
+      "handling": "Look at the frame artifact_id names and at page_id, the page it showed (actingctl run evidence --run-id <run_id>): another page means the flow differs from the pack there, the guard's page with a failing target means the target no longer matches; both are the pack author's. A scheduled run's failure starts the default recovery ladder (trigger pack_logic), and the same refusal again with a similar frame can pause the task (actingctl diagnose lists it under suspended)."
     },
     "contained_task_operation_candidates_exhausted": {
       "category": "error",
@@ -1959,8 +1959,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Workflow #390 EXEC-1: on a frame of the page page_id, every candidate operation of a page-graph task was passed over, count of them: its when did not hold, or its guard refused before any input of its step and it declared on_guard_refused next_candidate. No candidate was left to run; no further input was made.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "On one frame of the page page_id every operation that leaves it was passed over (count says how many): its when did not hold, or its guard refused before its first input and it declares on_guard_refused next_candidate; an operation capped by its designated effect set or by max_runs with on_max_runs next_candidate is left out as well. The screen shows a state of that page none of its operations accepts.",
+      "handling": "Look at the frame and at the when and guard evaluations of those operations (actingctl run evidence --run-id <run_id>, its overlay read with ac_material): a state the package should handle needs an operation for it or a keyed end, a when or guard that should have held needs its target fixed; both are the pack author's. No input was made from that frame."
     },
     "contained_task_operation_runs_capped": {
       "category": "info",
@@ -2100,8 +2100,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A page-graph step reached a declared error page and its operation decided to fail; or (#411 A45) a page-graph run observed a page it declares as an error page and no operation leaves that page, so it ended there before any input from it.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "After a step's input the screen showed a page the task lists in error_pages, and the operation, which declares retries, had no retryable on_error recovery to request, so it failed there; or a wait step saw such a page, or the run stood on an error page no operation leaves. An operation that declares no retries fails with page_confirmation_failed (hit_error_page=true) instead.",
+      "handling": "Read after_page in the detail of the run's runtime.failed record and the run's last frames (actingctl run evidence --run-id <run_id>): if the application did show its error page, the run stopped as the package declares and the cause is the application's state then; if the page was recognised wrongly, its targets are the pack author's to fix. A scheduled run's failure starts the default recovery ladder (trigger pack_logic) and does not pause the task by repetition."
     },
     "contained_task_linear_intermediate_unobserved": {
       "category": "error",
@@ -2234,8 +2234,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A step's expected page was not confirmed after its input. STILL-1: held_ms and limit_ms are present when the wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when the wait ended on a transition frame after its loading allowance was spent under execution.loading.mode on. LOAD-4 (since 0.12.38): so in a linear_steps task, for the wait of the intermediate page, of the next step's page or of its candidates, and of the retry decision.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "After a step's input the page it expects next did not pass within its confirmation wait: in a page-graph task an operation that declares no retries (none of retryable, max_attempts, retry_interval_ms) ended its wait without a destination page or on a declared error page (hit_error_page=true), or a retry's wait matched no page at all; in a linear_steps task the next step's page did not pass after the step's attempts. held_ms or loading_ms mean the wait ended early on an unchanged or a loading screen.",
+      "handling": "Read the detail of the run's runtime.failed record (after_page is the page the last frame matched, or <unrecognized>) and the run's frames (actingctl run evidence --run-id <run_id>): the step's own page means its input did not take, another page needs declaring as a destination or an interrupt, no page needs the frame's page declared or its targets fixed; all are the pack author's. A scheduled run's failure starts the default recovery ladder (trigger pack_logic), and the same failure again with a similar frame can pause the task until the package changes."
     },
     "contained_task_resource_reading_unresolved": {
       "category": "warning",
@@ -2609,8 +2609,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A select step's selection policy selected no candidate.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The step's selection policy decided on what it read and chose no candidate: none survived its filters (empty) and the step declares no on_empty, fewer survived than it requires (insufficient), its tie-break order did not separate them (ambiguous), or an unknown input reached a rule that ends the evaluation (unknown).",
+      "handling": "Read the step's task.selection_evaluated record (actingctl events --run-id <run_id> --event-type task.selection_evaluated --detail payload): its selection_result, verdicts and reasons show why each candidate fell out. Candidates the screen showed but the step read wrongly need their targets fixed, a screen with no suitable candidate can end the run by on_empty, and a policy that rules them out is its document's; all are the pack author's."
     },
     "selection_page_changed": {
       "category": "error",
@@ -2649,8 +2649,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A select step's confirmation candidate set differs from the evaluated one.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A single-frame select step with confirm candidate_set, the default, read its candidates again on a fresh frame before its tap, and that set's hash differed from the one it decided on: a candidate appeared, left or read another value between the two frames, as while a list still moves or a feature reads unstably. Nothing was tapped.",
+      "handling": "Compare the evaluated projection with the confirmation's candidate_set_sha256 and projection in the step's task.selection_evaluated record (actingctl events --run-id <run_id> --event-type task.selection_evaluated --detail payload). A list that was still moving or a feature that reads differently on a still screen is the pack author's: fix the target, or declare confirm decision, which compares the two decisions only."
     },
     "selection_decision_mismatch": {
       "category": "error",
@@ -2734,8 +2734,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A select step's scan session could not prove the start of its list: the declared start check failed on the settled first frame and the scan declares no rewind, or two consecutive rewind viewports repeated the one before them without the start check passing (stage select_scan_start). No selecting input was made.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The scan's start check did not pass on its first settled frame and the scan declares no rewind, or with rewind two consecutive rewind viewports repeated the one before them, the list no longer moving, while the check still did not pass: the list was left part-way down, or the check's target does not match the list's real start.",
+      "handling": "Look at the scan's first frames (actingctl run evidence --run-id <run_id>): a list left part-way down needs start.rewind declared, a list at its start where the check fails needs the check's target fixed; both are the pack author's. No selecting input was made."
     },
     "selection_scan_settle_incomplete": {
       "category": "error",
@@ -2782,8 +2782,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A select step's scan session found no single shift for a frame: not exactly one consistent cluster of anchor pairs lay inside the window its motion admits (scan_alignment_failure says why; count is the pairs of the best cluster, limit_count the declared min_overlap_instances). Under page-order evidence (Workflow #308 SEL-L3b) the shift is the page: not exactly one declared page check passed, or the one page is neither the previous viewport's nor the next (no_consistent_shift, ambiguous_shift, unexpected_displacement; count is the page checks that passed, limit_count 1). The Runtime never guesses a second time.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "Between two viewports of a select step's scan the Runtime could not place the new frame against the earlier one: too few anchor pairs matched (too_few_matches, count below limit_count), none formed a consistent shift (no_consistent_shift), two fit the drag's window (ambiguous_shift), or the only one lay outside it (unexpected_displacement). Under page-order evidence not exactly one page check passed, or the one that passed was neither the previous viewport's page nor the next.",
+      "handling": "Look at the frames of viewport_index and the one before it (actingctl run evidence --run-id <run_id>): too little of the list stayed in view or its anchors read differently, its rows look alike to the tracker, or it moved by more or less than the drag admits; the scan's track and moves are the pack author's to adjust. The scan's drags already moved the list and the Runtime does not try again; a scheduled run's failure starts the default recovery ladder (trigger pack_logic)."
     },
     "selection_scan_gap_detected": {
       "category": "error",
@@ -2971,8 +2971,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A select step's decision did not stand because positions it could not read might change it (rules 2 and 3 of the frozen selector model S0 §3.2, stage select_decide): an empty or insufficient decision with at least one unknown instance (selection_blocking unknown_instances), or a selected one that an unknown instance might outrank (outranked_possible). selection_kind and outcome_key are the evaluator's own; count is the number of unknown instances. The decision is recorded and nothing is tapped.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The step's scan, or its single frame when it declares on_empty, left positions it could not read (unknown instances, count of them), and the decision depends on them: an empty or insufficient decision with an unknown instance present (selection_blocking unknown_instances), or a selected candidate an unknown one might outrank (outranked_possible).",
+      "handling": "Read the step's task.selection_evaluated record (its unknown_check and verdicts) and the scan's frames (actingctl run evidence --run-id <run_id>) to see why those positions stayed unread; a feature or identity its targets cannot read there is the pack author's to fix. Nothing was tapped; a scheduled run's failure starts the default recovery ladder (trigger pack_logic)."
     },
     "selection_identity_unconfirmed": {
       "category": "error",

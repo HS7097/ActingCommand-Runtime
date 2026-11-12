@@ -52,7 +52,7 @@ column means. 915 codes.
 | `capture_summary_pin_conflict` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): capture summary pin conflict. |
 | `catalog_transition_failed` | error | none | 0.12.0 | active | pending | TBD | The diagnostic code of a ledger diagnostic record: catalog transition failed. |
 | `client_action_invalid` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): client action invalid. |
-| `command_rejected` | error | none | 0.12.0 | active | pending | TBD | The diagnostic code of a ledger diagnostic record: command rejected. |
+| `command_rejected` | error | none | 0.12.0 | active | pending | written | The diagnostic code of a command.rejected record: a request the Runtime refused, or a Lab operation that failed. |
 | `command_wait_expired` | error | none | 0.12.0 | active | pending | TBD | A command's --wait (actingctl emulator start, stop, restart and task-run; actinglab after U-3) ended before its request did: the command stopped waiting after… |
 | `config_decode_failed` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): the configuration file does not decode as actingd's… |
 | `config_manifest_parameters_too_many` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: config manifest parameters too many. |
@@ -66,14 +66,14 @@ column means. 915 codes.
 | `contained_task_entry_pages_missing` | error | declaration_error | 0.12.8 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, #411 A45): an entry check was asked of a package that declares no entry page it can check, an… |
 | `contained_task_guard_evaluation_failed` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task guard evaluation failed. |
 | `contained_task_home_entry_not_matched` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task home entry not matched. |
-| `contained_task_home_recovery_package_incompatible` | error | declaration_error | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task home recovery package incompatible. |
+| `contained_task_home_recovery_package_incompatible` | error | declaration_error | 0.12.0 | active | pending | written | A run whose required entry page was not on the screen named a recovery package of its own, and that package declares what a home recovery package may not run… |
 | `contained_task_ocr_fields_unresolved` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task ocr fields unresolved. |
-| `contained_task_page_unknown` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task page unknown. |
+| `contained_task_page_unknown` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | No frame of a contained task's wait for a page of its package matched one of its pages. |
 | `contained_task_paused` | error | planned_stop | 0.12.0 | active | pending | TBD | The Runtime's wire error code (receipt projection `code`): contained task paused. |
 | `contained_task_post_admission_ocr_failed` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task post admission ocr failed. |
 | `contained_task_prerequisite_incompatible` | error | declaration_error | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task prerequisite incompatible. |
 | `contained_task_prerequisite_step_limit` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task prerequisite step limit. |
-| `contained_task_recognition_failed` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): contained task recognition failed. |
+| `contained_task_recognition_failed` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | A recognition evaluation of a contained task ended in an error that is not the vision provider's: a page evaluation of its frame, or the evaluation of a when,… |
 | `contained_task_state_invalid` | error | none | 0.12.0 | active | pending | written | A code several owners emit with one meaning (contract-owned, A2a D3): a contained task's run reached a state from which it cannot go on, and ended there. |
 | `current_page_unknown` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): current page unknown. |
 | `dangling_reference` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): dangling reference. |
@@ -137,7 +137,7 @@ column means. 915 codes.
 | `incomplete_resource_close_context` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: incomplete resource close context. |
 | `inconsistent_fact_observation` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: inconsistent fact observation. |
 | `input_backend_open_failed` | error | environment_fault | 0.12.0 | active | pending | TBD | A device self-check failed: input backend open failed. |
-| `input_backend_operation_failed` | error | environment_fault | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): input backend operation failed. |
+| `input_backend_operation_failed` | error | environment_fault | 0.12.0 | active | pending | written | An input action on an instance's open input backend session failed. |
 | `input_check_failed` | error | environment_fault | 0.12.0 | active | pending | TBD | A device self-check failed: input check failed. |
 | `input_failed` | error | environment_fault | 0.12.0 | active | pending | TBD | The diagnostic code of a ledger diagnostic record: input failed. |
 | `input_frame_dimensions_invalid` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: input frame dimensions invalid. |
@@ -556,7 +556,7 @@ column means. 915 codes.
 | `lease_fencing_denied` | error | none | 0.12.0 | active | pending | TBD | The diagnostic code of a ledger diagnostic record: lease fencing denied. |
 | `lease_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime's wire error code (receipt projection `code`): lease mismatch. |
 | `lease_missing` | error | none | 0.11.6 | active | pending | written | The lease named is no longer the instance's lease. |
-| `lease_queue_cancelled` | error | none | 0.12.0 | active | pending | TBD | The diagnostic code of a ledger diagnostic record: lease queue cancelled. |
+| `lease_queue_cancelled` | error | none | 0.12.0 | active | pending | written | A lease request waiting in an instance's queue was withdrawn before its grant; the scheduler.denied record that ends its wait carries this code as its… |
 | `lease_queue_connection_mismatch` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): lease queue connection mismatch. |
 | `lease_queue_disconnected` | error | none | 0.12.0 | active | pending | TBD | The diagnostic code of a ledger diagnostic record: lease queue disconnected. |
 | `lease_queue_expired` | error | none | 0.12.0 | active | pending | written | An operator request waited its cap in its instance's one queue without a grant, and its entry was removed (Workflow #369). |
@@ -589,7 +589,7 @@ column means. 915 codes.
 | `nemu_input_frame_required` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): nemu input frame required. |
 | `not_implemented` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): not implemented. |
 | `observation_fact_encode_failed` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: observation fact encode failed. |
-| `ocr_field_low_confidence` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A required OCR field's text resolved, but its observation's confidence was missing or below the minimum_confidence its OCR target declares, so the field stayed… |
+| `ocr_field_low_confidence` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | A required OCR field's text resolved, but its observation's confidence was missing or below the minimum_confidence its OCR target declares, so the field stayed… |
 | `ocr_fields_binding_invalid` | error | declaration_error | 0.12.0 | active | pending | TBD | A task flow declaration was refused: ocr fields binding invalid. |
 | `ocr_fields_declaration_invalid` | error | declaration_error | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): ocr fields declaration invalid. |
 | `ocr_fields_declaration_missing` | error | declaration_error | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): ocr fields declaration missing. |
@@ -801,7 +801,7 @@ column means. 915 codes.
 | `runtime_busy` | error | none | 0.12.0 | active | pending | TBD | The Runtime's wire error code (receipt projection `code`): runtime busy. |
 | `runtime_capabilities_provenance_missing` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: runtime capabilities provenance missing. |
 | `runtime_debug_event_invalid` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): runtime debug event invalid. |
-| `runtime_diagnostic` | error | none | 0.12.0 | active | pending | TBD | The diagnostic code of a ledger diagnostic record: runtime diagnostic. |
+| `runtime_diagnostic` | error | none | 0.12.0 | active | pending | written | The diagnostic code the Runtime gives most runtime.failed records and every failed, cancelled or refused task terminal, beside an outcome that is the failure… |
 | `runtime_event_query_fingerprint_failed` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: runtime event query fingerprint failed. |
 | `runtime_event_query_page_encode_failed` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: runtime event query page encode failed. |
 | `runtime_event_query_response_too_large` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): runtime event query response too large. |
@@ -867,7 +867,7 @@ column means. 915 codes.
 | `scheduled_recovery_draft_invalid` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): scheduled recovery draft invalid. |
 | `scheduled_recovery_link_conflict` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: scheduled recovery link conflict. |
 | `scheduled_recovery_link_missing` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: scheduled recovery link missing. |
-| `selection_record_too_large` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: selection record too large. |
+| `selection_record_too_large` | error | none | 0.12.0 | active | pending | written | A select step's decision record (task.selection_evaluated) is larger than its write bound, 64 KiB of compact JSON, and is refused whole before the step's input. |
 | `semantic_action_requires_destructive_opt_in` | error | declaration_error | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): semantic action requires destructive opt in. |
 | `serialization_failed` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): serialization failed. |
 | `signature_replay_incomplete` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): signature replay incomplete. |

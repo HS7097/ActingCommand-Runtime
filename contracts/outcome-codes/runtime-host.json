@@ -8396,9 +8396,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports instance not running.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A request, a Runtime claim or a probe that would open an instance's device session, or a self-check, found the instance's emulator stopped: its discovery binding holds no ADB port.",
+      "common_causes": "The instance is bound by emulator discovery and its emulator is stopped, so its binding is pending with no ADB port: a lease request, a Runtime claim, an observation or a monitor probe is refused before any device access, and a self-check ends so when the emulator's status read finds no emulator process. The runtime.failed record of a refused request reads adb_endpoint=pending in its raw_text.",
+      "handling": "Start the emulator (actingctl emulator start --instance <alias>, or ac_emulator) and send the request again once the instance is bound; nothing was performed."
     },
     "instance_worker_spawn_failed": {
       "category": "error",
@@ -8740,9 +8740,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports lab arrival page absent.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A Lab do names an arrival page (after_page) that is not an exact page id of its package; it is refused before any input.",
+      "common_causes": "The after_page given to ac_lab_do (actinglab do --after-page) is not spelled as one of the package's page ids: a short or misspelled id, or a page of another package.",
+      "handling": "Give after_page the full page id as the package declares it, or leave it out; nothing ran on the device."
     },
     "lab_arrival_shutdown": {
       "category": "error",
