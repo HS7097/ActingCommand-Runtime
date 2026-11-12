@@ -599,7 +599,7 @@
       "since": "0.12.0",
       "description": "A Stop was confirmed by MuMuManager info alone: the process listing that checks that no vendor device process of the instance is left failed or passed its bound, so device_process_present is unknown. Recorded once per Stop under the request's links (a stuck-recovery ladder's on its emulator-restart rung), before command.validated.",
       "common_causes": "The process listing (PowerShell) did not answer within its bound under host load, or could not start.",
-      "handling": "TBD"
+      "handling": "The Stop counts as done. Whether a device process of the instance is left over is not known; if the instance's next start misbehaves, look for one on the host."
     },
     "emulator_control_timeout_settled": {
       "category": "warning",
@@ -3659,7 +3659,7 @@
       "since": "0.12.12",
       "description": "The start's settlement of the direct contained runs of earlier epochs (#411 A65) read the runtime fact host.contained_settlement, which names the start event of the last start that completed this settlement, and found no integer the Runtime recorded, or a start event at or after this start's own. The start fails; the fact comes back at every start.",
       "common_causes": "A ledger whose runtime facts were changed outside the Runtime, or a ledger written by another program.",
-      "handling": "TBD"
+      "handling": "The start fails, and every later start fails the same way while the fact stays; no configuration key changes it. Report it as a Runtime defect with the start's log and the runtime fact host.contained_settlement of the state root."
     },
     "contained_task_action_gap_recorded": {
       "category": "info",
@@ -10286,7 +10286,7 @@
       "since": "0.12.11",
       "description": "The start's ledger open succeeded but took longer than ledger_observer.open_warn_ratio_milli thousandths of its deadline ledger_observer.open_timeout_ms (P0-LO): elapsed_ms is the open's measured time, the sum of the phases ledger_opened reports (SQL read, verify, material and restore; since #422 LN-8 meta, tail, index and import), timeout_ms the deadline and event_count the events read. actingd writes it as a daemon line right after ledger_opened, at most once per start.",
       "common_causes": "A ledger that has grown large, a slow volume, or a start while the machine is busy (for example several emulators starting at boot).",
-      "handling": "TBD"
+      "handling": "The start went on. An open past the deadline fails the start, so if elapsed_ms keeps nearing timeout_ms, raise ledger_observer.open_timeout_ms in actingd.config.json (read at the next start)."
     },
     "owner_released": {
       "category": "info",
@@ -10390,8 +10390,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingd suspended could not read a recorded error frame of a pair; the artifact store's failure is the caused_by link (Workflow #378 A6a, was the text artifact_unreadable).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "actingd suspended, or another read of the suspension report, could not read a recorded error frame of a pair from the artifact store: the artifact is missing, fails its verification or cannot be read; the caused_by link says which.",
+      "handling": "The pair's comparison is unavailable and has no verdict; the rest of the report stands. The frame_id and artifact_sha256 in the report name the artifact the caused_by link concerns."
     },
     "observation_evidence_encode_failed": {
       "category": "error",
@@ -20136,8 +20136,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "An agent session reached its deadline without a response: the Runtime answers it NeedsHuman with this code as the response code (formerly the unregistered spelling session_timeout).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "An agent session the Runtime opened for an instance stayed active past agent_dispatcher.max_session_ms from its start without an agent response that ended it.",
+      "handling": "The Runtime answers the session NeedsHuman with this code, and the session waits for a person (paused needs human). If the agent answers but needs longer, raise agent_dispatcher.max_session_ms in actingd.config.json (read at the start)."
     },
     "recovery_ladder_exhausted": {
       "category": "error",
@@ -20176,8 +20176,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A holding interruption (shutdown, a lost key, an install drain, a closed admission, a pause drain or a key renewal refusal) ended a stuck-recovery ladder's climb; the outcome of the recovery_ladder_finished record and of the recovery_rung_finished record of the rung it ended, caused by the interruption.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A holding interruption ended a stuck-recovery ladder's climb: a requested shutdown, the ladder's lost key, an install drain, a scheduling pause or a capacity refusal, or a refused key renewal. The interruption is the caused_by link.",
+      "handling": "Nothing to repair in the ladder: it stopped on purpose (planned_stop). Look at the interruption the link names; a scheduling pause, for example, lasts until actingctl resume."
     },
     "recovery_rung_busy_outcome": {
       "category": "info",
@@ -21004,8 +21004,8 @@
       "status": "active",
       "since": "0.12.12",
       "description": "A column of a standard-pack table declares valid_until_unix_s and that second has passed, so every cell of the column reads null (Workflow #357 DB-1, M-357a v1.1). A note of check-config, one per expired column.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A column (table_column) of a table in a game root's tables/ (path) declares valid_until_unix_s and that second has passed, so every cell of the column reads null.",
+      "handling": "check-config notes it once per expired column. The pack author refreshes the column's values and its valid_until_unix_s; until then whatever reads the column gets null."
     },
     "contained_task_navigation_package_invalid": {
       "category": "error",
@@ -21070,8 +21070,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "One frame matched two or more shared interrupt pages (Workflow #373 NAV-6): none was handled and the run went on as it would without them. Carried by the interrupt_ambiguous task record.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "One frame matched two or more shared interrupt pages of the standard pack's interrupts.json (page_ids), at a run's interrupt check or at a navigation locate of its entry gate: their recognition overlaps.",
+      "handling": "None was handled and the run went on as without them (a locate takes the frame as lost, and the recovery chain's next step runs). The pack author makes those interrupt pages exclusive of each other."
     },
     "contained_task_interrupt_limit_reached": {
       "category": "error",
@@ -21180,8 +21180,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A locate of a run's entry gate matched no page of pages.json (Workflow #373 NAV-5): nothing is guessed, and the recovery chain's next step runs. Carried by the navigation_located task record.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A locate of the run's entry gate matched no page of pages.json on its frame (count is the attempt): the screen shows a page the list does not hold, or a listed page the feature package did not recognise.",
+      "handling": "Nothing is guessed and the recovery chain's next step runs. If it repeats, the run's navigation_located records show what was matched, and the pack author adds the screen to pages.json or fixes its recognition."
     },
     "contained_task_navigation_page_ambiguous": {
       "category": "warning",
@@ -21201,8 +21201,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A locate of a run's entry gate matched more than one page of pages.json (Workflow #373 NAV-5): none is picked, and the recovery chain's next step runs. page_ids lists the matched pages. Carried by the navigation_located task record.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A locate of the run's entry gate matched two or more pages of pages.json on one frame (page_ids): their recognition in the feature package overlaps.",
+      "handling": "No page is picked and the recovery chain's next step runs. The pack author makes those pages exclusive of each other."
     },
     "contained_task_navigation_route_missing": {
       "category": "warning",
@@ -21222,8 +21222,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "No edge of navigation.json for the run's server leads from the located page to the run's entry (Workflow #373 NAV-5): the recovery chain's next step runs. Carried by the navigation_warning task record.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "No edge of navigation.json for the run's server leads from the located page (page_id) to the run's entry pages.",
+      "handling": "The recovery chain's next step runs. The pack author adds the edges from that page to navigation.json, unless the flow should never reach it."
     },
     "contained_task_navigation_hop_unconfirmed": {
       "category": "warning",
@@ -21244,8 +21244,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "After an edge's package ran, the feature package did not see the edge's to page within the package's step timeout (Workflow #373 NAV-5): the run locates again. Carried by the navigation_warning task record.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "After an edge's package (package_id) ran, the feature package did not see the edge's to page (page_id) within the package's step timeout: the package did not reach that page, the screen took longer to get there, or the page was not recognised.",
+      "handling": "The run locates again and plans a new route. If it repeats, the pack author checks the edge's package against the screen, its step timeout and the recognition of the to page."
     },
     "contained_task_navigation_entry_unlisted": {
       "category": "warning",
@@ -21265,8 +21265,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A run's entry pages are not all pages of the standard pack's pages.json (Workflow #373 NAV-5, M-373 section 4.4): its entry gate does not navigate and behaves as without navigation data. page_ids lists the entry pages that are not listed. Carried by the navigation_warning task record.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The run's game has navigation data, but some entry pages of the run's package are not pages of the standard pack's pages.json (page_ids).",
+      "handling": "The entry gate does not navigate for this package and behaves as without navigation data. The pack author lists those pages in pages.json (and in the feature package, whose pages are exactly the list's) or corrects the package's entry pages."
     },
     "contained_task_navigation_entry_unconfirmed": {
       "category": "error",
@@ -21513,8 +21513,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A policy evaluation found no usable instance fact (fact_key) for an instance and projected the instance unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A scheduling evaluation found no active, well-formed fact fact_key (session.instance.available, session.instance.capabilities or session.instance.preferred_tasks) for a configured instance, for example a device self-checked instance whose connection preparation has not published its availability yet.",
+      "handling": "The instance is projected unavailable and takes no scheduled work while the fact is missing. A device self-checked instance gets session.instance.available from a passing self-check (actingctl selfcheck <alias>); the other keys are seeded from the configured policy inputs at each start."
     },
     "policy_fact_rows_exceeded": {
       "category": "warning",
@@ -21556,8 +21556,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A priority offset names a task (task_id) the active catalog does not declare; the offset is ignored.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A priority offset (actingctl task-offset) names a task_id that the active catalog does not declare: a misspelt id, or a task the catalog no longer holds.",
+      "handling": "The offset is ignored, and each evaluated cycle shows one blocked decision of that task with this reason. Set the offset again under a task id the active catalog declares."
     },
     "policy_detection_reason_unknown": {
       "category": "error",
@@ -21748,8 +21748,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A handset left device (#398 R1 RD-2, model-398 section 4.2): its availability is withdrawn under device_link:<state>, device.link and device.connected are recorded, its retained session is closed and the Runtime waits for the link. Recorded once per state.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A bound handset left adb's device state (device_link_state): its cable is out (absent), adb reports it offline, unauthorized, no_permissions or another state, or the link watch is not running (unwatched).",
+      "handling": "The handset takes no work until its link is back and a preparation passes, which the Runtime queues by itself. Plug the cable in, allow USB debugging on the handset for unauthorized or fix the host's driver for no_permissions; a person's self-check (actingctl selfcheck <alias>) also starts a failed link watch again."
     },
     "device_link_restored": {
       "category": "info",
@@ -21790,8 +21790,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The device-link watch, the Runtime's one adb track-devices process, ended and was started again within its restart budget (#398 R1 RD-2, model-398 section 4.3).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The Runtime's one adb track-devices process, which watches the links of the bound handsets, ended or closed its output (device_watch_problem exited) and was started again within device_link.watch.restart_limit restarts per device_link.watch.restart_window_ms.",
+      "handling": "Nothing to do while it is rare: the watch runs again. More restarts than the limit fail the watch (device_watch_failed) and leave the handsets unwatched until a person's self-check; then look for what ends adb on the host."
     },
     "device_watch_failed": {
       "category": "error",
@@ -21832,8 +21832,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The one adb reconnect of an offline handset's transport (device_link.offline_action = kick_once) failed (#398 R1 RD-2, model-398 section 4.3); the Runtime waits for the link as under wait. adb's text is the cause.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "With device_link.offline_action kick_once, the one adb reconnect of an offline handset's transport failed; adb's text is the cause.",
+      "handling": "The Runtime waits for the link as under wait. Reconnect the handset by hand (its cable, USB debugging); if the reconnect never helps on this host, set device_link.offline_action to wait."
     },
     "perf_stage_changed": {
       "category": "info",
@@ -22171,7 +22171,7 @@
       "since": "0.12.0",
       "description": "The operating system's connectivity status is unknown (connectivity_reason, and os_error when the system gave one); the autostart claim goes on without waiting (Workflow #369 S6c, P3). A report line.",
       "common_causes": "An older Windows without the connectivity query, a failed query, or a level the build does not know.",
-      "handling": "TBD"
+      "handling": "Nothing to do: the autostart goes on without waiting for the network, as it does on every host whose status stays unknown."
     },
     "emulator_autostart_network_unready": {
       "category": "error",
@@ -22235,8 +22235,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A configured start was performed, but the connection preparation after it did not pass (Workflow #369 S6c); the preparation recorded its failure, and the ladder it admitted holds the key. A report line. EMU-BIND (since 0.12.28): with watch_kind recognize, the recognition of a running emulator whose endpoint was pending or bound to another port did not pass its self-check (the emulator status read, the port's binding, the ADB baseline or the opens; the preparation recorded the failing step), and nothing was started; a ladder it admitted holds the key, as after a start. EMU-BIND fix 1 (since 0.12.28): so also for the recognition of an instance bound to the reported port but unprepared on it.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A configured emulator start was performed (with watch_kind recognize, a running emulator was recognised instead), but the connection preparation after it did not pass its self-check: the emulator status read, the port's binding, the ADB baseline or the backend opens failed.",
+      "handling": "Read the failure the preparation recorded on that instance; a stuck-recovery ladder it admitted may already hold the instance. Once the cause is fixed, a self-check (actingctl selfcheck <alias>) prepares the instance again."
     },
     "emulator_autostart_failed": {
       "category": "error",
@@ -22817,7 +22817,7 @@
       "since": "0.12.9",
       "description": "A self-check's emulator status read (MuMuManager info, #411 A48) failed, so the self-check went on from the Runtime's own state of the instance: an instance bound to an ADB port opened its backends as before, and one whose binding is pending was reported instance_not_running. The read's failure text is the caused_by link. Recorded once per self-check as a connection-preparation runtime.failed record at stage read_instance_state under the self-check's links. emu-watch: also a status read of the emulator watch that failed (operation emulator_watch, alias the instance): the instance's reading stays as it was and no restart is requested at that poll; recorded once per failing streak as a device_state_observed record under the instance and the same report line. And the cause of emulator_autostart_failed when the watch's autostart claim could not read the status just before its Start (operation run_emulator_autostart).",
       "common_causes": "MuMuManager did not answer within its bound or printed an answer of an unknown shape.",
-      "handling": "TBD"
+      "handling": "The Runtime goes on from its own state: a bound instance opens its backends as before, one whose binding is pending is reported instance_not_running, the watch requests no restart at that poll, and a watch's autostart claim ends as emulator_autostart_failed. If it repeats, check that the emulator manager program works on the host."
     },
     "emulator_restart_previous_instance_running": {
       "category": "error",

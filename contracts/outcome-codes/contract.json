@@ -262,8 +262,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A panic boundary caught a panic; raw_text keeps the panic payload. It is a link under the interrupted operation's own failure code.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A payload on an instance's worker thread panicked: a host claim (a startup package, a stuck-recovery ladder, a link restore, an emulator autostart, a fence recheck or an idle action) or a scheduled policy run. A panic is a defect in the Runtime's code.",
+      "handling": "The worker drops the payload without retrying it and takes the next one; a second panic before it finishes a payload ends the Runtime with runtime_restart_required. Report it as a Runtime defect with the record's raw_text, thread and boundary and the Runtime's log."
     },
     "panic_unrecovered": {
       "category": "fatal",
@@ -284,8 +284,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The watchdog's restart budget ran out and every start in its window ended in runtime_restart_required (Workflow #378 A6a, model sections 2.4 and 7.5): neither the Runtime nor the person operating it recovered it. The last start's terminal outcome is the caused_by link, with its panic_caught links. Only the watchdog decides it; at_unix_ms is when the budget ran out and limit_count the budget.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "Only the watchdog's run-once decides it: its restart budget ran out (3 starts within 30 minutes and since the last formal start) and the log of every start in that window ends in runtime_restart_required, which an instance worker gives when it panics again before it finishes a payload after an earlier panic.",
+      "handling": "The watchdog starts nothing more until a formal start. Report it as a Runtime defect with the start logs under <root>\\watchdog and the panic_caught records of those starts; start the Runtime formally (actingctl start --root <root>) once the cause is known."
     },
     "runtime_restart_required": {
       "category": "error",

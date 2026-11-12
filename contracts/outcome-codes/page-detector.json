@@ -18,8 +18,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A page of an evaluation batch was not evaluated because the batch request failed validation before any page ran.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "The batch request failed its check before any page ran: the recognition pack declares no coordinate_space, or the frame's width and height are not the coordinate_space's.",
+      "handling": "These pages are only the consequence; the batch's own cause names the failed check. Compare the frame's size with the pack's coordinate_space: a pack without one, or with the wrong one, is the pack author's to fix."
     },
     "batch_terminated": {
       "category": "warning",
@@ -38,8 +38,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A page of an evaluation batch was not evaluated because the batch stopped early after a page evaluation broke an invariant.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A page evaluation of the batch returned the evaluation of another page id than the page asked for, which breaks an invariant of the page detector, so the batch stopped and the pages after it were not evaluated.",
+      "handling": "It follows the batch's cause, a fatal page evaluation invariant failure, which is a defect in the Runtime's page detector: report it with the run's task diagnostic records."
     }
   }
 }
