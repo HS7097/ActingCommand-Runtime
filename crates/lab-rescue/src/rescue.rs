@@ -72,9 +72,13 @@ use crate::install::programs::{self, Deadline};
 use crate::install::runtime::Drained;
 use crate::install::state::{KindLocation, Paths};
 use crate::install::{self, Answer, Face, config_swap, instance_add, place};
+use crate::rescue_reads;
 use crate::runtime_start::{self, Mode};
 use actingcommand_contract::SchedulingPauseReason;
 use actingcommand_contract::outcome::{Category, CauseRelation, Outcome, OutcomeEnvelope};
+use actingcommand_lab_ops::core_reads::{
+    Handed, Params, Part, ROOT_FLAG, STATE_ROOT_FLAG, Written,
+};
 use actingcommand_lab_ops::initiator::Initiator;
 use actingcommand_lab_ops::locate::Location;
 use serde::Serialize;
@@ -134,7 +138,7 @@ pub fn serves(name: &str) -> bool {
 
 /// The parameters a caller may never give the rescue module: the root and the state root (§7,
 /// §9.3) and the confirmations (§5, §6). Each is refused as an unknown argument.
-const REFUSED_PARAMETERS: [&str; 7] = [
+pub(crate) const REFUSED_PARAMETERS: [&str; 7] = [
     "root",
     "state_root",
     "accept_ledger_one_way",
@@ -207,43 +211,26 @@ pub(crate) fn answer_with(
     if let Some(refused) = refused_parameter(params) {
         return Answered::Line(cli_line::failure(&refused, Some(USAGE)));
     }
-    if let Some(sub) = name.strip_prefix("agent ") {
-        return agent(context, sub, params);
+    // Workflow #434 LAB-5B1b: each row through its constant (`crate::rescue_reads`), which its code
+    // reads the parameters through and builds a command line from.
+    if let Some(handed) = rescue_reads::agent(name) {
+        return agent(context, handed, params);
     }
+    if let Some(handed) = rescue_reads::installer(name) {
+        return Answered::Line(match name {
+            "up" => up(context, handed, params),
+            "down" => down(context, handed, params),
+            _ => installer(context, handed, params),
+        });
+    }
+    let Some(params) = rescue_reads::read_here(name, params) else {
+        return Answered::Line(unknown_row(name));
+    };
     Answered::Line(match name {
-        "up" => up(context),
         "restart" => restart(context),
-        "down" => down(context, params),
         "alive" => alive(context, params),
         "deploy" => deploy(context, params),
         "rollback" => rollback(context, params),
-        "undo" => installer(context, &["undo"], params, &[("op", "--operation")], true),
-        "op status" => installer(context, &["status"], params, &[("op", "--operation")], true),
-        "op resume" => installer(context, &["resume"], params, &[("op", "--operation")], true),
-        "leftovers" => installer(context, &["leftovers"], params, &[], true),
-        "guards" => installer(context, &["guards"], params, &[("for", "--for")], true),
-        "release-hold" => installer(
-            context,
-            &["release-hold"],
-            params,
-            &[("reason", "--reason")],
-            true,
-        ),
-        "release verify" => installer(
-            context,
-            &["release", "verify"],
-            params,
-            &[("dir", "--dir")],
-            false,
-        ),
-        "release stage" => installer(
-            context,
-            &["release", "stage"],
-            params,
-            &[("dir", "--dir")],
-            true,
-        ),
-        "adopt" => installer(context, &["adopt"], params, &[], true),
         "config replace" => config_swap(context, params, false),
         "config restore" => config_swap(context, params, true),
         "instance add" => instance_add(context, params),
@@ -256,11 +243,16 @@ pub(crate) fn answer_with(
         "mcp plan" => mcp_plan(context, params),
         "mcp entries" => mcp_entries(context, params),
         "mcp config" => mcp_config(context, params),
-        _ => cli_line::failure(
-            &cli_line::usage_invalid(Some(name), ArgumentProblem::Unknown),
-            Some(USAGE),
-        ),
+        _ => unknown_row(name),
     })
+}
+
+/// The refusal of a name that is no row the module serves.
+fn unknown_row(name: &str) -> Exit {
+    cli_line::failure(
+        &cli_line::usage_invalid(Some(name), ArgumentProblem::Unknown),
+        Some(USAGE),
+    )
 }
 
 /// The first parameter the module never takes, as its refusal (`actingctl_usage_invalid`,
@@ -277,11 +269,13 @@ fn refused_parameter(params: &Map<String, Value>) -> Option<Outcome> {
         })
 }
 
-fn text<'a>(params: &'a Map<String, Value>, name: &str) -> Option<&'a str> {
+// Workflow #434 LAB-5B1b: each reads by name through the row's constant ([`Params`]).
+
+fn text<'a>(params: Params<'a>, name: &str) -> Option<&'a str> {
     params.get(name).and_then(Value::as_str)
 }
 
-fn switch(params: &Map<String, Value>, name: &str) -> bool {
+fn switch(params: Params<'_>, name: &str) -> bool {
     params.get(name).and_then(Value::as_bool).unwrap_or(false)
 }
 
@@ -290,7 +284,9 @@ fn switch(params: &Map<String, Value>, name: &str) -> bool {
 /// LAB-5A: the row declares them all (before it, they were the further flags of a row with
 /// `params_more`); a switch given `false`, which only `serve --stdio` can give, is not written.
 /// LAB-5A fix 1: and the one flag the command line still hands on undeclared, `op status
-/// --operation <op>` (actinglab's `words::KEPT_FLAGS`), written as before.
+/// --operation <op>` (actinglab's `words::KEPT_FLAGS`), written as before. Workflow #434
+/// LAB-5B1b: written where a handed row's constant has `Part::Further`, `declared` the parameters
+/// its other parts placed.
 fn further_flags(params: &Map<String, Value>, declared: &[&str]) -> Vec<String> {
     let mut words = Vec::new();
     for (name, value) in params {
@@ -320,33 +316,47 @@ fn further_flags(params: &Map<String, Value>, declared: &[&str]) -> Vec<String> 
     words
 }
 
-/// An installer command: `verb`, `--root <root>` (unless the command takes none), the row's
-/// parameters as the flags `named` maps them to, and its other parameters under their own flags
-/// ([`further_flags`]).
-fn installer(
-    context: &Context<'_>,
-    verb: &[&str],
-    params: &Map<String, Value>,
-    named: &[(&str, &str)],
-    rooted: bool,
-) -> Exit {
-    let mut words = verb
+/// An installer row: the command line its constant gives ([`installer_line`]), run with the
+/// module's face.
+fn installer(context: &Context<'_>, handed: &'static Handed, params: &Map<String, Value>) -> Exit {
+    let words = installer_line(handed, params, &context.root_word());
+    line(context, context.install(&words))
+}
+
+/// Workflow #434 LAB-5B1b: the command line the installer row `handed` gives for `params`: its
+/// command's words, then each part in its place (`--root` and the root; a parameter under its flag
+/// when it is given as text), then, with `Part::Further`, every member no part placed, in the
+/// order given, under the flag of its name ([`further_flags`]: the row's `Written::Each`
+/// parameters and the installer's own `--operation` that `op status`'s command line hands on).
+/// Before the slice each arm gave its command's words, whether it took the root and its
+/// parameters' flags itself, in the same order and forms.
+fn installer_line(handed: &'static Handed, params: &Map<String, Value>, root: &str) -> Vec<String> {
+    let read = rescue_reads::handing(handed, params);
+    let mut words = handed
+        .command
         .iter()
         .map(|word| (*word).to_owned())
         .collect::<Vec<_>>();
-    if rooted {
-        words.push("--root".to_owned());
-        words.push(context.root_word());
-    }
-    for (param, flag) in named {
-        if let Some(value) = text(params, param) {
-            words.push((*flag).to_owned());
-            words.push(value.to_owned());
+    let mut placed = Vec::new();
+    for part in handed.parts {
+        match *part {
+            Part::Root => {
+                words.push(ROOT_FLAG.to_owned());
+                words.push(root.to_owned());
+            }
+            Part::Param(name, Written::Flag(flag)) => {
+                placed.push(name);
+                if let Some(value) = text(read, name) {
+                    words.push(flag.to_owned());
+                    words.push(value.to_owned());
+                }
+            }
+            Part::Further => words.extend(further_flags(params, &placed)),
+            // Written with `Part::Further`, in the order given; no installer row has another part.
+            _ => {}
         }
     }
-    let declared = named.iter().map(|(param, _)| *param).collect::<Vec<_>>();
-    words.extend(further_flags(params, &declared));
-    line(context, context.install(&words))
+    words
 }
 
 /// The line of an installer answer, in the module's words: `next` names the module's operations,
@@ -543,12 +553,13 @@ fn hold_reason(context: &Context<'_>, word: &str) -> Result<SchedulingPauseReaso
 }
 
 /// `up`: on a single-location root the installer's start (`install start`, journalled, its
-/// post-start checks); on an A/B root the start of its selection (`actingctl start`).
-fn up(context: &Context<'_>) -> Exit {
+/// post-start checks; its constant `handed` hands no parameter on); on an A/B root the start of
+/// its selection (`actingctl start`).
+fn up(context: &Context<'_>, handed: &'static Handed, params: &Map<String, Value>) -> Exit {
     if context.location.installation.is_some() {
         return runtime_start::run_located(Mode::Start, &context.location.root, None);
     }
-    installer(context, &["start"], &Map::new(), &[], true)
+    installer(context, handed, params)
 }
 
 /// `restart`: `actingctl restart` for the root, with its configuration on a single-location root.
@@ -561,24 +572,22 @@ fn restart(context: &Context<'_>) -> Exit {
     runtime_start::run_located(Mode::Restart, &context.location.root, config)
 }
 
-/// `down [--reason <r>]`: the formal stop with its hold (`install stop`); without `--reason` the
-/// hold's reason is the module's own.
-fn down(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
-    let reason = match text(params, "reason") {
-        Some(reason) => reason.to_owned(),
-        None => match hold_reason(context, "down") {
-            Ok(reason) => reason.as_str().to_owned(),
+/// `down [--reason <r>]`: the formal stop with its hold (`install stop`, its constant `handed`);
+/// without `--reason` the hold's reason is the module's own.
+fn down(context: &Context<'_>, handed: &'static Handed, params: &Map<String, Value>) -> Exit {
+    let mut given = params.clone();
+    if text(rescue_reads::handing(handed, params), "reason").is_none() {
+        match hold_reason(context, "down") {
+            Ok(reason) => {
+                given.insert(
+                    "reason".to_owned(),
+                    Value::String(reason.as_str().to_owned()),
+                );
+            }
             Err(outcome) => return cli_line::failure(&outcome, None),
-        },
-    };
-    let words = vec![
-        "stop".to_owned(),
-        "--root".to_owned(),
-        context.root_word(),
-        "--hold".to_owned(),
-        reason,
-    ];
-    line(context, context.install(&words))
+        }
+    }
+    installer(context, handed, &given)
 }
 
 /// The probe period of `alive --wait` (the readiness probe's, fixed by the contract).
@@ -622,7 +631,7 @@ fn read_alive(context: &Context<'_>, wait_ms: Option<u64>) -> Alive {
 /// `alive [--wait <duration>]`: the watchdog's status and whether the Runtime is alive. Without
 /// `--wait` the report's own decision is the top; with it, a Runtime not alive when the wait
 /// ends refuses `runtime_not_running`, the decision as its link.
-fn alive(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+fn alive(context: &Context<'_>, params: Params<'_>) -> Exit {
     let wait_ms = match text(params, "wait").map(duration_ms) {
         Some(Some(ms)) => Some(ms),
         Some(None) => {
@@ -773,18 +782,14 @@ fn detach(context: &Context<'_>, operation: InstallLocation, words: Vec<String>)
 }
 
 /// The module's words of `name` with `params`, without `--detach`: what a detached run runs.
-fn words_without_detach(
-    name: &str,
-    params: &Map<String, Value>,
-    positionals: &[&str],
-) -> Vec<String> {
+fn words_without_detach(name: &str, params: Params<'_>, positionals: &[&str]) -> Vec<String> {
     let mut words = name.split(' ').map(str::to_owned).collect::<Vec<_>>();
     for positional in positionals {
         if let Some(value) = text(params, positional) {
             words.push(value.to_owned());
         }
     }
-    for (param, value) in params {
+    for (param, value) in params.map() {
         if param == "detach" || positionals.contains(&param.as_str()) {
             continue;
         }
@@ -933,7 +938,7 @@ fn alive_and_release(
 /// and its checks) followed by `alive` and the release, without one the update alone. `--plan`
 /// answers the plan only; `--detach` runs it detached. The hold's reason is always the module's
 /// own `lab-deploy-<ms>` (LAB-3 fix 1: the table's `--reason` is gone, as §7's form has none).
-fn deploy(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+fn deploy(context: &Context<'_>, params: Params<'_>) -> Exit {
     const DEPLOY: InstallLocation = InstallLocation::Deploy;
     let target = text(params, "target").unwrap_or_default().to_owned();
     let plan_only = switch(params, "plan");
@@ -1146,7 +1151,7 @@ fn applied_composite(
 /// `rollback [--to <tag|commit>] [--plan] [--detach]`: to the build the live one replaced unless
 /// `--to` names a kept build; the gate in its plan; with a Runtime running the composite
 /// rollback, `alive` and the release, without one the plain rollback.
-fn rollback(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+fn rollback(context: &Context<'_>, params: Params<'_>) -> Exit {
     const ROLLBACK: InstallLocation = InstallLocation::RollbackApply;
     let plan_only = switch(params, "plan");
     if switch(params, "detach") && !plan_only {
@@ -1230,7 +1235,7 @@ fn replaced_build(context: &Context<'_>, paths: &Paths, loaded: &Loaded) -> Opti
 }
 
 /// `config replace <file> [--sha <sha256>]` and `config restore <backup>`.
-fn config_swap(context: &Context<'_>, params: &Map<String, Value>, restore: bool) -> Exit {
+fn config_swap(context: &Context<'_>, params: Params<'_>, restore: bool) -> Exit {
     let command = if restore {
         InstallLocation::ConfigRestore
     } else {
@@ -1442,7 +1447,7 @@ fn commit(
 /// [`commit`] with the Runtime restarted under a hold; the new instance is paused with its own
 /// reason after the start. Every refusal before the candidate is written leaves the root as it
 /// was; a Runtime must run.
-fn instance_add(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+fn instance_add(context: &Context<'_>, params: Params<'_>) -> Exit {
     const ADD: InstallLocation = instance_add::ADD;
     let run = || -> Result<Exit, Outcome> {
         let asked = instance_add::Asked::of(params)?;
@@ -1639,7 +1644,7 @@ fn add_next(members: &mut Map<String, Value>, name: &str, form: Value) {
 /// `place <bundle.zip> [--sums <file>] [--facts <file>] [--plan]` (`crate::install::place`): the
 /// plan, the hold of the instances bound to the bundle's game, the placement, the checks, the
 /// release, and the schedule read after it.
-fn place(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
     const PLACE: InstallLocation = InstallLocation::PackPlace;
     let bundle = text(params, "bundle")
         .map(PathBuf::from)
@@ -1864,7 +1869,7 @@ fn unlock(context: &Context<'_>) -> Exit {
 
 /// `check-config [<file>]`: the live build's check-config of `file`, or of the root's
 /// configuration, judged as the root's (`--install-root`).
-fn check_config(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+fn check_config(context: &Context<'_>, params: Params<'_>) -> Exit {
     const CHECK: InstallLocation = InstallLocation::CheckConfig;
     let run = || -> Result<Exit, Outcome> {
         let (_, settings) = configuration(context, CHECK)?;
@@ -1961,7 +1966,7 @@ const ENTRY_PROTOCOL: &str = "entry_protocol";
 /// (`crate::install::mcp_entry::plan_g2`). Another protocol is `actingctl_usage_invalid`
 /// (`--entry-protocol`, `not_recognised`), as `actingctl mcp-entry plan` refuses one other than
 /// its own; the first generation's protocol is that command's.
-fn mcp_plan(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+fn mcp_plan(context: &Context<'_>, params: Params<'_>) -> Exit {
     const PLAN: InstallLocation = InstallLocation::McpEntryPlan;
     let protocol = params.get(ENTRY_PROTOCOL);
     if protocol.and_then(Value::as_u64) != Some(install::mcp_entry::ENTRY_PROTOCOL_G2) {
@@ -1979,7 +1984,7 @@ fn mcp_plan(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
 
 /// Workflow #434 LAB-5G5b: `mcp entries [--all]`, the entries' status files of the module's own
 /// root, both generations side by side (`crate::install::mcp_entry::entries`).
-fn mcp_entries(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+fn mcp_entries(context: &Context<'_>, params: Params<'_>) -> Exit {
     let listed = context
         .paths(InstallLocation::McpEntryList)
         .and_then(|paths| install::mcp_entry::entries(&paths, switch(params, "all")));
@@ -1989,7 +1994,7 @@ fn mcp_entries(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
 /// Workflow #434 LAB-5G5b: `mcp config --client <client> [--list <modules>]`, the second
 /// generation's registration snippet for the module's own root (`crate::install::mcp_config`);
 /// it writes nothing.
-fn mcp_config(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
+fn mcp_config(context: &Context<'_>, params: Params<'_>) -> Exit {
     let Some(client) = text(params, "client") else {
         return module_refusal(&cli_line::usage_invalid(
             Some("--client"),
@@ -2009,7 +2014,7 @@ fn mcp_config(context: &Context<'_>, params: &Map<String, Value>) -> Exit {
 
 /// `mcp config`'s `list`: the words of the server's `--list`, in their order; `None` when it is
 /// not given. A value that is no list of strings (the table's parser gives none) is `wrong_type`.
-fn list_words(params: &Map<String, Value>) -> Result<Option<Vec<String>>, Outcome> {
+fn list_words(params: Params<'_>) -> Result<Option<Vec<String>>, Outcome> {
     let Some(value) = params.get("list") else {
         return Ok(None);
     };
@@ -2032,39 +2037,70 @@ fn module_refusal(refused: &Outcome) -> Exit {
     cli_line::failure(refused, usage)
 }
 
-/// `agent <sub>`: `agent-channel <sub>` with `claude-hook`'s action word, the root's state root
-/// (`--state-root`) and the row's other parameters as flags; its answer as the command gives it
-/// (a hook prints nothing, the notice its text). Workflow #434 LAB-5A: the action is the row's
-/// positional `action` (a further word before).
-fn agent(context: &Context<'_>, sub: &str, params: &Map<String, Value>) -> Answered {
-    agent_channel::run(&agent_words(sub, params, &context.location.state_root))
+/// `agent <sub>`: `agent-channel <sub>` with the words the row's constant `handed` gives
+/// ([`agent_line`]); its answer as the command gives it (a hook prints nothing, the notice its
+/// text). Workflow #434 LAB-5A: the action is `claude-hook`'s positional `action` (a further word
+/// before).
+fn agent(context: &Context<'_>, handed: &'static Handed, params: &Map<String, Value>) -> Answered {
+    agent_channel::run(&agent_line(handed, params, &context.location.state_root))
+}
+
+/// Workflow #434 LAB-5B1b: the words after `agent-channel` the agent row `handed` gives for
+/// `params`, for the state root `state_root`: its command's word, then each part in its place
+/// (`claude-hook`'s action as a word; `--state-root` and the state root, which `notice` does not
+/// take), then every member no part placed, in the order given, under the flag of its name
+/// ([`further_flags`]). Before the slice one arm served every `agent` row and read `action` on
+/// each; the rows that do not declare it no longer read it (register §1.287, "Slice LAB-5B1b").
+fn agent_line(
+    handed: &'static Handed,
+    params: &Map<String, Value>,
+    state_root: &Path,
+) -> Vec<OsString> {
+    let read = rescue_reads::handing(handed, params);
+    let mut words = handed
+        .command
+        .iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+    let mut placed = Vec::new();
+    for part in handed.parts {
+        match *part {
+            Part::Param(name, Written::Word) => {
+                placed.push(name);
+                if let Some(value) = text(read, name) {
+                    words.push(OsString::from(value));
+                }
+            }
+            Part::StateRoot => {
+                words.push(OsString::from(STATE_ROOT_FLAG));
+                words.push(state_root.as_os_str().to_owned());
+            }
+            Part::Further => {
+                words.extend(
+                    further_flags(params, &placed)
+                        .into_iter()
+                        .map(OsString::from),
+                );
+            }
+            // Written with `Part::Further`, in the order given; no agent row has another part.
+            _ => {}
+        }
+    }
+    words
 }
 
 /// The words after `agent-channel` of the row `agent <sub>` with `params`, for the state root
-/// `state_root`.
+/// `state_root` ([`agent_line`], for the tests of Workflow #434 LAB-5A and LAB-5B1b).
+#[cfg(test)]
 pub(crate) fn agent_words(
     sub: &str,
     params: &Map<String, Value>,
     state_root: &Path,
 ) -> Vec<OsString> {
-    let mut words = vec![OsString::from(sub)];
-    if let Some(action) = text(params, AGENT_ACTION) {
-        words.push(OsString::from(action));
-    }
-    if sub != "notice" {
-        words.push(OsString::from("--state-root"));
-        words.push(state_root.as_os_str().to_owned());
-    }
-    words.extend(
-        further_flags(params, &[AGENT_ACTION])
-            .into_iter()
-            .map(OsString::from),
-    );
-    words
+    let handed = rescue_reads::agent(&format!("agent {sub}"))
+        .unwrap_or_else(|| panic!("agent {sub} is an agent row"));
+    agent_line(handed, params, state_root)
 }
-
-/// `agent claude-hook`'s positional: `start` or `end`.
-const AGENT_ACTION: &str = "action";
 
 /// The rescue module's answer of a row actinglab's parser gave, located from this process: the
 /// root of the running program ([`actingcommand_lab_ops::locate::locate`]).

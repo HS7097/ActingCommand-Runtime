@@ -422,12 +422,15 @@ enum List {
     Without,
 }
 
-/// The parameters of one call of a row, read by name through the row's constant.
+/// The parameters of one call of a row, read by name through the row's constant. Workflow #434
+/// LAB-5B1b: the rescue module (`lab_rescue::rescue_reads`) reads its rows through it too, each
+/// with its own constant and its module's exceptions.
 #[derive(Clone, Copy)]
-pub(crate) struct Params<'a> {
+pub struct Params<'a> {
     map: &'a Map<String, Value>,
     row: &'a str,
     list: List,
+    exceptions: &'static [Exception],
 }
 
 impl<'a> Params<'a> {
@@ -441,11 +444,46 @@ impl<'a> Params<'a> {
                 .find(|handed| handed.row == row)
                 .map_or(List::Without, List::Handed),
         };
-        Self { map, row, list }
+        Self {
+            map,
+            row,
+            list,
+            exceptions: &EXCEPTIONS,
+        }
+    }
+
+    /// Workflow #434 LAB-5B1b: the parameters `map` of another module's row read in its process,
+    /// through its constant `reads` and that module's `exceptions`.
+    pub fn reading(
+        reads: &'static Reads,
+        exceptions: &'static [Exception],
+        map: &'a Map<String, Value>,
+    ) -> Self {
+        Self {
+            map,
+            row: reads.row,
+            list: List::Read(reads),
+            exceptions,
+        }
+    }
+
+    /// Workflow #434 LAB-5B1b: the parameters `map` of another module's row whose answer is a
+    /// command line, through its constant `handed` and that module's `exceptions`.
+    pub fn handing(
+        handed: &'static Handed,
+        exceptions: &'static [Exception],
+        map: &'a Map<String, Value>,
+    ) -> Self {
+        Self {
+            map,
+            row: handed.row,
+            list: List::Handed(handed),
+            exceptions,
+        }
     }
 
     /// The value of the parameter `name`, when given.
-    pub(crate) fn get(self, name: &str) -> Option<&'a Value> {
+    pub fn get(self, name: &str) -> Option<&'a Value> {
         self.held(name);
         self.map.get(name)
     }
@@ -458,7 +496,7 @@ impl<'a> Params<'a> {
 
     /// Every member as given, for the code that reads no member by name (the refusal of a member
     /// the row does not declare, the further flags).
-    pub(crate) fn map(self) -> &'a Map<String, Value> {
+    pub fn map(self) -> &'a Map<String, Value> {
         self.map
     }
 
@@ -468,7 +506,7 @@ impl<'a> Params<'a> {
         debug_assert!(
             self.holds(name),
             "Workflow #434 LAB-5B1: the code of the row {} reads {name}, which its constant in \
-             lab_ops::core_reads does not hold",
+             lab_ops::core_reads or lab_rescue::rescue_reads does not hold",
             self.row
         );
     }
@@ -480,7 +518,7 @@ impl<'a> Params<'a> {
             List::Without => false,
         };
         listed
-            || EXCEPTIONS.iter().any(|exception| {
+            || self.exceptions.iter().any(|exception| {
                 exception.name == name
                     && (exception.rows.is_empty() || exception.rows.contains(&self.row))
             })

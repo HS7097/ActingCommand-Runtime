@@ -10900,7 +10900,8 @@ servers, what each accepts and refuses and what each sends to the Runtime, stays
 
 **Cut at the module boundary** (the work order's "If it is too large"; the core part alone is
 well past 1,200 changed lines): this slice holds the core rows (points 1, 3, 4 and their part of
-6). **Left out, for a later slice:** the rescue module's rows (point 2 and its part of 6): the rows
+6). **Left out, for a later slice** (done by "Slice LAB-5B1b" below, but the receivers' flag
+lists, which it leaves for one more): the rescue module's rows (point 2 and its part of 6): the rows
 `lab_rescue::rescue` reads in its process, the installer's flag lists (`crates/lab-rescue/src/install/`)
 and the agent channel's (`agent_channel.rs`, `crates/agent-forward`), each to be one constant held
 equal to its row or rows. Seen while reading, for that slice: `config restore` reads `sha`, which
@@ -10987,6 +10988,95 @@ changes; the operation table is unchanged; no code, key or location is added.
 
 **What LAB-5B1 changes live.** Nothing: every command line, `serve --stdio` line and MCP call
 answers as before.
+
+**Rollback** (to the release before it). Nothing persisted: code only.
+
+#### Slice LAB-5B1b (0.12.57): the rescue module's rows read what the operation table declares
+
+Coordinator work order `rd-1113/brief-lab5b1b.md` with `rd-1112/brief-lab5g-common.md`, on main
+`c113124d` (LAB-5B1 merged): point 2 of LAB-5B1's work order and its part of point 6, which "Slice
+LAB-5B1" left out. It guards the owner's statement of 2026-11-13 (board #434): the command line and
+MCP are two shells around the Lab, and what the Lab has, both must have; the operation table makes
+that true, and these tests keep the table and the code from drifting apart. The rule of the slice:
+no behaviour changes; every line every command prints, what each accepts and refuses, and the
+command line each row hands to the installer and to the agent channel, stays byte for byte.
+
+**In this order** (point 3). The command lines were pinned first, on main's code, in a commit of
+their own (`install::gate_434_lab5b1b_lines`; the one product line it adds is test-only: test
+builds keep each command line the module hands to `install`, `rescue::installed`). The refactor came
+after it and leaves that file untouched.
+
+**Cut** (the work order's "Size": the whole was about 1,800 changed lines). This slice holds the
+rows read in the module's process and the handed rows' constants, with their tests, and the pinned
+command lines of every handed row. **Left for one more slice:** the receivers' flag lists. The flag
+lists of the installer commands the handed rows reach (`start`, `stop`, `undo`, `status`, `resume`,
+`leftovers`, `guards`, `release-hold`, `release verify`, `release stage`, `adopt`, each still inline
+in its `Flags::parse` call) and the agent channel's (`crates/agent-forward/src/cli.rs`, each
+command's list inline in `run`), each to be lifted to one constant its parse reads; a test that the
+flags each handed row's constant writes are what its receiver takes, both ways (the receivers take
+three flags no row hands on: `install start|stop`'s `--ack-guard`, `install stop|guards`'
+`--known-pause`, `install guards`' `--hold`); and a test feeding each receiver the command line its
+row builds for every declared parameter.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5B1b-1 | `lab_rescue::rescue_reads` (new): one constant per row `rescue::serves` | code | LAB-5B1b | — | `READ_HERE` (16 rows the module reads in its process: `restart`, `alive`, `deploy`, `rollback`, `config replace`, `config restore`, `instance add`, `place`, `unlock`, `check-config`, `ledger verify`, `watchdog install`, `watchdog uninstall`, `mcp plan`, `mcp entries`, `mcp config`), each LAB-5B1's `Reads`; `INSTALLER` (11 rows whose answer is an `install` command: `up`, `down`, `undo`, `op status`, `op resume`, `leftovers`, `guards`, `release-hold`, `release verify`, `release stage`, `adopt`) and `AGENT` (the six `agent` rows), each LAB-5B1's `Handed` with its `Part`s: the command's words, the root (`Part::Root`) or the state root (`Part::StateRoot`), a parameter under its flag (`Written::Flag`) or as a word (`Written::Word`, `claude-hook`'s action), then the row's further flags (`Written::Each`) with `Part::Further`, written together in the order the caller gave them, as `rescue::further_flags` wrote them before; `up` and `down` have no `Part::Further` and hand nothing more on, as before. `rescue::installer_line` and `rescue::agent_line` build the command lines from them |
+| L5B1b-2 | every read by name through the row's constant | code | LAB-5B1b | — | LAB-5B1's `core_reads::Params` is public, with two constructors for another module's constant and that module's exceptions (`Params::reading`, `Params::handing`) and its `get` and `map`; its debug assertion names `lab_ops::core_reads or lab_rescue::rescue_reads`. The module's readers (`text`, `switch`, `instance_add::Asked::of`, `list_words`, `mcp plan`'s protocol, the words of a detached run) take it; `down` gives the installer its own hold reason by putting it among the call's parameters when none is given. Same names, same order, same forms |
+| L5B1b-3 | the shared `agent` arm | code | LAB-5B1b | — | it read `action` on all six `agent` rows; now only `agent claude-hook`, which declares it, reads it |
+
+**Reuse** (point 1). `lab-rescue` depends on `lab-ops` already (its `Cargo.toml`, since LAB-1), so
+LAB-5B1's types and reader are reused, not copied: `Reads`, `Handed`, `Part`, `Written`,
+`Exception`, `ROOT_FLAG`, `STATE_ROOT_FLAG` and `Params` with its debug assertion; no new mechanism
+and no new dependency.
+
+**The shared arms** (point 4):
+
+- `agent add`, `agent remove`, `agent list`, `agent claude-register` and `agent notice` read
+  `action`, which they do not declare. No front gives it: the command line refuses a word beyond a
+  row's positionals and a flag the row does not declare (`apps/actinglab/src/cli_module/words.rs`
+  lines 419 and 389; no rescue row hands on global options, `engine::as_written`, and
+  `words::KEPT_FLAGS` names no `agent` row), `serve --stdio` refuses an undeclared member
+  (`words.rs` line 461), the new MCP server an undeclared argument
+  (`apps/actinglab-mcp/src/calls.rs` lines 362 and 363). The agent channel would refuse it: it went
+  as the word after the command, which `cli::flags` refuses as no flag of the command
+  (`crates/agent-forward/src/cli.rs` lines 110 and 111, `unknown`). Both hold: split, as above.
+- `config restore` reads `sha` (`rescue::config_swap`, which `config replace` shares). No front
+  gives it (the same three refusals), but its receiver acts on it: `install::config_swap::candidate`
+  checks the file's SHA-256 against it and refuses `--sha` `unusable` when it differs
+  (`crates/lab-rescue/src/install/config_swap.rs` lines 68 to 72). The code is unchanged and so is
+  the table: whether the row declares `sha` is the coordinator's to decide (the table follows the
+  code, the coordinator's ruling of 11-10, board #434 6770034832, point 5). Until then the read is
+  an exception.
+
+**Exceptions** (`rescue_reads::EXCEPTIONS`): `config restore`'s `sha`, above. Beside them: the
+module's refused parameters (`rescue::REFUSED_PARAMETERS`: the root, the state root and the
+confirmations) are read from every call's members to refuse them by name, not through a row's
+constant, and no row the module serves declares one; `op status --operation`, which the command line
+hands on undeclared (`words::KEPT_FLAGS`), goes on with `Part::Further`, as before.
+
+**Declared and read by no code** (point 5): none. Every declared parameter of a served row is read
+by name or handed on as a further flag. **Corrections of the table:** none.
+
+**Where main differs.** A name `agent <word>` that is no row: the `agent` arm handed it to the
+agent channel, which refused the word (`unknown`, with its usage); now no constant holds it and the
+module refuses it as it refuses every other name it does not serve (`unknown`, with its usage). No
+front gives such a name: the command line and `serve --stdio` offer only the rows `rescue::serves`,
+the new MCP server only its tools.
+
+**Tests.** New: apps row "#434 LAB-5B1b". In `lab-rescue`: `rescue_handed_lines_are_pinned`
+(`install/gate_434_lab5b1b_lines.rs`: 48 command lines written out word by word, on the installer's
+fake host and fake clock and a root that does not exist, which each installer command refuses after
+its line is kept), and in `install/gate_434_lab5b1b.rs`, the embedded table and the constants only:
+`rescue_read_here_rows_read_what_they_declare`, `rescue_handed_rows_hand_what_they_declare`,
+`rescue_exceptions_are_outside_the_table`, `rescue_a_read_outside_its_constant_fails`. In actinglab,
+LAB-5B1's `every_table_driven_row_has_one_list` is extended as the work order's point 6 says: every
+planned rescue row the module serves (on Windows, where it runs) is in exactly one of `READ_HERE`,
+`INSTALLER` and `AGENT`, which hold only such rows. No other existing test is changed.
+
+**Interface.** None raised: nothing on the wire, in the ledger or in a file a released peer reads
+changes; the operation table is unchanged. [lab-two-entries.md](lab-two-entries.md) is unchanged.
+
+**What LAB-5B1b changes live.** Nothing: every command line and every line answered stays as it was.
 
 **Rollback** (to the release before it). Nothing persisted: code only.
 

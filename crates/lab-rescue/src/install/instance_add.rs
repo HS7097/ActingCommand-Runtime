@@ -47,8 +47,9 @@ use actingcommand_contract::{
     BundleIndex, IdentifierIssuer, STANDARD_PACK_BUNDLE_FILE, SchedulingPauseReason,
     validate_instance_alias,
 };
+use actingcommand_lab_ops::core_reads::Params;
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -98,10 +99,10 @@ fn identifier(text: &str) -> bool {
 }
 
 impl Asked {
-    /// The row's parameters: a missing one is `actingctl_usage_invalid` (`required`), one of
-    /// another type `wrong_type`, an empty or malformed one `unusable`, an index above 65535
-    /// `out_of_range`.
-    pub(crate) fn of(params: &Map<String, Value>) -> Result<Self, Outcome> {
+    /// The row's parameters (Workflow #434 LAB-5B1b: read through its constant): a missing one is
+    /// `actingctl_usage_invalid` (`required`), one of another type `wrong_type`, an empty or
+    /// malformed one `unusable`, an index above 65535 `out_of_range`.
+    pub(crate) fn of(params: Params<'_>) -> Result<Self, Outcome> {
         let text = |name: &str, shown: &str| -> Result<String, Outcome> {
             match params.get(name) {
                 None => Err(cli_line::usage_invalid(

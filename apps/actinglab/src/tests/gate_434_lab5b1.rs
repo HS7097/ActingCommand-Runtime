@@ -14,7 +14,10 @@
 //   LAB-5B2's register names table-driven, is in exactly one list (`lab_ops::core_reads`'
 //   `READ_HERE`, `HANDED` and `OFFLINE`, `own_flags::DECLARED_ROWS`, LAB-5B2's
 //   `own_flags::CORE_STRICT_ROWS`); each list holds only such rows, once; `lab_ops::core_ops`
-//   serves exactly the rows of its three. The rescue module's rows are a later slice's (register).
+//   serves exactly the rows of its three. Workflow #434 LAB-5B1b: and every planned rescue row the
+//   rescue module serves is in exactly one of its constants (`lab_rescue::rescue_reads`'
+//   `READ_HERE`, `INSTALLER` and `AGENT`; on Windows, where the module runs), which hold only such
+//   rows.
 // - LAB-5C's cases its tests did not cover (the review of its pull request), as the code answers
 //   them today, on the command line and in `serve --stdio`:
 //   `lab5c_both_starting_points_are_refused_as_repeated` (`since` and `since_unix_ms` at once on
@@ -28,7 +31,7 @@
 
 use super::gate_434_lab5b2::flag;
 use super::{RuntimeStateEnvGuard, env_lock, use_runtime_state_root};
-use crate::cli_module::{self, core_ops, engine, own_flags, serve};
+use crate::cli_module::{self, core_ops, engine, own_flags, serve, words};
 use actingcommand_lab_ops::core_reads;
 use actingcommand_lab_ops::events;
 use actingcommand_lab_ops::initiator::ENVIRONMENT_VARIABLE;
@@ -205,6 +208,41 @@ fn declared_rows_match_their_commands() {
     );
 }
 
+/// Workflow #434 LAB-5B1b: the rescue module's constants (`lab_rescue::rescue_reads`), each with
+/// its rows; none where the module does not run.
+#[cfg(windows)]
+fn rescue_lists() -> Vec<(&'static str, Vec<&'static str>)> {
+    use actingcommand_lab_rescue::rescue_reads;
+    vec![
+        (
+            "lab_rescue::rescue_reads::READ_HERE",
+            rescue_reads::READ_HERE
+                .iter()
+                .map(|reads| reads.row)
+                .collect(),
+        ),
+        (
+            "lab_rescue::rescue_reads::INSTALLER",
+            rescue_reads::INSTALLER
+                .iter()
+                .map(|handed| handed.row)
+                .collect(),
+        ),
+        (
+            "lab_rescue::rescue_reads::AGENT",
+            rescue_reads::AGENT
+                .iter()
+                .map(|handed| handed.row)
+                .collect(),
+        ),
+    ]
+}
+
+#[cfg(not(windows))]
+fn rescue_lists() -> Vec<(&'static str, Vec<&'static str>)> {
+    Vec::new()
+}
+
 #[test]
 fn every_table_driven_row_has_one_list() {
     let table = cli_module::table().expect("the operation table");
@@ -224,20 +262,29 @@ fn every_table_driven_row_has_one_list() {
         .iter()
         .map(|(row, _)| *row)
         .collect::<Vec<_>>();
-    let lists: [(&str, &[&str]); 5] = [
+    let core_lists: [(&str, &[&str]); 5] = [
         ("lab_ops::core_reads::READ_HERE", &read_here),
         ("lab_ops::core_reads::HANDED", &handed),
         ("lab_ops::core_reads::OFFLINE", &offline),
         ("own_flags::DECLARED_ROWS", &declared),
         ("own_flags::CORE_STRICT_ROWS", &own_flags::CORE_STRICT_ROWS),
     ];
+    // Workflow #434 LAB-5B1b: and the rescue module's constants, so that every row it serves is in
+    // exactly one, and a row it serves later and no constant holds fails.
+    let rescue = rescue_lists();
+    let lists = core_lists
+        .into_iter()
+        .chain(rescue.iter().map(|(list, rows)| (*list, rows.as_slice())))
+        .collect::<Vec<_>>();
     let rows = table
         .operations
         .iter()
         .filter(|operation| {
             operation.status == OperationStatus::Planned
                 && (operation.module == OperationModule::Core
-                    || own_flags::TABLE_DRIVEN_ROWS.contains(&operation.name.as_str()))
+                    || own_flags::TABLE_DRIVEN_ROWS.contains(&operation.name.as_str())
+                    || (operation.module == OperationModule::Rescue
+                        && words::rescue_served(&operation.name)))
         })
         .collect::<Vec<_>>();
     let mut failures = Vec::new();
