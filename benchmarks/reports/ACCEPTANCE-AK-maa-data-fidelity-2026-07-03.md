@@ -49,12 +49,12 @@ The current local retained-frame corpus found for AK page calibration contains:
 | `mission_result` | no generated page should match | `%USERPROFILE%\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\ak16416-current.png` |
 | `terminal_stage_map` | `arknights/terminal` | `%USERPROFILE%\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\runs\lab1y-20260625_050455_365\output\screenshots\20260625_050456_022.png` |
 | `operator_positive` | `arknights/operator` | `%USERPROFILE%\Documents\Azur\ActingCommand-Runtime\target\p2_2_smoke\capture-16416.png` |
-| `depot_positive` | `arknights/depot` | `%USERPROFILE%\AppData\Local\Temp\claude\%WORKSPACE%\scratchpad\akpg_depot.png` |
-| `friends_positive` | `arknights/friends` | `%USERPROFILE%\AppData\Local\Temp\claude\%WORKSPACE%\scratchpad\akpg_friends.png` |
-| `mission_positive` | `arknights/mission` | `%USERPROFILE%\AppData\Local\Temp\claude\%WORKSPACE%\scratchpad\akpg_mission.png` |
-| `signin_modal` | no generated page should match | `%USERPROFILE%\AppData\Local\Temp\claude\%WORKSPACE%\scratchpad\wf_arknights_recruit.png` |
-| `announcement_modal` | no generated page should match | `%USERPROFILE%\AppData\Local\Temp\claude\%WORKSPACE%\scratchpad\recak_close0.png` |
-| `quickswitch_dropdown_positive` | `arknights/quickswitch_dropdown` | `%USERPROFILE%\AppData\Local\Temp\claude\%WORKSPACE%\scratchpad\akqs_overlay.png` |
+| `depot_positive` | `arknights/depot` | `%SCRATCHPAD%\akpg_depot.png` |
+| `friends_positive` | `arknights/friends` | `%SCRATCHPAD%\akpg_friends.png` |
+| `mission_positive` | `arknights/mission` | `%SCRATCHPAD%\akpg_mission.png` |
+| `signin_modal` | no generated page should match | `%SCRATCHPAD%\wf_arknights_recruit.png` |
+| `announcement_modal` | no generated page should match | `%SCRATCHPAD%\recak_close0.png` |
+| `quickswitch_dropdown_positive` | `arknights/quickswitch_dropdown` | `%SCRATCHPAD%\akqs_overlay.png` |
 
 ## Calibration decision
 
