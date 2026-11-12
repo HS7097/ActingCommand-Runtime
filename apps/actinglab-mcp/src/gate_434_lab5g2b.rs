@@ -8,8 +8,8 @@
 //!
 //! - `mcp_served_and_refused_partition`: every offered row is served or refused by the one rule
 //!   (`tools::serving`), stated here from the table: refused are the rows of slice LAB-5 (`record
-//!   draft`; on Windows the rescue module's `mcp config` and `mcp entries`), the core and
-//!   debugging rows `lab_ops::core_ops` does not serve (the three `app` rows, `standard-pack
+//!   draft`; on Windows the rescue module's `mcp config`, `mcp entries` and `mcp plan`), the core
+//!   and debugging rows `lab_ops::core_ops` does not serve (the three `app` rows, `standard-pack
 //!   check`, the debugging rows actinglab's own commands serve), every authoring row and (until
 //!   the slice's second part) every rescue row; served are the rows `core_ops` serves. A call of a
 //!   refused row answers `mcp_operation_unsupported` with its tool, its arguments unread; a call of
@@ -19,11 +19,14 @@
 //!   `material` without `export`, or with it false, is handed on as given, with it true with
 //!   `out` the export directory; `frame` always with it; `deploy` and `rollback` with `detach`
 //!   true; `out`, `detach` and an `export` that is no boolean are refused.
-//! - `mcp_budget_cut_and_export`: a shaped row cut (`codes`, a page of the most entries: fewer
-//!   kept, `truncated`, within 24 KiB), a shaped row exported (`facts`' answer within this
-//!   server's budget: the header, `answer_exported` naming the file, the file the whole answer),
-//!   and a line without shaping over the limit answered `output_budget_exceeded` with the bytes
-//!   it takes and the limit, in each protocol era.
+//! - `mcp_budget_cut_and_export`: a shaped row that fits given whole (`codes`, a page of the most
+//!   entries, which today's budget takes), a shaped row cut (`schedule`'s answer with more
+//!   candidate rows than the budget takes: fewer kept, `candidates_truncated`, within 24 KiB; the
+//!   coordinator's correction of 11-12: the first round expected the `codes` page to be cut, and
+//!   it fits), a shaped row exported (`facts`' answer within this server's budget: the header,
+//!   `answer_exported` naming the file, the file the whole answer), and a line without shaping
+//!   over the limit answered `output_budget_exceeded` with the bytes it takes and the limit, in
+//!   each protocol era.
 
 use crate::budget;
 use crate::calls::{self, Service};
@@ -39,6 +42,7 @@ use actingcommand_lab_ops::events::CursorBinding;
 use actingcommand_lab_ops::facts;
 use actingcommand_lab_ops::front::{Connection, Front};
 use actingcommand_lab_ops::locate::AuthoringModule;
+use actingcommand_lab_ops::schedule;
 use actingcommand_lab_ops::table::{self, Operation, OperationModule, OperationTable};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -333,7 +337,8 @@ fn mcp_budget_cut_and_export() {
     let exports = tempfile::tempdir().expect("tempdir");
     let service = Service::new(exports.path().to_path_buf());
 
-    // A shaped row cut: `codes`, a page of the most entries, reads no Runtime.
+    // A shaped row that fits is given whole: `codes`, a page of the most entries (the page's limit
+    // is sized to today's budget), reads no Runtime.
     let codes = row(&table, "codes");
     let limit = code_lookup::MAX_LIMIT;
     let arguments = object(json!({"limit": limit}));
@@ -352,14 +357,59 @@ fn mcp_budget_cut_and_export() {
     );
     let result = service.call(codes, "ac_codes", &arguments, ERA);
     assert_eq!(result["isError"], json!(false), "{result}");
-    let cut = text_line(&result);
-    let kept = cut["codes"].as_array().map_or(0, Vec::len);
-    assert!(
-        (1..page).contains(&kept),
-        "the page is cut to the budget: {kept} of {page}"
+    let given = text_line(&result);
+    assert_eq!(
+        given["codes"].as_array().map(Vec::len),
+        Some(page),
+        "a page that fits is given whole"
     );
-    assert_eq!(cut["truncated"], json!(true), "the cut is marked");
-    assert!(cut["next_cursor"].is_string(), "the page goes on: {cut}");
+    assert!(given.get("truncated").is_none(), "nothing is cut: {given}");
+    assert!(
+        protocol::complete(ERA, result.clone()).to_string().len() <= budget::RESULT_LIMIT,
+        "within the limit"
+    );
+
+    // A shaped row cut: `schedule`'s answer with more candidate rows than this server's budget
+    // takes (the cut that row's serving code makes of an explanation, `schedule::within_budget`).
+    let rows = 400;
+    let candidates = (0..rows)
+        .map(|index| json!({"task_id": format!("neutral.task.{index}"), "detail": "x".repeat(64)}))
+        .collect::<Vec<_>>();
+    let explained = json!({
+        "evaluated_at_unix_ms": 1,
+        "catalog_hash": "sha256:0",
+        "instances": [{
+            "instance_alias": "neutral",
+            "candidates": candidates,
+            "candidates_total": rows,
+        }],
+    });
+    let cut = service.within_budget(ERA, |answer_budget| {
+        schedule::within_budget(explained, Some(answer_budget))
+    });
+    let kept = cut["instances"][0]["candidates"]
+        .as_array()
+        .map_or(0, Vec::len);
+    assert!(
+        (1..rows).contains(&kept),
+        "the candidate rows are cut to the budget: {kept} of {rows}"
+    );
+    assert_eq!(
+        cut["instances"][0]["candidates_truncated"],
+        json!(true),
+        "the cut is marked"
+    );
+    assert_eq!(
+        cut["instances"][0]["candidates_total"],
+        json!(rows),
+        "the total stays"
+    );
+    let exit = cli_line::success(
+        object(cut),
+        &Outcome::new(ActingctlCode::LabOperationCompleted),
+    );
+    let result = calls::call_result(&exit, ERA);
+    assert_eq!(result["isError"], json!(false), "{result}");
     assert!(
         protocol::complete(ERA, result.clone()).to_string().len() <= budget::RESULT_LIMIT,
         "within the limit"
