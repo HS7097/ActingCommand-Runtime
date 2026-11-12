@@ -11,6 +11,10 @@
 //!   `standard_packs.check_interval_ms` (and at the first cycle). A check `stat`s `schedule.json`
 //!   and `bundle.json` of each game in use and reads a game root only when one of them changed
 //!   or the bound instances changed: 「用到的时候再加载」.
+//! - **At start** (Workflow #442 REM-1, register §1.326). Before the start's remedy recovery the
+//!   workbench adopts the active generation the policy host loaded: its composition's procedure
+//!   bindings are the host's procedure manifest, so the remedy table built at start reads the
+//!   composed packages. The first check finds that generation adopted.
 //! - **Games in use.** The games of the configured instances ([`games_in_use`]). A game root
 //!   installed without a bound instance is never read. Pending decision 58 takes its recommended
 //!   answer A: a paused instance still uses its rules; [`games_in_use`] is the one function to
@@ -406,6 +410,71 @@ impl HostShared {
         Ok(true)
     }
 
+    /// Workflow #442 REM-1 (register §1.326; `contracts/remedies.md` section 7.1): at start, in
+    /// composer mode, the workbench adopts the active generation `policy` loaded, as its first
+    /// check would: the procedure bindings of its composition record are the host's procedure
+    /// manifest before the start's remedy recovery builds the table from it. The first check then
+    /// finds the generation adopted and does not adopt it again; it still reads every game in use
+    /// and composes as before. Nothing in configured mode. A generation that is not a composed
+    /// one, or whose record cannot be used, gives the manifest that binds no procedure, as the
+    /// check gives it.
+    pub(super) fn adopt_standard_pack_generation_on_start(
+        &self,
+        policy: &PolicyHost,
+    ) -> RuntimeHostResult<()> {
+        let Some(workbench) = self.standard_packs.schedule.as_ref() else {
+            return Ok(());
+        };
+        let active = policy.active_generation();
+        let record = match &active {
+            Some(generation) if generation.catalog_id() == STANDARD_PACKS_CATALOG_ID => {
+                policy.composition_record(generation.catalog_hash())?
+            }
+            _ => None,
+        };
+        let mut state = lock(&workbench.state, HostLocation::StandardPackRead)?;
+        self.adopt_active_generation(
+            &mut state,
+            active.map(|generation| generation.catalog_hash().to_owned()),
+            record,
+            self.standard_packs.root(),
+        )
+    }
+
+    /// Adopts the active generation `active_hash` with `record`, its composition record as read
+    /// (`None` when it is no composed one or has none): its record when it is one of this schema,
+    /// and every game in use read again at the next check. Until a composition succeeds the
+    /// cycle runs the active generation's own procedures (none without a composed one): a broken
+    /// root never leaves the cycle without a manifest.
+    fn adopt_active_generation(
+        &self,
+        state: &mut WorkbenchState,
+        active_hash: Option<String>,
+        record: Option<Vec<u8>>,
+        root: Option<&Path>,
+    ) -> RuntimeHostResult<()> {
+        state.adopted = true;
+        state.active = record
+            .and_then(|bytes| serde_json::from_slice::<CompositionRecord>(&bytes).ok())
+            .filter(|record| record.schema_version == COMPOSITION_RECORD_SCHEMA);
+        state.active_hash = active_hash;
+        state.marks.clear();
+        let record = state.active.clone().unwrap_or_else(|| CompositionRecord {
+            schema_version: COMPOSITION_RECORD_SCHEMA.to_owned(),
+            rules_digest: String::new(),
+            games: BTreeMap::new(),
+            procedures: Vec::new(),
+            pools: Vec::new(),
+        });
+        self.install_composed_manifest(&record, root)?;
+        state.procedures = record
+            .procedures
+            .iter()
+            .map(|procedure| (procedure.procedure_ref.clone(), procedure.clone()))
+            .collect();
+        Ok(())
+    }
+
     fn refresh_standard_pack_rules(
         &self,
         workbench: &StandardPackWorkbench,
@@ -433,38 +502,17 @@ impl HostShared {
             .as_ref()
             .map(|generation| generation.catalog_hash().to_owned());
         if !state.adopted || state.active_hash != active_hash {
-            state.adopted = true;
-            // The active generation is not the one the workbench last activated (a start, or a
-            // switch by another writer): adopt its record when it is a composed one, and read
-            // every game in use again.
-            state.active = match &active {
+            // The active generation is not the one the workbench last adopted or activated (a
+            // switch by another writer; #442 REM-1: the start adopts the one it loads, so its
+            // first check does not adopt it again).
+            let record = match &active {
                 Some(generation) if generation.catalog_id() == STANDARD_PACKS_CATALOG_ID => {
-                    let record = lock(self.policy()?, HostLocation::StandardPackRead)?
-                        .composition_record(generation.catalog_hash())?;
-                    record
-                        .and_then(|bytes| serde_json::from_slice::<CompositionRecord>(&bytes).ok())
-                        .filter(|record| record.schema_version == COMPOSITION_RECORD_SCHEMA)
+                    lock(self.policy()?, HostLocation::StandardPackRead)?
+                        .composition_record(generation.catalog_hash())?
                 }
                 _ => None,
             };
-            state.active_hash = active_hash.clone();
-            state.marks.clear();
-            // Until a composition succeeds the cycle runs the active generation's own
-            // procedures (none without a composed one): a broken root never leaves the cycle
-            // without a manifest.
-            let record = state.active.clone().unwrap_or_else(|| CompositionRecord {
-                schema_version: COMPOSITION_RECORD_SCHEMA.to_owned(),
-                rules_digest: String::new(),
-                games: BTreeMap::new(),
-                procedures: Vec::new(),
-                pools: Vec::new(),
-            });
-            self.install_composed_manifest(&record, root.as_deref())?;
-            state.procedures = record
-                .procedures
-                .iter()
-                .map(|procedure| (procedure.procedure_ref.clone(), procedure.clone()))
-                .collect();
+            self.adopt_active_generation(state, active_hash, record, root.as_deref())?;
         }
         let games = bound
             .values()

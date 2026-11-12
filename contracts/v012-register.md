@@ -15559,10 +15559,101 @@ ids it reads as before. Going back from MAPP-2 to MAPP-1 alone is not a release 
 - how a clone is addressed;
 - whether the report's readers deny unknown members.
 
+### 1.326 Slice REM-1 (0.12.56): in composer mode the remedy table is built from the composed manifest at start, and every build says what it found (Workflow #442; a production run of 11-12 on v0.12.52 whose outcome key declares a remedy opened no round and recorded nothing; the read-only investigation of that run at `b44eea2d`; coordinator work order `rd-1112/brief-442-rem-1.md`, read on main `6e4119c7`)
+
+[remedies.md](remedies.md) section 7.1 is the contract. 1.326 is the coordinator's number,
+written after §1.324 on main `6e4119c7`. Sections stand in merge order: §1.322 and §1.323 were
+merged first (main `c7dc14ec`, merged into this slice), so this section follows them; §1.325 was
+not used. No persisted ledger shape, wire shape, request kind, configuration key, outcome code,
+vocabulary or interface revision is new or changed. On main `6e4119c7` the start order,
+`table_due` and `build_table` are the ones the investigation read at `b44eea2d`; since then only
+Workflow #429 R-8 added the task packages to the table, which the pack schedule view reads.
+
+**What happened.** On production (v0.12.52, composer mode) a scheduled run ended on an outcome key
+whose package mapping declares a remedy. No remedy round opened, and nothing said so: no reason
+code, no planning signal, no ledger record, no log line.
+
+**Cause** (confirmed in the code).
+
+1. The start builds the remedy table (`recover_remedy_state`) from the host's procedure manifest;
+   in composer mode the configuration gives none.
+2. The composed manifest was put in place only by the scheduler workbench's first check, in the
+   first policy cycle, after that recovery: the table was built empty, carrying the active
+   catalog's hash.
+3. `table_due` rebuilt it only without a table, for another catalog, or at its interval while a
+   round, a stop or a client wait is open; an unchanged composition is not activated again, so the
+   empty table lasted until the next activation, and every restart built an empty one again.
+4. With no entry for the task the settlement does not read the terminal's key, and the next
+   cycle's remedy plan is empty; an empty table wrote no line.
+5. `actingd check-config` builds its table from the composed manifest, so the offline check passed
+   while the running table was empty.
+
+**What changed.**
+
+- **The start** (`host.rs`, before `recover_remedy_state`): in composer mode the workbench adopts
+  the active generation the policy host loaded (`adopt_standard_pack_generation_on_start`; the
+  adoption step of its check is now `adopt_active_generation`, which both call): the procedure
+  bindings of its composition record are the host's procedure manifest, so the table the start
+  builds reads the composed packages and the start reads the keys of the runs before it. The first
+  check finds the generation adopted and does not adopt it again; it still reads the games in use
+  and composes as before. A generation that is no composed one, or whose record cannot be used,
+  gives the manifest that binds no procedure, as the check gives it; no failure path is added.
+- **A table follows its manifest:** the table keeps the digest of the manifest it was built from
+  (`ProcedureManifest::digest`: SHA-256 over each binding's alias, binding digest and location, in
+  alias order; none without a manifest), and `table_due` is also true when the evaluation's
+  manifest has another digest. This covers any other order in which a manifest arrives after a
+  table.
+- **Every build says what it found:** each table taken into effect (`RemedyState::set_table`)
+  writes `actingd remedy_table built catalog_hash=<hash> manifest=<sha256:…|none> tasks=<n>
+  located=<n> remedy_tasks=<n> providers=<n> unbound=<n>` and, when some catalog task has no
+  package location, `actingd remedy_table unbound tasks=<first ten ids> more=<n>`. The `finding`
+  and `unreadable` lines are unchanged.
+
+**What an operator sees after a restart.** Among the start's lines, before `actingd
+startup_recovery`, one `actingd remedy_table built` line for the active catalog: in composer mode
+with `manifest=sha256:…` and `located` equal to `tasks` when every composed task is bound, and the
+number of tasks that declare a remedy and of providers the packages declare. A line with
+`manifest=none`, or an `unbound` line, says the table read no package for those tasks. One more
+such line follows each activation, a change of the manifest, and each rebuild while a round is
+open. A first start with no composed generation yet writes its first line at the first cycle.
+Nothing is configured.
+
+**Older builds** keep the defect: in composer mode their start builds the table from no manifest,
+and a blocked result opens no round until the next activation. Nothing in the ledger changes shape
+and this build writes no new record, so an older build reads every record as before.
+
+**Seen, not changed.** `actingd check-config` builds its offline table as before and writes no
+summary line. The pack schedule view (`host/pack_schedule.rs`) reads the same table and so lists the
+composed packages after a restart; no test of the view pins an empty table after a start (its tests
+run in configured mode). The ten names of the `unbound` line are a constant: the bound of one log
+line, not a scheduling value, and the work order adds no configuration key.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| REM1-1 | the remedy table built at start from the active composed generation's bindings, and rebuilt when the manifest's digest changes | rule (no shape; corrects [remedies.md](remedies.md) section 7.1) | REM-1 | — | `since` 0.12.56; configured mode unchanged |
+| REM1-2 | the developer lines `actingd remedy_table built` and `actingd remedy_table unbound` | log lines, no record and no interface | REM-1 | `RemedyState::set_table` | `since` 0.12.56 |
+
+Tests (host gate row "#442 REM-1", `gate_442_rem1`; composer mode over one neutral game root on a
+manual clock and a fake device; the rule, pool and profile builders of `gate_rl1b` are shared with
+it, no assertion of `gate_rl1b` changes): `composer_restart_table_declares_remedies` (a second
+start on the same files declares the blocked task's remedy and lists the provider before and after
+its first cycle, and its summary line says so); `composer_restart_blocked_run_opens_round` (after a
+restart the blocked task succeeds with the remedy key; the next cycle, inside the instance's
+activity interval, holds it with `policy_remedy_waiting` naming its round; once the instance may
+run again the provider's intent carries `policy_remedy_requested`, `remedy_source` `package`,
+`irreversible` true; the provider takes the instance in that cycle, so the blocked task is settled
+`instance_already_selected` there, as `gate_411_b15h` pins, and its hold is asserted in the cycle
+before); `composer_restart_keeps_round_opened_before` (a blocking run from before the restart
+opens its round after it); `remedy_table_names_unbound_tasks` (the tasks without a package
+location in catalog order, their number in the summary, ten named and the rest counted, a located
+package that cannot be read unreadable and not unbound, and `manifest=none` without a manifest). No
+existing test changes.
+
 ### 1.328 Slice MAPP-1 (0.12.56): device groups, one queue and one pick per device (Workflow #437; the contract of §1.323, merged in Runtime pull request #1624, main `c7dc14ec16`; the coordinator's rulings and answers it records, not Alice's words; coordinator work order `rd-1112/brief-437-mapp-1.md`, read on main `c7dc14ec16`)
 
-1.328 is the coordinator's number; §1.326 and §1.327 belong to pull requests not merged on
-`c7dc14ec16`. The contract is [device-group.md](device-group.md) and the passages §1.323 lists.
+1.328 is the coordinator's number. Sections stand in merge order: §1.326 (REM-1, main
+`a21571c475`, merged into this slice) was merged first, so this section follows it; §1.327
+belongs to a pull request not merged yet. The contract is [device-group.md](device-group.md) and the passages §1.323 lists.
 MAPP-1 builds the rows of §1.323's table whose slice is MAPP-1, except the four host rows named
 under "Not built in this slice" below; MAPP-2 (the switch before a run) is another slice.
 

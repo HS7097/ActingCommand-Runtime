@@ -3554,3 +3554,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_428_diag_si::diag_si_a_prerequisite_layer_without_a_move_names_the_page_and_the_stage_in_its_records",
 ]
 incident = ["#428 DIAG-SI"]
+
+# Workflow #442 REM-1 (0.12.56; register §1.326; brief rd-1112/brief-442-rem-1.md; contracts/remedies.md section 7.1): through the host in composer mode on a manual clock and a fake device, over one neutral game root whose blocked rule's package maps a key to a remedy and whose provider rule's package provides its capability, the table a second start on the same files builds declares the blocked task's remedy and lists the provider before and after its first cycle, its summary line naming the manifest's digest, two tasks, both located, one remedy task, one provider and none unbound, and nothing is activated again; after a restart the blocked task succeeds with the remedy key, the next cycle inside the instance's activity interval holds it with policy_remedy_waiting naming its round, and once the instance may run again the provider's intent carries policy_remedy_requested with remedy_source package and irreversible true while the blocked task is not dispatched; a blocking run from before a restart still opens its round after it (the provider requested for that run's decision); and the table built from a manifest that locates one of twelve catalog tasks lists the eleven without a package location in catalog order, its summary line gives their number, the second line names ten and counts one, the located package that cannot be read is unreadable and not unbound, and without a manifest every task is unbound and the line says manifest=none
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_442_rem1::composer_restart_table_declares_remedies",
+    "actingcommand-runtime-host::lib::tests::gate_442_rem1::composer_restart_blocked_run_opens_round",
+    "actingcommand-runtime-host::lib::tests::gate_442_rem1::composer_restart_keeps_round_opened_before",
+    "actingcommand-runtime-host::lib::tests::gate_442_rem1::remedy_table_names_unbound_tasks",
+]
+incident = ["#442 REM-1"]
