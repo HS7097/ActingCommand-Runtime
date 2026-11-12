@@ -17,19 +17,27 @@
 //! Workflow #434 LAB-5G1 (register §1.287, "Slice LAB-5G1"): moved here from actinglab's CLI
 //! module (`apps/actinglab/src/cli_module/core_ops.rs`), so that another program serves these rows
 //! with the same code. What stays the program's is given by its caller ([`Caller`]): where the
-//! program acts ([`Place`]), the developer text of a state root it could not locate, and the code
-//! of an answer whose only source was an MCP tool (`lab_operation_completed`, the catalog owner
-//! `actinglab`'s). The three helpers of actinglab's words this code reads moved with it
-//! ([`MORE_WORDS`], [`further_flags`], [`parse_duration`]). The caller also says how the rows reach
-//! the Runtime ([`Caller::connection`]): a connection made for each call as a front connects, as
-//! actinglab does, or a connection it keeps.
+//! program acts ([`Place`]) and the developer text of a state root it could not locate. The three
+//! helpers of actinglab's words this code reads moved with it ([`MORE_WORDS`], [`further_flags`],
+//! [`parse_duration`]). The caller also says how the rows reach the Runtime
+//! ([`Caller::connection`]): a connection made for each call as a front connects, as actinglab
+//! does, or a connection it keeps.
+//!
+//! Workflow #434 LAB-5G1b (register §1.287, "Slice LAB-5G1b"): the caller also gives the answer
+//! budget ([`Caller::budget`]; none: the whole answer, as the command line prints it) and the
+//! binding of the cursors `events` and `diagnose`'s errors page issue and take
+//! ([`Caller::cursor`]). An answer whose only source was an MCP tool answers
+//! `lab_operation_completed`, a code of this crate's registry since that slice, whichever program
+//! serves the row.
 
 // Workflow #434 LAB-5G1: as in actinglab, where this code was written (its `main.rs` allows it for
 // the crate): a step that ends the call returns the call's line, `Exit`, as its error.
 #![allow(clippy::result_large_err)]
 
+use crate::budget::{self, Budget};
 use crate::cli_line::{self, Exit};
 use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::events::CursorBinding;
 use crate::front::{Connection, Reached};
 use crate::instance_selector::{self, SelectorMiss};
 use crate::table::{Operation, ParamForm};
@@ -41,7 +49,7 @@ use crate::{
     scheduling, shutdown, targets, wait, wake_test,
 };
 use actingcommand_contract::codes::{ContractLocation, ReceiptCode};
-use actingcommand_contract::outcome::{Code, Detail, Outcome};
+use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     ContainedTaskRecoveryBinding, ContainedTaskRequest, MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
     MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS, RequestId, RuntimeReceiptState,
@@ -94,14 +102,23 @@ pub struct Caller<'a> {
     pub place: &'a dyn Fn() -> Place,
     /// The developer text of a state root the program could not locate.
     pub unlocated: &'a str,
-    /// The code of an answer whose only source was an MCP tool: `lab_operation_completed`, a code
-    /// of the catalog owner `actinglab`, which only actinglab's registry emits.
-    pub completed: Code,
     /// How the rows that reach the Runtime reach it: a connection made for the call as a front
     /// connects (actinglab: [`Connection::per_call`]), or one the caller keeps. Every such row
     /// takes it, each of the three ways: the words of a command of this crate (its `dispatch_on`),
     /// and the parameters read here. `codes`, `gap`, `packs` and `devices` read no Runtime.
     pub connection: Connection<'a>,
+    /// Workflow #434 LAB-5G1b: the answer budget. `None` (actinglab): the whole answer, the line
+    /// the command line prints. `Some`: handed to the step that shapes the answer of `status`,
+    /// `diagnose`, `events`, `schedule`, `runs`, `run evidence` and `codes` (each cuts it) and of
+    /// `facts`, `config`, `packs`, `remedy` and `summary` (each writes it whole through the
+    /// budget's export and answers its header, `answer_exported` the line's one warning,
+    /// [`budget::line_members`]). Every other row answers whole whatever the budget.
+    pub budget: Option<&'a Budget<'a>>,
+    /// Workflow #434 LAB-5G1b: the binding of the cursors `events` issues and takes and of the
+    /// cursor of `diagnose`'s errors page: a session and a connection generation (actinglab: a
+    /// fresh one for each call, [`CursorBinding::fresh`]). The cursors of `runs` and `codes` bind
+    /// to no session and do not take it.
+    pub cursor: CursorBinding,
 }
 
 /// The operations of this module: the core rows (but those actinglab's own command serves) and
@@ -132,9 +149,10 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
     };
     if let Some(argv) = offline_words(operation, params, root.as_deref()) {
         return dispatched(match name {
-            "codes" => code_lookup::dispatch(&argv),
+            // Workflow #434 LAB-5G1b: within the caller's budget (`gap` has no shaping).
+            "codes" => code_lookup::dispatch_within(&argv, caller.budget),
             "gap" => capability_gap::dispatch(&argv),
-            _ => packs::dispatch(&argv),
+            _ => packs::dispatch_within(&argv, caller.budget),
         });
     }
     let located = (caller.place)();
@@ -142,8 +160,7 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
         Ok(state_root) => state_root.clone(),
         Err(outcome) => return cli_line::failure(outcome, Some(caller.unlocated)),
     };
-    if let Some(exit) =
-        dispatched_with_state_root(operation, params, &located, &state_root, caller.connection)
+    if let Some(exit) = dispatched_with_state_root(operation, params, &located, &state_root, caller)
     {
         return exit;
     }
@@ -163,7 +180,7 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
     let answered = if name == "shutdown" {
         shutdown_line(params, client, &state_root)
     } else {
-        served(name, params, &client, caller.completed)
+        served(name, params, &client, caller.budget)
     };
     match answered {
         Ok(exit) | Err(exit) => exit,
@@ -242,33 +259,37 @@ pub fn offline_words(
     Some(argv.0)
 }
 
-/// The operations LAB-1 moved with their parsing, given actingctl's words, on `connection`;
-/// `None` for another.
+/// The operations LAB-1 moved with their parsing, given actingctl's words, on the caller's
+/// connection; `None` for another. Workflow #434 LAB-5G1b: those that shape their answer within
+/// the caller's budget, `events` and `diagnose` with the caller's cursor binding.
 fn dispatched_with_state_root(
     operation: &Operation,
     params: &Map<String, Value>,
     place: &Place,
     state_root: &Path,
-    connection: Connection<'_>,
+    caller: &Caller<'_>,
 ) -> Option<Exit> {
     let argv = match handed_words(operation, params, place.root.as_deref(), state_root)? {
         Ok(argv) => argv,
         Err(exit) => return Some(exit),
     };
     let detail = cli_line::detail().unwrap_or(Detail::Full);
+    let (connection, budget, cursor) = (caller.connection, caller.budget, caller.cursor);
     let exit = match operation.name.as_str() {
-        "status" => overview::dispatch_on(&argv, connection),
-        "summary" => routine_summary::dispatch_on(&argv, detail, connection),
-        "events" => events::dispatch_on(&argv, connection),
-        "runs" => run_list::dispatch_on(&argv, connection),
-        "run evidence" => run_evidence::dispatch_on(&argv, connection),
-        "diagnose" => diagnose::dispatch_on(&argv, connection),
+        "status" => overview::dispatch_within(&argv, connection, budget),
+        "summary" => routine_summary::dispatch_within(&argv, detail, connection, budget),
+        "events" => events::dispatch_within(&argv, connection, budget, cursor),
+        "runs" => run_list::dispatch_within(&argv, connection, budget),
+        "run evidence" => run_evidence::dispatch_within(&argv, connection, budget),
+        "diagnose" => diagnose::dispatch_within(&argv, connection, budget, cursor),
         // Workflow #434 LAB-5C: `remedy set`'s rows given inline go beside its words.
         "remedy set" => match params.get("rows") {
             Some(rows) => remedy::dispatch_rows_on(&argv, rows, detail, connection),
             None => remedy::dispatch_on(&argv, detail, connection),
         },
-        "remedy" | "remedy lift" => remedy::dispatch_on(&argv, detail, connection),
+        // Workflow #434 LAB-5G1b: the read within the caller's budget; `remedy lift` has none.
+        "remedy" => remedy::dispatch_within(&argv, detail, connection, budget),
+        "remedy lift" => remedy::dispatch_on(&argv, detail, connection),
         "frame" => observe_export::dispatch_on(&argv, connection),
         "preset" | "preset set" => perf_preset::dispatch_on(&argv, detail, connection),
         "evidence read" => evidence_read::dispatch_on(&argv, detail, connection),
@@ -442,13 +463,13 @@ pub fn handed_words(
     Some(Ok(argv.0))
 }
 
-/// The other operations, called with their parameters on `client`; `completed_code` is the code
-/// of an answer whose only source was an MCP tool.
+/// The other operations, called with their parameters on `client`. Workflow #434 LAB-5G1b:
+/// `facts`, `config` and `schedule` shape their answer within the caller's `budget`.
 fn served(
     name: &str,
     params: &Map<String, Value>,
     client: &RuntimeClient,
-    completed_code: Code,
+    budget: Option<&Budget<'_>>,
 ) -> Result<Exit, Exit> {
     Ok(match name {
         "facts" => {
@@ -472,12 +493,13 @@ fn served(
                 facts::FactsRequest::Program { .. } => ActingctlCode::RuntimeFactsReported,
                 facts::FactsRequest::Instance { .. } => ActingctlCode::InstanceFactsReported,
             };
-            facts_line(client, &request, code)?
+            facts_line(client, &request, code, budget)?
         }
         "config" => facts_line(
             client,
             &facts::FactsRequest::Config,
             ActingctlCode::RuntimeConfigReported,
+            budget,
         )?,
         "schedule" => {
             let explanation =
@@ -489,7 +511,15 @@ fn served(
                         }
                     }
                 })?;
-            reported(&explanation, ActingctlCode::RuntimeScheduleReported)
+            // Workflow #434 LAB-5G1b: whole without a budget, as before; with one, its candidate
+            // rows cut to it.
+            match serde_json::to_value(&explanation) {
+                Ok(answer) => cli_line::success(
+                    cli_line::members(schedule::within_budget(answer, budget), RESULT_MEMBER),
+                    &Outcome::new(ActingctlCode::RuntimeScheduleReported),
+                ),
+                Err(error) => output_failed(&error),
+            }
         }
         "run show" => {
             let id = required_text(params, "id")?;
@@ -497,7 +527,7 @@ fn served(
                 .or_else(|| run_show::by_run_id(id))
                 .ok_or_else(|| usage("<id>", ArgumentProblem::NotRecognised))?;
             let status = run_show::read(client, key).map_err(|error| client_failed(&error))?;
-            completed(run_show::answer(&status), completed_code)
+            completed(run_show::answer(&status))
         }
         "material" => match material_read(params)? {
             MaterialRead::Text {
@@ -513,7 +543,7 @@ fn served(
                         material::read_text(client, &found, offset, max_bytes, &|_: &Value| true)
                     })
                     .map_err(material_failed)?;
-                completed(found, completed_code)
+                completed(found)
             }
             // Workflow #434 LAB-5C: the whole material, read within the CLI's read budget (as
             // `frame --out` reads its frame) and written into `out`.
@@ -531,17 +561,13 @@ fn served(
                     &found.artifact.sha256,
                     found.artifact.kind.extension(),
                     &bytes,
-                    completed_code,
                 )
             }
         },
         "targets" => {
             let alias = alias_of(client, required_text(params, "instance")?)?;
             let view = targets::view(client, &alias).map_err(|error| client_failed(&error))?;
-            completed(
-                serde_json::to_value(&view).map_err(|error| output_failed(&error))?,
-                completed_code,
-            )
+            completed(serde_json::to_value(&view).map_err(|error| output_failed(&error))?)
         }
         "targets set" => {
             let alias = alias_of(client, required_text(params, "instance")?)?;
@@ -804,7 +830,7 @@ fn served(
         "pack-schedule" => pack_schedule_view(params, client)?,
         "pack-schedule set" => pack_schedule_set(params, client)?,
         "run start" => run_start(params, client)?,
-        "run stop" => run_stop(params, client, completed_code)?,
+        "run stop" => run_stop(params, client)?,
         "reset" => {
             let alias = alias_of(client, required_text(params, "instance")?)?;
             let reset = client
@@ -1016,11 +1042,7 @@ fn run_start(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit
 
 /// `run stop <id> [--cancel-only]` (MCP `ac_stop_run`): the run's cancellation, and without
 /// `--cancel-only` the reset of its instance after it, waited for up to the longest run deadline.
-fn run_stop(
-    params: &Map<String, Value>,
-    client: &RuntimeClient,
-    completed_code: Code,
-) -> Result<Exit, Exit> {
+fn run_stop(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit, Exit> {
     let id = required_text(params, "id")?;
     let request_id = serde_json::from_value::<RequestId>(Value::String(id.to_owned()))
         .map_err(|_| usage("<id>", ArgumentProblem::NotRecognised))?;
@@ -1030,7 +1052,6 @@ fn run_stop(
             .map_err(|error| client_failed(&error))?;
         return Ok(completed(
             serde_json::to_value(&cancellation).map_err(|error| output_failed(&error))?,
-            completed_code,
         ));
     }
     let key =
@@ -1081,7 +1102,7 @@ fn run_stop(
         }
         None => {}
     }
-    Ok(completed(Value::Object(answer), completed_code))
+    Ok(completed(Value::Object(answer)))
 }
 
 // ---- lines
@@ -1107,12 +1128,12 @@ fn reported(result: &impl Serialize, code: ActingctlCode) -> Exit {
     }
 }
 
-/// An answer of an operation whose only source was an MCP tool: `lab_operation_completed`, the
-/// caller's `completed_code`.
-fn completed(answer: Value, completed_code: Code) -> Exit {
+/// An answer of an operation whose only source was an MCP tool: `lab_operation_completed`
+/// (Workflow #434 LAB-5G1b: this crate's code, whichever program serves the row).
+fn completed(answer: Value) -> Exit {
     cli_line::success(
         cli_line::members(answer, RESULT_MEMBER),
-        &Outcome::new(completed_code),
+        &Outcome::new(ActingctlCode::LabOperationCompleted),
     )
 }
 
@@ -1231,26 +1252,23 @@ pub fn material_read(params: &Map<String, Value>) -> Result<MaterialRead<'_>, Ex
 /// Workflow #434 LAB-5C: `material --out`: the whole material's `bytes`, whose `sha256` the read
 /// verified, written into `out` as `<hex>.<extension>` by the writer `frame --out` and MCP share
 /// (`material_export::write`); the line names the file, `{path, sha256, size}` beside
-/// `lab_operation_completed` (the caller's `completed_code`). A failed write is the writer's
-/// `material_export_failed`.
-pub fn material_written(
-    out: &Path,
-    sha256: &str,
-    extension: &str,
-    bytes: &[u8],
-    completed_code: Code,
-) -> Exit {
+/// `lab_operation_completed`. A failed write is the writer's `material_export_failed`.
+pub fn material_written(out: &Path, sha256: &str, extension: &str, bytes: &[u8]) -> Exit {
     match material_export::write(out, sha256, extension, bytes) {
-        Ok(written) => completed(written, completed_code),
+        Ok(written) => completed(written),
         Err(failure) => cli_line::refused(&failure.outcome(), None),
     }
 }
 
-/// `facts` and `config`: the read's answer beside `code`.
+/// `facts` and `config`: the read's answer beside `code`. Workflow #434 LAB-5G1b: whole without a
+/// budget, as before; with one, written whole through its export when it does not fit
+/// (`facts::within_budget`), the line carrying the header and `answer_exported`. An answer that
+/// could not be written is that write's failure.
 fn facts_line(
     client: &RuntimeClient,
     request: &facts::FactsRequest,
     code: ActingctlCode,
+    budget: Option<&Budget<'_>>,
 ) -> Result<Exit, Exit> {
     let answer = facts::read(client, request).map_err(|failure| match failure {
         facts::Failure::Selector { miss, selector } => selector_missed(miss, &selector),
@@ -1261,7 +1279,13 @@ fn facts_line(
         facts::Failure::Runtime(error) => client_failed(&error),
         facts::Failure::Output(error) => output_failed(&error),
     })?;
-    Ok(reported(&answer, code))
+    Ok(match facts::within_budget(answer, budget) {
+        Ok(fitted) => cli_line::success(
+            budget::line_members(fitted, RESULT_MEMBER, Vec::new()),
+            &Outcome::new(code),
+        ),
+        Err(failure) => cli_line::refused(&failure, None),
+    })
 }
 
 /// A wait that ended before its request did: `{request_id?, correlation_id?, state}` with

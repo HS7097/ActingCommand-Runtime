@@ -11,6 +11,10 @@
 //! Workflow #434 LAB-5G1: how a row's serving code reaches the Runtime is its caller's
 //! ([`Connection`]): a connection made for the call as a front connects, as every command line does
 //! ([`Connection::per_call`]), or a connection the caller keeps.
+//!
+//! Workflow #434 LAB-5G1b: a third front, [`Front::Mcp`], the MCP channel with the envelope
+//! today's MCP server uses, (Cli, Cli): the Lab's MCP server connects so until LAB-6 (the
+//! coordinator's rulings 11 and 12 on board #434, comment 6775192250). No program says it yet.
 
 use actingcommand_contract::{EventActor, EventSource};
 use actingcommand_runtime_client::{
@@ -27,6 +31,9 @@ pub enum Front {
     Actingctl,
     /// `actinglab`'s CLI module (LAB-2): the Lab channel, envelope (Lab, Lab).
     Actinglab,
+    /// Workflow #434 LAB-5G1b: the Lab's MCP server: the MCP channel, envelope (Cli, Cli), as
+    /// `actingctl mcp-serve` connects (`apps/actingctl/src/mcp/runtime.rs`).
+    Mcp,
 }
 
 static FRONT: OnceLock<Front> = OnceLock::new();
@@ -62,6 +69,12 @@ pub fn config(front: Front, state_root: impl Into<PathBuf>) -> RuntimeClientConf
             RuntimeChannel::Lab,
             EventActor::Lab,
             EventSource::Lab,
+        ),
+        Front::Mcp => RuntimeClientConfig::new(
+            state_root,
+            RuntimeChannel::Mcp,
+            EventActor::Cli,
+            EventSource::Cli,
         ),
     }
 }

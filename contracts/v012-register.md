@@ -9957,6 +9957,96 @@ working as they do.
 **LAB-5G5a rollback** (to the release before it). Nothing persisted: a status file the program
 wrote would be listed by the build before it as any other.
 
+#### Slice LAB-5G1b (0.12.57): the core rows' serving code takes a budget and a cursor binding from its caller; the MCP front
+
+Coordinator work orders `rd-1112/brief-lab5g-common.md` and `rd-1112/brief-lab5g1b.md`: what
+"Slice LAB-5G1" above left for its second slice. The coordinator's rulings, not the owner's
+words: of 2026-11-11 in the acceptance record of Runtime pull request #1579 (`runs`' and `codes`'
+cursors stay as they are), of 2026-11-12 on the four points below, and on board #434 (6775192250
+points 4, 11 and 12; 6784514298). On main `dffd6263`. The rule of the slice: nothing a program
+prints or does changes. actinglab passes no budget and a fresh cursor binding for each call, so
+every line it prints on the command line and in `serve --stdio` stays byte for byte; actingctl's
+too; today's MCP server (`apps/actingctl/src/mcp`) is not touched. The only caller in this slice
+is actinglab; the server that passes the other values is slice G2b.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G1b-1 | `core_ops::Caller.budget: Option<&Budget>` (`lab_ops::budget::Budget`, LAB-5D) | new member | LAB-5G1b | actinglab (`None`) | the answer budget. `None`: the whole answer, the line the command line prints. `Some`: handed to the step LAB-5D moved that shapes the answer of `status` (`overview::within_budget`), `diagnose` (`Diagnosis::within_budget`), `events` (`Page::within_budget`, the payload page exported), `schedule` (`schedule::within_budget`), `runs` (`RunsAnswer::within_budget`), `run evidence` (`Evidence::within_budget`) and `codes` (`code_lookup::Page::within_budget`; an entry is given whole), which cut, and `facts` and `config` (`facts::within_budget`), `packs` (`Answer::within_budget`), `remedy` (`remedy::within_budget`; `remedy set` and `remedy lift` have none) and `summary` (`routine_summary::within_budget`), which export. The commands of `lab-ops` take it through a new `dispatch_within` beside their `dispatch_on` (`overview`, `diagnose`, `events`, `run_list`, `run_evidence`, `code_lookup`, `packs`, `remedy`, `routine_summary`); each `dispatch_on`, and each `dispatch`, is its `dispatch_within` with no budget (and `CursorBinding::fresh()`), so actingctl and actinglab answer as before. The caller's `fits` is asked about the answer as the shaping step holds it, without the line's `outcome` and without the `warnings` the line adds beside it (`status`, `diagnose`, `runs`, `packs`): a caller's measure allows for them. A write to the caller's export that fails is that write's outcome, refused (`material_export_failed`; `actingctl_output_failed` for a `packs` document that does not encode) |
+| L5G1b-2 | `budget::line_members(fitted, member, warnings)` | new function | LAB-5G1b | `core_ops` and the commands' `dispatch_within` | an answer within a budget as its line's members: the answer's members (one that is no JSON object under `member`), then `warnings` when there is one. An answer written whole to the caller's export carries `answer_exported` (with its `path`, and for `packs` the `count` of the warnings the file holds) as the line's one warning, the file holding the rest, as today's MCP server gives it (`tools::fitted`); any other carries the read's own warnings, as before |
+| L5G1b-3 | `core_ops::Caller.cursor: events::CursorBinding`; `CursorBinding::fresh()` | new member, new function | LAB-5G1b | actinglab (`CursorBinding::fresh()` for each call) | the binding (a session and a connection generation) of the cursors `events` issues and takes (`events::dispatch_within`) and of the cursor of `diagnose`'s errors page (`diagnose::dispatch_within`), in place of the fresh binding each of them made: `fresh()` is that binding, `{session: process_session(), generation: 1}`, so a command line binds as before. Only these two: `runs`' and `codes`' cursors carry their own position and query fingerprint and bind to no session, and binding them would change what actinglab prints and takes (the ruling of 2026-11-11), so they take no binding. The `events` row declares no `cursor`: cursors belong to the front (the coordinator's ruling of LAB-5A's step 0). The binding given to the moved code governs the cursors issued in its answers (the `next_cursor` of an `events` page and of `diagnose`'s errors page); a front that pages takes a cursor back on the layer below the row, `events::dispatch_within` with its command's words (`--cursor`), under its binding (the coordinator's ruling of 2026-11-12) |
+| L5G1b-4 | `lab_ops::front::Front::Mcp` | new variant | LAB-5G1b | — (the slice's test) | the MCP channel with the envelope today's MCP server uses, (Cli, Cli): `front::config(Front::Mcp, state_root)` is `RuntimeClientConfig::new(state_root, RuntimeChannel::Mcp, EventActor::Cli, EventSource::Cli)`, the configuration `apps/actingctl/src/mcp/runtime.rs` builds (`connect`, `connect_at`). No program says it yet (`front::set`); actingctl's product code does not call it |
+| L5G1b-5 | `lab_operation_completed`: registered in `crates/lab-ops` (`ActingctlCode::LabOperationCompleted`), its fragment entry in `contracts/outcome-codes/actingctl.json` (owner `actingctl`; was `actinglab`) | outcome catalog | LAB-5G1b | `core_ops` (`completed`, `material_written`) and actinglab's own commands (`cli_module::own_line::success`) | point 1: a served row's answer carries the same completion code whichever program serves it. The spelling, category (`success`), ladder class, values (none), review (`pending`), `since` and texts (description, common causes, handling) stay as they were; only the owner changes. What the outcome guard holds, and why the move is allowed: G1 (`tools/outcome-guard/src/lib.rs`, `check_registries`) wants a code registered once, in the registry of the crate its fragment's owner names (`crates/lab-ops` is owner `actingctl`'s, `contracts/outcome-codes/catalog.json` `fragments`), so actinglab's registry no longer lists it; G8 wants the owner among those of its prefix, and `lab_` lists `actingctl`; G9 binds only settled or retired entries, and their signature holds no owner (`ci/outcome_release.py`, `code_signature`), and the code is pending and in no release file. `Caller.completed` is dropped; `core_ops::material_written` takes no code. The index is regenerated (`ci/outcome_codes_index.py`) |
+| L5G1b-6 | `Operation::undeclared(members)` (`lab_ops::table`) | new function | LAB-5G1b | — (the server's slice, G2b, calls it) | point 2: for a row and the names of the members given, the names the row does not declare (none of its `params`), in the order given; the table is its only source. It takes no front end: the table declares a row's parameters for every front end alike, and only `required_in` is per front end (the coordinator's ruling of 2026-11-12). A front's own members, those it adds beside the table's parameters (such as the MCP front's cursor or export members), are that front's business. actinglab's own refusal (`words::from_json`, the command line's words) is where it was and does not call it |
+
+**Point 3, `status` and the watchdog block.** Nothing to build. `status` answers `watchdog: null`
+unless the program sets the block's reader: a caller sets it as actinglab does, once at its start
+(`overview::set_watchdog_block(actingcommand_watchdog::overview_block)`, on Windows,
+`cli_module::main`), and the server's slice (G2b) does so in the MCP server.
+
+**Point 4, relative paths.** Nothing to build. The coordinator's ruling: the MCP front refuses a
+relative path in a parameter, because a resident server's current directory means nothing to its
+caller; slice G2b builds the refusal. Until then the moved code resolves a relative path in a
+parameter as the command line does, against the current directory of the program that serves the
+row (`run start`'s package, for one, is canonicalized there).
+
+**What actinglab passes.** `cli_module::core_ops::caller()`, made for each call: its place, its
+developer text, `Connection::per_call()`, `budget: None` and `cursor: CursorBinding::fresh()`, the
+binding each command made for itself before. **Rows without answer shaping** (for the server's
+slice to bound): the list of "Slice LAB-5G1" holds, every row of `core_ops` but `status`,
+`diagnose`, `events`, `schedule`, `runs`, `run evidence`, `codes` (cut), `facts` and `config`,
+`packs`, `remedy` and `summary` (export); `remedy set` and `remedy lift` have none.
+
+**Tests.** New: apps row "#434 LAB-5G1b". In actinglab's binary tests (`gate_434_lab5g1b`; the
+runtime client's scripted Runtime, made-up ledger records and a made-up configuration in a
+temporary folder; no device, no clock, no sleep):
+`lab5g1b_a_budget_cuts_or_exports_and_none_is_the_command_lines_line` (no budget: `codes` and
+`packs` answer the command line's line; a budget that refuses the whole answer: `codes` keeps one
+row, `truncated`, the cursor after it; `packs` writes its whole document through the caller's
+export and answers `{source, export}` with `answer_exported` its one warning, the file holding the
+document; with no export the whole answer) and
+`lab5g1b_the_callers_cursor_binding_binds_events_and_no_other_cursor` (a cursor `events` issues
+through `core_ops` names the caller's binding, is taken under it and refused `cursor_invalid`,
+nothing read, under another; `codes` answers the same line under either binding and its cursor
+is taken as before; `runs` refuses a cursor of its own form alike under either) and
+`lab5g1b_the_errors_page_of_diagnose_is_bound_to_the_callers_binding` (the scripted Runtime
+answers `diagnose`'s errors page with one made-up row and more after it and refuses the four reads
+that follow, which the diagnosis answers without; the cursor of its errors page names the
+caller's binding, and `events` of the errors view of the diagnosis' window, read from its answer,
+takes it under that binding and refuses it `cursor_invalid`, nothing read, under another). In
+`crates/lab-ops` (`gate_434_lab5g1b`): `lab_ops_undeclared_members_follow_the_table` (of
+`events`' members a declared one is not returned and an undeclared one is; every parameter of every
+row is declared, `resume`'s `expect`, required on `mcp` only, too). In actingctl's gate tests
+(`lab5g1b_front_mcp`, which needs the runtime client's `test-support` feature as a
+dev-dependency): `lab5g1b_front_mcp_connects_as_todays_mcp_server` (`actingctl mcp-serve` and a
+`Front::Mcp` client each connect to one scripted Runtime: the same requests, ids and times left
+out, `Health`, `BindChannel` `mcp` without `via`, `Status`, the envelope (Cli, Cli); the members
+no request carries equal those of the expression mcp-serve builds). No existing test changed:
+`gate_434_lab5g1` builds its `Caller` from `cli_module::core_ops::caller()` as before, and
+`gate_434_lab5c` reads `core_ops::material_written` with the four arguments it gave;
+`gate_434_lab5c`, `gate_434_lab5d`, `gate_434_lab2`, `gate_434_lab2b`, `gate_434_lab5a` and
+`lab_ops_table_complete` are untouched.
+
+**Where LAB-5G1b differs from its work order's letter.** (a) The work order's test of a member
+"declared for another front only" has no case to test: the table declares no parameter for one
+front end only, and the coordinator's ruling of 2026-11-12 took the front end out of the function
+(L5G1b-6). (b) The `events` row declares no `cursor` (L5G1b-3), so the tests give an issued cursor
+back to `events::dispatch_within`, the step `core_ops` hands the binding to. (c) `runs`' cursor is
+tested by a refusal only: a cursor `runs` takes names a window of the last seven days, which needs
+the clock.
+
+**Interface.** None raised: nothing on the wire, in the ledger or in a file a released peer reads
+changes; no code, key, location or revision is added (`lab_operation_completed` keeps its
+spelling and envelope; its catalog owner changes).
+
+**What LAB-5G1b changes live.** One visible change: the owner shown for
+`lab_operation_completed` changes from the Lab's program (`actinglab`) to the operation layer's
+owner (`actingctl`), in `codes lab_operation_completed`, in MCP's `ac_outcome_code` and in the
+catalog index; `codes --owner actinglab` no longer lists it and `--owner actingctl` does (the
+coordinator accepted it on 2026-11-12). The code, its category and its texts do not change.
+Nothing else a person, a client or the Runtime sees changes.
+
+**LAB-5G1b rollback** (to the release before it). Nothing persisted: code and catalog text only.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

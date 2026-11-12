@@ -638,20 +638,6 @@
       "description": "Workflow #433 LABDO-1: online actinglab do --capture (an element, coordinates or --operation) sent its Lab operation and the Runtime answered it with a receipt, then a check the runtime client runs after the receipt failed: the event queries of the request, its lease and its actions, or the evidence check of the operation's record against those events and the artifacts they verify. The Runtime acted as its receipt reports, so this is not a device error: the details carry the receipt's req_id, correlation_id and receipt_state, the effect its record reports (performed, not_performed or indeterminate; null when the receipt carries no Lab operation record) with executed, the record's own failure when it reports one, and the client's code (client_code) and message (client_message). Since Workflow #434 LAB-2b (lab-two-entries.md open point 10) the command line prints the CLI module's line: this outcome with req_id, receipt_state and client_code as its values, beside message and the details nested whole, exit 1 like every error. A command line with --via (MCP's actinglab child) still answers the envelope with exit 5, the class of a Runtime or state failure, until LAB-5. MCP relays it as lab_tool_failed (class runtime) with req_id. Nothing more is written to the ledger by the client.",
       "common_causes": "The client's evidence check disagrees with what the Runtime recorded for a successful operation (for example runtime_lab_diagnostic_budget_mismatch when an OCR session's placement report was archived under the request); the event query timed out or failed; an artifact could not be read back from the state root.",
       "handling": "Do not send the operation again as though it had not run: read effect first, and the instance's screen. Report client_code with req_id so the check can be corrected."
-    },
-    "lab_operation_completed": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actinglab",
-      "layer": "process",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.47",
-      "description": "Workflow #434 LAB-2: an operation of actinglab's CLI module (or of actinglab serve --stdio) whose source has no success code of its own ran to its end: an operation whose only source was an MCP tool (run show, material, targets, run stop), and since Workflow #434 LAB-2b every one of actinglab's own commands (resource validate, package preflight, observe, do and the rest) that succeeded. The line carries the answer beside this outcome, its members flat at the top level (a result that is no JSON object under result; the two results whose top level has a member named outcome whole, resource verify's under report and run summary's under summary); warnings a result carries stay its member warnings in their own shape {code, values}, the category stays success; exit 0. A command line with --via (MCP's actinglab child) still answers the envelope, not this code, until LAB-5.",
-      "common_causes": "The operation succeeded.",
-      "handling": "None."
     }
   }
 }

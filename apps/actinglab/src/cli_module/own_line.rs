@@ -32,12 +32,13 @@
 //!   LAB-5 ([`via_line`]).
 
 use crate::cli_result::CliResult;
-use crate::codes::ActinglabCode;
 use actingcommand_contract::EnvelopeError;
 use actingcommand_contract::outcome::{
     Category, OUTCOME_SCHEMA_VERSION, Outcome, OutcomeEnvelope, catalog_json,
 };
 use actingcommand_lab_ops::cli_line::{self, Exit};
+// Workflow #434 LAB-5G1b: `lab_operation_completed` is the operation layer's code.
+use actingcommand_lab_ops::codes::ActingctlCode;
 use serde_json::{Map, Value, json};
 
 /// The global option of the counter that forwarded the work (`--via mcp`, MCP's actinglab child).
@@ -131,7 +132,7 @@ pub(crate) fn success(command: &str, data: Value) -> Exit {
             code: 1,
         };
     }
-    cli_line::success(members, &Outcome::new(ActinglabCode::LabOperationCompleted))
+    cli_line::success(members, &Outcome::new(ActingctlCode::LabOperationCompleted))
 }
 
 /// The failure line of `error`: its outcome, its message and its details whole; exit 1.

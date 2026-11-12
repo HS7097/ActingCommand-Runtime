@@ -529,6 +529,16 @@ pub struct CursorBinding {
 }
 
 impl CursorBinding {
+    /// Workflow #434 LAB-5G1b: the binding of a process that holds one Runtime connection, a
+    /// session of its own ([`process_session`]) and that connection: what every command line binds
+    /// its cursors to, and what actinglab passes the code that serves its rows for each call.
+    pub fn fresh() -> Self {
+        Self {
+            session: process_session(),
+            generation: 1,
+        }
+    }
+
     pub fn encode(self, cursor: &RuntimeEventQueryCursor) -> Result<String, EventsError> {
         let fingerprint = json!(cursor)
             .get("query_fingerprint")
@@ -1204,12 +1214,26 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
 
 /// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
 pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option<cli_line::Exit> {
+    dispatch_within(arguments, connection, None, CursorBinding::fresh())
+}
+
+/// Workflow #434 LAB-5G1b: [`dispatch_on`] within the caller's `budget` (none: the whole page, as
+/// the command line prints it; with one, the page within it, [`Page::within_budget`], an export
+/// carried on the line as its warning), its cursors taken and issued under the caller's
+/// `binding` (the command line: [`CursorBinding::fresh`]).
+pub fn dispatch_within(
+    arguments: &[OsString],
+    connection: Connection<'_>,
+    budget: Option<&Budget<'_>>,
+    binding: CursorBinding,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
-    Some(match run_cli(&arguments[1..], connection) {
+    let ran = run_cli(&arguments[1..], connection, budget, binding);
+    Some(match ran {
         Ok(page) => cli_line::success(
-            cli_line::members(page, "events"),
+            budget::line_members(page, "events", Vec::new()),
             &Outcome::new(ActingctlCode::RuntimeEventsReported),
         ),
         Err(error @ EventsError::Argument { .. }) => cli_line::failure(
@@ -1227,7 +1251,12 @@ pub fn cli_request(arguments: &[OsString]) -> Result<(PathBuf, Request), EventsE
     Ok((state_root, parse(&parameters, CLI_MAX_LIMIT)?))
 }
 
-fn run_cli(arguments: &[OsString], connection: Connection<'_>) -> Result<Value, EventsError> {
+fn run_cli(
+    arguments: &[OsString],
+    connection: Connection<'_>,
+    budget: Option<&Budget<'_>>,
+    binding: CursorBinding,
+) -> Result<Fitted, EventsError> {
     let (state_root, request) = cli_request(arguments)?;
     let client = connection
         .reach(&state_root, identity)
@@ -1247,11 +1276,8 @@ fn run_cli(arguments: &[OsString], connection: Connection<'_>) -> Result<Value, 
         }
         None => None,
     };
-    // This process holds one Runtime connection.
-    let binding = CursorBinding {
-        session: process_session(),
-        generation: 1,
-    };
+    // Workflow #434 LAB-5G1b: the caller's binding (the command line's process holds one Runtime
+    // connection: `CursorBinding::fresh`).
     let page = read(
         &client,
         &request,
@@ -1263,16 +1289,14 @@ fn run_cli(arguments: &[OsString], connection: Connection<'_>) -> Result<Value, 
     // The outcome detail main checked before this command ran (Workflow #378 A5).
     let outcome_detail = cli_line::detail().unwrap_or(OutcomeDetail::Full);
     let envelope = |outcome: &Outcome| cli_line::outcome_value(outcome, outcome_detail);
-    let rows = page
-        .events()
-        .iter()
-        .map(|event| row(event, request.detail, &envelope))
-        .collect::<Vec<_>>();
-    let next_cursor = page
-        .next_cursor()?
-        .map(|cursor| binding.encode(&cursor))
-        .transpose()?;
-    Ok(page.result(&rows, next_cursor, false))
+    // Without a budget the whole page, its rows each `row` and its next cursor bound to
+    // `binding`, as before; with one, the page within it (Workflow #434 LAB-5D's shaping).
+    page.within_budget(
+        request.detail,
+        &envelope,
+        &|cursor: &RuntimeEventQueryCursor| binding.encode(cursor),
+        budget,
+    )
 }
 
 /// `--state-root` and every other flag `flags_of` names for `events`, under its parameter name,

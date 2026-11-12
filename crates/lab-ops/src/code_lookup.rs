@@ -331,10 +331,21 @@ fn decode_cursor(cursor: &str, fingerprint: &str) -> Result<Option<String>, Refu
 /// line on stdout (Workflow #378 A5): the entry or the page with `outcome_codes_reported`, or
 /// `{outcome}` with the refusal (a usage refusal's developer line adds the usage) and exit 1.
 pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
+    dispatch_within(arguments, None)
+}
+
+/// Workflow #434 LAB-5G1b: [`dispatch`] within the caller's `budget`: none, the whole entry or
+/// page, as the command line prints it; with one, a page cut to it ([`Page::within_budget`]; an
+/// entry is given whole). Its cursor carries its own position and fingerprint, bound to no
+/// session.
+pub fn dispatch_within(
+    arguments: &[OsString],
+    budget: Option<&Budget<'_>>,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
-    Some(match run(&arguments[1..]) {
+    Some(match run(&arguments[1..], budget) {
         Ok(document) => cli_line::success(
             cli_line::members(document, COMMAND),
             &Outcome::new(ActingctlCode::OutcomeCodesReported),
@@ -346,11 +357,12 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     })
 }
 
-fn run(arguments: &[OsString]) -> Result<Value, Refusal> {
+fn run(arguments: &[OsString], budget: Option<&Budget<'_>>) -> Result<Value, Refusal> {
     match read_embedded(&parse(arguments)?)? {
         Answer::Entry(document) => Ok(document),
-        // The CLI has no output budget: the whole page.
-        Answer::List(page) => page.render(page.row_count()),
+        // The CLI has no output budget: the whole page (Workflow #434 LAB-5G1b: a caller's budget
+        // cuts it).
+        Answer::List(page) => page.within_budget(budget),
     }
 }
 

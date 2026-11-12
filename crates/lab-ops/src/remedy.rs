@@ -338,6 +338,19 @@ pub fn dispatch_on(
     detail: Detail,
     connection: Connection<'_>,
 ) -> Option<cli_line::Exit> {
+    dispatch_within(arguments, detail, connection, None)
+}
+
+/// Workflow #434 LAB-5G1b: [`dispatch_on`] within the caller's `budget`, which only `get` (the
+/// operation `remedy`) takes: none, the whole answer, as the command line prints it; with one,
+/// [`within_budget`], an answer written whole carried on the line as its header with
+/// `answer_exported` its warning. `set` and `lift` answer as before whatever the budget.
+pub fn dispatch_within(
+    arguments: &[OsString],
+    detail: Detail,
+    connection: Connection<'_>,
+    budget: Option<&Budget<'_>>,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -345,7 +358,8 @@ pub fn dispatch_on(
         Ok(parsed) => parsed,
         Err(outcome) => return Some(cli_line::failure(&outcome, Some(USAGE))),
     };
-    Some(line(run(&parsed, None, detail, connection)))
+    let budget = budget.filter(|_| parsed.action == GET);
+    Some(line(run(&parsed, None, detail, connection), budget))
 }
 
 /// Workflow #434 LAB-5C: `remedy set` with the scope's whole list given inline, the JSON `rows`
@@ -386,13 +400,20 @@ pub fn dispatch_rows_on(
             Some(USAGE),
         ));
     };
-    Some(line(run(&parsed, Some(rows), detail, connection)))
+    Some(line(run(&parsed, Some(rows), detail, connection), None))
 }
 
 /// The line of one run of the command: its answer beside its outcome, or why it ended.
-fn line(ran: Result<(Value, Outcome), Ended>) -> cli_line::Exit {
+/// Workflow #434 LAB-5G1b: the answer within `budget` (none: whole, as before); an answer that
+/// could not be written whole to the caller's export is that write's failure.
+fn line(ran: Result<(Value, Outcome), Ended>, budget: Option<&Budget<'_>>) -> cli_line::Exit {
     match ran {
-        Ok((answer, outcome)) => cli_line::success(cli_line::members(answer, COMMAND), &outcome),
+        Ok((answer, outcome)) => match within_budget(answer, budget) {
+            Ok(fitted) => {
+                cli_line::success(budget::line_members(fitted, COMMAND, Vec::new()), &outcome)
+            }
+            Err(failure) => cli_line::refused(&failure, None),
+        },
         Err(Ended::Usage(outcome)) => cli_line::failure(&outcome, Some(USAGE)),
         // A refused request prints the Runtime's receipt beside its outcome and exits non-zero.
         Err(Ended::Failure(Failure::Runtime(error))) => match error.received_receipt() {
