@@ -157,4 +157,7 @@ mod tests {
     // Workflow #437 MAPP-1 (0.12.56; register §1.328): one pick per device per round, the other
     // member waits with `device_group_waiting` `selected`.
     mod gate_mapp1;
+    // Workflow #437 MAPP-1b (0.12.57; register §1.328 point 8, §1.330): a chain handover's
+    // successor goes before the candidates of its device's other members too.
+    mod gate_mapp1b;
 }

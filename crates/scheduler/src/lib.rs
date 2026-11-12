@@ -2736,6 +2736,22 @@ impl SeedScheduler {
         first_eligible(state, &gate, now_monotonic_ms).map(|position| state.queue[position].kind)
     }
 
+    /// Workflow #437 MAPP-1b (`contracts/device-group.md`, "One queue, one worker, one lease per
+    /// device"): [`Self::first_eligible_kind`] with the member the entry serves, so that an answer
+    /// about one member of a device group can tell its own waiting claim from another member's.
+    pub fn first_eligible_claim(
+        &self,
+        instance_id: InstanceId,
+        gate: impl MemberGates,
+        now_monotonic_ms: u64,
+    ) -> Option<(InstanceId, ClaimKind)> {
+        let state = self.instances.get(&self.device(instance_id))?;
+        first_eligible(state, &gate, now_monotonic_ms).map(|position| {
+            let entry = &state.queue[position];
+            (entry.instance_id, entry.kind)
+        })
+    }
+
     /// Workflow #369 W-1: how long the instance's takeover cooldown still runs, if it does.
     /// Workflow #437 MAPP-1: its device's.
     pub fn cooldown_remaining_ms(

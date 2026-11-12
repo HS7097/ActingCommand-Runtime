@@ -3227,14 +3227,19 @@ impl HostShared {
         ))
     }
 
+    /// The admission guard of `instance_id`'s device. Workflow #437 MAPP-1b
+    /// (`contracts/device-group.md`, "One queue, one worker, one lease per device"): keyed by the
+    /// device key, so a device step of one member of a device group never meets a keyless
+    /// observation of another; an instance alone on its device keys its own id, as before.
     pub(super) fn instance_guard(
         &self,
         instance_id: InstanceId,
     ) -> Result<Arc<Mutex<()>>, RequestFailure> {
+        let device = self.device_key(instance_id);
         let mut guards = lock(&self.admission_guards, HostLocation::ReadInstanceAdmission)?;
         Ok(Arc::clone(
             guards
-                .entry(instance_id)
+                .entry(device)
                 .or_insert_with(|| Arc::new(Mutex::new(()))),
         ))
     }

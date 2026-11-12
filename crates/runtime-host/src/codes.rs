@@ -1634,6 +1634,13 @@ actingcommand_contract::outcome_codes! {
         /// Stop's failure is its `caused_by` link.
         EmulatorRestartPreviousInstanceRunning => "emulator_restart_previous_instance_running": error / environment_fault,
         // ---- #411 A50: end
+        // ---- Workflow #437 MAPP-1b (`contracts/device-group.md`, "Device-level actions"): begin
+        /// Error. A device-level action on a member of a device group of several, refused before
+        /// any device step: an operator's emulator control (start, stop, restart) of the member,
+        /// or a keyless read-only observation of it while another member holds the device (keys
+        /// `alias` the member, `operation` the action refused).
+        DeviceGroupActionRefused => "device_group_action_refused": error / none,
+        // ---- Workflow #437 MAPP-1b: end
     }
 }
 

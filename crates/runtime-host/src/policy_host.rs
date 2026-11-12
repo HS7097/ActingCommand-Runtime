@@ -321,6 +321,11 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// device each member of a device group of several runs on, by alias; an instance it does
     /// not name is a device of its own.
     pub(crate) device_groups: &'a actingcommand_policy::DeviceGroups,
+    /// Workflow #437 MAPP-1b (`contracts/device-group.md`, "One pick per device per round"):
+    /// each member of a device group of several that another member keeps from its device as the
+    /// cycle starts (its hold, its fence, or its holder), by alias; read after the member's own
+    /// control gates and before its queue. An instance it does not name waits as before.
+    pub(crate) device_group_holds: &'a BTreeMap<String, DeviceGroupHold>,
 }
 
 /// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
@@ -352,6 +357,61 @@ pub(crate) enum InstanceOccupancy {
     },
     /// The instance is free but its takeover cooldown runs until `until_unix_ms`.
     Cooldown { until_unix_ms: u64 },
+}
+
+/// Workflow #437 MAPP-1b (`contracts/device-group.md`, "One pick per device per round", "A
+/// failure stays where it belongs", "Pause and hold"): what keeps a member of a device group of
+/// several from its device because of another member, as a cycle starts or an admission reads
+/// it: that member's player hold (`player_hold`), its fence (`fenced`), or its claim or run that
+/// holds the device or waits for it first (`held`). A member's own holder or gate keeps its own
+/// code, so a member it holds has none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeviceGroupHold {
+    pub(crate) wait: actingcommand_policy::DeviceGroupWait,
+    /// The member that has the device, by alias.
+    pub(crate) alias: String,
+    /// With `held`, the member's task while its policy run holds the device.
+    pub(crate) task_id: Option<String>,
+    /// With `held`, the claim kind that holds the device or waits for it first.
+    pub(crate) holder_kind: Option<actingcommand_scheduler::ClaimKind>,
+}
+
+impl DeviceGroupHold {
+    /// `outcome` (`device_group_waiting`'s, or a refusal's of that code) with the hold's values
+    /// for the waiting member `instance_id`, named by its alias as the policy's reasons name it.
+    pub(crate) fn with_values(&self, outcome: Outcome, instance_id: &str) -> Outcome {
+        let outcome = outcome
+            .instance_id(instance_id)
+            .alias(self.alias.as_str())
+            .device_group_wait(self.wait);
+        let outcome = match &self.task_id {
+            Some(task_id) => outcome.task_id(task_id.as_str()),
+            None => outcome,
+        };
+        match self.holder_kind {
+            Some(holder_kind) => outcome.holder_kind(crate::error::ClaimKindToken(holder_kind)),
+            None => outcome,
+        }
+    }
+
+    /// The reason's detail text.
+    pub(crate) fn detail(&self) -> String {
+        let mut detail = format!(
+            "device_group_wait={} alias={}",
+            self.wait.as_str(),
+            self.alias
+        );
+        if let Some(task_id) = &self.task_id {
+            detail.push_str(" task_id=");
+            detail.push_str(task_id);
+        }
+        if let Some(holder_kind) = self.holder_kind {
+            detail.push_str(" holder_kind=");
+            detail.push_str(holder_kind.as_str());
+        }
+        detail.push_str(": another member of the device has it");
+        detail
+    }
 }
 
 /// Correlates an admission request; Runtime rebuilds approval authority and current time.
@@ -3255,6 +3315,7 @@ impl PolicyHost {
             pool_lines,
             task_held,
             device_groups,
+            device_group_holds,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -3326,6 +3387,7 @@ impl PolicyHost {
             &fact_refresh,
             control_gates,
             instance_occupancy,
+            device_group_holds,
             blackout_holds,
             time.unix_ms,
         )?;
@@ -3431,10 +3493,13 @@ impl PolicyHost {
                 let refresh = intent.task_id == FACT_REFRESH_TASK_ID;
                 // A control gate (`scheduling-blackout.md`, "Order of the deferrals", positions
                 // 1a to 1d: Workflow #191 ps1, #403, #429 R-7a2, in the one order of R-7a §2.6),
-                // then a held instance or a takeover cooldown (position 2, #369 W-1).
-                if let Some(hold) = crate::fact_refresh::instance_hold(
+                // then a held instance or a takeover cooldown (position 2, #369 W-1). Workflow
+                // #437 MAPP-1b: between them, for a member of a device group of several, a wait
+                // for another member of its device.
+                if let Some(hold) = crate::fact_refresh::member_hold(
                     &intent.instance_id,
                     &control_gates(&intent.instance_id),
+                    device_group_holds.get(&intent.instance_id),
                     instance_occupancy(&intent.instance_id),
                 ) {
                     return Ok(hold.eligibility(refresh));
@@ -3787,6 +3852,7 @@ impl PolicyHost {
         context: &FactRefreshContext<'_>,
         control_gates: &dyn Fn(&str) -> actingcommand_contract::ControlGates,
         instance_occupancy: &dyn Fn(&str) -> Option<InstanceOccupancy>,
+        device_group_holds: &BTreeMap<String, DeviceGroupHold>,
         blackout_holds: &BTreeMap<String, actingcommand_policy::Blackout>,
         now_unix_ms: u64,
     ) -> RuntimeHostResult<FactRefreshInputs> {
@@ -3794,9 +3860,11 @@ impl PolicyHost {
         let mut readers = Vec::new();
         let mut instance_holds = BTreeMap::new();
         for instance in &facts.instances {
-            if let Some(hold) = crate::fact_refresh::instance_hold(
+            // Workflow #437 MAPP-1b: a member another member keeps from its device is held too.
+            if let Some(hold) = crate::fact_refresh::member_hold(
                 &instance.instance_id,
                 &control_gates(&instance.instance_id),
+                device_group_holds.get(&instance.instance_id),
                 instance_occupancy(&instance.instance_id),
             ) {
                 instance_holds.insert(instance.instance_id.clone(), hold.policy_hold());

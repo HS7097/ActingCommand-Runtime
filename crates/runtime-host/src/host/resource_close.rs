@@ -108,7 +108,13 @@ impl HostShared {
     /// more registered instances use Nemu (`nemu_ipc` or an automatic choice for capture or
     /// input) each of them closes its session at every lease end as before. Every other
     /// instance keeps it, as does a registration without a device configuration (a fixture).
+    /// Workflow #437 MAPP-1b (`contracts/device-group.md`, "Device-level actions", row 7): a member
+    /// of a device group of several keeps no session across lease ends, whatever its backends:
+    /// each member opens its own on its turn, so two members' sessions are never open together.
     pub(super) fn keeps_device_session(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        if self.in_group_of_several(instance_id) {
+            return Ok(false);
+        }
         let registered = lock(
             &self.registered_instances,
             HostLocation::ReadDeviceSessionGate,
@@ -506,6 +512,71 @@ impl HostShared {
                 Ok(())
             }
             Err(error) => Err(error),
+        }
+    }
+
+    /// Workflow #437 MAPP-1b (`contracts/device-group.md`, "Device-level actions", rows 7 and
+    /// 15; register §1.330): a keyless observation of a member of a device group of several,
+    /// served on a free device under the device's admission guard (`admission`), keeps no
+    /// session: the member's session is closed before the guard frees the device, through a
+    /// dedicated close lease, as a lease end closes it. The close lease ends as the other closes
+    /// of a session a lease-free path retained end theirs (`close_device_link_session`,
+    /// `close_lapsed_run_session_guarded`): `BackendFailure`, which hands the key to a claim queued
+    /// meanwhile, else releases it. (An explicit release is a client's release request; the
+    /// scheduler refuses it here, `scheduler_cleanup_state_mismatch`, and that fenced the member.)
+    /// A device a lease holds (the member's own: another member's refused the observation) leaves
+    /// the session to that lease's end; a close lease a waiting claim refuses (the member's own, or
+    /// any member's queued while the capture ran: register §1.330, point 11) leaves it to the
+    /// member's next lease end, recorded once. An instance alone on its device keeps its session,
+    /// as before.
+    pub(super) fn close_keyless_session_of_group(
+        &self,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+        admission: &MutexGuard<'_, ()>,
+    ) -> Result<(), RequestFailure> {
+        if !self.in_group_of_several(instance_id)
+            || lock(&self.scheduler, HostLocation::ReadResourceCloseLease)?
+                .active_lease(instance_id)
+                .is_some()
+        {
+            return Ok(());
+        }
+        // The close's own failure fails the observation (fail loud); a fatal one poisons it.
+        let failed = |error: RuntimeHostError| {
+            if error.is_fatal() {
+                RequestFailure::poison_without_terminal(error)
+            } else {
+                RequestFailure::request(error, RuntimeReceiptState::Failed, None)
+            }
+        };
+        match self.close_retained_instance_while_guarded(
+            instance_id,
+            links.clone(),
+            false,
+            LeaseReleaseReason::BackendFailure,
+            admission,
+        ) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(close_error)) => match self.settle_retained_close_failure(
+                HostLocation::CloseExecutionSession,
+                instance_id,
+                &close_error,
+            )? {
+                None => Ok(()),
+                Some(error) => Err(failed(error)),
+            },
+            Err(mut refused) if close_lease_refused_by_queue(&refused) => {
+                refused.lifecycle.instance_id = Some(instance_id);
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::SessionClose,
+                    RuntimeLifecycleFailure::Host(&refused),
+                    links,
+                    None,
+                )?;
+                Ok(())
+            }
+            Err(error) => Err(failed(error)),
         }
     }
 
