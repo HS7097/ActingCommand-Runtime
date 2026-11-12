@@ -23,6 +23,7 @@
 //!   resolved as today's server resolves it, by one status read on the kept connection
 //!   ([`Runtime::alias`]).
 
+use crate::codes::McpCode;
 use crate::lock;
 use actingcommand_contract::codes::{GovernanceIdentityRefusal, SharedCode};
 use actingcommand_contract::outcome::{Detail, Outcome};
@@ -211,9 +212,11 @@ pub(crate) struct Write {
 /// A connection of its own to the Runtime of `state_root` for one write of the tool `tool`, with
 /// today's provenance recorded on it: `begin_interaction`, the identity card, then the client
 /// action naming `instance_alias`. A card the Runtime refuses because its `allowed_clients` does
-/// not list the client is no failure, as today: the write goes ahead and the refusal is the
-/// line's warning. Any other failure ends the call with the client's failure, and nothing is
-/// written.
+/// not list the client is no failure, as today: the client action and the write go ahead, and
+/// the line carries the warning `mcp_identity_declaration_refused` caused by the refusal (where
+/// today's server answers `mcp_identity_card_refused` with `mcp_blocker`, a vocabulary only
+/// actingctl's server builds). Any other failure ends the call with the client's failure, and
+/// nothing is written.
 pub(crate) fn begin_write(
     state_root: &Path,
     tool: &str,
@@ -235,7 +238,9 @@ pub(crate) fn begin_write(
         if !refusal.is(GovernanceIdentityRefusal::ClientNotAllowed) {
             return Err(client_failed(&error));
         }
-        warnings.push(cli_line::warning(&refusal));
+        warnings.push(cli_line::warning(
+            &Outcome::new(McpCode::IdentityDeclarationRefused).caused_by(refusal),
+        ));
     }
     let action = ClientActionRecord::new(
         MCP_SURFACE,

@@ -251,11 +251,12 @@ fn mcp_front_members_in_one_place() {
         calls::prepare(row(&table, name), &object(arguments), exports.path())
     };
     let given = |name: &str, arguments: Value| {
-        prepared(name, arguments).unwrap_or_else(|refusal| panic!("{name}: refused {refusal}"))
+        prepared(name, arguments)
+            .unwrap_or_else(|refused| panic!("{name}: refused {}", refused.outcome))
     };
     let problem = |name: &str, arguments: Value| {
-        let refusal = prepared(name, arguments).expect_err("refused");
-        let outcome = cli_line::outcome_value(&refusal, Detail::Full);
+        let refused = prepared(name, arguments).expect_err("refused");
+        let outcome = cli_line::outcome_value(&refused.outcome, Detail::Full);
         assert_eq!(outcome["code"], "arguments_invalid", "{name}: {outcome}");
         (
             outcome["values"]["argument"].clone(),

@@ -281,6 +281,9 @@ actingcommand_contract::outcome_vocabulary! {
         Conflicting => "conflicting",
         /// Names something that cannot be used: unreadable, not of its kind, or refused.
         Unusable => "unusable",
+        /// Workflow #434 LAB-5G2b: a path that is not absolute where an absolute one is required
+        /// (the Lab's MCP server, whose current directory means nothing to its caller).
+        NotAbsolute => "not_absolute",
     }
 }
 

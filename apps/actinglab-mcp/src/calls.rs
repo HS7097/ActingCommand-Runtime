@@ -13,9 +13,10 @@
 //!   today's server refuses an argument it does not know (`arguments_invalid`, `unknown`); so is a
 //!   member of the wrong type (`wrong_type`; text that is none of its words or no duration
 //!   `not_recognised`) and a required one missing (`required`); a relative path where the
-//!   parameter's type is a path, and a string that begins with `--` (as `serve` refuses it), are
-//!   `not_recognised`. A member given as `null` is absent, as today's server reads it. Then the
-//!   front's own members (`tools::SUPPLIED`, `tools::EXPORT`).
+//!   parameter's type is a path is `not_absolute`, its developer text saying that an absolute
+//!   path is required; a string that begins with `--` is refused as `serve` refuses it
+//!   (`actingctl_usage_invalid`, `not_recognised`). A member given as `null` is absent, as today's
+//!   server reads it. Then the front's own members (`tools::SUPPLIED`, `tools::EXPORT`).
 //! - **The answer** ([`call_result`]) is the line `actinglab --json` prints for the same row and
 //!   parameters: the text content and, from 2025-06-18 on, `structuredContent`; `isError` true
 //!   exactly when the command line would exit non-zero; within the answer budget
@@ -81,7 +82,7 @@ impl Service {
         }
         match prepare(operation, arguments, &self.exports) {
             Ok(params) => self.core(operation, tool, &params, era),
-            Err(refusal) => cli_line::failure(&refusal, None),
+            Err(refused) => cli_line::failure(&refused.outcome, refused.text),
         }
     }
 
@@ -236,6 +237,26 @@ fn with_warnings(mut exit: Exit, warnings: Vec<Value>) -> Exit {
     exit
 }
 
+/// The developer text of a relative path where an absolute one is required.
+const ABSOLUTE_REQUIRED: &str = "an absolute path is required: a resident server's current \
+     directory means nothing to its caller";
+
+/// The refusal of a call's arguments: its outcome, and the developer text of its line.
+#[derive(Debug)]
+pub(crate) struct Refused {
+    pub(crate) outcome: Outcome,
+    pub(crate) text: Option<&'static str>,
+}
+
+impl From<Outcome> for Refused {
+    fn from(outcome: Outcome) -> Self {
+        Self {
+            outcome,
+            text: None,
+        }
+    }
+}
+
 /// The parameters the code that serves `operation` is given for `arguments`, or the refusal of
 /// the first argument at fault; nothing is sent or written before it (see the module's
 /// description). `exports` is this server's export directory, which the front gives `material`
@@ -244,7 +265,7 @@ pub(crate) fn prepare(
     operation: &Operation,
     arguments: &Map<String, Value>,
     exports: &Path,
-) -> Result<Map<String, Value>, Outcome> {
+) -> Result<Map<String, Value>, Refused> {
     let row = operation.name.as_str();
     let takes_export = tools::takes_export(row);
     let members = arguments
@@ -252,13 +273,13 @@ pub(crate) fn prepare(
         .map(String::as_str)
         .filter(|member| !(takes_export && *member == tools::EXPORT));
     if let Some(member) = operation.undeclared(members).first() {
-        return Err(invalid(member, ArgumentProblem::Unknown));
+        return Err(invalid(member, ArgumentProblem::Unknown).into());
     }
     if let Some(member) = arguments
         .keys()
         .find(|member| tools::supplied(row, member).is_some())
     {
-        return Err(invalid(member, ArgumentProblem::Unknown));
+        return Err(invalid(member, ArgumentProblem::Unknown).into());
     }
     let mut export = false;
     let mut params = Map::new();
@@ -273,12 +294,23 @@ pub(crate) fn prepare(
             continue;
         }
         let Some(param) = operation.params.iter().find(|param| &param.name == member) else {
-            return Err(invalid(member, ArgumentProblem::Unknown));
+            return Err(invalid(member, ArgumentProblem::Unknown).into());
         };
-        checked(param, value)
-            .and_then(|()| not_a_flag(value))
-            .and_then(|()| absolute(param, value))
-            .map_err(|problem| invalid(member, problem))?;
+        checked(param, value).map_err(|problem| invalid(member, problem))?;
+        if flag_like(value) {
+            // As `serve` refuses it (actinglab's `cli_module::words::from_json`, `not_a_flag`).
+            return Err(cli_line::usage_invalid(
+                Some(member.as_str()),
+                ArgumentProblem::NotRecognised,
+            )
+            .into());
+        }
+        if relative_path(param, value) {
+            return Err(Refused {
+                outcome: invalid(member, ArgumentProblem::NotAbsolute),
+                text: Some(ABSOLUTE_REQUIRED),
+            });
+        }
         params.insert(member.clone(), value.clone());
     }
     if let Some(param) = operation.params.iter().find(|param| {
@@ -286,7 +318,7 @@ pub(crate) fn prepare(
             && tools::supplied(row, &param.name).is_none()
             && !params.contains_key(&param.name)
     }) {
-        return Err(invalid(&param.name, ArgumentProblem::Required));
+        return Err(invalid(&param.name, ArgumentProblem::Required).into());
     }
     for (_, param, supplied) in tools::SUPPLIED.iter().filter(|(of, _, _)| *of == row) {
         let value = match supplied {
@@ -382,43 +414,34 @@ fn decimal(text: &str) -> Option<f64> {
     text.parse::<f64>().ok().filter(|number| number.is_finite())
 }
 
-/// A string value that begins with `--`, or a list holding one, is refused (`not_recognised`),
-/// for every row, as `serve` refuses it (LAB-5G4a): the serving code turns many rows' parameters
-/// into command words, where it would be read as a flag. Numbers, booleans, objects and strings
-/// that begin with one dash pass.
-fn not_a_flag(value: &Value) -> Result<(), ArgumentProblem> {
+/// Whether a value is a string that begins with `--`, or a list holding one: refused for every
+/// row with the code and word `serve` answers for it since LAB-5G4a (`actingctl_usage_invalid`,
+/// `not_recognised`), since the serving code turns many rows' parameters into command words,
+/// where it would be read as a flag. Numbers, booleans, objects and strings that begin with one
+/// dash pass.
+fn flag_like(value: &Value) -> bool {
     let flag = |value: &Value| value.as_str().is_some_and(|text| text.starts_with("--"));
-    let found = match value {
+    match value {
         Value::Array(items) => items.iter().any(flag),
         other => flag(other),
-    };
-    if found {
-        Err(ArgumentProblem::NotRecognised)
-    } else {
-        Ok(())
     }
 }
 
-/// A parameter whose type is a path takes an absolute one: a resident server's current
-/// directory means nothing to its caller, so a relative path (or a list holding one) is refused
-/// (`not_recognised`). Stricter than today's server, which resolves or passes relative paths.
-fn absolute(param: &Param, value: &Value) -> Result<(), ArgumentProblem> {
+/// Whether a parameter whose type is a path is given a relative path (or a list holding one):
+/// refused `not_absolute`, since a resident server's current directory means nothing to its
+/// caller. Stricter than today's server, which resolves or passes relative paths.
+fn relative_path(param: &Param, value: &Value) -> bool {
     if !tools::is_path(&param.value_type) {
-        return Ok(());
+        return false;
     }
     let relative = |value: &Value| {
         value
             .as_str()
             .is_some_and(|text| !Path::new(text).is_absolute())
     };
-    let found = match value {
+    match value {
         Value::Array(items) => items.iter().any(relative),
         other => relative(other),
-    };
-    if found {
-        Err(ArgumentProblem::NotRecognised)
-    } else {
-        Ok(())
     }
 }
 

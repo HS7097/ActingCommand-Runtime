@@ -16,9 +16,10 @@
 //!   provenance before the write, the read's nothing of it.
 //! - `mcp_refusals_send_nothing`: a member the row does not declare and a parameter the front
 //!   gives itself (`unknown`), a member of the wrong type (`wrong_type`), a required one missing
-//!   (`required`), a relative path and a string that begins with `--`, alone or in a list
-//!   (`not_recognised`): each `arguments_invalid` with the argument, `isError` true, and the
-//!   scripted Runtime receives no connection at all.
+//!   (`required`) and a relative path (`not_absolute`), each `arguments_invalid`, and a string
+//!   that begins with `--`, alone or in a list, `actingctl_usage_invalid` `not_recognised` as
+//!   `serve` refuses it: each with the argument, `isError` true, and the scripted Runtime receives
+//!   no connection at all.
 //! - `mcp_write_provenance_as_todays_server`: today's server (`actingctl mcp-serve`, the program
 //!   the same build puts beside this one) and this one each pause scheduling once on a scripted
 //!   Runtime of their own: both connections carry the same requests, their issued ids and times
@@ -476,41 +477,62 @@ fn mcp_refusals_send_nothing() {
         temp.path(),
     ));
     server.initialize();
+    // Each case: the tool, its arguments, and the refusal's code, argument and problem. A value
+    // that begins with `--` is refused as `serve` refuses it (actingctl_usage_invalid).
+    const ARGUMENTS_INVALID: &str = "arguments_invalid";
+    const USAGE_INVALID: &str = "actingctl_usage_invalid";
     let cases = [
         (
             "ac_pause",
             json!({"reason": REASON, "neutral_undeclared": true}),
+            ARGUMENTS_INVALID,
             "neutral_undeclared",
             "unknown",
         ),
         (
             "ac_frame",
             json!({"instance": "neutral.frame", "out": "C:\\neutral"}),
+            ARGUMENTS_INVALID,
             "out",
             "unknown",
         ),
-        ("ac_pause", json!({"reason": 7}), "reason", "wrong_type"),
-        ("ac_pause", json!({}), "reason", "required"),
+        (
+            "ac_pause",
+            json!({"reason": 7}),
+            ARGUMENTS_INVALID,
+            "reason",
+            "wrong_type",
+        ),
+        (
+            "ac_pause",
+            json!({}),
+            ARGUMENTS_INVALID,
+            "reason",
+            "required",
+        ),
         (
             "ac_facts_publish",
             json!({"file": "relative\\observation.json"}),
+            ARGUMENTS_INVALID,
             "file",
-            "not_recognised",
+            "not_absolute",
         ),
         (
             "ac_pause",
             json!({"reason": "--drain"}),
+            USAGE_INVALID,
             "reason",
             "not_recognised",
         ),
         (
             "ac_config_set",
             json!({"changes": ["neutral.key=1", "--neutral=1"]}),
+            USAGE_INVALID,
             "changes",
             "not_recognised",
         ),
     ];
-    for (id, (tool, arguments, argument, problem)) in (2_u64..).zip(cases) {
+    for (id, (tool, arguments, code, argument, problem)) in (2_u64..).zip(cases) {
         let answer = server.call_tool(id, tool, arguments);
         let result = &answer["result"];
         assert_eq!(result["isError"], json!(true), "{tool}: {answer}");
@@ -527,11 +549,7 @@ fn mcp_refusals_send_nothing() {
                 &outcome["values"]["argument"],
                 &outcome["values"]["argument_problem"],
             ),
-            (
-                &json!("arguments_invalid"),
-                &json!(argument),
-                &json!(problem),
-            ),
+            (&json!(code), &json!(argument), &json!(problem)),
             "{tool}: {line}"
         );
     }

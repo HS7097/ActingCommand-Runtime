@@ -10132,8 +10132,10 @@ and 8 to 11; the rescue rows (point 7) are its second part, and stay refused her
 | L5G2b-4 | the budget (`budget`) | behaviour | LAB-5G2b | — | `Some(&Budget {fits, export})` for every call: today's limits copied (`RESULT_LIMIT` 24 KiB, `PAYLOAD_LIMIT` 11 KiB, `apps/actingctl/src/mcp/tools.rs`); `fits` is the answer as sent in the negotiated version (its JSON as text, and as `structuredContent` from 2025-06-18 on, the 2026-07-28 members included) with, per copy, the room the two limits leave a payload for the line's outcome and warnings (`RESULT_LIMIT / 2 − PAYLOAD_LIMIT`, 1 KiB); `export` writes into today's directory (`%TEMP%\actingcommand-mcp\materials`, ruling 18) with `lab_ops::material_export::write`. The line as sent is today's `carried` and `summary` adapted to the line (`{outcome, structured_content_only, warnings?, warnings_omitted?, truncated?, narrow}` beside a `structuredContent` too large to repeat); a line that fits neither way, a row's without answer shaping too, is `output_budget_exceeded` with `actual_bytes` and `limit_bytes` |
 | L5G2b-5 | the cursor binding | behaviour | LAB-5G2b | — | `CursorBinding {session: the server's (events::process_session, once), generation: the kept connection's}`: the cursors `events` and `diagnose`'s errors page issue are bound from this slice on. No `cursor` property is added: taking a cursor back is G3's |
 | L5G2b-6 | the front's own members (`tools::SUPPLIED`, `tools::EXPORT`) | behaviour, schema | LAB-5G2b | — | one table: `material`'s `out` and `frame`'s `out` are not in the schema, the front gives its export directory (`material` when its own boolean `export` is true, ruling 9; `frame` always); `deploy`'s and `rollback`'s `detach` is not in the schema and is given true (`calls::prepare`; their calls are the second part's). Each is refused as an unknown argument when given; nothing else (`wait_s`, handles, `cursor` are G3's) |
-| L5G2b-7 | the refusals (`calls::prepare`), before anything is sent or written | behaviour | LAB-5G2b | — | each `arguments_invalid` (today's server's code for an argument it refuses) with `argument` as the call names it: a member the row does not declare (`Operation::undeclared`, `export` excepted where the row takes it) and a member the front gives itself, `unknown`; a value of the wrong JSON type (by the row's type, as `serve` takes it; a switch a boolean, a repeated parameter a list of at least one), `wrong_type`, and text that is none of an enumeration's words or no duration, `not_recognised`; a required member (the row's, or `required_in` naming `mcp`) missing, `required`; a relative path in a parameter whose type is `path`, `file` or `dir`, on a row this build serves, `not_recognised` (**stricter than today's server**, which resolves or passes relative paths, register "Slice LAB-5G1b" point 4; the property's description ends `an absolute path: a relative one is refused`); a string that begins with `--`, alone or in a list, for every served row, `not_recognised` (the rule of `serve`, LAB-5G4a; `lab-ops` offers no such function, actinglab's is in its binary). A member given `null` is absent, as today's server reads it. No code is added |
-| L5G2b-8 | the write's provenance (`runtime::begin_write`) | behaviour | LAB-5G2b | — | one rule for every row the table marks as writing to the Runtime (`writes` and a Runtime need other than `offline`, `tools::writes_to_runtime`: 25 core rows): its own connection, `begin_interaction`, the identity card `{client: "actingctl-mcp"}`, then `RecordClientAction{surface_id: "mcp", control_id: <the tool>, kind: command, instance_alias}`, then the row on that connection, all under one correlation, copied from `apps/actingctl/src/mcp/operator.rs` (`record_provenance`). The instance is resolved first by one status read on the kept connection, as today's server resolves it; a step that fails ends the call with the line the serving code gives that failure, and nothing is written. A card refused as `governance_client_not_allowed` lets the write go ahead, its refusal the line's warning |
+| L5G2b-7 | the refusals (`calls::prepare`), before anything is sent or written | behaviour | LAB-5G2b | — | with `argument` as the call names it. `arguments_invalid` (today's server's code for an argument it refuses): a member the row does not declare (`Operation::undeclared`, `export` excepted where the row takes it) and a member the front gives itself, `unknown`; a value of the wrong JSON type (by the row's type, as `serve` takes it; a switch a boolean, a repeated parameter a list of at least one), `wrong_type`, and text that is none of an enumeration's words or no duration, `not_recognised`; a required member (the row's, or `required_in` naming `mcp`) missing, `required`; a relative path in a parameter whose type is `path`, `file` or `dir`, on a row this build serves, `not_absolute` (L5G2b-10), the developer text `an absolute path is required: …` (**stricter than today's server**, which resolves or passes relative paths, register "Slice LAB-5G1b" point 4; the property's description ends `an absolute path: a relative one is refused`). A string that begins with `--`, alone or in a list, for every served row: exactly the code and word `serve` answers for it since LAB-5G4a, `actingctl_usage_invalid` `not_recognised` (actinglab's `cli_module::words::from_json` and its `not_a_flag`, `apps/actinglab/src/cli_module/words.rs`; `lab-ops` offers no such function, so the rule is restated in `calls::flag_like`). A member given `null` is absent, as today's server reads it |
+| L5G2b-8 | the write's provenance (`runtime::begin_write`) | behaviour | LAB-5G2b | — | one rule for every row the table marks as writing to the Runtime (`writes` and a Runtime need other than `offline`, `tools::writes_to_runtime`: 25 core rows): its own connection, `begin_interaction`, the identity card `{client: "actingctl-mcp"}`, then `RecordClientAction{surface_id: "mcp", control_id: <the tool>, kind: command, instance_alias}`, then the row on that connection, all under one correlation, copied from `apps/actingctl/src/mcp/operator.rs` (`record_provenance`). The instance is resolved first by one status read on the kept connection, as today's server resolves it; a step that fails ends the call with the line the serving code gives that failure, and nothing is written. A card refused as `governance_client_not_allowed` is L5G2b-11 |
+| L5G2b-10 | the vocabulary `argument_problem` gains `not_absolute` ("A path that is not absolute where an absolute one is required.") | outcome vocabulary | LAB-5G2b | `calls::prepare` | in `crates/lab-ops/src/codes.rs` (`ArgumentProblem::NotAbsolute`) and the catalog's vocabulary, where the other words are registered; the coordinator's ruling of 2026-11-12 on this slice: `not_recognised` did not say what is wrong. The index is regenerated |
+| L5G2b-11 | `mcp_identity_declaration_refused` (warning, ladder class `none`, no values, pending; owner `actinglab-mcp`, domain `mcp_`) | outcome catalog | LAB-5G2b | `runtime::begin_write` | the coordinator's ruling of 2026-11-12 on this slice: where the Runtime refuses the identity card as `governance_client_not_allowed`, the line's `warnings` carry this code with the refusal as its `caused_by` link. What follows is exactly what today's server does after its `mcp_identity_card_refused` (`apps/actingctl/src/mcp/operator.rs`, `record_provenance`): nothing is retried and the card is not sent again; the client action is recorded and the write is sent on the same connection, its answer the call's. It stands where today's server answers `mcp_identity_card_refused` with `mcp_blocker` (a vocabulary only actingctl's server builds, the outcome guard's G7), until LAB-6 removes the step. Any other refusal of the card ends the call with the client's failure, nothing written. The index is regenerated |
 | L5G2b-9 | the instructions | text | LAB-5G2b | — | LAB-5G2a's sentence "This build serves no call yet" replaced by which kinds of row this build serves and that paths are absolute |
 
 **Where the new server records and today's tool for the same operation does not, and the
@@ -10159,10 +10161,8 @@ reverse** (for the coordinator to decide; none smoothed over):
   instance itself); today's tools read it once.
 - Today records and the new server does not: none among the served rows. The Lab tools' client
   action after a capture (ruling 12) belongs to rows this slice refuses.
-- The warning of a refused card: today's `mcp_identity_card_refused` needs the value
-  `mcp_blocker`, whose vocabulary only actingctl's server builds (the outcome guard's G7 lets one
-  enum build a vocabulary); the new server gives the Runtime's refusal itself
-  (`governance_client_not_allowed`) as the line's warning.
+- The warning of a refused card: today's `mcp_identity_card_refused` (with `mcp_blocker`) is
+  `mcp_identity_declaration_refused` here (L5G2b-11); what follows it is the same.
 
 **Rows that can take longer than 25 s** (each answers when it is done; they wait for G3's jobs):
 `run start` (see below), `run stop` without `cancel_only` (the cancellation and the reset, up to
@@ -10194,25 +10194,32 @@ the front gives, `export` after them where the row takes it, and on a served row
 description ends with the absolute-path sentence) and `server_stdio::mcp_calls_refused_unsupported_and_an_unknown_tool`
 and `mcp_loop_initialize_list_batch_and_cancel` (the refused calls name `ac_app_launch` and
 `ac_lab_observe`, rows this slice still refuses, where they named `ac_status` and `ac_frame`, which
-it serves). Today's server's tests are not touched.
+it serves; the coordinator's ruling of 2026-11-12 accepts the three: they pinned LAB-5G2a's
+interim state). Today's server's tests are not touched.
 
 **Interface.** None raised: on the wire the server sends what today's server sends (L5G2b-8); no
-key, location, vocabulary token or code is added (`mcp_operation_unsupported`'s common causes are
-rewritten for what this build refuses; the index is current).
+key or location is added. One code (L5G2b-11) and one vocabulary word (L5G2b-10) are added to the
+catalog only (`runtime-outcomes` does not move); `mcp_operation_unsupported`'s common causes are
+rewritten for what this build refuses; the index is regenerated.
 
 **Where LAB-5G2b differs from its work order's letter.** (a) LAB-5G2a's tests are adapted (above).
 (b) `standard-pack check` is refused by the rule though point 9 does not name it: actinglab's own
-command serves it (LAB-5F fix 1), so it waits for the `serve` children. (c) The card's warning
-(above). (d) The cut: the rescue rows are refused here.
+command serves it (LAB-5F fix 1), so it waits for the `serve` children. (c) By the coordinator's
+rulings of 2026-11-12: the refused card's own warning code (L5G2b-11) and the path word
+`not_absolute` (L5G2b-10), where the work order asked to reuse a fitting code. (d) The cut: the
+rescue rows are refused here; one pull request (the coordinator accepted the size).
 
 **For the second part (the rescue rows, point 7).** `tools::serving` gains a rescue row the rescue
 module serves (after the LAB-5 check, so `mcp config`, `mcp entries` and the plan row stay
 refused), answered by `lab_rescue::rescue::answer_here(…, Initiator::LabMcp)` and given its line as
 actinglab's CLI module gives it; the work order's test of a rescue row that needs no Runtime on a
 temporary root (`leftovers`, from a copy of the program) joins `mcp_stdio_one_row_per_kind`.
-Open: (1) `deploy` and `rollback`, given `detach` true, start their detached run with
-`ACTINGCOMMAND_INITIATOR=Lab-MCP`, which that run refuses (§4.2; "Slice LAB-5G4a", deviation (c)):
-through MCP a deploy or a rollback would answer `detached: true` and do nothing. (2) The rescue
+Open: (1) `deploy` and `rollback`, given `detach` true (`calls::prepare`, `tools::SUPPLIED`),
+start their detached run with `ACTINGCOMMAND_INITIATOR=Lab-MCP`
+(`crates/lab-rescue/src/rescue.rs` lines 739 to 743, `detach`: an initiator other than `Lab-CLI`
+is handed to `detach_rescue`), which that run refuses (§4.2; "Slice LAB-5G4a", deviation (c)):
+through MCP a deploy or a rollback would answer `detached: true` and do nothing; not solved here
+(the coordinator's ruling of 2026-11-12). (2) The rescue
 rows that write to the Runtime record no identity card and no client action: they go on the
 module's own channel (ruling 17), their journal records `Lab-MCP`, and today's server has no
 rescue tool.

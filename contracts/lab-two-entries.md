@@ -777,14 +777,21 @@ sentence fails that test.
       the whole material is written there and the answer names the file; else its text is read)
       and `frame` is always written there; `deploy` and `rollback` take no `detach`, which is
       always true once the slice's second part serves them (section 5).
-    - *Refused before anything is sent or written,* each `arguments_invalid` with the argument as
-      the call names it: a member the row does not declare and a parameter the front gives itself
-      (`unknown`), a member of the wrong type (`wrong_type`; text that is none of its words, or no
-      duration, `not_recognised`), a required one missing (`required`), a relative path in a
-      parameter whose type is a path, on a row the server serves (`not_recognised`; stricter than
+    - *Refused before anything is sent or written,* with the argument as the call names it: as
+      `arguments_invalid`, a member the row does not declare and a parameter the front gives
+      itself (`unknown`), a member of the wrong type (`wrong_type`; text that is none of its
+      words, or no duration, `not_recognised`), a required one missing (`required`) and a
+      relative path in a parameter whose type is a path, on a row the server serves
+      (`not_absolute`, its developer text saying an absolute path is required; stricter than
       today's server, which resolves or passes relative paths, and said in the property's
-      description), and a string that begins with `--`, alone or in a list, as `serve` refuses it
-      (`not_recognised`). A member given as `null` is absent, as today's server reads it.
+      description); and a string that begins with `--`, alone or in a list, as `serve` refuses it
+      since LAB-5G4a (`actingctl_usage_invalid`, `not_recognised`). A member given as `null` is
+      absent, as today's server reads it.
+    - *A refused identity card:* where the Runtime refuses the card as
+      `governance_client_not_allowed`, the client action and the write go ahead as today's
+      server lets them, and the line carries the warning `mcp_identity_declaration_refused`
+      (caused by the refusal), where today's server answers `mcp_identity_card_refused` with
+      `mcp_blocker`, until LAB-6 removes the step.
     - *Every call runs to its end on its worker:* there are no jobs and no handles yet (G3).
   - **Not yet:** a call of a row the server does not serve answers `mcp_operation_unsupported`
     (`mcp_tool`) as the CLI line of a refusal, `{outcome}`, its arguments unread, nothing sent,
@@ -924,10 +931,11 @@ only add: actingctl stays until LAB-7.
 
 ## 12 Codes
 
-One new code: `mcp_operation_unsupported` (`mcp_tool`; LAB-5G2a, the first of the owner
-`actinglab-mcp`), every call of a row the MCP server does not serve yet (section 9.3; LAB-5G2b
-serves the CLI module's rows and reuses today's codes for the rest). The codes this contract
-uses:
+Two new codes of the owner `actinglab-mcp`: `mcp_operation_unsupported` (`mcp_tool`; LAB-5G2a),
+every call of a row the MCP server does not serve yet, and `mcp_identity_declaration_refused`
+(warning; LAB-5G2b), the Runtime refused the identity card declared before a write (section
+9.3). LAB-5G2b adds the word `not_absolute` to the vocabulary `argument_problem` and reuses
+today's codes for the rest. The codes this contract uses:
 
 - `channel_request_refused` (`operation`, `channel`), with `config_key` for a refused setting: an
   optional value LAB-6 adds to its catalog entry;

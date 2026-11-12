@@ -6834,6 +6834,9 @@
         },
         "unusable": {
           "description": "Names something that cannot be used: unreadable, not of its kind, or refused."
+        },
+        "not_absolute": {
+          "description": "A path that is not absolute where an absolute one is required."
         }
       }
     },
