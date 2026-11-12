@@ -167,7 +167,7 @@ fn declared_rows_match_their_commands() {
                 }
                 _ => flag(&param.name) == *read,
             });
-            if !declared && !excepted(*read) {
+            if !declared && !excepted(read) {
                 failures.push(format!(
                     "{name}: {read}: command to row: {} reads it, the row does not declare it",
                     list.row
