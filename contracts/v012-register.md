@@ -10901,12 +10901,13 @@ servers, what each accepts and refuses and what each sends to the Runtime, stays
 **Cut at the module boundary** (the work order's "If it is too large"; the core part alone is
 well past 1,200 changed lines): this slice holds the core rows (points 1, 3, 4 and their part of
 6). **Left out, for a later slice** (done by "Slice LAB-5B1b" below, but the receivers' flag
-lists, which it leaves for one more): the rescue module's rows (point 2 and its part of 6): the rows
+lists, which it leaves for one more, done by "Slice LAB-5B1c"): the rescue module's rows (point 2
+and its part of 6): the rows
 `lab_rescue::rescue` reads in its process, the installer's flag lists (`crates/lab-rescue/src/install/`)
 and the agent channel's (`agent_channel.rs`, `crates/agent-forward`), each to be one constant held
 equal to its row or rows. Seen while reading, for that slice: `config restore` reads `sha`, which
 its row does not declare (`rescue::config_swap` serves `config replace` and `config restore`), the
-same kind as L5B1-3's shared arms.
+same kind as L5B1-3's shared arms (decided by "Slice LAB-5B1c": the row declares it).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -11008,7 +11009,8 @@ after it and leaves that file untouched.
 
 **Cut** (the work order's "Size": the whole was about 1,800 changed lines). This slice holds the
 rows read in the module's process and the handed rows' constants, with their tests, and the pinned
-command lines of every handed row. **Left for one more slice:** the receivers' flag lists. The flag
+command lines of every handed row. **Left for one more slice** (done by "Slice LAB-5B1c" below):
+the receivers' flag lists. The flag
 lists of the installer commands the handed rows reach (`start`, `stop`, `undo`, `status`, `resume`,
 `leftovers`, `guards`, `release-hold`, `release verify`, `release stage`, `adopt`, each still inline
 in its `Flags::parse` call) and the agent channel's (`crates/agent-forward/src/cli.rs`, each
@@ -11046,9 +11048,10 @@ and no new dependency.
   (`crates/lab-rescue/src/install/config_swap.rs` lines 68 to 72). The code is unchanged and so is
   the table: whether the row declares `sha` is the coordinator's to decide (the table follows the
   code, the coordinator's ruling of 11-10, board #434 6770034832, point 5). Until then the read is
-  an exception.
+  an exception (decided by "Slice LAB-5B1c" below: the row declares `sha`).
 
-**Exceptions** (`rescue_reads::EXCEPTIONS`): `config restore`'s `sha`, above. Beside them: the
+**Exceptions** (`rescue_reads::EXCEPTIONS`): `config restore`'s `sha`, above (none since
+LAB-5B1c). Beside them: the
 module's refused parameters (`rescue::REFUSED_PARAMETERS`: the root, the state root and the
 confirmations) are read from every call's members to refuse them by name, not through a row's
 constant, and no row the module serves declares one; `op status --operation`, which the command line
@@ -11079,6 +11082,111 @@ changes; the operation table is unchanged. [lab-two-entries.md](lab-two-entries.
 **What LAB-5B1b changes live.** Nothing: every command line and every line answered stays as it was.
 
 **Rollback** (to the release before it). Nothing persisted: code only.
+
+#### Slice LAB-5B1c (0.12.57): the receivers' flag lists; `config restore` declares `sha`
+
+Coordinator work order `rd-1113/brief-lab5b1c.md` with `rd-1112/brief-lab5g-common.md`, on main
+`c3e169d9` (LAB-5B1b merged): what "Slice LAB-5B1b" left for one more slice, the receivers' flag
+lists, and the coordinator's decision on LAB-5B1b's open point: `config restore` reads `sha`
+(`rescue::config_swap` serves `config replace` and `config restore`, and `install::config_swap`
+checks the file's SHA-256 against it when given), so its row declares it; the table follows the
+code (the coordinator's ruling of 11-10, board #434 6770034832, point 5). The rule of the slice:
+nothing else changes. Every line every command prints, what each accepts and refuses, and the
+command line each row hands to the installer and to the agent channel stay byte for byte
+(`install::gate_434_lab5b1b_lines` is unchanged and passes as it is; point 2 adds no command line:
+`config restore` is a row read in the module's process, and `sha` goes to no installer command).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5B1c-1 | `install::FlagLists {with_value, lists, switches}` and `install::Flags::parse_by` | code | LAB-5B1c | — | one constant beside each of the eleven installer commands the handed rescue rows reach (`rescue_reads::INSTALLER`): `deploy::START_FLAGS`, `deploy::STOP_FLAGS`, `undo::UNDO_FLAGS`, `status::STATUS_FLAGS`, `install::RESUME_FLAGS`, `status::LEFTOVERS_FLAGS`, `deploy::GUARDS_FLAGS`, `deploy::RELEASE_HOLD_FLAGS`, `release::VERIFY_FLAGS`, `release::STAGE_FLAGS`, `adopt::ADOPT_FLAGS`. Each command's parse reads its constant (`Flags::parse_by`, which is `Flags::parse_lists` by the constant's three lists), so a word outside them is refused as before: `actingctl_usage_invalid`, `unknown`, the word as given, before anything else the command does |
+| L5B1c-2 | `actingcommand_agent_forward::cli::{ADD_FLAGS, REMOVE_FLAGS, LIST_FLAGS, CLAUDE_HOOK_FLAGS, CLAUDE_REGISTER_FLAGS, NOTICE_FLAGS}`; `cli::flags` public | code | LAB-5B1c | — | one constant per agent channel command (`rescue_reads::AGENT`'s receivers); the arm of `cli::run` (and `hook`, after the action) reads the command line by its command's constant, and `flags` refuses a word outside it `unknown`, as before; `flags` is public so that the rescue module's test feeds it a row's words |
+| L5B1c-3 | `config restore`'s parameter `sha` | contract table | LAB-5B1c | — | `{"name": "sha", "form": "option", "type": "sha256", "required": false, "note": "the candidate's expected SHA-256"}`, as `config replace` declares it; `rescue_reads::READ_HERE` holds `sha` for the row; `rescue_reads::EXCEPTIONS` is empty |
+
+**The lists, side by side** (point 1). These receivers had no `match` over their flags: each
+command's accepted flags were the lists its parse call gave inline. Each constant is that call's
+lists, whole and in the same order, whether or not a Lab row declares each flag (`Flags::parse(w,
+v, s)` is `Flags::parse_lists(w, v, [], s)`):
+
+| Receiver | Its parse before | Its constant now: with a value; list flags; switches | Equal |
+|---|---|---|---|
+| `install start` | `parse_lists(words, ["--root"], ["--ack-guard"], [])` | `START_FLAGS`: `--root`; `--ack-guard`; none | yes |
+| `install stop` | `parse_lists(words, ["--root", "--hold"], ["--known-pause", "--ack-guard"], [])` | `STOP_FLAGS`: `--root`, `--hold`; `--known-pause`, `--ack-guard`; none | yes |
+| `install undo` | `parse(words, ["--root", "--operation"], [])` | `UNDO_FLAGS`: `--root`, `--operation`; none; none | yes |
+| `install status` | `parse(words, ["--root", "--operation"], ["--check-rollback"])` | `STATUS_FLAGS`: `--root`, `--operation`; none; `--check-rollback` | yes |
+| `install resume` | `parse(words, ["--root", "--operation"], [])` | `RESUME_FLAGS`: `--root`, `--operation`; none; none | yes |
+| `install leftovers` | `parse(words, ["--root"], [])` | `LEFTOVERS_FLAGS`: `--root`; none; none | yes |
+| `install guards` | `parse_lists(words, ["--root", "--for", "--hold"], ["--known-pause"], [])` | `GUARDS_FLAGS`: `--root`, `--for`, `--hold`; `--known-pause`; none | yes |
+| `install release-hold` | `parse(words, ["--root", "--reason"], [])` | `RELEASE_HOLD_FLAGS`: `--root`, `--reason`; none; none | yes |
+| `install release verify` | `parse(words, ["--dir", "--facts", "--expect-tag", "--expect-commit"], [])` | `VERIFY_FLAGS`: `--dir`, `--facts`, `--expect-tag`, `--expect-commit`; none; none | yes |
+| `install release stage` | `parse(words, ["--root", "--dir", "--facts", "--expect-tag", "--expect-commit"], ["--local-build"])` | `STAGE_FLAGS`: `--root`, `--dir`, `--facts`, `--expect-tag`, `--expect-commit`; none; `--local-build` | yes |
+| `install adopt` | `parse(words, ["--root"], [])` | `ADOPT_FLAGS`: `--root`; none; none | yes |
+| `agent-channel add` | `flags(rest, [--state-root, --name, --client, --native-id, --dsh-app-root, --dsh-home, --dsh-node, --restore])` | `ADD_FLAGS`: the same eight | yes |
+| `agent-channel remove` | `flags(rest, [--state-root, --name])` | `REMOVE_FLAGS`: the same two | yes |
+| `agent-channel list` | `flags(rest, [--state-root])` | `LIST_FLAGS`: `--state-root` | yes |
+| `agent-channel claude-hook <start\|end>` | `flags(rest, [--state-root])` in `hook`, after the action | `CLAUDE_HOOK_FLAGS`: `--state-root` | yes |
+| `agent-channel claude-register` | `flags(rest, [--state-root, --name])` | `CLAUDE_REGISTER_FLAGS`: the same two | yes |
+| `agent-channel notice` | `flags(rest, [])` | `NOTICE_FLAGS`: none | yes |
+
+Not one differs. The flags a receiver takes that no rescue row writes stay in its list, since the
+list is what the parse takes today and `actingctl install` and the coordinator's deploy tooling give
+them: `install start`'s and `install stop`'s `--ack-guard`, `install stop`'s and `install guards`'
+`--known-pause`, `install guards`' `--hold`. The rescue module refuses the first two as parameters
+(`rescue::REFUSED_PARAMETERS`), and `guards` declares no `hold`; so the test holds the rows to their
+receivers in one direction, row to receiver.
+
+**`config restore` declares `sha`** (point 2). The row's code is unchanged: it read `sha` before
+(LAB-5B1b's exception) and reads it now as a declared parameter. What follows the table: the
+command line's words (`config restore <backup> --sha <sha256>`), `actinglab help config restore`
+and `serve --stdio`, all read from the table the build embeds, and the tool `ac_config_restore`,
+which the new MCP server generates from it. No checked-in help text, no test's row count or tool
+list, and no sentence of the manual names the row's parameters
+([install-cli.md](install-cli.md) "The Lab's rescue module", [lab-two-entries.md](lab-two-entries.md)
+§7 name neither `config replace`'s `--sha` nor `config restore`'s): none changes. The test the work
+order asks for runs both rows with a wrong `sha` on an adopted fake root, the fixture LAB-3's and
+INST-5's tests of `config replace` use. The contract table does not touch `contracts/outcome-codes/`.
+
+**Every table-driven row in exactly one list** (point 4). LAB-5B1's `every_table_driven_row_has_one_list`
+already holds every planned rescue row the module serves in exactly one of `READ_HERE`, `INSTALLER`
+and `AGENT` (LAB-5B1b); this slice adds that each `INSTALLER` and `AGENT` row has exactly one
+receiver's list, and a row whose command has none fails, named. Nothing is recorded as left for a
+later slice: the sentences of "Slice LAB-5B1" and "Slice LAB-5B1b" that said so name this slice, as
+do `rescue_reads`' module comment, the header comment of `install/gate_434_lab5b1b.rs` and the gate
+map's LAB-5B1b row comment.
+
+**Tests.** New: apps row "#434 LAB-5B1c", in `crates/lab-rescue/src/install/gate_434_lab5b1c.rs`
+(the embedded table, the constants and `fixture.rs`' fake host and fake clock; no Runtime, no
+device): `rescue_handed_flags_are_what_the_receivers_take` (each handed row's receiver's list
+exists, and every flag its constant writes, the root's, the state root's and each parameter's, is
+in it), `rescue_receivers_refuse_no_declared_parameter` (each row's command line for no parameter
+but the required ones and for each declared parameter with a made-up value of its type: the
+installer as the module runs it, on a root that does not exist, which every installer command
+refuses only after its flags are read, the one line the module handed on being that command's;
+the agent channel's `cli::flags` with the command's list, on the words after the command's own;
+none refused `unknown`) and `config_restore_refuses_a_wrong_sha_as_config_replace_does` (both
+refused `actingctl_usage_invalid`, `--sha`, `unusable`, the same line and exit, before the root
+changes or the Runtime is asked anything). Existing tests: no assertion changed. Two comments of
+`install/gate_434_lab5b1b.rs` that point 2 or point 4 made untrue were brought in line (its header's
+"Left for one more slice", and the comment over the third read of
+`rescue_a_read_outside_its_constant_fails`, which called `config restore`'s `sha` an exception);
+`rescue_exceptions_are_outside_the_table` now goes over an empty list, and
+`rescue_a_read_outside_its_constant_fails` reads that `sha` as a declared parameter.
+
+**Interface.** None raised. Nothing on the wire, in the ledger or in a file a released peer reads
+changes. The operation table gains one optional parameter on one row; LAB-5A's rule for an added
+member (L5A-3, followed by LAB-5C for its added optional parameters) applies: the table's schema
+string stays `actingcommand.lab-operations.v1`, members and types are the ones §9.1 has. The table
+ships inside the programs and has no reader of its own; today's MCP server (`actingctl mcp-serve`)
+does not read it. No code, key, location, record or vocabulary token is added.
+[lab-two-entries.md](lab-two-entries.md) is unchanged (no sentence of it became untrue).
+
+**What LAB-5B1c changes live.** `config restore` accepts `--sha <sha256>` on the command line, the
+member `sha` in `serve --stdio`, and the argument `sha` of `ac_config_restore` where the new MCP
+server offers the rescue rows (on Windows); with it, a kept file whose SHA-256 is not the one given
+is refused `actingctl_usage_invalid` (`--sha`, `unusable`) before anything changes, as `config
+replace` refuses one. Nothing else.
+
+**Rollback** (to the release before it). Nothing persisted: code and the embedded table. The release
+before it refuses `config restore --sha` as an argument it does not know.
 
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 

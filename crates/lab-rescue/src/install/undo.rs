@@ -19,7 +19,7 @@ use super::manifest;
 use super::plan::{self, PlanInputs, PlanKind};
 use super::state::{self, CurrentState, OperationKind, Paths};
 use super::update::{self, SwapIntent};
-use super::{Answer, Flags};
+use super::{Answer, FlagLists, Flags};
 use crate::codes::{InstallLocation, InstallRefusal, RollbackGatePart};
 use crate::watchdog::decide::{Journal as OwnerJournal, OwnerLock};
 use crate::watchdog::observe;
@@ -113,10 +113,17 @@ fn started_inside(journal: &journal::Journal) -> bool {
         })
 }
 
+/// The flags `install undo` takes (Workflow #434 LAB-5B1c).
+pub(crate) static UNDO_FLAGS: FlagLists = FlagLists {
+    with_value: &["--root", "--operation"],
+    lists: &[],
+    switches: &[],
+};
+
 /// `install undo`. Workflow #434 LAB-3: the rescue module's `undo` runs it with its face, and the
 /// journal's undo record carries its initiator.
 pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result<Answer, Outcome> {
-    let flags = Flags::parse(words, &["--root", "--operation"], &[])?;
+    let flags = Flags::parse_by(words, &UNDO_FLAGS)?;
     let paths = super::resolve_root(&flags)?;
     let operation_id = flags.required("--operation")?;
     if journal::operation_ms(operation_id).is_none() || !paths.journal(operation_id).is_file() {

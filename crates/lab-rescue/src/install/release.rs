@@ -16,7 +16,7 @@ use super::files::{self, join_relative};
 use super::journal::{self, Opening, Operation, PlannedStep, Previous, StepKind, StepState};
 use super::manifest::{self, Half, Speaks, UiDeclaration};
 use super::state::{self, BuildOrigin, KeptBuild, OperationKind, Paths};
-use super::{Answer, Flags, Host};
+use super::{Answer, FlagLists, Flags, Host};
 use crate::cli_line;
 use crate::codes::{
     ActingctlCode, ArgumentProblem, InstallCaveat, InstallLocation, InstallRefusal, ReleaseCheck,
@@ -688,15 +688,31 @@ fn inputs(flags: &Flags<'_>) -> Result<ReleaseInputs, Outcome> {
     })
 }
 
+/// The flags `install release verify` takes (Workflow #434 LAB-5B1c).
+pub(crate) static VERIFY_FLAGS: FlagLists = FlagLists {
+    with_value: &["--dir", "--facts", "--expect-tag", "--expect-commit"],
+    lists: &[],
+    switches: &[],
+};
+
+/// The flags `install release stage` takes (Workflow #434 LAB-5B1c).
+pub(crate) static STAGE_FLAGS: FlagLists = FlagLists {
+    with_value: &[
+        "--root",
+        "--dir",
+        "--facts",
+        "--expect-tag",
+        "--expect-commit",
+    ],
+    lists: &[],
+    switches: &["--local-build"],
+};
+
 /// `install release verify --dir <dir> [--facts <file>] [--expect-tag <tag>] [--expect-commit
 /// <hex8+>]`: read-only; the zips are extracted into a new work folder under the host's work
 /// directory, left there and named in the result.
 pub(crate) fn verify(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
-    let flags = Flags::parse(
-        words,
-        &["--dir", "--facts", "--expect-tag", "--expect-commit"],
-        &[],
-    )?;
+    let flags = Flags::parse_by(words, &VERIFY_FLAGS)?;
     let inputs = inputs(&flags)?;
     let Prechecked {
         located,
@@ -808,17 +824,7 @@ fn stage_steps(commit: &str, ms: u64) -> Vec<PlannedStep> {
 /// [--expect-commit …] [--local-build]`. Workflow #434 LAB-3: the rescue module's `release stage`
 /// and `deploy` run it with their face, so its journal records the initiator.
 pub(crate) fn stage(words: &[&str], host: &dyn Host, face: super::Face) -> Result<Answer, Outcome> {
-    let flags = Flags::parse(
-        words,
-        &[
-            "--root",
-            "--dir",
-            "--facts",
-            "--expect-tag",
-            "--expect-commit",
-        ],
-        &["--local-build"],
-    )?;
+    let flags = Flags::parse_by(words, &STAGE_FLAGS)?;
     let inputs = inputs(&flags)?;
     let paths = super::resolve_root(&flags)?;
     super::refuse_ab(InstallLocation::ReleaseStage, &paths)?;

@@ -34,6 +34,33 @@ const DSH_HOME: &str = "--dsh-home";
 const DSH_NODE: &str = "--dsh-node";
 const RESTORE: &str = "--restore";
 
+// Workflow #434 LAB-5B1c: the flags each command takes after its words (`claude-hook`'s after its
+// action), one list per command, which its arm in [`run`] reads the command line by ([`flags`]):
+// the lists its arm gave inline before, unchanged. The Lab's rescue module holds the flags its
+// `agent` rows write to them (`lab_rescue`'s test `gate_434_lab5b1c`).
+
+/// The flags of `add`.
+pub const ADD_FLAGS: [&str; 8] = [
+    STATE_ROOT,
+    NAME,
+    CLIENT,
+    NATIVE_ID,
+    DSH_APP_ROOT,
+    DSH_HOME,
+    DSH_NODE,
+    RESTORE,
+];
+/// The flags of `remove`.
+pub const REMOVE_FLAGS: [&str; 2] = [STATE_ROOT, NAME];
+/// The flags of `list`.
+pub const LIST_FLAGS: [&str; 1] = [STATE_ROOT];
+/// The flags of `claude-hook <start|end>`, after its action.
+pub const CLAUDE_HOOK_FLAGS: [&str; 1] = [STATE_ROOT];
+/// The flags of `claude-register`.
+pub const CLAUDE_REGISTER_FLAGS: [&str; 2] = [STATE_ROOT, NAME];
+/// The flags of `notice`: none.
+pub const NOTICE_FLAGS: [&str; 0] = [];
+
 /// The file the writers of `<state_root>\agent-forward\` lock.
 const LOCK_FILE: &str = ".lock";
 /// How long a writer waits for another one.
@@ -98,8 +125,10 @@ fn utf8(word: &OsStr) -> Result<&str, CliFailure> {
         .ok_or_else(|| usage(None, UsageProblem::NotUtf8))
 }
 
-/// The flags of one command: each at most once, each with a value.
-fn flags(
+/// The flags of one command: each at most once, each with a value; a word that is no flag of
+/// `allowed` is refused `unknown`. Workflow #434 LAB-5B1c: public, so that the Lab's rescue
+/// module's test feeds it the words its `agent` rows write, with the command's list.
+pub fn flags(
     words: &[OsString],
     allowed: &[&'static str],
 ) -> Result<BTreeMap<&'static str, String>, CliFailure> {
@@ -378,7 +407,7 @@ fn hook(words: &[OsString]) -> Result<CliAnswer, CliFailure> {
         "end" => false,
         other => return Err(usage(Some(other), UsageProblem::NotRecognised)),
     };
-    let values = flags(rest, &[STATE_ROOT])?;
+    let values = flags(rest, &CLAUDE_HOOK_FLAGS)?;
     let state_root = PathBuf::from(required(&values, STATE_ROOT)?);
     let result = now_unix_ms().and_then(|now| {
         if start {
@@ -411,19 +440,7 @@ pub fn run(words: &[OsString]) -> Result<CliAnswer, CliFailure> {
     let action = utf8(action)?;
     match action {
         "add" => {
-            let values = flags(
-                rest,
-                &[
-                    STATE_ROOT,
-                    NAME,
-                    CLIENT,
-                    NATIVE_ID,
-                    DSH_APP_ROOT,
-                    DSH_HOME,
-                    DSH_NODE,
-                    RESTORE,
-                ],
-            )?;
+            let values = flags(rest, &ADD_FLAGS)?;
             let flag = |name: &'static str| values.get(name).map(String::as_str);
             let dsh = DshFlags {
                 app_root: flag(DSH_APP_ROOT),
@@ -450,7 +467,7 @@ pub fn run(words: &[OsString]) -> Result<CliAnswer, CliFailure> {
             Ok(CliAnswer::Members(members))
         }
         "remove" => {
-            let values = flags(rest, &[STATE_ROOT, NAME])?;
+            let values = flags(rest, &REMOVE_FLAGS)?;
             let name = required(&values, NAME)?;
             remove_channel(Path::new(required(&values, STATE_ROOT)?), name).map_err(failed)?;
             let mut members = Map::new();
@@ -458,7 +475,7 @@ pub fn run(words: &[OsString]) -> Result<CliAnswer, CliFailure> {
             Ok(CliAnswer::Members(members))
         }
         "list" => {
-            let values = flags(rest, &[STATE_ROOT])?;
+            let values = flags(rest, &LIST_FLAGS)?;
             let channels = read_channels(Path::new(required(&values, STATE_ROOT)?))
                 .map_err(failed)?
                 .iter()
@@ -470,7 +487,7 @@ pub fn run(words: &[OsString]) -> Result<CliAnswer, CliFailure> {
         }
         "claude-hook" => hook(rest),
         "claude-register" => {
-            let values = flags(rest, &[STATE_ROOT, NAME])?;
+            let values = flags(rest, &CLAUDE_REGISTER_FLAGS)?;
             let state_root = PathBuf::from(required(&values, STATE_ROOT)?);
             let name = required(&values, NAME)?;
             now_unix_ms()
@@ -489,7 +506,7 @@ pub fn run(words: &[OsString]) -> Result<CliAnswer, CliFailure> {
             Ok(CliAnswer::Members(members))
         }
         "notice" => {
-            flags(rest, &[])?;
+            flags(rest, &NOTICE_FLAGS)?;
             Ok(CliAnswer::Text(NOTICE))
         }
         other => Err(usage(Some(other), UsageProblem::Unknown)),

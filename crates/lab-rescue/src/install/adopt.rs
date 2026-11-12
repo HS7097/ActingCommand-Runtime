@@ -10,7 +10,7 @@ use super::files::{self, join_relative};
 use super::journal::{self, Opening, Operation, PlannedStep, Previous, StepKind, StepState};
 use super::manifest::{self, BuildManifest, BuildProblem, Half};
 use super::state::{self, BuildOrigin, KeptBuild, LiveBuild, OperationKind, PackEntry, Paths};
-use super::{Answer, Flags, Host};
+use super::{Answer, FlagLists, Flags, Host};
 use crate::codes::{InstallLocation, InstallRefusal};
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use serde::{Deserialize, Serialize};
@@ -164,10 +164,17 @@ fn adopt_steps(commit: &str, ms: u64) -> Vec<PlannedStep> {
     ]
 }
 
+/// The flags `install adopt` takes (Workflow #434 LAB-5B1c).
+pub(crate) static ADOPT_FLAGS: FlagLists = FlagLists {
+    with_value: &["--root"],
+    lists: &[],
+    switches: &[],
+};
+
 /// `install adopt --root <root>`. Workflow #434 LAB-3: the rescue module's `adopt` runs it with its
 /// face, so its journal records the initiator.
 pub(crate) fn adopt(words: &[&str], host: &dyn Host, face: super::Face) -> Result<Answer, Outcome> {
-    let flags = Flags::parse(words, &["--root"], &[])?;
+    let flags = Flags::parse_by(words, &ADOPT_FLAGS)?;
     let paths = super::resolve_root(&flags)?;
     super::refuse_ab(InstallLocation::Adopt, &paths)?;
     if !paths.is_single_location() {

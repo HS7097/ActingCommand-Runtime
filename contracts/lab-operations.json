@@ -3073,7 +3073,8 @@
       "name": "config restore",
       "module": "rescue",
       "params": [
-        {"name": "backup", "form": "positional", "type": "file", "required": true, "note": "a kept previous configuration"}
+        {"name": "backup", "form": "positional", "type": "file", "required": true, "note": "a kept previous configuration"},
+        {"name": "sha", "form": "option", "type": "sha256", "required": false, "note": "the candidate's expected SHA-256"}
       ],
       "help": "Puts a kept configuration file back in place as config replace does, restarting the Runtime under a hold.",
       "output": "the operation id and each step's result",
@@ -3085,7 +3086,7 @@
       "source": ["script rd-1108/dml_switch.ps1 restore", "actingctl install config restore"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: config replace with the kept file (operation install_config_restore); actingctl install config restore (INST-3) is not built"
+      "notes": "LAB-3: config replace with the kept file (operation install_config_restore); actingctl install config restore (INST-3) is not built. LAB-5B1c: declares sha as config replace does: config replace's path read it for this row since LAB-3 (the table follows the code)"
     },
     {
       "name": "config file show",
