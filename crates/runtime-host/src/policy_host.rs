@@ -326,6 +326,20 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// cycle starts (its hold, its fence, or its holder), by alias; read after the member's own
     /// control gates and before its queue. An instance it does not name waits as before.
     pub(crate) device_group_holds: &'a BTreeMap<String, DeviceGroupHold>,
+    /// IDLE-3 (#447, register §1.332): the policy's own dispatches as the cycle's inputs were
+    /// read ([`PolicyHost::idle_dispatches_read`]), kept with the cycle's not-run explanation.
+    pub(crate) dispatches_read: IdleDispatchRead,
+}
+
+/// IDLE-3 (#447, register §1.332): the policy's own dispatches as an evaluation read its inputs,
+/// under the policy guard it projected them under: the instances, by alias, on which a dispatch was
+/// still open (from its intent to its completion or its refusal; a dispatch this start could not
+/// settle is not counted, as it is not among the pending settlements), and the ledger position
+/// the inputs were read at. A dispatch opened later has its intent after that position (I-W).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IdleDispatchRead {
+    open: BTreeSet<String>,
+    through: u64,
 }
 
 /// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
@@ -1319,6 +1333,10 @@ pub(crate) struct PolicyHost {
     /// Workflow #386 SR-6b, MCP-19a (register §1.143 M19A-2): the latest evaluated cycle's
     /// not-run explanation. Memory only; a host starts with none.
     explanation: crate::schedule_explanation::ScheduleExplanationTable,
+    /// IDLE-3 (#447, register §1.332): the policy's own dispatches as the latest evaluated cycle
+    /// read its inputs, replaced with its explanation ([`Self::idle_runs_counted`]). Memory only;
+    /// a host starts with none.
+    idle_read: Option<IdleDispatchRead>,
     /// Workflow #427-B: `performance.pacing.max_concurrent_runs` as the host started
     /// (`set_max_concurrent_runs`); `None`, no limit.
     max_concurrent_runs: Option<u16>,
@@ -1897,6 +1915,7 @@ impl PolicyHost {
             remedies: crate::remedy::RemedyState::default(),
             random_delays: RandomDelayTable::default(),
             explanation: crate::schedule_explanation::ScheduleExplanationTable::default(),
+            idle_read: None,
             max_concurrent_runs: None,
             recorded_values: BTreeMap::new(),
             values_loaded: false,
@@ -3151,6 +3170,55 @@ impl PolicyHost {
         self.explanation.idle_plan(alias)
     }
 
+    /// IDLE-3 (#447, register §1.332): the policy's own dispatches as an evaluation reads its
+    /// inputs at the ledger position `through`, under the guard it projects them under: the
+    /// instances on which a dispatch is still open, from its intent until its completion (or its
+    /// refusal). The completion, not the record of the execution, is what the next task of a chain
+    /// reads: its predecessor's terminal state (`task_runtime_snapshots`) and its outcome
+    /// (`outcome_key_snapshot`) are projected from completed dispatches only. A dispatch this
+    /// start could not settle (`quarantine_dispatch`) is left out, as it is from the pending
+    /// settlements: no end of it comes in this start.
+    pub(crate) fn idle_dispatches_read(&self, through: u64) -> IdleDispatchRead {
+        IdleDispatchRead {
+            open: self
+                .seen_dispatches
+                .iter()
+                .filter(|(decision_id, dispatch)| {
+                    matches!(
+                        dispatch.lifecycle,
+                        DispatchLifecycle::Intent | DispatchLifecycle::Admitted
+                    ) && !self.quarantined_dispatches.contains(*decision_id)
+                })
+                .map(|(_, dispatch)| dispatch.data.instance_id.clone())
+                .collect(),
+            through,
+        }
+    }
+
+    /// IDLE-3 (#447, register §1.332): whether the latest evaluated cycle's plan for `alias`
+    /// ([`Self::idle_plan`]) counts the end of every run the policy dispatched on the instance:
+    /// as that evaluation read its inputs no dispatch of the instance was open, and none has been
+    /// opened since. A dispatch opened since has its intent after the read position, and the
+    /// dispatch journal keeps every open dispatch and each pair's latest intent, so the latest
+    /// intent of the instance's dispatches it holds shows it. True before the first evaluated
+    /// cycle after a start, which leaves no plan.
+    pub(crate) fn idle_runs_counted(&self, alias: &str) -> bool {
+        let Some(read) = &self.idle_read else {
+            return true;
+        };
+        let latest_intent = self
+            .seen_dispatches
+            .values()
+            .filter(|dispatch| dispatch.data.instance_id == alias)
+            .map(|dispatch| dispatch.intent_sequence)
+            .max();
+        crate::idle_action::RunsRead {
+            open: read.open.contains(alias),
+            through: read.through,
+        }
+        .counts_every_run(latest_intent)
+    }
+
     /// Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluated cycle's not-run
     /// explanation for `instance` (every instance when absent), with the selected decision's
     /// dispatch state as the dispatch projection holds it now: `pending` before its intent is
@@ -3316,6 +3384,7 @@ impl PolicyHost {
             task_held,
             device_groups,
             device_group_holds,
+            dispatches_read,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -3794,6 +3863,9 @@ impl PolicyHost {
                 store_tasks: &store_tasks,
             },
         );
+        // IDLE-3 (#447, register §1.332): what this evaluation's inputs counted of the policy's own
+        // dispatches, replaced with the explanation it belongs to.
+        self.idle_read = Some(dispatches_read);
         // Workflow #438 HELD-1 (register §1.322 HELD-R6; `scheduling/README.md`, "Held records"):
         // after the evaluation and its explanation, the ends of the holds it found ended, then the
         // held records of the rows held past the threshold, each checked against the
