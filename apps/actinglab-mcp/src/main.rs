@@ -27,8 +27,13 @@
 //! lists (the ids of the table's module rows of role `operations`); without it every installed
 //! module is listed, the authoring module only where its option lists it. `--workers <n>` is the
 //! number of threads that run `tools/call`, 1 to 64, 8 when not given (board #434, the
-//! coordinator's rulings 6775192250 points 20 and 22, and of 2026-11-12 on #1639). `--list-tools`
-//! prints the `tools/list` result and exits, and takes no `--workers`. `--tier`, today's server's
+//! coordinator's rulings 6775192250 points 20 and 22, and of 2026-11-12 on #1639). Workflow #434
+//! LAB-5G3 ([`jobs`]; ruling 20: a tunable is a start option with a default): `--call-budget
+//! <seconds>` (1 to 300, today's 25) is how long a call may take before it answers its job's
+//! handle, `--jobs <n>` (1 to 64, today's 8) how many jobs run at once and `--kept-jobs <n>` (1 to
+//! 1024, today's 64) how many are kept. `--list-tools`
+//! prints the `tools/list` result and exits, and takes no `--workers`, `--jobs` or `--kept-jobs`
+//! (a `--call-budget` beside it sets the waits the list describes). `--tier`, today's server's
 //! option, is refused: this server has no tiers. Nothing else is taken. stdout is the protocol, or the printed list; a start that
 //! fails writes its developer line on stderr and exits by its outcome's category, as
 //! `actingctl mcp-serve` does.
@@ -36,6 +41,7 @@
 mod budget;
 mod calls;
 mod codes;
+mod jobs;
 mod protocol;
 mod runtime;
 mod server;
@@ -50,6 +56,10 @@ mod gate_434_lab5g2a;
 // `mcp_budget_cut_and_export`).
 #[cfg(test)]
 mod gate_434_lab5g2b;
+// Test-only: Workflow #434 LAB-5G3, the slice's named test of its start options, the jobs' caps
+// and the front's added members (`mcp_job_start_options`).
+#[cfg(test)]
+mod gate_434_lab5g3;
 
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
@@ -60,13 +70,14 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 use std::process::ExitCode;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 use tools::{Catalog, Listing};
 
 /// The program's name in its developer lines and its `serverInfo`.
 const PROGRAM: &str = "actinglab-mcp";
-const USAGE: &str = "usage: actinglab-mcp [--list <module>[,<module>...]] [--workers <n>] | actinglab-mcp --list-tools [--list <module>[,<module>...]]; <module>: core, debugging, authoring, rescue; <n>: 1 to 64, default 8";
+const USAGE: &str = "usage: actinglab-mcp [--list <module>[,<module>...]] [--workers <n>] [--call-budget <seconds>] [--jobs <n>] [--kept-jobs <n>] | actinglab-mcp --list-tools [--list <module>[,<module>...]] [--call-budget <seconds>]; <module>: core, debugging, authoring, rescue; --workers 1 to 64, default 8; --call-budget 1 to 300, default 25; --jobs 1 to 64, default 8; --kept-jobs 1 to 1024, default 64";
 /// The developer text of a refused `--tier`.
-const NO_TIERS: &str = "actinglab-mcp has no tiers: tools/list lists every tool of the modules --list names, by default every installed module; usage: actinglab-mcp [--list <module>[,<module>...]] [--workers <n>] | actinglab-mcp --list-tools [--list <module>[,<module>...]]";
+const NO_TIERS: &str = "actinglab-mcp has no tiers: tools/list lists every tool of the modules --list names, by default every installed module; usage: actinglab-mcp [--list <module>[,<module>...]] [--workers <n>] [--call-budget <seconds>] [--jobs <n>] [--kept-jobs <n>] | actinglab-mcp --list-tools [--list <module>[,<module>...]] [--call-budget <seconds>]";
 const LIST: &str = "--list";
 const LIST_TOOLS: &str = "--list-tools";
 const WORKERS: &str = "--workers";
@@ -77,6 +88,18 @@ const DEFAULT_WORKERS: usize = 8;
 /// The fewest and the most `--workers` takes.
 const MIN_WORKERS: usize = 1;
 const MAX_WORKERS: usize = 64;
+/// Workflow #434 LAB-5G3 (work order point 2; ruling 20 of 6775192250: a tunable is a start option
+/// with a default, never a constant): the call budget in seconds, the jobs that run at once and the
+/// jobs kept, each with today's server's value as its default (`apps/actingctl/src/mcp/tools.rs`
+/// `CALL_BUDGET`, `jobs.rs` `MAX_RUNNING` and `MAX_KEPT`) and its range.
+const CALL_BUDGET: &str = "--call-budget";
+const JOBS: &str = "--jobs";
+const KEPT_JOBS: &str = "--kept-jobs";
+const CALL_BUDGET_RANGE: (u64, u64) = (1, 300);
+const DEFAULT_JOBS: usize = 8;
+const JOBS_RANGE: (u64, u64) = (1, 64);
+const DEFAULT_KEPT_JOBS: usize = 64;
+const KEPT_JOBS_RANGE: (u64, u64) = (1, 1024);
 
 /// Why the program ended without serving (Workflow #378 A5, model v2.2 §7.3): one outcome, and
 /// the developer text of its line (the usage line of a usage error). Nothing is printed on
@@ -107,6 +130,15 @@ struct Invocation {
     workers: usize,
 }
 
+/// Workflow #434 LAB-5G3: the start options of the jobs, each its default when it is not given.
+#[derive(Debug, PartialEq, Eq)]
+struct JobOptions {
+    /// `--call-budget`: how long a call may take before it answers its job's handle.
+    call_budget: Duration,
+    /// `--jobs` and `--kept-jobs`: the jobs that run at once and the jobs kept.
+    limits: jobs::Limits,
+}
+
 fn main() -> ExitCode {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
     run(&arguments).unwrap_or_else(|ended| {
@@ -119,14 +151,16 @@ fn main() -> ExitCode {
 }
 
 fn run(arguments: &[OsString]) -> Result<ExitCode, Ended> {
-    let invocation = parse(arguments)?;
+    let (invocation, job_options) = parse_all(arguments)?;
     // Without ACTINGCOMMAND_DETAIL, full (class (b), model v2.2 §7.1), as actingctl's server.
     let detail = cli_line::detail().map_err(|outcome| Ended {
         outcome,
         text: Some(USAGE),
     })?;
     tools::set_detail(detail);
-    let catalog = Catalog::of(&table::operation_table()?)?;
+    // Workflow #434 LAB-5G3: the waits the tools describe are the call budget's.
+    let catalog = Catalog::of(&table::operation_table()?)?
+        .with_call_budget(job_options.call_budget.as_secs())?;
     let listing = match &invocation.list {
         None => Listing::Default,
         Some(words) => catalog
@@ -157,18 +191,31 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, Ended> {
         listing,
         workers: invocation.workers,
         service: calls::Service::new(budget::export_directory()),
+        call_budget: job_options.call_budget,
+        limits: job_options.limits,
     })
     .map_err(Ended::from)
+}
+
+/// The command line's options without the jobs' ([`parse_all`]).
+#[cfg(test)]
+fn parse(arguments: &[OsString]) -> Result<Invocation, Ended> {
+    parse_all(arguments).map(|(invocation, _)| invocation)
 }
 
 /// The command line's options; every other word, an option given twice, an option without its
 /// value, a `--workers` value outside its range or that is no number and `--workers` beside
 /// `--list-tools` are `actingctl_usage_invalid` naming the word, before anything is read or
-/// served.
-fn parse(arguments: &[OsString]) -> Result<Invocation, Ended> {
+/// served. Workflow #434 LAB-5G3: the jobs' options (`--call-budget`, `--jobs`, `--kept-jobs`) are
+/// refused as `--workers` is; `--jobs` and `--kept-jobs` beside `--list-tools`, which runs no call,
+/// are `conflicting`, and `--call-budget` beside it sets the waits the printed list describes.
+fn parse_all(arguments: &[OsString]) -> Result<(Invocation, JobOptions), Ended> {
     let mut list: Option<Vec<String>> = None;
     let mut list_tools = false;
     let mut workers: Option<usize> = None;
+    let mut call_budget: Option<u64> = None;
+    let mut running: Option<u64> = None;
+    let mut kept: Option<u64> = None;
     let mut index = 0;
     while index < arguments.len() {
         let word = arguments[index]
@@ -185,7 +232,28 @@ fn parse(arguments: &[OsString]) -> Result<Invocation, Ended> {
                 index += 1;
                 workers = Some(worker_count(option_value(arguments, index, word)?)?);
             }
-            LIST | LIST_TOOLS | WORKERS => {
+            CALL_BUDGET if call_budget.is_none() => {
+                index += 1;
+                let value = option_value(arguments, index, word)?;
+                call_budget = Some(whole_number(value, CALL_BUDGET, CALL_BUDGET_RANGE)?);
+            }
+            JOBS if running.is_none() => {
+                index += 1;
+                running = Some(whole_number(
+                    option_value(arguments, index, word)?,
+                    JOBS,
+                    JOBS_RANGE,
+                )?);
+            }
+            KEPT_JOBS if kept.is_none() => {
+                index += 1;
+                kept = Some(whole_number(
+                    option_value(arguments, index, word)?,
+                    KEPT_JOBS,
+                    KEPT_JOBS_RANGE,
+                )?);
+            }
+            LIST | LIST_TOOLS | WORKERS | CALL_BUDGET | JOBS | KEPT_JOBS => {
                 return Err(usage(ArgumentProblem::Repeated, Some(word)));
             }
             // Today's server's tiers: this one has none, and says so.
@@ -203,11 +271,64 @@ fn parse(arguments: &[OsString]) -> Result<Invocation, Ended> {
     if list_tools && workers.is_some() {
         return Err(usage(ArgumentProblem::Conflicting, Some(WORKERS)));
     }
-    Ok(Invocation {
+    // Workflow #434 LAB-5G3: nor would the jobs' caps.
+    if list_tools && running.is_some() {
+        return Err(usage(ArgumentProblem::Conflicting, Some(JOBS)));
+    }
+    if list_tools && kept.is_some() {
+        return Err(usage(ArgumentProblem::Conflicting, Some(KEPT_JOBS)));
+    }
+    let limits = jobs::Limits {
+        running: count(running, DEFAULT_JOBS, JOBS, JOBS_RANGE)?,
+        kept: count(kept, DEFAULT_KEPT_JOBS, KEPT_JOBS, KEPT_JOBS_RANGE)?,
+    };
+    let job_options = JobOptions {
+        call_budget: Duration::from_secs(call_budget.unwrap_or(tools::DEFAULT_CALL_BUDGET_S)),
+        limits,
+    };
+    let invocation = Invocation {
         list,
         list_tools,
         workers: workers.unwrap_or(DEFAULT_WORKERS),
-    })
+    };
+    Ok((invocation, job_options))
+}
+
+/// Workflow #434 LAB-5G3: the value of the option `word`, read as `--workers`' is: a whole number
+/// within `range`; text that is no whole number is `wrong_type`, and a number outside the range
+/// `out_of_range` with the range (`range_min`, `range_max`).
+fn whole_number(value: &str, word: &str, range: (u64, u64)) -> Result<u64, Ended> {
+    let number = value
+        .parse::<i64>()
+        .map_err(|_| usage(ArgumentProblem::WrongType, Some(word)))?;
+    match u64::try_from(number) {
+        Ok(number) if (range.0..=range.1).contains(&number) => Ok(number),
+        _ => Err(out_of_range(word, range)),
+    }
+}
+
+/// Workflow #434 LAB-5G3: a count the option `word` gave within `range`, or `default` without it.
+fn count(
+    given: Option<u64>,
+    default: usize,
+    word: &str,
+    range: (u64, u64),
+) -> Result<usize, Ended> {
+    match given {
+        None => Ok(default),
+        Some(given) => usize::try_from(given).map_err(|_| out_of_range(word, range)),
+    }
+}
+
+/// `actingctl_usage_invalid` `out_of_range` for the option `word`, with its range and the usage
+/// line.
+fn out_of_range(word: &str, range: (u64, u64)) -> Ended {
+    Ended {
+        outcome: cli_line::usage_invalid(Some(word), ArgumentProblem::OutOfRange)
+            .range_min(range.0)
+            .range_max(range.1),
+        text: Some(USAGE),
+    }
 }
 
 /// The value of the option `word`, the argument at `index`: `value_missing` when there is none,
