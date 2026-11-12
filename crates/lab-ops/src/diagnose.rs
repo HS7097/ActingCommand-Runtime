@@ -1861,10 +1861,22 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
 
 /// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
 pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option<cli_line::Exit> {
+    dispatch_within(arguments, connection, None, CursorBinding::fresh())
+}
+
+/// Workflow #434 LAB-5G1b: [`dispatch_on`] within the caller's `budget` (none: the whole
+/// diagnosis, as the command line prints it; with one, [`Diagnosis::within_budget`]), its errors
+/// page's cursor bound to the caller's `binding` (the command line: [`CursorBinding::fresh`]).
+pub fn dispatch_within(
+    arguments: &[OsString],
+    connection: Connection<'_>,
+    budget: Option<&budget::Budget<'_>>,
+    binding: CursorBinding,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != "diagnose" {
         return None;
     }
-    Some(match run(arguments, connection) {
+    Some(match run(arguments, connection, budget, binding) {
         Ok(diagnosis) => cli_line::success(
             cli_line::members(diagnosis, "diagnosis"),
             &Outcome::new(ActingctlCode::RuntimeDiagnosisReported),
@@ -1876,7 +1888,12 @@ pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option
     })
 }
 
-fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Value, Failure> {
+fn run(
+    arguments: &[OsString],
+    connection: Connection<'_>,
+    budget: Option<&budget::Budget<'_>>,
+    binding: CursorBinding,
+) -> Result<Value, Failure> {
     let (state_root, root, request) = parse(arguments)?;
     let since_unix_ms = request.window(now_unix_ms()?)?;
     let deadline = Instant::now() + CLI_READ_BUDGET;
@@ -1893,18 +1910,16 @@ fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Value, Fail
         deadline,
         &SystemClock,
     )?;
-    // This process holds one Runtime connection: its cursor answers cursor_invalid in any
-    // later call, as `actingctl events` prints it.
-    let binding = CursorBinding {
-        session: events::process_session(),
-        generation: 1,
-    };
-    let errors_page = diagnosis.errors_page(&query, binding, diagnosis.errors.len())?;
+    // Workflow #434 LAB-5G1b: the errors page's cursor bound to the caller's binding (the command
+    // line's process holds one Runtime connection, `CursorBinding::fresh`: its cursor answers
+    // cursor_invalid in any later call, as `actingctl events` prints it); the diagnosis whole
+    // without a budget, as before, else within it.
     let detail = cli_line::detail().unwrap_or(Detail::Full);
-    let mut rendered =
-        diagnosis.render(&diagnosis.kept_all(), errors_page, &|outcome: &Outcome| {
-            cli_line::outcome_value(outcome, detail)
-        });
+    let mut rendered = diagnosis.within_budget(
+        budget,
+        &|kept: usize| diagnosis.errors_page(&query, binding, kept),
+        &|outcome: &Outcome| cli_line::outcome_value(outcome, detail),
+    )?;
     // Workflow #386 SR-6b, MCP-19b: what could not be read, as the line's `warnings` (D3).
     if let Value::Object(members) = &mut rendered
         && !diagnosis.warnings.is_empty()

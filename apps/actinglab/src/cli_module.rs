@@ -48,19 +48,20 @@
 pub(crate) mod authoring;
 // Workflow #434 LAB-5C: what a row hands `lab-ops` is read by the slice's test.
 // Workflow #434 LAB-5G1: the code that serves these rows moved to `lab_ops::core_ops`; this module
-// gives it what stays actinglab's (`Caller`): the program's place (`place`), the developer text of
-// a state root it could not locate, and actinglab's code `lab_operation_completed`; and, as before,
-// a connection made for each call as the program in force connects.
+// gives it what stays actinglab's (`Caller`): the program's place (`place`) and the developer text
+// of a state root it could not locate; and, as before, a connection made for each call as the
+// program in force connects. Workflow #434 LAB-5G1b: no budget (the whole answer, as the command
+// line prints it) and a fresh cursor binding for each call, as each command bound its cursors.
 pub(crate) mod core_ops {
     use super::place;
-    use crate::codes::ActinglabCode;
     use actingcommand_lab_ops::cli_line::Exit;
     pub(crate) use actingcommand_lab_ops::core_ops::serves;
     use actingcommand_lab_ops::core_ops::{self as serving, Caller, Place};
     #[cfg(test)]
     pub(crate) use actingcommand_lab_ops::core_ops::{
-        MaterialRead, handed_words, material_read, offline_words,
+        MaterialRead, handed_words, material_read, material_written, offline_words,
     };
+    use actingcommand_lab_ops::events::CursorBinding;
     use actingcommand_lab_ops::front::Connection;
     use actingcommand_lab_ops::table::Operation;
     use serde_json::{Map, Value};
@@ -75,8 +76,9 @@ pub(crate) mod core_ops {
         Caller {
             place: &here,
             unlocated: place::UNLOCATED,
-            completed: ActinglabCode::LabOperationCompleted.into(),
             connection: Connection::per_call(),
+            budget: None,
+            cursor: CursorBinding::fresh(),
         }
     }
 
@@ -87,23 +89,6 @@ pub(crate) mod core_ops {
             state_root: located.state_root,
             root: located.root,
         }
-    }
-
-    /// Workflow #434 LAB-5C: `material --out`'s line for a material written into `out`.
-    #[cfg(test)]
-    pub(crate) fn material_written(
-        out: &std::path::Path,
-        sha256: &str,
-        extension: &str,
-        bytes: &[u8],
-    ) -> Exit {
-        serving::material_written(
-            out,
-            sha256,
-            extension,
-            bytes,
-            ActinglabCode::LabOperationCompleted.into(),
-        )
     }
 }
 // Workflow #434 LAB-5A: its command table is read by the slice's test.

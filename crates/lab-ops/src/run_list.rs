@@ -546,10 +546,21 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
 
 /// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
 pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option<cli_line::Exit> {
+    dispatch_within(arguments, connection, None)
+}
+
+/// Workflow #434 LAB-5G1b: [`dispatch_on`] within the caller's `budget`: none, every row, as the
+/// command line prints it; with one, [`RunsAnswer::within_budget`]. Its cursor carries its own
+/// position and query fingerprint and binds to no session, whatever the caller's.
+pub fn dispatch_within(
+    arguments: &[OsString],
+    connection: Connection<'_>,
+    budget: Option<&Budget<'_>>,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != "runs" {
         return None;
     }
-    Some(match run(arguments, connection) {
+    Some(match run(arguments, connection, budget) {
         Ok(result) => cli_line::success(result, &Outcome::new(ActingctlCode::RunListReported)),
         Err(failure @ Failure::Argument { .. }) => {
             cli_line::failure(&failure.outcome(), Some(USAGE))
@@ -558,7 +569,11 @@ pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option
     })
 }
 
-fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Map<String, Value>, Failure> {
+fn run(
+    arguments: &[OsString],
+    connection: Connection<'_>,
+    budget: Option<&Budget<'_>>,
+) -> Result<Map<String, Value>, Failure> {
     let (state_root, request) = parse(arguments)?;
     let now_unix_ms = now_unix_ms()?;
     let deadline = Instant::now() + CLI_READ_BUDGET;
@@ -566,7 +581,8 @@ fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Map<String,
         .reach(state_root, identity)
         .map_err(Failure::Runtime)?;
     let answer = read(&client, &request, now_unix_ms, deadline)?;
-    let mut result = cli_line::members(answer.render(answer.row_count()), "runs");
+    // Workflow #434 LAB-5G1b: every row without a budget, as before; with one, cut to it.
+    let mut result = cli_line::members(answer.within_budget(budget), "runs");
     let warnings = answer.warnings();
     if !warnings.is_empty() {
         result.insert(

@@ -52,9 +52,9 @@ here.
 | Owner | Codes | Active | Text written | Settled |
 |---|---:|---:|---:|---:|
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
-| [actingctl](actingctl.md) | 198 | 197 | 38 | 11 |
+| [actingctl](actingctl.md) | 199 | 198 | 39 | 11 |
 | [actingd](actingd.md) | 152 | 151 | 96 | 86 |
-| [actinglab](actinglab.md) | 41 | 40 | 40 | 0 |
+| [actinglab](actinglab.md) | 40 | 39 | 39 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 2 | 0 |
 | [contract](contract.md) | 915 | 911 | 160 | 39 |

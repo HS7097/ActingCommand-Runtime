@@ -80,6 +80,34 @@ impl OperationTable {
             .iter()
             .find(|operation| operation.name == name)
     }
+
+    /// Workflow #434 LAB-5G1b: the names among `members` that this table does not declare for the
+    /// row `operation` on the front end `front` (the id of a `modules` row of role `front_end`:
+    /// `cli`, `mcp`, `serve`, `watchdog`), in the order given, for the caller to refuse. On a
+    /// front end the table names, a member is declared when it is one of the row's `params`: the
+    /// table declares a row's parameters for every front end alike (`required_in` says only where
+    /// a declared parameter is also required). On a name that is no front end of the table nothing
+    /// is declared, and every member is returned. The table is the only source: what a caller
+    /// takes beside the row's parameters (the command line's kept flags, a front's own members) is
+    /// the caller's to take out before it asks.
+    pub fn undeclared<'m>(
+        &self,
+        operation: &Operation,
+        front: &str,
+        members: impl IntoIterator<Item = &'m str>,
+    ) -> Vec<&'m str> {
+        let front_end = self
+            .modules
+            .iter()
+            .any(|module| module.role == ModuleRole::FrontEnd && module.id == front);
+        members
+            .into_iter()
+            .filter(|member| {
+                let declared = operation.params.iter().any(|param| param.name == *member);
+                !(front_end && declared)
+            })
+            .collect()
+    }
 }
 
 /// An initiator word and its entry (§4.1).
