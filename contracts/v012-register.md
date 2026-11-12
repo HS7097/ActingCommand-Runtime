@@ -10538,6 +10538,88 @@ changes; no code, key, location or vocabulary token is added.
 
 **Rollback** (to the release before it). Nothing persisted.
 
+#### Slice LAB-5G2b, second part (0.12.57): the new MCP server serves the rescue rows in its own process
+
+Coordinator work order `rd-1112/brief-lab5g2b2.md` with `rd-1112/brief-lab5g-common.md`, on the
+first part's branch at `72091382` (pull request #1644, which holds main `239e2618`'s tree: LAB-5G5b
+and LAB-5G6); the coordinator's rulings on board #434, 6775192250 point 17 (the rescue module's
+requests stay on the channel it uses today) and of 2026-11-12 (`deploy` and `rollback` stay
+refused), not the owner's words. The contract is [lab-two-entries.md](lab-two-entries.md) §5
+("Through MCP", its "Not yet") and §9.3 ("Calls served in the server's process", "Not yet"). The
+rule of "Slice LAB-5G2b" holds unchanged: the answer is the command line's line, within the
+budget, with the front's own members and the refusals before anything is sent; nothing existing
+changes but this program's answers (actinglab's lines, `serve --stdio`, today's MCP server and the
+rescue module's code are untouched).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G2b-12 | which rows are served, the second part (`tools::serving`, `Serving::Rescue`) | behaviour | LAB-5G2b | — | one rule from the table, the front's table and the module: `Core` a row `lab_ops::core_ops` serves (the first part's LAB-5 check is gone: no row of slice LAB-5 is one); `Rescue`, on Windows, a rescue row the module serves (`lab_rescue::rescue::serves`, 33 rows, `mcp config`, `mcp entries` and `mcp plan` among them) but a row whose run the front forces detached (L5G2b-13); `Refused` every other, `record draft` because no code serves it. Of the 143 rows offered on Windows 80 are served (49 core, 31 rescue) and 63 refused (the three `app` rows and `standard-pack check`, 4, and the debugging rows actinglab's own commands serve, 22; the authoring rows, 35 with `record draft`; `deploy` and `rollback`, 2); elsewhere 49 served and 61 refused of 110, as before. A served rescue row's path parameters (13 on 7 rows: `release verify` and `release stage` `dir` and `facts`, `config replace` `file`, `config restore` `backup`, `place` `bundle`, `sums` and `facts`, `check-config` `file`, `agent add` `dsh_app_root`, `dsh_home` and `dsh_node`) gain L5G2b-9's absolute-path sentence in their descriptions |
+| L5G2b-13 | the detached rows refused (`tools::runs_detached`) | behaviour | LAB-5G2b | — | the coordinator's ruling of 2026-11-12: a row to whose parameter `tools::SUPPLIED` gives `Supplied::True` (its `detach`: `deploy`, `rollback`), derived from that table and not from the names, answers `mcp_operation_unsupported` with its tool, its arguments unread; nothing is run, started or written. Why: the module's detached run is an `actinglab.exe` handed the operation's initiator in `ACTINGCOMMAND_INITIATOR` (`rescue::detach`, `install::host::detach_with_wmi`), and such a process refuses `Lab-MCP` there (`lab_ops::initiator`, `of_lab_process`; §4.2; "Slice LAB-5G4a", deviation (c)), so the operation would answer `detached: true` and never run (the first part's open point (1)). How a detached run carries `Lab-MCP` is decided with LAB-6, which carries the initiator in requests. The schema still leaves `detach` out (L5G2b-6) and `calls::prepare` still gives it true |
+| L5G2b-14 | a rescue row's call (`calls::rescue_line`) | behaviour | LAB-5G2b | — | its arguments through `calls::prepare` as a core row's (L5G2b-7: undeclared members and the front's own, types, `--`, relative paths), then `lab_rescue::rescue::answer_here(<row>, <params>, Initiator::LabMcp)` for the root the program runs from (`lab_ops::locate`); its answer the line actinglab's `--json` and `serve --stdio` print for it (`apps/actinglab/src/cli_module.rs`, `rescue::line`, read for this slice): `Line` its exit as it is; `Text` (the notice) `{text}` with `agent_channel_reported`; `Silent` (a hook that did its work) `agent_channel_reported` without members; `Hook` (a registered session's failed hook) its outcome refused, `agent_channel_failed`, its text the developer line. Then `calls::call_result` as for a core row (L5G2b-2, L5G2b-4): no rescue row shapes its answer, so a line over the budget is the summary beside `structuredContent`, or `output_budget_exceeded` |
+| L5G2b-15 | no MCP provenance for a rescue row | behaviour | LAB-5G2b | — | ruling 17: the server sends no identity card and records no client action for a rescue row (L5G2b-8 is the core rows'); the module makes its own connections on its own channel (the CLI channel and envelope until LAB-6, `crate::install::runtime`), and its journal records `Lab-MCP` (§4.3). The rescue rows the table marks as writing to the Runtime (`writes` and a Runtime need other than `offline`): `down`, `release-hold`, `config replace`, `config restore`, `instance add` and `place`, served, and `deploy` and `rollback`, refused. Today's MCP server has no rescue tool, so nothing is recorded where it recorded something |
+| L5G2b-16 | the instructions | text | LAB-5G2b | — | the sentence of which kinds of row this build serves gains "and, on Windows, the rescue module's as Lab-MCP but deploy and rollback, which must run detached"; by the coordinator's ruling of 2026-11-12 on this part, the sentence "deploy and rollback run detached: follow with ac_op_status" is replaced by "This build does not serve deploy and rollback through MCP: use the command line." (`tools::INSTRUCTIONS`, now 1,954 bytes; L5G2a-7's figure stays that slice's record) |
+| L5G2b-17 | `mcp_operation_unsupported`'s common causes | outcome catalog text | LAB-5G2b | — | rewritten for what this build refuses, with why `deploy` and `rollback` are refused; no code, key or word is added; the index is current |
+
+**What can take long** (every call still runs to its end on its worker; these wait for G3's
+handles). The served rescue rows that can exceed 25 s: `up` (the start and its post-start checks:
+a memory wait up to `install.start.memory_wait_ms` and readiness up to
+`install.start.ready_timeout_ms`), `restart`, `down` (the hold's drain up to
+`install.stop.drain_timeout_ms` and the shutdown wait), `alive` with `wait`, `release verify` and
+`release stage` (the release zips hashed and unpacked; the stage under the writer lock, which
+waits up to `install.lock_wait_ms`), `adopt` (the live build hashed), `config replace`, `config
+restore` and `instance add` (the composite: stop with hold, swap, start, `alive`, release),
+`place` (the hold, the idle wait up to `install.hot.idle_wait_ms`, the new composition), `undo`
+and `op resume` (journalled steps under the writer lock), `check-config` and `unlock` (the live
+build's check-config and actingd's `unlock-owner`, up to `install.child.check_config_timeout_ms`)
+and `ledger verify` (up to `install.child.ledger_verify_timeout_ms`); `mcp plan` hashes every
+file of the live build, seconds on a usual one.
+
+**Tests.** New: apps row "#434 LAB-5G2b, second part", over pipes in `tests/serve_calls.rs`, on
+Windows (a made-up single-location root in a temporary folder whose build carries a copy of the
+program in `tools\`, listed with its size and SHA-256, adopted, with a file kept aside; no
+Runtime): `mcp_plan_through_the_server_is_the_command_lines` (`ac_mcp_plan` answers the line the
+rescue module's code gives for `mcp plan` on that root, in the members of LAB-5G5b's checked-in
+sample, its one child the server's own file), `mcp_detached_rows_refused_and_nothing_started`
+(`ac_deploy` and `ac_rollback` answer `mcp_operation_unsupported` with their tool on a root where
+a detached run would start, and the root holds the same files after them: no detached log, no
+journal) and `mcp_rescue_rows_refused_before_the_module` (an undeclared member of `ac_leftovers`,
+`unknown`, and a relative `dir` of `ac_release_stage`, `not_absolute`, are `arguments_invalid`,
+which the rescue module never answers; the root unchanged). **Adapted** (the work order's
+"Tests"): `gate_434_lab5g2b::mcp_served_and_refused_partition`, which asserted every rescue row
+refused (`mcp config`, `mcp entries`, `deploy` and `up` among them), now states the new rule from
+the table, `tools::SUPPLIED` and the module's list and holds every offered row in one class (the
+counts above are its classes'; it derives them and asserts that every row the module serves is
+served or refused as detached); `serve_calls::mcp_stdio_one_row_per_kind` gains its rescue row
+(`ac_leftovers` from a copy of the program in a made-up root equals the line the module's code
+gives on that root, the file kept aside listed); no assertion of it changes. The first part's
+other tests, `mcp_front_members_in_one_place` included (it pins what `calls::prepare` gives
+`deploy` and `rollback`), and today's server's tests are not touched. The package's tests gain
+`sha2` as a dev-dependency (the Tools manifest of the made-up root).
+
+**Interface.** None raised: on the wire and in the journal a served rescue row is what
+`serve --stdio --front mcp` does for it (L5G4a-2), and no key, location, code or vocabulary token
+is added; one catalog text changes (L5G2b-17).
+
+**Where LAB-5G2b's second part differs from its work order's letter.**
+
+- (a) The LAB-5 check is dropped from the rule rather than kept for `record draft`: no row of
+  slice LAB-5 is a core row, and `record draft` is refused because no code serves it.
+- (b) "The command line's line" of `leftovers` and `mcp plan` in the tests is the rescue module's
+  code run in the test with `Lab-MCP` on the copy's located root (`rescue::answer`), which is what
+  actinglab's `--json` prints for it; actinglab's binary is not this package's, so the test does
+  not run it. The partition's counts are stated here and derived in the test, not written into it.
+- (c) Beyond point 6's serving sentence, the instructions' sentence "deploy and rollback run
+  detached: follow with ac_op_status" is replaced (L5G2b-16, the coordinator's ruling of
+  2026-11-12: a client must not read it while this build refuses both); §8.1's sentence on the
+  program and §9.3's "The Runtime" ("a core row") are brought in line too.
+
+**What LAB-5G2b's second part changes live.** Nothing: the program is in the Tools archive (G6)
+and no registration points to it.
+
+**Its rollback** (to the release before it). Nothing persisted but what each served rescue row
+writes as the command line would; a journal the module writes for it carries `Lab-MCP`, one of
+the six words (§4.1).
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

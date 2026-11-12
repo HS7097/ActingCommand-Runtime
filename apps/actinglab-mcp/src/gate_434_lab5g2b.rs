@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #434 LAB-5G2b (register §1.287, "Slice LAB-5G2b"; contracts/lab-two-entries.md §9.3;
-//! the coordinator's work order `rd-1112/brief-lab5g2b.md`, points 3, 4 and 9): what this build
+//! Workflow #434 LAB-5G2b (register §1.287, "Slice LAB-5G2b" and its second part;
+//! contracts/lab-two-entries.md §9.3; the coordinator's work orders `rd-1112/brief-lab5g2b.md`,
+//! points 3, 4 and 9, and `rd-1112/brief-lab5g2b2.md`, points 1 and 2): what this build
 //! serves, the front's own members and the answer budget, in the server's own code. No Runtime, no
 //! clock, no sleep: every call here is refused or served before anything reaches a Runtime, or is
 //! a row that reads none; exports go to a temporary folder.
 //!
 //! - `mcp_served_and_refused_partition`: every offered row is served or refused by the one rule
-//!   (`tools::serving`), stated here from the table: refused are the rows of slice LAB-5 (`record
-//!   draft`; on Windows the rescue module's `mcp config`, `mcp entries` and `mcp plan`), the core
-//!   and debugging rows `lab_ops::core_ops` does not serve (the three `app` rows, `standard-pack
-//!   check`, the debugging rows actinglab's own commands serve), every authoring row and (until
-//!   the slice's second part) every rescue row; served are the rows `core_ops` serves. A call of a
-//!   refused row answers `mcp_operation_unsupported` with its tool, its arguments unread; a call of
-//!   a served row reads its arguments (an undeclared one is `arguments_invalid`, `unknown`).
+//!   (`tools::serving`), stated here from the table, the front's table and the rescue module's
+//!   list (adapted by the slice's second part, whose rule it pins): served are the rows `core_ops`
+//!   serves and, on Windows, the rescue rows the rescue module serves (its `mcp config`, `mcp
+//!   entries` and `mcp plan` among them) but those whose run the front forces detached (`deploy`,
+//!   `rollback`); refused are those two, the core and debugging rows `lab_ops::core_ops` does not
+//!   serve (the three `app` rows, `standard-pack check`, the debugging rows actinglab's own
+//!   commands serve) and every authoring row (`record draft` among them). Every row the module
+//!   serves falls in one of its two classes. A call of a refused row answers
+//!   `mcp_operation_unsupported` with its tool, its arguments unread; a call of a served row reads
+//!   its arguments first (an undeclared one is `arguments_invalid`, `unknown`, before the code
+//!   that serves it runs).
 //! - `mcp_front_members_in_one_place`: the front's members are one table; `material` has
 //!   `export` and no `out`, `frame` no `out`, `deploy` and `rollback` (Windows) no `detach`;
 //!   `material` without `export`, or with it false, is handed on as given, with it true with
@@ -105,34 +110,79 @@ fn text_line(result: &Value) -> Value {
     line
 }
 
+/// Workflow #434 LAB-5G2b, second part: the classes of the partition, by the rule; the register
+/// states how many rows each holds.
+const SERVED_CORE: &str = "served by lab_ops::core_ops";
+const SERVED_RESCUE: &str = "served by the rescue module";
+const REFUSED_DETACHED: &str = "refused: the front forces its run detached";
+const REFUSED_OWN_COMMAND: &str = "refused: actinglab's own command serves it";
+const REFUSED_AUTHORING: &str = "refused: an authoring row";
+const REFUSED_UNSERVED: &str = "refused: a rescue row no code serves";
+
+/// Whether the rescue module serves the rescue row `name`, by its own list, on Windows, where it
+/// runs.
+#[cfg(windows)]
+fn rescue_module_serves(name: &str) -> bool {
+    actingcommand_lab_rescue::rescue::SERVED.contains(&name)
+}
+
+/// Elsewhere it serves none.
+#[cfg(not(windows))]
+fn rescue_module_serves(_name: &str) -> bool {
+    false
+}
+
+/// How many rows the rescue module's own list holds, on Windows; none elsewhere.
+#[cfg(windows)]
+fn rescue_module_rows() -> usize {
+    actingcommand_lab_rescue::rescue::SERVED.len()
+}
+
+/// Elsewhere it serves none.
+#[cfg(not(windows))]
+fn rescue_module_rows() -> usize {
+    0
+}
+
 #[test]
 fn mcp_served_and_refused_partition() {
     let table = embedded();
     let catalog = catalog_of(&table);
     let exports = tempfile::tempdir().expect("tempdir");
     let service = Service::new(exports.path().to_path_buf());
-    let mut refused = Vec::new();
-    let mut served = 0;
+    let mut classes: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for operation in &table.operations {
         let tool = tools::tool_name(operation);
         if !catalog.offers(&tool) {
             continue;
         }
-        // The rule, stated from the table (work order point 9).
-        let stays_refused = operation.slice == "LAB-5"
-            || (matches!(
-                operation.module,
-                OperationModule::Core | OperationModule::Debugging
-            ) && !core_ops::serves(operation))
-            || matches!(
-                operation.module,
-                OperationModule::Authoring | OperationModule::Rescue
-            );
-        let serving = tools::serving(operation);
+        // The rule, stated from the table, the front's table and the rescue module's list (work
+        // order points 1 and 2 of the second part).
+        let detached = tools::SUPPLIED
+            .iter()
+            .any(|(row, _, supplied)| *row == operation.name && *supplied == Supplied::True);
+        let (expected, class) = if core_ops::serves(operation) {
+            (Serving::Core, SERVED_CORE)
+        } else if operation.module == OperationModule::Rescue
+            && rescue_module_serves(&operation.name)
+        {
+            if detached {
+                (Serving::Refused, REFUSED_DETACHED)
+            } else {
+                (Serving::Rescue, SERVED_RESCUE)
+            }
+        } else {
+            let class = match operation.module {
+                OperationModule::Core | OperationModule::Debugging => REFUSED_OWN_COMMAND,
+                OperationModule::Authoring => REFUSED_AUTHORING,
+                OperationModule::Rescue => REFUSED_UNSERVED,
+            };
+            (Serving::Refused, class)
+        };
         assert_eq!(
-            serving == Serving::Refused,
-            stays_refused,
-            "{}: served or refused by the rule",
+            tools::serving(operation),
+            expected,
+            "{}: {class}",
             operation.name
         );
         let line = line_of(
@@ -142,49 +192,75 @@ fn mcp_served_and_refused_partition() {
             json!({"neutral_undeclared": true}),
         );
         let outcome = &line["outcome"];
-        if stays_refused {
+        if expected == Serving::Refused {
             assert_eq!(
                 (&outcome["code"], &outcome["values"]["mcp_tool"]),
                 (&json!("mcp_operation_unsupported"), &json!(tool)),
                 "{}: refused, its arguments unread: {line}",
                 operation.name
             );
-            refused.push(operation.name.clone());
-            continue;
+        } else {
+            assert_eq!(
+                (
+                    &outcome["code"],
+                    &outcome["values"]["argument"],
+                    &outcome["values"]["argument_problem"],
+                ),
+                (
+                    &json!("arguments_invalid"),
+                    &json!("neutral_undeclared"),
+                    &json!("unknown"),
+                ),
+                "{}: served, so its arguments are read, and an undeclared one is refused before \
+                 the code that serves it runs: {line}",
+                operation.name
+            );
         }
-        assert!(core_ops::serves(operation), "{}", operation.name);
-        assert_eq!(serving, Serving::Core, "{}", operation.name);
-        assert_eq!(
-            (
-                &outcome["code"],
-                &outcome["values"]["argument"],
-                &outcome["values"]["argument_problem"],
-            ),
-            (
-                &json!("arguments_invalid"),
-                &json!("neutral_undeclared"),
-                &json!("unknown"),
-            ),
-            "{}: served, so its arguments are read, and an undeclared one is refused: {line}",
-            operation.name
-        );
-        served += 1;
+        classes
+            .entry(class)
+            .or_default()
+            .push(operation.name.clone());
     }
-    for name in ["app launch", "app restart", "app stop", "record draft"] {
-        assert!(
-            refused.iter().any(|refused| refused == name),
-            "setup: {name} stays refused: {refused:?}"
-        );
+    let count = |class: &str| classes.get(class).map_or(0, Vec::len);
+    let holds = |class: &str, name: &str| {
+        classes
+            .get(class)
+            .is_some_and(|names| names.iter().any(|row| row == name))
+    };
+    let offered = catalog
+        .listed(&Listing::Named(EVERY_MODULE.to_vec()), &unrooted)
+        .len();
+    assert_eq!(
+        classes.values().map(Vec::len).sum::<usize>(),
+        offered,
+        "every offered row in one class: {classes:?}"
+    );
+    for (class, name) in [
+        (REFUSED_OWN_COMMAND, "app launch"),
+        (REFUSED_OWN_COMMAND, "standard-pack check"),
+        (REFUSED_AUTHORING, "record draft"),
+        (SERVED_CORE, "status"),
+    ] {
+        assert!(holds(class, name), "setup: {name} is {class}: {classes:?}");
     }
-    assert!(
-        served > 0 && !refused.is_empty(),
-        "setup: rows of both kinds"
+    // Every row the rescue module serves is offered, and served unless the front forces its run
+    // detached.
+    assert_eq!(
+        count(SERVED_RESCUE) + count(REFUSED_DETACHED),
+        rescue_module_rows(),
+        "the rescue module's rows: {classes:?}"
     );
     if cfg!(windows) {
-        for name in ["mcp config", "mcp entries", "deploy", "up"] {
+        for name in ["leftovers", "up", "mcp config", "mcp entries", "mcp plan"] {
             assert!(
-                refused.iter().any(|refused| refused == name),
-                "setup: {name} stays refused on Windows: {refused:?}"
+                holds(SERVED_RESCUE, name),
+                "setup: {name} is served on Windows: {classes:?}"
+            );
+        }
+        for name in ["deploy", "rollback"] {
+            assert!(
+                holds(REFUSED_DETACHED, name),
+                "setup: {name} stays refused: {classes:?}"
             );
         }
     }
