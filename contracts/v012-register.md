@@ -10391,32 +10391,34 @@ points to it.
 **LAB-5G5b rollback** (to the release before it). Nothing persisted: code, one table row, one
 parameter, catalog entries and a test file.
 
-#### Slice LAB-5G3 (0.12.57): the new MCP server's jobs, handles, waits and cursors
+#### Slice LAB-5G3 (0.12.57): the new MCP server's jobs, handles and waits
 
 Coordinator work order `rd-1112/brief-lab5g3.md` with `rd-1112/brief-lab5g-common.md`, after the
 read-only survey `rd-1108/arch-013/lab5g-step0-survey.md` (§3, "Jobs, handles, cursors", with its
 table of front members, and the row G3 of its §10); the coordinator's rulings on board #434,
 6775192250 (points 10 and 20) and 6784514298, and the work order's own of 2026-11-12, not the
 owner's words; built on the first part of "Slice LAB-5G2b" (Runtime pull request #1644). The
-contract is [lab-two-entries.md](lab-two-entries.md) §9.3 ("Jobs, handles, waits and cursors").
-The rule of the slice: nothing existing changes but this program's answers. Today's MCP server
+contract is [lab-two-entries.md](lab-two-entries.md) §9.3 ("Jobs, handles and waits"). The rule
+of the slice: nothing existing changes but this program's answers. Today's MCP server
 (`apps/actingctl/`) is not touched; its jobs are copied (`mcp/jobs.rs`, and `job_answer`,
 `run_pack` and `stop_run` of `mcp/operator.rs`, `get_run` of `mcp/runs.rs`, the `entryStatus`
-answer of `mcp/server.rs`). actinglab's lines and `serve --stdio` stay byte for byte.
+answer of `mcp/server.rs`). actinglab's lines and `serve --stdio` stay byte for byte. **Cut as
+the work order's "Size" says** (the whole passed 2,500 changed lines): this is its first part,
+the work order's points 1 to 5 and 7 to 11; taking cursors back (point 6) is its second part,
+below.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | L5G3-1 | the jobs (`jobs::Jobs`) | behaviour | LAB-5G3 | — | every call the server serves runs as a job, on a thread of its own, to its end; a call not done within the call budget, less today's 2 s for its answer (at most a tenth of a shorter budget), answers `{handle, job_phase}` with `mcp_job_started` and the job goes on. A row this build does not serve and arguments it refuses answer at once, with no job (`calls::Service::refuses`). Handles: a run's job is named by the run's Runtime request id; any other by `mcp_job_<session>_<n>`, which only this process holds (another is `handle_unknown`). A body that panics ends its job with `mcp_tool_panicked` |
 | L5G3-2 | the start options `--call-budget <seconds>` (1 to 300, default 25), `--jobs <n>` (1 to 64, default 8), `--kept-jobs <n>` (1 to 1024, default 64) | behaviour | LAB-5G3 | — | ruling 20: today's constants (`CALL_BUDGET`, `MAX_RUNNING`, `MAX_KEPT`) are their defaults. Refused as `--workers` is: outside the range `actingctl_usage_invalid` `out_of_range` with `range_min` and `range_max`, no whole number `wrong_type`, twice `repeated`, without its value `value_missing`; `--jobs` and `--kept-jobs` beside `--list-tools` `conflicting`, where `--call-budget` sets the waits the printed list describes. At the caps, today's server's: a call that would start a job past `--jobs` answers `job_capacity_exhausted` (`limit_count`); past `--kept-jobs` the oldest finished job is dropped, never a running one |
-| L5G3-3 | the front's added members (`tools::ADDED`) | behaviour, schema | LAB-5G3 | — | one table, beside `tools::SUPPLIED`: `run show` and `run stop` take `wait_s` (an integer from 0 to the call budget, defaults 0 and today's 20, never more than the budget, its description naming the budget) and `events` and `codes` a `cursor` (text); each after the row's parameters and `export`. They are read and taken out of a call's arguments before the row's (`calls::front_members`): another JSON type is `arguments_invalid` `wrong_type`, a wait outside 0 to the budget `out_of_range` with the range, a cursor that begins with `--` refused as `serve` refuses it. `ac_runs`' `cursor` is its row's own parameter; `ac_run_show`'s `id` also takes a job handle (ruling 10) |
+| L5G3-3 | the front's added members (`tools::ADDED`) | behaviour, schema | LAB-5G3 | — | one table, beside `tools::SUPPLIED`: `run show` and `run stop` take `wait_s` (an integer from 0 to the call budget, defaults 0 and today's 20, never more than the budget, its description naming the budget), after the row's parameters. They are read and taken out of a call's arguments before the row's (`calls::front_members`): another JSON type is `arguments_invalid` `wrong_type`, a wait outside 0 to the budget `out_of_range` with the range. `ac_run_show`'s `id` also takes a job handle (ruling 10) |
 | L5G3-4 | `ac_run_show` | behaviour | LAB-5G3 | — | a job handle: waited for up to `wait_s`, within the budget less today's 5 s for a last read (at most a fifth of a shorter budget), then `{handle, job_phase}`, or the job's line once it ended, which is then read. A run: today's `get_run` on the kept connection, read again every second while it is not found, admitted or running, for at most `wait_s`, all reads on that one connection; a run whose job of this process ended before the run was found answers at once; a run this process's job submits carries `job` (`kind`, `job_phase` and, once ended, its `line`). Without `get_run`'s `run_id` argument: the row's `id` takes a request id, a run id or a job handle |
 | L5G3-5 | `ac_run_stop` | behaviour | LAB-5G3 | — | a job, its call waiting for it up to `wait_s`; a run this process's job still submits is given `cancel_only`, as today's `stop_run` only asks it to stop: that job's own client resets after the cancelled run |
-| L5G3-6 | `ac_run_start` | behaviour | LAB-5G3 | — | today's `run_pack`: the jobs' cap first; the instance resolved, today's provenance recorded on a connection of its own, the run read as `run start` reads it and prepared there (L5G3-8), then submitted in a run's job; the call answers at once `{handle, correlation_id, job_phase: submitting}` (and the provenance's `warnings`) with `mcp_job_started`, the handle the run's request id. With the row's `wait` the call waits as long, within the budget, and answers the run's line when it ended. The instructions say to call `ac_status` before submitting again after an interrupted call |
-| L5G3-7 | cursors taken back (`calls::Service::taken_back`) | behaviour | LAB-5G3 | — | `events`: `events::dispatch_within` with the command's words (`core_ops::handed_words`) and `--cursor`, on the kept connection, under `{session: the server's, generation: the kept connection's}` (L5G1b-3), so after the connection was made again the cursor is `cursor_invalid`, nothing read. `codes`: `code_lookup::dispatch_within` with its words (`core_ops::offline_words`) and `--cursor`, bound to no session. `runs`: its row's `cursor`, as the command line takes it. Each within this server's budget |
-| L5G3-8 | `lab_ops::core_ops::run_start_prepared`, `run_start_ended` | new functions | LAB-5G3 | the server's `ac_run_start` | `run start` in two parts for a front that answers before the run's receipt: the run read as `run start` reads it (instance, package, recovery, deadline) and prepared on the caller's client, named by its request id before anything of it is sent; and the line of its submission's end. `run start` itself is made of the same parts (`run_start_request`, `run_start_answer`) in the same order, its lines byte for byte |
-| L5G3-9 | `mcp_job_started` (info, ladder class `none`, no values, pending; owner `actinglab-mcp`, domain `mcp_`) | outcome catalog | LAB-5G3 | `server::job_answer`, `server::run_start` | the line of a call whose job goes on, `{handle, job_phase}`: no existing code says it (today's server answered it as `{ok, result}` with no code; `command_wait_expired` is an error of a command's `--wait`). The index is regenerated |
-| L5G3-10 | `actingcommand/entryStatus` | behaviour | LAB-5G3 | — | today's answer and count (`jobs::Jobs::outstanding`): `outstanding_handles`, `kinds` (the tools of the jobs' calls), `handles`, `calls_in_flight`; a job counts while it runs and, once it ended, until its line was read if its handle went out to the client; a run's job only while it submits. The members the second entry reads (`apps/mcp-entry-g2/src/logic.rs`, `status_answer`: `outstanding_handles` and `calls_in_flight` as numbers, `kinds` and `handles` as lists of text) |
-| L5G3-11 | the instructions (`tools::instructions`) | text | LAB-5G3 | — | the call budget in effect where they said 25 s; every served call a job; `ac_run_start`'s handle at once; after an interrupted `ac_run_start` call `ac_status` before submitting again; point 10's handle; an `events` cursor bound to the process and its connection, a `codes` or `runs` cursor carrying its own position |
+| L5G3-6 | `ac_run_start` | behaviour | LAB-5G3 | — | today's `run_pack`: the jobs' cap first; the instance resolved, today's provenance recorded on a connection of its own, the run read as `run start` reads it and prepared there (L5G3-7), then submitted in a run's job; the call answers at once `{handle, correlation_id, job_phase: submitting}` (and the provenance's `warnings`) with `mcp_job_started`, the handle the run's request id. With the row's `wait` the call waits as long, within the budget, and answers the run's line when it ended. The instructions say to call `ac_status` before submitting again after an interrupted call |
+| L5G3-7 | `lab_ops::core_ops::run_start_prepared`, `run_start_ended` | new functions | LAB-5G3 | the server's `ac_run_start` | `run start` in two parts for a front that answers before the run's receipt: the run read as `run start` reads it (instance, package, recovery, deadline) and prepared on the caller's client, named by its request id before anything of it is sent; and the line of its submission's end. `run start` itself is made of the same parts (`run_start_request`, `run_start_answer`) in the same order, its lines byte for byte |
+| L5G3-8 | `mcp_job_started` (info, ladder class `none`, no values, pending; owner `actinglab-mcp`, domain `mcp_`) | outcome catalog | LAB-5G3 | `server::job_answer`, `server::run_start` | the line of a call whose job goes on, `{handle, job_phase}`: no existing code says it (today's server answered it as `{ok, result}` with no code; `command_wait_expired` is an error of a command's `--wait`). The index is regenerated |
+| L5G3-9 | `actingcommand/entryStatus` | behaviour | LAB-5G3 | — | today's answer and count (`jobs::Jobs::outstanding`): `outstanding_handles`, `kinds` (the tools of the jobs' calls), `handles`, `calls_in_flight`; a job counts while it runs and, once it ended, until its line was read if its handle went out to the client; a run's job only while it submits. The members the second entry reads (`apps/mcp-entry-g2/src/logic.rs`, `status_answer`: `outstanding_handles` and `calls_in_flight` as numbers, `kinds` and `handles` as lists of text) |
+| L5G3-10 | the instructions (`tools::instructions`) | text | LAB-5G3 | — | the call budget in effect where they said 25 s; every served call a job; `ac_run_start`'s handle at once; after an interrupted `ac_run_start` call `ac_status` before submitting again; point 10's handle. Their sentence on cursors stays the first part's of "Slice LAB-5G2b" until the second part |
 
 **Point 10, a line over the budget after its work was done.** Chosen: the call still answers
 `output_budget_exceeded` with `actual_bytes` and `limit_bytes`, and beside the outcome the member
@@ -10440,40 +10442,54 @@ again.
 change, each listed): `gate_434_lab5g2a::mcp_tools_from_op_table` (its helper
 `assert_definition_from_row`, which the first part adapted for the front's own members): a tool's
 properties are its row's parameters but those the front gives, `export` where the row takes it,
-and now the members the front adds (`tools::ADDED`) after them, each of its type; the work order's
-points 3, 4 and 6 add them to the schema. No other existing test changes: `mcp_list_option_and_authoring_gate`
-reads the command line through `parse`, which is now the test-only view of `parse_all` without the
-jobs' options.
+and now the members the front adds (`tools::ADDED`) after them, each an integer; the work order's
+points 3 and 4 add them to the schema. No other existing test changes:
+`mcp_list_option_and_authoring_gate` reads the command line through `parse`, which is now the
+test-only view of `parse_all` without the jobs' options.
 
 **Tests.** New: apps row "#434 LAB-5G3". In the binary's unit tests (`gate_434_lab5g3`, no
 Runtime, made-up job bodies): `mcp_job_start_options` (the three options' defaults, given values
 at both ends of their ranges and refusals; `job_capacity_exhausted` past `--jobs`, the oldest
 finished job dropped past `--kept-jobs` and a running one never, the count of a finished job by
 its handle's issue and its read; the added members one table, none a row's parameter, `wait_s`
-from 0 to the budget given with its defaults and its description naming it, the cursors, the
-instructions naming the budget). Over pipes (`tests/serve_calls.rs`, the runtime client's scripted
+from 0 to the budget given with its defaults and its description naming it, the instructions
+naming the budget). Over pipes (`tests/serve_calls.rs`, the runtime client's scripted
 Runtime, each server with `--call-budget` of 2 or 3 s): `mcp_jobs_handles_entry_status` (a held
 read past the budget answers its handle and counts while it runs, `ac_run_show` of the handle
 answers the command line's line and it counts no more; point 10: a pack schedule of made-up
 packages far past the budget answers `output_budget_exceeded` with its handle and the bytes it
 takes, counts unread, and `ac_run_show` of the handle answers its summary with the command line's
 own outcome and members' names; a handle never issued is `handle_unknown`; `ac_run_start` answers
-`submitting` at once with the request id the Runtime then receives, and counts while it submits),
-`mcp_cursor_bound_to_connection` (an `events` cursor taken back on its connection gives the rest of
-the page and is `cursor_invalid` with nothing read once the connection was made again; a `codes`
-cursor gives the command line's next page; a `runs` cursor the command line's line) and
-`mcp_run_show_and_run_stop_wait` (`ac_run_show` of a run not found reads it once without a wait and
+`submitting` at once with the request id the Runtime then receives, and counts while it submits)
+and `mcp_run_show_and_run_stop_wait` (`ac_run_show` of a run not found reads it once without a wait and
 twice with one of 2 s; `ac_run_stop` answers its job's handle after its `wait_s` and `ac_run_show`
 of the handle then the job's line; waits past the budget, below 0 or of another type refused).
 
 **Where LAB-5G3 differs from its work order's letter.** (a) A code is added, `mcp_job_started`
-(L5G3-9): no existing code fits the line of a job that goes on. (b) `lab_ops::core_ops` gains two
-functions (L5G3-8), so that `run start` is read and answered by one piece of code. (c) `ac_run_start`
+(L5G3-8): no existing code fits the line of a job that goes on. (b) `lab_ops::core_ops` gains two
+functions (L5G3-7), so that `run start` is read and answered by one piece of code. (c) `ac_run_start`
 with the row's `wait` waits for the run within the budget; without it it answers at once. (d)
 Point 10's behaviour is tested inside `mcp_jobs_handles_entry_status`, whose finished unread job is
 the over-budget line's. (e) `ac_run_stop` of a run this process's job submits is `cancel_only`,
 today's behaviour, which the work order does not name. (f) The size of `tools/list` grows by the
-four added members; it was not measured.
+two added members; it was not measured. (g) The cut (above): the work order's named test
+`mcp_cursor_bound_to_connection` is the second part's.
+
+**For the second part (the work order's point 6, cursors taken back).** `tools::ADDED` gains
+`events` and `codes` `cursor` (text; a value that begins with `--` refused as `serve` refuses it),
+`calls::FrontMembers` a `cursor`, and the job's body serves a call that gives one back on the layer
+below the row: `events` with `events::dispatch_within` and its command's words
+(`core_ops::handed_words`) and `--cursor`, on the kept connection, under `{session: the server's,
+generation: the kept connection's}` (L5G1b-3), so after the connection was made again it is
+`cursor_invalid`, nothing read; `codes` with `code_lookup::dispatch_within`, its words
+(`core_ops::offline_words`) and `--cursor`, bound to no session; `runs` takes its row's own
+`cursor` already. The instructions' sentence on cursors then says which bind. Its test,
+`serve_calls::mcp_cursor_bound_to_connection`: an `events` cursor issued on the kept connection
+taken back there gives the rest of the page, and after a `Health` the scripted Runtime answers by
+closing (the connection made again) it is `cursor_invalid` with no event query sent; a `codes`
+cursor gives the page the command line gives for it; a `runs` cursor the command line's line. The
+code was written with this slice and taken out again by its pull request's commit that cuts it,
+which the second part may revert.
 
 **Interface.** None raised: on the wire the server sends what it sent before and what today's
 server sends for the same calls (`run start` prepared and submitted as `ac_run_pack` does); one

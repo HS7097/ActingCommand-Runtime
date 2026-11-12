@@ -32,8 +32,7 @@
 //!   ([`ABSOLUTE_PATH`]).
 //! - **The jobs' members** (Workflow #434 LAB-5G3, [`ADDED`]): `ac_run_show` and `ac_run_stop`
 //!   take `wait_s`, from 0 to the call budget in effect (`--call-budget`,
-//!   [`Catalog::with_call_budget`]), and `ac_events` and `ac_codes` a `cursor` they give back; the
-//!   instructions name that budget ([`instructions`]).
+//!   [`Catalog::with_call_budget`]); the instructions name that budget ([`instructions`]).
 
 use crate::codes::McpCode;
 use actingcommand_contract::outcome::{Category, Detail, Outcome};
@@ -51,9 +50,9 @@ use std::sync::OnceLock;
 /// The `instructions` of `initialize` and `server/discover`: the survey's draft
 /// (`lab5g-step0-survey.md` §6), its names corrected by the coordinator's ruling 6784514298,
 /// point 1, and (Workflow #434 LAB-5G2b) which kinds of row this build serves. Workflow #434
-/// LAB-5G3: the handles, the jobs and the cursors as this build has them, and the call budget in
-/// effect where [`CALL_BUDGET_MARK`] stands ([`instructions`]).
-pub(crate) const INSTRUCTIONS: &str = "ActingCommand Lab over MCP (actinglab-mcp). One tool per operation of the Lab's operation table: the tool is ac_ and the CLI words with spaces and - as _ (emu start is ac_emu_start), and its arguments are the CLI's parameters by name. Two tools keep other names: one frame is ac_frame and the authoring observe is ac_lab_observe; no tool is named ac_observe. Start with ac_status. A result is the line actinglab --json prints: the members and outcome; a refusal is {outcome, message?, details?}; warnings are in warnings. This build serves in its own process the operations actinglab's CLI module serves (the core ones and run start, run stop, reset, drill), paths given absolute; any other call answers mcp_operation_unsupported, and nothing is sent, run or written for it. Every call it serves runs as a job: one not done within {call_budget_s} s (this server's call budget) answers {handle, job_phase} and goes on; follow it with ac_run_show (id the handle, wait_s). ac_run_start answers at once with its run's handle, the run's request_id, which survives restarts; any other handle lives only as long as this process (then handle_unknown). If an ac_run_start call was interrupted before it answered, call ac_status before submitting again. After an interrupted or uncertain write call ac_status or ac_run_show before anything else; never resend a write with new arguments. An answer over 24 KiB is cut where its operation marks the cut, or written whole to %TEMP%\\actingcommand-mcp\\materials with the warning answer_exported; never cut silently; one that still does not fit answers output_budget_exceeded with its handle, and ac_run_show gives that job's summary. An events cursor belongs to this process and its Runtime connection (cursor_invalid after a reconnect): read again from after; a codes or runs cursor carries its own position. A Lab operation the Runtime answered whose check then failed is lab_operation_check_failed: read its effect before sending it again. Irreversible operations record who started them and ask nothing; deploy and rollback run detached: follow with ac_op_status. A module left out of the list (by --list, or the authoring module by lab_module_authoring) still answers its tools' calls. Manual: skill actingcommand.";
+/// LAB-5G3: the handles and the jobs as this build has them, and the call budget in effect where
+/// [`CALL_BUDGET_MARK`] stands ([`instructions`]).
+pub(crate) const INSTRUCTIONS: &str = "ActingCommand Lab over MCP (actinglab-mcp). One tool per operation of the Lab's operation table: the tool is ac_ and the CLI words with spaces and - as _ (emu start is ac_emu_start), and its arguments are the CLI's parameters by name. Two tools keep other names: one frame is ac_frame and the authoring observe is ac_lab_observe; no tool is named ac_observe. Start with ac_status. A result is the line actinglab --json prints: the members and outcome; a refusal is {outcome, message?, details?}; warnings are in warnings. This build serves in its own process the operations actinglab's CLI module serves (the core ones and run start, run stop, reset, drill), paths given absolute; any other call answers mcp_operation_unsupported, and nothing is sent, run or written for it. Every call it serves runs as a job: one not done within {call_budget_s} s (this server's call budget) answers {handle, job_phase} and goes on; follow it with ac_run_show (id the handle, wait_s). ac_run_start answers at once with its run's handle, the run's request_id, which survives restarts; any other handle lives only as long as this process (then handle_unknown). If an ac_run_start call was interrupted before it answered, call ac_status before submitting again. After an interrupted or uncertain write call ac_status or ac_run_show before anything else; never resend a write with new arguments. An answer over 24 KiB is cut where its operation marks the cut, or written whole to %TEMP%\\actingcommand-mcp\\materials with the warning answer_exported; never cut silently; one that still does not fit answers output_budget_exceeded with its handle, and ac_run_show gives that job's summary. Cursors belong to this process and its Runtime connection (cursor_invalid after a reconnect): read again from after. A Lab operation the Runtime answered whose check then failed is lab_operation_check_failed: read its effect before sending it again. Irreversible operations record who started them and ask nothing; deploy and rollback run detached: follow with ac_op_status. A module left out of the list (by --list, or the authoring module by lab_module_authoring) still answers its tools' calls. Manual: skill actingcommand.";
 /// Workflow #434 LAB-5G3: where [`INSTRUCTIONS`] names the call budget.
 const CALL_BUDGET_MARK: &str = "{call_budget_s}";
 /// Workflow #434 LAB-5G3: today's call budget, in seconds (`apps/actingctl/src/mcp/tools.rs`,
@@ -136,21 +135,19 @@ const EXPORT_NOTE: &str = "true: write the whole material to this server's expor
 pub(crate) const ABSOLUTE_PATH: &str = "an absolute path: a relative one is refused";
 
 /// Workflow #434 LAB-5G3: a member the front adds to a row's tool beside the row's parameters,
-/// which the front reads itself and does not hand to the serving code.
+/// which the front reads itself and does not hand to the serving code. (The cursors `events` and
+/// `codes` take back, the work order's point 6, are the slice's second part.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Added {
     /// `wait_s`: whole seconds from 0 to the call budget, `default_s` when it is absent (never
     /// more than the budget); `note` begins its description.
     Wait { default_s: u64, note: &'static str },
-    /// `cursor`: a cursor the call gives back; `note` is its description.
-    Cursor { note: &'static str },
 }
 
-/// Workflow #434 LAB-5G3 (work order points 3, 4 and 6; the survey's §3, its table of front
+/// Workflow #434 LAB-5G3 (work order points 3 and 4; the survey's §3, its table of front
 /// members): the members the front adds, in one place, each a row, the member and what it is.
-/// `ac_run_show`'s `id` also takes a job handle, and `ac_runs` takes back its cursor as its row's
-/// own parameter; neither is a member added here.
-pub(crate) const ADDED: [(&str, &str, Added); 4] = [
+/// `ac_run_show`'s `id` also takes a job handle; that is no member added here.
+pub(crate) const ADDED: [(&str, &str, Added); 2] = [
     (
         "run show",
         "wait_s",
@@ -167,36 +164,20 @@ pub(crate) const ADDED: [(&str, &str, Added); 4] = [
             note: "seconds to wait for the stop and the reset; not done by then, the answer is {handle, job_phase} for ac_run_show",
         },
     ),
-    (
-        "events",
-        "cursor",
-        Added::Cursor {
-            note: "the next_cursor of an earlier page, taken back on the Runtime connection it was issued on; once that connection was made again it is cursor_invalid: read again from after",
-        },
-    ),
-    (
-        "codes",
-        "cursor",
-        Added::Cursor {
-            note: "the next_cursor of the previous page, given with the same prefix, owner and limit",
-        },
-    ),
 ];
 
 /// Workflow #434 LAB-5G3: the property of the member `added` the front adds, for a call budget of
 /// `budget_s` seconds: a wait an integer from 0 to the budget, its default never more than it,
-/// its description naming the budget; a cursor a string.
+/// its description naming the budget.
 fn added_schema(added: Added, budget_s: u64) -> Value {
-    match added {
-        Added::Wait { default_s, note } => json!({
-            "type": "integer",
-            "minimum": 0,
-            "maximum": budget_s,
-            "default": default_s.min(budget_s),
-            "description": format!("{note}; from 0 to {budget_s}, this server's call budget in seconds"),
-        }),
-        Added::Cursor { note } => json!({"type": "string", "description": note}),
-    }
+    let Added::Wait { default_s, note } = added;
+    json!({
+        "type": "integer",
+        "minimum": 0,
+        "maximum": budget_s,
+        "default": default_s.min(budget_s),
+        "description": format!("{note}; from 0 to {budget_s}, this server's call budget in seconds"),
+    })
 }
 
 /// Workflow #434 LAB-5G2b: how this build serves the calls of a row's tool.

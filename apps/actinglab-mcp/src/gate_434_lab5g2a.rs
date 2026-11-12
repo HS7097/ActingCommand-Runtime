@@ -233,15 +233,14 @@ fn assert_definition_from_row(operation: &Operation, definition: &Value) {
             "{row_name}: export"
         );
     }
-    // Workflow #434 LAB-5G3 (adapted, its work order points 3, 4 and 6): then the members the
-    // front adds to the row (`tools::ADDED`), in that table's order.
-    for (_, member, added) in tools::ADDED.iter().filter(|(row, _, _)| *row == row_name) {
+    // Workflow #434 LAB-5G3 (adapted, its work order points 3 and 4): then the members the front
+    // adds to the row (`tools::ADDED`, each a wait), in that table's order.
+    for (_, member, _) in tools::ADDED.iter().filter(|(row, _, _)| *row == row_name) {
         expected.push((*member).to_owned());
-        let kind = match added {
-            tools::Added::Wait { .. } => "integer",
-            tools::Added::Cursor { .. } => "string",
-        };
-        assert_eq!(properties[*member]["type"], kind, "{row_name}: {member}");
+        assert_eq!(
+            properties[*member]["type"], "integer",
+            "{row_name}: {member}"
+        );
     }
     assert_eq!(
         members(properties),

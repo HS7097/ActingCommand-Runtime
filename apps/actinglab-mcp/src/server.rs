@@ -34,6 +34,9 @@
 //! - `actingcommand/entryStatus` counts the jobs as the original counts them; progress and
 //!   cancellation are the original's, for the call in flight: a cancelled call's handle is never
 //!   issued, and its job goes on; at stdin EOF the jobs are not waited for.
+//!
+//! Taking the cursors of `events` and `codes` back (the work order's point 6) is the slice's
+//! second part.
 
 use crate::budget;
 use crate::calls::{self, FrontMembers, Service};
@@ -905,9 +908,9 @@ fn answer(
     }
 }
 
-/// Workflow #434 LAB-5G3 (work order points 1, 4 and 6): a served call as a job of its own, its
-/// line `calls::Service::line`'s (or, for a cursor given back, `calls::Service::taken_back`'s). The
-/// call waits for it up to the call budget, `ac_run_stop` up to its `wait_s`, then answers
+/// Workflow #434 LAB-5G3 (work order points 1 and 4): a served call as a job of its own, its line
+/// `calls::Service::line`'s. The call waits for it up to the call budget, `ac_run_stop` up to its
+/// `wait_s`, then answers
 /// [`job_answer`]. `ac_run_stop` of a run whose job of this process still submits it only asks it
 /// to stop (`cancel_only`), as today's `ac_stop_run` does: that job's own client resets after the
 /// cancelled run.
@@ -936,11 +939,8 @@ fn served_as_job(
         let tool = asked.tool.to_owned();
         let era = asked.era;
         move || {
-            let served = panic::catch_unwind(AssertUnwindSafe(|| match &members.cursor {
-                Some(cursor) => shared
-                    .service
-                    .taken_back(&operation, &arguments, cursor, era),
-                None => shared.service.line(&operation, &tool, &arguments, era),
+            let served = panic::catch_unwind(AssertUnwindSafe(|| {
+                shared.service.line(&operation, &tool, &arguments, era)
             }));
             calls::finished(
                 &served.unwrap_or_else(|_| cli_line::failure(&tool_panicked(&tool), None)),

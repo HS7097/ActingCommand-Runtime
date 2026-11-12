@@ -786,8 +786,8 @@ sentence fails that test.
       action `{surface_id: mcp, control_id: <tool>, kind: command}` naming the instance, under
       the write's correlation (rulings 11 and 12: until LAB-6 the new server looks like today's
       on the wire and in the ledger). The cursors the code issues bind to the server's session
-      and that connection's generation; taking one back is LAB-5G3's (below). `status` carries
-      the watchdog block on Windows, as on the command line.
+      and that connection's generation; taking one back is LAB-5G3's second part's. `status`
+      carries the watchdog block on Windows, as on the command line.
     - *The budget.* Today's limits: the whole result as sent at most 24 KiB. The code that
       shapes an answer (section 9.3, "The answer budget is the caller's") cuts or exports it to
       the size of the line as sent in the negotiated protocol version, its exports in today's
@@ -816,11 +816,11 @@ sentence fails that test.
       (caused by the refusal), where today's server answers `mcp_identity_card_refused` with
       `mcp_blocker`, until LAB-6 removes the step.
     - *Every call runs to its end*, since Workflow #434 LAB-5G3 as a job (below).
-  - **Jobs, handles, waits and cursors** (Workflow #434 LAB-5G3, 0.12.57; register §1.287,
-    "Slice LAB-5G3"; the survey's §3 and the coordinator's rulings on board #434, 6775192250
-    points 10 and 20, and 6784514298, not the owner's words). What today's MCP server has for
-    long work, copied (its jobs, `actingctl`'s `mcp/jobs.rs`, and `job_answer`, `run_pack`,
-    `stop_run` and `get_run`) and adapted to the generated tools.
+  - **Jobs, handles and waits** (Workflow #434 LAB-5G3, 0.12.57, its first part; register
+    §1.287, "Slice LAB-5G3"; the survey's §3 and the coordinator's rulings on board #434,
+    6775192250 points 10 and 20, and 6784514298, not the owner's words). What today's MCP server
+    has for long work, copied (its jobs, `actingctl`'s `mcp/jobs.rs`, and `job_answer`,
+    `run_pack`, `stop_run` and `get_run`) and adapted to the generated tools.
     - *Jobs.* Every call the server serves runs as a job, on a thread of its own, to its end. A
       call not done within the call budget answers `{handle, job_phase}` with `mcp_job_started`
       (info) and its job goes on; `ac_run_show` with the handle as `id` reads it. A row the server
@@ -837,8 +837,7 @@ sentence fails that test.
       instructions name the budget in effect.
     - *The front's added members* (one table, `tools::ADDED`): `ac_run_show` and `ac_run_stop`
       take `wait_s` (0 to the call budget; defaults 0 and today's 20, never more than the
-      budget); `ac_events` and `ac_codes` take `cursor`. `ac_run_show`'s `id` also takes a job
-      handle (ruling 10): it waits up to `wait_s` for the job, then answers `{handle, job_phase}`
+      budget). `ac_run_show`'s `id` also takes a job handle (ruling 10): it waits up to `wait_s` for the job, then answers `{handle, job_phase}`
       or, once the job ended, its line; with a run it reads the run again every second while it
       is not found, admitted or running, for at most `wait_s` (and the budget less today's 5 s
       for the last read), as `ac_get_run` waits, and a run this process's job submits carries
@@ -849,12 +848,6 @@ sentence fails that test.
       Runtime request id, which outlives the process (with the row's `wait`, the call waits as
       long, within the budget, for the run's end). After an interrupted call a caller reads first
       (`ac_status`, `ac_run_show`) and never sends the write again, as the instructions say.
-    - *Cursors taken back.* An `events` cursor is taken back on the layer below the row
-      (`events::dispatch_within` with the command's words and `--cursor`) under the server's
-      binding, its session and the kept connection's generation: after the connection was made
-      again it is `cursor_invalid`, nothing read. A `codes` cursor (`--cursor` to the command) and
-      `ac_runs`' own `cursor` carry their own position and bind to no session: they pass as the
-      command line takes them.
     - *A line that does not fit after its work was done* (the work order's point 10) is never cut
       and never lost: the call answers `output_budget_exceeded` (`actual_bytes`, `limit_bytes`)
       with its job's `handle`, the job keeps the line unread, and `ac_run_show` of the handle
@@ -874,8 +867,9 @@ sentence fails that test.
     run or written; a name that is no offered row's tool answers as today's server answers an
     unknown tool (-32602 `mcp_params_invalid`). The rescue rows (LAB-5G2b's second part; the
     server lists the tools of the rescue module's MCP rows, `ac_mcp_config`, `ac_mcp_entries` and
-    `ac_mcp_plan`, and serves their calls with the other rescue rows'), the `serve --stdio
-    --front mcp` children (G4b) and the manual (G7) come with their slices. The program is in the Tools archive since LAB-5G6 (0.12.57; section 8.1,
+    `ac_mcp_plan`, and serves their calls with the other rescue rows'), taking the cursors of
+    `events` and `codes` back (LAB-5G3's second part; `ac_runs` takes its row's own `cursor`), the
+    `serve --stdio --front mcp` children (G4b) and the manual (G7) come with their slices. The program is in the Tools archive since LAB-5G6 (0.12.57; section 8.1,
     "Packaging"); nothing starts it until a client is registered with the second entry (G7).
 - **The answer budget is the caller's** (Workflow #434 LAB-5D, 0.12.52; register §1.287, "Slice
   LAB-5D"). The reads whose answer can outgrow a caller's budget (`status`, `diagnose`, `events`,
