@@ -16950,7 +16950,17 @@ next work in a rest's gap and in `close_app`'s), `idle_action_runs_after_fresh_p
 counts the end and shows the next task an hour away: one `close_app`, its wake at next due minus the
 lead) and `idle_action_abandoned_on_key_for_newer_plan` (`close_app` and a rest under `auto` do not
 stand on their key against a task due, work closer than the gap, a reading due or a dispatch opened
-after the read; the planner is active again and decides once more). No existing test changes.
+after the read; the planner is active again and decides once more). On a real policy host, through
+the mapped chain of two tasks on one neutral instance (the second due once the first has completed)
+and evaluated cycles at fixed times on the manual Runtime clock:
+`gate_idle3_host::idle_runs_counted_follows_the_policys_dispatches` (`PolicyHost::idle_runs_counted`
+is true before any evaluated cycle and after a cycle evaluated with nothing open; false once that
+cycle's dispatch is admitted, after a cycle evaluated while it is admitted and after its execution
+and completion with no new evaluation; true after the cycle evaluated after the completion, whose
+plan shows the second task due; false once the second task's dispatch is admitted). Not reached
+there: an intent apart from its admission (the live admission records both under one guard) and a
+dispatch a start could not settle (it needs a start that refuses the run's settlement). No existing
+test changes.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

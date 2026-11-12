@@ -1819,6 +1819,18 @@ impl RuntimeHost {
             .check_idle(false, Some(plans), Some(identities))
     }
 
+    /// IDLE-3 (#447), tests: the scheduler's latest plan of `alias` and whether it counts the end
+    /// of every run the policy dispatched on the instance (`PolicyHost::idle_plan`,
+    /// `PolicyHost::idle_runs_counted`), read under one policy guard as the idle check reads them.
+    pub(crate) fn idle_plan_and_runs_counted_for_test(
+        &self,
+        alias: &str,
+    ) -> RuntimeHostResult<(Option<IdlePlan>, bool)> {
+        let shared = self.shared_ref(IdleLocation::Check)?;
+        let policy = lock(shared.policy()?, IdleLocation::Check)?;
+        Ok((policy.idle_plan(alias), policy.idle_runs_counted(alias)))
+    }
+
     /// IDLE-1, tests: the number of idle actions whose worker ended, once it reaches `ended`,
     /// waiting at most `wait`; `None` when it did not in time.
     pub(crate) fn await_idle_action_ends_for_test(
