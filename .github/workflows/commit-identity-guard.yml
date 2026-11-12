@@ -37,8 +37,11 @@ jobs:
           set -euo pipefail
 
           # Exact allowlist: the three HS7097 family accounts (numeric and legacy
-          # noreply forms), the registered ViW address, and GitHub's web committer.
-          ALLOW='^(103177863\+HS7097@users\.noreply\.github\.com|HS7097@users\.noreply\.github\.com|310586811\+HS7097ViW@users\.noreply\.github\.com|HS7097ViW@users\.noreply\.github\.com|306820463\+HS7097Agt@users\.noreply\.github\.com|HS7097Agt@users\.noreply\.github\.com|alice\.office\.7097@gmail\.com|noreply@github\.com)$'
+          # noreply forms) and GitHub's web committer. No personal mailbox belongs
+          # here: a commit GitHub makes on its servers for an account without e-mail
+          # privacy (Update branch, a web merge, a web edit) carries the account's
+          # primary mailbox as its author, and this guard must refuse it.
+          ALLOW='^(103177863\+HS7097@users\.noreply\.github\.com|HS7097@users\.noreply\.github\.com|310586811\+HS7097ViW@users\.noreply\.github\.com|HS7097ViW@users\.noreply\.github\.com|306820463\+HS7097Agt@users\.noreply\.github\.com|HS7097Agt@users\.noreply\.github\.com|noreply@github\.com)$'
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             RANGE="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
@@ -63,7 +66,7 @@ jobs:
           done < <(git log --format=$'%H\t%ae\t%ce' $RANGE)
 
           if [ "$bad" -ne 0 ]; then
-            echo "::error::commit identity guard failed: only HS7097-family identities may author or commit. Fix git user.email and amend before merge."
+            echo "::error::commit identity guard failed: only HS7097-family no-reply identities may author or commit. Fix git user.email and amend before merge. A commit GitHub made for the account (Update branch, a web merge or edit) is redone as a local merge with the no-reply identity."
             exit 1
           fi
           echo "all commit identities are family identities"
