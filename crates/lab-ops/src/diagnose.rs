@@ -457,7 +457,7 @@ pub fn read(
     // policy evaluation, of the diagnosed instance or of every one, at most the configured bound
     // per instance; a failed read leaves only a warning. #422 QR-2b: read before the run
     // listing, which grows with the window, so that a long listing does not leave them unread.
-    let not_run = if budget.spent() {
+    let mut not_run = if budget.spent() {
         unfinished.warnings.push(Warning::Outcome(
             Outcome::new(ActingctlCode::CallBudgetExhausted).member(NOT_RUN),
         ));
@@ -493,6 +493,12 @@ pub fn read(
             .map(|(alias, instance_id)| (alias.as_str(), json!(instance_id))),
         since_unix_ms,
     );
+    // Workflow #438 HELD-1 (`contracts/scheduling/README.md`, "Held records", "Where a person
+    // reads it"): a not_run row whose instance, task and start an open held record of the report
+    // names is marked; the two reads are joined here and no wire shape changes.
+    if let Some(not_run) = &mut not_run {
+        mark_held_reported(&mut not_run.rows, &report.held);
+    }
     let diagnosis = Diagnosis {
         instance: match &selected {
             Some((alias, instance_id)) => json!({"alias": alias, "instance_id": instance_id}),
@@ -523,6 +529,7 @@ pub fn read(
         packs: report.packs,
         remedies: report.remedies,
         reruns: report.reruns,
+        held: report.held,
         lift: report.lift,
         report_warnings: report.warnings,
         report_status: report.status,
@@ -1125,6 +1132,9 @@ pub struct Diagnosis {
     /// Workflow #386 SR-2b-2: the report's owed reruns of the instance (every one without an
     /// instance).
     pub reruns: Vec<Value>,
+    /// Workflow #438 HELD-1: the report's held records of the instance, still open or ended
+    /// within 48 h (every one without an instance).
+    pub held: Vec<Value>,
     pub lift: Vec<Value>,
     pub report_warnings: Vec<Value>,
     /// The report status's data members: `{status, …}`.
@@ -1161,6 +1171,8 @@ pub struct Kept {
     pub remedies: usize,
     /// Workflow #386 SR-2b-2.
     pub reruns: usize,
+    /// Workflow #438 HELD-1.
+    pub held: usize,
     pub lift: usize,
     pub report_warnings: usize,
     pub clock_slots: usize,
@@ -1179,8 +1191,10 @@ impl Kept {
         // failures_grouped, then runs_grouped. Then the clock-slot rows, from the end of their
         // list (the owed rows, then the deferred and expired ones, then the refused and
         // superseded ones, each oldest first): the full list stays in actingd suspended and
-        // clock_slots_total points there (#372 K3, K4). Then the deferred rows of the latest
-        // evaluation, from the end of their list (Workflow #386 SR-6b, MCP-19b: ac_schedule
+        // clock_slots_total points there (#372 K3, K4). Then the held records, from the end of
+        // their list, the oldest first (Workflow #438 HELD-1: the whole list stays in actingd
+        // suspended, and the records in ac_events' errors view). Then the deferred rows of the
+        // latest evaluation, from the end of their list (Workflow #386 SR-6b, MCP-19b: ac_schedule
         // answers them all). Then what another tool can read again: the errors page (ac_events),
         // then the runs, oldest first (ac_get_run / ac_events). The other rows of the actingd
         // suspended report have no other MCP route, so they go last: repeating, lift, suspended,
@@ -1192,6 +1206,8 @@ impl Kept {
             self.runs_grouped -= 1;
         } else if self.clock_slots > 0 {
             self.clock_slots -= 1;
+        } else if self.held > 0 {
+            self.held -= 1;
         } else if self.not_run > 0 {
             self.not_run -= 1;
         } else if self.errors > 0 {
@@ -1231,6 +1247,7 @@ impl Diagnosis {
             packs: self.packs.len(),
             remedies: self.remedies.len(),
             reruns: self.reruns.len(),
+            held: self.held.len(),
             lift: self.lift.len(),
             report_warnings: self.report_warnings.len(),
             clock_slots: self.clock_slots.len(),
@@ -1283,6 +1300,8 @@ impl Diagnosis {
                 json!(self.clock_slots_total),
             );
         }
+        // Workflow #438 HELD-1: the instance's held records, after the clock slots.
+        list_into(&mut result, "held", &self.held, kept.held);
         // Workflow #386 SR-6b, MCP-19b: absent when the rows could not be read.
         if let Some(not_run) = &self.not_run {
             list_into(&mut result, "not_run", &not_run.rows, kept.not_run);
@@ -1405,6 +1424,8 @@ struct SuspensionRows {
     packs: Vec<Value>,
     remedies: Vec<Value>,
     reruns: Vec<Value>,
+    /// Workflow #438 HELD-1.
+    held: Vec<Value>,
     lift: Vec<Value>,
     repeating: Vec<Value>,
     warnings: Vec<Value>,
@@ -1424,6 +1445,7 @@ impl SuspensionRows {
             packs: Vec::new(),
             remedies: Vec::new(),
             reruns: Vec::new(),
+            held: Vec::new(),
             lift: Vec::new(),
             repeating: Vec::new(),
             warnings: Vec::new(),
@@ -1553,6 +1575,53 @@ pub fn rerun_rows(document: &Value, instance: Option<(&str, &Value)>) -> Vec<Val
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Workflow #438 HELD-1 (`contracts/policy-suspension.md`, `held`): the report's `held` rows of
+/// the instance (its alias or its instance id is the row's `instance_id`), or every row when no
+/// instance is diagnosed, in the report's order (newest first). An unparsed row names no instance
+/// and is kept only without one.
+pub fn held_rows(document: &Value, instance: Option<(&str, &Value)>) -> Vec<Value> {
+    document
+        .get("held")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| of_instance(row, instance))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Workflow #438 HELD-1 (`contracts/scheduling/README.md`, "Held records", "Where a person reads
+/// it"): marks `held_reported: true` on each `not_run` row (`instance_alias`, `task_id`,
+/// `since_unix_ms`) whose instance, task and start an open `held` row names (its `instance_id`,
+/// `task_id` and `held_since_unix_ms`, and no `ended`). A row no open record names is left as the
+/// Runtime answered it.
+pub fn mark_held_reported(not_run: &mut [Value], held: &[Value]) {
+    let open = held
+        .iter()
+        .filter(|row| row.get("ended").is_none() && row.get("parse_state").is_none())
+        .filter_map(|row| pair_start(row, "instance_id", "held_since_unix_ms"))
+        .collect::<BTreeSet<_>>();
+    for row in not_run {
+        let named = pair_start(row, "instance_alias", "since_unix_ms")
+            .is_some_and(|start| open.contains(&start));
+        if named && let Value::Object(members) = row {
+            members.insert("held_reported".to_owned(), json!(true));
+        }
+    }
+}
+
+/// Workflow #438 HELD-1: a row's instance (member `instance`), task and start (member `since`),
+/// when it names all three.
+fn pair_start(row: &Value, instance: &str, since: &str) -> Option<(String, String, u64)> {
+    Some((
+        row.get(instance)?.as_str()?.to_owned(),
+        row.get("task_id")?.as_str()?.to_owned(),
+        row.get(since)?.as_u64()?,
+    ))
 }
 
 /// The instance's `clock_slots` rows of the report recorded since `since_unix_ms` (#372 K3):
@@ -1729,6 +1798,7 @@ impl SuspensionReport {
                     packs: pack_rows(&document, instance),
                     remedies: remedy_rows(&document, instance),
                     reruns: rerun_rows(&document, instance),
+                    held: held_rows(&document, instance),
                     lift: rows("lifted"),
                     repeating: rows("repeating"),
                     warnings: document

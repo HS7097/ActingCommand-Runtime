@@ -144,6 +144,10 @@ mod gate_434_lab1b;
 // `lab_ops_budget_cuts_keep_their_markers`, `lab_ops_budget_exports_the_header`).
 #[cfg(test)]
 mod gate_434_lab5d;
+// Test-only: Workflow #438 HELD-1, the diagnose half of `held_t9` (the instance's held rows and
+// the mark on its `not_run` rows).
+#[cfg(test)]
+mod gate_438_held;
 // Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
 #[cfg(test)]
 #[path = "../../../tests/support/standard_pack_schedule.rs"]

@@ -10215,6 +10215,10 @@ impl HostShared {
         let previous = anchors.previous.unwrap_or(0);
         if current.saturating_sub(previous) >= 2 {
             self.settle_contained_runs_between(previous, current)?;
+            // Workflow #438 HELD-1 (register §1.322 HELD-R7, settled 1): over the same range, the
+            // holds the runs since the last settled start reported and did not end, ended
+            // `restarted` before the anchor below is recorded.
+            self.end_task_holds_between(previous, current)?;
         }
         #[cfg(test)]
         if self.contained_settlement_unrecorded_for_test {
@@ -10222,6 +10226,85 @@ impl HostShared {
         }
         self.record_contained_settlement(current)?;
         Ok(anchors)
+    }
+
+    /// Workflow #438 HELD-1 (register §1.322 HELD-R7; `contracts/scheduling/README.md`, "Held
+    /// records", "The end", `restarted`): the `policy.planning_signal_observed` records after the
+    /// event at `previous` and before the start event at `current`, read by the ledger's type
+    /// index page by page; each held record among them whose end the planning-signal projection
+    /// does not hold is ended `restarted` (no `held_for_ms`), observed at the start's time. A
+    /// start that stops before recording its anchor leaves the anchor where it was, so the next
+    /// one reads the range again and finds the ends already written. A held record that does not
+    /// read back as one this build writes (a `gate_code` outside this build's held set, a value
+    /// missing, or an id that is not the digest of its own task, alias and start) is left as it
+    /// is, without an end, and the start goes on (register §1.327, settled by the coordinator on
+    /// 11-12): no decision reads these records, another build's held set or digest may differ
+    /// from this one's, and a start that failed here would fail again at every later start, the
+    /// anchor staying where it was. Such records are named by their ledger sequence on one
+    /// developer line, `actingd task_held unreadable` (Fail Loud), and `actingd suspended` lists
+    /// each of them open, unparsed.
+    fn end_task_holds_between(&self, previous: u64, current: u64) -> RuntimeHostResult<()> {
+        use crate::policy_host::held::{
+            HeldRecordRead, SignalView, reported_hold, restarted_end, unreadable_holds_line,
+        };
+
+        let records = LedgerPages::new(
+            &self.ledger,
+            EventQuery {
+                event_type: Some(EventType::PolicyPlanningSignalObserved),
+                from_sequence: Some(previous.saturating_add(1)),
+                to_sequence: Some(current - 1),
+                ..EventQuery::default()
+            },
+            previous,
+            current - 1,
+            RECOVERY_PAGE_EVENTS,
+        )
+        .read_all()
+        .map_err(|error| ledger_error_caused_by(PREVIOUS_EPOCH_SETTLEMENT_OPERATION, &error))?;
+        let mut observed_at_unix_ms = None;
+        // The held records this build cannot read back, by ledger sequence.
+        let mut unreadable = Vec::new();
+        for event in &records {
+            let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload)) =
+                event.payload()
+            else {
+                continue;
+            };
+            let hold = match reported_hold(&SignalView {
+                signal_id: payload.signal_id(),
+                kind: payload.kind(),
+                task_id: payload.task_id(),
+                alias: payload.instance_id(),
+                outcome: payload.outcome(),
+            }) {
+                HeldRecordRead::Other => continue,
+                HeldRecordRead::Held(hold) => hold,
+                HeldRecordRead::Unreadable => {
+                    unreadable.push(event.sequence());
+                    continue;
+                }
+            };
+            let ended = lock(self.policy()?, HostLocation::RecordPolicyPlanningSignal)?
+                .planning_signal(&hold.ended_signal_id())?
+                .is_some();
+            if ended {
+                continue;
+            }
+            let at = match observed_at_unix_ms {
+                Some(at) => at,
+                None => {
+                    let at = self.clock.sample()?.unix_ms;
+                    observed_at_unix_ms = Some(at);
+                    at
+                }
+            };
+            self.record_policy_planning_signal(restarted_end(&hold, at))?;
+        }
+        if let Some(line) = unreadable_holds_line(&unreadable) {
+            println!("{line}");
+        }
+        Ok(())
     }
 
     /// The direct contained runs whose first task semantic fact lies after the event at

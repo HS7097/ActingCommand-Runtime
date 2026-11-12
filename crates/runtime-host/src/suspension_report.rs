@@ -25,6 +25,11 @@
 //! Workflow #411 B15 R7 adds `remedies`: the stopped remedy rounds (`goal_missed` planning
 //! signals whose `signal_id` starts with `signal:remedy:stopped:`) still in effect or lifted
 //! within 48 h of the ledger's latest event, each with its lift when one was recorded.
+//!
+//! Workflow #438 HELD-1 adds `held`: the held records (`goal_missed` planning signals whose
+//! `signal_id` starts with `signal:task_held:held:`) still open or ended within 48 h of the
+//! ledger's latest event, newest first, at most 200, each with its end when one was recorded
+//! (`signal:task_held:ended:` of the same `<hex>`).
 
 use crate::RuntimeHostConfig;
 use crate::codes::{HostCode, HostLocation, SchedulingRuleHostCode};
@@ -74,6 +79,12 @@ const REMEDY_LIFT_WINDOW_MS: u64 = 48 * 60 * 60 * 1000;
 /// `remedies` keeps at most this many entries, newest first; `remedies_total` then counts them
 /// all.
 const REMEDY_LIMIT: usize = 200;
+/// Workflow #438 HELD-1: `held` keeps an ended hold while its end is within this span of the
+/// ledger's latest event; a hold still open is kept whatever its age.
+const HELD_END_WINDOW_MS: u64 = 48 * 60 * 60 * 1000;
+/// Workflow #438 HELD-1: `held` keeps at most this many entries, newest first; `held_total` then
+/// counts them all.
+const HELD_LIMIT: usize = 200;
 /// ROUT-L RL-1c fix 1 (#411 H1): the record types the report reads by the ledger's type index.
 /// The other types it reads are a run's own rows ([`RUN_TYPES`]). RL-1c fix 2 (#411 M2): no
 /// `runtime.lifecycle_observed` (nothing queried it) and no `runtime.fact_recorded`: of those
@@ -777,6 +788,7 @@ fn incomplete_report(inputs: &ReportInputs<'_>, mut warnings: Vec<String>) -> Va
         "packs": [],
         "remedies": [],
         "reruns": [],
+        "held": [],
     })
 }
 
@@ -1137,6 +1149,7 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
     let packs = packs(&snapshot, &view, &procedure_refs, daemon_started_at_unix_ms)?;
     let (remedies, remedies_total) = remedies(&snapshot)?;
     let reruns = reruns(&snapshot)?;
+    let (held, held_total) = held(&snapshot)?;
     // RL-1c fix 1 (#411 H1): a run the budget left unread is shown without its step and frames.
     if snapshot.incomplete.get() {
         warnings.push(LEDGER_READ_INCOMPLETE.to_owned());
@@ -1155,12 +1168,16 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
         "packs": packs,
         "remedies": remedies,
         "reruns": reruns,
+        "held": held,
     });
     if let Some(total) = clock_slots_total {
         report["clock_slots_total"] = json!(total);
     }
     if let Some(total) = remedies_total {
         report["remedies_total"] = json!(total);
+    }
+    if let Some(total) = held_total {
+        report["held_total"] = json!(total);
     }
     Ok(report)
 }
@@ -1921,4 +1938,206 @@ fn remedies(snapshot: &Snapshot<'_>) -> Result<(Vec<Value>, Option<usize>), Susp
     let total = entries.len();
     entries.truncate(REMEDY_LIMIT);
     Ok((entries, (total > REMEDY_LIMIT).then_some(total)))
+}
+
+/// Workflow #438 HELD-1: the end of a hold, where the ledger holds it: the `task_held_ended`
+/// record of the same `<hex>`, its place, its `held_end` and, but for `restarted`, its
+/// `held_for_ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+struct HeldEndRecord {
+    sequence: u64,
+    at_unix_ms: u64,
+    held_end: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    held_for_ms: Option<u64>,
+}
+
+/// Workflow #438 HELD-1: one `held` entry of a held record whose outcome reads back.
+#[derive(Serialize)]
+struct HeldEntry<'a> {
+    code: &'a CodeStr,
+    task_id: &'a str,
+    instance_id: &'a str,
+    gate_code: CodeStr,
+    held_state: &'static str,
+    held_since_unix_ms: u64,
+    held_for_ms: u64,
+    held_after_ms: u64,
+    recorded_sequence: u64,
+    recorded_at_unix_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ended: Option<HeldEndRecord>,
+}
+
+/// The values a `task_held` outcome holds (`contracts/scheduling/README.md`, "Held records").
+const HELD_VALUES: [&str; 7] = [
+    "task_id",
+    "alias",
+    "gate_code",
+    "held_state",
+    "held_since_unix_ms",
+    "held_for_ms",
+    "held_after_ms",
+];
+/// The values a `task_held_ended` outcome holds.
+const HELD_END_VALUES: [&str; 6] = [
+    "task_id",
+    "alias",
+    "gate_code",
+    "held_since_unix_ms",
+    "held_end",
+    "held_for_ms",
+];
+
+/// A held record's values read back: its gate code, `held_state` token and three times. `None`
+/// when the code is not `task_held`, a value is not one it holds or has the wrong type, a value
+/// it requires is absent, its task or alias is not the record's own, or a token is no word of its
+/// vocabulary.
+fn held_values(
+    outcome: &Outcome,
+    task_id: &str,
+    instance_id: &str,
+) -> Option<(CodeStr, &'static str, u64, u64, u64)> {
+    let values = outcome.values();
+    if !outcome.is(crate::codes::TaskHeldCode::Held)
+        || !values.keys().all(|key| HELD_VALUES.contains(&key.as_str()))
+    {
+        return None;
+    }
+    let text = |key: &str| values.get(key).and_then(Value::as_str);
+    let time = |key: &str| values.get(key).and_then(Value::as_u64);
+    if text("task_id") != Some(task_id) || text("alias") != Some(instance_id) {
+        return None;
+    }
+    let gate_code = values
+        .get("gate_code")
+        .filter(|value| value.is_string())
+        .and_then(|value| serde_json::from_value::<CodeStr>(value.clone()).ok())?;
+    let held_state = crate::codes::HeldState::ALL
+        .iter()
+        .map(|state| state.as_str())
+        .find(|token| text("held_state") == Some(*token))?;
+    Some((
+        gate_code,
+        held_state,
+        time("held_since_unix_ms")?,
+        time("held_for_ms")?,
+        time("held_after_ms")?,
+    ))
+}
+
+/// An end record's `held_end` token and `held_for_ms`, read back: `None` when the code is not
+/// `task_held_ended`, a value is not one it holds or has the wrong type, or `held_end` is absent
+/// or no word of its vocabulary.
+fn held_end_values(outcome: &Outcome) -> Option<(&'static str, Option<u64>)> {
+    let values = outcome.values();
+    if !outcome.is(crate::codes::TaskHeldCode::Ended)
+        || !values
+            .keys()
+            .all(|key| HELD_END_VALUES.contains(&key.as_str()))
+    {
+        return None;
+    }
+    let held_end = crate::codes::HeldEnd::ALL
+        .iter()
+        .map(|end| end.as_str())
+        .find(|token| values.get("held_end").and_then(Value::as_str) == Some(*token))?;
+    let held_for_ms = match values.get("held_for_ms") {
+        None => None,
+        Some(value) => Some(value.as_u64()?),
+    };
+    Some((held_end, held_for_ms))
+}
+
+/// Workflow #438 HELD-1 (`contracts/scheduling/README.md`, "Held records", "Where a person reads
+/// it"; `contracts/policy-suspension.md`, `held`): the held records, newest first and at most
+/// 200, and how many there are when the list is cut. A held record is a
+/// `signal:task_held:held:<hex>` record; the first later `signal:task_held:ended:<hex>` record
+/// of the same `<hex>` is its end. A hold still open is listed whatever its age, an ended one
+/// while its end is within 48 h of the ledger's latest event. Records are selected by their kind
+/// and their `signal_id` prefix, never by their outcome; a held record whose outcome does not
+/// read back, or that names no task, is an unparsed entry and adds no warning.
+fn held(snapshot: &Snapshot<'_>) -> Result<(Vec<Value>, Option<usize>), SuspensionReportError> {
+    use crate::policy_host::held::{ENDED_SIGNAL_PREFIX, HELD_SIGNAL_PREFIX};
+
+    let Some(reference_unix_ms) = snapshot.selection.head_time_unix_ms() else {
+        return Ok((Vec::new(), None));
+    };
+    let events = snapshot.query(EventQuery {
+        event_type: Some(EventType::PolicyPlanningSignalObserved),
+        ..EventQuery::default()
+    })?;
+    let mut records = Vec::new();
+    let mut ends = BTreeMap::<&str, Vec<(u64, u64, &Outcome)>>::new();
+    for event in &events {
+        let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload)) = event.payload()
+        else {
+            continue;
+        };
+        if payload.kind() != PolicyPlanningSignalKind::GoalMissed {
+            continue;
+        }
+        if let Some(hex) = payload.signal_id().strip_prefix(HELD_SIGNAL_PREFIX) {
+            records.push((event, payload, hex));
+        } else if let Some(hex) = payload.signal_id().strip_prefix(ENDED_SIGNAL_PREFIX) {
+            ends.entry(hex).or_default().push((
+                event.sequence(),
+                event.timestamp_unix_ms(),
+                payload.outcome(),
+            ));
+        }
+    }
+    let oldest_end_unix_ms = reference_unix_ms.saturating_sub(HELD_END_WINDOW_MS);
+    let mut entries = Vec::new();
+    for (event, payload, hex) in records.iter().rev() {
+        let end = ends
+            .get(hex)
+            .and_then(|ends| {
+                ends.iter()
+                    .find(|(sequence, _, _)| *sequence > event.sequence())
+            })
+            .copied();
+        if end.is_some_and(|(_, at_unix_ms, _)| at_unix_ms < oldest_end_unix_ms) {
+            continue;
+        }
+        let ended = end.and_then(|(sequence, at_unix_ms, outcome)| {
+            held_end_values(outcome).map(|(held_end, held_for_ms)| HeldEndRecord {
+                sequence,
+                at_unix_ms,
+                held_end,
+                held_for_ms,
+            })
+        });
+        let outcome = payload.outcome();
+        let read = payload.task_id().and_then(|task_id| {
+            held_values(outcome, task_id, payload.instance_id()).map(|values| (task_id, values))
+        });
+        entries.push(match read {
+            // An end that does not read back is shown as none: the entry is then listed open.
+            Some((
+                task_id,
+                (gate_code, held_state, held_since_unix_ms, held_for_ms, held_after_ms),
+            )) => wire(&HeldEntry {
+                code: outcome.code(),
+                task_id,
+                instance_id: payload.instance_id(),
+                gate_code,
+                held_state,
+                held_since_unix_ms,
+                held_for_ms,
+                held_after_ms,
+                recorded_sequence: event.sequence(),
+                recorded_at_unix_ms: event.timestamp_unix_ms(),
+                ended,
+            }),
+            None => wire(&UnparsedClockSlot {
+                parse_state: ParseState::Unparsed,
+                signal_id: payload.signal_id(),
+                code: outcome.code(),
+            }),
+        });
+    }
+    let total = entries.len();
+    entries.truncate(HELD_LIMIT);
+    Ok((entries, (total > HELD_LIMIT).then_some(total)))
 }

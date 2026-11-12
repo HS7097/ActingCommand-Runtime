@@ -600,7 +600,7 @@
     },
     "gate_code": {
       "type": "code",
-      "description": "The code of the gate that refused a clock slot."
+      "description": "The code of the gate that held back a clock slot or a candidate (since 0.12.56, Workflow #438 HELD-1: of a held record and its end, the not-run explanation row's why code)."
     },
     "budget_dimension": {
       "type": "vocab:budget_dimension",
@@ -2672,6 +2672,26 @@
     "phase_id": {
       "type": "id",
       "description": "The declared id of a stage of a phased route (a task's phases[].id): the stage the run was in (#428 DIAG-SI, since 0.12.55)."
+    },
+    "held_state": {
+      "type": "vocab:held_state",
+      "description": "How a held pair stood when task_held reported it: the not-run explanation row's eligibility (Workflow #438 HELD-1, since 0.12.56). Kept in codes mode."
+    },
+    "held_end": {
+      "type": "vocab:held_end",
+      "description": "How a hold that task_held reported ended, the value of task_held_ended (Workflow #438 HELD-1, since 0.12.56). Kept in codes mode."
+    },
+    "held_since_unix_ms": {
+      "type": "unix_ms",
+      "description": "The start of a hold: the not-run explanation row's since_unix_ms, the first evaluation of the run of evaluations in which the pair kept its why code (Workflow #438 HELD-1, since 0.12.56)."
+    },
+    "held_for_ms": {
+      "type": "duration_ms",
+      "description": "How long a pair has been held: the evaluation time less held_since_unix_ms, at the held record or at the evaluation that found the hold ended (Workflow #438 HELD-1, since 0.12.56)."
+    },
+    "held_after_ms": {
+      "type": "duration_ms",
+      "description": "The threshold in effect for the instance when a held record was written, scheduling.task_held.after_ms (Workflow #438 HELD-1, since 0.12.56)."
     }
   },
   "vocabularies": {
@@ -9153,6 +9173,39 @@
         },
         "held_state_unusable": {
           "description": "A state the run's layers or a package registry hold is not one the host can use: the run's navigation or interrupt state, a layer package the run admitted, or a registry's return-home entry without a listed package."
+        }
+      }
+    },
+    "held_state": {
+      "description": "How a held pair stood when task_held reported it, the not-run explanation row's eligibility (Workflow #438 HELD-1, contracts/scheduling/README.md \"Held records\"). A held code never comes with eligibility false.",
+      "review": "pending",
+      "tokens": {
+        "due": {
+          "description": "Eligibility true: the pair is due (its trigger true and its stop false) and the held code holds it."
+        },
+        "undecidable": {
+          "description": "Eligibility unknown: whether the pair is due cannot be decided (an unknown trigger or stop, or a fact refresh wait after one)."
+        }
+      }
+    },
+    "held_end": {
+      "description": "How a hold that task_held reported ended, the value of task_held_ended (Workflow #438 HELD-1, contracts/scheduling/README.md \"Held records\", \"The end\").",
+      "review": "pending",
+      "tokens": {
+        "selected": {
+          "description": "The evaluation selected the pair's decision; whether its intent is then admitted is the dispatch records'."
+        },
+        "why_changed": {
+          "description": "The pair's row carries another why code, held or not (a trigger turned false, a package closed, a pause), or a fact refresh wait of another fact_key; a move between the three waits for one fact's refresh of the same fact_key is none."
+        },
+        "row_gone": {
+          "description": "The instance has rows and none of the pair: the task left the catalog generation, or its package left the composed catalog."
+        },
+        "instance_gone": {
+          "description": "The evaluation decided nothing for the instance: it left the snapshot."
+        },
+        "restarted": {
+          "description": "The hold was reported by an earlier run of the Runtime: the start ended it before recording its settlement anchor; held_for_ms is absent."
         }
       }
     }
