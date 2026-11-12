@@ -17089,7 +17089,11 @@ no list reading.
 package refuses it before any run: `package_invalid`, caused by `recognition_sample_budget_invalid`
 naming the operation (`pack_operation_id`), the need (`required_ms`) and the limit (`limit_ms`),
 instead of a package that passes and a run that fails at the step. The remedy is the package's: a
-step timeout (for a scan, a `max_ms`) of at least the need, or fewer or shorter provider reads.
+step timeout (for a scan, a `max_ms`) above the need, or fewer or shorter provider reads. The
+bound is necessary, not sufficient: a run compares the same need with what is left of the step
+once its first frame is taken and its page recognized, so a limit exactly at the need is admitted
+and is still refused in a run (the production case had 4 997 ms left of 5 000). An author leaves
+room for that first capture; how much depends on the device, so admission does not fix a margin.
 
 **What older builds do.** A build before 0.12.57 admits such a package and ends every run at the
 step with `candidate_sample_budget_insufficient` (`required_ms`, `remaining_ms`), which the default
