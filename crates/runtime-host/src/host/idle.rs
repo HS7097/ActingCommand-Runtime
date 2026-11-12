@@ -13,13 +13,22 @@
 //!   and a #403 fence through its routine gate, its emulator state, its startup package and
 //!   configured emulator start) and the scheduler's latest plan for it: the latest evaluation's
 //!   not-run explanation (`PolicyHost::schedule_explanation`, the evaluator's own due candidates
-//!   and next wake of the instance; no other estimate). The pure planner (`crate::idle_action`)
-//!   decides; this module carries its steps out. Nothing here blocks the policy cycle: the
-//!   action runs on the instance's worker, the wake only queues claims.
+//!   and next wake of the instance; no other estimate). IDLE-3 (#447, register §1.332): with the
+//!   plan, under the same policy guard, whether it counts the end of every run the policy
+//!   dispatched on the instance (`PolicyHost::idle_runs_counted`: as its evaluation read its
+//!   inputs no dispatch of the instance was open, from its intent to its completion, and none has
+//!   been opened since); an action or a rest is decided only on a plan that does
+//!   (`IdleView::run_uncounted`), whichever check reads it, the cycle's or the sweep's. The pure
+//!   planner (`crate::idle_action`) decides; this module carries its steps out. Nothing here
+//!   blocks the policy cycle: the action runs on the instance's worker, the wake only queues
+//!   claims.
 //! - **The action** runs on an emulator-control claim of the instance's key (no new claim kind,
 //!   as #411 A38's recheck reuses the self-check claim), which no dispatch can pass. On the key
 //!   the instance is checked once more: a pause or a queued request that came meanwhile leaves it
-//!   alone. `close_app` reads the application id the game's standard pack root declares for the
+//!   alone, and so (IDLE-3) does the scheduler's latest plan read again by the same rule
+//!   (`idle_action::stands_on_key`): one that does not count the end of every run the policy
+//!   dispatched on the instance, or that shows work due or closer than the gap the step is taken
+//!   from. `close_app` reads the application id the game's standard pack root declares for the
 //!   instance's server (`<standard_packs.root>/<game>/applications.json`,
 //!   `servers.<server>.application_id`; no game word in the code), checks that it is the
 //!   instance's assigned application (the read-only foreground query), and stops it through the
@@ -188,6 +197,9 @@ pub(super) struct PendingIdleAction {
     work: IdleWork,
     next_due_unix_ms: Option<u64>,
     wake_at_unix_ms: Option<u64>,
+    /// IDLE-3 (#447): the gap the step is taken from (`idle_action::action_min_gap_ms`; a rest's
+    /// `idle.return_home_min_gap_ms`), which the latest plan is held to again on the key.
+    min_gap_ms: u64,
     /// The game and the server the instance's policy identity names, when one does.
     identity: Option<(String, String)>,
     /// Shared by the claim's request and the action's own requests.
@@ -372,12 +384,18 @@ impl HostShared {
             return Ok(());
         }
         // The scheduler's latest plan of each configured instance (IDLE-1P: its tasks and its
-        // fact-refresh reading apart).
+        // fact-refresh reading apart) and (IDLE-3, #447) whether it fails to count the end of a run
+        // the policy dispatched on the instance, both read under one policy guard.
         let latest = {
             let read = |policy: &crate::policy_host::PolicyHost| {
                 configured
                     .iter()
-                    .map(|(_, alias, _, _)| (alias.clone(), policy.idle_plan(alias)))
+                    .map(|(_, alias, _, _)| {
+                        (
+                            alias.clone(),
+                            (policy.idle_plan(alias), !policy.idle_runs_counted(alias)),
+                        )
+                    })
                     .collect::<BTreeMap<_, _>>()
             };
             let policy = self.policy()?;
@@ -401,17 +419,16 @@ impl HostShared {
             }
             // PAUSE-AUTO (0.12.34): whether an automatic start may start the emulator now.
             let hold = self.automatic_start_hold(&alias, IdleLocation::Check)?;
-            let view = self.idle_view(instance_id, emulator_on, hold.is_some())?;
-            let plan = plans.map_or_else(
-                || latest.get(&alias).copied().flatten(),
-                |given| given.get(&alias).copied(),
-            );
+            let (latest_plan, run_uncounted) = latest.get(&alias).copied().unwrap_or((None, false));
+            let view = self.idle_view(instance_id, emulator_on, hold.is_some(), run_uncounted)?;
+            let plan = plans.map_or(latest_plan, |given| given.get(&alias).copied());
             let Some(step) = planner.check(&alias, &config, view, plan, now_unix_ms) else {
                 continue;
             };
             let pending = |work: IdleWork,
                            next_due_unix_ms: Option<u64>,
-                           wake_at_unix_ms: Option<u64>|
+                           wake_at_unix_ms: Option<u64>,
+                           min_gap_ms: u64|
              -> RuntimeHostResult<PendingIdleAction> {
                 Ok(PendingIdleAction {
                     instance_id,
@@ -419,6 +436,7 @@ impl HostShared {
                     work,
                     next_due_unix_ms,
                     wake_at_unix_ms,
+                    min_gap_ms,
                     identity: identities.get(&alias).cloned(),
                     causation_id: self
                         .events
@@ -436,6 +454,7 @@ impl HostShared {
                     IdleWork::Act(action),
                     next_due_unix_ms,
                     wake_at_unix_ms,
+                    crate::idle_action::action_min_gap_ms(&config, action),
                 )?),
                 // IDLE-2: a rest takes the idle action's claim and runs on its key.
                 IdleStep::Rest {
@@ -445,6 +464,7 @@ impl HostShared {
                     IdleWork::Rest { within_ms },
                     next_due_unix_ms,
                     None,
+                    within_ms,
                 )?),
                 IdleStep::Wake { action, work } => {
                     self.queue_idle_wake(instance_id, &alias, action, work)
@@ -893,11 +913,14 @@ impl HostShared {
     /// What the instance shows to the idle check now. Read without waiting: a held admission
     /// guard (a keyless observe, probe or Lab look, or work starting on the instance) is work.
     /// PAUSE-AUTO (0.12.34): `start_held`, an automatic start may not start its emulator now.
+    /// IDLE-3 (#447): `run_uncounted`, the scheduler's latest plan does not count the end of
+    /// every run the policy dispatched on the instance (`PolicyHost::idle_runs_counted`).
     fn idle_view(
         &self,
         instance_id: InstanceId,
         emulator_on: bool,
         start_held: bool,
+        run_uncounted: bool,
     ) -> RuntimeHostResult<IdleView> {
         // Workflow #386 SR-4a3: a blackout that covers the instance holds its action as a pause
         // does (complete silence); a wake's claims wait at the gate for its end.
@@ -930,6 +953,7 @@ impl HostShared {
             app_wakeable: startup_package,
             emulator_wakeable: startup_package && configured_start,
             start_held,
+            run_uncounted,
         })
     }
 
@@ -1081,7 +1105,8 @@ impl HostShared {
     }
 
     /// A granted idle action's claim on its instance's worker. The instance is checked once
-    /// more on the key; then the action runs, its end is reported to the planner, the key is
+    /// more on the key (IDLE-3: with the scheduler's latest plan, `idle_step_stands`); then the
+    /// action runs, its end is reported to the planner, the key is
     /// released and the action recorded. A failure is contained to the instance (#419); only one the
     /// Runtime does not survive is the error, which ends the worker.
     pub(super) fn run_idle_action(
@@ -1112,9 +1137,11 @@ impl HostShared {
         let paused = gate.routine_held() || gate.blackout();
         let queued =
             lock(&self.scheduler, IdleLocation::Action)?.queued_count(pending.instance_id) > 0;
+        // IDLE-3 (#447): the latest plan read again, by the rule the step was decided by.
+        let outdated = !self.idle_step_stands(pending)?;
         // IDLE-2: the planner asks only for a tier, never for `auto` itself.
         let no_tier = matches!(action, IdleAction::None | IdleAction::Auto(_));
-        if paused || queued || no_tier || self.fatal.is_shutdown_requested() {
+        if paused || queued || outdated || no_tier || self.fatal.is_shutdown_requested() {
             let kept = self.end_idle_action(|planner| planner.abandoned(alias));
             let released = self.release_host_key(&key);
             return self
@@ -1189,7 +1216,8 @@ impl HostShared {
 
     /// IDLE-2: a granted rest's claim on its instance's worker. On the key the instance is checked
     /// once more as for an action (a pause, a blackout, a fence or a queued request that came
-    /// meanwhile leaves it alone, and it is active again). Then the return-home package its game's
+    /// meanwhile leaves it alone, and it is active again; IDLE-3, so does a latest plan that no
+    /// longer allows the rest, `idle_step_stands`). Then the return-home package its game's
     /// standard pack declares for its server (`bundle.json`'s maintenance entry whose `uses`
     /// holds `return_home`, read as the ladder and the prerequisite chain read it) runs once on
     /// the claim's key as a host run of its own, its response deadline `within_ms`. Its end,
@@ -1212,7 +1240,9 @@ impl HostShared {
         let paused = gate.routine_held() || gate.blackout();
         let queued =
             lock(&self.scheduler, IdleLocation::Action)?.queued_count(pending.instance_id) > 0;
-        if paused || queued || self.fatal.is_shutdown_requested() {
+        // IDLE-3 (#447): the latest plan read again, by the rule the rest was decided by.
+        let outdated = !self.idle_step_stands(pending)?;
+        if paused || queued || outdated || self.fatal.is_shutdown_requested() {
             let kept = self.end_idle_action(|planner| planner.abandoned(alias));
             let released = self.release_host_key(&key);
             return self
@@ -1390,6 +1420,26 @@ impl HostShared {
         let mut planner = lock(&self.idle, IdleLocation::Action)?;
         end(&mut planner);
         self.keep_idle_state(&mut planner)
+    }
+
+    /// IDLE-3 (#447, register §1.332): whether the step `pending` asked for still stands on its
+    /// claim's key by the scheduler's latest plan, read again there with whether it counts the end
+    /// of every run the policy dispatched on the instance, under one policy guard
+    /// (`idle_action::stands_on_key`). A step that no longer stands is left undone as for a pause
+    /// that came meanwhile: the planner's `abandoned`, nothing sent, no record of an action.
+    fn idle_step_stands(&self, pending: &PendingIdleAction) -> RuntimeHostResult<bool> {
+        let alias = pending.instance_alias.as_str();
+        let (plan, counted) = {
+            let policy = lock(self.policy()?, IdleLocation::Action)?;
+            (policy.idle_plan(alias), policy.idle_runs_counted(alias))
+        };
+        let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
+        Ok(crate::idle_action::stands_on_key(
+            plan,
+            !counted,
+            pending.min_gap_ms,
+            now_unix_ms,
+        ))
     }
 
     /// `close_app` on the claim's `key`: the declared application, the check that it is the

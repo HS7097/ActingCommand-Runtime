@@ -215,6 +215,9 @@ mod gate_idle2_auto;
 // IDLE-2 (0.12.54): `auto` through the host: the rest, its failure, no declared package, a
 // restart.
 mod gate_idle2_auto_host;
+// IDLE-3 (#447): an idle action is decided only on a plan that counts the end of the instance's
+// last run, and the plan is read again on the action's key.
+mod gate_idle3;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;

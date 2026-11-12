@@ -3598,3 +3598,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_mapp1b::mapp1b_a_keyless_observation_of_a_member_keeps_no_session_and_no_other_member_runs_under_it",
 ]
 incident = ["#437 MAPP-1b"]
+
+# IDLE-3 (#447; register §1.332; production v0.12.54: between two chained scheduled tasks the idle action closed the application on a plan whose evaluation had read the first task's dispatch still open, and the second task met the cold start): the idle planner on a manual clock, in the defect's order, decides no action and no rest on a plan whose evaluation read a dispatch of the instance open or after whose read one was opened (RunsRead, IdleView::run_uncounted), although the sampled rule passes that plan, nor on the next plan with the second task due, so the second task is dispatched to an open application (close_app, and auto's rest and close_app); on the next plan that counts the run's end and shows no work closer than the gap the action runs once, with its wake; on its key an action or a rest no longer stands when the latest plan shows a task or a reading due, work closer than the gap the step is taken from (close_app's idle.min_gap_ms, under auto stop_emulator's idle.stop_emulator_min_gap_ms, a rest's idle.return_home_min_gap_ms) or a dispatch opened after its read, the host leaves the instance alone and the planner is active again
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_idle3::idle_action_waits_for_plan_after_run_end",
+    "actingcommand-runtime-host::lib::tests::gate_idle3::idle_action_waits_for_plan_after_run_end_under_auto",
+    "actingcommand-runtime-host::lib::tests::gate_idle3::idle_action_runs_after_fresh_plan",
+    "actingcommand-runtime-host::lib::tests::gate_idle3::idle_action_abandoned_on_key_for_newer_plan",
+]
+incident = ["#447 IDLE-3"]
