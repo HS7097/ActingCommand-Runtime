@@ -28,6 +28,10 @@ use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_runtime_config::{CheckContext, ConfigFailure, EffectiveConfig};
 use std::collections::BTreeMap;
 
+/// The longest `device_group` name, in bytes (`contracts/device-group.md`, "The configuration
+/// form": 1 to 64 bytes under the alias rules, whose own bound is longer). A bound of the form,
+/// not a tunable.
+pub(super) const MAX_DEVICE_GROUP_BYTES: usize = 64;
 /// The entry's member a refusal names for a handset member: its `device` (kind).
 const DEVICE_KEY: &str = "device";
 /// The entry's member a refusal names for a fixture member.
