@@ -1,0 +1,26 @@
+{
+  "switch": true,
+  "build": {
+    "commit": "2222222222222222222222222222222222222222",
+    "manifest_sha256": "e64bd7e532836056d0d31e3b531d4a8d1bbb85b721c2399ef4b6ce668da8d3af"
+  },
+  "child": [
+    "C:\\ActingCommand\\tools\\actinglab-mcp.exe"
+  ],
+  "tunables": {
+    "poll_ms": 1000,
+    "settle_ms": 5000,
+    "verify_timeout_ms": 30000,
+    "drain_max_ms": 60000,
+    "refused_retry_max_ms": 12000
+  },
+  "entry_protocol": 2,
+  "outcome": {
+    "schema_version": "actingcommand.outcome.v1",
+    "code": "install_command_done",
+    "category": "success",
+    "values": {
+      "operation": "install_mcp_entry_plan"
+    }
+  }
+}

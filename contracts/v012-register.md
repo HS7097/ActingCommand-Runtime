@@ -10110,6 +10110,86 @@ or Tools archive until G6.
 **LAB-5G2a rollback** (to the release before it). Nothing persisted: code, the table's readers and
 one catalog entry.
 
+#### Slice LAB-5G5b (0.12.57): the rescue module's MCP rows: the snippet, the entry list and the second entry's plan
+
+Coordinator work order `rd-1112/brief-lab5g5b.md` with `rd-1112/brief-lab5g-common.md`, after the
+read-only survey `rd-1108/arch-013/lab5g-step0-survey.md` (§7 and its §10 row G5b), as amended by
+the coordinator's ruling of 2026-11-12 on board #434 that replaced ruling 6 of 6775192250 (the
+second generation is another program with another file name; the first generation's source, file
+and folder `mcp-entry\g1\` are never touched; its text is in "Slice LAB-5G5a" above); on main
+`4f1e5da5`. The contract is [install-cli.md](install-cli.md), "The MCP entry" (its last bullet,
+"The rescue module's rows"), and [lab-two-entries.md](lab-two-entries.md) §7 ("The MCP rows") and
+§9.3. The rule of the slice: nothing existing changes. The first generation (`apps/mcp-entry`,
+`actingctl mcp-entry plan|list` with `entry_protocol` 1, `actingctl mcp-config`, their tests),
+`apps/actingctl`, the product code of `apps/mcp-entry-g2` and `apps/actinglab-mcp` are not
+changed; every line actinglab printed for a row it offered before stays byte for byte.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G5b-1 | the row `mcp plan` (module `rescue`, slice LAB-5, planned; `entry_protocol` an unsigned option, required; `current_build` a string option; read only, offline; `source` none, `new` #434 LAB-5G5b) | operation table row added | LAB-5G5b | the MCP entry's second generation, which runs `actinglab.exe --json mcp plan --entry-protocol 2 [--current-build <commit>]` (L5G5a-5) | its `help` and `output` per §9.1; the MCP server lists it as `ac_mcp_plan` on Windows, a rescue row of slice LAB-5 |
+| L5G5b-2 | the parameter `list` of `mcp config` (`list<string>`, optional) | operation table parameter added | LAB-5G5b | the owner, registering a client (G7) | the server's `--list` words; given, the snippet carries `--list <modules>` after `--` |
+| L5G5b-3 | `rescue::SERVED` holds `mcp config`, `mcp entries` and `mcp plan` (33 rows) | behaviour | LAB-5G5b | — | `rescue::answer` serves them with the module's rules (its own root, `--root` and `--state-root` refused); actinglab offers them through its words' rule (`words::offered`, the rescue rows the module serves, on Windows) on the command line and in `serve --stdio`, with no command path of its own |
+| L5G5b-4 | `install::mcp_entry::plan_g2` | behaviour | LAB-5G5b | the row `mcp plan` | the answer the second generation reads ("What the entry reads of the plan's answer" in "Slice LAB-5G5a"): `switch` (`current_build` another commit than the installed build's, case-insensitive; false without it), `build {commit, manifest_sha256}`, `child` of one element (the server program of the installed build: `runtime\actinglab-mcp.exe` when the Runtime member's manifest lists it, else `tools\actinglab-mcp.exe` when the Tools member's does), `tunables`, `entry_protocol` 2 and the outcome (`install_command_done`, operation `install_mcp_entry_plan`); no `reason`, no child words. The first generation's checks in its order and with its refusals; a build whose manifests list no `actinglab-mcp.exe` refuses `mcp_server_not_in_build` (`commit_sha`, `path` the last place looked) with the tunables. Another `entry_protocol` is `actingctl_usage_invalid` (`--entry-protocol`, `not_recognised`), absent `required` |
+| L5G5b-5 | `install::mcp_entry::entries` | behaviour | LAB-5G5b | the row `mcp entries` | the first generation's `list_with` run with `--root <root> [--all]` and the operating system's probe, unchanged (operation `install_mcp_entry_list`), each row then given `generation` when its status file's `entry_generation` is a whole number |
+| L5G5b-6 | `install::mcp_config` (`snippet`) | behaviour | LAB-5G5b | the row `mcp config` | the clients (`claude`, `codex`, `antigravity`, `dsh`) and the shapes of `actingctl mcp-config --entry` (`apps/actingctl/src/mcp/mod.rs`, `entry_snippet`, copied: actingctl has no library and is not changed) for `<root>\mcp-entry\g2\actingcommand-mcp-entry-g2.exe --root <root> --client <client> --`, no `--tier`; `{client, entry, snippet}`; `list` checked against the table's module rows of role `operations` (`not_recognised`, `repeated`, naming `--list`), no second list; writes no client file and reads none; the program not placed in `g2\` is the warning `mcp_entry_not_placed`, a note of the outcome and the answer's `warnings` |
+| L5G5b-7 | the location `install_mcp_config` (owner `actingctl`); `install_refusal` `mcp_server_not_in_build`; `install_caveat` `mcp_entry_not_placed` (all `since` 0.12.57, pending) | outcome catalog | LAB-5G5b | the rows `mcp config` and `mcp plan` | `InstallLocation::McpConfig`, `InstallRefusal::McpServerNotInBuild`, `InstallCaveat::McpEntryNotPlaced` in `crates/lab-ops/src/codes.rs`; `mcp plan` and `mcp entries` answer with the first generation's locations `install_mcp_entry_plan` and `install_mcp_entry_list`; no code or key is new; the index is regenerated |
+| L5G5b-8 | `crates/lab-rescue/tests/fixtures/mcp-plan-entry-protocol-2.json` | checked-in sample | LAB-5G5b | the row's test, from a made-up root | **the contract between the two programs**: one answer of `mcp plan` for the made-up root `C:\ActingCommand` whose build `2222…` carries the server in its Tools member, asked with a current build of another commit (`switch` true); the row's test produces it and compares, the second generation's test reads it with the entry's own reader and accepts it. A change to what the row answers or to what the entry reads changes this file and both tests |
+
+**What is shared with the first generation**, inside `crates/lab-rescue`: the second generation's
+plan lives beside the first's in `install/mcp_entry.rs` and uses its private parts (`Tunables`,
+`PlannedBuild`, `install_settings`, `writer_lock_free`), the installer's `refuse_ab`,
+`state::unfinished_operation` and `adopt::verify_live`; the entry list is the first generation's
+`list_with` itself. The first generation's `plan`, `planned`, `list` and `list_with` are not
+changed; its tests (`gate_411_p49`, actingctl's `gate_mcp_entry`, `apps/mcp-entry`'s) run
+unchanged.
+
+**The tools** (computed from the table this build embeds by the generation rules of "Slice
+LAB-5G2a", on its figures; not measured by a build of this slice; slice G2b, in flight beside it,
+may change them): on Windows every module lists **143 tools** (core 49, debugging 26, authoring 35,
+rescue 33), without the authoring module **108**; elsewhere 110 and 75, as before. `ac_mcp_plan`'s
+definition is 655 bytes and `mcp config`'s `list` adds 261 bytes to `ac_mcp_config`'s, so the
+compact `tools/list` result grows by 917 bytes: 87,302 bytes (87,449 in the 2026-07-28 framing)
+with every module, 61,673 (61,820) without the authoring module. "Slice LAB-5G2a"'s figures stay
+that slice's record.
+
+**Tests.** New: apps row "#434 LAB-5G5b". In `crates/lab-rescue` (`install::gate_434_lab5g5b`, the
+fake host of `fixture.rs`, made-up roots in a temporary folder): `mcp_plan_answers_the_checked_in_sample`,
+`mcp_plan_switch_is_false_for_the_selected_build`, `mcp_plan_refuses_a_build_without_the_server`,
+`mcp_plan_refuses_entry_protocol_1`, `mcp_plan_refuses_while_the_writer_lock_is_held` (the line the
+first generation's plan gives), `mcp_entries_lists_both_generations` (status files naming the
+test's own process), `mcp_config_gives_each_clients_snippet` and
+`mcp_config_refuses_a_list_word_the_server_refuses`. In `apps/mcp-entry-g2` (a test only):
+`g2_the_entry_reads_the_rescue_rows_sample`. In actinglab's integration tests
+(`tests/rescue_mcp_rows.rs`): `mcp_rows_answer_the_same_line_on_the_command_line_and_in_serve`
+(the real binary placed as `tools\actinglab.exe` of a made-up root, the three rows on its
+command line with `--json` and in `serve --stdio`). No existing test changed: the tests that
+enumerate the table (actinglab's help list and completion, LAB-5E's help check, LAB-5A's offered
+rows, LAB-5G2a's tool list) compute from it and take the row and the parameter as they come.
+
+**Where LAB-5G5b differs from its work order's letter.**
+
+- (a) "A build that carries no such file": carried means listed in the manifest of the installed
+  build's Runtime or Tools member (and so checked against it with the rest of the build), not a
+  file found in the folder; a file in place that no manifest lists is refused as one that is not
+  there. The order is the entry's, `runtime\` then `tools\`.
+- (b) The answer has no `reason` ("exactly what the second entry reads"); the first generation's
+  plan keeps its own.
+- (c) `mcp plan` and `mcp entries` answer with the first generation's locations; only `mcp config`
+  has one of its own.
+
+**Interface.** None raised: nothing on the wire, in the ledger or in a file a released peer reads
+changes; the status files are read as before; the sample, like `entry_protocol` 2, is the contract
+between this row and the second generation and no declared interface; one location and two
+vocabulary tokens in the catalog only (`runtime-outcomes` stays 1).
+
+**What LAB-5G5b changes live.** `actinglab` gains three commands (`mcp config`, `mcp entries`, `mcp
+plan`), on the command line and in `serve --stdio`, and their help and completion. Nothing runs
+them by itself: the second entry is in no release or Tools archive until G6, and no registration
+points to it.
+
+**LAB-5G5b rollback** (to the release before it). Nothing persisted: code, one table row, one
+parameter, catalog entries and a test file.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

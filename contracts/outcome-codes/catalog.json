@@ -7757,6 +7757,9 @@
         },
         "hold_not_owned": {
           "description": "The Lab's rescue module hands back only its own hold (contracts/lab-two-entries.md section 5): release-hold of a reason no journal of the module recorded in its pause step, down with a reason an instance already shows (aliases), or a release that found the reason on an instance at another revision or owner epoch than the module recorded (aliases, left as they are). hold_reason names the reason. Nothing is paused or resumed by the refusal; another party's pause is never touched. (Workflow #434 LAB-3 fix 1, since 0.12.48)"
+        },
+        "mcp_server_not_in_build": {
+          "description": "The Lab's rescue module's mcp plan, the plan of the MCP entry's second generation, found no actinglab-mcp.exe in the manifests of the installed build, neither in its runtime\\ nor in its tools\\ (commit_sha the build, path the last place looked). It names no program that does not exist and no other program; every build before the server is packaged answers this. The refusal carries the tunables, as every refusal of the plan after its configuration read does. (Workflow #434 LAB-5G5b, since 0.12.57)"
         }
       }
     },
@@ -7870,6 +7873,9 @@
         },
         "hold_ownership_unconfirmed": {
           "description": "The Lab's rescue module could not read whether a hold is its own (contracts/lab-two-entries.md section 5): the reason does not parse, or the root or its operations folder cannot be read. The answer's next leaves that release-hold out, as for a hold the module does not own, and this note says why; operation is install_release_hold, hold_reason names the reason when it parses, and the read failure is the caused_by link. Nothing is paused or resumed. (Workflow #434 LAB-3 fix 3, since 0.12.48)"
+        },
+        "mcp_entry_not_placed": {
+          "description": "The Lab's rescue module's mcp config gave the registration snippet of the MCP entry's second generation, whose program is not placed in the root (path the program the snippet names, <root>\\mcp-entry\\g2\\actingcommand-mcp-entry-g2.exe): a client registered with it cannot start it until it is placed there. The snippet is given all the same; nothing is written. (Workflow #434 LAB-5G5b, since 0.12.57)"
         }
       }
     },

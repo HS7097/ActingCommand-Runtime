@@ -1305,3 +1305,79 @@ fn g2_the_plan_answer_is_read_for_protocol_2_only() {
     assert_eq!(entry.host.status["last_plan"]["switch"], true);
     assert_eq!(entry.host.status["last_plan"]["build"]["commit"], NEW);
 }
+
+// ---- Workflow #434 LAB-5G5b: the answer of the rescue row `mcp plan`, its checked-in sample ----
+
+/// The checked-in sample of the answer of the rescue row `mcp plan` (`crates/lab-rescue`), which
+/// that row's test produces from a made-up installation root: the contract between the two
+/// programs (register §1.287, "Slice LAB-5G5b").
+const RESCUE_SAMPLE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../crates/lab-rescue/tests/fixtures/mcp-plan-entry-protocol-2.json"
+));
+
+/// LAB-5G5b: the entry reads the rescue row's sample with its own reader and accepts it. As the
+/// first plan after a fresh child it names that child's build; as the plan after a settled change
+/// its `switch` starts a candidate of its `child[0]` with the entry's own words; its build,
+/// tunables and outcome are taken.
+#[test]
+fn g2_the_entry_reads_the_rescue_rows_sample() {
+    let sample: Value = serde_json::from_str(RESCUE_SAMPLE).expect("the sample is JSON");
+    let commit = sample["build"]["commit"]
+        .as_str()
+        .expect("the sample's build")
+        .to_owned();
+    let server = sample["child"][0]
+        .as_str()
+        .expect("the sample's server program")
+        .to_owned();
+    assert_eq!(
+        sample["entry_protocol"], 2,
+        "the second generation's protocol"
+    );
+
+    // The first plan of a fresh entry.
+    let host = FakeHost {
+        now: 1_000_000,
+        stamp: Stamp {
+            files: vec![Some((10, 1))],
+        },
+        ..FakeHost::default()
+    };
+    let mut fresh = Core::new(host, config());
+    fresh.start();
+    assert_eq!(fresh.host.plans, vec![None]);
+    fresh.plan_done(PlanEnd::Answered(sample.clone()));
+    assert_eq!(fresh.host.status["child"]["build"], commit.as_str());
+    assert_eq!(fresh.host.status["deferred"], Value::Null);
+    assert_eq!(fresh.host.status["plan_refusals"]["consecutive"], 0);
+    assert_eq!(fresh.host.status["last_plan"]["build"], sample["build"]);
+    assert_eq!(fresh.host.status["last_plan"]["outcome"], sample["outcome"]);
+    assert_eq!(fresh.host.status["tunables"], sample["tunables"]);
+
+    // The plan after a settled change, asked with the current child's build.
+    let mut entry = entry();
+    legacy_session(&mut entry);
+    entry.host.stamp = Stamp {
+        files: vec![Some((20, 2))],
+    };
+    entry.tick();
+    entry.host.now += 5_000;
+    entry.tick();
+    assert_eq!(entry.host.plans.last(), Some(&Some(OLD.to_owned())));
+    entry.plan_done(PlanEnd::Answered(sample.clone()));
+    assert_eq!(
+        entry.host.spawned.len(),
+        2,
+        "the candidate of the sample's switch"
+    );
+    let mut candidate = vec![server];
+    candidate.extend(owned(&ARGS));
+    assert_eq!(entry.host.spawned[1].1, candidate);
+    assert_eq!(entry.host.status["last_plan"]["switch"], true);
+    assert_eq!(
+        entry.host.status["last_plan"]["build"]["commit"],
+        commit.as_str()
+    );
+    assert_eq!(entry.host.status["tunables"], sample["tunables"]);
+}

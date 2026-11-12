@@ -38,7 +38,10 @@ pub(crate) mod journal;
 pub(crate) mod launch;
 pub(crate) mod lock;
 pub(crate) mod manifest;
-// Workflow #421 MCP-ENTRY: `mcp-entry plan|list`.
+// Workflow #434 LAB-5G5b: the rescue module's `mcp config`, the second generation's snippet.
+pub(crate) mod mcp_config;
+// Workflow #421 MCP-ENTRY: `mcp-entry plan|list`; Workflow #434 LAB-5G5b: and the rescue module's
+// `mcp plan` and `mcp entries`.
 pub(crate) mod mcp_entry;
 // Workflow #434 LAB-3: the rescue module's `place`.
 pub(crate) mod place;
@@ -88,6 +91,10 @@ mod gate_434_lab3;
 // `instance add`.
 #[cfg(test)]
 mod gate_421_inst5;
+// Test-only: Workflow #434 LAB-5G5b, the register's named tests of the rescue module's MCP rows
+// (`mcp plan` against its checked-in sample, `mcp entries`, `mcp config`).
+#[cfg(test)]
+mod gate_434_lab5g5b;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
