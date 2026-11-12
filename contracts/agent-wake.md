@@ -86,7 +86,9 @@ the closed list `ladder_exhausted`, `instance_fenced`, `run_failed`, `daily_summ
 configuration words, not the ledger's `AgentWakeKind`. A Runtime before HELD-2 refuses a rule that
 names `task_held` (`agent_wake_config_invalid`, `kind_unknown`), so the word raises `actingd-config`
 ([component-interfaces.md](component-interfaces.md), "Planned: Workflow #438 HELD"). `codes` applies to
-`run_failed` only, which needs it. `instances` is `"*"` or a list of aliases. `to` is a channel name:
+`run_failed`, which needs it, and (HELD, not built yet; HELD-2) to `task_held`, where it is
+optional: the gate codes the rule wakes for ("Rules" below). `instances` is `"*"` or a list of
+aliases. `to` is a channel name:
 1 to 16 Unicode scalars with no control character, opaque to the section. `cooldown_ms` is at most a
 week, and `daily_cap` is at least 1. **A `daily_summary` rule** (AGT-2b) names that kind alone, no
 `codes`, `at_minute_of_day` (0 to 1439) and `utc_offset_minutes` (−720 to 840, minutes east of UTC,
@@ -106,7 +108,7 @@ rendered, as in every section. A broken rule below is `agent_wake_config_invalid
 | A key left out; an empty section | `required_missing` |
 | Two rules with one id | `duplicate_id` |
 | A kind outside the closed list | `kind_unknown` |
-| A rule with no kind; `run_failed` with no `codes` | `match_missing` |
+| A rule with no kind; `run_failed` with no `codes`; (HELD, not built yet; HELD-2) a rule that names `task_held` with an empty `codes` list | `match_missing` |
 | A `daily_summary` rule with another kind or `codes`, without its minute or offset or with one out of range, or a `daily_cap` other than 1; another kind's rule that names a minute or an offset | `daily_summary_shape` |
 | A code the catalog does not list, or has retired | `code_unknown`, `code_retired` |
 | `instances` neither `"*"` nor a non-empty list of configured aliases | `instance_unknown` |
@@ -157,9 +159,17 @@ rule's clock makes it ("The daily summary").
 
 **Rules.** A rule matches a candidate of one of its `kinds` on an instance its `instances` covers;
 `run_failed` also needs the candidate's code in the rule's `codes`: no list, no wake. A candidate no
-rule matches is dropped and not counted. A `task_held` rule (HELD, not built yet) names no `codes`,
-as a `ladder_exhausted` rule: it matches every held record of the instances it covers, whatever
-the reason (`gate_code`) or the task.
+rule matches is dropped and not counted. A `task_held` rule (HELD, not built yet; HELD-2; settled
+by the coordinator on 11-12) may name `codes`, a list of gate codes: with it, the rule matches only
+a held record whose `gate_code` is in the list, so that a wait behind a long run
+(`dispatch_instance_held`) need wake no one; without it, every held record of the instances it
+covers, whatever the reason or the task. The list is checked as a `run_failed` rule's is
+("Refusals"): an entry the catalog does not list, or has retired, is refused (`code_unknown`,
+`code_retired`); a listed code outside the held set is not refused and matches no held record, as
+a `run_failed` rule's code that no run fails with. An empty list is refused (`match_missing`), as
+an empty `kinds`, a `run_failed` rule's empty `codes` and an empty `instances` list
+(`instance_unknown`) are: it never means "none", and the file's `[]` is not the absent member. A
+rule that names both `run_failed` and `task_held` reads its one list for both.
 
 **Coalescing.** One instance's matched candidates are gathered for `delivery.coalesce_ms` from the
 first one (0: those taken in the same pass). Then each channel receives at most one wake: of the rules

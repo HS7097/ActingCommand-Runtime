@@ -407,12 +407,13 @@ its architecture test are unchanged ([3, 8] and [3, 7]).
 
 ### Planned: Workflow #438 HELD (HELD-1 and HELD-2; [v012-register.md](v012-register.md) §1.322)
 
-Planned row, **not in force** (HELD, not built yet): main at `e2b5590f` declares `actingd-config`
-[5, 28], `ledger` [3, 8] and `runtime-client` [3, 7]. HELD-C, which writes this row, raises nothing.
+Planned row, **not in force** (HELD, not built yet): main at `e2b5590f`, and at `6e4119c7` merged
+into HELD-C, declares `actingd-config` [5, 28], `ledger` [3, 8] and `runtime-client` [3, 7]. HELD-C,
+which writes this row, raises nothing.
 
 | Interface | Rev | Meaning | Anchor | Slice |
 |---|---|---|---|---|
-| `actingd-config` | 29 (the next free revision when it is built) | revision 28 plus the optional member `task_held` (`enabled`, `after_ms`) of the `scheduling` section and of an `instances[]` entry's `scheduling` member (HELD-1; [runtime-config.md](runtime-config.md), "Held records"), and the word `task_held` of a rule's `on.kinds` in `agent_wake.rules` (HELD-2; [agent-wake.md](agent-wake.md)). Additive: a Runtime before HELD-1 refuses a file that names `scheduling.task_held` (the section and the entry deny unknown members), and one before HELD-2 a rule that names `task_held` (`agent_wake_config_invalid`, `kind_unknown`); a file that names neither keeps its revision, so the Runtime still reads revisions 5 to 28 and declares [5, 29]. One raise when both slices ship in one release; HELD-2 in a later release takes the next free revision. The console must reach the revision before it edits either (the UI repository's work) | `crates/runtime-config/src/scheduling.rs`, `SchedulingFile`, `InstanceSchedulingFile`; `crates/runtime-config/src/agent_wake.rs`, `KINDS`; `distribution/windows/actingd.defaults.json`; `distribution/windows/component-interfaces.json` | HELD-1, HELD-2 |
+| `actingd-config` | 29 (the next free revision when it is built) | revision 28 plus the optional member `task_held` (`enabled`, `after_ms`) of the `scheduling` section and of an `instances[]` entry's `scheduling` member (HELD-1; [runtime-config.md](runtime-config.md), "Held records"), and the word `task_held` of a rule's `on.kinds` in `agent_wake.rules`, with that rule's optional `codes` of gate codes (HELD-2; [agent-wake.md](agent-wake.md)). Additive: a Runtime before HELD-1 refuses a file that names `scheduling.task_held` (the section and the entry deny unknown members), and one before HELD-2 a rule that names `task_held` (`agent_wake_config_invalid`, `kind_unknown`); a file that names neither keeps its revision, so the Runtime still reads revisions 5 to 28 and declares [5, 29]. One raise when both slices ship in one release; HELD-2 in a later release takes the next free revision. The console must reach the revision before it edits either (the UI repository's work) | `crates/runtime-config/src/scheduling.rs`, `SchedulingFile`, `InstanceSchedulingFile`; `crates/runtime-config/src/agent_wake.rs`, `KINDS`; `distribution/windows/actingd.defaults.json`; `distribution/windows/component-interfaces.json` | HELD-1, HELD-2 |
 
 - **Not moved** (the walk is in the register). `ledger`: the records are
   `policy.planning_signal_observed` of kind `goal_missed` with existing members; their codes, keys
