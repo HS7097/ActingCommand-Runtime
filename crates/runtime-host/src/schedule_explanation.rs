@@ -5,7 +5,10 @@
 //! the policy host's memory. Every evaluated cycle replaces it from the bound evaluation, before
 //! the host adds its notes to the decisions; a deferred cycle and a failed evaluation leave it as
 //! it was, and a start begins with none. Nothing here reaches the ledger and no decision reads
-//! it: only the read `ScheduleExplanation` and the idle check (IDLE-1, its plan per instance) do.
+//! it: only the read `ScheduleExplanation` and the idle check (IDLE-1, its plan per instance) do,
+//! and (Workflow #438 HELD-1) the held records, which read its rows after every evaluated cycle
+//! (`policy_host::held`). From HELD-1 the three waits for one fact's refresh of one `fact_key`
+//! count as one `why` code for a row's `since_unix_ms` (`same_clock`).
 
 use crate::application_update::IdleUpdateHold;
 use crate::idle_action::IdlePlan;
@@ -268,7 +271,8 @@ impl ScheduleExplanationTable {
     /// catalog's, `evaluated_at_unix_ms` its time). A row's `since_unix_ms` carries over from the
     /// table it replaces while the same (instance, task) keeps the same `why` code, and the
     /// not-running row's while the same (instance, task or none) keeps it; otherwise it is this
-    /// evaluation's time. SCH-M ED-2 (§3.4 "Visible"): `expected` gives, for a (task, instance
+    /// evaluation's time. Workflow #438 HELD-1: the three waits for one fact's refresh that name
+    /// the same `fact_key` count as one code (`same_clock`). SCH-M ED-2 (§3.4 "Visible"): `expected` gives, for a (task, instance
     /// alias), the duration its dispatch would reserve and where it comes from (`declared` or
     /// `runs:<n>`); a row carries both. IDLE-WG (0.12.27): `held_back`, the instances a
     /// time-bound gate holds back as the evaluation ran ([`idle_held_back`]), which only the idle
@@ -366,6 +370,21 @@ impl ScheduleExplanationTable {
             catalog_hash: catalog_hash.to_owned(),
             instances,
         });
+    }
+
+    /// Workflow #438 HELD-1 (`contracts/scheduling/README.md`, "Held records"): the latest
+    /// evaluated cycle's candidate rows, by instance alias, every instance the evaluation decided
+    /// something for (one whose only decision was selected has none); `None` before the first
+    /// evaluated cycle after a start. The held records read them after the table is replaced.
+    pub(crate) fn candidate_rows(&self) -> Option<BTreeMap<&str, &[ScheduleExplanationCandidate]>> {
+        let latest = self.latest.as_ref()?;
+        Some(
+            latest
+                .instances
+                .iter()
+                .map(|(alias, rows)| (alias.as_str(), rows.candidates.as_slice()))
+                .collect(),
+        )
     }
 
     /// IDLE-1 (IDLE-1P, #405): the latest evaluation's plan for `alias` as the idle check reads
@@ -483,7 +502,7 @@ fn candidate_row(
                 .iter()
                 .find(|row| row.task_id == decision.task_id)
         })
-        .filter(|row| row.why.code() == draft.why.code())
+        .filter(|row| same_clock(&row.why, draft.why))
         .map_or(evaluated_at_unix_ms, |row| row.since_unix_ms);
     ScheduleExplanationCandidate {
         task_id: decision.task_id.clone(),
@@ -541,13 +560,38 @@ fn not_running_row(
         }
     };
     let since_unix_ms = earlier
-        .filter(|row| row.task_id == task_id && row.why.code() == why.code())
+        .filter(|row| row.task_id == task_id && same_clock(&row.why, &why))
         .map_or(evaluated_at_unix_ms, |row| row.since_unix_ms);
     ScheduleExplanationNotRunning {
         task_id,
         why,
         next_wake_unix_ms: row_wake,
         since_unix_ms,
+    }
+}
+
+/// Workflow #438 HELD-1 (settled by the coordinator on 11-12; `contracts/scheduling/README.md`,
+/// "Held records", "The clock"): the three waits for one fact's refresh.
+const REFRESH_WAITS: [PolicyCode; 3] = [
+    PolicyCode::FactRefreshPending,
+    PolicyCode::FactRefreshUnresolved,
+    PolicyCode::FactRefreshExhausted,
+];
+
+/// Whether a row whose `why` was `earlier` and is `now` keeps its `since_unix_ms`: the same code,
+/// or (HELD-1) two of the three waits for one fact's refresh that name the same `fact_key`, which
+/// share one clock. Another `fact_key` of one of them starts another run, as any other code does.
+fn same_clock(earlier: &Outcome, now: &Outcome) -> bool {
+    let refresh_key = |why: &Outcome| {
+        REFRESH_WAITS
+            .iter()
+            .any(|code| why.is(*code))
+            .then(|| why.value("fact_key").cloned())
+    };
+    match (refresh_key(earlier), refresh_key(now)) {
+        (Some(earlier_key), Some(now_key)) => earlier_key == now_key,
+        (None, None) => earlier.code() == now.code(),
+        _ => false,
     }
 }
 

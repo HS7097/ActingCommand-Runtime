@@ -378,6 +378,10 @@
     },
     "no_progress": {
       "enabled": true
+    },
+    "task_held": {
+      "enabled": true,
+      "after_ms": 1800000
     }
   },
   "ledger_observer": {

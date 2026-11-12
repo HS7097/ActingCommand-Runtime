@@ -3283,3 +3283,51 @@ actingcommand_contract::outcome_codes! {
     }
 }
 // ---- #428 S168-LB1a: end ----
+
+// ---- Workflow #438 HELD-1 (register §1.322 HELD-R1 to HELD-R4; `contracts/scheduling/README.md`,
+// "Held records"): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's codes of the held records (HELD-1; #420 S4: one code for one state, the
+    /// eligibility a value, and one for its end). No existing code fits: the clock-slot codes name
+    /// one occurrence of a clock, a held record a run of evaluations of one pair.
+    pub(crate) enum TaskHeldCode {
+        /// Warning. A pair (task, instance alias) that should run has been held by one `why` code
+        /// of the held set past the threshold in effect: one `goal_missed` planning signal
+        /// `signal:task_held:held:<hex>` per hold (keys `task_id`, `alias`, `gate_code` the row's
+        /// code, `held_state`, `held_since_unix_ms`, `held_for_ms`, `held_after_ms`; one
+        /// `caused_by` link, the row's `why` outcome whole). Changes no decision.
+        Held => "task_held": warning / none,
+        /// Info. A reported hold ended: `signal:task_held:ended:<hex>`, the held record's `<hex>`
+        /// (keys `task_id`, `alias`, `gate_code`, `held_since_unix_ms`, `held_end`, and
+        /// `held_for_ms` except for `restarted`).
+        Ended => "task_held_ended": info / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// How a held pair stood when it was reported (the vocabulary `held_state`): the row's
+    /// eligibility.
+    pub enum HeldState: "held_state" {
+        /// Eligibility `true`: the pair is due and something holds it.
+        Due => "due",
+        /// Eligibility `unknown`: whether the pair is due cannot be decided.
+        Undecidable => "undecidable",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// How a reported hold ended (the vocabulary `held_end`).
+    pub enum HeldEnd: "held_end" {
+        /// The evaluation selected the pair's decision.
+        Selected => "selected",
+        /// The pair's row carries another `why` code (or the same refresh wait of another key).
+        WhyChanged => "why_changed",
+        /// The instance has rows and none of the pair.
+        RowGone => "row_gone",
+        /// The evaluation decided nothing for the instance.
+        InstanceGone => "instance_gone",
+        /// The hold was reported by an earlier run of the Runtime; its start ended it.
+        Restarted => "restarted",
+    }
+}
+// ---- Workflow #438 HELD-1: end ----

@@ -52,7 +52,10 @@
 //! `scheduling.pool_lines`, the instance's own lines of its pools, in the entry's `scheduling`
 //! member: no default (each pool's catalog lines are in effect), settable; checked whole per
 //! instance, and an instruction names only pools the active generation gives the instance with a
-//! declared valuation (`EffectiveConfig::apply`, the check context's valued pools).
+//! declared valuation (`EffectiveConfig::apply`, the check context's valued pools). Workflow #438
+//! HELD-1 (register §1.322 HELD-R8) adds `scheduling.task_held.enabled` and `.after_ms`, in the
+//! entry's `scheduling` member, each defaulting to the `scheduling` section's key of the same
+//! name, settable.
 
 use crate::codes::ConfigValueProblem;
 use crate::display_safe_area;
@@ -64,7 +67,8 @@ use crate::scheduling::{
     self, DAY_BOUNDARY_QUIET, DELAY, EXPECTED_RUNTIME_ENABLED, EXPECTED_RUNTIME_MARGIN_MS,
     EXPECTED_RUNTIME_MARGIN_RANGE, EXPECTED_RUNTIME_RUNS, EXPECTED_RUNTIME_RUNS_RANGE,
     INSTANCE_BLACKOUT, INSTANCE_POOL_LINES, NO_PROGRESS_ENABLED, RANDOM_DELAY_ENABLED,
-    RANDOM_DELAY_MAX_MS, RANDOM_DELAY_MIN_MS, REMEDY_CHOICES,
+    RANDOM_DELAY_MAX_MS, RANDOM_DELAY_MIN_MS, REMEDY_CHOICES, TASK_HELD_AFTER_MS,
+    TASK_HELD_AFTER_RANGE, TASK_HELD_ENABLED,
 };
 use crate::table::{
     DefaultSource, FilePath, KeyName, KeyRange, KeyRow, NotSettable, Settable, ValueType,
@@ -288,10 +292,33 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "SCHED-C1e",
         since: "0.12.54",
     },
+    // Workflow #438 HELD-1 (register §1.322 HELD-R8): the instance's own held-record switch and
+    // threshold; the section's values in effect are their defaults.
+    task_held_row(TASK_HELD_ENABLED, ValueType::Boolean, KeyRange::Any),
+    task_held_row(
+        TASK_HELD_AFTER_MS,
+        ValueType::DurationMs,
+        TASK_HELD_AFTER_RANGE,
+    ),
     // Workflow #437 MAPP-1 (`contracts/device-group.md`, "The configuration form"): the entry's
     // device group, reported only for an entry that names it, read once at assembly.
     crate::device_group::ROW,
 ];
+
+/// Workflow #438 HELD-1: one instance's held-record member, named as the section-level key whose
+/// value in effect is its default.
+const fn task_held_row(member: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
+    KeyRow {
+        name: KeyName::PerInstance(member),
+        file_path: FilePath::InstanceMember,
+        value_type,
+        range,
+        default: DefaultSource::Section(member),
+        settable: Settable::Yes,
+        reader: "HELD-1",
+        since: "0.12.56",
+    }
+}
 
 /// SCH-M ED-1: one instance's expected-duration member, named as the section-level key whose
 /// value in effect is its default.

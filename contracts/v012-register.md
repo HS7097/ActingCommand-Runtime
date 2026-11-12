@@ -15065,6 +15065,7 @@ deferral. Classes: *not due*, *said no* and *own time* are never held; *held* is
 | `application_update_pending` | host, position 4a | true | held | — | waits for the client update, no wake |
 | `selection_input_unknown` | evaluator, score stage | true | held | — | an input no reading can supply; waits for the facts or the catalog |
 | `decision_reason_missing` | evaluator, round end | true | held | — | a programming error; nothing names a time |
+| `device_group_waiting` | evaluator, round (`selected`); the host's gates from MAPP-1b (`held`, `player_hold`, `fenced`) | true | held | any `device_group_wait` | added by Workflow #437 MAPP-1a (§1.328), which registers the code: a member of a device group waits for the device another member has, with no wake of its own; the device's form of `instance_already_selected` and `dispatch_instance_held` |
 | `trigger_unknown` | evaluator, trigger | unknown | held | — | 11-11's followers; a trigger that reads its own task's fact can stay unknown for ever |
 | `feedback_stop_unknown` | evaluator, stop | unknown | held | — | the trigger passed, the stop cannot be decided |
 | `fact_refresh_pending` | evaluator, fact refresh plan | unknown or true | held | — | waits for the instance's reader to read a key (after an unknown trigger or stop: unknown; after a selection input: true) |
@@ -15072,7 +15073,8 @@ deferral. Classes: *not due*, *said no* and *own time* are never held; *held* is
 | `fact_refresh_exhausted` | evaluator, fact refresh plan | unknown or true | held | — | a reader's limit; the pair's own decision names no time |
 | `fact_refresh_unbound` | evaluator, fact refresh plan | unknown or true | held | — | no reader can refresh the key |
 
-Counts: not due 2; own time 8; said no 23; held 17 (11 due, 2 undecidable, 4 either); by a value
+Counts: not due 2; own time 8; said no 23; held 18 (12 due, 2 undecidable, 4 either; 17 and 11
+before MAPP-1a added `device_group_waiting`); by a value
 2. The table is settled by the coordinator on 11-12 as classed, the six rows the draft was unsure
 of included, each with its reason: `dispatch_instance_held` (a long run of another task makes
 waiting due pairs held: kept held for the abandoned registration, settled 3),
@@ -15653,11 +15655,113 @@ location in catalog order, their number in the summary, ten named and the rest c
 package that cannot be read unreadable and not unbound, and `manifest=none` without a manifest). No
 existing test changes.
 
+### 1.327 Slice HELD-1 (0.12.56): a task held too long leaves a record, and its end (Workflow #438; the contract of §1.322, slice HELD-C, with the coordinator's rulings and answers of 11-12 written into it, not the owner's words; coordinator work order `rd-1112/brief-438-held-1.md`, read on main `fbb457a4`, main `c7dc14ec` merged)
+
+1.327 is the coordinator's number, written after §1.323 on main `c7dc14ec`. Sections stand in
+merge order: §1.326 was merged first (main `a21571c4`, merged into this slice), so this section
+follows it; §1.325 was not used. HELD-1 builds rows HELD-R1 to
+HELD-R9 of §1.322; HELD-R10, the wake kind `task_held` and its `codes`, is HELD-2's and stays
+planned ([agent-wake.md](agent-wake.md)). The contract's "(HELD, not built yet)" and "proposed"
+marks are dropped for HELD-1's parts ([scheduling/README.md](scheduling/README.md), "Held records"
+and the paragraph in "Why A Candidate Does Not Run"; [runtime-config.md](runtime-config.md), the
+two key rows and "Held records"; [component-interfaces.md](component-interfaces.md)), and kept for
+HELD-2's.
+
+| Row | Built | Where |
+|---|---|---|
+| HELD-R1, HELD-R2 | `task_held` (warning, `none`) and `task_held_ended` (info, `none`), each with its description, common causes and handling | `crates/runtime-host/src/codes.rs`, `TaskHeldCode`; `contracts/outcome-codes/runtime-host.json`; built by `crates/runtime-host/src/policy_host/held.rs`, `held_signal`, `ended_signal`, `restarted_end` |
+| HELD-R3 | the keys `held_state`, `held_end`, `held_since_unix_ms`, `held_for_ms`, `held_after_ms`; `gate_code`'s description widened to a candidate's gate | `crates/actingcommand-contract/src/outcome/keys.rs`; `contracts/outcome-codes/catalog.json` |
+| HELD-R4 | the vocabularies `held_state` (`due`, `undecidable`) and `held_end` (`selected`, `why_changed`, `row_gone`, `instance_gone`, `restarted`) | `crates/runtime-host/src/codes.rs`, `HeldState`, `HeldEnd`; `catalog.json` |
+| HELD-R5 | the two records, `goal_missed` planning signals `signal:task_held:held:<hex>` and `signal:task_held:ended:<hex>` (`<hex>` the SHA-256 of `task \0 alias \0 since`), each checked against the projection first; appended after the cycle's clock-slot records | `held.rs`, `held_signal_id`, `ended_signal_id`; `crates/runtime-host/src/host/policy_dispatch.rs`, `evaluate_policy_cycle_authoritative` (`PolicyCycle::task_held_signals`) |
+| HELD-R6 | the detector: after `record_held_back`, the ends first, then the held records; the held set (`HELD_CODES`, 17 codes, 18 from MAPP-1a's `device_group_waiting`, §1.328, and the two codes a value decides); the memory of the holds this run reported; the one clock of the three fact refresh waits of one `fact_key` | `held.rs`, `HeldMemory::observe`, `held`, `held_code`; `crates/runtime-host/src/policy_host.rs`, `PolicyHost::evaluate`; `crates/runtime-host/src/schedule_explanation.rs`, `same_clock`, `candidate_rows` |
+| HELD-R7 | the start's end pass: the `policy.planning_signal_observed` records between the settled anchor's start and this start, by the type index, page by page; each held record without an end ended `restarted` (no `held_for_ms`), before `host.contained_settlement` is recorded | `crates/runtime-host/src/host/contained_task.rs`, `settle_previous_epoch_contained_runs`, `end_task_holds_between`; `held.rs`, `reported_hold` |
+| HELD-R8 | `scheduling.task_held.enabled` (`true`) and `.after_ms` (`60000..=86400000`, `1800000`), section and per instance, settable, read for every instance of the snapshot at every evaluated cycle | `crates/runtime-config/src/scheduling.rs`, `TaskHeldFile`, `TaskHeldConfig`, `instance_task_held`; `crates/runtime-config/src/instance.rs`; `crates/runtime-config/src/effective.rs`, `EffectiveConfig::task_held`; `distribution/windows/actingd.defaults.json`; `crates/runtime-host/src/host/runtime_config.rs`, `task_held_context`; `PolicyEvaluationContext::task_held` |
+| HELD-R9 | `actingd suspended` `held` (and `held_total`); `ac_diagnose` (and `actingctl diagnose`) `held` rows of the instance and `held_reported: true` on the `not_run` row an open held row names | `crates/runtime-host/src/suspension_report.rs`, `held`; `crates/lab-ops/src/diagnose.rs`, `held_rows`, `mark_held_reported`, `Diagnosis::held`; `apps/actingctl/src/mcp/tools.rs`, the description and the result schema; [policy-suspension.md](policy-suspension.md), `held` |
+
+**The interface.** `actingd-config` goes to 29: the row 29 of
+[component-interfaces.md](component-interfaces.md) holds HELD-1's member `task_held` of the
+section and of an entry's `scheduling` member; `distribution/windows/component-interfaces.json`
+and `tools/actinglab-architecture/tests/component_interfaces.rs` declare [5, 29]. HELD-2's word
+and MAPP-1's members join that row when they ship in 0.12.56. `ledger`, `runtime-client`,
+`runtime-outcomes` and every other interface stay (§1.322, "The interface walk").
+
+**Where the code reads the contract, and why** (no point the contract's text leaves open is
+guessed; each is a reading of its own words):
+
+- *An end by the row's start.* A reported hold ends `why_changed` when the pair's row carries
+  another start than the hold's: the table's `since_unix_ms` changes exactly when the `why` code
+  does, or when a fact refresh wait names another `fact_key`. So `fact_refresh_pending` of one key
+  followed by `fact_refresh_pending` of another restarts the row, which before HELD-1 kept its
+  start ("another `fact_key` … starts another run").
+- *The not-running row too.* The one clock of the three fact refresh waits applies to the
+  not-running row's `since_unix_ms` as to the candidate rows' ("count as one `why` code for
+  `since_unix_ms`").
+- *Reported means in the projection.* A held record is written when the projection does not hold
+  its id, also again at the next cycle when its append failed (the cycle failed loudly); an end is
+  written only when the projection holds the held record ("a hold that was never reported leaves
+  nothing"). A held record the projection holds for the row's start is taken as open.
+- *A capped pair stopped by a gate.* `pool_line_held` with `capped_not_dispatchable` is held when
+  its `gate_code` is one of the codes held whatever their values (`HELD_CODES`); a gate code a
+  value decides cannot be decided from the code alone and is not held.
+- *An instance the context does not name* (it is not in the snapshot) writes no new held record.
+- *A held record the start cannot read back* stops no start (settled by the coordinator on 11-12
+  at the slice's review; not the owner's words). The start reads a held record back by its own
+  values: its outcome is `task_held`, its task and alias are the record's own, its `gate_code` is
+  a code the catalog this build embeds registers (whether this build's held set holds it is not
+  asked: the set is closed per build, a later slice may change it, and a hold another build
+  reported is ended all the same), and its id is the digest of its task, alias and start. A
+  record that fails one of these (a spelling this build does not register, a missing value,
+  another digest) is left as it is, without an end, and the start goes on; the pass names such
+  records on one developer line, `actingd task_held unreadable sequences=<s1,s2,…> more=<n>`
+  (their ledger sequences, the first eight in ledger order, and the number of the rest; Fail
+  Loud), and `actingd suspended` keeps listing each of them open. The reason: no decision reads
+  these records, the ledger keeps what an earlier or a later build wrote, and a start that failed
+  here would leave the settlement anchor where it was, so every later start would fail the same
+  way until another build was installed. The slice's first form failed the start with
+  `policy_planning_signal_identity_conflict`; that form was not merged. The pass runs over the
+  range the settlement of direct runs reads, when it holds a record.
+- *`ac_diagnose`'s cut.* Its `held` rows are cut after the clock slots and before `not_run`; the
+  whole list stays in `actingd suspended`, and the records in `ac_events`' errors view.
+
+**Tests** (`crates/runtime-host/src/tests/gate_438_held.rs`; host gate row "Workflow #438
+HELD-1"). Logic tests on the policy host's own table and memory with a fake projection and a
+manual clock: `held_t1`, `held_t2` (a pause, a cooldown, a false trigger, a blackout, an
+exhausted budget, the benefit gaps that wait for a value, a hard line and a capped pair a budget
+stops, beside a row that is reported), `held_t4`, `held_t5`, `held_t7`, `held_t10`. Through the
+host on a manual Runtime clock: `held_t3` (a client lease holds the instance; the restart's end;
+counting again), `held_t6` (two hosts, the record on and off, the same decisions, intents and
+other records at every cycle; only decisions, reason codes and records are compared), `held_t8`,
+`held_t9`'s `actingd suspended` half, and `held_t11`, added at the slice's review (the start's
+read of a held record: a registered code outside the held set reads back, an unregistered
+spelling, a missing start and another digest do not; the developer line; then through the host a
+start that leaves the record it cannot read back, ends the two it reads and completes, and the
+start after it, which writes nothing more). `held_t9`'s diagnose half has the same name in
+`crates/lab-ops/src/gate_438_held.rs` (the host's tests cannot reach lab-ops). Adapted: the five
+tests that build a `Diagnosis` by its members (`crates/lab-ops/src/gate_434_lab5d.rs`,
+`apps/actingctl/src/mcp/tests/clock_slots.rs`, `gate_386_sr3.rs`, `gate_411_b15w2.rs`,
+`gate_mcp19b.rs`) name the new member `held`, empty; what they assert is unchanged.
+
+**What an operator sees after deploy.** A pair that should run and is held by a held code for
+`scheduling.task_held.after_ms` (30 minutes by default) leaves one `task_held` warning in the
+ledger, in the errors view of `ac_events` and of an `ac_diagnose` without an instance, in
+`actingd suspended` `held` and in the instance's `ac_diagnose` `held` rows, whose `not_run` row
+then carries `held_reported: true`; its end leaves one `task_held_ended` info record; a start ends
+the holds the runs before it left open (`restarted`), and a start that meets held records it
+cannot read back says so on the line `actingd task_held unreadable` of the daemon's log and goes
+on. No decision, intent, eligibility age, guard,
+pause, ladder or streak changes, and nothing reaches a channel until HELD-2 and a wake rule exist.
+The configuration lists the two keys and each instance's two. A console edits them only once its
+`actingd-config` range reaches 29.
+
+**Rollback** (below 0.12.56), as §1.322 says: remove `task_held` from the `scheduling` section and
+from every entry's `scheduling` member, since an older build refuses the member; it reads the
+records and ignores them, and a hold open at the change keeps no end.
+
 ### 1.328 Slice MAPP-1a (0.12.56): device groups: the form, the checks, one queue and one pick per device (Workflow #437; the contract of §1.323, merged in Runtime pull request #1624, main `c7dc14ec16`; the coordinator's rulings and answers it records, and its settled points of 11-12 below, not Alice's words; coordinator work orders `rd-1112/brief-437-mapp-1.md`, read on main `c7dc14ec16`, and `rd-1112/brief-437-mapp-1-fix.md`)
 
 1.328 is the coordinator's number. Sections stand in merge order: §1.326 (REM-1, main
-`a21571c475`, merged into this slice) was merged first, so this section follows it; §1.327
-belongs to a pull request not merged yet. The contract is [device-group.md](device-group.md) and the passages §1.323 lists.
+`a21571c475`) and §1.327 (HELD-1) were merged first and into this slice, so this section follows
+them. The contract is [device-group.md](device-group.md) and the passages §1.323 lists.
 The coordinator cut MAPP-1 in two (11-12; §1.323, "The code slices"). **MAPP-1a**, this section
 and Runtime pull request #1631, builds the rows of §1.323's table whose slice is MAPP-1 but the
 host's. **MAPP-1b**, the next slice, builds the host's rows and a chain handover's successor,
@@ -15767,6 +15871,17 @@ is today", below) on 11-12.
     one such device beside the first emulator, accepted today, would have been refused; that form
     was not merged. A group's own rule is unchanged: its members name the same `host`, `port` and
     `serial`. Test `mapp1_two_serials_are_two_devices_whatever_their_host_and_port`.
+11. *The held set* (settled by the coordinator on 11-12; done here after §1.327, HELD-1, was
+    merged into this slice). The held set is closed, and a slice that adds a deferral code classes
+    it ([scheduling/README.md](scheduling/README.md), "Held records", "The held set"; §1.322's
+    census). `device_group_waiting` is held, due, whatever its `device_group_wait`: a member that
+    waits hours for its device behind another member is the starvation a held record exists for,
+    and it is the device's form of `instance_already_selected` and `dispatch_instance_held`,
+    which are held. So `HELD_CODES` (`crates/runtime-host/src/policy_host/held.rs`) has 18 codes,
+    12 of them due; the census gains its row and the contract's list names it. MAPP-1a writes the
+    code only with `selected`, and no configuration of MAPP-1a reaches it (the load refuses every
+    group of several): test `held_t12_a_member_that_waits_for_its_device_is_held` gives the
+    detector such a row.
 
 **A group of one is today.** With no entry naming one device twice, every decision, record, key
 and byte the Runtime persists is as before, but for the contract's three exceptions

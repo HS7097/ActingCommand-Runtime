@@ -1204,6 +1204,37 @@ impl HostShared {
         Ok(enabled)
     }
 
+    /// Workflow #438 HELD-1 (register §1.322 HELD-R8): `scheduling.task_held.enabled` and
+    /// `.after_ms` in effect for each instance `aliases` name (`EffectiveConfig::task_held` by its
+    /// registry id; an alias the registry does not hold takes the section's keys), by alias, read
+    /// at every authoritative policy cycle. No decision reads them: only the held records do,
+    /// after the evaluation.
+    pub(super) fn task_held_context(
+        &self,
+        aliases: &[&str],
+        operation: HostLocation,
+    ) -> RuntimeHostResult<BTreeMap<String, actingcommand_runtime_config::TaskHeldConfig>> {
+        let ids = lock(&self.registered_instances, operation)?
+            .values()
+            .map(|instance| {
+                (
+                    instance.instance_alias.clone(),
+                    crate::failure_identity::identifier_text(&instance.instance_id),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let mut settings = BTreeMap::new();
+        for alias in aliases {
+            let id = ids.get(*alias).map_or(*alias, String::as_str);
+            // The keys are checked whenever the configuration is loaded or changed, so a value
+            // that cannot be read here is a halt, as a no-progress key's is.
+            let setting = config.task_held(id).map_err(remedy_config_failure)?;
+            settings.insert((*alias).to_owned(), setting);
+        }
+        Ok(settings)
+    }
+
     /// #428 SCHED-C1e (register §1.299 SC1-12; `contracts/scheduling/README.md`, "Lines for one
     /// instance"): the lines `instance.<instance id>.scheduling.pool_lines` in effect gives the
     /// pools of each instance `aliases` name (`EffectiveConfig::pool_lines` by its registry id; an

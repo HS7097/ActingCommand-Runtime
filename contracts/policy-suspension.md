@@ -404,7 +404,11 @@ only its registered names (`"detail":"codes"`).
    "instances":["..."]}],
  "remedies":[{"code":"policy_remedy_unchosen","remedy_problem":"no_choice","task_id":"...",
    "instance_id":"...","outcome_key":"...","need":"...","recorded_sequence":0,
-   "recorded_at_unix_ms":0,"lifted":{"sequence":0,"at_unix_ms":0}}]}
+   "recorded_at_unix_ms":0,"lifted":{"sequence":0,"at_unix_ms":0}}],
+ "held":[{"code":"task_held","task_id":"...","instance_id":"...","gate_code":"policy_no_progress",
+   "held_state":"due","held_since_unix_ms":0,"held_for_ms":1800000,"held_after_ms":1800000,
+   "recorded_sequence":0,"recorded_at_unix_ms":0,
+   "ended":{"sequence":0,"at_unix_ms":0,"held_end":"selected","held_for_ms":2400000}}]}
 ```
 
 - `suspended`: each pair whose latest execution paused it and is not lifted. `previous` is the
@@ -526,6 +530,27 @@ only its registered names (`"detail":"codes"`).
     no warning.
   - MCP `ac_diagnose` carries the diagnosed instance's entries as its `remedies` rows, with the
     same members.
+
+- `held` (Workflow #438 HELD-1, since 0.12.56; [scheduling/README.md](scheduling/README.md),
+  "Held records"): the held records. One entry per `policy.planning_signal_observed` record of
+  kind `goal_missed` whose `signal_id` starts with `signal:task_held:held:` and that is still
+  open, or ended within 48 h of the ledger's latest event; newest first, at most 200, with
+  `held_total` added with their number when the list is cut. A record is selected by its kind and
+  prefix, never by its outcome.
+  - `code` is `task_held`; `gate_code`, `held_state`, `held_since_unix_ms`, `held_for_ms` and
+    `held_after_ms` are its outcome's values, `task_id` and `instance_id` (the alias) the record's
+    own, and `recorded_sequence` and `recorded_at_unix_ms` place it in the ledger.
+  - `ended: {sequence, at_unix_ms, held_end, held_for_ms?}` is present when a later
+    `signal:task_held:ended:` record of the same hold (the same `<hex>`) exists and reads back;
+    without it the hold is still open (`held_for_ms` is absent for `held_end` `restarted`).
+  - A record whose outcome does not read back (a code that is not `task_held`, a value the entry
+    does not hold, a value of the wrong type, a missing required value, a task or alias that is not
+    the record's own), or that names no task, gives
+    `{"parse_state":"unparsed","signal_id":"...","code":"..."}`, as for `clock_slots`, and no
+    warning.
+  - MCP `ac_diagnose` carries the diagnosed instance's entries as its `held` rows, with the same
+    members, and marks `held_reported: true` on each `not_run` row whose instance, task and
+    `since_unix_ms` an open entry names (its `instance_id`, `task_id` and `held_since_unix_ms`).
 
 Every exit, usage errors included, prints that one stdout line, and the process exits by its
 outcome's category (Workflow #378 A6a): 0 for `suspended_reported`, whatever the report lists,

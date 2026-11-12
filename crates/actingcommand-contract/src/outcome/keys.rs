@@ -792,6 +792,14 @@ outcome_keys! {
     // in codes mode, and the declared id of the stage a phased route's run was in. ----
     state_problem: vocab(state_problem),
     phase_id: id,
+    // ---- Workflow #438 HELD-1 (a held record and its end, contracts/scheduling/README.md "Held
+    // records"; register §1.322 HELD-R3): begin ----
+    held_state: vocab(held_state),
+    held_end: vocab(held_end),
+    held_since_unix_ms: unix_ms,
+    held_for_ms: duration_ms,
+    held_after_ms: duration_ms,
+    // ---- Workflow #438 HELD-1: end ----
     // ---- Workflow #437 MAPP-1 (contracts/device-group.md): which rule of device groups a
     // configuration breaks, and why a member of a device group waits for its device; both kept
     // in codes mode. ----
