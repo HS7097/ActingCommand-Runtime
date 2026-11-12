@@ -8,8 +8,9 @@
 //!   `core_ops` in this process ([`Service::core`]); and (the slice's second part) on Windows a
 //!   rescue row the rescue module serves, by the module in this process with the initiator
 //!   `Lab-MCP` ([`rescue_line`]), but `deploy` and `rollback`, whose run the front forces
-//!   detached. Every other call answers `mcp_operation_unsupported`, its arguments unread, as
-//!   before.
+//!   detached, which answer `mcp_operation_unsupported`, their arguments unread. Workflow #434
+//!   LAB-5G4b: every other offered row through a `serve` child (`crate::children`), its
+//!   arguments read here first as every served row's.
 //! - **The arguments** ([`prepare`]), before anything is sent or written: a member the row does
 //!   not declare (`Operation::undeclared`), and a parameter the front gives itself, is refused as
 //!   today's server refuses an argument it does not know (`arguments_invalid`, `unknown`); so is a
@@ -29,6 +30,7 @@
 //!   [`Service::run_start`]).
 
 use crate::budget;
+use crate::children::{self, Children};
 use crate::protocol::Era;
 use crate::runtime::{self, Runtime};
 use crate::tools::{self, Added, Serving, Supplied};
@@ -50,19 +52,37 @@ use std::time::Duration;
 /// The parameter of the instance a write names in its client action.
 const INSTANCE: &str = "instance";
 
-/// What serves the calls: this server's Runtime connection and its export directory.
+/// What serves the calls: this server's Runtime connection and its export directory, and
+/// (Workflow #434 LAB-5G4b) its `serve` children.
 pub(crate) struct Service {
     runtime: Runtime,
     exports: PathBuf,
+    children: Children,
 }
 
 impl Service {
-    /// A service whose exports go to `exports` (`budget::export_directory` in the server).
+    /// A service whose exports go to `exports` (`budget::export_directory` in the server), with
+    /// the children's default options and no child kept idle.
     pub(crate) fn new(exports: PathBuf) -> Self {
         Self {
             runtime: Runtime::new(),
             exports,
+            children: Children::new(children::Options::default()),
         }
+    }
+
+    /// Workflow #434 LAB-5G4b: this service with the children the start options ask for
+    /// (`--children`, `--child-idle`), whose idle ones a thread of their own ends; a thread the
+    /// OS refuses is `mcp_server_start_failed`.
+    pub(crate) fn with_children(mut self, options: children::Options) -> Result<Self, Outcome> {
+        self.children = Children::started(options)?;
+        Ok(self)
+    }
+
+    /// Workflow #434 LAB-5G4b: the server's input ended; every child's input is closed, an idle
+    /// one's now and a working one's once its line came.
+    pub(crate) fn end_of_input(&self) {
+        self.children.end_of_input();
     }
 
     /// The `tools/call` result of a call of `operation`'s tool `tool` with `arguments`, in `era`.
@@ -77,7 +97,8 @@ impl Service {
     }
 
     /// The line of that call: `mcp_operation_unsupported` for a row this build does not serve;
-    /// else the refusal of its arguments, or the line of the code that serves it.
+    /// else the refusal of its arguments, or the line of the code that serves it (Workflow #434
+    /// LAB-5G4b: for a row a child serves, the line of the child's envelope).
     pub(crate) fn line(
         &self,
         operation: &Operation,
@@ -91,6 +112,7 @@ impl Service {
         }
         match prepare(operation, arguments, &self.exports) {
             Ok(params) if serving == Serving::Rescue => rescue_line(operation, &params),
+            Ok(params) if serving == Serving::Child => self.children.line(operation, &params),
             Ok(params) => self.core(operation, tool, &params, era),
             Err(refused) => cli_line::failure(&refused.outcome, refused.text),
         }

@@ -16,14 +16,19 @@
 //!   `mcp_params_invalid`, `name`, `not_recognised`), and arguments that are no object -32602.
 //!   Workflow #434 LAB-5G2b (adapted: that slice serves the core rows, `ac_status` and `ac_frame`
 //!   among them): the refused tools called are of rows it still refuses, `ac_app_launch` and
-//!   `ac_lab_observe`.
+//!   `ac_lab_observe`. Workflow #434 LAB-5G4b (adapted, its work order point 1: every other offered
+//!   row is served through a `serve` child since): the refused tools are `ac_deploy` and
+//!   `ac_rollback`, the rows still refused, on Windows, where they are offered; elsewhere no
+//!   offered row is refused.
 //! - `mcp_loop_initialize_list_batch_and_cancel`: `initialize` negotiates as today's server and
 //!   carries the instructions; `tools/list` answers `--list-tools`' list, in either era; under
 //!   2025-03-26 a batch is one array of its answers, under a later version -32600, an empty one
 //!   -32600 always; a cancellation of a request not in flight, or of a call already answered,
 //!   answers nothing and the server goes on; `actingcommand/entryStatus` holds nothing; at stdin
 //!   EOF the server exits 0. Workflow #434 LAB-5G2b (adapted, as above): the call the cancellation
-//!   and the batch hold is `ac_app_launch`'s, a row that slice still refuses.
+//!   and the batch hold is `ac_app_launch`'s, a row that slice still refuses. Workflow #434
+//!   LAB-5G4b (adapted, as above): the same call, refused since for its missing `instance`
+//!   (`arguments_invalid`, `required`) before any child starts.
 
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
@@ -228,6 +233,25 @@ fn assert_unsupported(outcome: &Value, tool: &str) {
     assert_eq!(outcome["values"]["mcp_tool"], tool, "{outcome}");
 }
 
+/// Workflow #434 LAB-5G4b: the refusal of `ac_app_launch` without its `instance`, before anything
+/// is sent or started.
+#[track_caller]
+fn assert_instance_required(outcome: &Value) {
+    assert_eq!(
+        (
+            &outcome["code"],
+            &outcome["values"]["argument"],
+            &outcome["values"]["argument_problem"],
+        ),
+        (
+            &json!("arguments_invalid"),
+            &json!("instance"),
+            &json!("required"),
+        ),
+        "{outcome}"
+    );
+}
+
 /// `params._meta` of a 2026-07-28 request.
 fn modern_meta() -> Value {
     let mut meta = Map::new();
@@ -304,10 +328,13 @@ fn mcp_tier_refused() {
 fn mcp_calls_refused_unsupported_and_an_unknown_tool() {
     let mut server = Server::spawn(&[]);
     server.initialize(1, "2025-11-25");
-    let refused = server.call_tool(2, "ac_app_launch", json!({}));
-    assert_unsupported(&refusal(&refused, true), "ac_app_launch");
-    let refused = server.call_tool(3, "ac_lab_observe", json!({"instance": "neutral.shell"}));
-    assert_unsupported(&refusal(&refused, true), "ac_lab_observe");
+    // Workflow #434 LAB-5G4b (adapted): the rows still refused, offered on Windows only.
+    if cfg!(windows) {
+        let refused = server.call_tool(2, "ac_deploy", json!({}));
+        assert_unsupported(&refusal(&refused, true), "ac_deploy");
+        let refused = server.call_tool(3, "ac_rollback", json!({}));
+        assert_unsupported(&refusal(&refused, true), "ac_rollback");
+    }
     for (id, name) in [(4, "ac_observe"), (5, "ac_no_such_tool")] {
         let answer = server.call_tool(id, name, json!({}));
         let (code, outcome) = rpc_error(&answer);
@@ -351,8 +378,15 @@ fn mcp_calls_refused_unsupported_and_an_unknown_tool() {
         listed["result"]["tools"], core,
         "tools/list is --list-tools'"
     );
-    let refused = server.call_tool(3, "ac_record_start", json!({}));
-    assert_unsupported(&refusal(&refused, true), "ac_record_start");
+    // Workflow #434 LAB-5G4b (adapted): a refused row's tool --list leaves out, on Windows.
+    if cfg!(windows) {
+        assert!(
+            !tool_names(&core).contains(&"ac_deploy".to_owned()),
+            "--list core leaves the rescue tools out: {core}"
+        );
+        let refused = server.call_tool(3, "ac_deploy", json!({}));
+        assert_unsupported(&refusal(&refused, true), "ac_deploy");
+    }
 }
 
 #[test]
@@ -420,7 +454,7 @@ fn mcp_loop_initialize_list_batch_and_cancel() {
     assert_eq!(ping["result"], json!({}), "{ping}");
     // A cancellation of a call already answered changes nothing.
     let refused = server.call_tool(6, "ac_app_launch", json!({}));
-    assert_unsupported(&refusal(&refused, true), "ac_app_launch");
+    assert_instance_required(&refusal(&refused, true));
     server.send(&json!({
         "jsonrpc": "2.0",
         "method": "notifications/cancelled",
@@ -462,7 +496,7 @@ fn mcp_loop_initialize_list_batch_and_cancel() {
     );
     for answered in answers {
         if answered["id"] == json!(3) {
-            assert_unsupported(&refusal(answered, false), "ac_app_launch");
+            assert_instance_required(&refusal(answered, false));
         } else {
             assert_eq!(answered["result"], json!({}), "{answer}");
         }

@@ -417,21 +417,33 @@ pub(crate) fn admitted() -> Result<(), Exit> {
 /// `front` is the front end `serve --stdio --front` named (Workflow #434 LAB-5G4a), `None` on the
 /// command line and without the option.
 pub(crate) fn answer(table: &OperationTable, call: &Call, front: Option<serve::Front>) -> Exit {
+    answered(table, call, front).0
+}
+
+/// Workflow #434 LAB-5G4b: [`answer`], and the request id the result of the own command that
+/// served it carries (`engine::answered`), which `serve --stdio --front mcp` puts beside the line;
+/// an operation of this module or of the rescue module carries none.
+pub(crate) fn answered(
+    table: &OperationTable,
+    call: &Call,
+    front: Option<serve::Front>,
+) -> (Exit, Option<String>) {
     let Some(operation) = table.operation(&call.name) else {
-        return cli_line::failure(
+        let refused = cli_line::failure(
             &cli_line::usage_invalid(Some(call.name.as_str()), ArgumentProblem::Unknown),
             Some(USAGE),
         );
+        return (refused, None);
     };
     if core_ops::serves(operation) {
-        return core_ops::answer(operation, &call.params);
+        return (core_ops::answer(operation, &call.params), None);
     }
     // Workflow #434 LAB-3: the rescue module's rows (offered on Windows only, where it runs).
     #[cfg(windows)]
     if operation.module == OperationModule::Rescue {
-        return rescue::line(rescue::answer(call, front));
+        return (rescue::line(rescue::answer(call, front)), None);
     }
-    engine::line(operation, &call.params, front)
+    engine::answered(operation, &call.params, front)
 }
 
 /// Workflow #434 LAB-3: the rescue module's rows (`crates/lab-rescue`), for the root actinglab

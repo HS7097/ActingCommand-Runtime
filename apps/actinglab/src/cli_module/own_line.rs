@@ -30,6 +30,8 @@
 //! - **A command line with `--via`** (only MCP's actinglab child sends one) is not answered here:
 //!   `main` prints the envelope for it as before, byte for byte, with its exit codes 2 to 6, until
 //!   LAB-5 ([`via_line`]).
+//! - **The request id** (Workflow #434 LAB-5G4b, [`request_id`]): what `serve --stdio --front mcp`
+//!   puts beside the line of an own command whose result carries one.
 
 use crate::cli_result::CliResult;
 use actingcommand_contract::EnvelopeError;
@@ -53,6 +55,9 @@ const DETAILS: &str = "details";
 /// The members of an outcome nested in a failure's details that name its code and its values.
 const CODE_MEMBER: &str = "code";
 const VALUES_MEMBER: &str = "values";
+/// Workflow #434 LAB-5G4b: the member of a result, or of a failure's details, that names the Lab
+/// request the command made, as MCP's actinglab child reads it (`lab_ops::lab_child::interpret`).
+const REQ_ID: &str = "req_id";
 
 /// The commands whose result has a top-level member named `outcome`, each with the one member
 /// its line carries that result in, whole and unchanged (the coordinator's ruling of 2026-11-10 on
@@ -110,6 +115,22 @@ pub(crate) fn exit(result: &CliResult) -> Exit {
             envelope.data.clone().unwrap_or(Value::Null),
         ),
     }
+}
+
+/// Workflow #434 LAB-5G4b (register §1.287, "Slice LAB-5G4b"; contract §8.2): the request id one
+/// own command's result carries, where MCP's actinglab child reads it: the result's `req_id` on a
+/// success, its details' `req_id` on a failure; `None` when it carries none. `serve --stdio --front
+/// mcp` puts it beside the line, which does not say it in every shape (a failure nests its details).
+pub(crate) fn request_id(result: &CliResult) -> Option<String> {
+    let envelope = &result.envelope;
+    let carrier = match &envelope.error {
+        Some(error) => error.details.as_ref(),
+        None => envelope.data.as_ref(),
+    };
+    carrier
+        .and_then(|carrier| carrier.get(REQ_ID))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 /// The success line of `command` with its result `data`.
