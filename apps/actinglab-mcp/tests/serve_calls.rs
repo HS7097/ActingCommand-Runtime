@@ -30,6 +30,27 @@
 //!   client action of `ac_pause` on surface `mcp`, then `PauseScheduling`), each with the envelope
 //!   (Cli, Cli).
 //!
+//! Workflow #434 LAB-5G3 (register §1.287, "Slice LAB-5G3"), each server with a short call budget
+//! (`--call-budget`), so that no test waits for today's 25 s:
+//! - `mcp_jobs_handles_entry_status`: a read the scripted Runtime holds past the budget answers its
+//!   job's handle (`mcp_job_started`, `running`), counted by `actingcommand/entryStatus` while it
+//!   runs; `ac_run_show` of the handle answers the job's line, the command line's, and then it
+//!   counts no more. A read whose line is far larger than the budget (a pack schedule of made-up
+//!   packages) answers `output_budget_exceeded` with its job's handle and the bytes it takes (the
+//!   work order's point 10); the finished job counts, unread, until `ac_run_show` of its handle
+//!   answers its summary (the line's own outcome, the command line's, and its members' names).
+//!   A handle this process never issued is `handle_unknown`. `ac_run_start` answers at once with
+//!   `submitting` and a handle that is the request id the Runtime then receives, and its job counts
+//!   while it submits.
+//! - `mcp_cursor_bound_to_connection`: an `events` cursor is taken back on the connection it was
+//!   issued on (the rest of the page) and is `cursor_invalid`, nothing read, once the connection was
+//!   made again; a `codes` cursor gives the page the command line gives for it, and a `runs` cursor
+//!   the line the command line's code gives for it.
+//! - `mcp_run_show_and_run_stop_wait`: `ac_run_show` of a run not found reads it once without a
+//!   wait and once more a second later with one; `ac_run_stop` answers its job's handle after its
+//!   `wait_s`, and `ac_run_show` of the handle then the job's line; a wait past the budget, below
+//!   0 or of another type is refused before anything is sent.
+//!
 //! The second part's own (Windows, where the rescue module runs; a made-up single-location root in
 //! a temporary folder whose build carries a copy of this program in `tools\`, adopted, no Runtime):
 //! - `mcp_plan_through_the_server_is_the_command_lines`: `ac_mcp_plan` answers the line the rescue
@@ -43,26 +64,35 @@
 //!   module never answers, with the argument; the root holds the same files after them.
 
 use actingcommand_contract::{
-    EventActor, EventSource, IdentifierIssuer, RuntimeErrorCode, RuntimeErrorProjection,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    TerminalEvent,
+    AuditInput, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
+    EventPayloadDraft, EventSeverity, EventSource, FactScope, IdentifierIssuer, OriginModule,
+    OwnerEpoch, PackSchedulePackage, PackScheduleScopeVersion, PackScheduleSource,
+    PackScheduleView, ProjectedEvent, ProjectionPayload, RuntimeControlPlaneStatus,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    RuntimeInstanceStatus, RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult, SanitizationError, SecretField,
+    SecretFingerprinter, Sha256Fingerprint, TerminalEvent,
 };
 use actingcommand_lab_ops::cli_line::Exit;
+use actingcommand_lab_ops::code_lookup;
 use actingcommand_lab_ops::core_ops::{self, Caller, Place};
 use actingcommand_lab_ops::events::CursorBinding;
 use actingcommand_lab_ops::front::{self, Connection, Front};
 use actingcommand_lab_ops::table;
 use actingcommand_runtime_client::test_support::{
-    ScriptedAnswer, ScriptedConnection, ScriptedConnectionRecord, ScriptedRecord, ScriptedRuntime,
+    ScriptedAnswer, ScriptedConnection, ScriptedConnectionRecord, ScriptedGate, ScriptedRecord,
+    ScriptedRuntime,
 };
 use actingcommand_runtime_client::{RuntimeChannel, RuntimeClient};
 use serde_json::{Value, json};
+use std::ffi::OsString;
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 /// Bounds a broken run only.
@@ -658,6 +688,689 @@ fn mcp_write_provenance_as_todays_server() {
             "{request}"
         );
     }
+}
+
+// ---- Workflow #434 LAB-5G3: jobs, handles, waits and cursors taken back
+
+/// The made-up instance the scripted status lists.
+const INSTANCE: &str = "neutral.a";
+/// The made-up packages of a pack schedule view: some 70 bytes of JSON each, so the line takes
+/// some 140 KB as text and as much again as `structuredContent`, far past the 24 KiB budget.
+const PACKAGES: usize = 2000;
+/// The time of the made-up record at sequence 0; a record's time is this plus its sequence.
+const RECORDED_FROM_UNIX_MS: u64 = 1_700_000_000_000;
+
+/// `command` with the call budget `seconds` (the start option `--call-budget`).
+fn with_call_budget(mut command: Command, seconds: u64) -> Command {
+    command.arg("--call-budget").arg(seconds.to_string());
+    command
+}
+
+/// The answer of `actingcommand/entryStatus`.
+fn entry_status(server: &mut Server, id: u64) -> Value {
+    server.request(id, "actingcommand/entryStatus", json!({}))["result"].clone()
+}
+
+/// The line a `tools/call` answer carries as its text, which `structuredContent` repeats.
+#[track_caller]
+fn line_of(answer: &Value) -> Value {
+    let result = &answer["result"];
+    let text = result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("an answer without its text: {answer}"));
+    let line = serde_json::from_str::<Value>(text)
+        .unwrap_or_else(|error| panic!("the text is no JSON ({error}): {answer}"));
+    assert_eq!(
+        result["structuredContent"], line,
+        "structuredContent repeats the line"
+    );
+    line
+}
+
+/// The handle of an answer that names a job going on: `{handle, job_phase}` beside
+/// `mcp_job_started`, no error.
+#[track_caller]
+fn handle_of(answer: &Value, phase: &str) -> String {
+    let line = line_of(answer);
+    assert_eq!(answer["result"]["isError"], json!(false), "{answer}");
+    assert_eq!(line["outcome"]["code"], "mcp_job_started", "{line}");
+    assert_eq!(line["job_phase"], phase, "{line}");
+    line["handle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no handle: {line}"))
+        .to_owned()
+}
+
+/// The code of the outcome a refused answer's line carries, and the answer is an error.
+#[track_caller]
+fn refused_code(answer: &Value) -> Value {
+    assert_eq!(answer["result"]["isError"], json!(true), "{answer}");
+    line_of(answer)["outcome"]["code"].clone()
+}
+
+/// `Health` on a kept connection before it is used again, answered in `owner_epoch`.
+fn healthy(owner_epoch: OwnerEpoch) -> impl FnOnce(&RuntimeRequest) -> ScriptedAnswer + Send {
+    move |request| {
+        assert!(
+            matches!(request.operation(), RuntimeOperation::Health),
+            "a kept connection is checked with Health first, not {:?}",
+            request.operation()
+        );
+        ScriptedAnswer::completed(request, RuntimeResult::Health { owner_epoch })
+    }
+}
+
+/// The Runtime's status in `owner_epoch`, listing the made-up instances `aliases`.
+fn status_listing(
+    owner_epoch: OwnerEpoch,
+    aliases: &'static [&'static str],
+) -> impl FnOnce(&RuntimeRequest) -> ScriptedAnswer + Send {
+    move |request| {
+        assert!(
+            matches!(request.operation(), RuntimeOperation::Status),
+            "a status read, not {:?}",
+            request.operation()
+        );
+        let issuer = IdentifierIssuer::new().expect("identifiers");
+        let instances = aliases
+            .iter()
+            .copied()
+            .map(|alias| {
+                let instance_id = *issuer
+                    .mint_instance_id()
+                    .expect("an instance id")
+                    .transport();
+                RuntimeInstanceStatus::new(alias, instance_id, false, 0, false, false, false)
+                    .expect("an instance's status")
+            })
+            .collect();
+        let status =
+            RuntimeControlPlaneStatus::new(owner_epoch, instances).expect("the scripted status");
+        ScriptedAnswer::completed(request, RuntimeResult::Status { status })
+    }
+}
+
+/// `INSTANCE`'s pack schedule view of `PACKAGES` made-up packages.
+fn large_pack_schedule(request: &RuntimeRequest) -> ScriptedAnswer {
+    assert!(
+        matches!(
+            request.operation(),
+            RuntimeOperation::PackScheduleView { .. }
+        ),
+        "a pack schedule read, not {:?}",
+        request.operation()
+    );
+    let packages = (0..PACKAGES)
+        .map(|index| PackSchedulePackage {
+            package_id: format!("neutral.package.{index:04}"),
+            schedulable: true,
+            source: PackScheduleSource::None,
+            row: None,
+            next_change_unix_ms: None,
+            below: None,
+        })
+        .collect();
+    let view = PackScheduleView {
+        instance_alias: INSTANCE.to_owned(),
+        scopes: vec![PackScheduleScopeVersion {
+            scope: FactScope::Instance {
+                instance_id: INSTANCE.to_owned(),
+            },
+            version: 0,
+        }],
+        packages,
+    };
+    ScriptedAnswer::completed(
+        request,
+        RuntimeResult::PackScheduleViewed {
+            view: Box::new(view),
+        },
+    )
+}
+
+/// The client action of today's provenance, recorded.
+fn recorded_action(request: &RuntimeRequest) -> ScriptedAnswer {
+    assert!(
+        matches!(
+            request.operation(),
+            RuntimeOperation::RecordClientAction { .. }
+        ),
+        "the client action comes second, not {:?}",
+        request.operation()
+    );
+    let event_id = *IdentifierIssuer::new()
+        .expect("identifiers")
+        .mint_event_id()
+        .expect("an event id")
+        .transport();
+    let receipt = RuntimeReceipt::success(
+        request,
+        RuntimeReceiptState::Completed,
+        Some(TerminalEvent {
+            sequence: 1,
+            event_id,
+        }),
+        RuntimeResult::ClientActionRecorded,
+    )
+    .expect("the client action's receipt");
+    ScriptedAnswer::Receipt(Box::new(receipt))
+}
+
+/// A write's own connection, today's provenance first: the identity card accepted, the client
+/// action recorded.
+fn provenance() -> ScriptedConnection {
+    ScriptedConnection::new()
+        .request(|request| match request.operation() {
+            RuntimeOperation::DeclareGovernanceIdentity { .. } => {
+                ScriptedAnswer::completed(request, RuntimeResult::GovernanceIdentityAccepted)
+            }
+            other => panic!("the identity card comes first, not {other:?}"),
+        })
+        .request(recorded_action)
+}
+
+/// An event query of a ledger that holds nothing.
+fn empty_page(request: &RuntimeRequest) -> ScriptedAnswer {
+    let RuntimeOperation::QueryEvents { page, .. } = request.operation() else {
+        panic!("an event query, not {:?}", request.operation());
+    };
+    let page = RuntimeEventQueryPage::new(Vec::new(), 0, page.limit(), false, None)
+        .expect("an empty page");
+    ScriptedAnswer::completed(request, RuntimeResult::EventPage { page })
+}
+
+/// One page of `events` for the event query `request` sends, as the scripted ledger answers one:
+/// the records after its cursor and from its first sequence, oldest first, at the snapshot of the
+/// last record, with the cursor after the page while more remain.
+fn page_of(events: &[ProjectedEvent], request: &RuntimeRequest) -> ScriptedAnswer {
+    let RuntimeOperation::QueryEvents {
+        query,
+        profile,
+        page,
+    } = request.operation()
+    else {
+        panic!("an event query, not {:?}", request.operation());
+    };
+    let snapshot = events.last().map_or(0, |event| event.sequence);
+    let after = page
+        .cursor()
+        .map_or(0, RuntimeEventQueryCursor::after_sequence);
+    let mut matching = events.iter().filter(|event| {
+        event.sequence > after
+            && query
+                .from_sequence
+                .is_none_or(|from| event.sequence >= from)
+    });
+    let rows = matching
+        .by_ref()
+        .take(usize::from(page.limit()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let has_more = matching.next().is_some();
+    let next = rows.last().filter(|_| has_more).map(|last| {
+        RuntimeEventQueryCursor::new(snapshot, last.sequence, query, *profile)
+            .expect("the page's next cursor")
+    });
+    let page = RuntimeEventQueryPage::new(rows, snapshot, page.limit(), has_more, next)
+        .expect("an event page");
+    ScriptedAnswer::completed(request, RuntimeResult::EventPage { page })
+}
+
+struct NoSecrets;
+
+impl SecretFingerprinter for NoSecrets {
+    fn fingerprint(
+        &self,
+        _field: SecretField,
+        _original: &str,
+    ) -> Result<Sha256Fingerprint, SanitizationError> {
+        panic!("the made-up records hold no secret")
+    }
+}
+
+/// Made-up records at the sequences 1 to `count`, as a forensic read projects them.
+fn ledger(count: u64) -> Vec<ProjectedEvent> {
+    let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    (1..=count)
+        .map(|sequence| {
+            let payload: EventPayloadDraft =
+                RuntimePayloadDraft::started(EventAction::RuntimeStart, AuditInput::new()).into();
+            let sanitized = EventDraft::new(
+                issuer.mint_event_id().expect("event id"),
+                RECORDED_FROM_UNIX_MS + sequence,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default(),
+                payload,
+            )
+            .sanitize(&NoSecrets)
+            .expect("sanitize a made-up record");
+            ProjectedEvent {
+                views: Vec::new(),
+                artifact_evictions: Vec::new(),
+                schema_version: sanitized.schema_version().to_owned(),
+                sequence,
+                event_id: *sanitized.event_id(),
+                timestamp_unix_ms: sanitized.timestamp_unix_ms(),
+                event_type: sanitized.event_type(),
+                severity: sanitized.severity(),
+                sensitivity: sanitized.sensitivity(),
+                origin: sanitized.origin().clone(),
+                links: sanitized.links().clone(),
+                payload_schema: sanitized.payload_schema().to_owned(),
+                payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
+                artifacts: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+/// The seq of each row of an `events` line.
+fn sequences(line: &Value) -> Vec<u64> {
+    line["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a line without events: {line}"))
+        .iter()
+        .map(|row| row["seq"].as_u64().expect("a row's seq"))
+        .collect()
+}
+
+/// How many event queries a connection received.
+fn queries(connection: &ScriptedConnectionRecord) -> usize {
+    connection.count(|operation| matches!(operation, RuntimeOperation::QueryEvents { .. }))
+}
+
+/// A request id the Runtime never issued, as text.
+fn made_up_request_id() -> String {
+    let issuer = IdentifierIssuer::new().expect("identifiers");
+    let request_id = *issuer.mint_request_id().expect("a request id").transport();
+    json!(request_id)
+        .as_str()
+        .expect("a request id is text")
+        .to_owned()
+}
+
+#[test]
+fn mcp_jobs_handles_entry_status() {
+    let state = TempDir::new().expect("tempdir");
+    let temp = TempDir::new().expect("tempdir");
+    let package = temp.path().join("neutral-package.json");
+    fs::write(&package, b"{}").expect("write a made-up package");
+    let package = package
+        .to_str()
+        .expect("the temporary folder is UTF-8")
+        .to_owned();
+    // `hold` keeps the first read's answer back until the test lets it go, `written` says it went;
+    // `submit` keeps the run's receipt back.
+    let (hold, written, submit) = (
+        ScriptedGate::new(),
+        ScriptedGate::new(),
+        ScriptedGate::new(),
+    );
+    let runtime = ScriptedRuntime::start(state.path(), |owner_epoch| {
+        let held = hold.clone();
+        let submitted = submit.clone();
+        vec![
+            // The server's kept connection: the held read; a pack schedule far past the budget;
+            // the instance of the run.
+            ScriptedConnection::new()
+                .request(move |request| {
+                    assert_eq!(operation_of(request), "discover_instances");
+                    denied(request).after(&held)
+                })
+                .open(&written)
+                .request(healthy(owner_epoch))
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(large_pack_schedule)
+                .request(healthy(owner_epoch))
+                .request(status_listing(owner_epoch, &[INSTANCE])),
+            // The run's own connection: today's provenance, the instance again, the run held and
+            // refused.
+            provenance()
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(move |request| {
+                    assert!(
+                        matches!(
+                            request.operation(),
+                            RuntimeOperation::RunContainedTask { .. }
+                        ),
+                        "the run, not {:?}",
+                        request.operation()
+                    );
+                    denied(request).after(&submitted)
+                })
+                .ledger(Vec::new()),
+            // The command line's code: the same read and the same pack schedule.
+            ScriptedConnection::new().request(denied_one("discover_instances")),
+            ScriptedConnection::new()
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(large_pack_schedule),
+        ]
+    });
+    let mut server = Server::start(with_call_budget(
+        actinglab_mcp(Path::new(PROGRAM), Some(state.path()), temp.path()),
+        2,
+    ));
+    server.initialize();
+
+    // A call past the budget answers its job's handle; the job goes on and counts.
+    let first = handle_of(&server.call_tool(2, "ac_discover", json!({})), "running");
+    assert!(first.starts_with("mcp_job_"), "{first}");
+    assert_eq!(
+        entry_status(&mut server, 3),
+        json!({"outstanding_handles": 1, "kinds": ["ac_discover"], "handles": [first], "calls_in_flight": 0}),
+        "a running job counts"
+    );
+    hold.open();
+    written.wait();
+    // Its line, read with ac_run_show by the handle.
+    let read = server.call_tool(4, "ac_run_show", json!({"id": first, "wait_s": 2}));
+    assert_eq!(
+        entry_status(&mut server, 5),
+        json!({"outstanding_handles": 0, "kinds": [], "handles": [], "calls_in_flight": 0}),
+        "read, it counts no more"
+    );
+
+    // Work order point 10: a line far past the budget is never cut; the job keeps it.
+    let over = server.call_tool(6, "ac_pack_schedule", json!({"instance": INSTANCE}));
+    assert_eq!(
+        refused_code(&over),
+        json!("output_budget_exceeded"),
+        "{over}"
+    );
+    let refusal = line_of(&over);
+    let values = &refusal["outcome"]["values"];
+    assert!(
+        values["actual_bytes"].as_u64() > values["limit_bytes"].as_u64()
+            && values["limit_bytes"].as_u64().is_some(),
+        "the bytes it takes, past the limit: {refusal}"
+    );
+    let second = refusal["handle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the refusal carries its job's handle: {refusal}"))
+        .to_owned();
+    assert_eq!(
+        entry_status(&mut server, 7),
+        json!({"outstanding_handles": 1, "kinds": ["ac_pack_schedule"], "handles": [second], "calls_in_flight": 0}),
+        "a finished job whose line was not read counts"
+    );
+    let summary = server.call_tool(8, "ac_run_show", json!({"id": second}));
+    assert_eq!(refused_code(&summary), json!("output_budget_exceeded"));
+    let summary = line_of(&summary);
+    assert_eq!(
+        (&summary["handle"], &summary["job_phase"]),
+        (&json!(second), &json!("done")),
+        "{summary}"
+    );
+    assert_eq!(
+        entry_status(&mut server, 9)["outstanding_handles"],
+        json!(0),
+        "read, it counts no more"
+    );
+
+    // A handle this process never issued.
+    let unknown = server.call_tool(
+        10,
+        "ac_run_show",
+        json!({"id": "mcp_job_0000000000000000_0"}),
+    );
+    assert_eq!(refused_code(&unknown), json!("handle_unknown"), "{unknown}");
+
+    // ac_run_start answers at once: its handle is the run's request id; its job counts while it
+    // submits.
+    let started = server.call_tool(
+        11,
+        "ac_run_start",
+        json!({"instance": INSTANCE, "package": package}),
+    );
+    let run = handle_of(&started, "submitting");
+    assert!(line_of(&started)["correlation_id"].is_string(), "{started}");
+    assert_eq!(
+        entry_status(&mut server, 12),
+        json!({"outstanding_handles": 1, "kinds": ["ac_run_start"], "handles": [run], "calls_in_flight": 0}),
+        "a run's job counts while it submits"
+    );
+    submit.open();
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+
+    assert_served_as(
+        &read,
+        &command_line_line(state.path(), "discover", json!({})),
+    );
+    let (whole, _) =
+        command_line_line(state.path(), "pack-schedule", json!({"instance": INSTANCE}));
+    let members = whole
+        .as_object()
+        .expect("a line is an object")
+        .keys()
+        .filter(|name| name.as_str() != "outcome")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        summary["summary"],
+        json!({"outcome": whole["outcome"], "members": members, "warnings_total": 0}),
+        "the summary: the line's own outcome and its members' names"
+    );
+    let record = runtime.finish();
+    assert!(record.unscripted.is_empty(), "a connection beyond the four");
+    let submitted = record.connections[1]
+        .requests
+        .iter()
+        .find(|request| {
+            matches!(
+                request.operation(),
+                RuntimeOperation::RunContainedTask { .. }
+            )
+        })
+        .expect("the run was submitted");
+    assert_eq!(
+        json!(submitted.request_id()),
+        json!(run),
+        "ac_run_start's handle is the run's request id"
+    );
+}
+
+#[test]
+fn mcp_cursor_bound_to_connection() {
+    let state = TempDir::new().expect("tempdir");
+    let temp = TempDir::new().expect("tempdir");
+    let records = ledger(4);
+    let runtime = ScriptedRuntime::start(state.path(), |owner_epoch| {
+        let (first_page, rest) = (records.clone(), records.clone());
+        vec![
+            // The kept connection: a page of two of four records, then the rest from its cursor;
+            // then its Health answered by a close, so the connection is made again.
+            ScriptedConnection::new()
+                .request(move |request| page_of(&first_page, request))
+                .request(healthy(owner_epoch))
+                .request(move |request| page_of(&rest, request))
+                .request(|request| {
+                    assert!(
+                        matches!(request.operation(), RuntimeOperation::Health),
+                        "a kept connection is checked with Health first, not {:?}",
+                        request.operation()
+                    );
+                    ScriptedAnswer::Close
+                }),
+            // The connection made again: the cursor refused, nothing read; then `runs`.
+            ScriptedConnection::new().request(healthy(owner_epoch)),
+            // The command line's code: `runs` with the same cursor.
+            ScriptedConnection::new(),
+        ]
+    });
+    let mut server = Server::start(actinglab_mcp(
+        Path::new(PROGRAM),
+        Some(state.path()),
+        temp.path(),
+    ));
+    server.initialize();
+
+    // `events`: a cursor issued on the kept connection, the first one.
+    let first = line_of(&server.call_tool(2, "ac_events", json!({"after": 0, "limit": 2})));
+    assert_eq!(sequences(&first), [1, 2], "{first}");
+    let cursor = first["next_cursor"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no next_cursor: {first}"))
+        .to_owned();
+    let parts = cursor.split('.').collect::<Vec<_>>();
+    assert_eq!(
+        (parts.first().copied(), parts.get(2).copied()),
+        (Some("v1"), Some("1")),
+        "bound to this server's first connection: {cursor}"
+    );
+    let taken = server.call_tool(3, "ac_events", json!({"cursor": cursor}));
+    assert_eq!(taken["result"]["isError"], json!(false), "{taken}");
+    assert_eq!(sequences(&line_of(&taken)), [3, 4], "the rest of the page");
+    // Once the connection was made again: cursor_invalid, nothing read.
+    let refused = server.call_tool(4, "ac_events", json!({"cursor": cursor}));
+    assert_eq!(refused_code(&refused), json!("cursor_invalid"), "{refused}");
+
+    // `codes`: its cursor carries its own position; the next page is the command line's.
+    let codes =
+        line_of(&server.call_tool(5, "ac_codes", json!({"prefix": "actingctl_", "limit": 2})));
+    let next = codes["next_cursor"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no next_cursor: {codes}"))
+        .to_owned();
+    let second = line_of(&server.call_tool(
+        6,
+        "ac_codes",
+        json!({"prefix": "actingctl_", "limit": 2, "cursor": next}),
+    ));
+    let words = [
+        "codes",
+        "--prefix",
+        "actingctl_",
+        "--limit",
+        "2",
+        "--cursor",
+        next.as_str(),
+    ]
+    .map(OsString::from);
+    let expected = code_lookup::dispatch(&words)
+        .expect("the words of codes")
+        .line
+        .expect("the line encodes");
+    assert_eq!(
+        second, expected,
+        "the next page, as the command line gives it"
+    );
+    assert_ne!(second["codes"], codes["codes"], "the next page");
+
+    // `runs`: its cursor is its row's own and passes as the command line takes it.
+    let runs = server.call_tool(7, "ac_runs", json!({"cursor": "r1.0"}));
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    let expected = command_line_line(state.path(), "runs", json!({"cursor": "r1.0"}));
+    assert_served_as(&runs, &expected);
+    let record = runtime.finish();
+    assert!(
+        record.unscripted.is_empty(),
+        "a connection beyond the three"
+    );
+    assert_eq!(
+        record.connections.iter().map(queries).collect::<Vec<_>>(),
+        [2, 0, 0],
+        "the refused cursor read nothing"
+    );
+}
+
+#[test]
+fn mcp_run_show_and_run_stop_wait() {
+    let run = made_up_request_id();
+    // ac_run_show of a run not found: read once without a wait; with one of 2 s (in a call budget
+    // of 3 s), read again a second later, and then not again before the wait ends.
+    let mut read = Vec::new();
+    for wait_s in [0_u64, 2] {
+        let state = TempDir::new().expect("tempdir");
+        let temp = TempDir::new().expect("tempdir");
+        let runtime = ScriptedRuntime::start(state.path(), |_| {
+            vec![ScriptedConnection::new().ledger(Vec::new())]
+        });
+        let mut server = Server::start(with_call_budget(
+            actinglab_mcp(Path::new(PROGRAM), Some(state.path()), temp.path()),
+            3,
+        ));
+        server.initialize();
+        let asked = Instant::now();
+        let answer = server.call_tool(2, "ac_run_show", json!({"id": run, "wait_s": wait_s}));
+        let waited = asked.elapsed();
+        let line = line_of(&answer);
+        assert_eq!(line["state"], "not_found", "{line}");
+        assert!(
+            waited >= Duration::from_secs(wait_s.saturating_sub(1)),
+            "waited {waited:?} with wait_s {wait_s}"
+        );
+        let status = server.finish();
+        assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+        read.push(queries(&only_connection(runtime.finish())));
+    }
+    assert!(read[0] >= 1, "{read:?}");
+    assert_eq!(read[1], 2 * read[0], "read twice with the wait: {read:?}");
+
+    // ac_run_stop: its job waited for as long as its wait_s, then its handle.
+    let state = TempDir::new().expect("tempdir");
+    let temp = TempDir::new().expect("tempdir");
+    let hold = ScriptedGate::new();
+    let runtime = ScriptedRuntime::start(state.path(), |owner_epoch| {
+        let held = hold.clone();
+        vec![
+            // The stop's own connection: today's provenance, the run's read held, then a status
+            // that names no instance for it.
+            provenance()
+                .request(move |request| empty_page(request).after(&held))
+                .request(status_listing(owner_epoch, &[])),
+        ]
+    });
+    let mut server = Server::start(with_call_budget(
+        actinglab_mcp(Path::new(PROGRAM), Some(state.path()), temp.path()),
+        3,
+    ));
+    server.initialize();
+    // A wait past the budget, below 0 or of another type: refused, nothing sent.
+    for (id, tool, wait_s, problem) in [
+        (2, "ac_run_show", json!(4), "out_of_range"),
+        (3, "ac_run_show", json!("2"), "wrong_type"),
+        (4, "ac_run_stop", json!(4), "out_of_range"),
+        (5, "ac_run_stop", json!(-1), "out_of_range"),
+    ] {
+        let answer = server.call_tool(id, tool, json!({"id": run, "wait_s": wait_s}));
+        assert_eq!(
+            refused_code(&answer),
+            json!("arguments_invalid"),
+            "{answer}"
+        );
+        let values = &line_of(&answer)["outcome"]["values"];
+        assert_eq!(
+            (&values["argument"], &values["argument_problem"]),
+            (&json!("wait_s"), &json!(problem)),
+            "{tool} {wait_s}"
+        );
+        if problem == "out_of_range" {
+            assert_eq!(
+                (&values["range_min"], &values["range_max"]),
+                (&json!(0), &json!(3)),
+                "{tool} {wait_s}: 0 to the call budget"
+            );
+        }
+    }
+    let asked = Instant::now();
+    let stop = server.call_tool(6, "ac_run_stop", json!({"id": run, "wait_s": 1}));
+    let waited = asked.elapsed();
+    let handle = handle_of(&stop, "running");
+    assert!(waited >= Duration::from_secs(1), "waited {waited:?}");
+    hold.open();
+    let stopped = server.call_tool(7, "ac_run_show", json!({"id": handle, "wait_s": 2}));
+    assert_eq!(refused_code(&stopped), json!("run_unknown"), "{stopped}");
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    let record = runtime.finish();
+    assert!(record.unscripted.is_empty(), "only the stop's connection");
 }
 
 // ---- Workflow #434 LAB-5G2b, second part: the rescue rows, on Windows, where the rescue module

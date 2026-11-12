@@ -15,6 +15,9 @@
 //!   fits; else, where the version has `structuredContent`, the line there alone beside a summary
 //!   text; a line that fits neither way is `output_budget_exceeded` ([`exceeded`]) with the bytes
 //!   it takes and the limit. Never cut silently, never sent over the limit.
+//! - **A line over the limit after its work was done** (Workflow #434 LAB-5G3, work order point
+//!   10): its job keeps it, and `ac_run_show` of the job's handle answers its summary
+//!   ([`job_summary`]) beside `output_budget_exceeded`.
 //! - **The export** ([`export_directory`], [`write_export`]): today's server's directory (the
 //!   coordinator's ruling 18, board #434 6775192250) and the writer it shares with
 //!   `actingctl observe --export` (`lab_ops::material_export::write`).
@@ -145,6 +148,33 @@ fn summary(line: &Value, kept: usize) -> Value {
     }
     text.insert("narrow".to_owned(), json!(NARROW_HINT));
     Value::Object(text)
+}
+
+/// Workflow #434 LAB-5G3 (work order point 10): what `ac_run_show` gives of a job whose line fits
+/// the limit neither way, `{outcome, members, warnings_total, truncated?}`: the line's own outcome
+/// (whether its work was done), the names of its other members, how many warnings it carries and,
+/// when the serving code cut it, its `truncated`. The line itself stays with the job, unsent.
+pub(crate) fn job_summary(line: &Value) -> Value {
+    let members = line
+        .as_object()
+        .map(|members| {
+            members
+                .keys()
+                .filter(|name| name.as_str() != "outcome")
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut summary = Map::new();
+    if let Some(outcome) = line.get("outcome") {
+        summary.insert("outcome".to_owned(), outcome.clone());
+    }
+    summary.insert("members".to_owned(), json!(members));
+    summary.insert("warnings_total".to_owned(), json!(warnings_of(line).len()));
+    if let Some(truncated) = line.get("truncated") {
+        summary.insert("truncated".to_owned(), truncated.clone());
+    }
+    Value::Object(summary)
 }
 
 /// The warnings a line carries.

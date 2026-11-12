@@ -1626,6 +1626,24 @@ tests = [
 ]
 incident = ["#434 LAB-5G2b"]
 
+# Workflow #434 LAB-5G3, its first part (0.12.57; register §1.287, "Slice LAB-5G3"; brief rd-1112/brief-lab5g3.md; contracts/lab-two-entries.md §9.3, "Jobs, handles and waits"; the coordinator's rulings on board #434, 6775192250 points 10 and 20, and 6784514298): the new MCP server's jobs, copied from today's server. The start options --call-budget (1 to 300, default 25), --jobs (1 to 64, default 8) and --kept-jobs (1 to 1024, default 64) take their values at both ends of their ranges and refuse 0, one past the range and -1 out_of_range with range_min and range_max, a word that is no whole number wrong_type, the option without its value value_missing, twice repeated, and --jobs and --kept-jobs beside --list-tools conflicting, each actingctl_usage_invalid naming the option with the usage line; a job past --jobs is refused job_capacity_exhausted with limit_count, past --kept-jobs the oldest finished job is dropped and a running one never, a finished job counts for the MCP entry only while its handle went out and its line was not read; the front's added members are one table (run show and run stop wait_s), none a row's parameter, wait_s from 0 to the budget given with defaults 0 and 20 never more than it and a description naming it, and the instructions name the budget given. Over pipes against the runtime client's scripted Runtime, each server with a short call budget: a read held past the budget answers its job's handle (mcp_job_started, running), counted by actingcommand/entryStatus while it runs; ac_run_show of the handle answers the command line's line, and it counts no more; a pack schedule far past the answer budget answers output_budget_exceeded with its job's handle and the bytes it takes, counts unread, and ac_run_show of the handle answers its summary (the command line's own outcome and its members' names); a handle never issued is handle_unknown; ac_run_start answers submitting at once with a handle that is the request id the Runtime receives, counted while it submits; ac_run_show of a run not found reads it once without a wait and again a second later with one; ac_run_stop answers its job's handle after its wait_s and ac_run_show of the handle then the job's line; a wait past the budget, below 0 or of another type is refused arguments_invalid before anything is sent
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g3::mcp_job_start_options",
+    "actingcommand-actinglab-mcp::serve_calls::mcp_jobs_handles_entry_status",
+    "actingcommand-actinglab-mcp::serve_calls::mcp_run_show_and_run_stop_wait",
+]
+incident = ["#434 LAB-5G3"]
+
+# Workflow #434 LAB-5G3, its second part (0.12.57; register §1.287, "Slice LAB-5G3, second part"; brief rd-1112/brief-lab5g3.md point 6; contracts/lab-two-entries.md §9.3, "Cursors taken back"): over pipes against the runtime client's scripted Runtime with made-up ledger records, an events cursor issued on the server's kept connection (its generation 1) is taken back there and gives the rest of the page, and once the connection was made again (the scripted Runtime closes it at the next Health) the same cursor is cursor_invalid and no event query is sent; a codes cursor gives the page the command line gives for it, bound to no session; a runs cursor, its row's own, gives the line the command line's code gives
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-mcp::serve_calls::mcp_cursor_bound_to_connection",
+]
+incident = ["#434 LAB-5G3"]
+
 # Workflow #434 LAB-5G2b, second part (0.12.57; register §1.287, "Slice LAB-5G2b, second part"; brief rd-1112/brief-lab5g2b2.md; contracts/lab-two-entries.md §5 and §9.3, "Calls served in the server's process"; the coordinator's rulings on board #434, 6775192250 point 17 and of 2026-11-12): the new MCP server serves on Windows the rescue rows the rescue module serves, in its own process with the initiator Lab-MCP. Over pipes, from a copy of the program in a made-up single-location root whose build carries it in tools\ (listed with its size and SHA-256), adopted, no Runtime: ac_mcp_plan answers the line the rescue module's code gives for mcp plan on that root, in the members of LAB-5G5b's checked-in sample, its one child the server's own file; ac_deploy and ac_rollback, whose run the front forces detached, answer mcp_operation_unsupported with their tool and the root holds the same files after them (no detached log, no journal); an undeclared member of ac_leftovers (unknown) and a relative dir of ac_release_stage (not_absolute) are arguments_invalid, which the module never answers, with the argument, and the root holds the same files after them
 [[gate]]
 coverage = "Y"

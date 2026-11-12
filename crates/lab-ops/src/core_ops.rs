@@ -55,7 +55,10 @@ use actingcommand_contract::{
     MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS, RequestId, RuntimeReceiptState,
     SchedulingPauseExpectation, SchedulingPauseReason,
 };
-use actingcommand_runtime_client::{ContainedTaskResetOutcome, RuntimeClient, RuntimeClientError};
+use actingcommand_runtime_client::{
+    ContainedTaskResetOutcome, PreparedContainedTask, RuntimeClient, RuntimeClientError,
+    RuntimeFlowOutput,
+};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::ffi::OsString;
@@ -983,25 +986,7 @@ pub fn pack_schedule_rows(
 /// package, and its recovery package, by their paths; with a wait, the run is prepared so that it
 /// is named before its receipt, and a wait that ends first answers `command_wait_expired`.
 fn run_start(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit, Exit> {
-    let alias = alias_of(client, required_text(params, "instance")?)?;
-    let package = canonical(required_text(params, "package")?)?;
-    let recovery = match text(params, "recovery") {
-        Some(path) => Some(canonical(path)?),
-        None => None,
-    };
-    let deadline = match duration(params, "deadline")? {
-        Some(deadline) => millis(deadline),
-        None => ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS,
-    };
-    let request = ContainedTaskRequest::new(package.display().to_string())
-        .and_then(|request| match recovery {
-            Some(path) => request.with_recovery(ContainedTaskRecoveryBinding::new(
-                path.display().to_string(),
-            )?),
-            None => Ok(request),
-        })
-        .and_then(|request| request.with_response_deadline_ms(deadline))
-        .map_err(|_| usage("<package>", ArgumentProblem::Unusable))?;
+    let (alias, request) = run_start_request(params, client)?;
     let output = match duration(params, "wait")? {
         None => client
             .run_contained_task(&alias, request)
@@ -1026,15 +1011,76 @@ fn run_start(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit
             }
         }
     };
-    // A run that ended failed may still come back with its receipt: the receipt's own outcome
-    // is the top, and the line exits non-zero.
+    run_start_answer(&output)
+}
+
+/// Workflow #434 LAB-5G3: the instance `run start` names, resolved by one status read on
+/// `client`, and the run's request: the package, and its recovery package, by their paths made
+/// absolute, and the deadline (absent: the longest a run may have). `run start` reads them so
+/// before it runs or prepares the run, as before.
+fn run_start_request(
+    params: &Map<String, Value>,
+    client: &RuntimeClient,
+) -> Result<(String, ContainedTaskRequest), Exit> {
+    let alias = alias_of(client, required_text(params, "instance")?)?;
+    let package = canonical(required_text(params, "package")?)?;
+    let recovery = match text(params, "recovery") {
+        Some(path) => Some(canonical(path)?),
+        None => None,
+    };
+    let deadline = match duration(params, "deadline")? {
+        Some(deadline) => millis(deadline),
+        None => ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS,
+    };
+    let request = ContainedTaskRequest::new(package.display().to_string())
+        .and_then(|request| match recovery {
+            Some(path) => request.with_recovery(ContainedTaskRecoveryBinding::new(
+                path.display().to_string(),
+            )?),
+            None => Ok(request),
+        })
+        .and_then(|request| request.with_response_deadline_ms(deadline))
+        .map_err(|_| usage("<package>", ArgumentProblem::Unusable))?;
+    Ok((alias, request))
+}
+
+/// Workflow #434 LAB-5G3 (register §1.287, "Slice LAB-5G3"): `run start` for a front that answers
+/// before the run's receipt, the MCP server's job: the run read as `run start` reads it and
+/// prepared on `client`, so that it is named by its request id before anything of it is sent.
+/// `client.submit_prepared` then submits it, and [`run_start_ended`] is the line of its end. The
+/// row's `wait` is the front's to honour; it is not read here.
+pub fn run_start_prepared(
+    params: &Map<String, Value>,
+    client: &RuntimeClient,
+) -> Result<PreparedContainedTask, Exit> {
+    let (alias, request) = run_start_request(params, client)?;
+    client
+        .prepare_contained_task(&alias, request)
+        .map_err(|error| client_failed(&error))
+}
+
+/// Workflow #434 LAB-5G3: the line of a prepared run's submission ([`run_start_prepared`]): the
+/// line `run start` gives for its receipt, or the client's failure.
+pub fn run_start_ended(submitted: Result<RuntimeFlowOutput, RuntimeClientError>) -> Exit {
+    match submitted
+        .map_err(|error| client_failed(&error))
+        .and_then(|output| run_start_answer(&output))
+    {
+        Ok(exit) | Err(exit) => exit,
+    }
+}
+
+/// The line of a run's receipt: `task_run_reported` beside it, or, for a run that ended failed and
+/// still came back with its receipt, the receipt's own outcome on top, and the line exits
+/// non-zero.
+fn run_start_answer(output: &RuntimeFlowOutput) -> Result<Exit, Exit> {
     let completed = output.receipt().state() == RuntimeReceiptState::Completed;
     let outcome = if completed {
         Outcome::new(ActingctlCode::TaskRunReported)
     } else {
         output.receipt().outcome().clone()
     };
-    let members = serde_json::to_value(&output)
+    let members = serde_json::to_value(output)
         .map(|value| cli_line::members(value, RESULT_MEMBER))
         .map_err(|error| output_failed(&error))?;
     Ok(cli_line::receipt(members, &outcome, !completed))

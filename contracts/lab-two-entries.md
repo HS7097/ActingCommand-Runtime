@@ -791,8 +791,9 @@ sentence fails that test.
       failed hook its failure (`agent_channel_failed`, refused). The server records no provenance
       for it (no identity card, no client action): the module makes its own connection on its own
       channel until LAB-6 (section 7) and records the initiator in its journal (section 4.3). The
-      budget is the core rows' (below). Each call runs to its end, a start, a stop or a placement
-      too.
+      budget is the core rows' (below). Each call runs as a job, as a core row's does since
+      LAB-5G3 (below): a start, a stop or a placement that outlasts the call budget answers its
+      job's handle.
     - *The answer* is the line `actinglab --json` prints for the same row and parameters (its
       members, `outcome`, `warnings`): the text content and, from 2025-06-18 on,
       `structuredContent`; `isError` is true exactly when the command line would exit non-zero
@@ -806,8 +807,9 @@ sentence fails that test.
       the client action `{surface_id: mcp, control_id: <tool>, kind: command}` naming the
       instance, under the write's correlation (rulings 11 and 12: until LAB-6 the new server
       looks like today's on the wire and in the ledger). The cursors the code issues bind to the
-      server's session and that connection's generation; taking one back is G3's. `status`
-      carries the watchdog block on Windows, as on the command line.
+      server's session and that connection's generation; one is taken back since LAB-5G3's
+      second part (below). `status` carries the watchdog block on Windows, as on the command
+      line.
     - *The budget.* Today's limits: the whole result as sent at most 24 KiB. The code that
       shapes an answer (section 9.3, "The answer budget is the caller's") cuts or exports it to
       the size of the line as sent in the negotiated protocol version, its exports in today's
@@ -835,15 +837,70 @@ sentence fails that test.
       server lets them, and the line carries the warning `mcp_identity_declaration_refused`
       (caused by the refusal), where today's server answers `mcp_identity_card_refused` with
       `mcp_blocker`, until LAB-6 removes the step.
-    - *Every call runs to its end on its worker:* there are no jobs and no handles yet (G3).
+    - *Every call runs to its end*, since Workflow #434 LAB-5G3 as a job (below).
+  - **Jobs, handles and waits** (Workflow #434 LAB-5G3, 0.12.57, its first part; register
+    §1.287, "Slice LAB-5G3"; the survey's §3 and the coordinator's rulings on board #434,
+    6775192250 points 10 and 20, and 6784514298, not the owner's words). What today's MCP server
+    has for long work, copied (its jobs, `actingctl`'s `mcp/jobs.rs`, and `job_answer`,
+    `run_pack`, `stop_run` and `get_run`) and adapted to the generated tools.
+    - *Jobs.* Every call the server serves runs as a job, on a thread of its own, to its end. A
+      call not done within the call budget answers `{handle, job_phase}` with `mcp_job_started`
+      (info) and its job goes on; `ac_run_show` with the handle as `id` reads it. A row the server
+      does not serve and arguments it refuses answer at once, with no job. A job handle
+      (`mcp_job_<session>_<n>`) lasts as long as the process; one it does not hold answers
+      `handle_unknown`.
+    - *Start options*, each a tunable with today's value as its default (ruling 20): the call
+      budget `--call-budget <seconds>` (1 to 300, 25), the jobs that run at once `--jobs <n>` (1
+      to 64, 8) and the jobs kept `--kept-jobs <n>` (1 to 1024, 64), each refused outside its
+      range as `--workers` is. A call waits for its job up to the budget less today's 2 s for its
+      answer (never more than a tenth of a shorter budget). Past `--jobs` a call that would start
+      a job answers `job_capacity_exhausted` (`limit_count`); past `--kept-jobs` the oldest
+      finished job is dropped, its handle then unknown. The tools' wait members and the
+      instructions name the budget in effect.
+    - *The front's added members* (one table, `tools::ADDED`): `ac_run_show` and `ac_run_stop`
+      take `wait_s` (0 to the call budget; defaults 0 and today's 20, never more than the
+      budget); since the second part, `ac_events` and `ac_codes` take `cursor` (below).
+      `ac_run_show`'s `id` also takes a job handle (ruling 10): it waits up to `wait_s` for the
+      job, then answers `{handle, job_phase}` or, once the job ended, its line; with a run it reads the run again every second while it
+      is not found, admitted or running, for at most `wait_s` (and the budget less today's 5 s
+      for the last read), as `ac_get_run` waits, and a run this process's job submits carries
+      that job as `job`. `ac_run_stop`'s call waits up to its `wait_s` for its job; a run this
+      process's job still submits is only asked to stop (`cancel_only`), as `ac_stop_run` asks it.
+    - *`ac_run_start`* prepares the run after today's provenance and submits it in a job, and
+      answers at once `{handle, correlation_id, job_phase: submitting}`: the handle is the run's
+      Runtime request id, which outlives the process (with the row's `wait`, the call waits as
+      long, within the budget, for the run's end). After an interrupted call a caller reads first
+      (`ac_status`, `ac_run_show`) and never sends the write again, as the instructions say.
+    - *A line that does not fit after its work was done* (the work order's point 10) is never cut
+      and never lost: the call answers `output_budget_exceeded` (`actual_bytes`, `limit_bytes`)
+      with its job's `handle`, the job keeps the line unread, and `ac_run_show` of the handle
+      answers the same refusal with the job's `job_phase` and `summary` (the line's own outcome,
+      the names of its other members, `warnings_total`, its `truncated`).
+    - *`actingcommand/entryStatus`* answers today's members (`outstanding_handles`, `kinds`, the
+      tools of the jobs' calls, `handles`, `calls_in_flight`): a job counts while it runs and,
+      once it ended, until its line was read, if its handle went out to the client; a run's job
+      only while it submits. The second entry switches only at zero.
+    - *Progress, cancellation and the end of input* are today's: `notifications/progress` while
+      the call is in flight and gave a progress token; `notifications/cancelled` stops the call's
+      wait and drops its answer, its handle never issued, its job going on; at stdin EOF the
+      server gives answers in flight 2 s and ends, the jobs not waited for (a run goes on in the
+      Runtime, its request id still reads it; any other job ends with the process).
+    - *Cursors taken back* (LAB-5G3's second part; register §1.287, "Slice LAB-5G3, second
+      part"; the work order's point 6). An `events` cursor is taken back on the layer below the
+      row (`events::dispatch_within` with the command's words and `--cursor`) under the server's
+      binding, its session and the kept connection's generation: after the connection was made
+      again it is `cursor_invalid`, nothing read. A `codes` cursor (`--cursor` to the command) and
+      `ac_runs`' own `cursor` carry their own position and filters and bind to no session: they
+      pass as the command line takes them. A cursor that begins with `--` is refused as `serve`
+      refuses such a value.
   - **Not yet:** a call of a row the server does not serve answers `mcp_operation_unsupported`
     (`mcp_tool`) as the CLI line of a refusal, `{outcome}`, its arguments unread, nothing sent,
     run or written; a name that is no offered row's tool answers as today's server answers an
     unknown tool (-32602 `mcp_params_invalid`). `deploy` and `rollback` (until a detached run
-    carries `Lab-MCP`, section 5), jobs, handles and taking cursors back (G3), the `serve --stdio
-    --front mcp` children (G4b) and the manual (G7) come with their slices. The program is in the
-    Tools archive since LAB-5G6 (0.12.57; section 8.1, "Packaging"); nothing starts it until a
-    client is registered with the second entry (G7).
+    carries `Lab-MCP`, section 5), the `serve --stdio --front mcp` children (G4b) and the manual
+    (G7) come with their slices. The program is in the Tools archive since LAB-5G6 (0.12.57;
+    section 8.1, "Packaging"); nothing starts it until a client is registered with the second
+    entry (G7).
 - **The answer budget is the caller's** (Workflow #434 LAB-5D, 0.12.52; register §1.287, "Slice
   LAB-5D"). The reads whose answer can outgrow a caller's budget (`status`, `diagnose`, `events`,
   `schedule`, `runs`, `run evidence`, `codes`; `facts`, `packs`, `remedy`, `summary`) take, in

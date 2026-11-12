@@ -6,7 +6,8 @@
 //! shape alone, never from a client name: a request whose `_meta` carries
 //! `io.modelcontextprotocol/protocolVersion` is a stateless 2026-07-28 request; any other request
 //! needs a legacy `initialize` first. What differs from the original: the server's name
-//! (`actinglab-mcp`) and its instructions ([`tools::INSTRUCTIONS`]).
+//! (`actinglab-mcp`) and its instructions ([`tools::INSTRUCTIONS`], given for the call budget in
+//! effect since Workflow #434 LAB-5G3).
 //!
 //! A JSON-RPC error (Workflow #378 A5, model v2.2 §7.3) carries one outcome: `error.message` is
 //! the outcome code's spelling, never a sentence, and `error.data` is `{outcome}`.
@@ -247,7 +248,9 @@ pub(super) fn complete(era: Era, result: Value) -> Value {
 }
 
 /// `server/discover`. `ttlMs` 0 and `cacheScope` private mark the answer as not cacheable.
-pub(super) fn discover(id: &Value) -> Value {
+/// Workflow #434 LAB-5G3: `instructions` are this server's (`tools::instructions`, for its call
+/// budget).
+pub(super) fn discover(id: &Value, instructions: &str) -> Value {
     response(
         id,
         complete(
@@ -255,7 +258,7 @@ pub(super) fn discover(id: &Value) -> Value {
             json!({
                 "supportedVersions": SUPPORTED_VERSIONS,
                 "capabilities": {"tools": {}},
-                "instructions": tools::INSTRUCTIONS,
+                "instructions": instructions,
                 "ttlMs": 0,
                 "cacheScope": "private",
             }),
@@ -263,12 +266,12 @@ pub(super) fn discover(id: &Value) -> Value {
     )
 }
 
-/// The legacy `initialize` answer for the negotiated version.
-pub(super) fn initialize_result(version: LegacyVersion) -> Value {
+/// The legacy `initialize` answer for the negotiated version, with this server's `instructions`.
+pub(super) fn initialize_result(version: LegacyVersion, instructions: &str) -> Value {
     json!({
         "protocolVersion": version.as_str(),
         "capabilities": {"tools": {"listChanged": false}},
         "serverInfo": server_info(),
-        "instructions": tools::INSTRUCTIONS,
+        "instructions": instructions,
     })
 }
