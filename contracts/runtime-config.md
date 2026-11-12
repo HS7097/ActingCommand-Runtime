@@ -499,6 +499,8 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.evaluation.retry_ms` (ISO-PE, #419) | milliseconds `1..=3600000` | `15000` |
 | `scheduling.evaluation.escalate_after` (ISO-PE, #419) | integer `1..=4294967295` | `3` |
 | `scheduling.no_progress.enabled` (SS-4, since 0.12.34) | boolean | `true` |
+| `scheduling.task_held.enabled` (Workflow #438 HELD-1; HELD, not built yet, proposed) | boolean | `true` |
+| `scheduling.task_held.after_ms` (Workflow #438 HELD-1; HELD, not built yet, proposed) | milliseconds `60000..=86400000` | `1800000` |
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
@@ -581,6 +583,22 @@ or the section's. The host reads it for every instance of the snapshot at every 
 cycle, so an instruction takes effect at the next one. `false` on an instance: the evaluation of
 its pairs is the one before SS-4, the guard captures nothing for it and forgets what it kept for
 it, so turning the key off and on again releases every guard of the instance.
+
+**Held records (Workflow #438 HELD-1; HELD, not built yet, proposed; `actingd-config` revision 29
+on this base, [component-interfaces.md](component-interfaces.md), "Planned: Workflow #438 HELD").**
+`scheduling.task_held.enabled` (boolean, default `true`) and `scheduling.task_held.after_ms`
+(milliseconds `60000..=86400000`, default `1800000`), in the file the `scheduling` section's
+`task_held` member, say whether a pair held past `after_ms` leaves a held record and when
+([scheduling/README.md](scheduling/README.md), "Held records"). Both are also per instance,
+`instance.<instance id>.scheduling.task_held.enabled` and `.after_ms`, in the file the entry's
+`scheduling.task_held` member, default `section:scheduling.task_held.<member>`. All four are
+settable; the host reads the pair in effect for every instance of the snapshot at every evaluated
+policy cycle, so an instruction takes effect at the next one. A change touches no decision and no
+hold's start (the not-run explanation's `since_unix_ms`): a lower `after_ms` reports, at the next
+evaluated cycle, every run already past it; a higher one withdraws nothing written; `enabled`
+`false` writes no new held record for the instance and still writes the end of each hold already
+reported. Off by the file or an instruction, nothing else of the Runtime changes. A Runtime before
+HELD-1 refuses a file that names either member (the section and the entry deny unknown members).
 
 **Pool lines for one instance (#428 SCHED-C1e, register §1.299 SC1-12; `actingd-config` revision
 28; since 0.12.54).** `instance.<instance id>.scheduling.pool_lines`, in the file the entry's
