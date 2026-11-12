@@ -1142,10 +1142,21 @@ fn startup_package_id(path: &Path) -> Option<String> {
 /// result line on stdout (Workflow #378 A5): the bindings with `package_bindings_reported`, or
 /// `{outcome}` with the refusal (a flag refusal's developer line adds the usage) and exit 1.
 pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
+    dispatch_within(arguments, None)
+}
+
+/// Workflow #434 LAB-5G1b: [`dispatch`] within the caller's `budget`: none, the whole document
+/// with its warnings, as the command line prints it; with one, [`Answer::within_budget`], a
+/// document written whole carried on the line as `{source, export}` with `answer_exported` its
+/// one warning ([`budget::line_members`]).
+pub fn dispatch_within(
+    arguments: &[OsString],
+    budget: Option<&Budget<'_>>,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
-    Some(match run(&arguments[1..]) {
+    Some(match run(&arguments[1..], budget) {
         Ok(document) => cli_line::success(
             document,
             &Outcome::new(ActingctlCode::PackageBindingsReported),
@@ -1210,8 +1221,12 @@ fn parse(arguments: &[OsString]) -> Result<Flags, PacksError> {
 
 /// The CLI's document: the bindings and their warnings, each `{outcome}` in this process's
 /// detail. One that does not encode is `actingctl_output_failed`, caused by the encoder's
-/// failure.
-fn run(arguments: &[OsString]) -> Result<Map<String, Value>, PacksError> {
+/// failure. Workflow #434 LAB-5G1b: within the caller's `budget` (none: the document whole, as
+/// before).
+fn run(
+    arguments: &[OsString],
+    budget: Option<&Budget<'_>>,
+) -> Result<Map<String, Value>, PacksError> {
     let flags = parse(arguments)?;
     let (installation, config) = selected_config(flags.root.as_deref())?;
     let answer = read_with_tables(
@@ -1222,15 +1237,15 @@ fn run(arguments: &[OsString]) -> Result<Map<String, Value>, PacksError> {
             role: flags.role,
         },
     )?;
-    answer.document(cli_line::warning).map_err(|error| {
-        PacksError(
-            Outcome::new(ActingctlCode::ActingctlOutputFailed).caused_by(
-                Outcome::new(ContractCode::ForeignDataError)
-                    .raw_source(RawSource::Json)
-                    .raw_text(error.to_string()),
-            ),
-        )
-    })
+    let warnings = answer
+        .warnings()
+        .iter()
+        .map(cli_line::warning)
+        .collect::<Vec<_>>();
+    let fitted = answer
+        .within_budget(budget, &cli_line::warning)
+        .map_err(PacksError)?;
+    Ok(budget::line_members(fitted, "packs", warnings))
 }
 
 /// The selected configuration generation, found as mcp-serve finds it (`mcp/runtime.rs`): this

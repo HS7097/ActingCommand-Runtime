@@ -109,6 +109,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-actinglab-mcp"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "actingcommand-lab-ops",
+ "actingcommand-lab-rescue",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "actingcommand-actingwatch"
 version = "0.1.0"
 dependencies = [

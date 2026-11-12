@@ -14,7 +14,12 @@
 //! for the four ([`exported`]), as the payload page of `events` does with its own header. MCP's
 //! server (`actingctl mcp-serve`) passes its measure of an answer as it sends it and its export
 //! directory; that measure, and the cursors bound to its connection, stay its own.
+//!
+//! Workflow #434 LAB-5G1b: the code that serves the core rows (`core_ops`) takes the budget from
+//! its caller too and hands it to these steps, the answer then being the row's line
+//! ([`line_members`]: an export is carried on the line as its warning).
 
+use crate::cli_line;
 use crate::codes::ActingctlCode;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Outcome, RawSource};
@@ -74,6 +79,24 @@ impl Fitted {
             exported: None,
         }
     }
+}
+
+/// Workflow #434 LAB-5G1b: `fitted` as the members of a row's line beside its outcome: the
+/// answer's members (an answer that is no JSON object under `member`), then `warnings` when there
+/// is one. An answer written whole to the caller's export carries `answer_exported` as its one
+/// warning (the file holds the rest, as MCP gives it); any other carries `warnings`, the read's
+/// own, each already rendered as the line renders a warning.
+pub fn line_members(fitted: Fitted, member: &str, warnings: Vec<Value>) -> Map<String, Value> {
+    let Fitted { result, exported } = fitted;
+    let mut members = cli_line::members(result, member);
+    let warnings = match exported {
+        Some(note) => vec![cli_line::warning(&note)],
+        None => warnings,
+    };
+    if !warnings.is_empty() {
+        members.insert("warnings".to_owned(), Value::Array(warnings));
+    }
+    members
 }
 
 /// The writer `answer` is written through: none without a budget, for an answer the budget takes,

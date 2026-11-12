@@ -772,10 +772,20 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
 
 /// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
 pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option<cli_line::Exit> {
+    dispatch_within(arguments, connection, None)
+}
+
+/// Workflow #434 LAB-5G1b: [`dispatch_on`] within the caller's `budget`: none, every step of the
+/// page, as the command line prints it; with one, [`Evidence::within_budget`].
+pub fn dispatch_within(
+    arguments: &[OsString],
+    connection: Connection<'_>,
+    budget: Option<&Budget<'_>>,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND || arguments.get(1)?.to_str()? != ACTION {
         return None;
     }
-    Some(match run(&arguments[2..], connection) {
+    Some(match run(&arguments[2..], connection, budget) {
         Ok(result) => cli_line::success(result, &Outcome::new(ActingctlCode::RunEvidenceReported)),
         Err(failure @ Failure::Argument { .. }) => {
             cli_line::failure(&failure.outcome(), Some(USAGE))
@@ -784,16 +794,18 @@ pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option
     })
 }
 
-fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Map<String, Value>, Failure> {
+fn run(
+    arguments: &[OsString],
+    connection: Connection<'_>,
+    budget: Option<&Budget<'_>>,
+) -> Result<Map<String, Value>, Failure> {
     let (state_root, request) = parse(arguments)?;
     let client = connection
         .reach(state_root, identity)
         .map_err(Failure::Runtime)?;
     let evidence = read(&client, &request, Instant::now() + CLI_READ_BUDGET)?;
-    Ok(cli_line::members(
-        evidence.render(evidence.page_len()),
-        ACTION,
-    ))
+    // Workflow #434 LAB-5G1b: every step of the page without a budget, as before; with one, cut.
+    Ok(cli_line::members(evidence.within_budget(budget), ACTION))
 }
 
 /// The flags `flags_of` names for `run evidence`, each at most once and with a value; any other

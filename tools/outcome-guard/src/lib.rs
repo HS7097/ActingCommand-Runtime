@@ -58,7 +58,8 @@ const CHANNELS: &[Check] = &[Check::G2, Check::G3, Check::G4, Check::G5];
 /// Owners line of model section 11 assigns to it when it converts them. A channel of a converted
 /// member that another owner's code fills, or that a later slice replaces, stays a string behind
 /// a bridge entry (a function or a field) whose reason names the slice that removes it. The two
-/// tools, MCP's JSON-RPC `error_response` and the configuration manifest's subsystem names
+/// tools, MCP's JSON-RPC `error_response` (actingctl's and, since Workflow #434 LAB-5G2a, the
+/// Lab's MCP server's copy) and the configuration manifest's subsystem names
 /// (`apps/actingd/src/config/manifest.rs` `build`, G5) are standing entries (kept after B6).
 pub const ALLOW_LIST: &[AllowEntry] = &[
     member(
@@ -731,6 +732,12 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         item: Some("error_response"),
         checks: &[Check::G3],
         reason: "standing: JSON-RPC requires error.code and error.message (model section 7.3)",
+    },
+    AllowEntry {
+        path: "apps/actinglab-mcp/src/protocol.rs",
+        item: Some("error_response"),
+        checks: &[Check::G3],
+        reason: "standing: JSON-RPC requires error.code and error.message (model section 7.3); Workflow #434 LAB-5G2a copied actingctl's MCP protocol into the Lab's MCP server",
     },
     AllowEntry {
         path: "apps/actingd/src/config/manifest.rs",

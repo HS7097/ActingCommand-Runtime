@@ -118,6 +118,10 @@ mod gate_434_lab5e;
 // prints.
 #[path = "gate_434_lab5g1.rs"]
 mod gate_434_lab5g1;
+// Workflow #434 LAB-5G1b: the serving code takes the answer budget and the cursor binding from its
+// caller.
+#[path = "gate_434_lab5g1b.rs"]
+mod gate_434_lab5g1b;
 // Workflow #434 LAB-5F: the authoring rows are listed only where the option lists them, and
 // served everywhere (fix 2).
 #[path = "gate_434_lab5f.rs"]
@@ -142,6 +146,10 @@ mod gate_434_cli_help;
 // candidates.
 #[path = "gate_434_cli_comp.rs"]
 mod gate_434_cli_comp;
+// Workflow #428 LAB-OCR-DL: the switch that raises the OCR inference deadline of an offline
+// evaluation of saved scenes names it in the answer and is refused off a saved scene.
+#[path = "gate_428_lab_ocr_dl.rs"]
+mod gate_428_lab_ocr_dl;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

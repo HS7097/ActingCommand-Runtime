@@ -9957,6 +9957,159 @@ working as they do.
 **LAB-5G5a rollback** (to the release before it). Nothing persisted: a status file the program
 wrote would be listed by the build before it as any other.
 
+#### Slice LAB-5G1b (0.12.57): the core rows' serving code takes a budget and a cursor binding from its caller; the MCP front
+
+Coordinator work orders `rd-1112/brief-lab5g-common.md` and `rd-1112/brief-lab5g1b.md`: what
+"Slice LAB-5G1" above left for its second slice. The coordinator's rulings, not the owner's
+words: of 2026-11-11 in the acceptance record of Runtime pull request #1579 (`runs`' and `codes`'
+cursors stay as they are), of 2026-11-12 on the four points below, and on board #434 (6775192250
+points 4, 11 and 12; 6784514298). On main `dffd6263`. The rule of the slice: nothing a program
+prints or does changes. actinglab passes no budget and a fresh cursor binding for each call, so
+every line it prints on the command line and in `serve --stdio` stays byte for byte; actingctl's
+too; today's MCP server (`apps/actingctl/src/mcp`) is not touched. The only caller in this slice
+is actinglab; the server that passes the other values is slice G2b.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G1b-1 | `core_ops::Caller.budget: Option<&Budget>` (`lab_ops::budget::Budget`, LAB-5D) | new member | LAB-5G1b | actinglab (`None`) | the answer budget. `None`: the whole answer, the line the command line prints. `Some`: handed to the step LAB-5D moved that shapes the answer of `status` (`overview::within_budget`), `diagnose` (`Diagnosis::within_budget`), `events` (`Page::within_budget`, the payload page exported), `schedule` (`schedule::within_budget`), `runs` (`RunsAnswer::within_budget`), `run evidence` (`Evidence::within_budget`) and `codes` (`code_lookup::Page::within_budget`; an entry is given whole), which cut, and `facts` and `config` (`facts::within_budget`), `packs` (`Answer::within_budget`), `remedy` (`remedy::within_budget`; `remedy set` and `remedy lift` have none) and `summary` (`routine_summary::within_budget`), which export. The commands of `lab-ops` take it through a new `dispatch_within` beside their `dispatch_on` (`overview`, `diagnose`, `events`, `run_list`, `run_evidence`, `code_lookup`, `packs`, `remedy`, `routine_summary`); each `dispatch_on`, and each `dispatch`, is its `dispatch_within` with no budget (and `CursorBinding::fresh()`), so actingctl and actinglab answer as before. The caller's `fits` is asked about the answer as the shaping step holds it, without the line's `outcome` and without the `warnings` the line adds beside it (`status`, `diagnose`, `runs`, `packs`): a caller's measure allows for them. A write to the caller's export that fails is that write's outcome, refused (`material_export_failed`; `actingctl_output_failed` for a `packs` document that does not encode) |
+| L5G1b-2 | `budget::line_members(fitted, member, warnings)` | new function | LAB-5G1b | `core_ops` and the commands' `dispatch_within` | an answer within a budget as its line's members: the answer's members (one that is no JSON object under `member`), then `warnings` when there is one. An answer written whole to the caller's export carries `answer_exported` (with its `path`, and for `packs` the `count` of the warnings the file holds) as the line's one warning, the file holding the rest, as today's MCP server gives it (`tools::fitted`); any other carries the read's own warnings, as before |
+| L5G1b-3 | `core_ops::Caller.cursor: events::CursorBinding`; `CursorBinding::fresh()` | new member, new function | LAB-5G1b | actinglab (`CursorBinding::fresh()` for each call) | the binding (a session and a connection generation) of the cursors `events` issues and takes (`events::dispatch_within`) and of the cursor of `diagnose`'s errors page (`diagnose::dispatch_within`), in place of the fresh binding each of them made: `fresh()` is that binding, `{session: process_session(), generation: 1}`, so a command line binds as before. Only these two: `runs`' and `codes`' cursors carry their own position and query fingerprint and bind to no session, and binding them would change what actinglab prints and takes (the ruling of 2026-11-11), so they take no binding. The `events` row declares no `cursor`: cursors belong to the front (the coordinator's ruling of LAB-5A's step 0). The binding given to the moved code governs the cursors issued in its answers (the `next_cursor` of an `events` page and of `diagnose`'s errors page); a front that pages takes a cursor back on the layer below the row, `events::dispatch_within` with its command's words (`--cursor`), under its binding (the coordinator's ruling of 2026-11-12) |
+| L5G1b-4 | `lab_ops::front::Front::Mcp` | new variant | LAB-5G1b | — (the slice's test) | the MCP channel with the envelope today's MCP server uses, (Cli, Cli): `front::config(Front::Mcp, state_root)` is `RuntimeClientConfig::new(state_root, RuntimeChannel::Mcp, EventActor::Cli, EventSource::Cli)`, the configuration `apps/actingctl/src/mcp/runtime.rs` builds (`connect`, `connect_at`). No program says it yet (`front::set`); actingctl's product code does not call it |
+| L5G1b-5 | `lab_operation_completed`: registered in `crates/lab-ops` (`ActingctlCode::LabOperationCompleted`), its fragment entry in `contracts/outcome-codes/actingctl.json` (owner `actingctl`; was `actinglab`) | outcome catalog | LAB-5G1b | `core_ops` (`completed`, `material_written`) and actinglab's own commands (`cli_module::own_line::success`) | point 1: a served row's answer carries the same completion code whichever program serves it. The spelling, category (`success`), ladder class, values (none), review (`pending`), `since` and texts (description, common causes, handling) stay as they were; only the owner changes. What the outcome guard holds, and why the move is allowed: G1 (`tools/outcome-guard/src/lib.rs`, `check_registries`) wants a code registered once, in the registry of the crate its fragment's owner names (`crates/lab-ops` is owner `actingctl`'s, `contracts/outcome-codes/catalog.json` `fragments`), so actinglab's registry no longer lists it; G8 wants the owner among those of its prefix, and `lab_` lists `actingctl`; G9 binds only settled or retired entries, and their signature holds no owner (`ci/outcome_release.py`, `code_signature`), and the code is pending and in no release file. `Caller.completed` is dropped; `core_ops::material_written` takes no code. The index is regenerated (`ci/outcome_codes_index.py`) |
+| L5G1b-6 | `Operation::undeclared(members)` (`lab_ops::table`) | new function | LAB-5G1b | — (the server's slice, G2b, calls it) | point 2: for a row and the names of the members given, the names the row does not declare (none of its `params`), in the order given; the table is its only source. It takes no front end: the table declares a row's parameters for every front end alike, and only `required_in` is per front end (the coordinator's ruling of 2026-11-12). A front's own members, those it adds beside the table's parameters (such as the MCP front's cursor or export members), are that front's business. actinglab's own refusal (`words::from_json`, the command line's words) is where it was and does not call it |
+
+**Point 3, `status` and the watchdog block.** Nothing to build. `status` answers `watchdog: null`
+unless the program sets the block's reader: a caller sets it as actinglab does, once at its start
+(`overview::set_watchdog_block(actingcommand_watchdog::overview_block)`, on Windows,
+`cli_module::main`), and the server's slice (G2b) does so in the MCP server.
+
+**Point 4, relative paths.** Nothing to build. The coordinator's ruling: the MCP front refuses a
+relative path in a parameter, because a resident server's current directory means nothing to its
+caller; slice G2b builds the refusal. Until then the moved code resolves a relative path in a
+parameter as the command line does, against the current directory of the program that serves the
+row (`run start`'s package, for one, is canonicalized there).
+
+**What actinglab passes.** `cli_module::core_ops::caller()`, made for each call: its place, its
+developer text, `Connection::per_call()`, `budget: None` and `cursor: CursorBinding::fresh()`, the
+binding each command made for itself before. **Rows without answer shaping** (for the server's
+slice to bound): the list of "Slice LAB-5G1" holds, every row of `core_ops` but `status`,
+`diagnose`, `events`, `schedule`, `runs`, `run evidence`, `codes` (cut), `facts` and `config`,
+`packs`, `remedy` and `summary` (export); `remedy set` and `remedy lift` have none.
+
+**Tests.** New: apps row "#434 LAB-5G1b". In actinglab's binary tests (`gate_434_lab5g1b`; the
+runtime client's scripted Runtime, made-up ledger records and a made-up configuration in a
+temporary folder; no device, no clock, no sleep):
+`lab5g1b_a_budget_cuts_or_exports_and_none_is_the_command_lines_line` (no budget: `codes` and
+`packs` answer the command line's line; a budget that refuses the whole answer: `codes` keeps one
+row, `truncated`, the cursor after it; `packs` writes its whole document through the caller's
+export and answers `{source, export}` with `answer_exported` its one warning, the file holding the
+document; with no export the whole answer) and
+`lab5g1b_the_callers_cursor_binding_binds_events_and_no_other_cursor` (a cursor `events` issues
+through `core_ops` names the caller's binding, is taken under it and refused `cursor_invalid`,
+nothing read, under another; `codes` answers the same line under either binding and its cursor
+is taken as before; `runs` refuses a cursor of its own form alike under either) and
+`lab5g1b_the_errors_page_of_diagnose_is_bound_to_the_callers_binding` (the scripted Runtime
+answers `diagnose`'s errors page with one made-up row and more after it and refuses the four reads
+that follow, which the diagnosis answers without; the cursor of its errors page names the
+caller's binding, and `events` of the errors view of the diagnosis' window, read from its answer,
+takes it under that binding and refuses it `cursor_invalid`, nothing read, under another). In
+`crates/lab-ops` (`gate_434_lab5g1b`): `lab_ops_undeclared_members_follow_the_table` (of
+`events`' members a declared one is not returned and an undeclared one is; every parameter of every
+row is declared, `resume`'s `expect`, required on `mcp` only, too). In actingctl's gate tests
+(`lab5g1b_front_mcp`, which needs the runtime client's `test-support` feature as a
+dev-dependency): `lab5g1b_front_mcp_connects_as_todays_mcp_server` (`actingctl mcp-serve` and a
+`Front::Mcp` client each connect to one scripted Runtime: the same requests, ids and times left
+out, `Health`, `BindChannel` `mcp` without `via`, `Status`, the envelope (Cli, Cli); the members
+no request carries equal those of the expression mcp-serve builds). No existing test changed:
+`gate_434_lab5g1` builds its `Caller` from `cli_module::core_ops::caller()` as before, and
+`gate_434_lab5c` reads `core_ops::material_written` with the four arguments it gave;
+`gate_434_lab5c`, `gate_434_lab5d`, `gate_434_lab2`, `gate_434_lab2b`, `gate_434_lab5a` and
+`lab_ops_table_complete` are untouched.
+
+**Where LAB-5G1b differs from its work order's letter.** (a) The work order's test of a member
+"declared for another front only" has no case to test: the table declares no parameter for one
+front end only, and the coordinator's ruling of 2026-11-12 took the front end out of the function
+(L5G1b-6). (b) The `events` row declares no `cursor` (L5G1b-3), so the tests give an issued cursor
+back to `events::dispatch_within`, the step `core_ops` hands the binding to. (c) `runs`' cursor is
+tested by a refusal only: a cursor `runs` takes names a window of the last seven days, which needs
+the clock.
+
+**Interface.** None raised: nothing on the wire, in the ledger or in a file a released peer reads
+changes; no code, key, location or revision is added (`lab_operation_completed` keeps its
+spelling and envelope; its catalog owner changes).
+
+**What LAB-5G1b changes live.** One visible change: the owner shown for
+`lab_operation_completed` changes from the Lab's program (`actinglab`) to the operation layer's
+owner (`actingctl`), in `codes lab_operation_completed`, in MCP's `ac_outcome_code` and in the
+catalog index; `codes --owner actinglab` no longer lists it and `--owner actingctl` does (the
+coordinator accepted it on 2026-11-12). The code, its category and its texts do not change.
+Nothing else a person, a client or the Runtime sees changes.
+
+**LAB-5G1b rollback** (to the release before it). Nothing persisted: code and catalog text only.
+
+#### Slice LAB-5G2a (0.12.57): the new MCP server's shell and its tool list from the operation table
+
+Coordinator work order `rd-1112/brief-lab5g2a.md` with `rd-1112/brief-lab5g-common.md`, after the
+read-only survey `rd-1108/arch-013/lab5g-step0-survey.md` (§1, §5, §6, §8 and its §10 row G2a);
+the coordinator's rulings on board #434, 6775192250 (points 13 to 15, 19, 20 and 22) as amended by
+6784514298 (points 1 and 2); on main `dffd6263`. The contract is
+[lab-two-entries.md](lab-two-entries.md) §8.1, §8.3, §9.3 ("The server's shell") and §12. The rule
+of the slice: nothing existing changes. No file under `apps/actingctl/` changes; actinglab's lines
+and `serve --stdio` are untouched; the program is in no release and no Tools archive (G6 packages
+it).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G2a-1 | `apps/actinglab-mcp` (package `actingcommand-actinglab-mcp`, binary `actinglab-mcp`, version 0.1.0; no lib target) | workspace member | LAB-5G2a | — | tested in the CI job `apps`; depends on `actingcommand-contract`, `actingcommand-lab-ops`, `actingcommand-lab-rescue` (which rescue rows the rescue module serves, on Windows) and `serde_json`, `tempfile` for its tests; not in `windows-remote-build.yml`'s `--bin` list or `$toolFiles`, `scripts/windows-tools/` or the installer's fixtures (slice G6) |
+| L5G2a-2 | the protocol and the loop (`protocol.rs`, `server.rs`) | copied code | LAB-5G2a | — | copied from `apps/actingctl/src/mcp/protocol.rs` (whole; the server's name `actinglab-mcp` and its instructions differ) and the generic part of `server.rs` (the stdin reader of 4 MiB lines, the ordered stdout writer, the two eras, batches under 2025-03-26, `ping`, `server/discover`, progress, `notifications/cancelled`, request ids in flight, the 2 s grace at stdin EOF, `actingcommand/entryStatus`), without the tiers, the Runtime connection, the session identity and the jobs; as many workers as the start option `--workers` says (L5G2a-4; default eight, 6775192250 points 20 and 22), where the original has a constant; `entryStatus` answers no handle, as this build issues none, and its calls in flight |
+| L5G2a-3 | `tools::Catalog`: one tool per offered row | behaviour | LAB-5G2a | — | offered: a planned row of a slice actinglab's words offer (`tools::ACTINGLAB_SLICES`, held equal to actinglab's `BUILT_SLICES` by the test) or of slice LAB-5; a rescue row only on Windows, one the rescue module serves (`lab_rescue::rescue::serves`) or of slice LAB-5. Name: the table's rule (`Operation::mcp_tool`) but `tools::NAMED`, one place: `frame` → `ac_frame`, `observe` (authoring) → `ac_lab_observe`; no tool is `ac_observe`. Definition: `name`, `description` (the row's `help`), `inputSchema` (one property per parameter in the row's order, by the survey's type table; a switch a boolean; a repeated parameter an array of at least one; `default` typed, a default its type does not read ending the start with `foreign_data_error` and the table's `path`; the `note` its `description`; `required` the row's required parameters and those whose `required_in` names `mcp`; `additionalProperties: false`), `annotations` (`readOnlyHint` not `writes`, `destructiveHint` `irreversible` or `disruptive`, `openWorldHint` false); no `title`, no `outputSchema`, no `idempotentHint`; the same in every protocol version |
+| L5G2a-4 | the command line: `--list <module>[,<module>...]`, `--workers <n>`, `--list-tools`; `--tier` refused | behaviour | LAB-5G2a | — | `--workers` (the coordinator's ruling of 2026-11-12 on #1639: a tunable is a start option with a default, and this slice's loop reads it) is the number of threads that run `tools/call`, a whole number from 1 to 64, 8 when not given; 0, 65 or a negative number is `actingctl_usage_invalid` (`argument` `--workers`, `out_of_range`, `range_min` 1, `range_max` 64), a word that is no whole number `wrong_type`, the option twice `repeated`, without its value `value_missing`, beside `--list-tools` (which runs no call) `conflicting`; ruling 20's two other start options (children, idle time) come with the slice that uses them. `--list` takes the ids of the table's module rows of role `operations` (`core`, `debugging`, `authoring`, `rescue`); another word or an empty one is `actingctl_usage_invalid` (`argument` `--list`, `not_recognised`), a word twice `repeated`, the option twice `repeated`, without its value `value_missing`. Without `--list`: core, debugging, rescue and, where `lab_ops::locate::authoring_module` lists it (read at each listing), authoring; an option that cannot be read leaves it out with one `WARN actinglab-mcp:` developer line naming the failure. `--list-tools` prints the `tools/list` result `{tools}` (pretty JSON) for the listing and exits 0. `--tier` (and `--tier=…`) is `actingctl_usage_invalid` (`argument` `--tier`, `unknown`) with a developer text that says the server has no tiers; any other word `unknown`; nothing on stdout, exit 1. `ACTINGCOMMAND_DETAIL` is read as `actingctl mcp-serve` reads it without `--detail` |
+| L5G2a-5 | `tools/call` | behaviour | LAB-5G2a | — | the name of any offered row's tool, listed or not (not listed is never refused; ruling 2, LAB-5F), runs on a worker and answers `mcp_operation_unsupported` with `mcp_tool`, as the CLI line of a refusal, `{outcome}`: the text content and, from 2025-06-18 on, `structuredContent`, `isError` true; nothing is sent, run or written, and the arguments (an object, or absent) are not read. A name that is no offered row's tool (`ac_observe` too) answers as today's server answers an unknown tool: -32602 `mcp_params_invalid`, `name`, `not_recognised` |
+| L5G2a-6 | `mcp_operation_unsupported` (error, ladder class `none`, value `mcp_tool` required, pending, its texts written) | outcome catalog | LAB-5G2a | — | the first code of the new owner `actinglab-mcp` (fragment `contracts/outcome-codes/actinglab-mcp.json`, registry `apps/actinglab-mcp/src/codes.rs`); the header's `fragments` names it and the domain `mcp_` gains it beside `actingctl`; the index regenerated (`ci/outcome_codes_index.py`). No existing code means "listed, not served by this build". The JSON-RPC errors and usage refusals stay actingctl's codes, as today's server answers them |
+| L5G2a-7 | the instructions (`tools::INSTRUCTIONS`, 1,696 bytes) | text | LAB-5G2a | — | the survey's draft (§6) with the names of 6784514298 point 1 (`ac_frame`, `ac_lab_observe`, no `ac_observe`), the authoring option read as LAB-5F fix 2 reads it (a module left out of the list still answers its tools' calls), and one sentence for this build: it serves no call yet |
+
+**Measured** (computed from the table this build embeds by the generation's rules; compact JSON,
+UTF-8, the 2025-06-18/2025-11-25 framing, the 2026-07-28 framing in brackets): on Windows every
+module lists **142 tools** (core 49, debugging 26, authoring 35, rescue 32) in **86,385 bytes**
+(86,532); without the authoring module **107 tools** in **60,756 bytes** (60,903). Elsewhere 110
+and 75 tools. Today's server: 198,337 bytes (the survey's §1). The largest definition is `events`
+(2,466 bytes); the longest name `ac_standard_pack_compose`.
+
+**Tests.** New: apps row "#434 LAB-5G2a": `gate_434_lab5g2a::mcp_tools_from_op_table`,
+`mcp_tool_names_keep_two_exceptions` and `mcp_list_option_and_authoring_gate` (the binary's unit
+tests; the embedded table, a doctored copy of it and made-up installation roots in a temporary
+folder; the last also reads `--workers`: its default, given values and its refusals), and `server_stdio::mcp_tier_refused`, `mcp_calls_refused_unsupported_and_an_unknown_tool`
+and `mcp_loop_initialize_list_batch_and_cancel` (the program over pipes, as today's server's
+`mcp_shell` drives it; no Runtime). No existing test changed. The outcome guard's allow list gains
+one standing G3 entry, the copy's `error_response` (JSON-RPC's `error.code`), beside actingctl's.
+
+**Interface.** None raised: nothing on the wire, in the ledger or in a file a released peer reads
+changes; the program is in no release; the MCP entry's `entry_protocol` is G5a's. One code is added
+(L5G2a-6); no key, location or vocabulary token.
+
+**A tool left out of the list is callable** (the coordinator's ruling of 2026-11-12 on #1639,
+which confirms the amended ruling 6784514298 point 2 over the work order's point 6): a tool that
+belongs to an offered row but is left out of the list by `--list` or by the authoring key is
+called like a listed one, and only a name that belongs to no offered row is an unknown tool.
+
+**Where LAB-5G2a differs from its work order's letter.**
+
+- (a) The instructions keep the draft's rules for the slices to come (handles, the budget, cursors)
+  beside the sentence that this build serves no call (accepted by the coordinator on #1639); G7
+  writes them finally.
+- (b) The rescue module's rows of slice LAB-5 (`mcp config`, `mcp entries`) and the authoring row
+  `record draft` are listed as offered rows (§9.2); no slice serves them yet.
+- (c) "Offered" restates actinglab's rule, as actinglab is a program without a library; the test
+  reads actinglab's `BUILT_SLICES` from its source and holds the two equal.
+- (d) `--workers` (L5G2a-4) was added after the first round, by the coordinator's ruling on #1639,
+  where the first round had a constant.
+
+**What LAB-5G2a changes live.** Nothing: the program is built and tested in CI and is in no release
+or Tools archive until G6.
+
+**LAB-5G2a rollback** (to the release before it). Nothing persisted: code, the table's readers and
+one catalog entry.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
@@ -16211,6 +16364,145 @@ without `device_group` runs as before.
 
 **Rollback** (below 0.12.57). Nothing is persisted by MAPP-1b; the build before it reads every
 record this one writes.
+
+### 1.331 Slice LAB-OCR-DL (0.12.57): an offline evaluation of a saved scene can raise the OCR inference deadline to the contract's maximum (Workflow #428; after VIS-LOAD-1, §1.298, a resource repository's CI frame regression on a hosted runner, on the CPU, still failed 1 check of 2260 in 1 of 3 runs on Tools v0.12.54 with `candidate_feature_failed` … `Timeout: fatal vision FFI error in ppocr_ctc_engine: PPOCR recognizer could not start before the configured timeout`; the coordinator's rulings of 11-12 on board #428, not the owner's words; coordinator work order `rd-1112/brief-lab-ocr-deadline.md`, read on main `dffd6263`)
+
+1.331 is the next free number: main `dffd6263` holds 1.329, CODES-T2, and 1.330 is MAPP-1b's, in
+flight. [vision-model-folders.md](vision-model-folders.md), "Startup and first use", is the
+contract and gains one sentence; [package-reference.md](package-reference.md) defines no
+`timeout_ms` and does not change; the operation table
+([lab-operations.json](lab-operations.json)) declares the switch. No persisted ledger shape, wire
+shape, configuration key, outcome code, closed vocabulary or interface revision changes, no
+package's `timeout_ms` or its bounds (1 to 60 000), and no file of today's MCP server
+(`apps/actingctl/src/mcp/**`).
+
+**The rulings** (the coordinator's, 11-12, board #428). A package's `timeout_ms` is not changed for
+CI, and production keeps every deadline it has. An offline regression asks whether a saved scene is
+recognised correctly, not whether it is recognised fast enough, and a cold CPU process on a shared
+runner says nothing about production's speed: so an offline evaluation of a saved scene may, on an
+explicit switch, raise each OCR target's inference deadline to the contract's maximum, 60 000 ms.
+Raised, not removed: a hung inference still ends. The switch is refused wherever the frame does not
+come from a saved scene.
+
+**The rows.** The rows that declare `scene` (an offline PNG frame) and whose saved-scene path
+evaluates it with the Lab's OCR provider, so that it can reach an OCR target (page detection
+evaluates every target of every page; a target reaches the members of a composite and the sides of
+a value test). Each loads its package through `contained_resources::load_with_ocr_deadline`, whose
+bundle evaluator holds the provider every evaluation of the line uses.
+
+| Row | The path that takes the switch |
+|---|---|
+| `observe` | `--scene` (not `--capture`): page detection, `--targets`, the actions' targets, the candidate layouts |
+| `do` | `--scene` with `--dry-run`: the page, the guard and the target |
+| `ensure` | `--scene` with `--dry-run`: the page |
+| `wait` | `--scene`: the page or the stable target, each poll |
+| `recognize`, `is-visible` | `--scene` (their `--capture` is retired and refused): the target |
+| `detect-page`, `current-page` | `--scene`: page detection |
+| `tap-target`, `navigate` | `--scene` with `--dry-run`, their only path (`--capture` is retired): the target, the page |
+
+Not given the switch: `recover`, whose planned recovery builds its evaluator without a vision
+provider (`RecognitionEvaluator::new`), so that an OCR target is never inferred there
+(`recognition_pack_provider_missing`); `locate`, template matching only; `recognize-artifact`,
+whose request (`RecognizeArtifact`) the resident Runtime evaluates. The rows that evaluate saved
+frames that are no `scene` are not the rulings' rows and do not take it: `regression` (a run's
+frames, read from a state root's ledger, through the same load and with no time bound of its own),
+`replay` and the dry runs of a package over a directory of frames, and the authoring rows'
+recordings. **Open for the coordinator:** `replay` runs the kernel's contained task, whose sampling
+deadline (`with_sample_deadline`, sized from the declared `timeout_ms`) a raised deadline would
+outgrow; giving it the switch would change the kernel's recognition outside the Lab's own entry, so
+it is not done here.
+
+**Where a target's `timeout_ms` becomes the engine's deadline on these paths.** The recognition
+pack's evaluator builds each OCR request with the target's `timeout_ms` (a candidate layout's shared
+read with its own, `shared_ocr.timeout_ms`) as `OcrProviderRequest.timeout_ms` (`evaluate_ocr`, the
+OCR observation, `read_shared_text`, the text locate) and hands it to the provider the package load
+gave it: the kernel's `VisionFfiProvider` over the `ppocr-ctc` engine on the CPU
+(`LabOcr::from_vision_root`, `crates/lab/src/ocr.rs`). Its `call_ocr` takes it as the request's
+deadline (the wait for the model's lock and, in `load_ocr`, for another request's runtime
+initialisation) and gives the engine what remains, which the engine's `read_request` takes as its
+inference deadline (§1.298). With the switch actinglab gives the package load
+`with_ocr_deadline_max(provider)` instead (`crates/lab/src/ocr.rs`), which hands every OCR request
+on with `timeout_ms` 60 000 (`OCR_DEADLINE_MAX_MS`) and changes nothing else: model admission, NN
+requests and the provider's reports pass through. The kernel's provider then bounds the request and
+the engine its inference by 60 000. No file of the kernel, the recognition pack or the engine
+changes, and no path the resident Runtime runs builds the wrapper.
+
+**The other wall-clock bounds of these paths, with the switch.**
+
+- The recognition pack's sample deadline (an OCR target whose `timeout_ms` exceeds what is left is
+  not started, `recognition sample budget insufficient`; `recognition_sample_deadline_exceeded`
+  after an evaluation): only the kernel's contained task sets one (`with_sample_deadline`); the
+  scene contexts of these rows (`scene_context`, `scene_context_with_samples`) carry none. Nothing
+  to change.
+- The saved artifact's OCR request deadline (`evaluate_saved_artifact_ocr`, 120 s): the Runtime's
+  `RecognizeArtifact`, on no path of these rows. Unchanged.
+- The package admission deadline (`ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS`, in
+  `contained_resources::load_with_ocr_deadline`): it bounds the reading of the package, before
+  anything is evaluated. Unchanged.
+- `wait`'s `--timeout-ms` (default 5 000) and `--poll-ms`: the wait compares the time spent only
+  after a whole evaluation and answers `arrived` when the page or the target is what it waits for,
+  whatever the time; it never refuses or cuts an evaluation. Unchanged.
+- `do`'s `--after-timeout-ms`, `ensure`'s and `navigate`'s `--step-timeout-ms` and `--poll-ms`:
+  online or pressing only, refused or not read on these paths. Unchanged.
+- The text-read budget and a candidate projection's provider budget count calls and area, not time;
+  the 5 s limit of a unique template search is a template's. Unchanged.
+
+So the offline path is consistent without any further change, and no code the production path
+shares changes.
+
+**The switch.** `--ocr-deadline-max`, the proposed name, which the table's naming rule gives the
+parameter `ocr_deadline_max` (form `switch`, type `boolean`, not required, the last parameter of
+each of the ten rows, its `note` saying the above). The command lines read it through their lists:
+`lab2_cli::LAB2_SWITCHES` and the reads of the four `--scene` paths (`OBSERVE_SCENE`, `DO_SCENE`,
+`ENSURE_SCENE`, `WAIT_SCENE`; no `--capture` path reads it), and the switches of
+`readonly_cli::READONLY_INPUT_READS`, a part of the six readers' read lists. `serve --stdio` hands
+it on as any switch of a row; `help` and the completion read it from the table. No row's `help`
+changes: a row's sentence says what the row does and nothing its parameters say (LAB-5E,
+[lab-two-entries.md](lab-two-entries.md) §9.1), and the parameter's note says this.
+
+**Refused off a saved scene.** Given beside `--capture`, or on a line with no `--scene`, the switch
+is refused before any package is loaded or any frame read: `validation_failed`, its details
+`{argument: "--ocr-deadline-max", argument_problem: "conflicting"}`, the message
+"--ocr-deadline-max raises the OCR inference deadline of an offline evaluation of saved scenes
+only: give --scene, without --capture". `detect-page`, `tap-target` and `navigate` carry those
+details in their trace's `details`, as every refusal of theirs.
+
+**The answer.** With the switch every answer of these rows that stands carries the member
+`ocr_deadline_raised_to_ms`, `60000`, beside its others (on actinglab's line flat beside `outcome`,
+LAB-2b); `observe`, `do`, `ensure` and `wait` keep it in Min (`lab2_projection_request`'s kept
+members). Without the switch every line is as before, byte for byte. A failure's line is the
+failure's, unchanged.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): no declared
+interface covers the Lab's lines, and the one member appears only when the switch is given.
+
+**At deploy.** Nothing changes in production, nor for any command line without the switch. A
+resource repository's regression script may pass `--ocr-deadline-max` to `observe --scene` and
+`recognize --scene` once its Tools pin has it; a build without it refuses the switch as a flag it
+does not read. **Rollback** (below 0.12.57): the switch is refused again as unknown.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| OCRDL-1 | `ocr_deadline_max` (`--ocr-deadline-max`) on `observe`, `do`, `ensure`, `wait`, `recognize`, `detect-page`, `current-page`, `is-visible`, `tap-target`, `navigate` | operation table parameter, a switch | LAB-OCR-DL | actinglab | `since` 0.12.57; a saved scene only |
+| OCRDL-2 | `ocr_deadline_raised_to_ms` | member of those rows' answers | LAB-OCR-DL | actinglab | `since` 0.12.57; only with the switch; 60000 |
+| OCRDL-3 | `with_ocr_deadline_max`, `OCR_DEADLINE_MAX_MS` (`crates/lab`) | Lab-internal | LAB-OCR-DL | — | the wrapper of the Lab's provider; the contract's bound, no tunable |
+| OCRDL-4 | what a target's `timeout_ms` bounds offline ([vision-model-folders.md](vision-model-folders.md)) | contract sentence | LAB-OCR-DL | — | the switch; production never |
+
+Tests (apps gate row "#428 LAB-OCR-DL"):
+`gate_428_lab_ocr_dl::lab_ocr_dl_an_inference_longer_than_the_timeout_fails_without_the_switch_and_passes_with_it`
+(`crates/lab`: the readers' evaluation, `ReadonlyRecognitionEngine`, over a fake provider whose
+inference takes 3 000 ms of an OCR target that declares 1 000: without the switch it fails with
+the engine's Timeout of today, its request's deadline 1 000; through `with_ocr_deadline_max` it
+passes, its request's deadline 60 000; no clock, no sleep, no model), and
+`gate_428_lab_ocr_dl::lab_ocr_dl_the_answer_names_the_raised_deadline_only_with_the_switch` and
+`lab_ocr_dl_the_switch_off_a_saved_scene_is_refused` (actinglab's bin, a neutral package and frame:
+the member on each of the ten rows only with the switch, `recognize`'s answer otherwise the same;
+the refusal beside `--capture` and without `--scene`). The lists extended are the code's:
+`lab2_cli::LAB2_SWITCHES` (8 to 9), the reads of `OBSERVE_SCENE`, `DO_SCENE`, `ENSURE_SCENE` and
+`WAIT_SCENE`, and the switches of `readonly_cli::READONLY_INPUT_READS`, which LAB-5B2's
+`strict_rows_match_their_commands` and LAB-5B3's `lenient_rows_match_their_reads` hold equal to the
+ten rows. No golden and no list of CLI-HELP or CLI-COMP changes (both read the table), and no
+existing test changes.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

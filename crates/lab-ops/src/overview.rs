@@ -1390,10 +1390,20 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
 
 /// Workflow #434 LAB-5G1: [`dispatch`] on the caller's `connection`.
 pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option<cli_line::Exit> {
+    dispatch_within(arguments, connection, None)
+}
+
+/// Workflow #434 LAB-5G1b: [`dispatch_on`] within the caller's `budget`: none, the whole overview,
+/// as the command line prints it; with one, [`within_budget`], its warnings beside it as before.
+pub fn dispatch_within(
+    arguments: &[OsString],
+    connection: Connection<'_>,
+    budget: Option<&Budget<'_>>,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != "overview" {
         return None;
     }
-    Some(match run(arguments, connection) {
+    Some(match run(arguments, connection, budget) {
         Ok(members) => cli_line::success(
             members,
             &Outcome::new(ActingctlCode::RuntimeOverviewReported),
@@ -1405,7 +1415,11 @@ pub fn dispatch_on(arguments: &[OsString], connection: Connection<'_>) -> Option
     })
 }
 
-fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Map<String, Value>, Failure> {
+fn run(
+    arguments: &[OsString],
+    connection: Connection<'_>,
+    budget: Option<&Budget<'_>>,
+) -> Result<Map<String, Value>, Failure> {
     let (state_root, root, request) = parse(arguments)?;
     let deadline = Instant::now() + CLI_READ_BUDGET;
     let (program_root, install_root) = install_roots(root.as_deref()).map_err(Failure::Install)?;
@@ -1422,7 +1436,12 @@ fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Map<String,
     };
     let envelope = |outcome: &Outcome| cli_line::outcome_value(outcome, detail);
     let overview = read(connection, &request, &place, deadline, &envelope)?;
-    let mut members = overview.result;
+    // Workflow #434 LAB-5G1b: the overview whole without a budget, as before (`within_budget`
+    // gives it back unchanged); with one, cut to it.
+    let mut members = cli_line::members(
+        within_budget(Value::Object(overview.result), budget),
+        "overview",
+    );
     if !overview.warnings.is_empty() {
         let warnings = overview
             .warnings

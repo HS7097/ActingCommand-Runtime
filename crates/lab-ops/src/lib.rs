@@ -144,6 +144,10 @@ mod gate_434_lab1b;
 // `lab_ops_budget_cuts_keep_their_markers`, `lab_ops_budget_exports_the_header`).
 #[cfg(test)]
 mod gate_434_lab5d;
+// Test-only: Workflow #434 LAB-5G1b, the slice's named test of the table
+// (`lab_ops_undeclared_members_follow_the_table`).
+#[cfg(test)]
+mod gate_434_lab5g1b;
 // Test-only: Workflow #438 HELD-1, the diagnose half of `held_t9` (the instance's held rows and
 // the mark on its `not_run` rows).
 #[cfg(test)]
