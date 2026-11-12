@@ -81,7 +81,29 @@
 //!   exit code and its stderr's tail, its request is not sent again, and the next call starts a new
 //!   child under `--children 1`. With `--child-idle 0`, and with 1, the child ends after its
 //!   answer without another call while the server goes on.
+//!
+//! Workflow #434 LAB-5G4b, its second part (register §1.287, "Slice LAB-5G4b"), with the same
+//! made-up `actinglab` answering each request of a test's instance with the envelope the test
+//! wrote for it (its line, exit code and request id):
+//! - `mcp_lab_overflow_rule`: a child's success line far past the budget is written whole to the
+//!   server's export directory (the file holds the child's line, its SHA-256 and size as the
+//!   reference says) and answered `{req_id, export, overflowed: true}` with `answer_exported`
+//!   first and the child's own warnings after it: `record stop` keeps its four binding parts under
+//!   `lab`; `observe` and `do` their frame parts in order, a part that does not fit left out and
+//!   the next one kept. With a file where the export directory would be: no `export`, the export's
+//!   `material_export_failed` first, the parts kept. A failure line past the budget is not
+//!   exported: it is sent in `structuredContent` alone beside a summary text, and no file is
+//!   written.
+//! - `mcp_capture_records_client_action`: after the child of `ac_lab_observe` or `ac_do` with
+//!   `capture` true answered, the scripted Runtime receives on a connection of its own the identity
+//!   card and the client action (surface `mcp`, the tool, kind `command`, the call's instance, the
+//!   envelope's `req_id` as its value), from (Cli, Cli); without a request id it is recorded
+//!   without a value and the line carries `client_action_without_req_id`; a recording the Runtime
+//!   refuses gives `client_action_not_recorded` caused by the refusal and the call's answer stands;
+//!   `capture` absent or false records nothing; `capture` with `dry_run` records, as today. Each
+//!   Lab command reaches the child once.
 
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     AuditInput, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
     EventPayloadDraft, EventSeverity, EventSource, FactScope, IdentifierIssuer, OriginModule,
@@ -92,8 +114,9 @@ use actingcommand_contract::{
     RuntimeReceiptState, RuntimeRequest, RuntimeResult, SanitizationError, SecretField,
     SecretFingerprinter, Sha256Fingerprint, TerminalEvent,
 };
-use actingcommand_lab_ops::cli_line::Exit;
+use actingcommand_lab_ops::cli_line::{self, Exit};
 use actingcommand_lab_ops::code_lookup;
+use actingcommand_lab_ops::codes::ActingctlCode;
 use actingcommand_lab_ops::core_ops::{self, Caller, Place};
 use actingcommand_lab_ops::events::CursorBinding;
 use actingcommand_lab_ops::front::{self, Connection, Front};
@@ -103,7 +126,7 @@ use actingcommand_runtime_client::test_support::{
     ScriptedRuntime,
 };
 use actingcommand_runtime_client::{RuntimeChannel, RuntimeClient};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -2073,4 +2096,530 @@ fn mcp_serve_children_pool() {
         let status = server.finish();
         assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
     }
+}
+
+// ---- Workflow #434 LAB-5G4b, second part: the Lab overflow rule and the client action after a
+// capture, the made-up child answering each test instance with the envelope the test wrote.
+
+/// Made-up text that puts a line far past the budget: some 20 KB, as text and again as
+/// `structuredContent`, where the server's measure takes a line of about 11 KB.
+const PAST_THE_BUDGET: usize = 20_000;
+/// A frame part too large to keep beside an exported line: some 12 KB.
+const TOO_LARGE_A_PART: usize = 12_000;
+/// A failure line that the 24 KiB limit takes in `structuredContent` alone but not again as its
+/// text: some 16 KB.
+const FAILURE_PAST_THE_BUDGET: usize = 16_000;
+/// The request ids the made-up envelopes carry.
+const OBSERVE_REQ_ID: &str = "req-neutral-observe";
+const DO_REQ_ID: &str = "req-neutral-do";
+/// The tools of the rows of today's `ac_record_stop`, `ac_lab_observe` and `ac_lab_do`.
+const RECORD_STOP: &str = "ac_record_stop";
+const LAB_OBSERVE: &str = "ac_lab_observe";
+const LAB_DO: &str = "ac_do";
+/// The frame parts an exported `observe` or `do` line keeps, in order.
+const FRAME_PARTS: [&str; 4] = [
+    "frame_coordinates",
+    "frame_path",
+    "preview",
+    "after_attachment",
+];
+
+/// `bytes` of made-up text.
+fn filler(bytes: usize) -> String {
+    "n".repeat(bytes)
+}
+
+/// Writes the envelope the made-up child in `log` answers a request of the instance `key` with.
+fn can_answer(log: &Path, key: &str, envelope: &Value) {
+    fs::write(log.join(format!("answer-{key}.json")), envelope.to_string())
+        .expect("write the made-up child's answer");
+}
+
+/// The outcome of an own command's success line, as actinglab's line carries it.
+fn completed() -> Value {
+    let exit = cli_line::success(
+        Map::new(),
+        &Outcome::new(ActingctlCode::LabOperationCompleted),
+    );
+    exit.line.expect("the line encodes")["outcome"].clone()
+}
+
+/// The outcome of a failure line.
+fn failed() -> Value {
+    let exit = cli_line::failure(&Outcome::new(ActingctlCode::LabProcessFailed), None);
+    exit.line.expect("the line encodes")["outcome"].clone()
+}
+
+/// The server at `program` beside the made-up child logging to `log`, its state root `state`, its
+/// exports under `temp` (named by `TMPDIR` too, which is where they go elsewhere than on Windows).
+fn exporting_into(program: &Path, log: &Path, state: &Path, temp: &Path) -> Command {
+    let mut command = with_children(program, log, state, temp, &[]);
+    command.env("TMPDIR", temp);
+    command
+}
+
+/// The line of an answer that is no error.
+#[track_caller]
+fn answered_as(answer: &Value) -> Value {
+    assert_eq!(answer["result"]["isError"], json!(false), "{answer}");
+    line_of(answer)
+}
+
+/// The names of a line's members, in order.
+fn members_of(line: &Value) -> Vec<String> {
+    line.as_object()
+        .map(|members| members.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default()
+}
+
+/// The codes of the warnings a line carries, in order.
+fn warning_codes(line: &Value) -> Vec<String> {
+    line["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|warning| {
+            warning["outcome"]["code"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect()
+}
+
+/// The files in `folder`, none when it is not there.
+fn files_in(folder: &Path) -> std::collections::BTreeSet<std::path::PathBuf> {
+    fs::read_dir(folder)
+        .map(|entries| {
+            entries
+                .map(|entry| entry.expect("an entry of the folder").path())
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .unwrap_or_default()
+}
+
+/// The export an overflowed `line` names holds `child_line` whole: a file in `exports`, the
+/// child's line as JSON, its SHA-256 and size as the reference says; and the first warning is
+/// `answer_exported` naming it.
+#[track_caller]
+fn assert_exported_whole(line: &Value, child_line: &Value, exports: &Path) {
+    use sha2::{Digest, Sha256};
+    let export = &line["export"];
+    let path = export["path"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no export path: {line}"));
+    let bytes = fs::read(path).expect("read the export");
+    let written = serde_json::from_slice::<Value>(&bytes).expect("the export is JSON");
+    assert!(
+        written == *child_line,
+        "the file holds the child's line whole"
+    );
+    assert_eq!(
+        (&export["sha256"], &export["size"]),
+        (
+            &json!(format!("sha256:{:x}", Sha256::digest(bytes.as_slice()))),
+            &json!(bytes.len()),
+        ),
+        "{line}"
+    );
+    assert_eq!(
+        fs::canonicalize(Path::new(path).parent().expect("the export's folder"))
+            .expect("the export's folder"),
+        fs::canonicalize(exports).expect("the export directory"),
+        "written to the server's export directory"
+    );
+    let first = &line["warnings"][0]["outcome"];
+    assert_eq!(
+        (
+            &first["code"],
+            &first["values"]["path"],
+            &first["values"]["actual_sha256"],
+            &first["values"]["actual_bytes"],
+        ),
+        (
+            &json!("answer_exported"),
+            &export["path"],
+            &export["sha256"],
+            &export["size"],
+        ),
+        "{line}"
+    );
+}
+
+#[test]
+fn mcp_lab_overflow_rule() {
+    let temp = TempDir::new().expect("tempdir");
+    let base = TempDir::new().expect("tempdir");
+    let state = base.path().join("state");
+    let (program, log) = beside_a_made_up_child(base.path());
+    let completed = completed();
+    let own_warning = json!({"code": "neutral_child_warning", "values": {}});
+    // `record stop`: its four binding parts under `lab`, beside far more.
+    let binding = json!({
+        "binding_example": {"procedure_ref": "neutral.package"},
+        "binding_requires": ["neutral.prerequisite"],
+        "prerequisite_entry_example": {"directory": "neutral"},
+        "catalog_on_failure_example": {"action": "pause"},
+    });
+    let mut lab = binding.clone();
+    lab["neutral_detail"] = json!(filler(PAST_THE_BUDGET));
+    let stopped = json!({
+        "lab": lab,
+        "lab_status": "neutral",
+        "warnings": [own_warning],
+        "outcome": completed,
+    });
+    can_answer(
+        &log,
+        "neutral.stop",
+        &json!({"exit_code": 0, "line": stopped}),
+    );
+    // `observe` and `do`: the four frame parts beside far more; `observe`'s preview too large.
+    let framed = |preview: Value| {
+        json!({
+            "frame_coordinates": {"device_pixels": [2, 1], "orientation": "landscape"},
+            "frame_path": "neutral-frame.png",
+            "preview": preview,
+            "after_attachment": {"kind": "frame", "frame_path": "neutral-after.png"},
+            "neutral_detail": filler(PAST_THE_BUDGET),
+            "outcome": completed,
+        })
+    };
+    let observed = framed(json!({"path": filler(TOO_LARGE_A_PART), "scale": 1}));
+    can_answer(
+        &log,
+        "neutral.observe",
+        &json!({"exit_code": 0, "req_id": OBSERVE_REQ_ID, "line": observed}),
+    );
+    let acted = framed(json!({"path": "neutral-preview.jpg", "scale": 1}));
+    can_answer(
+        &log,
+        "neutral.do",
+        &json!({"exit_code": 0, "req_id": DO_REQ_ID, "line": acted}),
+    );
+    // A failure line past the budget.
+    let refusal = json!({
+        "message": "neutral failure",
+        "details": {"neutral_detail": filler(FAILURE_PAST_THE_BUDGET)},
+        "outcome": failed(),
+    });
+    can_answer(
+        &log,
+        "neutral.failure",
+        &json!({"exit_code": 1, "line": refusal}),
+    );
+
+    let mut server = Server::start(exporting_into(&program, &log, &state, temp.path()));
+    server.initialize();
+    let stop = answered_as(&server.call_tool(2, RECORD_STOP, json!({"instance": "neutral.stop"})));
+    let observe =
+        answered_as(&server.call_tool(3, LAB_OBSERVE, json!({"instance": "neutral.observe"})));
+    let act = answered_as(&server.call_tool(4, LAB_DO, json!({"instance": "neutral.do"})));
+    let exports = temp.path().join("actingcommand-mcp").join("materials");
+    let before = files_in(&exports);
+    let failure = server.call_tool(5, RECORD_STOP, json!({"instance": "neutral.failure"}));
+    let after = files_in(&exports);
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+
+    // `record stop`: written whole, its binding parts kept, the child's own warning after the
+    // first; no request id.
+    assert_eq!(
+        members_of(&stop),
+        [
+            "req_id",
+            "export",
+            "overflowed",
+            "lab",
+            "warnings",
+            "outcome"
+        ],
+        "{stop}"
+    );
+    assert_eq!(
+        (&stop["req_id"], &stop["overflowed"], &stop["lab"]),
+        (&Value::Null, &json!(true), &binding),
+        "{stop}"
+    );
+    assert_exported_whole(&stop, &stopped, &exports);
+    assert_eq!(
+        stop["warnings"]
+            .as_array()
+            .map(|warnings| warnings[1..].to_vec()),
+        Some(vec![own_warning.clone()]),
+        "the child's own warnings after the first: {stop}"
+    );
+    assert_eq!(stop["outcome"], completed, "{stop}");
+
+    // `observe`: its frame parts in order, the preview that does not fit left out and the part
+    // after it kept.
+    assert_eq!(
+        members_of(&observe),
+        [
+            "req_id",
+            "export",
+            "overflowed",
+            "frame_coordinates",
+            "frame_path",
+            "after_attachment",
+            "warnings",
+            "outcome",
+        ],
+        "{observe}"
+    );
+    assert_eq!(observe["req_id"], json!(OBSERVE_REQ_ID), "{observe}");
+    for part in ["frame_coordinates", "frame_path", "after_attachment"] {
+        assert_eq!(observe[part], observed[part], "{part}: {observe}");
+    }
+    assert_exported_whole(&observe, &observed, &exports);
+    assert_eq!(warning_codes(&observe), ["answer_exported"], "{observe}");
+
+    // `do`: its four frame parts, in order.
+    let mut kept = vec!["req_id", "export", "overflowed"];
+    kept.extend(FRAME_PARTS);
+    kept.extend(["warnings", "outcome"]);
+    assert_eq!(members_of(&act), kept, "{act}");
+    assert_eq!(act["req_id"], json!(DO_REQ_ID), "{act}");
+    for part in FRAME_PARTS {
+        assert_eq!(act[part], acted[part], "{part}: {act}");
+    }
+    assert_exported_whole(&act, &acted, &exports);
+
+    // A failure line is not exported: sent whole in `structuredContent` alone beside a summary.
+    assert_eq!(before.len(), 3, "the three lines written: {before:?}");
+    assert_eq!(after, before, "no file for the failure line");
+    let result = &failure["result"];
+    assert_eq!(result["isError"], json!(true), "the failure is an error");
+    assert!(
+        result["structuredContent"] == refusal,
+        "the failure line whole, not exported"
+    );
+    let summary = serde_json::from_str::<Value>(
+        result["content"][0]["text"]
+            .as_str()
+            .expect("the failure's text"),
+    )
+    .expect("the summary is JSON");
+    assert!(
+        summary.get("structured_content_only").is_some() && summary.get("overflowed").is_none(),
+        "a summary beside it: {summary}"
+    );
+
+    // The export's failure: a file where the export directory would be.
+    let blocked = TempDir::new().expect("tempdir");
+    fs::write(blocked.path().join("actingcommand-mcp"), b"neutral")
+        .expect("block the export directory");
+    let mut server = Server::start(exporting_into(&program, &log, &state, blocked.path()));
+    server.initialize();
+    let unwritten =
+        answered_as(&server.call_tool(2, RECORD_STOP, json!({"instance": "neutral.stop"})));
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    assert_eq!(
+        members_of(&unwritten),
+        ["req_id", "overflowed", "lab", "warnings", "outcome"],
+        "no export: {unwritten}"
+    );
+    assert_eq!(
+        (&unwritten["overflowed"], &unwritten["lab"]),
+        (&json!(true), &binding),
+        "{unwritten}"
+    );
+    assert_eq!(
+        (
+            &unwritten["warnings"][0]["outcome"]["code"],
+            &unwritten["warnings"][1],
+            unwritten["warnings"].as_array().map(Vec::len),
+        ),
+        (&json!("material_export_failed"), &own_warning, Some(2)),
+        "the export's failure first, the child's own after it: {unwritten}"
+    );
+}
+
+/// A capture's own connection whose client action the Runtime refuses: the identity card
+/// accepted, the client action denied.
+fn refused_recording() -> ScriptedConnection {
+    ScriptedConnection::new()
+        .request(|request| match request.operation() {
+            RuntimeOperation::DeclareGovernanceIdentity { .. } => {
+                ScriptedAnswer::completed(request, RuntimeResult::GovernanceIdentityAccepted)
+            }
+            other => panic!("the identity card comes first, not {other:?}"),
+        })
+        .request(|request| {
+            assert!(
+                matches!(
+                    request.operation(),
+                    RuntimeOperation::RecordClientAction { .. }
+                ),
+                "the client action comes second, not {:?}",
+                request.operation()
+            );
+            denied(request)
+        })
+}
+
+#[test]
+fn mcp_capture_records_client_action() {
+    let state = TempDir::new().expect("tempdir");
+    let temp = TempDir::new().expect("tempdir");
+    let base = TempDir::new().expect("tempdir");
+    let (program, log) = beside_a_made_up_child(base.path());
+    let completed = completed();
+    let observed = json!({"neutral_frame": "observed", "outcome": completed});
+    let acted = json!({"neutral_action": "acted", "outcome": completed});
+    can_answer(
+        &log,
+        "neutral.observe",
+        &json!({"exit_code": 0, "req_id": OBSERVE_REQ_ID, "line": observed}),
+    );
+    can_answer(
+        &log,
+        "neutral.unnamed",
+        &json!({"exit_code": 0, "line": acted}),
+    );
+    can_answer(
+        &log,
+        "neutral.do",
+        &json!({"exit_code": 0, "req_id": DO_REQ_ID, "line": acted}),
+    );
+    // One connection per capture: recorded, recorded, refused, recorded.
+    let runtime = ScriptedRuntime::start(state.path(), |_| {
+        vec![
+            provenance(),
+            provenance(),
+            refused_recording(),
+            provenance(),
+        ]
+    });
+    let mut server = Server::start(with_children(
+        &program,
+        &log,
+        state.path(),
+        temp.path(),
+        &[],
+    ));
+    server.initialize();
+    let with_id = server.call_tool(
+        2,
+        LAB_OBSERVE,
+        json!({"instance": "neutral.observe", "capture": true}),
+    );
+    let without_id = server.call_tool(
+        3,
+        LAB_DO,
+        json!({"instance": "neutral.unnamed", "capture": true}),
+    );
+    let not_recorded = server.call_tool(
+        4,
+        LAB_DO,
+        json!({"instance": "neutral.do", "capture": true}),
+    );
+    let absent = server.call_tool(5, LAB_OBSERVE, json!({"instance": "neutral.observe"}));
+    let off = server.call_tool(
+        6,
+        LAB_DO,
+        json!({"instance": "neutral.unnamed", "capture": false}),
+    );
+    let planned = server.call_tool(
+        7,
+        LAB_DO,
+        json!({"instance": "neutral.do", "capture": true, "dry_run": true}),
+    );
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+
+    // The answers: the child's line; the warnings of the recording after its own.
+    assert_eq!(answered_as(&with_id), observed, "recorded: no warning");
+    let line = answered_as(&without_id);
+    assert_eq!(line["neutral_action"], acted["neutral_action"], "{line}");
+    assert_eq!(
+        warning_codes(&line),
+        ["client_action_without_req_id"],
+        "{line}"
+    );
+    let line = answered_as(&not_recorded);
+    assert_eq!(
+        (&line["neutral_action"], &line["outcome"]),
+        (&acted["neutral_action"], &completed),
+        "the call's answer stands: {line}"
+    );
+    assert_eq!(
+        warning_codes(&line),
+        ["client_action_not_recorded"],
+        "{line}"
+    );
+    assert!(
+        line["warnings"][0]["outcome"]["causes"]
+            .as_array()
+            .is_some_and(|causes| !causes.is_empty()),
+        "caused by the recording's failure: {line}"
+    );
+    assert_eq!(answered_as(&absent), observed, "capture absent");
+    assert_eq!(answered_as(&off), acted, "capture false");
+    assert_eq!(answered_as(&planned), acted, "capture with dry_run");
+
+    // The scripted Runtime: one connection of its own per capture that a child answered, carrying
+    // the identity card and the client action, nothing else.
+    let record = runtime.finish();
+    assert!(
+        record.unscripted.is_empty(),
+        "a recording past the four captures: {record:?}"
+    );
+    assert_eq!(
+        record.connections.len(),
+        4,
+        "one connection per capture a child answered, the dry-run's too: {record:?}"
+    );
+    let expected = [
+        (LAB_OBSERVE, "neutral.observe", Some(OBSERVE_REQ_ID)),
+        (LAB_DO, "neutral.unnamed", None),
+        (LAB_DO, "neutral.do", Some(DO_REQ_ID)),
+        (LAB_DO, "neutral.do", Some(DO_REQ_ID)),
+    ];
+    for (connection, (tool, instance, req_id)) in record.connections.iter().zip(expected) {
+        assert_eq!(
+            operations(connection),
+            [
+                "health",
+                "bind_channel",
+                "declare_governance_identity",
+                "record_client_action",
+            ],
+            "{tool} {instance}: a connection of its own"
+        );
+        let request = sent(&connection.requests[3]);
+        let action = &request["operation"]["action"];
+        assert_eq!(
+            (
+                &action["surface_id"],
+                &action["control_id"],
+                &action["kind"],
+                &action["instance_alias"],
+            ),
+            (
+                &json!("mcp"),
+                &json!(tool),
+                &json!("command"),
+                &json!(instance)
+            ),
+            "{action}"
+        );
+        let value = req_id.map_or(
+            Value::Null,
+            |id| json!({"type": "path_safe_string", "value": id}),
+        );
+        assert_eq!(action["value"], value, "the envelope's req_id: {action}");
+        assert_eq!(
+            (&request["actor"], &request["source"]),
+            (&json!(EventActor::Cli), &json!(EventSource::Cli)),
+            "{request}"
+        );
+    }
+    let events = child_events(&log);
+    assert_eq!(
+        (requests_of(&events, "observe"), requests_of(&events, "do")),
+        (2, 4),
+        "each Lab command reached the child once"
+    );
 }

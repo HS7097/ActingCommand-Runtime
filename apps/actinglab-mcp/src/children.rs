@@ -16,9 +16,11 @@
 //!   (`lab_ops::child::pin_child`); its three streams piped, no console window.
 //! - **One request at a time** ([`Children::line`]): a call takes an idle child or starts one,
 //!   writes one line `{"op", "params"}` and reads one line, the envelope `{exit_code, req_id?,
-//!   line}` `serve` answers under `--front mcp`: the call's line is its `line`, which exits with
-//!   its `exit_code`. At most `--children` children live at once; a call while every one is busy
-//!   is refused, not queued, with the code a job past `--jobs` is refused with,
+//!   line}` `serve` answers under `--front mcp`: the call's line is its `line` (a JSON object, else
+//!   the answer is no envelope), which exits with its `exit_code`, and (the slice's second part)
+//!   its `req_id` names the Lab request the own command made, for the client action after a
+//!   capture (`crate::after_child`). At most `--children` children live at once; a call while
+//!   every one is busy is refused, not queued, with the code a job past `--jobs` is refused with,
 //!   `job_capacity_exhausted`, its `limit_count` the children's limit.
 //! - **Idle** ([`reap`]): a child idle for `--child-idle` seconds is ended by closing its input,
 //!   by a thread of its own, without waiting for the next call (ruling 5: a resident server keeps
@@ -59,6 +61,7 @@ const WORDS: [&str; 4] = ["serve", "--stdio", "--front", "mcp"];
 const OP: &str = "op";
 const PARAMS: &str = "params";
 const EXIT_CODE: &str = "exit_code";
+const REQ_ID: &str = "req_id";
 const LINE: &str = "line";
 /// The tail of a child's stderr kept, today's (`lab_ops::lab_child`, 2048 bytes), and how much is
 /// read at once.
@@ -94,6 +97,32 @@ impl Default for Options {
 /// This server's `serve` children.
 pub(crate) struct Children {
     pool: Arc<Pool>,
+}
+
+/// What a call was answered by the children (Workflow #434 LAB-5G4b, second part): the call's
+/// line, the request id the child's envelope carries, and whether a child answered at all.
+pub(crate) struct Answer {
+    /// The envelope's `line` with its exit code; else the refusal or the failure that kept a child
+    /// from answering.
+    pub(crate) exit: Exit,
+    /// The envelope's `req_id`: the request id the own command's result carries, when it carries
+    /// one.
+    pub(crate) req_id: Option<String>,
+    /// Whether a child answered with its envelope, so that the command ran and may have made a Lab
+    /// request the Runtime records; false for a call refused past `--children` and for a child
+    /// that gave no answer.
+    pub(crate) answered: bool,
+}
+
+impl Answer {
+    /// A call no child answered: `exit` is its refusal or its failure.
+    fn unanswered(exit: Exit) -> Self {
+        Self {
+            exit,
+            req_id: None,
+            answered: false,
+        }
+    }
 }
 
 struct Pool {
@@ -169,11 +198,11 @@ impl Children {
         Ok(children)
     }
 
-    /// The line of `operation` with `params` (the call's arguments, `calls::prepare`d), from a
-    /// child: its envelope's `line` with its exit code, a refusal the child answers passed on as
-    /// it is; `job_capacity_exhausted` while every child is busy; `lab_process_failed` for a child
-    /// that gave no answer.
-    pub(crate) fn line(&self, operation: &Operation, params: &Map<String, Value>) -> Exit {
+    /// The answer of `operation` with `params` (the call's arguments, `calls::prepare`d), from a
+    /// child: its envelope's `line` with its exit code and its `req_id`, a refusal the child
+    /// answers passed on as it is; `job_capacity_exhausted` while every child is busy;
+    /// `lab_process_failed` for a child that gave no answer.
+    pub(crate) fn line(&self, operation: &Operation, params: &Map<String, Value>) -> Answer {
         let mut request = Map::new();
         request.insert(OP.to_owned(), Value::String(operation.name.clone()));
         request.insert(PARAMS.to_owned(), Value::Object(params.clone()));
@@ -181,16 +210,16 @@ impl Children {
         text.push(b'\n');
         let mut worker = match self.pool.take() {
             Ok(worker) => worker,
-            Err(refusal) => return cli_line::failure(&refusal, None),
+            Err(refusal) => return Answer::unanswered(cli_line::failure(&refusal, None)),
         };
         match worker.ask(&text) {
-            Ok(exit) => {
+            Ok(answer) => {
                 self.pool.give_back(worker);
-                exit
+                answer
             }
             Err(cause) => {
                 self.pool.lost();
-                cli_line::failure(&worker.failed(cause), None)
+                Answer::unanswered(cli_line::failure(&worker.failed(cause), None))
             }
         }
     }
@@ -359,10 +388,11 @@ impl Worker {
         matches!(self.process.try_wait(), Ok(None))
     }
 
-    /// Sends the request line `request` and reads the answer line: the exit of its envelope's
-    /// `line`. `Err` when the child gave none (see [`Self::failed`]), with the failure that kept it
-    /// from answering when there is one: the write's, the read's, or the line that is no envelope.
-    fn ask(&mut self, request: &[u8]) -> Result<Exit, Option<Outcome>> {
+    /// Sends the request line `request` and reads the answer line: its envelope's `line` as an
+    /// exit, and its `req_id`. `Err` when the child gave none (see [`Self::failed`]), with the
+    /// failure that kept it from answering when there is one: the write's, the read's, or the line
+    /// that is no envelope.
+    fn ask(&mut self, request: &[u8]) -> Result<Answer, Option<Outcome>> {
         self.input
             .write_all(request)
             .and_then(|()| self.input.flush())
@@ -452,19 +482,28 @@ impl Worker {
     }
 }
 
-/// The exit of a child's answer line: its envelope's `line`, exiting with its `exit_code`; `None`
-/// for a line that is no such envelope.
-fn enveloped(answer: &[u8]) -> Option<Exit> {
+/// The answer of a child's answer line: its envelope's `line`, a JSON object as every line `serve`
+/// answers, exiting with its `exit_code`, and its `req_id` when it carries one; `None` for a line
+/// that is no such envelope.
+fn enveloped(answer: &[u8]) -> Option<Answer> {
     let envelope = serde_json::from_slice::<Value>(answer.trim_ascii()).ok()?;
     let code = envelope
         .get(EXIT_CODE)?
         .as_u64()
         .and_then(|code| u8::try_from(code).ok())?;
-    let line = envelope.get(LINE)?.clone();
-    Some(Exit {
-        line: Ok(line),
-        developer: None,
-        code,
+    let line = envelope.get(LINE).filter(|line| line.is_object())?.clone();
+    let req_id = envelope
+        .get(REQ_ID)
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Some(Answer {
+        exit: Exit {
+            line: Ok(line),
+            developer: None,
+            code,
+        },
+        req_id,
+        answered: true,
     })
 }
 

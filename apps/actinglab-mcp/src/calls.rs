@@ -10,7 +10,9 @@
 //!   `Lab-MCP` ([`rescue_line`]), but `deploy` and `rollback`, whose run the front forces
 //!   detached, which answer `mcp_operation_unsupported`, their arguments unread. Workflow #434
 //!   LAB-5G4b: every other offered row through a `serve` child (`crate::children`), its
-//!   arguments read here first as every served row's.
+//!   arguments read here first as every served row's, and (its second part) its line answered
+//!   after the client action of a capture and under the Lab overflow rule
+//!   (`crate::after_child`).
 //! - **The arguments** ([`prepare`]), before anything is sent or written: a member the row does
 //!   not declare (`Operation::undeclared`), and a parameter the front gives itself, is refused as
 //!   today's server refuses an argument it does not know (`arguments_invalid`, `unknown`); so is a
@@ -29,6 +31,7 @@
 //!   this module ([`front_members`], [`finished`], [`Service::watched`], [`Service::taken_back`],
 //!   [`Service::run_start`]).
 
+use crate::after_child;
 use crate::budget;
 use crate::children::{self, Children};
 use crate::protocol::Era;
@@ -98,7 +101,7 @@ impl Service {
 
     /// The line of that call: `mcp_operation_unsupported` for a row this build does not serve;
     /// else the refusal of its arguments, or the line of the code that serves it (Workflow #434
-    /// LAB-5G4b: for a row a child serves, the line of the child's envelope).
+    /// LAB-5G4b: for a row a child serves, the line of the child's envelope, [`Self::child`]).
     pub(crate) fn line(
         &self,
         operation: &Operation,
@@ -112,10 +115,27 @@ impl Service {
         }
         match prepare(operation, arguments, &self.exports) {
             Ok(params) if serving == Serving::Rescue => rescue_line(operation, &params),
-            Ok(params) if serving == Serving::Child => self.children.line(operation, &params),
+            Ok(params) if serving == Serving::Child => self.child(operation, tool, &params, era),
             Ok(params) => self.core(operation, tool, &params, era),
             Err(refused) => cli_line::failure(&refused.outcome, refused.text),
         }
+    }
+
+    /// Workflow #434 LAB-5G4b: a row a `serve` child serves: the child's answer
+    /// (`children::Children::line`), then (the slice's second part) what this server does with it
+    /// before it answers (`after_child::answered`): the client action after a capture, and the Lab
+    /// overflow rule within this server's budget in `era`.
+    fn child(
+        &self,
+        operation: &Operation,
+        tool: &str,
+        params: &Map<String, Value>,
+        era: Era,
+    ) -> Exit {
+        let answer = self.children.line(operation, params);
+        self.within_budget(era, |answer_budget| {
+            after_child::answered(&operation.name, tool, params, answer, answer_budget)
+        })
     }
 
     /// `body` with this server's answer budget in `era`: the measure of the line as sent

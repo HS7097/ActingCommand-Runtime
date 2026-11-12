@@ -20,7 +20,9 @@
 //!   by the module, with the initiator `Lab-MCP` (LAB-5G2b's second part), but `deploy` and
 //!   `rollback`, which are refused with `mcp_operation_unsupported` ([`codes`]);
 //! - [`children`] (Workflow #434 LAB-5G4b): every other offered row is served through a child
-//!   `actinglab.exe serve --stdio --front mcp`, one request per child at a time.
+//!   `actinglab.exe serve --stdio --front mcp`, one request per child at a time; [`after_child`]
+//!   (its second part): the client action after a capture and the Lab overflow rule, as today's
+//!   server has them around its Lab child.
 //!
 //! It ships in the Tools archive since LAB-5G6 (0.12.57); nothing starts it until a client is
 //! registered with the MCP entry's second generation.
@@ -44,6 +46,7 @@
 //! fails writes its developer line on stderr and exits by its outcome's category, as
 //! `actingctl mcp-serve` does.
 
+mod after_child;
 mod budget;
 mod calls;
 mod children;
