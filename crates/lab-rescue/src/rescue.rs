@@ -171,6 +171,9 @@ impl Context<'_> {
 
     /// An `actingctl install` command (the words after `install`) run with the module's face.
     fn install(&self, words: &[String]) -> Answer {
+        // Workflow #434 LAB-5B1b: test builds keep each command line handed on ([`installed`]).
+        #[cfg(test)]
+        installed::record(words);
         let words = words.iter().map(String::as_str).collect::<Vec<_>>();
         install::execute_as(&words, self.host, self.face())
     }
@@ -2039,7 +2042,11 @@ fn agent(context: &Context<'_>, sub: &str, params: &Map<String, Value>) -> Answe
 
 /// The words after `agent-channel` of the row `agent <sub>` with `params`, for the state root
 /// `state_root`.
-fn agent_words(sub: &str, params: &Map<String, Value>, state_root: &Path) -> Vec<OsString> {
+pub(crate) fn agent_words(
+    sub: &str,
+    params: &Map<String, Value>,
+    state_root: &Path,
+) -> Vec<OsString> {
     let mut words = vec![OsString::from(sub)];
     if let Some(action) = text(params, AGENT_ACTION) {
         words.push(OsString::from(action));
@@ -2076,6 +2083,27 @@ pub(crate) fn location_of(root: &Path, config: &Path, state_root: &Path) -> Loca
         installation: None,
         config: config.to_path_buf(),
         state_root: state_root.to_path_buf(),
+    }
+}
+
+/// Test builds only (Workflow #434 LAB-5B1b): the command lines this thread handed to `install`,
+/// in order, which the test that pins them reads (`install::gate_434_lab5b1b_lines`).
+#[cfg(test)]
+pub(crate) mod installed {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static LINES: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// One more command line handed to `install`.
+    pub(crate) fn record(words: &[String]) {
+        LINES.with_borrow_mut(|lines| lines.push(words.to_vec()));
+    }
+
+    /// The command lines handed on since the last call.
+    pub(crate) fn take() -> Vec<Vec<String>> {
+        LINES.take()
     }
 }
 
