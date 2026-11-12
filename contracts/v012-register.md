@@ -15347,7 +15347,7 @@ device as a device group.
 | host | the switch before every start of a member's application: a direct run, `ApplicationLifecycle` `launch` or `restart`, the ladder's application restart rung, a hold's release | MAPP-2 | |
 | host | the switch's failure | MAPP-2 | `application_switch_failed` and the vocabulary `application_switch_step` (proposed); settled by policy_outcome.rs:1544-1567 |
 | host, policy | the member's switch cooldown: one in-memory deadline per member after a failed switch, its candidates deferred at position 2 as during a takeover cooldown | MAPP-2 | `dispatch_instance_cooldown` with `failure_code` `application_switch_failed`; `InstanceHolds`, evaluator.rs:343-380 |
-| configuration | `scheduling.device_group.switch_failure_cooldown_ms`, milliseconds `1..=3600000`, default `300000`, settable | MAPP-2 | added to `actingd-config` 29 (planned row) and to the defaults file |
+| configuration | `scheduling.device_group.switch_failure_cooldown_ms`, milliseconds `1..=3600000`, default `300000`, settable | MAPP-2 | added with MAPP-2 to the next free revision of `actingd-config` (planned; 0.12.56 ships revision 29 without it) and to the defaults file |
 | catalog | the five codes and three vocabularies, each in its writer's slice, and the optional value `failure_code` of `dispatch_instance_cooldown` | MAPP-1, MAPP-2 | `runtime-outcomes` stays 1 |
 
 **Device-level actions** (ruling 8; the full table with files and lines is
@@ -15460,7 +15460,7 @@ thing, and what decides it)
 | `Status`, `ScheduleExplanation` | the console | the same shapes; a waiting member's `why` is the new code | runtime-interface.md |
 | the owner journal's active instances | a build before MAPP-1 after a rollback | member ids, read as today | lease.rs:3242-3247 |
 | a group of several | a build with MAPP-1 and without the slice "order within one device" | refuses the file at assembly, in check-config and at start: `device_group_config_invalid`, `several_members_unsupported` | device-group.md, "The configuration form" |
-| the `scheduling` member `device_group.switch_failure_cooldown_ms` | actingd up to the build before MAPP-2 (`actingd-config` [5, 28]), check-config and start | refuses the file, `config_decode_failed` | the `scheduling` section denies unknown members (component-interfaces.md, the `actingd-config` rows 19, 20 and 23) |
+| the `scheduling` member `device_group.switch_failure_cooldown_ms` | actingd up to the build before MAPP-2 (`actingd-config` up to [5, 29]: the key takes the next free revision with MAPP-2), check-config and start | refuses the file, `config_decode_failed` | the `scheduling` section denies unknown members (component-interfaces.md, the `actingd-config` rows 19, 20 and 23) |
 | the key's row in the manifest and in `config.parameters.scheduling` | an older console | not verified how it shows a row it does not know: MAPP-2 checks with the UI repository | runtime-config.md, "The `scheduling` section" |
 | `dispatch_instance_cooldown` with `failure_code` | a Runtime that declares `ledger` [3, 8], the console, the Tools | an existing code with one more value, which the reader only spells, relayed unchanged | outcome/check.rs:3-6 |
 
@@ -15785,8 +15785,9 @@ listed once below ("MAPP-1b"). MAPP-2 (the switch before a run) is another slice
 **Also built.** The defaults file's `recovery_ladder.profiles` gains `without_emulator_restart`
 (`return_home`, `application_restart`), the profile a member names. `actingd-config` rises to
 [5, 29] (`distribution/windows/component-interfaces.json`, the architecture test,
-[component-interfaces.md](component-interfaces.md) row 29); MAPP-2's key joins row 29 in the same
-release. A discovered index several entries resolve to names the first by alias as its
+[component-interfaces.md](component-interfaces.md) row 29); MAPP-2's key comes with MAPP-2 and
+takes the next free revision of `actingd-config` (0.12.56 ships revision 29 without it; corrected
+by MAPP-1b, §1.330). A discovered index several entries resolve to names the first by alias as its
 `bound_alias` (`provider_startup.rs`), as "Device-level actions" row 6 settles.
 
 **MAPP-1b** (the next slice; its rows, listed here and nowhere else):
@@ -15979,6 +15980,95 @@ descriptions included); every category, ladder class, owner, layer, value, `sinc
 review (`pending`) stays, `runtime-outcomes` stays 1, and no release file changes, since a release
 file holds no text. The index under `contracts/outcome-codes/index/` is regenerated with
 `ci/outcome_codes_index.py` in the same pull request.
+
+### 1.330 Slice MAPP-1b (0.12.57): device groups in the host: one worker per device, the group's occupancy, gates, session rule and refusals, and a chain handover's successor before the device's other members (Workflow #437; the contract of §1.323 and the list of §1.328, "MAPP-1b", with its points 7 to 10; the coordinator's rulings it records, not the owner's words; coordinator work order `rd-1112/brief-437-mapp-1b.md`, read on main `dffd6263`)
+
+1.330 is the coordinator's number, appended after §1.329. The contract is
+[device-group.md](device-group.md), the passages §1.323 lists and §1.328's list "MAPP-1b". A
+build still refuses every group of several at load (`several_members_unsupported`, unchanged), so
+no configuration reaches this slice's code: its tests hand the host the member → device key map
+and the group's name as the assembly builds them.
+
+| §1.328 "MAPP-1b" row | Built | Where |
+|---|---|---|
+| 1 one worker per device | yes | `crates/runtime-host/src/host/host_claims.rs`, `spawn_instance_workers` (one worker per device key: `actingd-instance-<alias>` for an instance alone on its device, a group of one included, `actingd-device-<device_group>` for a group of several), `post_host_claim` and `post_policy_run` (the device's worker); the name comes from `RuntimeHostConfig::with_device_group_names` (`crates/runtime-host/src/host.rs`), which actingd fills from `DeviceGroups::names` beside `with_device_keys` (`apps/actingd/src/config.rs`) |
+| 2 occupancy across the group | yes | `crates/runtime-host/src/host/device_group.rs`, `device_occupancy`: the device's lease whichever member its token names, else a registered policy run of any member (`policy_lanes.rs`, `policy_run_of_members`; the registration keeps the run's catalog task, in memory), else the first eligible waiting claim (`SeedScheduler::first_eligible_claim`, `crates/scheduler/src/lib.rs`), each claim judged by its own member's routine gate; `instance_occupancy` (`policy_dispatch.rs`) reads it for a member; `device_group_hold` gives the wait `held` (the member that has the device, `task_id` with a registered run, `holder_kind`); the evaluation's deferral and the fact refresh's holds (`fact_refresh::member_hold`, `PolicyEvaluationContext::device_group_holds`, `policy_device_group_holds`) and the admission (`dispatch_held_error`, `admission_device_group_hold`) carry it |
+| 3 the admission guard keyed by the device key | yes | `crates/runtime-host/src/host/lease.rs`, `instance_guard` (`device_key`) |
+| 4 a pause of one member waits for its own work | yes | `policy_dispatch.rs`, `release_paused_instance`: a lease whose token names the member, `member_refusing_count` |
+| 5 the gates of the group | the gates; not the second hold's refusal | `device_group_hold`: another member's player hold (`player_hold`, the control gates' player-hold dimension, `SchedulingPauseTable::player_holds`), then another member's fence (`fenced`); the second hold: point 4 below |
+| 6 no session kept across lease ends | yes | `crates/runtime-host/src/host/resource_close.rs`, `keeps_device_session` (false for a member of a group of several) |
+| 7 the refusals | yes | `device_group.rs`, `refuse_emulator_control_of_group` (`requests.rs`, first in the `ControlEmulatorInstance` arm) and `refuse_keyless_observation_of_group` (`observation.rs`, `capture_readonly_observation`, under the device's admission guard); `HostCode::DeviceGroupActionRefused` (`crates/runtime-host/src/codes.rs`), `contracts/outcome-codes/runtime-host.json`, the index regenerated |
+| 8 a chain handover's successor | yes | `crates/policy/src/evaluator/chain_handover.rs`, `plan` (handovers keyed by device; `Handover::before`), `crates/policy/src/evaluator.rs` (the handover of the candidate's device) |
+
+**The code.** `device_group_action_refused` (`runtime-host`, error, ladder class `none`, `since`
+0.12.57, values `alias` and `operation` required; its description, common causes and handling
+written). `runtime-outcomes` stays 1; no key, no record type, payload member, fact, tag or state
+file is added.
+
+**Where the build differs from the contract or completes it.**
+
+1. *The order of a member's waits.* The member's own control gates come first, then its own
+   holder (each with its own code); then another member's player hold, another member's fence
+   (the one order of the control gates; the other members in alias order) and another member's
+   holder; then the device's takeover cooldown (`dispatch_instance_cooldown`, as before).
+2. *The admission's refusal* is `device_group_waiting` with the waiting member's alias as
+   `instance_id` (as the policy's reasons name it, where `dispatch_instance_held` names the opaque
+   identifier), the hold's values and `operation` `admit_policy_dispatch`, at info, as the catalog
+   entry of MAPP-1a declares its receipt values.
+3. *`task_id` with `held`* is the catalog task of a registered run (a run handed to the device's
+   worker); a policy dispatch's lease on the driver's own thread (`scheduling.parallel.enabled`
+   off) is held with no `task_id`.
+4. *The player hold is not built* (Workflow #429 R-7b: `AcquirePlayerHold` and
+   `ReleasePlayerHold` answer `not_implemented`; only tests set the hold's dimension). This slice
+   builds the group's gate on that dimension. The acquire's drain of the device's holder, the
+   refusal of a second hold on another member (`player_hold_already_held`) and the release have no
+   code to extend: they are R-7b's, with the group read (the question is the coordinator's).
+5. *A fence of one member* holds the other members' dispatches (evaluation and admission). Its
+   own routine claims stay held as before; the other members' claims and direct requests are not.
+6. *A keyless observation's refusal* is written as the capacity refusal of an observation is
+   (`scheduler.denied`, then the failure's record), with `operation` `observe_readonly` for every
+   keyless observation (an observe, a capture sequence, a Lab observation). A member that holds
+   the device itself, and a free device, are not refused.
+7. *Emulator control* of a member is refused first in its request, before its intent and before
+   the fixture check, with no record (a fixture is never a member in a configuration).
+8. *Two handovers on one device.* A device has at most one handover in a round, the first in rank
+   order; a later successor of another member of the device is an ordinary candidate. The
+   candidates that wait under `policy_chain_handover_waiting` stay those of the successor's own
+   instance; the device's other members wait `device_group_waiting` `selected`.
+9. *A group of several the host was not given a name for* stops the start with
+   `instance_worker_spawn_failed` (its worker cannot be named as the contract says).
+10. *Not changed:* the pump and the transfers still judge a device's queue by the routine gate of
+    the instance they are called for (as MAPP-1a left them); only the occupancy reads each
+    member's gate.
+
+**The held set.** `device_group_waiting` is held, due, whatever its `device_group_wait` (§1.328,
+point 11). The waits `held`, `player_hold` and `fenced` carry it, so a member that waits past
+`scheduling.task_held.after_ms` leaves one held record (`gate_code` `device_group_waiting`), counted
+from the first round in which it waited for its device under any of the four words; test
+`mapp1b_one_worker_per_device_and_a_member_held_behind_the_others_registered_run`.
+
+**A group of one is today.** Every map keyed by the device key has today's keys for an instance
+alone on its device (its own id), its worker keeps `actingd-instance-<alias>`, its occupancy,
+admission, pause release, guard, session rule and requests take the paths they took, and the
+evaluator's handovers are keyed by the instance (`DeviceGroups::default()`). The existing tests of
+those paths are unchanged.
+
+**MAPP-2's key** (the coordinator's correction of 11-12, text only). 0.12.56 ships `actingd-config`
+revision 29 with HELD-1's `task_held` and MAPP-1a's `device_group` and without MAPP-2's
+`scheduling.device_group.switch_failure_cooldown_ms`. As row 29 of
+[component-interfaces.md](component-interfaces.md) says, that key comes with MAPP-2 and takes the
+next free revision. [device-group.md](device-group.md) ("The key", "Interfaces") and §1.323's
+table and interface walk and §1.328's "Also built" say so now.
+
+**Tests.** `crates/runtime-host/src/tests/gate_mapp1b.rs` (gate map `host.toml`) and
+`crates/policy/src/tests/gate_mapp1b.rs` (`policy.toml`).
+
+**What an operator sees after deploy.** Nothing: the load refuses every group of several, so no
+root runs this slice's code until the release that carries the order within one device. A root
+without `device_group` runs as before.
+
+**Rollback** (below 0.12.57). Nothing is persisted by MAPP-1b; the build before it reads every
+record this one writes.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

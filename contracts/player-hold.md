@@ -8,14 +8,17 @@ rows and ruling 116's five pauses are untouched by it. Alice's rulings 134 (no c
 the drain, no reserved shape for one) and 135 (every formal channel may end a hold; the
 channel is only recorded in `source`) bind this contract.
 
-(Workflow #437 MAPP, not built yet; [device-group.md](device-group.md), "Pause and hold".) In a
-device group of several, a hold on one member holds the device for the whole group:
+(Workflow #437 MAPP; [device-group.md](device-group.md), "Pause and hold".) In a device group of
+several, a hold on one member holds the device for the whole group:
 
-- the acquire drains the device's holder, whichever member's work it is;
-- while held, no member is dispatched (the others wait with `device_group_waiting` `player_hold`,
-  proposed);
-- a second hold on another member of the group is `player_hold_already_held`;
-- the release's startup package goes through the switch.
+- the acquire drains the device's holder, whichever member's work it is (not built yet: the
+  acquire is R-7b's);
+- while held, no member is dispatched (the others wait with `device_group_waiting` `player_hold`;
+  MAPP-1b, since 0.12.57, register §1.330, builds this gate on the hold's dimension of the control
+  gates, which only tests set until R-7b);
+- a second hold on another member of the group is `player_hold_already_held` (not built yet: the
+  acquire is R-7b's);
+- the release's startup package goes through the switch (not built yet: MAPP-2).
 
 The hold's state and records stay the holding member's, in today's shapes. A group of one is
 unchanged.

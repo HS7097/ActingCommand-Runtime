@@ -106,14 +106,21 @@ impl WorkerJob {
 
 /// The instance workers' channels and threads. Shutdown takes both: dropping the senders ends
 /// every worker after its current payload, and the threads are joined before the host closes.
+/// Workflow #437 MAPP-1b: the senders are keyed by the device key, one worker per device.
 #[derive(Default)]
 pub(super) struct InstanceWorkers {
     senders: BTreeMap<InstanceId, mpsc::Sender<WorkerJob>>,
     threads: Vec<JoinHandle<RuntimeHostResult<()>>>,
 }
 
-/// W-2: creates one worker per registered instance. It runs at host start, before the
-/// daemon-start preparation, so a preparation's ladder already has a worker.
+/// W-2: creates one worker per registered device. It runs at host start, before the
+/// daemon-start preparation, so a preparation's ladder already has a worker. Workflow #437
+/// MAPP-1b (`contracts/device-group.md`, "One queue, one worker, one lease per device"): the
+/// workers are keyed by the device key; an instance alone on its device has its own worker,
+/// `actingd-instance-<alias>`, as before, and a device group of several has one worker,
+/// `actingd-device-<device_group>`, which takes every member's host claims and handed-off policy
+/// runs, one at a time. A group of several whose name the host was not given cannot be named so
+/// and stops the start (`instance_worker_spawn_failed`).
 pub(super) fn spawn_instance_workers(shared: &Arc<HostShared>) -> RuntimeHostResult<()> {
     let instances = lock(
         &shared.registered_instances,
@@ -122,21 +129,39 @@ pub(super) fn spawn_instance_workers(shared: &Arc<HostShared>) -> RuntimeHostRes
     .values()
     .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
     .collect::<Vec<_>>();
-    let mut workers = lock(&shared.instance_workers, HostLocation::SpawnInstanceWorkers)?;
+    let mut devices = BTreeMap::<InstanceId, Vec<String>>::new();
     for (instance_id, instance_alias) in instances {
+        devices
+            .entry(shared.device_key(instance_id))
+            .or_default()
+            .push(instance_alias);
+    }
+    let spawn_failed = || {
+        RuntimeHostError::fatal(
+            HostCode::InstanceWorkerSpawnFailed,
+            HostLocation::StartRuntimeHost,
+            RuntimeErrorCode::RuntimeHalted,
+        )
+    };
+    let mut workers = lock(&shared.instance_workers, HostLocation::SpawnInstanceWorkers)?;
+    for (device, aliases) in devices {
+        let name = match aliases.as_slice() {
+            [instance_alias] => format!("actingd-instance-{instance_alias}"),
+            members => {
+                let group = members
+                    .iter()
+                    .find_map(|alias| shared.device_group_names.get(alias))
+                    .ok_or_else(spawn_failed)?;
+                format!("actingd-device-{group}")
+            }
+        };
         let (sender, receiver) = mpsc::channel();
         let worker_shared = Arc::clone(shared);
         let thread = thread::Builder::new()
-            .name(format!("actingd-instance-{instance_alias}"))
+            .name(name)
             .spawn(move || instance_worker_loop(&worker_shared, &receiver))
-            .map_err(|_| {
-                RuntimeHostError::fatal(
-                    HostCode::InstanceWorkerSpawnFailed,
-                    HostLocation::StartRuntimeHost,
-                    RuntimeErrorCode::RuntimeHalted,
-                )
-            })?;
-        workers.senders.insert(instance_id, sender);
+            .map_err(|_| spawn_failed())?;
+        workers.senders.insert(device, sender);
         workers.threads.push(thread);
     }
     Ok(())
@@ -337,18 +362,20 @@ impl HostShared {
         .map(|_| ())
     }
 
-    /// W-2: posts a granted host claim's payload with its key to the instance's worker. Only a
-    /// stopping host has no worker left; its close releases the key.
+    /// W-2: posts a granted host claim's payload with its key to the instance's worker (Workflow
+    /// #437 MAPP-1b: its device's). Only a stopping host has no worker left; its close releases
+    /// the key.
     pub(super) fn post_host_claim(
         &self,
         instance_id: InstanceId,
         work: HostClaimWork,
         key: HostKey,
     ) -> RuntimeHostResult<()> {
+        let device = self.device_key(instance_id);
         let workers = lock(&self.instance_workers, HostLocation::PostHostClaim)?;
         let posted = workers
             .senders
-            .get(&instance_id)
+            .get(&device)
             .is_some_and(|sender| sender.send(WorkerJob::HostClaim { work, key }).is_ok());
         if posted || self.fatal.is_shutdown_requested() {
             return Ok(());
@@ -360,19 +387,20 @@ impl HostShared {
         ))
     }
 
-    /// Workflow #427-A: posts a handed-off policy run to the instance's worker. `Ok(Err(run))`
-    /// gives the run back when no worker took it: the host is stopping (its workers' senders
-    /// are gone) or the instance's worker ended.
+    /// Workflow #427-A: posts a handed-off policy run to the instance's worker (Workflow #437
+    /// MAPP-1b: its device's). `Ok(Err(run))` gives the run back when no worker took it: the
+    /// host is stopping (its workers' senders are gone) or the instance's worker ended.
     pub(super) fn post_policy_run(
         &self,
         instance_id: InstanceId,
         run: Box<super::policy_lanes::PolicyRunJob>,
     ) -> RuntimeHostResult<Result<(), Box<super::policy_lanes::PolicyRunJob>>> {
+        let device = self.device_key(instance_id);
         let workers = lock(
             &self.instance_workers,
             HostLocation::HandOffScheduledPolicyRun,
         )?;
-        let Some(sender) = workers.senders.get(&instance_id) else {
+        let Some(sender) = workers.senders.get(&device) else {
             return Ok(Err(run));
         };
         match sender.send(WorkerJob::PolicyRun(run)) {

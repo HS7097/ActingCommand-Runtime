@@ -108,7 +108,13 @@ impl HostShared {
     /// more registered instances use Nemu (`nemu_ipc` or an automatic choice for capture or
     /// input) each of them closes its session at every lease end as before. Every other
     /// instance keeps it, as does a registration without a device configuration (a fixture).
+    /// Workflow #437 MAPP-1b (`contracts/device-group.md`, "Device-level actions", row 7): a member
+    /// of a device group of several keeps no session across lease ends, whatever its backends:
+    /// each member opens its own on its turn, so two members' sessions are never open together.
     pub(super) fn keeps_device_session(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        if self.in_group_of_several(instance_id) {
+            return Ok(false);
+        }
         let registered = lock(
             &self.registered_instances,
             HostLocation::ReadDeviceSessionGate,

@@ -521,6 +521,8 @@ impl HostShared {
                 instance_alias,
                 action,
             } => {
+                // Workflow #437 MAPP-1b: a member of a device group of several is refused first.
+                self.refuse_emulator_control_of_group(instance_alias)?;
                 self.require_physical_instance_alias(instance_alias)?;
                 self.control_emulator_instance(
                     request,

@@ -251,6 +251,14 @@ impl HostShared {
         // Workflow #369 Q-6: a read-only observe stays keyless; its guard pumps when dropped, so a
         // claim queued during the observe is granted right after it.
         let admission = self.lock_admission(&instance_guard, instance_id)?;
+        // Workflow #437 MAPP-1b: under the device's guard, a member of a device group of several
+        // is not observed while another member holds the device.
+        self.refuse_keyless_observation_of_group(
+            instance_alias,
+            instance_id,
+            links.clone(),
+            &admission,
+        )?;
         // #411 A49: a keyless observe's frame is an observer's; it leaves the frame of a run in
         // flight on the instance in place.
         self.capture_observation_with_links(
