@@ -12,13 +12,14 @@
 //! which `main` reports on stderr.
 //!
 //! What differs from the original: no tiers (every offered row's tool may be called, listed or
-//! not); no Runtime connection, no session identity and no jobs, which this build has no use for
-//! (handles and cursors come with the slice of jobs, G3); `tools/list` is the table's
-//! (`tools::Catalog`); a `tools/call` of an offered row's tool runs on a worker as before, and
-//! answers `mcp_operation_unsupported` (`tools::unsupported`), since this build serves no call.
-//! The worker count is the start option `--workers` (`ServerConfig::workers`), where the original
-//! has a constant.
+//! not); no jobs (handles and the cursors a call takes back come with the slice of jobs, G3);
+//! `tools/list` is the table's (`tools::Catalog`); a `tools/call` of an offered row's tool runs
+//! on a worker as before, to its end, and (Workflow #434 LAB-5G2b) is served by
+//! `calls::Service` (its Runtime connection and this server's session identity are there), or
+//! answers `mcp_operation_unsupported` for a row this build does not serve. The worker count is
+//! the start option `--workers` (`ServerConfig::workers`), where the original has a constant.
 
+use crate::calls::{self, Service};
 use crate::lock;
 use crate::protocol::{
     self, Era, INVALID_PARAMS, INVALID_REQUEST, Incoming, LegacyVersion, METHOD_NOT_FOUND,
@@ -28,7 +29,7 @@ use crate::tools::{self, Catalog, Listing};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
@@ -55,11 +56,14 @@ pub(crate) struct ServerConfig {
     pub(crate) listing: Listing,
     /// The threads that run `tools/call` (`--workers`, at least one).
     pub(crate) workers: usize,
+    /// Workflow #434 LAB-5G2b: what serves the calls.
+    pub(crate) service: Service,
 }
 
 struct Shared {
     catalog: Catalog,
     listing: Listing,
+    service: Service,
     /// The version a legacy `initialize` negotiated; `None` until one arrives.
     legacy: Mutex<Option<LegacyVersion>>,
     /// `tools/call` requests in flight, by their JSON-RPC id.
@@ -95,6 +99,8 @@ struct Job {
     era: Era,
     /// The tool the call names, an offered row's.
     tool: String,
+    /// Workflow #434 LAB-5G2b: the call's arguments (none given: empty).
+    arguments: Map<String, Value>,
     call: Arc<Call>,
     sink: Sink,
 }
@@ -189,6 +195,7 @@ pub(crate) fn serve(config: ServerConfig) -> Result<ExitCode, Outcome> {
     let shared = Arc::new(Shared {
         catalog: config.catalog,
         listing: config.listing,
+        service: config.service,
         legacy: Mutex::new(None),
         calls: Mutex::new(HashMap::new()),
         out: out_sender,
@@ -564,15 +571,17 @@ fn list_tools(shared: &Shared, id: &Value, era: Era, params: Option<&Value>) -> 
 /// What a `CallToolRequest` names.
 struct CallRequest {
     tool: String,
+    /// Workflow #434 LAB-5G2b: its arguments, which `calls` reads.
+    arguments: Map<String, Value>,
     progress_token: Option<Value>,
 }
 
 /// The tool a `tools/call` names, an offered row's whether listed or not; a refusal is
 /// `mcp_params_invalid` with the member at fault, as today's server refuses it (a name that is no
-/// offered row's tool `not_recognised`). Its `arguments` must be an object when given; this build
-/// reads none of them, since it serves no call.
+/// offered row's tool `not_recognised`). Its `arguments` must be an object when given (absent or
+/// `null`: none); `calls` reads them for a row this build serves.
 fn parse_call(catalog: &Catalog, params: Option<Value>) -> Result<CallRequest, Outcome> {
-    let params = match params {
+    let mut params = match params {
         Some(Value::Object(params)) => params,
         Some(_) => {
             return Err(protocol::params_invalid(
@@ -598,15 +607,16 @@ fn parse_call(catalog: &Catalog, params: Option<Value>) -> Result<CallRequest, O
         Some(_) => return Err(protocol::params_invalid("name", ArgumentProblem::WrongType)),
         None => return Err(protocol::params_invalid("name", ArgumentProblem::Required)),
     };
-    match params.get("arguments") {
-        None | Some(Value::Null | Value::Object(_)) => {}
+    let arguments = match params.remove("arguments") {
+        None | Some(Value::Null) => Map::new(),
+        Some(Value::Object(arguments)) => arguments,
         Some(_) => {
             return Err(protocol::params_invalid(
                 "arguments",
                 ArgumentProblem::WrongType,
             ));
         }
-    }
+    };
     let progress_token = params
         .get("_meta")
         .and_then(Value::as_object)
@@ -615,6 +625,7 @@ fn parse_call(catalog: &Catalog, params: Option<Value>) -> Result<CallRequest, O
         .cloned();
     Ok(CallRequest {
         tool,
+        arguments,
         progress_token,
     })
 }
@@ -629,6 +640,7 @@ fn call_tool(
 ) {
     let CallRequest {
         tool,
+        arguments,
         progress_token,
     } = match parse_call(&shared.catalog, params) {
         Ok(request) => request,
@@ -668,6 +680,7 @@ fn call_tool(
         key,
         era,
         tool,
+        arguments,
         call,
         sink: sink.clone(),
     };
@@ -675,7 +688,7 @@ fn call_tool(
         lock(&shared.calls).remove(&job.key);
         // No tools/call worker is running.
         let failure = Outcome::new(ActingctlCode::McpWorkersUnavailable);
-        let result = tools::call_result(&failure, job.era);
+        let result = calls::refusal_result(&failure, job.era);
         job.sink.respond(
             shared,
             Some(protocol::response(
@@ -702,22 +715,30 @@ fn run_job(shared: &Shared, job: Job) {
         key,
         era,
         tool,
+        arguments,
         call,
         sink,
     } = job;
-    // This build serves no call: the tool's call is refused, nothing is sent or run.
-    let refusal = panic::catch_unwind(AssertUnwindSafe(|| tools::unsupported(&tool)))
-        .unwrap_or_else(|_| tool_panicked(&tool));
-    let response = protocol::response(
-        &id,
-        protocol::complete(era, tools::call_result(&refusal, era)),
-    );
+    // Workflow #434 LAB-5G2b: the call runs to its end here (this build has no jobs).
+    let result = panic::catch_unwind(AssertUnwindSafe(|| answer(shared, &tool, &arguments, era)))
+        .unwrap_or_else(|_| calls::refusal_result(&tool_panicked(&tool), era));
+    let response = protocol::response(&id, protocol::complete(era, result));
     let mut phase = lock(&call.phase);
     phase.finished = true;
     // A cancelled request gets no answer. Read once: the same reading decides it.
     let delivered = !call.cancelled.load(Ordering::SeqCst);
     lock(&shared.calls).remove(&key);
     sink.respond(shared, delivered.then_some(response));
+}
+
+/// Workflow #434 LAB-5G2b: the `tools/call` result of a call of `tool` with `arguments` in `era`:
+/// served by `calls::Service` for the tool's row. `parse_call` admits only an offered row's tool;
+/// a name the catalog does not hold is refused as unsupported.
+fn answer(shared: &Shared, tool: &str, arguments: &Map<String, Value>, era: Era) -> Value {
+    match shared.catalog.operation(tool) {
+        Some(operation) => shared.service.call(operation, tool, arguments, era),
+        None => calls::refusal_result(&tools::unsupported(tool), era),
+    }
 }
 
 /// A panic caught at the tool call boundary: the call fails with `mcp_tool_panicked`

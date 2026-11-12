@@ -115,6 +115,8 @@ dependencies = [
  "actingcommand-contract",
  "actingcommand-lab-ops",
  "actingcommand-lab-rescue",
+ "actingcommand-runtime-client",
+ "actingcommand-watchdog",
  "serde_json",
  "tempfile",
 ]

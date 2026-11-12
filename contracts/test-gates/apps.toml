@@ -1613,6 +1613,19 @@ tests = [
 ]
 incident = ["#434 LAB-5G2a"]
 
+# Workflow #434 LAB-5G2b (0.12.57; register §1.287, "Slice LAB-5G2b"; brief rd-1112/brief-lab5g2b.md; contracts/lab-two-entries.md §8.1 and §9.3, "Calls served in the server's process"; the coordinator's rulings on board #434, 6775192250 points 1, 9, 11, 12 and 18, and 6784514298): the new MCP server serves in its own process the rows lab_ops::core_ops serves (the slice's first part; the rescue rows are its second). Every offered row is served or refused by one rule stated from the table (refused: the rows of slice LAB-5, the core and debugging rows core_ops does not serve, every authoring and every rescue row); a refused row's call answers mcp_operation_unsupported with its tool, its arguments unread, a served row's call reads them. The front's own members are one table: material has export and no out, frame no out, deploy and rollback no detach; material is handed on as given without export or with it false and with out the export directory with it true, frame always with it, deploy and rollback with detach true; out, detach and an export that is no boolean are refused. A shaped row is cut to the budget (codes: fewer entries kept, truncated, next_cursor, within 24 KiB) or exported (facts: the header, answer_exported naming the file, the file the whole answer); a line without shaping over the limit is output_budget_exceeded with actual_bytes and limit_bytes in each protocol era. Over pipes against the runtime client's scripted Runtime: a core read on the kept connection and a core write on its own connection after the identity card and the client action each answer the line the command line's code gives (ids masked), structuredContent the same, isError its non-zero exit; an undeclared member and a member the front gives (unknown), a wrong type (wrong_type), a missing required one (required), a relative path and a value beginning with -- alone or in a list (not_recognised) are arguments_invalid with the argument and no connection reaches the Runtime; one pause through this server and through actingctl mcp-serve sends the same requests (ids and times left out): Health, BindChannel mcp, the identity card actingctl-mcp, the client action ac_pause on surface mcp, PauseScheduling, envelope (Cli, Cli)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition",
+    "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_front_members_in_one_place",
+    "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export",
+    "actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind",
+    "actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing",
+    "actingcommand-actinglab-mcp::serve_calls::mcp_write_provenance_as_todays_server",
+]
+incident = ["#434 LAB-5G2b"]
+
 # Workflow #428 LAB-OCR-DL (0.12.57; register §1.331; brief rd-1112/brief-lab-ocr-deadline.md; contracts/vision-model-folders.md, "Startup and first use"; contracts/lab-operations.json, the switch ocr_deadline_max): an offline evaluation of a saved scene may take each OCR target's timeout_ms as 60000 on the switch --ocr-deadline-max; the readers' evaluation over a provider whose inference takes 3000 ms of an OCR target that declares 1000 fails with the engine's Timeout of today without the switch, its request's deadline 1000, and passes with it, its request's deadline 60000 (with_ocr_deadline_max); on a saved scene observe, do --dry-run, ensure --dry-run, wait, recognize, is-visible, detect-page, current-page, tap-target --dry-run and navigate --dry-run answer ocr_deadline_raised_to_ms 60000 with the switch and no such member without it, recognize's answer otherwise the same; beside --capture or with no --scene the switch is refused validation_failed naming it, conflicting
 [[gate]]
 coverage = "Y"

@@ -5,14 +5,20 @@
 //! for each row the table offers, generated from the row; it has no tiers. It runs beside today's
 //! MCP server (`actingctl mcp-serve`), which it replaces only at the end of LAB-5.
 //!
-//! This build is the server's shell (LAB-5G2a):
+//! This build is the server's shell (LAB-5G2a) and serves the calls it can serve in its own
+//! process (LAB-5G2b):
 //! - [`protocol`] and [`server`]: the JSON-RPC framing, the two MCP protocol eras, the stdio loop,
 //!   batches, progress, cancellation and `actingcommand/entryStatus`, copied from today's server
-//!   without its tiers, its Runtime connection and its jobs;
+//!   without its tiers and its jobs;
 //! - [`tools`]: the tools generated from the table, `tools/list`, the listing option and the
 //!   instructions;
-//! - every call of one of its tools is refused with `mcp_operation_unsupported` ([`codes`]): the
-//!   later slices serve the calls. It is in no release and no Tools archive until it is packaged.
+//! - [`calls`], [`runtime`] and [`budget`] (Workflow #434 LAB-5G2b): a call of a row
+//!   `lab_ops::core_ops` serves is served here and
+//!   answers the line `actinglab --json` prints, within today's answer budget, on one kept
+//!   Runtime connection of `lab_ops::front`'s `Front::Mcp` (a write on a connection of its own,
+//!   after today's provenance); every other call is refused with `mcp_operation_unsupported`
+//!   ([`codes`]) until a later slice serves it. It is in no release and no Tools archive until it
+//!   is packaged.
 //!
 //! The command line: `--list <module>[,<module>...]` names the modules whose tools `tools/list`
 //! lists (the ids of the table's module rows of role `operations`); without it every installed
@@ -24,8 +30,11 @@
 //! fails writes its developer line on stderr and exits by its outcome's category, as
 //! `actingctl mcp-serve` does.
 
+mod budget;
+mod calls;
 mod codes;
 mod protocol;
+mod runtime;
 mod server;
 mod tools;
 
@@ -33,12 +42,17 @@ mod tools;
 // (`mcp_tools_from_op_table`, the names, `mcp_list_option_and_authoring_gate`).
 #[cfg(test)]
 mod gate_434_lab5g2a;
+// Test-only: Workflow #434 LAB-5G2b, the slice's named tests of what is served and how
+// (`mcp_served_and_refused_partition`, `mcp_front_members_in_one_place`,
+// `mcp_budget_cut_and_export`).
+#[cfg(test)]
+mod gate_434_lab5g2b;
 
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_lab_ops::cli_line;
 use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
-use actingcommand_lab_ops::table;
+use actingcommand_lab_ops::{front, table};
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -128,10 +142,18 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, Ended> {
         print_text(&text)?;
         return Ok(ExitCode::SUCCESS);
     }
+    // Workflow #434 LAB-5G2b: this process's commands connect as the Lab's MCP server does until
+    // LAB-6 (the MCP channel, today's envelope), and `status` reads the overview's `watchdog`
+    // block as actinglab reads it, on Windows only, where the watchdog runs.
+    let _ = front::set(front::Front::Mcp);
+    #[cfg(windows)]
+    let _ =
+        actingcommand_lab_ops::overview::set_watchdog_block(actingcommand_watchdog::overview_block);
     server::serve(server::ServerConfig {
         catalog,
         listing,
         workers: invocation.workers,
+        service: calls::Service::new(budget::export_directory()),
     })
     .map_err(Ended::from)
 }

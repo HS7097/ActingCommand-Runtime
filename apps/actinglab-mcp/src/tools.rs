@@ -23,18 +23,22 @@
 //!   authoring module only where its option lists it (§8.3: read at each listing, through
 //!   `lab_ops::locate::authoring_module`). Not listed is never refused: a call names any offered
 //!   row's tool.
-//! - **A call**: this build serves none. Each call of a tool is answered with
-//!   `mcp_operation_unsupported` ([`unsupported`]) as the CLI line of a refusal, `{outcome}`.
+//! - **A call** (Workflow #434 LAB-5G2b, [`serving`]; `crate::calls` serves it): a row
+//!   `lab_ops::core_ops` serves is served in this process; every other call (the rescue rows
+//!   too, until the slice's second part serves them) is answered with `mcp_operation_unsupported`
+//!   ([`unsupported`]) as the CLI line of a refusal, `{outcome}`. The front's own members ([`SUPPLIED`], [`EXPORT`])
+//!   change the schema of the rows they belong to, and a parameter whose type is a path says in
+//!   its description, on a row this build serves, that it takes an absolute path
+//!   ([`ABSOLUTE_PATH`]).
 
 use crate::codes::McpCode;
-use crate::protocol::Era;
 use actingcommand_contract::outcome::{Category, Detail, Outcome};
 use actingcommand_lab_ops::cli_line;
 use actingcommand_lab_ops::codes::ArgumentProblem;
 use actingcommand_lab_ops::locate::{self, AUTHORING_KEY, AuthoringModule};
 use actingcommand_lab_ops::table::{
     ModuleRole, Operation, OperationModule, OperationStatus, OperationTable, Param, ParamForm,
-    ParamType, TABLE_PATH,
+    ParamType, RuntimeNeed, TABLE_PATH,
 };
 use serde_json::{Map, Value, json};
 use std::fmt;
@@ -42,15 +46,15 @@ use std::sync::OnceLock;
 
 /// The `instructions` of `initialize` and `server/discover`: the survey's draft
 /// (`lab5g-step0-survey.md` §6), its names corrected by the coordinator's ruling 6784514298,
-/// point 1, and this build's one rule, that it serves no call yet.
-pub(crate) const INSTRUCTIONS: &str = "ActingCommand Lab over MCP (actinglab-mcp). One tool per operation of the Lab's operation table: the tool is ac_ and the CLI words with spaces and - as _ (emu start is ac_emu_start), and its arguments are the CLI's parameters by name. Two tools keep other names: one frame is ac_frame and the authoring observe is ac_lab_observe; no tool is named ac_observe. Start with ac_status. A result is the line actinglab --json prints: the members and outcome; a refusal is {outcome, message?, details?}; warnings are in warnings. This build serves no call yet: each call answers mcp_operation_unsupported, and nothing is sent, run or written. A call not done within 25 s answers {handle, job_phase}: follow it with ac_run_show (id, wait_s). A run's handle is its request_id and survives restarts; any other handle lives only as long as this process (then handle_unknown). After an interrupted or uncertain write call ac_status or ac_run_show before anything else; never resend a write with new arguments. An answer over 24 KiB is cut where its operation marks the cut, or written whole to %TEMP%\\actingcommand-mcp\\materials with the warning answer_exported; never cut silently. Cursors belong to this process and its Runtime connection (cursor_invalid after a reconnect): read again from after. A Lab operation the Runtime answered whose check then failed is lab_operation_check_failed: read its effect before sending it again. Irreversible operations record who started them and ask nothing; deploy and rollback run detached: follow with ac_op_status. A module left out of the list (by --list, or the authoring module by lab_module_authoring) still answers its tools' calls. Manual: skill actingcommand.";
+/// point 1, and (Workflow #434 LAB-5G2b) which kinds of row this build serves.
+pub(crate) const INSTRUCTIONS: &str = "ActingCommand Lab over MCP (actinglab-mcp). One tool per operation of the Lab's operation table: the tool is ac_ and the CLI words with spaces and - as _ (emu start is ac_emu_start), and its arguments are the CLI's parameters by name. Two tools keep other names: one frame is ac_frame and the authoring observe is ac_lab_observe; no tool is named ac_observe. Start with ac_status. A result is the line actinglab --json prints: the members and outcome; a refusal is {outcome, message?, details?}; warnings are in warnings. This build serves in its own process the operations actinglab's CLI module serves (the core ones and run start, run stop, reset, drill), paths given absolute; any other call answers mcp_operation_unsupported, and nothing is sent, run or written for it. A call not done within 25 s answers {handle, job_phase}: follow it with ac_run_show (id, wait_s). A run's handle is its request_id and survives restarts; any other handle lives only as long as this process (then handle_unknown). After an interrupted or uncertain write call ac_status or ac_run_show before anything else; never resend a write with new arguments. An answer over 24 KiB is cut where its operation marks the cut, or written whole to %TEMP%\\actingcommand-mcp\\materials with the warning answer_exported; never cut silently. Cursors belong to this process and its Runtime connection (cursor_invalid after a reconnect): read again from after. A Lab operation the Runtime answered whose check then failed is lab_operation_check_failed: read its effect before sending it again. Irreversible operations record who started them and ask nothing; deploy and rollback run detached: follow with ac_op_status. A module left out of the list (by --list, or the authoring module by lab_module_authoring) still answers its tools' calls. Manual: skill actingcommand.";
 
 /// The slices whose planned rows actinglab offers: its words' `BUILT_SLICES`
 /// (`apps/actinglab/src/cli_module/words.rs`), which this server's test holds equal.
 pub(crate) const ACTINGLAB_SLICES: [&str; 5] = ["LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8"];
 /// The slice whose planned rows this server offers itself (§9.2): `record draft`, `mcp config`,
-/// `mcp entries`.
-const OWN_SLICE: &str = "LAB-5";
+/// `mcp entries`; later slices serve them (Workflow #434 LAB-5G2b: refused here, [`serving`]).
+pub(crate) const OWN_SLICE: &str = "LAB-5";
 /// This front end: the id of its `modules` row of role `front_end`, which a parameter's
 /// `required_in` names where MCP requires the parameter although the row does not.
 const FRONT_END: &str = "mcp";
@@ -81,6 +85,110 @@ const DURATION_PATTERN: &str = "^[0-9]+(ms|s|m|h)$";
 const KEY_VALUE_PATTERN: &str = "^[^=]+=.*$";
 /// What an `operation_id` parameter takes: `op-<ms>`.
 const OPERATION_ID_PATTERN: &str = "^op-[0-9]+$";
+
+/// Workflow #434 LAB-5G2b: what the front gives a row's parameter itself, which the row's tool
+/// leaves out of its schema and refuses as an argument it does not know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Supplied {
+    /// This server's export directory, always: one frame is written there.
+    ExportDirectory,
+    /// This server's export directory when the tool's [`EXPORT`] is true: the whole material is
+    /// written there, and the answer names the file.
+    ExportDirectoryOnExport,
+    /// `true`: through MCP the row runs detached (contract §5), answering at once.
+    True,
+}
+
+/// Workflow #434 LAB-5G2b (work order point 4; board #434, the coordinator's ruling 9 of
+/// 6775192250; contract §5): the front's own members, in one place. Each entry is a row, its
+/// parameter the front gives itself and what it gives. A row with
+/// [`Supplied::ExportDirectoryOnExport`] also takes the boolean [`EXPORT`] beside its parameters.
+pub(crate) const SUPPLIED: [(&str, &str, Supplied); 4] = [
+    ("material", "out", Supplied::ExportDirectoryOnExport),
+    ("frame", "out", Supplied::ExportDirectory),
+    ("deploy", "detach", Supplied::True),
+    ("rollback", "detach", Supplied::True),
+];
+/// Workflow #434 LAB-5G2b: the tool's own member of a row whose parameter is
+/// [`Supplied::ExportDirectoryOnExport`].
+pub(crate) const EXPORT: &str = "export";
+/// Its description.
+const EXPORT_NOTE: &str = "true: write the whole material to this server's export directory and answer the file {path, sha256, size}; absent or false: read its text";
+/// Workflow #434 LAB-5G2b: what the description of a parameter whose type is a path says on a row
+/// this build serves, where a relative path is refused (stricter than today's server).
+pub(crate) const ABSOLUTE_PATH: &str = "an absolute path: a relative one is refused";
+
+/// Workflow #434 LAB-5G2b: how this build serves the calls of a row's tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Serving {
+    /// By `lab_ops::core_ops`, in this process: the rows actinglab's CLI module serves.
+    Core,
+    /// Not by this build: `mcp_operation_unsupported`, nothing read, sent, run or written.
+    Refused,
+}
+
+/// Workflow #434 LAB-5G2b: the rule that decides how a row's calls are served. A planned row of
+/// slice LAB-5 is its later slices' (`record draft`; the rescue module's `mcp config`, `mcp
+/// entries` and the entry's plan, LAB-5G5b): refused. A row `lab_ops::core_ops` serves (the core
+/// rows but those actinglab's own commands serve, and `run start`, `run stop`, `reset`, `drill`):
+/// [`Serving::Core`]. Every other row is refused: the three `app` rows, `standard-pack check` and
+/// the debugging and authoring rows actinglab's own commands serve, which wait for the `serve`
+/// children of a later slice, and the rescue rows, which the slice's second part serves.
+pub(crate) fn serving(operation: &Operation) -> Serving {
+    if operation.slice != OWN_SLICE && actingcommand_lab_ops::core_ops::serves(operation) {
+        Serving::Core
+    } else {
+        Serving::Refused
+    }
+}
+
+/// Workflow #434 LAB-5G2b: whether the table marks `operation` as writing to the Runtime: it
+/// writes and it reaches the Runtime. Its calls record today's provenance first.
+pub(crate) fn writes_to_runtime(operation: &Operation) -> bool {
+    operation.writes && operation.runtime != RuntimeNeed::Offline
+}
+
+/// Whether `param` is required through MCP: by its row, or by its `required_in` naming this
+/// front end.
+pub(crate) fn required_here(param: &Param) -> bool {
+    param.required
+        || param
+            .required_in
+            .as_ref()
+            .is_some_and(|fronts| fronts.iter().any(|front| front == FRONT_END))
+}
+
+/// Whether a parameter type is a path (`path`, `file`, `dir`).
+pub(crate) fn is_path(value_type: &ParamType) -> bool {
+    matches!(
+        value_type,
+        ParamType::Path | ParamType::File | ParamType::Dir
+    )
+}
+
+/// What the front gives the parameter `param` of the row `row` itself, if anything.
+pub(crate) fn supplied(row: &str, param: &str) -> Option<Supplied> {
+    SUPPLIED
+        .iter()
+        .find(|(of, name, _)| *of == row && *name == param)
+        .map(|(_, _, supplied)| *supplied)
+}
+
+/// Whether the row `row` takes [`EXPORT`].
+pub(crate) fn takes_export(row: &str) -> bool {
+    SUPPLIED
+        .iter()
+        .any(|(of, _, supplied)| *of == row && *supplied == Supplied::ExportDirectoryOnExport)
+}
+
+/// The description of a path parameter on a row this build serves: its note, and
+/// [`ABSOLUTE_PATH`].
+pub(crate) fn absolute_note(note: Option<&str>) -> String {
+    match note {
+        Some(note) => format!("{note}; {ABSOLUTE_PATH}"),
+        None => ABSOLUTE_PATH.to_owned(),
+    }
+}
 
 /// The outcome detail of every outcome this server writes (model v2.2 §7.1: full by default;
 /// `ACTINGCOMMAND_DETAIL=codes` keeps only the registered names), set once at start.
@@ -116,6 +224,8 @@ struct Tool {
     name: String,
     module: OperationModule,
     definition: Value,
+    /// Workflow #434 LAB-5G2b: its row, which a call of the tool serves.
+    operation: Operation,
 }
 
 /// Every tool this build offers, generated once from the table.
@@ -138,6 +248,7 @@ impl Catalog {
                 name,
                 module: operation.module,
                 definition,
+                operation: operation.clone(),
             });
         }
         let modules = table
@@ -170,6 +281,14 @@ impl Catalog {
     /// Whether `name` is the tool of an offered row: a call may name it, listed or not.
     pub(crate) fn offers(&self, name: &str) -> bool {
         self.tools.iter().any(|tool| tool.name == name)
+    }
+
+    /// Workflow #434 LAB-5G2b: the row whose tool is `name`, when it is an offered row's.
+    pub(crate) fn operation(&self, name: &str) -> Option<&Operation> {
+        self.tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .map(|tool| &tool.operation)
     }
 
     /// The `tools/list` result of `listing`, `{tools}`, as this process's place lists it.
@@ -261,19 +380,32 @@ fn definition(operation: &Operation, name: &str) -> Result<Value, Outcome> {
     Ok(Value::Object(definition))
 }
 
-/// The input schema of `operation`: one property per parameter, in the row's order.
+/// The input schema of `operation`: one property per parameter, in the row's order. Workflow
+/// #434 LAB-5G2b: but a parameter the front gives itself ([`SUPPLIED`]), and with [`EXPORT`]
+/// after them where the row takes it; on a row this build serves, a path parameter's description
+/// says that it takes an absolute path ([`absolute_note`]).
 fn input_schema(operation: &Operation) -> Result<Value, Outcome> {
     let mut properties = Map::new();
     let mut required = Vec::new();
+    let served = serving(operation) != Serving::Refused;
     for param in &operation.params {
-        properties.insert(param.name.clone(), param_schema(param)?);
-        let required_here = param
-            .required_in
-            .as_ref()
-            .is_some_and(|fronts| fronts.iter().any(|front| front == FRONT_END));
-        if param.required || required_here {
+        if supplied(&operation.name, &param.name).is_some() {
+            continue;
+        }
+        let mut property = param_schema(param)?;
+        if served && is_path(&param.value_type) {
+            property["description"] = json!(absolute_note(param.note.as_deref()));
+        }
+        properties.insert(param.name.clone(), property);
+        if required_here(param) {
             required.push(Value::String(param.name.clone()));
         }
+    }
+    if takes_export(&operation.name) {
+        properties.insert(
+            EXPORT.to_owned(),
+            json!({"type": "boolean", "description": EXPORT_NOTE}),
+        );
     }
     let mut schema = Map::new();
     schema.insert("type".to_owned(), json!("object"));
@@ -371,26 +503,8 @@ fn unreadable(error: &impl fmt::Display) -> Outcome {
     actingcommand_lab_ops::foreign_data_error(error).path(TABLE_PATH)
 }
 
-/// The refusal of every call of the tool `tool` in this build, which serves none:
+/// The refusal of a call of the tool `tool` of a row this build does not serve ([`serving`]):
 /// `mcp_operation_unsupported` with the tool (`mcp_tool`).
 pub(crate) fn unsupported(tool: &str) -> Outcome {
     Outcome::new(McpCode::OperationUnsupported).mcp_tool(tool)
-}
-
-/// The `tools/call` result of a call `refusal` answers: the CLI line of a refusal, `{outcome}`,
-/// as compact JSON text and, from 2025-06-18 on, as `structuredContent`; `isError` true.
-pub(crate) fn call_result(refusal: &Outcome, era: Era) -> Value {
-    let mut line = Map::new();
-    line.insert("outcome".to_owned(), envelope(refusal));
-    let line = Value::Object(line);
-    let mut result = Map::new();
-    result.insert(
-        "content".to_owned(),
-        json!([{"type": "text", "text": line.to_string()}]),
-    );
-    if era.structured() {
-        result.insert("structuredContent".to_owned(), line);
-    }
-    result.insert("isError".to_owned(), Value::Bool(true));
-    Value::Object(result)
 }

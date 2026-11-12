@@ -14,7 +14,7 @@
       "status": "active",
       "since": "0.12.57",
       "description": "actinglab-mcp lists this tool, the tool of an operation table row, but this build serves no call of it: the call was refused before anything was sent, run or written; mcp_tool names the tool.",
-      "common_causes": "Any call of a tool of this build: it is the server's shell (Workflow #434 LAB-5G2a), which lists the tool of every offered row and serves none; the later slices of LAB-5 serve them.",
+      "common_causes": "A call of a tool whose row this build does not serve yet: since Workflow #434 LAB-5G2b it serves the rows actinglab's CLI module serves, and refuses the three app rows and standard-pack check, the debugging and authoring rows actinglab's own commands serve, record draft and the rescue module's rows; the later slices of LAB-5 serve them.",
       "handling": "Run the operation with actinglab (actinglab --json and the row's words), or through actingctl mcp-serve, until a build of actinglab-mcp that serves the tool is installed; sending the same call again answers the same."
     }
   }
