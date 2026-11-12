@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# Workflow #434 LAB-5G2a (register §1.287, "Slice LAB-5G2a"; contracts/lab-two-entries.md §8.1 and
+# §9.3): `actinglab-mcp`, the Lab's MCP server, whose tools are the operation table's offered rows.
+# This slice is its shell: the protocol and the loop copied from `actingctl mcp-serve`, the tool
+# list generated from the table, and every call refused with `mcp_operation_unsupported` until the
+# next slices serve them. It is in no release and no Tools archive until slice G6 packages it.
+
+[package]
+name = "actingcommand-actinglab-mcp"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "actinglab-mcp"
+path = "src/main.rs"
+
+[dependencies]
+actingcommand-contract = { workspace = true }
+# The operation table, the authoring option's place, the CLI line and the MCP codes of actingctl's
+# registry, which this server answers with as today's does.
+actingcommand-lab-ops = { workspace = true }
+# The rescue rows the rescue module serves, on Windows, where it runs: the rescue rows actinglab
+# offers, and so this server.
+actingcommand-lab-rescue = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The made-up installation roots of the authoring option's test.
+tempfile = "3"
