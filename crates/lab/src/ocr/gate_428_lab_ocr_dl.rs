@@ -153,7 +153,7 @@ fn lab_ocr_dl_an_inference_longer_than_the_timeout_fails_without_the_switch_and_
     // Without the switch: the request's deadline is the declared timeout_ms, which the inference
     // outlasts, and the target fails with the engine's Timeout, as it fails today.
     let declared = Arc::new(SlowEngine::default());
-    let failure = match recognized(Arc::clone(&declared), &scene) {
+    let failure = match recognized(Arc::clone(&declared) as Arc<dyn VisionProvider>, &scene) {
         Ok(answer) => panic!("without the switch the target was recognized: {answer:?}"),
         Err(message) => message,
     };
