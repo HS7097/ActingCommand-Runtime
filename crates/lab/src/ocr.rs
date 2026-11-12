@@ -16,16 +16,25 @@
 //! #411 Lab L6: a vision root with NN models and no OCR model gives the offline tools a provider,
 //! as the Runtime accepts such a root: NN targets evaluate with it, while OCR stays unavailable
 //! under `lab_ocr_unavailable` caused by `lab_ocr_model_missing`, as before.
+//!
+//! Workflow #428 LAB-OCR-DL (register §1.331): an offline evaluation of a saved scene that asks for
+//! it on its switch is given the provider through [`with_ocr_deadline_max`], which raises every OCR
+//! request's deadline to [`OCR_DEADLINE_MAX_MS`]; nothing else changes, and production never builds
+//! it.
 
 use crate::codes::LabCode;
 use actingcommand_contract::codes::{InstallationCode, SharedCode};
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, OutcomeEnvelope};
-use actingcommand_contract::{InstalledProcess, LabError, LabResult};
+use actingcommand_contract::{
+    InstalledProcess, LabError, LabResult, VisionModelMemoryStatus, VisionModelTimingStatus,
+};
 use actingcommand_execution_kernel::VisionFfiProvider;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_ppocr_onnx_json_provider::PpocrCtcLoader;
 use actingcommand_recognition_pack::{
-    RecognitionPack, RecognitionTarget, ValueTestRight, VisionProvider,
+    NnProviderRequest, NnProviderResult, OcrProviderObservation, OcrProviderRequest,
+    OcrProviderResult, RecognitionPack, RecognitionTarget, ValueTestRight, VisionProvider,
+    VisionProviderError,
 };
 use actingcommand_vision_ffi::{
     ONNXRUNTIME_LIBRARY, OnnxExecutionProvider, VISION_MODELS_DIRECTORY, VISION_RUNTIME_DIRECTORY,
@@ -457,6 +466,91 @@ fn reached_ocr_target<'p>(pack: &'p RecognitionPack, target_id: &str) -> Option<
     })
 }
 
+/// Workflow #428 LAB-OCR-DL (register §1.331): the most a vision target's `timeout_ms` declares
+/// (1 to 60 000, `contracts/vision-model-folders.md`), which an offline evaluation of a saved scene
+/// takes as each OCR target's `timeout_ms` on its switch. The contract's bound, not a tunable.
+pub const OCR_DEADLINE_MAX_MS: u64 = 60_000;
+
+/// Workflow #428 LAB-OCR-DL (register §1.331): `provider` as an offline evaluation of a saved scene
+/// is given it when its switch raises the OCR inference deadline. Every OCR request reaches
+/// `provider` with `timeout_ms` [`OCR_DEADLINE_MAX_MS`], which the kernel's provider
+/// (`VisionFfiProvider::call_ocr`) takes as the request's deadline and the engine as its inference
+/// budget, as for a target that declares it: raised, not removed, so a hung inference still ends.
+/// Model admission, NN requests and the provider's reports pass unchanged. Only actinglab's
+/// offline evaluations of saved scenes build it; no path of the Runtime does.
+pub fn with_ocr_deadline_max(provider: Arc<dyn VisionProvider>) -> Arc<dyn VisionProvider> {
+    Arc::new(OcrDeadlineMax { inner: provider })
+}
+
+/// The provider [`with_ocr_deadline_max`] gives: the one it was given, its OCR requests' deadline
+/// raised.
+#[derive(Debug)]
+struct OcrDeadlineMax {
+    inner: Arc<dyn VisionProvider>,
+}
+
+impl OcrDeadlineMax {
+    /// `request` with its deadline [`OCR_DEADLINE_MAX_MS`]; nothing else of it changes.
+    fn raised(request: OcrProviderRequest<'_>) -> OcrProviderRequest<'_> {
+        OcrProviderRequest {
+            timeout_ms: OCR_DEADLINE_MAX_MS,
+            ..request
+        }
+    }
+}
+
+impl VisionProvider for OcrDeadlineMax {
+    fn require_ocr_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        self.inner.require_ocr_model(model_ref, model_sha256)
+    }
+
+    fn require_nn_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        self.inner.require_nn_model(model_ref, model_sha256)
+    }
+
+    fn read_text(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderResult, VisionProviderError> {
+        self.inner.read_text(Self::raised(request))
+    }
+
+    fn read_text_with_execution_evidence(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderObservation, VisionProviderError> {
+        self.inner
+            .read_text_with_execution_evidence(Self::raised(request))
+    }
+
+    fn classify(
+        &self,
+        request: NnProviderRequest<'_>,
+    ) -> Result<NnProviderResult, VisionProviderError> {
+        self.inner.classify(request)
+    }
+
+    fn loaded_models(&self) -> Vec<VisionModelMemoryStatus> {
+        self.inner.loaded_models()
+    }
+
+    fn model_timings(&self) -> Vec<VisionModelTimingStatus> {
+        self.inner.model_timings()
+    }
+
+    fn execution_warnings(&self) -> Vec<Outcome> {
+        self.inner.execution_warnings()
+    }
+}
+
 #[cfg(test)]
 mod tests;
 // Workflow #411 A12 part 1 (exec key 87): a single-location root's configuration names the vision
@@ -467,3 +561,7 @@ mod gate_rc2_a12;
 // a provider for NN targets; OCR stays unavailable, caused by `lab_ocr_model_missing`.
 #[cfg(test)]
 mod gate_lab_l6;
+// Workflow #428 LAB-OCR-DL (apps gate row "#428 LAB-OCR-DL"): an OCR inference longer than its
+// target's timeout_ms fails without the switch and passes with it.
+#[cfg(test)]
+mod gate_428_lab_ocr_dl;

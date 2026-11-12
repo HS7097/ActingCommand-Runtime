@@ -69,7 +69,8 @@ pub(super) fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutc
         let instance_alias = capture_requested
             .then(|| resolve_instance_id(global, &config))
             .transpose()?;
-        let input =
+        // Workflow #428 LAB-OCR-DL: and whether its switch raised the OCR inference deadline.
+        let (input, ocr_deadline_max) =
             super::readonly_cli::recognition_input_with_config(global, &flags, false, &config)?;
         let mut lab =
             super::env_detection::build_drive_lab(config, instance_alias.as_deref(), !dry_run)?;
@@ -81,7 +82,10 @@ pub(super) fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutc
             capture_requested,
             draw: super::lab_draw::press_draw(seed)?,
         };
-        serialize_response(lab.tap_target(request, &mut ledger)?)
+        super::offline_ocr::with_ocr_deadline(
+            serialize_response(lab.tap_target(request, &mut ledger)?)?,
+            ocr_deadline_max,
+        )
     })();
     finish_semantic_result_with_ledger(global, ledger, result)
 }
@@ -108,7 +112,8 @@ pub(super) fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcom
         let instance_alias = capture_requested
             .then(|| resolve_instance_id(global, &config))
             .transpose()?;
-        let input =
+        // Workflow #428 LAB-OCR-DL: and whether its switch raised the OCR inference deadline.
+        let (input, ocr_deadline_max) =
             super::readonly_cli::recognition_input_with_config(global, &flags, true, &config)?;
         let mut lab =
             super::env_detection::build_drive_lab(config, instance_alias.as_deref(), !dry_run)?;
@@ -123,7 +128,10 @@ pub(super) fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcom
             poll: (!dry_run).then(|| parse_optional_duration_ms(&flags, "--poll-ms", 500)),
             draw: super::lab_draw::press_draw(seed)?,
         };
-        serialize_response(lab.navigate(request, &mut ledger)?)
+        super::offline_ocr::with_ocr_deadline(
+            serialize_response(lab.navigate(request, &mut ledger)?)?,
+            ocr_deadline_max,
+        )
     })();
     finish_semantic_result_with_ledger(global, ledger, result)
 }

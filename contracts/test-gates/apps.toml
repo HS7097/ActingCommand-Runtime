@@ -1552,3 +1552,13 @@ tests = [
     "actingcommand-runtime-config::lib::gate_mapp1::mapp1_the_device_level_actions_in_effect_name_the_key_that_turns_each_on",
 ]
 incident = ["#437 MAPP-1"]
+
+# Workflow #428 LAB-OCR-DL (0.12.57; register §1.331; brief rd-1112/brief-lab-ocr-deadline.md; contracts/vision-model-folders.md, "Startup and first use"; contracts/lab-operations.json, the switch ocr_deadline_max): an offline evaluation of a saved scene may take each OCR target's timeout_ms as 60000 on the switch --ocr-deadline-max; the readers' evaluation over a provider whose inference takes 3000 ms of an OCR target that declares 1000 fails with the engine's Timeout of today without the switch, its request's deadline 1000, and passes with it, its request's deadline 60000 (with_ocr_deadline_max); on a saved scene observe, do --dry-run, ensure --dry-run, wait, recognize, is-visible, detect-page, current-page, tap-target --dry-run and navigate --dry-run answer ocr_deadline_raised_to_ms 60000 with the switch and no such member without it, recognize's answer otherwise the same; beside --capture or with no --scene the switch is refused validation_failed naming it, conflicting
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::ocr::gate_428_lab_ocr_dl::lab_ocr_dl_an_inference_longer_than_the_timeout_fails_without_the_switch_and_passes_with_it",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_428_lab_ocr_dl::lab_ocr_dl_the_answer_names_the_raised_deadline_only_with_the_switch",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_428_lab_ocr_dl::lab_ocr_dl_the_switch_off_a_saved_scene_is_refused",
+]
+incident = ["#428 LAB-OCR-DL"]

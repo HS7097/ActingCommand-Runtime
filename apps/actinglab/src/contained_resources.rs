@@ -274,7 +274,19 @@ pub(super) fn operation_guards(
 /// Workflow #396 LAB-3: every bundle evaluates OCR with actinglab's OCR provider, the
 /// Runtime's, when it has one.
 pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<ExternallyVerifiedBundle>> {
-    let vision_provider = super::offline_ocr::lab_ocr().provider();
+    load_with_ocr_deadline(flags, command, false)
+}
+
+/// [`load`] for an offline evaluation of saved scenes: Workflow #428 LAB-OCR-DL, its OCR
+/// inference deadline raised when `ocr_deadline_max`, the switch the command read
+/// (`offline_ocr::ocr_deadline_max`). The package's admission deadline is unchanged: it bounds the
+/// reading of the package, before anything is evaluated.
+pub(super) fn load_with_ocr_deadline(
+    flags: &FlagArgs,
+    command: &str,
+    ocr_deadline_max: bool,
+) -> CliOutcome<Arc<ExternallyVerifiedBundle>> {
+    let vision_provider = super::offline_ocr::evaluation_provider(ocr_deadline_max);
     // `--package <path>`: the path chooses the reading (a directory, a `.json` or a `.zip`
     // container, an assembled ZIP); `--zip <path>`: a published assembled `.zip`.
     if flags.optional("--package").is_some() {
