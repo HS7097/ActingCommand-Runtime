@@ -11,5 +11,7 @@ actingcommand_contract::outcome_codes! {
         // Workflow #434 LAB-5G2b: the Runtime refused the identity card declared before a write;
         // the write went ahead (where today's server answers mcp_identity_card_refused).
         IdentityDeclarationRefused => "mcp_identity_declaration_refused": warning / none,
+        // Workflow #434 LAB-5G3: the call goes on as a job of this server, named by its handle.
+        JobStarted => "mcp_job_started": info / none,
     }
 }

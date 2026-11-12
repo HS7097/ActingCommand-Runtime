@@ -21,23 +21,29 @@
 //!   parameters: the text content and, from 2025-06-18 on, `structuredContent`; `isError` true
 //!   exactly when the command line would exit non-zero; within the answer budget
 //!   ([`crate::budget`]), which the serving code also cuts or exports a shaped answer to.
-//! - **Every call runs to its end on its worker**: this build has no jobs and no handles (slice
-//!   G3).
+//! - **Jobs** (Workflow #434 LAB-5G3; `crate::jobs`, `crate::server`): every served call runs as
+//!   a job; what the server's jobs, waits and cursors ask of the serving code is the last part of
+//!   this module ([`front_members`], [`finished`], [`Service::watched`], [`Service::taken_back`],
+//!   [`Service::run_start`]).
 
 use crate::budget;
 use crate::protocol::Era;
 use crate::runtime::{self, Runtime};
-use crate::tools::{self, Serving, Supplied};
+use crate::tools::{self, Added, Serving, Supplied};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_lab_ops::budget::Budget;
 use actingcommand_lab_ops::cli_line::{self, Exit};
+use actingcommand_lab_ops::code_lookup;
 use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_lab_ops::core_ops::{self, Caller};
-use actingcommand_lab_ops::events::CursorBinding;
+use actingcommand_lab_ops::events::{self, CursorBinding};
 use actingcommand_lab_ops::front::{Connection, Front};
 use actingcommand_lab_ops::table::{Operation, Param, ParamForm, ParamType, RuntimeNeed};
-use serde_json::{Map, Value};
+use actingcommand_runtime_client::{PreparedContainedTask, RuntimeClient};
+use serde_json::{Map, Value, json};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The parameter of the instance a write names in its client action.
 const INSTANCE: &str = "instance";
@@ -451,6 +457,14 @@ fn relative_path(param: &Param, value: &Value) -> bool {
 /// numbers. A line that did not encode is `actingctl_output_failed`, as `serve` answers it. The
 /// developer line goes to stderr, as `serve` writes it.
 pub(crate) fn call_result(exit: &Exit, era: Era) -> Value {
+    sent(&finished(exit), era)
+        .unwrap_or_else(|sent_bytes| refusal_result(&budget::exceeded(sent_bytes), era))
+}
+
+/// Workflow #434 LAB-5G3: the line `exit` is answered with, once: a line that did not encode is
+/// `actingctl_output_failed`, as `serve` answers it, and the developer line goes to stderr, as
+/// `serve` writes it.
+pub(crate) fn finished(exit: &Exit) -> Finished {
     let line = match &exit.line {
         Ok(line) => {
             if let Some(developer) = &exit.developer {
@@ -466,11 +480,16 @@ pub(crate) fn call_result(exit: &Exit, era: Era) -> Value {
             refusal_line(&Exit::output_failed())
         }
     };
-    let is_error = exit.code != 0;
-    match budget::carried(&line, era, is_error) {
-        Ok(result) => result,
-        Err(sent_bytes) => refusal_result(&budget::exceeded(sent_bytes), era),
+    Finished {
+        line,
+        is_error: exit.code != 0,
     }
+}
+
+/// Workflow #434 LAB-5G3: the `tools/call` result carrying `finished` in `era` within the limit
+/// (`budget::carried`), or, when it fits neither way, the bytes it takes as sent.
+pub(crate) fn sent(finished: &Finished, era: Era) -> Result<Value, usize> {
+    budget::carried(&finished.line, era, finished.is_error)
 }
 
 /// The `tools/call` result of a call `refusal` answers: the line of a refusal, `{outcome}`, as
@@ -485,4 +504,282 @@ fn refusal_line(refusal: &Outcome) -> Value {
     let mut line = Map::new();
     line.insert("outcome".to_owned(), tools::envelope(refusal));
     Value::Object(line)
+}
+
+// ---- Workflow #434 LAB-5G3 (register §1.287, "Slice LAB-5G3"): what the server's jobs, waits and
+// cursors ask of the serving code. The jobs themselves are `crate::jobs`; when a call waits and
+// what it answers, `crate::server`.
+
+/// The command words that give a cursor back to the commands of `lab-ops`.
+const CURSOR_FLAG: &str = "--cursor";
+
+/// Workflow #434 LAB-5G3: a call's line once its job ended, as it is answered ([`finished`]): the
+/// line, and whether the command line would exit non-zero for it.
+#[derive(Debug, Clone)]
+pub(crate) struct Finished {
+    pub(crate) line: Value,
+    pub(crate) is_error: bool,
+}
+
+/// Workflow #434 LAB-5G3: the members the front adds to a row's tool beside its parameters
+/// (`tools::ADDED`), as a call gives them.
+#[derive(Debug, Default)]
+pub(crate) struct FrontMembers {
+    /// `wait_s`, or its default, on a row whose tool takes it.
+    pub(crate) wait: Option<Duration>,
+    /// `cursor`, when it is given.
+    pub(crate) cursor: Option<String>,
+}
+
+/// Workflow #434 LAB-5G3: the members the front adds to `operation`'s tool, read from `arguments`
+/// and taken out of them, and the rest, the row's, which [`prepare`] reads. `wait_s` is a whole
+/// number of seconds from 0 to the call budget (`call_budget`), its default when it is absent or
+/// `null` (never more than the budget); `cursor` is text. A value of another JSON type is
+/// `arguments_invalid` `wrong_type`, a wait outside its range `out_of_range` with the range, and a
+/// cursor that begins with `--` is refused as `serve` refuses such a value. Nothing is sent or
+/// written before.
+pub(crate) fn front_members(
+    operation: &Operation,
+    mut arguments: Map<String, Value>,
+    call_budget: Duration,
+) -> Result<(FrontMembers, Map<String, Value>), Refused> {
+    let mut members = FrontMembers::default();
+    let budget_s = call_budget.as_secs();
+    for (_, member, added) in tools::ADDED
+        .iter()
+        .filter(|(row, _, _)| *row == operation.name)
+    {
+        let value = arguments.remove(*member).filter(|value| !value.is_null());
+        match added {
+            Added::Wait { default_s, .. } => {
+                let seconds = match value {
+                    None => (*default_s).min(budget_s),
+                    Some(value) => match value.as_u64() {
+                        Some(seconds) if seconds <= budget_s => seconds,
+                        Some(_) => return Err(out_of_range(member, budget_s).into()),
+                        None if value.is_i64() => return Err(out_of_range(member, budget_s).into()),
+                        None => return Err(invalid(member, ArgumentProblem::WrongType).into()),
+                    },
+                };
+                members.wait = Some(Duration::from_secs(seconds));
+            }
+            Added::Cursor { .. } => {
+                let Some(value) = value else {
+                    continue;
+                };
+                if flag_like(&value) {
+                    return Err(cli_line::usage_invalid(
+                        Some(*member),
+                        ArgumentProblem::NotRecognised,
+                    )
+                    .into());
+                }
+                let cursor = value
+                    .as_str()
+                    .ok_or_else(|| invalid(member, ArgumentProblem::WrongType))?;
+                members.cursor = Some(cursor.to_owned());
+            }
+        }
+    }
+    Ok((members, arguments))
+}
+
+/// `arguments_invalid` `out_of_range` for a wait of more than the call budget, `budget_s`, or
+/// less than nothing, with the range.
+fn out_of_range(member: &str, budget_s: u64) -> Outcome {
+    invalid(member, ArgumentProblem::OutOfRange)
+        .range_min(0_u64)
+        .range_max(budget_s)
+}
+
+/// A line `lab-ops`' command built; a command that did not take its first word is a defect of
+/// this server, answered as `lab_ops::core_ops` answers it.
+fn not_served(exit: Option<Exit>) -> Exit {
+    exit.unwrap_or_else(|| {
+        cli_line::failure(
+            &cli_line::usage_invalid(None, ArgumentProblem::Unknown),
+            Some("the operation's command was not served"),
+        )
+    })
+}
+
+/// Workflow #434 LAB-5G3: a run prepared for `ac_run_start` on a connection of its own, after
+/// today's provenance, and not yet submitted.
+pub(crate) struct StartedRun {
+    client: RuntimeClient,
+    prepared: PreparedContainedTask,
+    /// The warnings recording the provenance gave (each `{outcome}`), which the run's lines carry.
+    pub(crate) warnings: Vec<Value>,
+}
+
+impl StartedRun {
+    /// The run's Runtime request id, its handle.
+    pub(crate) fn request_id(&self) -> Value {
+        json!(self.prepared.request_id())
+    }
+
+    pub(crate) fn correlation_id(&self) -> Value {
+        json!(self.prepared.correlation_id())
+    }
+
+    /// Submits the run and waits for its receipt: the line `run start` gives for it, with the
+    /// provenance's warnings after its own.
+    pub(crate) fn submitted(self) -> Exit {
+        let exit = core_ops::run_start_ended(self.client.submit_prepared(self.prepared));
+        with_warnings(exit, self.warnings)
+    }
+}
+
+impl Service {
+    /// Workflow #434 LAB-5G3: whether a call of `operation` with `arguments` (the row's, without
+    /// the front's added members) is answered at once, with no job: a row this build does not
+    /// serve, or arguments [`prepare`] refuses. Nothing is sent or written for it.
+    pub(crate) fn refuses(&self, operation: &Operation, arguments: &Map<String, Value>) -> bool {
+        tools::serving(operation) == Serving::Refused
+            || prepare(operation, arguments, &self.exports).is_err()
+    }
+
+    /// Workflow #434 LAB-5G3: the line of a read (`run show`) served as [`Self::line`] serves it,
+    /// but read again on the one kept connection as long as `again` says after each line (a run
+    /// read every second while it may change, today's `ac_get_run`), so that no `Health` comes
+    /// between the reads. Without a located state root or an answering Runtime it is read once, as
+    /// [`Self::line`] reads it.
+    pub(crate) fn watched(
+        &self,
+        operation: &Operation,
+        tool: &str,
+        arguments: &Map<String, Value>,
+        era: Era,
+        again: &mut dyn FnMut(&Exit) -> bool,
+    ) -> Exit {
+        let params = match prepare(operation, arguments, &self.exports) {
+            Ok(params) => params,
+            Err(refused) => return cli_line::failure(&refused.outcome, refused.text),
+        };
+        let place = runtime::place();
+        let Ok(state_root) = &place.state_root else {
+            return self.line(operation, tool, arguments, era);
+        };
+        let Ok(kept) = self.runtime.kept(state_root) else {
+            return self.line(operation, tool, arguments, era);
+        };
+        let exit = self.within_budget(era, |answer_budget| {
+            loop {
+                let exit = self.served(
+                    operation,
+                    &params,
+                    Connection::Kept(&kept.client),
+                    kept.generation,
+                    answer_budget,
+                );
+                if !again(&exit) {
+                    break exit;
+                }
+            }
+        });
+        self.runtime.settle(&kept);
+        exit
+    }
+
+    /// Workflow #434 LAB-5G3 (work order point 6): a call of `events` or `codes` that gives a
+    /// cursor back, served on the layer below the row with the command's words and `--cursor`,
+    /// within this server's budget. `codes`' cursor carries its own position and filters and binds
+    /// to no session: its words are the command line's (`core_ops::offline_words`). `events`'
+    /// cursor is taken under this server's binding, its session and the kept connection's
+    /// generation (register "Slice LAB-5G1b", L5G1b-3; `events::dispatch_within`), so one issued
+    /// before the connection was made again is `cursor_invalid`, nothing read.
+    pub(crate) fn taken_back(
+        &self,
+        operation: &Operation,
+        arguments: &Map<String, Value>,
+        cursor: &str,
+        era: Era,
+    ) -> Exit {
+        let params = match prepare(operation, arguments, &self.exports) {
+            Ok(params) => params,
+            Err(refused) => return cli_line::failure(&refused.outcome, refused.text),
+        };
+        let cursor_words = [OsString::from(CURSOR_FLAG), OsString::from(cursor)];
+        self.within_budget(era, |answer_budget| {
+            if let Some(mut argv) = core_ops::offline_words(operation, &params, None) {
+                argv.extend(cursor_words);
+                return not_served(code_lookup::dispatch_within(&argv, Some(answer_budget)));
+            }
+            let place = runtime::place();
+            let state_root = match &place.state_root {
+                Ok(state_root) => state_root.clone(),
+                Err(outcome) => return cli_line::failure(outcome, Some(runtime::UNLOCATED)),
+            };
+            let mut argv = match core_ops::handed_words(
+                operation,
+                &params,
+                place.root.as_deref(),
+                &state_root,
+            ) {
+                Some(Ok(argv)) => argv,
+                Some(Err(exit)) => return exit,
+                None => return not_served(None),
+            };
+            argv.extend(cursor_words);
+            let binding = |generation| CursorBinding {
+                session: self.runtime.session(),
+                generation,
+            };
+            match self.runtime.kept(&state_root) {
+                Ok(kept) => {
+                    let exit = not_served(events::dispatch_within(
+                        &argv,
+                        Connection::Kept(&kept.client),
+                        Some(answer_budget),
+                        binding(kept.generation),
+                    ));
+                    self.runtime.settle(&kept);
+                    exit
+                }
+                Err(_) => not_served(events::dispatch_within(
+                    &argv,
+                    Connection::Connect(Front::Mcp),
+                    Some(answer_budget),
+                    binding(self.runtime.generation()),
+                )),
+            }
+        })
+    }
+
+    /// Workflow #434 LAB-5G3 (work order point 5; today's `ac_run_pack`, `operator.rs`): `run
+    /// start` prepared and not submitted: the instance resolved as a write's (one status read on
+    /// the kept connection), today's provenance recorded on a connection of its own
+    /// (`runtime::begin_write`), then the run read as `run start` reads it and prepared on that
+    /// connection (`core_ops::run_start_prepared`), named by its request id. A step that fails
+    /// ends the call with its line, and nothing of the run is sent.
+    pub(crate) fn run_start(
+        &self,
+        operation: &Operation,
+        tool: &str,
+        arguments: &Map<String, Value>,
+    ) -> Result<StartedRun, Exit> {
+        let params = prepare(operation, arguments, &self.exports)
+            .map_err(|refused| cli_line::failure(&refused.outcome, refused.text))?;
+        let place = runtime::place();
+        let state_root = match &place.state_root {
+            Ok(state_root) => state_root.clone(),
+            Err(outcome) => return Err(cli_line::failure(outcome, Some(runtime::UNLOCATED))),
+        };
+        let alias = match instance_of(operation, &params) {
+            Some(selector) => Some(
+                self.runtime
+                    .alias(&state_root, selector)
+                    .map_err(|ended| *ended)?,
+            ),
+            None => None,
+        };
+        let write =
+            runtime::begin_write(&state_root, tool, alias.as_deref()).map_err(|ended| *ended)?;
+        let prepared = core_ops::run_start_prepared(&params, &write.client)?;
+        Ok(StartedRun {
+            client: write.client,
+            prepared,
+            warnings: write.warnings,
+        })
+    }
 }

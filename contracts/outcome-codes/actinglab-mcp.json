@@ -30,6 +30,20 @@
       "description": "The Runtime refused the governance identity card actinglab-mcp declares before a write (client actingctl-mcp, Workflow #434 LAB-5G2b, until LAB-6 removes the step); the write went ahead without it, and the Runtime's refusal is the caused_by link. It stands where actingctl mcp-serve answers mcp_identity_card_refused with mcp_blocker.",
       "common_causes": "actingd's governance.allowed_clients does not admit actingctl-mcp, so the Runtime refused the card as a client not allowed (governance_client_not_allowed) and recorded its own warning event; it still takes the write from the (Cli, Cli) envelope.",
       "handling": "Nothing is lost: the client action and the write were recorded and sent, and the answer is the write's. To stop the warning, the person adds actingctl-mcp to governance.allowed_clients in actingd.config.json, which actingd reads at its start."
+    },
+    "mcp_job_started": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actinglab-mcp",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.57",
+      "description": "actinglab-mcp serves the call as a job (Workflow #434 LAB-5G3), and the job goes on: the line's handle names it and job_phase says where it is (running, or submitting for a run). It answers a call not done within the server's call budget, ac_run_start at once (its handle is the run's Runtime request id) and ac_run_show of a job that still runs.",
+      "common_causes": "The operation takes longer than the call budget (the start option --call-budget, 25 seconds by default): a drain, an emulator control, a stop and reset, a wait, a large read; or the call was ac_run_start, which answers before the run's receipt.",
+      "handling": "Follow the handle with ac_run_show (id the handle, wait_s up to the call budget) until it answers the job's line; do not send the call again. A handle other than a run's lives only as long as this server process (then handle_unknown); a run's is read from the Runtime by any process."
     }
   }
 }
