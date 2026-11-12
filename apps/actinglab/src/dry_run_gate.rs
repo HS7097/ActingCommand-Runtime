@@ -317,6 +317,8 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("record candidates", Mode::NoEffect),
     ("session record status", Mode::NoEffect),
     ("session record candidates", Mode::NoEffect),
+    // Workflow #434 LAB-5G4c: it changes nothing (its row's `writes` is false).
+    ("record draft", Mode::NoEffect),
     ("current-page", Mode::NoEffect),
     ("is-visible", Mode::NoEffect),
     ("locate", Mode::NoEffect),

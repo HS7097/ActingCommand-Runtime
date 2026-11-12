@@ -77,7 +77,7 @@ pub(crate) const ACTINGLAB_SLICES: [&str; 5] = ["LAB-1", "LAB-1b", "LAB-2", "R-6
 /// The slice whose planned rows this server offers itself (§9.2): `record draft`, `mcp config`,
 /// `mcp entries` and, since LAB-5G5b, `mcp plan` (Workflow #434 LAB-5G2b, second part: the three
 /// `mcp` rows served with the rescue module's others; Workflow #434 LAB-5G4b: `record draft`
-/// through a `serve` child, which refuses it until actinglab has its command, [`serving`]).
+/// through a `serve` child, which runs actinglab's command for it since LAB-5G4c, [`serving`]).
 pub(crate) const OWN_SLICE: &str = "LAB-5";
 /// This front end: the id of its `modules` row of role `front_end`, which a parameter's
 /// `required_in` names where MCP requires the parameter although the row does not.
@@ -231,8 +231,8 @@ pub(crate) enum Serving {
 /// the module does not serve, or every one where it does not run. Workflow #434 LAB-5G4b: every
 /// other row, a row of no module this process serves itself, goes to a `serve` child
 /// ([`Serving::Child`]): the three `app` rows, `standard-pack check`, the debugging and authoring
-/// rows actinglab's own commands serve, and `record draft`, whose refusal the child gives until
-/// actinglab has a command for it.
+/// rows actinglab's own commands serve, `record draft` among them since LAB-5G4c gave it its
+/// command (a row no command serves is refused by the child; none is left).
 pub(crate) fn serving(operation: &Operation) -> Serving {
     if actingcommand_lab_ops::core_ops::serves(operation) {
         return Serving::Core;

@@ -85,8 +85,9 @@ pub(crate) const STRICT_ROWS: [&str; 30] = [
 /// which `gate_434_lab5b3` holds equal to its row ([`reads`]). Until slice B4 they were the lenient
 /// rows: their command ignored a flag it did not read. Since B4 each parses its command line by
 /// its list (`FlagArgs::parse_reading`) and refuses a flag or a positional the list does not hold,
-/// so they are strict too, by their list; no row of the two modules is lenient.
-pub(crate) const READ_LIST_ROWS: [&str; 24] = [
+/// so they are strict too, by their list; no row of the two modules is lenient. Workflow #434
+/// LAB-5G4c: `record draft`, whose command that slice built, parsed by its list from the start.
+pub(crate) const READ_LIST_ROWS: [&str; 25] = [
     "touch-probe",
     "recover",
     "tap-target",
@@ -99,6 +100,7 @@ pub(crate) const READ_LIST_ROWS: [&str; 24] = [
     "record candidates",
     "record amend",
     "record step",
+    "record draft",
     "package validate",
     "package inspect",
     "package bundle",
@@ -126,9 +128,9 @@ pub(crate) const TABLE_DRIVEN_ROWS: [&str; 6] = [
     "user-config set",
 ];
 
-/// The rows no command of actinglab serves yet: `record draft`, MCP's `ac_binding_draft` until
-/// LAB-5 builds its command.
-pub(crate) const NO_COMMAND_ROWS: [&str; 1] = ["record draft"];
+/// The rows no command of actinglab serves yet: none since Workflow #434 LAB-5G4c, which built
+/// `record draft`'s command (MCP's `ac_binding_draft` before; a row of [`READ_LIST_ROWS`] now).
+pub(crate) const NO_COMMAND_ROWS: [&str; 0] = [];
 
 /// Workflow #434 LAB-5F fix 1: the rows of the core module that actinglab's own command serves
 /// and that are held equal to it as the strict rows are, [`accepted`] answering for them:
@@ -373,6 +375,7 @@ pub(crate) fn reads(row: &str) -> Option<Reads> {
         "record candidates" => (&session_record::RECORD_CANDIDATES_READS, Some("--step-id")),
         "record amend" => (&session_record::RECORD_AMEND_READS, Some("--step-id")),
         "record step" => (&session_record::RECORD_STEP_READS, None),
+        "record draft" => (&crate::record_draft::RECORD_DRAFT_READS, None),
         "package validate" => (&package_cli::VALIDATE_READS, None),
         "package inspect" => (&lab_package_control::INSPECT_READS, None),
         "package bundle" => (&package_build::BUNDLE_READS, None),

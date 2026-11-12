@@ -796,8 +796,10 @@ sentence fails that test.
       process, but a row whose `detach` the front forces (`tools::SUPPLIED`: `deploy` and
       `rollback`, section 5's "Not yet"). Since LAB-5G4b every other offered row (the three `app`
       rows and `standard-pack check`, the debugging and authoring rows actinglab's own commands
-      serve, and `record draft`) is served by a `serve` child ("Calls served by `serve` children",
-      below); only `deploy` and `rollback` answer `mcp_operation_unsupported` as below.
+      serve, `record draft` among them: actinglab's own command since LAB-5G4c, 0.12.57, MCP's
+      `ac_binding_draft` ported; register §1.287, "Slice LAB-5G4c") is served by a `serve` child
+      ("Calls served by `serve` children", below); only `deploy` and `rollback` answer
+      `mcp_operation_unsupported` as below.
     - *A rescue row* (the second part) is checked as a core row is (the refusals below), then
       answered by the module for the root the program runs from with the initiator `Lab-MCP`
       (`lab_rescue::rescue::answer_here`), and its answer is the line actinglab's `--json` and
@@ -935,8 +937,9 @@ sentence fails that test.
       `serve` answers; since the slice's second part an envelope whose `line` is none is no
       envelope) is the call's line, text and `structuredContent`, and `isError` is true exactly
       when its `exit_code` is not 0, after what the server does with it (below); a refusal
-      the child answers is passed on as it is (`record draft`, which no command of actinglab
-      serves yet, is refused so). The server checks the arguments first as for every row it
+      the child answers is passed on as it is (a row no command of actinglab serves would be
+      refused so; since LAB-5G4c, in the same release, there is none: `record draft` has its
+      command). The server checks the arguments first as for every row it
       serves (undeclared and the front's own members, types, required members, relative paths,
       values that begin with `--`), so a call it refuses starts no child; the child checks them
       again.
@@ -996,9 +999,9 @@ sentence fails that test.
     (`mcp_tool`) as the CLI line of a refusal, `{outcome}`, its arguments unread, nothing sent,
     run or written; a name that is no offered row's tool answers as today's server answers an
     unknown tool (-32602 `mcp_params_invalid`). `deploy` and `rollback` (until a detached run
-    carries `Lab-MCP`, section 5) and the manual (G7) come with their slices. The program is in the Tools archive since LAB-5G6 (0.12.57;
-    section 8.1, "Packaging"); nothing starts it until a client is registered with the second
-    entry (G7).
+    carries `Lab-MCP`, section 5) and the manual (G7) come with their slices. The program is in
+    the Tools archive since LAB-5G6 (0.12.57; section 8.1, "Packaging"); nothing starts it until
+    a client is registered with the second entry (G7).
 - **The answer budget is the caller's** (Workflow #434 LAB-5D, 0.12.52; register §1.287, "Slice
   LAB-5D"). The reads whose answer can outgrow a caller's budget (`status`, `diagnose`, `events`,
   `schedule`, `runs`, `run evidence`, `codes`; `facts`, `packs`, `remedy`, `summary`) take, in

@@ -1707,3 +1707,15 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_434_lab5g6::deploy_notice_counts_the_mcp_server_as_todays",
 ]
 incident = ["#434 LAB-5G6"]
+
+# Workflow #434 LAB-5G4c (0.12.57; register §1.287, "Slice LAB-5G4c"; brief rd-1113/brief-lab5g4c.md; contracts/lab-two-entries.md §9.3; contracts/lab-operations.json, the row record draft; the coordinator's ruling 3 on board #434, 6775192250): record draft is a command of actinglab, MCP's ac_binding_draft ported. On a made-up single-location root without a daemon program: a record stop answer given inline gives its four binding parts verbatim; binding_requires a list gives manual_steps that list and the manual step, absent or null gives binding_requires null, the warning binding_requires_unavailable first and the manual step alone; check_config is {error} (class runtime, check_config_failed with the configuration's path) with the warning check_config_unavailable naming it, the rest of the answer standing. Outside any installation root, arguments that pass answer lab_tool_unavailable with mcp_blocker install_root, and each refusal comes before it: neither or both options (--record-stop conflicting), an answer without lab or one of its parts, a package path beginning with --, a binding_requires that is no list (--record-stop unusable), text that is not JSON (wrong_type), an export that is not {path, sha256, size?} (--record-stop-export wrong_type) or names no file (unusable), each actingctl_usage_invalid, exit 1. An export in today's export directory is read with its sha256, with or without the sha256: prefix; a wrong sha256, a file outside the directory and one in a subdirectory of it are --record-stop-export unusable. serve --stdio answers a draft and a refusal with the line the command line prints for the same parameters
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g4c::record_draft_answers_the_binding_parts",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g4c::record_draft_refuses_what_the_tool_refuses",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g4c::record_draft_reads_only_checked_exports",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g4c::record_draft_without_daemon_program_says_so",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g4c::serve_answers_record_draft_as_the_command_line",
+]
+incident = ["#434 LAB-5G4c"]

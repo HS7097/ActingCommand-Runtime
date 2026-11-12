@@ -678,8 +678,8 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "ac_binding_draft: the answer carries no binding_requires.",
-      "common_causes": "The record_stop handed to ac_binding_draft holds no binding_requires in its lab parts (absent or null): only the ac_record_stop answer of the stop that generated the package carries it.",
+      "description": "record draft and ac_binding_draft: the answer carries no binding_requires.",
+      "common_causes": "The record_stop handed to record draft or ac_binding_draft holds no binding_requires in its lab parts (absent or null): only the ac_record_stop answer of the stop that generated the package carries it.",
       "handling": "The draft's binding_requires is null and its manual_steps hold only the fixed manual step, so what the binding needs is not listed: pass the ac_record_stop answer of the stop that generated the package, or work out the requirements by hand before binding it."
     },
     "preflight_failed": {
@@ -694,7 +694,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "ac_binding_draft: actinglab package preflight did not pass the recorded package.",
+      "description": "record draft and ac_binding_draft: actinglab package preflight did not pass the recorded package.",
       "common_causes": "actinglab package preflight did not pass the package that the record_stop's binding_example names (its scheduled_execution.package_path): the preflight refused it, or actinglab failed or gave no answer.",
       "handling": "The draft's admission holds preflight_error with actinglab's failure. Fix the package or its path and ask for the draft again before binding it."
     },
@@ -710,8 +710,8 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "ac_binding_draft: actingd check-config gave no report.",
-      "common_causes": "ac_binding_draft ran <root>\\runtime\\actingcommand-actingd.exe check-config on the configuration in force (path) and got no report: the program could not be started or waited for, its stdout could not be exported, or its stdout was not JSON.",
+      "description": "record draft and ac_binding_draft: actingd check-config gave no report.",
+      "common_causes": "record draft or ac_binding_draft ran <root>\\runtime\\actingcommand-actingd.exe check-config on the configuration in force (path) and got no report: the program could not be started or waited for, its stdout could not be exported, or its stdout was not JSON.",
       "handling": "The draft's check_config member holds the error (check_config_failed with its cause, exit code and actingd's stderr where there were any, or the export's failure); fix what it names and ask for the draft again. The draft's other parts are complete."
     },
     "check_config_failed": {

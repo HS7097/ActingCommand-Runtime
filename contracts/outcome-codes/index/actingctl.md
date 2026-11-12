@@ -18,10 +18,10 @@ column means. 199 codes.
 | `agent_wake_test_queued` | success | none | 0.12.37 | active | pending | written | actingctl agent-wake-test: the test wake is queued for the worker; the line carries {wake_id, channel, quiet?} and, with --wait-s, the wake's row (Workflow #432… |
 | `answer_exported` | warning | none | 0.12.0 | active | pending | written | An answer larger than the output budget was written whole to an export file. |
 | `arguments_invalid` | error | none | 0.12.0 | active | pending | TBD | An MCP tool was called with arguments its input schema refuses. |
-| `binding_requires_unavailable` | warning | none | 0.12.0 | active | pending | written | ac_binding_draft: the answer carries no binding_requires. |
+| `binding_requires_unavailable` | warning | none | 0.12.0 | active | pending | written | record draft and ac_binding_draft: the answer carries no binding_requires. |
 | `call_budget_exhausted` | error | none | 0.12.0 | active | pending | TBD | An MCP call reached the end of its time budget. |
 | `check_config_failed` | error | none | 0.12.0 | active | pending | TBD | actingd check-config could not run or printed no JSON report. |
-| `check_config_unavailable` | warning | none | 0.12.0 | active | pending | written | ac_binding_draft: actingd check-config gave no report. |
+| `check_config_unavailable` | warning | none | 0.12.0 | active | pending | written | record draft and ac_binding_draft: actingd check-config gave no report. |
 | `client_action_not_recorded` | warning | none | 0.12.0 | active | pending | written | Recording the call's client.action in the Runtime failed after actinglab answered. |
 | `client_action_without_req_id` | warning | none | 0.12.0 | active | pending | written | actinglab's answer carried no req_id for the call's client.action. |
 | `clock_unavailable` | error | none | 0.12.0 | active | pending | TBD | The system clock is before the Unix epoch or out of range. |
@@ -106,7 +106,7 @@ column means. 199 codes.
 | `output_budget_exceeded` | error | none | 0.12.0 | active | pending | TBD | An MCP tool result takes more bytes as sent than the tool output budget: actual_bytes is the bytes the tools/call result takes as sent in the session's protocol… |
 | `package_binding_unreadable` | warning | none | 0.12.0 | active | pending | written | actingctl packs or ac_packs found a package binding of the selected configuration whose path does not exist or cannot be read (a package folder bound as a… |
 | `package_bindings_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl packs: the bound packages of the selected configuration were printed. |
-| `preflight_failed` | warning | none | 0.12.0 | active | pending | written | ac_binding_draft: actinglab package preflight did not pass the recorded package. |
+| `preflight_failed` | warning | none | 0.12.0 | active | pending | written | record draft and ac_binding_draft: actinglab package preflight did not pass the recorded package. |
 | `process_probe_failed` | error | none | 0.12.0 | active | pending | TBD | The watchdog's process probe failed. |
 | `recovery_ladder_drill_queued` | success | none | 0.12.0 | active | pending | TBD | actingctl ladder-drill: the Runtime admitted a drill of the instance's stuck-recovery ladder and queued its claim; the line carries the drill {instance_alias,… |
 | `resource_targets_applied` | success | none | 0.12.0 | active | pending | TBD | actingctl agent-apply-resource-targets: the Runtime applied the resource target policy. |
