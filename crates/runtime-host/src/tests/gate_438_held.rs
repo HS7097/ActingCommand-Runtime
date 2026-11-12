@@ -934,8 +934,9 @@ fn daily_at(minute: u16) -> Value {
 const HOST_HEAD: &str = "fixture.held.head";
 const HOST_LATE: &str = "fixture.held.late";
 
-/// Two tasks on the fixture instance: the head, due at every evaluation, and a task due from
-/// 08:20 UTC.
+/// Two tasks on the fixture instance: the head, due at every evaluation, and a daily task at
+/// 08:20 UTC. The daily task never ran, so its first run is owed and it too is due from the first
+/// evaluation (`gate_372k2`, `gate_clock_slot_first_run_is_owed_and_a_spent_slot_is_refused_once`).
 fn held_sources() -> CatalogSources {
     slot_sources(
         1,
@@ -1133,28 +1134,39 @@ fn decided(cycle: &PolicyCycle) -> Decided {
 // ---- The host tests.
 
 /// Through the host: a hold is reported once, also over later evaluations, as the projection
-/// holds its id; the start writes `restarted` for the hold left open by the run before, with no
+/// holds its id; the start writes `restarted` for each hold the run before left open, with no
 /// `held_for_ms`, and nothing for a hold never reported; counting begins again after the start.
+/// Both fixture tasks are due from the first evaluation (the daily task's first run is owed, as
+/// `gate_372k2` pins), so the client's lease holds both pairs from that evaluation on.
 #[test]
 fn held_t3_one_hold_is_reported_once_and_a_start_ends_the_holds_left_open() {
-    let mut slots = Slots::start(&held_sources(), at(0, 7, 0));
-    let holder = slots.hold();
-    for (hour, minute) in [(8, 0), (8, 25)] {
-        slots.evaluate(at(0, hour, minute));
-    }
-    let cycle = slots.evaluate(at(0, 8, 30));
-    assert_eq!(
+    let pairs = [HOST_HEAD, HOST_LATE];
+    let held_ids = |since: u64| {
+        BTreeSet::from(pairs.map(|task| held_signal_id(task, POLICY_INSTANCE_ALIAS, since)))
+    };
+    let reported = |cycle: &PolicyCycle| {
         cycle
             .task_held_signals
             .iter()
             .map(|signal| signal.signal_id.clone())
-            .collect::<Vec<_>>(),
-        [held_signal_id(
-            HOST_HEAD,
-            POLICY_INSTANCE_ALIAS,
-            at(0, 8, 0)
-        )],
-        "the head, held since 08:00, at 08:30; the later task since 08:25 not yet"
+            .collect::<BTreeSet<_>>()
+    };
+    let mut slots = Slots::start(&held_sources(), at(0, 7, 0));
+    let holder = slots.hold();
+    for (hour, minute) in [(8, 0), (8, 25)] {
+        assert!(
+            slots
+                .evaluate(at(0, hour, minute))
+                .task_held_signals
+                .is_empty(),
+            "before the threshold ({hour}:{minute:02})"
+        );
+    }
+    let cycle = slots.evaluate(at(0, 8, 30));
+    assert_eq!(
+        reported(&cycle),
+        held_ids(at(0, 8, 0)),
+        "both pairs, held since 08:00, at 08:30"
     );
     for minute in [35, 38] {
         assert!(
@@ -1166,12 +1178,12 @@ fn held_t3_one_hold_is_reported_once_and_a_start_ends_the_holds_left_open() {
         );
     }
     let records = held_records(&slots.host);
-    assert_eq!(records.len(), 1, "{records:#?}");
-    let (held_id, task_id, outcome, observed) = &records[0];
-    assert_eq!(
-        held_id,
-        &held_signal_id(HOST_HEAD, POLICY_INSTANCE_ALIAS, at(0, 8, 0))
-    );
+    assert_eq!(records.len(), 2, "{records:#?}");
+    let head_id = held_signal_id(HOST_HEAD, POLICY_INSTANCE_ALIAS, at(0, 8, 0));
+    let (_, task_id, outcome, observed) = records
+        .iter()
+        .find(|(signal_id, ..)| *signal_id == head_id)
+        .expect("the head's held record");
     assert_eq!(task_id.as_deref(), Some(HOST_HEAD));
     assert!(outcome.is(TaskHeldCode::Held), "{outcome:?}");
     assert_eq!(
@@ -1180,50 +1192,67 @@ fn held_t3_one_hold_is_reported_once_and_a_start_ends_the_holds_left_open() {
     );
     assert_eq!(*observed, at(0, 8, 30));
 
-    // The start after it ends the open hold, and only that one.
+    // The start after it ends each open hold.
     Slots::release(holder);
     let mut slots = slots.restart(at(0, 8, 40));
     let records = held_records(&slots.host);
-    assert_eq!(records.len(), 2, "{records:#?}");
-    let (end_id, task_id, end, observed) = &records[1];
+    assert_eq!(records.len(), 4, "{records:#?}");
     assert_eq!(
-        end_id,
-        &ended_signal_id(HOST_HEAD, POLICY_INSTANCE_ALIAS, at(0, 8, 0))
+        records[2..]
+            .iter()
+            .map(|(signal_id, ..)| signal_id.clone())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(pairs.map(|task| ended_signal_id(task, POLICY_INSTANCE_ALIAS, at(0, 8, 0)))),
+        "one end for each hold left open"
     );
-    assert_eq!(task_id.as_deref(), Some(HOST_HEAD));
-    assert!(end.is(TaskHeldCode::Ended), "{end:?}");
+    for (_, _, end, observed) in &records[2..] {
+        assert!(end.is(TaskHeldCode::Ended), "{end:?}");
+        assert_eq!(
+            end.value("held_end"),
+            Some(&json!(HeldEnd::Restarted.as_str()))
+        );
+        assert_eq!(end.value("held_since_unix_ms"), Some(&json!(at(0, 8, 0))));
+        assert_eq!(
+            end.value("gate_code"),
+            Some(&json!(HostCode::DispatchInstanceHeld.code().as_str()))
+        );
+        assert!(
+            end.value("held_for_ms").is_none(),
+            "no held_for_ms for restarted"
+        );
+        assert_eq!(*observed, at(0, 8, 40), "observed at the start");
+    }
+
+    // A hold never reported leaves nothing at the start after it: held from 08:45, not yet past
+    // the threshold at 08:55, where that run ends.
+    let holder = slots.hold();
+    for minute in [45, 55] {
+        assert!(
+            slots
+                .evaluate(at(0, 8, minute))
+                .task_held_signals
+                .is_empty(),
+            "before the threshold (08:{minute})"
+        );
+    }
+    Slots::release(holder);
+    let mut slots = slots.restart(at(0, 9, 0));
     assert_eq!(
-        end.value("held_end"),
-        Some(&json!(HeldEnd::Restarted.as_str()))
+        held_records(&slots.host).len(),
+        4,
+        "nothing for a hold never reported"
     );
-    assert_eq!(end.value("held_since_unix_ms"), Some(&json!(at(0, 8, 0))));
-    assert_eq!(
-        end.value("gate_code"),
-        Some(&json!(HostCode::DispatchInstanceHeld.code().as_str()))
-    );
-    assert!(
-        end.value("held_for_ms").is_none(),
-        "no held_for_ms for restarted"
-    );
-    assert_eq!(*observed, at(0, 8, 40), "observed at the start");
 
     // Counting begins again: the holds of the new run start at its first evaluation.
     let holder = slots.hold();
-    slots.evaluate(at(0, 8, 45));
-    assert!(slots.evaluate(at(0, 9, 10)).task_held_signals.is_empty());
-    let cycle = slots.evaluate(at(0, 9, 15));
-    let mut reported = cycle
-        .task_held_signals
-        .iter()
-        .map(|signal| signal.signal_id.clone())
-        .collect::<Vec<_>>();
-    reported.sort();
-    let mut expected = [
-        held_signal_id(HOST_HEAD, POLICY_INSTANCE_ALIAS, at(0, 8, 45)),
-        held_signal_id(HOST_LATE, POLICY_INSTANCE_ALIAS, at(0, 8, 45)),
-    ];
-    expected.sort();
-    assert_eq!(reported, expected, "both pairs count from 08:45");
+    slots.evaluate(at(0, 9, 5));
+    assert!(slots.evaluate(at(0, 9, 30)).task_held_signals.is_empty());
+    let cycle = slots.evaluate(at(0, 9, 35));
+    assert_eq!(
+        reported(&cycle),
+        held_ids(at(0, 9, 5)),
+        "both pairs count from 09:05"
+    );
     Slots::release(holder);
     slots.close();
 }
@@ -1398,20 +1427,21 @@ fn held_t6_the_decisions_are_the_same_with_the_record_on_and_off() {
             "no record with the switch off: {:#?}",
             without.task_held_signals
         );
+        // Both pairs are due from the first evaluation (the daily task's first run is owed), so
+        // the lease holds both from 08:00 and both are reported at 08:30.
         let expected = if (hour, minute) == (8, 30) {
-            vec![held_signal_id(
-                HOST_HEAD,
-                POLICY_INSTANCE_ALIAS,
-                at(0, 8, 0),
-            )]
+            BTreeSet::from(
+                [HOST_HEAD, HOST_LATE]
+                    .map(|task| held_signal_id(task, POLICY_INSTANCE_ALIAS, at(0, 8, 0))),
+            )
         } else {
-            Vec::new()
+            BTreeSet::new()
         };
         assert_eq!(
             with.task_held_signals
                 .iter()
                 .map(|signal| signal.signal_id.clone())
-                .collect::<Vec<_>>(),
+                .collect::<BTreeSet<_>>(),
             expected,
             "{hour}:{minute:02}"
         );
@@ -1426,17 +1456,22 @@ fn held_t6_the_decisions_are_the_same_with_the_record_on_and_off() {
         "the same decisions at 8:50"
     );
     assert!(without.task_held_signals.is_empty());
-    assert_eq!(
-        with.task_held_signals
-            .iter()
-            .map(|signal| signal.signal_id.clone())
-            .collect::<Vec<_>>(),
-        [ended_signal_id(
-            HOST_HEAD,
-            POLICY_INSTANCE_ALIAS,
-            at(0, 8, 0)
-        )],
-        "the reported hold ends once the hold is released; the other never reported leaves nothing"
+    // Once the lease is released the head's reported hold ends; whatever the cycle writes is an
+    // end of one of the two reported holds, never a new held record.
+    let ends = with
+        .task_held_signals
+        .iter()
+        .map(|signal| signal.signal_id.clone())
+        .collect::<BTreeSet<_>>();
+    let reported_ends = [HOST_HEAD, HOST_LATE]
+        .map(|task| ended_signal_id(task, POLICY_INSTANCE_ALIAS, at(0, 8, 0)));
+    assert!(
+        ends.contains(&reported_ends[0]),
+        "the head's reported hold ends once the lease is released: {ends:?}"
+    );
+    assert!(
+        ends.iter().all(|id| reported_ends.contains(id)),
+        "only ends of the two reported holds: {ends:?}"
     );
     on.host.close().expect("close the host with the record on");
     off.host
