@@ -12,10 +12,12 @@
 //!   list (adapted by the slice's second part, whose rule it pins): served are the rows `core_ops`
 //!   serves and, on Windows, the rescue rows the rescue module serves (its `mcp config`, `mcp
 //!   entries` and `mcp plan` among them) but those whose run the front forces detached (`deploy`,
-//!   `rollback`); refused are those two, the core and debugging rows `lab_ops::core_ops` does not
-//!   serve (the three `app` rows, `standard-pack check`, the debugging rows actinglab's own
-//!   commands serve) and every authoring row (`record draft` among them). Every row the module
-//!   serves falls in one of its two classes. A call of a refused row answers
+//!   `rollback`); refused are those two (Workflow #434 LAB-5G4b, adapted: every other row, of no
+//!   module this process serves itself, is served by a `serve` child: the three `app` rows,
+//!   `standard-pack check`, the debugging rows actinglab's own commands serve and every authoring
+//!   row, `record draft` among them; this test starts no child, as each call's arguments are
+//!   refused first). Every row the module serves falls in one of its two classes. A call of a
+//!   refused row answers
 //!   `mcp_operation_unsupported` with its tool, its arguments unread; a call of a served row reads
 //!   its arguments first (an undeclared one is `arguments_invalid`, `unknown`, before the code
 //!   that serves it runs).
@@ -111,12 +113,13 @@ fn text_line(result: &Value) -> Value {
 }
 
 /// Workflow #434 LAB-5G2b, second part: the classes of the partition, by the rule; the register
-/// states how many rows each holds.
+/// states how many rows each holds. Workflow #434 LAB-5G4b (adapted, its work order point 1): the
+/// rows LAB-5G2b refused because actinglab's own commands serve them, the authoring rows among
+/// them, are one class, served by a `serve` child.
 const SERVED_CORE: &str = "served by lab_ops::core_ops";
 const SERVED_RESCUE: &str = "served by the rescue module";
+const SERVED_CHILD: &str = "served by a serve child";
 const REFUSED_DETACHED: &str = "refused: the front forces its run detached";
-const REFUSED_OWN_COMMAND: &str = "refused: actinglab's own command serves it";
-const REFUSED_AUTHORING: &str = "refused: an authoring row";
 const REFUSED_UNSERVED: &str = "refused: a rescue row no code serves";
 
 /// Whether the rescue module serves the rescue row `name`, by its own list, on Windows, where it
@@ -157,27 +160,23 @@ fn mcp_served_and_refused_partition() {
             continue;
         }
         // The rule, stated from the table, the front's table and the rescue module's list (work
-        // order points 1 and 2 of the second part).
+        // order points 1 and 2 of the second part; Workflow #434 LAB-5G4b, point 1: a row of no
+        // module this process serves itself goes to a child).
         let detached = tools::SUPPLIED
             .iter()
             .any(|(row, _, supplied)| *row == operation.name && *supplied == Supplied::True);
         let (expected, class) = if core_ops::serves(operation) {
             (Serving::Core, SERVED_CORE)
-        } else if operation.module == OperationModule::Rescue
-            && rescue_module_serves(&operation.name)
-        {
-            if detached {
+        } else if operation.module == OperationModule::Rescue {
+            if !rescue_module_serves(&operation.name) {
+                (Serving::Refused, REFUSED_UNSERVED)
+            } else if detached {
                 (Serving::Refused, REFUSED_DETACHED)
             } else {
                 (Serving::Rescue, SERVED_RESCUE)
             }
         } else {
-            let class = match operation.module {
-                OperationModule::Core | OperationModule::Debugging => REFUSED_OWN_COMMAND,
-                OperationModule::Authoring => REFUSED_AUTHORING,
-                OperationModule::Rescue => REFUSED_UNSERVED,
-            };
-            (Serving::Refused, class)
+            (Serving::Child, SERVED_CHILD)
         };
         assert_eq!(
             tools::serving(operation),
@@ -236,9 +235,10 @@ fn mcp_served_and_refused_partition() {
         "every offered row in one class: {classes:?}"
     );
     for (class, name) in [
-        (REFUSED_OWN_COMMAND, "app launch"),
-        (REFUSED_OWN_COMMAND, "standard-pack check"),
-        (REFUSED_AUTHORING, "record draft"),
+        (SERVED_CHILD, "app launch"),
+        (SERVED_CHILD, "standard-pack check"),
+        (SERVED_CHILD, "watch"),
+        (SERVED_CHILD, "record draft"),
         (SERVED_CORE, "status"),
     ] {
         assert!(holds(class, name), "setup: {name} is {class}: {classes:?}");

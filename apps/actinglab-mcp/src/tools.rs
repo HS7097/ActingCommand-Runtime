@@ -26,8 +26,9 @@
 //! - **A call** (Workflow #434 LAB-5G2b, [`serving`]; `crate::calls` serves it): a row
 //!   `lab_ops::core_ops` serves is served in this process, and (its second part) on Windows a
 //!   rescue row the rescue module serves, but one whose run the front forces detached
-//!   ([`runs_detached`]); every other call is answered with `mcp_operation_unsupported`
-//!   ([`unsupported`]) as the CLI line of a refusal, `{outcome}`. The front's own members ([`SUPPLIED`], [`EXPORT`])
+//!   ([`runs_detached`]), which is answered with `mcp_operation_unsupported` ([`unsupported`]) as
+//!   the CLI line of a refusal, `{outcome}`; Workflow #434 LAB-5G4b: every other row through a
+//!   `serve` child (`crate::children`). The front's own members ([`SUPPLIED`], [`EXPORT`])
 //!   change the schema of the rows they belong to, and a parameter whose type is a path says in
 //!   its description, on a row this build serves, that it takes an absolute path
 //!   ([`ABSOLUTE_PATH`]).
@@ -53,8 +54,10 @@ use std::sync::OnceLock;
 /// (`lab5g-step0-survey.md` §6), its names corrected by the coordinator's ruling 6784514298,
 /// point 1, and (Workflow #434 LAB-5G2b) which kinds of row this build serves. Workflow #434
 /// LAB-5G3: the handles, the jobs and the cursors as this build has them, and the call budget in
-/// effect where [`CALL_BUDGET_MARK`] stands ([`instructions`]).
-pub(crate) const INSTRUCTIONS: &str = "ActingCommand Lab over MCP (actinglab-mcp). One tool per operation of the Lab's operation table: the tool is ac_ and the CLI words with spaces and - as _ (emu start is ac_emu_start), and its arguments are the CLI's parameters by name. Two tools keep other names: one frame is ac_frame and the authoring observe is ac_lab_observe; no tool is named ac_observe. Start with ac_status. A result is the line actinglab --json prints: the members and outcome; a refusal is {outcome, message?, details?}; warnings are in warnings. This build serves in its own process the operations actinglab's CLI module serves (the core ones and run start, run stop, reset, drill) and, on Windows, the rescue module's as Lab-MCP but deploy and rollback, which must run detached, paths given absolute; any other call answers mcp_operation_unsupported, and nothing is sent, run or written for it. Every call it serves runs as a job: one not done within {call_budget_s} s (this server's call budget) answers {handle, job_phase} and goes on; follow it with ac_run_show (id the handle, wait_s). ac_run_start answers at once with its run's handle, the run's request_id, which survives restarts; any other handle lives only as long as this process (then handle_unknown). If an ac_run_start call was interrupted before it answered, call ac_status before submitting again. After an interrupted or uncertain write call ac_status or ac_run_show before anything else; never resend a write with new arguments. An answer over 24 KiB is cut where its operation marks the cut, or written whole to %TEMP%\\actingcommand-mcp\\materials with the warning answer_exported; never cut silently; one that still does not fit answers output_budget_exceeded with its handle, and ac_run_show gives that job's summary. An events cursor belongs to this process and its Runtime connection (cursor_invalid after a reconnect): read again from after; a codes or runs cursor carries its own position. A Lab operation the Runtime answered whose check then failed is lab_operation_check_failed: read its effect before sending it again. Irreversible operations record who started them and ask nothing. This build does not serve deploy and rollback through MCP: use the command line. A module left out of the list (by --list, or the authoring module by lab_module_authoring) still answers its tools' calls. Manual: skill actingcommand.";
+/// effect where [`CALL_BUDGET_MARK`] stands ([`instructions`]). Workflow #434 LAB-5G4b: the rows
+/// served through `serve` children, the two still refused, and what an answer over the budget is
+/// for a row whose answer this process does not shape.
+pub(crate) const INSTRUCTIONS: &str = "ActingCommand Lab over MCP (actinglab-mcp). One tool per operation of the Lab's operation table: the tool is ac_ and the CLI words with spaces and - as _ (emu start is ac_emu_start), and its arguments are the CLI's parameters by name. Two tools keep other names: one frame is ac_frame and the authoring observe is ac_lab_observe; no tool is named ac_observe. Start with ac_status. A result is the line actinglab --json prints: the members and outcome; a refusal is {outcome, message?, details?}; warnings are in warnings. This build serves in its own process the operations actinglab's CLI module serves (the core ones and run start, run stop, reset, drill) and, on Windows, the rescue module's as Lab-MCP; every other one through a child actinglab serve --stdio --front mcp as Lab-MCP, one call per child at a time (a call while --children children are busy answers job_capacity_exhausted); paths given absolute. Only deploy and rollback, which must run detached, answer mcp_operation_unsupported, and nothing is sent, run or written for them. Every call it serves runs as a job: one not done within {call_budget_s} s (this server's call budget) answers {handle, job_phase} and goes on; follow it with ac_run_show (id the handle, wait_s). ac_run_start answers at once with its run's handle, the run's request_id, which survives restarts; any other handle lives only as long as this process (then handle_unknown). If an ac_run_start call was interrupted before it answered, call ac_status before submitting again. After an interrupted or uncertain write call ac_status or ac_run_show before anything else; never resend a write with new arguments. An answer over 24 KiB is cut where its operation marks the cut, or written whole to %TEMP%\\actingcommand-mcp\\materials with the warning answer_exported (operations served in this process), else sent in structuredContent alone beside a summary text; never cut silently; one that still does not fit answers output_budget_exceeded with its handle, and ac_run_show gives that job's summary. An events cursor belongs to this process and its Runtime connection (cursor_invalid after a reconnect): read again from after; a codes or runs cursor carries its own position. A Lab operation the Runtime answered whose check then failed is lab_operation_check_failed: read its effect before sending it again. Irreversible operations record who started them and ask nothing. This build does not serve deploy and rollback through MCP: use the command line. A module left out of the list (by --list, or the authoring module by lab_module_authoring) still answers its tools' calls. Manual: skill actingcommand.";
 /// Workflow #434 LAB-5G3: where [`INSTRUCTIONS`] names the call budget.
 const CALL_BUDGET_MARK: &str = "{call_budget_s}";
 /// Workflow #434 LAB-5G3: today's call budget, in seconds (`apps/actingctl/src/mcp/tools.rs`,
@@ -71,8 +74,8 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 pub(crate) const ACTINGLAB_SLICES: [&str; 5] = ["LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8"];
 /// The slice whose planned rows this server offers itself (§9.2): `record draft`, `mcp config`,
 /// `mcp entries` and, since LAB-5G5b, `mcp plan` (Workflow #434 LAB-5G2b, second part: the three
-/// `mcp` rows served with the rescue module's others; `record draft`, which no code serves yet,
-/// refused, [`serving`]).
+/// `mcp` rows served with the rescue module's others; Workflow #434 LAB-5G4b: `record draft`
+/// through a `serve` child, which refuses it until actinglab has its command, [`serving`]).
 pub(crate) const OWN_SLICE: &str = "LAB-5";
 /// This front end: the id of its `modules` row of role `front_end`, which a parameter's
 /// `required_in` names where MCP requires the parameter although the row does not.
@@ -210,6 +213,9 @@ pub(crate) enum Serving {
     /// Workflow #434 LAB-5G2b, second part: by the rescue module (`lab_rescue::rescue`), in this
     /// process, on Windows, with the initiator `Lab-MCP`.
     Rescue,
+    /// Workflow #434 LAB-5G4b: by actinglab's own `serve` loop in a child process
+    /// (`crate::children`), one request per child at a time.
+    Child,
     /// Not by this build: `mcp_operation_unsupported`, nothing read, sent, run or written.
     Refused,
 }
@@ -218,22 +224,24 @@ pub(crate) enum Serving {
 /// `lab_ops::core_ops` serves (the core rows but those actinglab's own commands serve, and `run
 /// start`, `run stop`, `reset`, `drill`): [`Serving::Core`]. The second part: a rescue row the
 /// rescue module serves (`lab_rescue::rescue::serves`, `mcp config`, `mcp entries` and `mcp plan`
-/// among them), on Windows, where it runs: [`Serving::Rescue`], but a row whose run the front
-/// forces detached ([`runs_detached`]), which is refused. Every other row is refused: the three
-/// `app` rows, `standard-pack check` and the debugging and authoring rows actinglab's own commands
-/// serve, which wait for the `serve` children of a later slice, and `record draft`, which no code
-/// serves yet.
+/// among them), on Windows, where it runs: [`Serving::Rescue`]; a rescue row refused for a reason
+/// of its own stays refused: one whose run the front forces detached ([`runs_detached`]), and one
+/// the module does not serve, or every one where it does not run. Workflow #434 LAB-5G4b: every
+/// other row, a row of no module this process serves itself, goes to a `serve` child
+/// ([`Serving::Child`]): the three `app` rows, `standard-pack check`, the debugging and authoring
+/// rows actinglab's own commands serve, and `record draft`, whose refusal the child gives until
+/// actinglab has a command for it.
 pub(crate) fn serving(operation: &Operation) -> Serving {
     if actingcommand_lab_ops::core_ops::serves(operation) {
         return Serving::Core;
     }
-    if operation.module == OperationModule::Rescue
-        && rescue_serves(&operation.name)
-        && !runs_detached(&operation.name)
-    {
-        return Serving::Rescue;
+    if operation.module == OperationModule::Rescue {
+        if rescue_serves(&operation.name) && !runs_detached(&operation.name) {
+            return Serving::Rescue;
+        }
+        return Serving::Refused;
     }
-    Serving::Refused
+    Serving::Child
 }
 
 /// Workflow #434 LAB-5G2b, second part (the coordinator's ruling of 2026-11-12, not the owner's
@@ -637,7 +645,8 @@ fn unreadable(error: &impl fmt::Display) -> Outcome {
     actingcommand_lab_ops::foreign_data_error(error).path(TABLE_PATH)
 }
 
-/// The refusal of a call of the tool `tool` of a row this build does not serve ([`serving`]):
+/// The refusal of a call of the tool `tool` of a row this build does not serve ([`serving`];
+/// since Workflow #434 LAB-5G4b, of the offered rows, only `deploy` and `rollback`):
 /// `mcp_operation_unsupported` with the tool (`mcp_tool`).
 pub(crate) fn unsupported(tool: &str) -> Outcome {
     Outcome::new(McpCode::OperationUnsupported).mcp_tool(tool)

@@ -5,10 +5,10 @@
 # LAB-5G2a is its shell: the protocol and the loop copied from `actingctl mcp-serve` and the tool
 # list generated from the table. LAB-5G2b ("Slice LAB-5G2b") serves in its own process the calls of
 # the rows `lab_ops::core_ops` serves and, its second part, on Windows the rescue rows the rescue
-# module serves but `deploy` and `rollback`; every other call is refused with
-# `mcp_operation_unsupported` until a later slice serves it. It ships in the Tools archive since
-# slice LAB-5G6 (0.12.57); nothing starts it until a client is registered with the MCP entry's
-# second generation.
+# module serves but `deploy` and `rollback`, which are refused with `mcp_operation_unsupported`.
+# LAB-5G4b ("Slice LAB-5G4b") serves every other offered row through `actinglab.exe serve --stdio
+# --front mcp` children. It ships in the Tools archive since slice LAB-5G6 (0.12.57); nothing
+# starts it until a client is registered with the MCP entry's second generation.
 
 [package]
 name = "actingcommand-actinglab-mcp"
@@ -21,6 +21,15 @@ publish = false
 [[bin]]
 name = "actinglab-mcp"
 path = "src/main.rs"
+
+# Workflow #434 LAB-5G4b: test helper of `tests/serve_calls.rs` (`mcp_serve_children_pool`), a
+# made-up `actinglab` the test copies beside a copy of the server, which starts it as a `serve`
+# child. Never shipped (the Tools archive names `actinglab-mcp` alone). It keeps the default
+# `test = true`: `cargo test --bins` runs its (empty) harness anyway, and CI's test build table
+# must list it.
+[[bin]]
+name = "actinglab-mcp-test-child"
+path = "src/test_child.rs"
 
 [dependencies]
 actingcommand-contract = { workspace = true }

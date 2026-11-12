@@ -34,6 +34,11 @@
 //! - `actingcommand/entryStatus` counts the jobs as the original counts them; progress and
 //!   cancellation are the original's, for the call in flight: a cancelled call's handle is never
 //!   issued, and its job goes on; at stdin EOF the jobs are not waited for.
+//!
+//! Workflow #434 LAB-5G4b (register §1.287, "Slice LAB-5G4b"): a row neither this process's core
+//! serving code nor the rescue module serves runs as a job like every served call, its line from a
+//! `serve` child (`crate::children`); at stdin EOF every child's input is closed
+//! (`calls::Service::end_of_input`) and none is killed.
 
 use crate::budget;
 use crate::calls::{self, FrontMembers, Service};
@@ -302,6 +307,9 @@ pub(crate) fn serve(config: ServerConfig) -> Result<ExitCode, Outcome> {
     }
 
     // Shutdown: no new calls; answers in flight get up to 2 s; background waits are dropped.
+    // Workflow #434 LAB-5G4b: every `serve` child's input is closed, an idle one's now and a
+    // working one's once its line came; none is killed.
+    shared.service.end_of_input();
     drop(job_sender);
     let grace_end = Instant::now() + SHUTDOWN_GRACE;
     while Instant::now() < grace_end && !lock(&shared.calls).is_empty() {

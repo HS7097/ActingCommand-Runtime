@@ -111,6 +111,10 @@ mod gate_434_lab5b5;
 // that begins with `--`.
 #[path = "gate_434_lab5g4a.rs"]
 mod gate_434_lab5g4a;
+// Workflow #434 LAB-5G4b: `serve --stdio --front mcp` answers each line as the envelope
+// `{exit_code, req_id?, line}`; without the option every line is as before.
+#[path = "gate_434_lab5g4b.rs"]
+mod gate_434_lab5g4b;
 // Workflow #434 LAB-5E: every offered row says in one sentence what it does.
 #[path = "gate_434_lab5e.rs"]
 mod gate_434_lab5e;

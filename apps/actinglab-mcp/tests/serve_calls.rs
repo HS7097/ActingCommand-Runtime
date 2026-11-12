@@ -6,8 +6,8 @@
 //! part, from a copy of the program in a made-up root). The Runtime is the runtime client's
 //! scripted one (`test_support`) on loopback in a temporary state root, which the server finds
 //! through `ACTINGCOMMAND_RUNTIME_STATE_ROOT`, as actinglab does; `TMP` and `TEMP` name a
-//! temporary folder, so its exports stay there. No device, no clock, no sleep; `GATE_WAIT` only
-//! bounds a broken run.
+//! temporary folder, so its exports stay there. No device, no clock, no sleep (but the bounded
+//! waits of LAB-5G4b's pool test, below); `GATE_WAIT` only bounds a broken run.
 //!
 //! - `mcp_stdio_one_row_per_kind`: a core read (`discover`) on the server's kept connection and a
 //!   core write (`pause`) on a connection of its own, each refused by the scripted Runtime: each
@@ -16,7 +16,11 @@
 //!   true exactly when that line exits non-zero. The write's connection carries today's
 //!   provenance before the write, the read's nothing of it. The second part, on Windows: a rescue
 //!   row that needs no Runtime (`leftovers`), answered by a copy of the program in a made-up root,
-//!   is the line the rescue module's code gives for it on that root.
+//!   is the line the rescue module's code gives for it on that root. Workflow #434 LAB-5G4b: a row
+//!   a `serve` child serves (`package check` of a package that is not there), answered through the
+//!   real actinglab the CI job builds beside this program (`ACTINGCOMMAND_TEST_ACTINGLAB_EXE`), is
+//!   the line that actinglab's command line prints for it with `--json`, `isError` its non-zero
+//!   exit.
 //! - `mcp_refusals_send_nothing`: a member the row does not declare and a parameter the front
 //!   gives itself (`unknown`), a member of the wrong type (`wrong_type`), a required one missing
 //!   (`required`) and a relative path (`not_absolute`), each `arguments_invalid`, and a string
@@ -62,6 +66,21 @@
 //! - `mcp_rescue_rows_refused_before_the_module`: an undeclared member (`unknown`) and a relative
 //!   path in `release stage`'s `dir` (`not_absolute`) are `arguments_invalid`, which the rescue
 //!   module never answers, with the argument; the root holds the same files after them.
+//!
+//! Workflow #434 LAB-5G4b (register §1.287, "Slice LAB-5G4b"), the `serve` children, with this
+//! package's made-up `actinglab` (`src/test_child.rs`), copied with a copy of the program into a
+//! temporary folder, where the server finds it beside itself; it logs each start, request and end
+//! to a folder of the test's. Bounded waits on that log, no sleep of a default:
+//! - `mcp_serve_children_pool`: `--children` and `--child-idle` refused as `--jobs` is (outside
+//!   their ranges, not a whole number, without a value, twice, beside `--list-tools`); a child is
+//!   started on the first call and used again by the next; two calls at once use two children,
+//!   and a third past `--children 2` is refused `job_capacity_exhausted` with `limit_count` 2;
+//!   every child is started as `serve --stdio --front mcp` with the state root variable set and
+//!   `ACTINGCOMMAND_INITIATOR` removed; at the end of the server's input every child's input is
+//!   closed and each ends. A child that ends before its answer gives `lab_process_failed` with its
+//!   exit code and its stderr's tail, its request is not sent again, and the next call starts a new
+//!   child under `--children 1`. With `--child-idle 0`, and with 1, the child ends after its
+//!   answer without another call while the server goes on.
 
 use actingcommand_contract::{
     AuditInput, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
@@ -513,6 +532,9 @@ fn mcp_stdio_one_row_per_kind() {
     // Workflow #434 LAB-5G2b, second part: the rescue row.
     #[cfg(windows)]
     rescue_row_on_a_made_up_root(temp.path());
+
+    // Workflow #434 LAB-5G4b: a row a `serve` child serves.
+    child_row_from_the_real_actinglab(temp.path());
 }
 
 #[test]
@@ -1678,4 +1700,377 @@ fn mcp_rescue_rows_refused_before_the_module() {
     let status = server.finish();
     assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
     assert_eq!(files_under(&root), before, "the module wrote nothing");
+}
+
+// ---- Workflow #434 LAB-5G4b: the rows served through `serve` children.
+
+/// The variable CI sets in the job these tests run in to the actinglab it builds
+/// (`.github/workflows/ci.yml`, the `apps` job), which is the file beside this program.
+const ACTINGLAB_VARIABLE: &str = "ACTINGCOMMAND_TEST_ACTINGLAB_EXE";
+/// This package's made-up `actinglab` (`src/test_child.rs`).
+const TEST_CHILD: &str = env!("CARGO_BIN_EXE_actinglab-mcp-test-child");
+/// The folder the made-up child logs to, and the file there that releases a held request.
+const CHILD_LOG_VARIABLE: &str = "ACTINGCOMMAND_TEST_CHILD_LOG";
+const RELEASE: &str = "release";
+/// What the made-up child writes on stderr before it ends without an answer, and its exit code.
+const CHILD_FAILURE_TEXT: &str = "neutral child failure text";
+const CHILD_FAILURE_EXIT: i64 = 3;
+/// The tools of three rows the children serve: one the made-up child answers at once, one it holds
+/// until released, one whose request ends it; and the rows' names, as the child logs them.
+const ANSWERED: &str = "ac_record_status";
+const HELD: &str = "ac_watch";
+const HELD_ROW: &str = "watch";
+const FAILED: &str = "ac_record_draft";
+const FAILED_ROW: &str = "record draft";
+/// How often a bounded wait reads the made-up children's logs again.
+const LOG_POLL: Duration = Duration::from_millis(20);
+
+/// `mcp_stdio_one_row_per_kind`'s child row: `package check` of a package that is not there,
+/// served through the real actinglab the CI job builds beside this program, answers the line that
+/// actinglab's command line prints for it with `--json`, `isError` its non-zero exit. Its exports
+/// go under `temp`.
+fn child_row_from_the_real_actinglab(temp: &Path) {
+    let actinglab = std::env::var_os(ACTINGLAB_VARIABLE)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| panic!("{ACTINGLAB_VARIABLE} names the actinglab the job builds"));
+    let beside =
+        Path::new(PROGRAM).with_file_name(format!("actinglab{}", std::env::consts::EXE_SUFFIX));
+    assert_eq!(
+        fs::canonicalize(&actinglab).expect("the built actinglab"),
+        fs::canonicalize(beside).expect("an actinglab beside this program"),
+        "the server's child is the actinglab the job built"
+    );
+    let package = temp.join("neutral-missing-package.json");
+    let mut server = Server::start(actinglab_mcp(Path::new(PROGRAM), None, temp));
+    server.initialize();
+    let answer = server.call_tool(2, "ac_package_check", json!({"package": package}));
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    let output = Command::new(actinglab)
+        .arg("--json")
+        .args(["package", "check", "--package"])
+        .arg(package)
+        .env("TMP", temp)
+        .env("TEMP", temp)
+        .env_remove("ACTINGCOMMAND_DETAIL")
+        .env_remove("ACTINGCOMMAND_INITIATOR")
+        .env_remove(STATE_ROOT_VARIABLE)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run the command line");
+    let text = String::from_utf8(output.stdout).expect("a UTF-8 line");
+    let line = serde_json::from_str::<Value>(text.trim())
+        .unwrap_or_else(|error| panic!("the command line printed no line ({error}): {text}"));
+    let code = output
+        .status
+        .code()
+        .and_then(|code| u8::try_from(code).ok())
+        .expect("the command line's exit code");
+    assert_ne!(code, 0, "setup: the package is not there: {line}");
+    assert_served_as(&answer, &(line, code));
+}
+
+/// A copy of this program in `base`'s folder `bin`, the made-up child beside it as its
+/// `actinglab`, and the folder the children log to.
+fn beside_a_made_up_child(base: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let bin = base.join("bin");
+    let log = base.join("log");
+    fs::create_dir_all(&bin).expect("make the program's folder");
+    fs::create_dir_all(&log).expect("make the log folder");
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let program = bin.join(format!("actinglab-mcp{suffix}"));
+    fs::copy(PROGRAM, &program).expect("copy the server");
+    fs::copy(TEST_CHILD, bin.join(format!("actinglab{suffix}"))).expect("copy the made-up child");
+    (program, log)
+}
+
+/// The server at `program` with `options`, its state root `state`, its exports under `temp`, its
+/// children logging to `log`, and `ACTINGCOMMAND_INITIATOR` set, which the children must not
+/// inherit.
+fn with_children(
+    program: &Path,
+    log: &Path,
+    state: &Path,
+    temp: &Path,
+    options: &[&str],
+) -> Command {
+    let mut command = actinglab_mcp(program, Some(state), temp);
+    command
+        .args(options)
+        .env(CHILD_LOG_VARIABLE, log)
+        .env("ACTINGCOMMAND_INITIATOR", "neutral");
+    command
+}
+
+/// Every event the made-up children wrote whole under `log`, each `{event, pid, …}`.
+fn child_events(log: &Path) -> Vec<Value> {
+    let mut events = Vec::new();
+    for entry in fs::read_dir(log).expect("read the log folder") {
+        let path = entry.expect("a log entry").path();
+        if path
+            .extension()
+            .is_none_or(|extension| extension != "jsonl")
+        {
+            continue;
+        }
+        let text = fs::read_to_string(path).expect("read a child's log");
+        for line in text
+            .split_inclusive('\n')
+            .filter(|line| line.ends_with('\n'))
+        {
+            events
+                .push(serde_json::from_str(line.trim()).unwrap_or_else(|error| {
+                    panic!("a log line that is no JSON ({error}): {line}")
+                }));
+        }
+    }
+    events
+}
+
+/// The made-up children's events once `done` holds for them, read again every `LOG_POLL` for at
+/// most `GATE_WAIT`.
+fn events_once(log: &Path, what: &str, done: impl Fn(&[Value]) -> bool) -> Vec<Value> {
+    let deadline = Instant::now() + GATE_WAIT;
+    loop {
+        let events = child_events(log);
+        if done(events.as_slice()) {
+            return events;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{what}: not within GATE_WAIT: {events:?}"
+        );
+        thread::sleep(LOG_POLL);
+    }
+}
+
+/// The processes that logged `event`.
+fn pids_with(events: &[Value], event: &str) -> std::collections::BTreeSet<u64> {
+    events
+        .iter()
+        .filter(|logged| logged["event"] == event)
+        .filter_map(|logged| logged["pid"].as_u64())
+        .collect()
+}
+
+/// How many requests of the row `row` reached a child.
+fn requests_of(events: &[Value], row: &str) -> usize {
+    events
+        .iter()
+        .filter(|logged| logged["event"] == "request" && logged["op"] == row)
+        .count()
+}
+
+/// The process a made-up child's answer names; the answer is no error.
+#[track_caller]
+fn child_pid(answer: &Value) -> u64 {
+    assert_eq!(answer["result"]["isError"], json!(false), "{answer}");
+    line_of(answer)["child_pid"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("no child_pid: {answer}"))
+}
+
+#[test]
+fn mcp_serve_children_pool() {
+    use std::collections::BTreeSet;
+    // The start options, refused as `--jobs` is.
+    for (words, argument, problem) in [
+        (vec!["--children", "0"], "--children", "out_of_range"),
+        (vec!["--children", "65"], "--children", "out_of_range"),
+        (vec!["--children", "-1"], "--children", "out_of_range"),
+        (vec!["--children", "many"], "--children", "wrong_type"),
+        (vec!["--children"], "--children", "value_missing"),
+        (
+            vec!["--children", "2", "--children", "3"],
+            "--children",
+            "repeated",
+        ),
+        (
+            vec!["--list-tools", "--children", "2"],
+            "--children",
+            "conflicting",
+        ),
+        (vec!["--child-idle", "601"], "--child-idle", "out_of_range"),
+        (vec!["--child-idle", "-1"], "--child-idle", "out_of_range"),
+        (vec!["--child-idle", "soon"], "--child-idle", "wrong_type"),
+        (vec!["--child-idle"], "--child-idle", "value_missing"),
+        (
+            vec!["--child-idle", "1", "--child-idle", "2"],
+            "--child-idle",
+            "repeated",
+        ),
+        (
+            vec!["--list-tools", "--child-idle", "2"],
+            "--child-idle",
+            "conflicting",
+        ),
+    ] {
+        let output = Command::new(PROGRAM)
+            .args(&words)
+            .stdin(Stdio::null())
+            .output()
+            .expect("run the server");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{words:?}: {stderr}");
+        assert!(output.stdout.is_empty(), "{words:?} printed on stdout");
+        assert!(
+            stderr.contains("actingctl_usage_invalid")
+                && stderr.contains(&format!("argument={argument}"))
+                && stderr.contains(&format!("argument_problem={problem}")),
+            "{words:?}: {stderr}"
+        );
+    }
+
+    let temp = TempDir::new().expect("tempdir");
+    // One child used again; two at once; a third past `--children 2` refused; the end of input.
+    let base = TempDir::new().expect("tempdir");
+    let state = base.path().join("state");
+    let (program, log) = beside_a_made_up_child(base.path());
+    let mut server = Server::start(with_children(
+        &program,
+        &log,
+        &state,
+        temp.path(),
+        &["--children", "2", "--child-idle", "600"],
+    ));
+    server.initialize();
+    let first = child_pid(&server.call_tool(2, ANSWERED, json!({})));
+    let again = child_pid(&server.call_tool(3, ANSWERED, json!({})));
+    assert_eq!(
+        again, first,
+        "the next call uses the child the first one started"
+    );
+    assert_eq!(
+        pids_with(&child_events(&log), "started"),
+        BTreeSet::from([first]),
+        "one child started for both calls"
+    );
+    for id in [4_u64, 5] {
+        server.send(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {"name": HELD, "arguments": {}},
+        }));
+    }
+    events_once(&log, "both held requests reach a child", |events| {
+        requests_of(events, HELD_ROW) == 2
+    });
+    let refused = server.call_tool(6, ANSWERED, json!({}));
+    assert_eq!(refused["result"]["isError"], json!(true), "{refused}");
+    let outcome = &line_of(&refused)["outcome"];
+    assert_eq!(
+        (&outcome["code"], &outcome["values"]["limit_count"]),
+        (&json!("job_capacity_exhausted"), &json!(2)),
+        "past --children: {outcome}"
+    );
+    fs::write(log.join(RELEASE), b"").expect("release the held requests");
+    let mut ids = BTreeSet::new();
+    let mut pids = BTreeSet::new();
+    for _ in 0..2 {
+        let answer = server
+            .next_message()
+            .expect("a held call's answer before stdout ends");
+        ids.insert(answer["id"].as_u64());
+        pids.insert(child_pid(&answer));
+    }
+    assert_eq!(ids, BTreeSet::from([Some(4), Some(5)]), "the held calls");
+    assert_eq!(
+        pids.len(),
+        2,
+        "two calls at once use two children: {pids:?}"
+    );
+    assert!(pids.contains(&first), "one of them the idle child");
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    let events = events_once(&log, "every child ends at the end of input", |events| {
+        pids_with(events, "ended") == pids_with(events, "started")
+    });
+    assert_eq!(pids_with(&events, "started"), pids, "two children in all");
+    for started in events.iter().filter(|logged| logged["event"] == "started") {
+        assert_eq!(
+            started["arguments"],
+            json!(["serve", "--stdio", "--front", "mcp"]),
+            "{started}"
+        );
+        assert_eq!(
+            started["initiator"],
+            json!(false),
+            "ACTINGCOMMAND_INITIATOR removed: {started}"
+        );
+        assert_eq!(
+            started["state_root"],
+            json!(state),
+            "the state root variable set: {started}"
+        );
+    }
+
+    // A child that ends before its answer; the next call gets a new child.
+    let base = TempDir::new().expect("tempdir");
+    let (program, log) = beside_a_made_up_child(base.path());
+    let mut server = Server::start(with_children(
+        &program,
+        &log,
+        &state,
+        temp.path(),
+        &["--children", "1", "--child-idle", "600"],
+    ));
+    server.initialize();
+    let first = child_pid(&server.call_tool(2, ANSWERED, json!({})));
+    let failed = server.call_tool(3, FAILED, json!({}));
+    assert_eq!(failed["result"]["isError"], json!(true), "{failed}");
+    let outcome = line_of(&failed)["outcome"].clone();
+    assert_eq!(
+        (&outcome["code"], &outcome["values"]["exit_code"]),
+        (&json!("lab_process_failed"), &json!(CHILD_FAILURE_EXIT)),
+        "{outcome}"
+    );
+    let tail = outcome["causes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|cause| {
+            cause["code"] == "foreign_other_error"
+                && cause["values"]["raw_text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains(CHILD_FAILURE_TEXT))
+        });
+    assert!(tail, "the child's stderr tail: {outcome}");
+    let next = child_pid(&server.call_tool(4, ANSWERED, json!({})));
+    assert_ne!(next, first, "the next call gets a new child");
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    let events = events_once(&log, "the new child ends at the end of input", |events| {
+        pids_with(events, "ended").contains(&next)
+    });
+    assert_eq!(
+        requests_of(&events, FAILED_ROW),
+        1,
+        "the request is never sent again"
+    );
+    assert_eq!(pids_with(&events, "started"), BTreeSet::from([first, next]));
+
+    // A child idle for `--child-idle` ends without another call, and the server goes on.
+    for idle in ["0", "1"] {
+        let base = TempDir::new().expect("tempdir");
+        let (program, log) = beside_a_made_up_child(base.path());
+        let mut server = Server::start(with_children(
+            &program,
+            &log,
+            &state,
+            temp.path(),
+            &["--child-idle", idle],
+        ));
+        server.initialize();
+        let child = child_pid(&server.call_tool(2, ANSWERED, json!({})));
+        events_once(
+            &log,
+            &format!("a child idle for --child-idle {idle} ends"),
+            |events| pids_with(events, "ended").contains(&child),
+        );
+        let ping = server.request(3, "ping", json!({}));
+        assert_eq!(ping["result"], json!({}), "the server goes on: {ping}");
+        let status = server.finish();
+        assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    }
 }
