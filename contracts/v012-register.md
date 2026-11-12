@@ -15559,6 +15559,99 @@ ids it reads as before. Going back from MAPP-2 to MAPP-1 alone is not a release 
 - how a clone is addressed;
 - whether the report's readers deny unknown members.
 
+### 1.328 Slice MAPP-1 (0.12.56): device groups, one queue and one pick per device (Workflow #437; the contract of §1.323, merged in Runtime pull request #1624, main `c7dc14ec16`; the coordinator's rulings and answers it records, not Alice's words; coordinator work order `rd-1112/brief-437-mapp-1.md`, read on main `c7dc14ec16`)
+
+1.328 is the coordinator's number; §1.326 and §1.327 belong to pull requests not merged on
+`c7dc14ec16`. The contract is [device-group.md](device-group.md) and the passages §1.323 lists.
+MAPP-1 builds the rows of §1.323's table whose slice is MAPP-1, except the four host rows named
+under "Not built in this slice" below; MAPP-2 (the switch before a run) is another slice.
+
+| §1.323 row | Built | Where |
+|---|---|---|
+| configuration: the entry member `device_group`, check-config's report member, the manifest row | yes | `apps/actingd/src/config.rs`, `InstanceConfig::device_group` (a name under the alias rules, `invalid_instance_alias` otherwise), the per-instance member of the file layer; `crates/runtime-config/src/device_group.rs`, `ROW` (`instance.<id>.device_group`, string, default none, not settable, read at assembly, in `instance::ROWS`); `apps/actingd/src/check_config.rs`, `summarize` (the report row's `device_group`) |
+| check: the group's rules at assembly, the instruction rule, undeclared sharing at assembly and after discovery | yes | `apps/actingd/src/config/device_group.rs`, `DeviceGroups::check` (run by `assemble_noting` after the manifest, before the whole-section checks, in check-config and at start alike); `crates/runtime-config/src/effective.rs`, `EffectiveConfig::device_groups_of_several`, `device_action_in_effect`, `check_device_groups` (in `check_sections` for the `instance`, `idle` and `recovery_ladder` sections); `apps/actingd/src/config/provider_startup.rs`, `undeclared_sharing_after_discovery` (in `bind_discovered_instances_of_groups`, a Provider startup failure of the discovery stage) |
+| check: every group of several refused at load after the group's rules | yes | `DeviceGroups::check`, last (`several_members_unsupported`, `config_key` `device_group`) |
+| daemon line `device_group_assembled` | yes | `provider_startup.rs`, `write_device_group_lines`, after the registry is built; no ledger record. No start of this build prints it (the load refuses every group of several) |
+| memory: the member → device key map | yes | `DeviceGroups::device_keys` (smallest `InstanceId` of a group; an entry's own id otherwise), `RuntimeHostConfig::with_device_keys` (`crates/runtime-host/src/host.rs`); never stored |
+| scheduler: `InstanceState` keyed by device; the member kept in each queue entry; the token kept the member's | yes | `crates/scheduler/src/lib.rs`: `SeedScheduler::new_for_devices` (the start, `host.rs`, hands it the map; the takeover cooldown of a listed member covers its device), `device_key`, `QueueEntry::instance_id`, every entry point resolving its instance to the device key, `lease_locations` to the device key, the transfer's and the renewal's token naming the member, `MemberGates` (each queued entry judged by its own member's routine gate), `member_refusing_count` (a pause of one member counts its own claims), `QueueEntry::asks_preemption_of` (no preemption of a holder that serves another member), `protected_instance_ids` and `active_instance_ids` (member ids) |
+| policy: one pick per device and `device_group_waiting` | yes, `selected` | `crates/policy/src/evaluator.rs`: `DeviceGroups`, `evaluate_with_device_groups` (the round's `selected_devices`, `device_group_selected_reason`); the host passes it at every cycle (`policy_dispatch.rs`, `policy_device_groups`; `policy_host.rs`). The words `held`, `player_hold` and `fenced` are registered; the host's gates that give them are not built (below) |
+| host: one worker per device; occupancy across the group; the admission guard per device; a pause's wait per member; the owner journal's ids | owner journal ids only | the journal's ids are the scheduler's `protected_instance_ids`, member ids (built); the rest is not built |
+| host: the gates (a fence or a player hold of one member holds the group; a second hold refused) | no | not built |
+| host: no session kept across lease ends for a member of a group of several | no | not built |
+| host: refusing operator emulator control and keyless observation | no | not built; `device_group_action_refused` is not registered |
+| catalog | MAPP-1's | `device_group_config_invalid`, `device_group_assembled` (`apps/actingd/src/codes.rs`), `device_group_waiting` (`crates/policy/src/codes.rs`); keys and vocabularies `device_group_problem` (actingd) and `device_group_wait` (policy) in `crates/actingcommand-contract/src/outcome/keys.rs` and the catalog; the prefix `device_` given to `policy`; the index regenerated |
+
+**Also built.** The defaults file's `recovery_ladder.profiles` gains `without_emulator_restart`
+(`return_home`, `application_restart`), the profile a member names. `actingd-config` rises to
+[5, 29] (`distribution/windows/component-interfaces.json`, the architecture test,
+[component-interfaces.md](component-interfaces.md) row 29); MAPP-2's key joins row 29 in the same
+release. A discovered index several entries resolve to names the first by alias as its
+`bound_alias` (`provider_startup.rs`), as "Device-level actions" row 6 settles.
+
+**Not built in this slice** (the pull request is a draft and lists them): the host's worker per
+device (`InstanceWorkers` keyed by device, thread `actingd-device-<device_group>`), a member's
+occupancy read across the group (`instance_occupancy`, `dispatch_held_error`) with
+`device_group_waiting` `held`, the admission guard keyed by device (`instance_guard`), the pause's
+release waiting per member (`release_paused_instance`, which `member_refusing_count` is for), the
+fence and player-hold gates of the group (`fenced`, `player_hold`, `player_hold_already_held` for
+a second hold), `keeps_device_session` false for a member, and the refusals of emulator control
+and keyless observation (`device_group_action_refused`). None of them can be reached by a
+configuration of this build: the load refuses every group of several.
+
+**Where the build differs from the contract or completes it.**
+
+1. *The order of the table's rules.* The rules are checked per group by name, the kind rules
+   first (`handset_member`, `fixture_member`), then `device_mismatch`, `application_shared`,
+   `startup_package_missing`, `device_action_unsupported`; then undeclared sharing over every two
+   entries, in configuration order; then `several_members_unsupported`. With the kinds first a
+   fixture or a handset, which names no device key, is refused for what it is rather than as a
+   mismatch.
+2. *`aliases` and `config_key`.* `aliases` is the entries concerned: both entries of a mismatch,
+   of a shared application or of undeclared sharing; the one member for the kind rules, a missing
+   startup package and a device-level action; every member for `several_members_unsupported`.
+   `config_key` is the entry's member: `host`, `port` or `serial` (the first that differs), or the
+   key the differing member uses, for a mismatch; `port` for one host and port shared undeclared,
+   `instance_index` for a discovered index shared after discovery.
+3. *The keys an instruction's refusal names.* The member's own key (`start_emulator`,
+   `idle.action`, `recovery_ladder_profile`), the section's `idle.action` when the member takes
+   it, `recovery_ladder.kind_profiles` when the member climbs its kind's profile and
+   `recovery_ladder.rungs` when it climbs the section's rungs; a change of `recovery_ladder.profiles`
+   that puts `emulator_restart` into a profile a member names is refused on that member's
+   `recovery_ladder_profile`.
+4. *A name that breaks the alias rules* is refused with the alias's own code,
+   `invalid_instance_alias`; the table has no word for it.
+5. *`device_group_assembled`'s `device_label`* is the `HOST:PORT` the first member is bound to
+   once the registry is built, and is optional: a discovery-bound member of a stopped emulator has
+   no port yet.
+6. *The manifest row's console tier* is `hidden`: `advanced` holds its eight keys, and how the
+   console shows a device with its applications is the console slice's.
+7. *The scheduler's gate per member.* A scheduling pause stays per instance, so the scheduler
+   judges each queued entry by the gate of the member it serves (`MemberGates`: a `ClaimGate` is
+   every member's, as every caller passes today; a closure gives each member its own).
+8. *A chain handover's successor* goes before the candidates of its own instance that outranked
+   it, as today; a candidate of another member of the device that outranked it takes the device
+   first and the successor waits `device_group_waiting`. "A group of one is today" holds; whether
+   the successor should go before the other members too is left to the coordinator.
+
+**A group of one is today.** With no entry naming one device twice, every decision, record, key
+and byte the Runtime persists is as before, but for the contract's two exceptions (the refusal of
+undeclared sharing; MAPP-2's key) and one this slice adds by the contract's own rule: the defaults
+file's profile `without_emulator_restart` is a member of every root's `recovery_ladder.profiles`
+row, so that row's value and the ladder's `config_digest` change on every root; no ladder of an
+instance that does not name the profile climbs differently.
+
+**What an operator sees after deploy.** A root without `device_group` runs as before; a file that
+names one device from two entries outside one group is refused at its start (at assembly, or
+after the discovery as a Provider startup failure), `device_group_config_invalid`,
+`undeclared_shared_device`; a file with a group of several is refused at its start,
+`several_members_unsupported` (or the broken rule's problem), until the release that carries the
+order within one device. check-config reports the same. A console whose `actingd-config` range
+ends at 28 does not pair with this build's [5, 29] until the UI repository raises its range.
+
+**Rollback** (below 0.12.56). Remove every `device_group` (an older build refuses the member,
+`config_decode_failed`). Nothing is persisted by MAPP-1: no record type, payload member, fact,
+tag or state file; the owner journal's ids are member ids an older build reads as before.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

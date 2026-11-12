@@ -323,6 +323,28 @@ impl ClaimGate {
     }
 }
 
+/// Workflow #437 MAPP-1 (`contracts/device-group.md`, "One queue, one worker, one lease per
+/// device"): the routine gate of each member whose claims wait in one device's queue. A
+/// scheduling pause stays per instance, so each queued entry is judged by its own member's gate.
+/// A [`ClaimGate`] is the gate of every member (an instance alone on its device, as before); a
+/// closure gives each member its own, as the caller reads its pauses and blackouts.
+pub trait MemberGates {
+    /// The routine gate of `member`.
+    fn gate_of(&self, member: InstanceId) -> ClaimGate;
+}
+
+impl MemberGates for ClaimGate {
+    fn gate_of(&self, _member: InstanceId) -> ClaimGate {
+        *self
+    }
+}
+
+impl<F: Fn(InstanceId) -> ClaimGate> MemberGates for F {
+    fn gate_of(&self, member: InstanceId) -> ClaimGate {
+        self(member)
+    }
+}
+
 /// Workflow #369 Q-6, Q-7: a Runtime-internal claim. It is queued with no deadline and never
 /// requests a preemption; a grant gives it `lease_ttl_ms`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,7 +410,6 @@ struct LeaseAcquisitionPolicy {
     priority: LeasePriority,
     lease_ttl_ms: u64,
     kind: ClaimKind,
-    gate: ClaimGate,
 }
 
 impl PreparedLease {
@@ -594,6 +615,10 @@ struct LeaseEntry {
 #[derive(Clone, PartialEq, Eq)]
 struct QueueEntry {
     request_id: RequestId,
+    /// Workflow #437 MAPP-1: the member the entry serves, kept in memory. Its device's state
+    /// holds the queue, so the map key no longer gives it; for an instance alone on its device it
+    /// is that key.
+    instance_id: InstanceId,
     holder_id: HolderId,
     connection_id: ConnectionId,
     priority: LeasePriority,
@@ -607,11 +632,21 @@ struct QueueEntry {
 }
 
 impl QueueEntry {
-    /// Q-3 (4): not expired, and not an entry the gate holds back (a routine entry behind a
-    /// closed gate; Workflow #386 SR-4a3: a startup package or an autostart blackout silence
-    /// holds).
-    fn eligible(&self, gate: ClaimGate, now_monotonic_ms: u64) -> bool {
-        self.deadline_monotonic_ms > now_monotonic_ms && !gate.holds(self.kind)
+    /// Q-3 (4): not expired, and not an entry its member's gate holds back (a routine entry
+    /// behind a closed gate; Workflow #386 SR-4a3: a startup package or an autostart blackout
+    /// silence holds).
+    fn eligible(&self, gate: &dyn MemberGates, now_monotonic_ms: u64) -> bool {
+        self.deadline_monotonic_ms > now_monotonic_ms
+            && !gate.gate_of(self.instance_id).holds(self.kind)
+    }
+
+    /// C3, Q-7, Workflow #437 MAPP-1: whether this entry asks the holder `lease` for a
+    /// preemption: a client entry of higher priority that serves the holder's own member. In a
+    /// group of several a client entry never asks a holder that serves another member.
+    fn asks_preemption_of(&self, lease: &LeaseEntry) -> bool {
+        self.may_preempt
+            && self.priority > lease.priority
+            && self.instance_id == lease.token.instance_id()
     }
 }
 
@@ -889,6 +924,9 @@ impl fmt::Debug for PreparedLeaseTransfer {
     }
 }
 
+/// The state of one device: one lease, one last release, one takeover cooldown and one queue
+/// (Workflow #437 MAPP-1: keyed by the device key, so the one state per device is the exclusion
+/// of its members; an instance alone on its device keys its own id, as before).
 #[derive(Default)]
 struct InstanceState {
     lease: Option<LeaseEntry>,
@@ -901,8 +939,14 @@ pub struct SeedScheduler {
     owner_epoch: OwnerEpoch,
     config: SchedulerConfig,
     lease_issuer: IdentifierIssuer,
+    /// Per device key (Workflow #437 MAPP-1); see [`InstanceState`].
     instances: BTreeMap<InstanceId, InstanceState>,
+    /// Each lease's device key.
     lease_locations: BTreeMap<LeaseId, InstanceId>,
+    /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "Derived, never stored"): the member
+    /// → device key map the configuration gave at the start, in memory only. An instance it does
+    /// not name keys its own id.
+    device_keys: BTreeMap<InstanceId, InstanceId>,
     next_arrival_sequence: u64,
     next_step_id: u64,
 }
@@ -926,16 +970,45 @@ impl SeedScheduler {
         takeover_instances: impl IntoIterator<Item = InstanceId>,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<Self> {
+        Self::new_for_devices(
+            owner_epoch,
+            config,
+            BTreeMap::new(),
+            takeover_instances,
+            now_monotonic_ms,
+        )
+    }
+
+    /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "One queue, one worker, one lease per
+    /// device", "Derived, never stored"): the scheduler of devices `device_keys` groups (member →
+    /// device key; an instance it does not name keys its own id). Each device has one state: one
+    /// lease, one queue, one takeover cooldown and one last release. A takeover instance gives its
+    /// device the takeover cooldown, so the whole group of a listed member gets it.
+    pub fn new_for_devices(
+        owner_epoch: OwnerEpoch,
+        config: SchedulerConfig,
+        device_keys: BTreeMap<InstanceId, InstanceId>,
+        takeover_instances: impl IntoIterator<Item = InstanceId>,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<Self> {
         let config = config.validate()?;
         let cooldown_until = now_monotonic_ms
             .checked_add(config.takeover_cooldown_ms)
             .ok_or(SchedulerError::ExpiryOverflow)?;
+        let device = |instance_id: InstanceId| {
+            device_keys
+                .get(&instance_id)
+                .copied()
+                .unwrap_or(instance_id)
+        };
         let mut instances = BTreeMap::new();
         for instance_id in takeover_instances {
-            instances.entry(instance_id).or_insert(InstanceState {
-                cooldown_until_monotonic_ms: cooldown_until,
-                ..InstanceState::default()
-            });
+            instances
+                .entry(device(instance_id))
+                .or_insert(InstanceState {
+                    cooldown_until_monotonic_ms: cooldown_until,
+                    ..InstanceState::default()
+                });
         }
         Ok(Self {
             owner_epoch,
@@ -944,9 +1017,25 @@ impl SeedScheduler {
                 .map_err(|_| SchedulerError::IdentifierIssuance)?,
             instances,
             lease_locations: BTreeMap::new(),
+            device_keys,
             next_arrival_sequence: 1,
             next_step_id: 1,
         })
+    }
+
+    /// Workflow #437 MAPP-1: the device key of `instance_id`, its own id when the map names it
+    /// not. Every entry point that takes an instance id resolves it here first.
+    fn device(&self, instance_id: InstanceId) -> InstanceId {
+        self.device_keys
+            .get(&instance_id)
+            .copied()
+            .unwrap_or(instance_id)
+    }
+
+    /// Workflow #437 MAPP-1: the device key of `instance_id`, as the scheduler keys its state:
+    /// the smallest instance id of its group, its own id when it is alone on its device.
+    pub fn device_key(&self, instance_id: InstanceId) -> InstanceId {
+        self.device(instance_id)
     }
 
     pub const fn owner_epoch(&self) -> OwnerEpoch {
@@ -995,8 +1084,8 @@ impl SeedScheduler {
                 priority: LeasePriority::Normal,
                 lease_ttl_ms,
                 kind: ClaimKind::ClientLease,
-                gate: ClaimGate::Open,
             },
+            &ClaimGate::Open,
             now_monotonic_ms,
         )
     }
@@ -1020,8 +1109,8 @@ impl SeedScheduler {
                 priority: LeasePriority::Normal,
                 lease_ttl_ms,
                 kind: ClaimKind::ClientLease,
-                gate: ClaimGate::Open,
             },
+            &ClaimGate::Open,
             now_monotonic_ms,
         )
     }
@@ -1029,11 +1118,12 @@ impl SeedScheduler {
     /// Workflow #369 Q-3 (5), Q-6: an immediate try of `claim` on its instance. It is granted
     /// only on a free instance where no eligible entry waits (`QueueAhead` otherwise). Q-3 (4)
     /// (S6c): a routine claim that waits in the queue is never granted at once while `gate` holds
-    /// it back (`GateHeld`); it waits queued.
+    /// it back (`GateHeld`); it waits queued. Workflow #437 MAPP-1: on its member's device, each
+    /// queued entry judged by its own member's gate.
     pub fn prepare_claim_acquire(
         &mut self,
         claim: ClaimRequest,
-        gate: ClaimGate,
+        gate: impl MemberGates,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<LeasePreparation> {
         self.validate_claim_ttl(claim.lease_ttl_ms)?;
@@ -1046,8 +1136,8 @@ impl SeedScheduler {
                 priority: claim.priority,
                 lease_ttl_ms: claim.lease_ttl_ms,
                 kind: claim.kind,
-                gate,
             },
+            &gate,
             now_monotonic_ms,
         )
     }
@@ -1083,10 +1173,10 @@ impl SeedScheduler {
         holder_id: HolderId,
         connection_id: ConnectionId,
         kind: ClaimKind,
-        gate: ClaimGate,
+        gate: impl MemberGates,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<LeasePreparation> {
-        if self.refusing_count(instance_id, gate, now_monotonic_ms) > 0 {
+        if self.refusing_count_of(instance_id, &gate, now_monotonic_ms) > 0 {
             return Err(SchedulerError::TransferNotSafe);
         }
         let lease_ttl_ms = self.config.lease_ttl_ms;
@@ -1099,8 +1189,8 @@ impl SeedScheduler {
                 priority: LeasePriority::Normal,
                 lease_ttl_ms,
                 kind,
-                gate: ClaimGate::Open,
             },
+            &ClaimGate::Open,
             now_monotonic_ms,
         )?;
         match &mut preparation {
@@ -1110,6 +1200,9 @@ impl SeedScheduler {
         Ok(preparation)
     }
 
+    /// Workflow #437 MAPP-1: on the device of `instance_id`, whose one lease any member's holder
+    /// keeps; the token names `instance_id`, the member.
+    #[allow(clippy::too_many_arguments)]
     fn prepare_acquire_with_policy(
         &mut self,
         request_id: RequestId,
@@ -1117,10 +1210,12 @@ impl SeedScheduler {
         holder_id: HolderId,
         connection_id: ConnectionId,
         policy: LeaseAcquisitionPolicy,
+        gate: &dyn MemberGates,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<LeasePreparation> {
         {
-            let state = self.instances.entry(instance_id).or_default();
+            let device = self.device(instance_id);
+            let state = self.instances.entry(device).or_default();
             if state.cooldown_until_monotonic_ms > now_monotonic_ms {
                 return Err(SchedulerError::Cooldown {
                     retry_after_ms: state.cooldown_until_monotonic_ms - now_monotonic_ms,
@@ -1143,7 +1238,7 @@ impl SeedScheduler {
                     expires_at_monotonic_ms: lease.token.expires_at_monotonic_ms(),
                 });
             }
-            if let Some(ahead) = first_eligible(state, policy.gate, now_monotonic_ms) {
+            if let Some(ahead) = first_eligible(state, gate, now_monotonic_ms) {
                 return Err(queue_ahead(state, ahead));
             }
             // Workflow #369 Q-3 (4) (S6c): while a pause holds the gate, a routine claim that
@@ -1153,7 +1248,9 @@ impl SeedScheduler {
             // queued: its pause deferral is the admission's own, before the scheduler is asked.
             // Workflow #386 SR-4a3: so does a startup package or an autostart claim blackout
             // silence holds back.
-            if policy.gate.holds(policy.kind) && policy.kind != ClaimKind::PolicyDispatch {
+            if gate.gate_of(instance_id).holds(policy.kind)
+                && policy.kind != ClaimKind::PolicyDispatch
+            {
                 return Err(SchedulerError::GateHeld);
             }
         }
@@ -1198,10 +1295,10 @@ impl SeedScheduler {
         if prepared.token.expires_at_monotonic_ms() <= now_monotonic_ms {
             return Err(SchedulerError::LeaseExpired);
         }
-        let instance_id = prepared.token.instance_id();
+        let device = self.device(prepared.token.instance_id());
         let state = self
             .instances
-            .get_mut(&instance_id)
+            .get_mut(&device)
             .ok_or(SchedulerError::LeaseMissing)?;
         if state.cooldown_until_monotonic_ms > now_monotonic_ms {
             return Err(SchedulerError::Cooldown {
@@ -1238,7 +1335,7 @@ impl SeedScheduler {
         });
         refresh_preempt_requested(state);
         state.last_release = None;
-        self.lease_locations.insert(lease_id, instance_id);
+        self.lease_locations.insert(lease_id, device);
         Ok(token)
     }
 
@@ -1253,11 +1350,13 @@ impl SeedScheduler {
 
     /// A client `QueueLease` (Workflow #369 Q-3, Q-6): a free instance grants at once only when
     /// `immediate_allowed` (the caller holds the instance's admission) and no eligible entry
-    /// waits; otherwise the request queues behind the entries ahead of it.
+    /// waits; otherwise the request queues behind the entries ahead of it. Workflow #437 MAPP-1:
+    /// in its member's device's one queue, where it asks no preemption of a holder that serves
+    /// another member.
     pub fn request_queued_gated(
         &mut self,
         request: QueueLeaseRequest,
-        gate: ClaimGate,
+        gate: impl MemberGates,
         immediate_allowed: bool,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<QueueAdmissionOutcome> {
@@ -1290,11 +1389,12 @@ impl SeedScheduler {
         }
         let expired = self.take_expired_for_instance(instance_id, now_monotonic_ms)?;
         let (has_active_lease, cooldown_until, entry_ahead) = {
-            let state = self.instances.entry(instance_id).or_default();
+            let device = self.device(instance_id);
+            let state = self.instances.entry(device).or_default();
             (
                 state.lease.is_some(),
                 state.cooldown_until_monotonic_ms,
-                first_eligible(state, gate, now_monotonic_ms).is_some(),
+                first_eligible(state, &gate, now_monotonic_ms).is_some(),
             )
         };
         if !has_active_lease {
@@ -1314,8 +1414,8 @@ impl SeedScheduler {
                         priority,
                         lease_ttl_ms,
                         kind: ClaimKind::ClientLease,
-                        gate,
                     },
+                    &gate,
                     now_monotonic_ms,
                 )?;
                 return Ok(QueueAdmissionOutcome {
@@ -1328,20 +1428,18 @@ impl SeedScheduler {
             .checked_add(timeout_ms)
             .ok_or(SchedulerError::ExpiryOverflow)?;
         let lease_ttl_ms = self.config.lease_ttl_ms;
-        let queued = self.insert_queue_entry(
+        let queued = self.insert_queue_entry(QueueEntry {
+            request_id,
             instance_id,
-            QueueEntry {
-                request_id,
-                holder_id,
-                connection_id,
-                priority,
-                deadline_monotonic_ms,
-                arrival_sequence: 0,
-                kind: ClaimKind::ClientLease,
-                lease_ttl_ms,
-                may_preempt: true,
-            },
-        )?;
+            holder_id,
+            connection_id,
+            priority,
+            deadline_monotonic_ms,
+            arrival_sequence: 0,
+            kind: ClaimKind::ClientLease,
+            lease_ttl_ms,
+            may_preempt: true,
+        })?;
         Ok(QueueAdmissionOutcome {
             decision: QueueAdmissionDecision::Queued(queued),
             expired,
@@ -1372,40 +1470,37 @@ impl SeedScheduler {
         if claim.kind.holder_owned() {
             let holder = self
                 .instances
-                .get(&claim.instance_id)
+                .get(&self.device(claim.instance_id))
                 .and_then(|state| state.lease.as_ref())
                 .ok_or(SchedulerError::LeaseMissing)?;
             if holder.token.holder_id() != claim.holder_id {
                 return Err(SchedulerError::HolderMismatch);
             }
         }
-        self.insert_queue_entry(
-            claim.instance_id,
-            QueueEntry {
-                request_id: claim.request_id,
-                holder_id: claim.holder_id,
-                connection_id: claim.connection_id,
-                priority: claim.priority,
-                deadline_monotonic_ms: CLAIM_NO_DEADLINE_MONOTONIC_MS,
-                arrival_sequence: 0,
-                kind: claim.kind,
-                lease_ttl_ms: claim.lease_ttl_ms,
-                may_preempt: false,
-            },
-        )
+        self.insert_queue_entry(QueueEntry {
+            request_id: claim.request_id,
+            instance_id: claim.instance_id,
+            holder_id: claim.holder_id,
+            connection_id: claim.connection_id,
+            priority: claim.priority,
+            deadline_monotonic_ms: CLAIM_NO_DEADLINE_MONOTONIC_MS,
+            arrival_sequence: 0,
+            kind: claim.kind,
+            lease_ttl_ms: claim.lease_ttl_ms,
+            may_preempt: false,
+        })
     }
 
-    fn insert_queue_entry(
-        &mut self,
-        instance_id: InstanceId,
-        mut entry: QueueEntry,
-    ) -> SchedulerResult<QueuedLease> {
+    /// Queues `entry` on the device of the member it serves (Workflow #437 MAPP-1: one queue per
+    /// device, its depth bound per device).
+    fn insert_queue_entry(&mut self, mut entry: QueueEntry) -> SchedulerResult<QueuedLease> {
         let arrival_sequence = self.next_arrival_sequence;
         let next_arrival_sequence = self
             .next_arrival_sequence
             .checked_add(1)
             .ok_or(SchedulerError::QueueSequenceOverflow)?;
-        let state = self.instances.entry(instance_id).or_default();
+        let device = self.device(entry.instance_id);
+        let state = self.instances.entry(device).or_default();
         if state.queue.len() >= self.config.max_queue_depth_per_instance {
             return Err(SchedulerError::QueueFull);
         }
@@ -1415,22 +1510,23 @@ impl SeedScheduler {
         state.queue.push(entry);
         sort_queue(&mut state.queue);
         refresh_preempt_requested(state);
-        queued_by_request(state, instance_id, request_id)
+        queued_by_request(state, request_id)
     }
 
     /// Workflow #369 Q-4: the kind of the entry the pump would grant on `instance_id` now: the
-    /// instance is free and out of takeover cooldown, and an eligible entry waits.
+    /// instance is free and out of takeover cooldown, and an eligible entry waits. Workflow #437
+    /// MAPP-1: on its device, whichever member the entry serves.
     pub fn grant_candidate(
         &self,
         instance_id: InstanceId,
-        gate: ClaimGate,
+        gate: impl MemberGates,
         now_monotonic_ms: u64,
     ) -> Option<ClaimKind> {
-        let state = self.instances.get(&instance_id)?;
+        let state = self.instances.get(&self.device(instance_id))?;
         if state.lease.is_some() || state.cooldown_until_monotonic_ms > now_monotonic_ms {
             return None;
         }
-        first_eligible(state, gate, now_monotonic_ms).map(|position| state.queue[position].kind)
+        first_eligible(state, &gate, now_monotonic_ms).map(|position| state.queue[position].kind)
     }
 
     /// Workflow #387 D1c: the request of the entry [`Self::grant_candidate`] names, so that the
@@ -1438,32 +1534,33 @@ impl SeedScheduler {
     pub fn grant_candidate_request(
         &self,
         instance_id: InstanceId,
-        gate: ClaimGate,
+        gate: impl MemberGates,
         now_monotonic_ms: u64,
     ) -> Option<RequestId> {
-        let state = self.instances.get(&instance_id)?;
+        let state = self.instances.get(&self.device(instance_id))?;
         if state.lease.is_some() || state.cooldown_until_monotonic_ms > now_monotonic_ms {
             return None;
         }
-        first_eligible(state, gate, now_monotonic_ms)
+        first_eligible(state, &gate, now_monotonic_ms)
             .map(|position| state.queue[position].request_id)
     }
 
     /// Workflow #369 Q-4: prepares the pump's grant of the first eligible entry on a free
-    /// instance, with that entry's TTL. `None` when there is nothing to grant.
+    /// instance, with that entry's TTL. `None` when there is nothing to grant. Workflow #437
+    /// MAPP-1: on its device; the token names the member the entry serves.
     pub fn prepare_queued_grant(
         &mut self,
         instance_id: InstanceId,
-        gate: ClaimGate,
+        gate: impl MemberGates,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<Option<PreparedLease>> {
-        let Some(state) = self.instances.get(&instance_id) else {
+        let Some(state) = self.instances.get(&self.device(instance_id)) else {
             return Ok(None);
         };
         if state.lease.is_some() || state.cooldown_until_monotonic_ms > now_monotonic_ms {
             return Ok(None);
         }
-        let Some(position) = first_eligible(state, gate, now_monotonic_ms) else {
+        let Some(position) = first_eligible(state, &gate, now_monotonic_ms) else {
             return Ok(None);
         };
         let entry = state.queue[position].clone();
@@ -1476,7 +1573,7 @@ impl SeedScheduler {
         let token = LeaseToken::new(
             self.owner_epoch,
             lease_id,
-            instance_id,
+            entry.instance_id,
             entry.holder_id,
             expires_at_monotonic_ms,
         )
@@ -1492,50 +1589,93 @@ impl SeedScheduler {
         }))
     }
 
-    /// Workflow #369 Q-2: the queued entries of `instance_id` in grant order.
+    /// Workflow #369 Q-2: the queued entries of `instance_id` in grant order. Workflow #437
+    /// MAPP-1: of its device, each naming the member it serves.
     pub fn queued_on(&self, instance_id: InstanceId) -> SchedulerResult<Vec<QueuedLease>> {
-        let Some(state) = self.instances.get(&instance_id) else {
+        let Some(state) = self.instances.get(&self.device(instance_id)) else {
             return Ok(Vec::new());
         };
         (0..state.queue.len())
-            .map(|position| queued_at_position(state, instance_id, position))
+            .map(|position| queued_at_position(state, position))
             .collect()
     }
 
     /// Workflow #369 Q-3 (4): how many entries on `instance_id` the gate lets through now.
+    /// Workflow #437 MAPP-1: on its device, each by its own member's gate.
     pub fn eligible_count(
         &self,
         instance_id: InstanceId,
-        gate: ClaimGate,
+        gate: impl MemberGates,
         now_monotonic_ms: u64,
     ) -> usize {
-        self.instances.get(&instance_id).map_or(0, |state| {
-            state
-                .queue
-                .iter()
-                .filter(|entry| entry.eligible(gate, now_monotonic_ms))
-                .count()
-        })
+        self.instances
+            .get(&self.device(instance_id))
+            .map_or(0, |state| {
+                state
+                    .queue
+                    .iter()
+                    .filter(|entry| entry.eligible(&gate, now_monotonic_ms))
+                    .count()
+            })
     }
 
     /// Workflow #369 §5.1 (review M-2): the entries on `instance_id` that refuse a pause release
     /// or a dedicated lease: those `gate` lets through, except the holding ladder's own
-    /// continuation (its ladder is the holder that the release already waits for).
+    /// continuation (its ladder is the holder that the release already waits for). Workflow
+    /// #437 MAPP-1: on its device, whichever member each serves (a dedicated lease takes the
+    /// device); a pause of one member counts its own with [`Self::member_refusing_count`].
     pub fn refusing_count(
         &self,
         instance_id: InstanceId,
-        gate: ClaimGate,
+        gate: impl MemberGates,
         now_monotonic_ms: u64,
     ) -> usize {
-        self.instances.get(&instance_id).map_or(0, |state| {
-            state
-                .queue
-                .iter()
-                .filter(|entry| {
-                    entry.eligible(gate, now_monotonic_ms) && !entry.kind.holder_owned()
-                })
-                .count()
-        })
+        self.refusing_count_of(instance_id, &gate, now_monotonic_ms)
+    }
+
+    fn refusing_count_of(
+        &self,
+        instance_id: InstanceId,
+        gate: &dyn MemberGates,
+        now_monotonic_ms: u64,
+    ) -> usize {
+        self.instances
+            .get(&self.device(instance_id))
+            .map_or(0, |state| {
+                state
+                    .queue
+                    .iter()
+                    .filter(|entry| {
+                        entry.eligible(gate, now_monotonic_ms) && !entry.kind.holder_owned()
+                    })
+                    .count()
+            })
+    }
+
+    /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "One queue, one worker, one lease per
+    /// device"): [`Self::refusing_count`] of the entries that serve `instance_id` itself. A
+    /// scheduling pause of one member waits only for that member's own work, so the claims of
+    /// the device's other members never refuse its release. For an instance alone on its device
+    /// it is `refusing_count`.
+    pub fn member_refusing_count(
+        &self,
+        instance_id: InstanceId,
+        gate: impl MemberGates,
+        now_monotonic_ms: u64,
+    ) -> usize {
+        self.instances
+            .get(&self.device(instance_id))
+            .map_or(0, |state| {
+                state
+                    .queue
+                    .iter()
+                    .filter(|entry| {
+                        entry.instance_id == instance_id
+                            && entry.eligible(&gate, now_monotonic_ms)
+                            && !entry.kind.holder_owned()
+                    })
+                    .count()
+            })
     }
 
     /// Workflow #369 §3.5, #411 A3: how many entries wait on every instance together (install
@@ -1560,14 +1700,14 @@ impl SeedScheduler {
     /// package or an autostart claim blackout silence holds (it waits for the blackout's end,
     /// and a shutdown disconnects it as it disconnects a paused one).
     pub fn waiting_total_gated(&self, gate_of: impl Fn(InstanceId) -> ClaimGate) -> usize {
+        // Workflow #437 MAPP-1: each entry by the gate of the member it serves.
         self.instances
-            .iter()
-            .map(|(instance_id, state)| {
-                let gate = gate_of(*instance_id);
+            .values()
+            .map(|state| {
                 state
                     .queue
                     .iter()
-                    .filter(|entry| !gate.holds(entry.kind))
+                    .filter(|entry| !gate_of(entry.instance_id).holds(entry.kind))
                     .count()
             })
             .sum()
@@ -1575,22 +1715,26 @@ impl SeedScheduler {
 
     /// Workflow #369 §5.3: whether a ladder holds `instance_id` or waits for it: the holder is
     /// a ladder (or its continuation's grant), or a ladder claim or continuation is queued.
+    /// Workflow #437 MAPP-1: on its device, whichever member's ladder it is.
     pub fn ladder_active(&self, instance_id: InstanceId) -> bool {
         let is_ladder =
             |kind: ClaimKind| matches!(kind, ClaimKind::Ladder | ClaimKind::LadderContinuation);
-        self.instances.get(&instance_id).is_some_and(|state| {
-            state
-                .lease
-                .as_ref()
-                .is_some_and(|lease| is_ladder(lease.kind))
-                || state.queue.iter().any(|entry| is_ladder(entry.kind))
-        })
+        self.instances
+            .get(&self.device(instance_id))
+            .is_some_and(|state| {
+                state
+                    .lease
+                    .as_ref()
+                    .is_some_and(|lease| is_ladder(lease.kind))
+                    || state.queue.iter().any(|entry| is_ladder(entry.kind))
+            })
     }
 
     /// Workflow #369 H-6: the queued entries of `kind` on `instance_id`, in grant order.
+    /// Workflow #437 MAPP-1: on its device.
     pub fn queued_of_kind(&self, instance_id: InstanceId, kind: ClaimKind) -> Vec<RequestId> {
         self.instances
-            .get(&instance_id)
+            .get(&self.device(instance_id))
             .map_or_else(Vec::new, |state| {
                 state
                     .queue
@@ -1641,11 +1785,7 @@ impl SeedScheduler {
             refresh_preempt_requested(state);
             return Err(SchedulerError::QueueExpired);
         }
-        Ok(QueuePoll::Pending(queued_at_position(
-            state,
-            instance_id,
-            position,
-        )?))
+        Ok(QueuePoll::Pending(queued_at_position(state, position)?))
     }
 
     pub fn cancel_queued(
@@ -1672,7 +1812,7 @@ impl SeedScheduler {
         if state.queue[position].connection_id != connection_id {
             return Err(SchedulerError::QueueConnectionMismatch);
         }
-        let queued = queued_at_position(state, instance_id, position)?;
+        let queued = queued_at_position(state, position)?;
         state.queue.remove(position);
         refresh_preempt_requested(state);
         Ok(CancelledQueuedLease { queued })
@@ -1695,12 +1835,12 @@ impl SeedScheduler {
         connection_id: ConnectionId,
     ) -> SchedulerResult<Vec<CancelledQueuedLease>> {
         let mut removed = Vec::new();
-        for (instance_id, state) in &mut self.instances {
+        for state in self.instances.values_mut() {
             let mut position = 0;
             while position < state.queue.len() {
                 if state.queue[position].connection_id == connection_id {
                     removed.push(CancelledQueuedLease {
-                        queued: queued_at_position(state, *instance_id, position)?,
+                        queued: queued_at_position(state, position)?,
                     });
                     state.queue.remove(position);
                 } else {
@@ -1712,36 +1852,45 @@ impl SeedScheduler {
         Ok(removed)
     }
 
+    /// The instances whose queued entries `connection_id` holds; Workflow #437 MAPP-1: the
+    /// members those entries serve, each once, in instance id order.
     pub fn queued_instance_ids_for_connection(
         &self,
         connection_id: ConnectionId,
     ) -> Vec<InstanceId> {
         self.instances
-            .iter()
-            .filter_map(|(instance_id, state)| {
+            .values()
+            .flat_map(|state| {
                 state
                     .queue
                     .iter()
-                    .any(|entry| entry.connection_id == connection_id)
-                    .then_some(*instance_id)
+                    .filter(|entry| entry.connection_id == connection_id)
+                    .map(|entry| entry.instance_id)
             })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
             .collect()
     }
 
+    /// The queued entries of `instance_id` that `connection_id` holds, removed. Workflow #437
+    /// MAPP-1: only those that serve `instance_id` itself, on its device.
     pub fn remove_queued_for_connection_on_instance(
         &mut self,
         instance_id: InstanceId,
         connection_id: ConnectionId,
     ) -> SchedulerResult<Vec<CancelledQueuedLease>> {
-        let Some(state) = self.instances.get_mut(&instance_id) else {
+        let device = self.device(instance_id);
+        let Some(state) = self.instances.get_mut(&device) else {
             return Ok(Vec::new());
         };
         let mut removed = Vec::new();
         let mut position = 0;
         while position < state.queue.len() {
-            if state.queue[position].connection_id == connection_id {
+            if state.queue[position].connection_id == connection_id
+                && state.queue[position].instance_id == instance_id
+            {
                 removed.push(CancelledQueuedLease {
-                    queued: queued_at_position(state, instance_id, position)?,
+                    queued: queued_at_position(state, position)?,
                 });
                 state.queue.remove(position);
             } else {
@@ -1752,19 +1901,27 @@ impl SeedScheduler {
         Ok(removed)
     }
 
+    /// Every queued entry of `instance_id`, removed. Workflow #437 MAPP-1: only those that serve
+    /// `instance_id` itself; the device's other members keep theirs.
     pub fn remove_queued_for_instance(
         &mut self,
         instance_id: InstanceId,
     ) -> SchedulerResult<Vec<CancelledQueuedLease>> {
-        let Some(state) = self.instances.get_mut(&instance_id) else {
+        let device = self.device(instance_id);
+        let Some(state) = self.instances.get_mut(&device) else {
             return Ok(Vec::new());
         };
         let mut removed = Vec::with_capacity(state.queue.len());
-        while !state.queue.is_empty() {
-            removed.push(CancelledQueuedLease {
-                queued: queued_at_position(state, instance_id, 0)?,
-            });
-            state.queue.remove(0);
+        let mut position = 0;
+        while position < state.queue.len() {
+            if state.queue[position].instance_id == instance_id {
+                removed.push(CancelledQueuedLease {
+                    queued: queued_at_position(state, position)?,
+                });
+                state.queue.remove(position);
+            } else {
+                position += 1;
+            }
         }
         refresh_preempt_requested(state);
         Ok(removed)
@@ -1777,9 +1934,10 @@ impl SeedScheduler {
         now_monotonic_ms: u64,
     ) -> SchedulerResult<FencedWrite> {
         self.validate_write(token, connection_id, now_monotonic_ms)?;
+        let device = self.device(token.instance_id());
         let state = self
             .instances
-            .get_mut(&token.instance_id())
+            .get_mut(&device)
             .ok_or(SchedulerError::LeaseMissing)?;
         let lease = state.lease.as_mut().ok_or(SchedulerError::LeaseMissing)?;
         if lease.destructive_step.is_some() {
@@ -1809,9 +1967,10 @@ impl SeedScheduler {
         now_monotonic_ms: u64,
     ) -> SchedulerResult<FencedWrite> {
         self.validate_current_lease(token, connection_id, now_monotonic_ms)?;
+        let device = self.device(token.instance_id());
         let state = self
             .instances
-            .get_mut(&token.instance_id())
+            .get_mut(&device)
             .ok_or(SchedulerError::LeaseMissing)?;
         let lease = state.lease.as_mut().ok_or(SchedulerError::LeaseMissing)?;
         if lease.destructive_step.is_some() {
@@ -1878,14 +2037,16 @@ impl SeedScheduler {
 
     /// Workflow #369 Q-3, Q-4: hands the lease on to the first eligible entry (a holder-owned
     /// continuation first; expired and gated entries are skipped and stay as they are), with
-    /// that entry's TTL. A preemption only goes to a client entry of higher priority.
+    /// that entry's TTL. A preemption only goes to a client entry of higher priority. Workflow
+    /// #437 MAPP-1: the first eligible entry of the device, whichever member it serves, each by
+    /// its own member's gate; a preemption only to an entry of the holder's own member.
     pub fn prepare_transfer_gated(
         &mut self,
         token: &LeaseToken,
         connection_id: ConnectionId,
         reason: LeaseTransferReason,
         release_request_id: Option<RequestId>,
-        gate: ClaimGate,
+        gate: impl MemberGates,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<TransferPreparation> {
         if (reason == LeaseTransferReason::ExplicitRelease) != release_request_id.is_some() {
@@ -1897,15 +2058,13 @@ impl SeedScheduler {
         }
         let state = self
             .instances
-            .get(&token.instance_id())
+            .get(&self.device(token.instance_id()))
             .ok_or(SchedulerError::LeaseMissing)?;
-        let Some(position) = first_eligible(state, gate, now_monotonic_ms) else {
+        let Some(position) = first_eligible(state, &gate, now_monotonic_ms) else {
             return Ok(TransferPreparation::NoCandidate);
         };
         let queued = state.queue[position].clone();
-        if reason == LeaseTransferReason::Preempted
-            && !(queued.may_preempt && queued.priority > lease.priority)
-        {
+        if reason == LeaseTransferReason::Preempted && !queued.asks_preemption_of(&lease) {
             return Ok(TransferPreparation::NoCandidate);
         }
         self.prepared_transfer(
@@ -1927,7 +2086,7 @@ impl SeedScheduler {
         connection_id: ConnectionId,
         reason: LeaseTransferReason,
         claim: ClaimRequest,
-        gate: ClaimGate,
+        gate: impl MemberGates,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<TransferPreparation> {
         if reason == LeaseTransferReason::ExplicitRelease {
@@ -1939,7 +2098,7 @@ impl SeedScheduler {
             reason,
             None,
             claim,
-            gate,
+            &gate,
             now_monotonic_ms,
         )
     }
@@ -1955,7 +2114,7 @@ impl SeedScheduler {
         connection_id: ConnectionId,
         release_request_id: RequestId,
         claim: ClaimRequest,
-        gate: ClaimGate,
+        gate: impl MemberGates,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<TransferPreparation> {
         self.prepare_claim_hand_off(
@@ -1964,11 +2123,13 @@ impl SeedScheduler {
             LeaseTransferReason::ExplicitRelease,
             Some(release_request_id),
             claim,
-            gate,
+            &gate,
             now_monotonic_ms,
         )
     }
 
+    /// Workflow #437 MAPP-1: a hand-off stays on the holder's own member (the claim names the
+    /// token's instance), judged by that member's gate.
     #[allow(clippy::too_many_arguments)]
     fn prepare_claim_hand_off(
         &mut self,
@@ -1977,7 +2138,7 @@ impl SeedScheduler {
         reason: LeaseTransferReason,
         release_request_id: Option<RequestId>,
         claim: ClaimRequest,
-        gate: ClaimGate,
+        gate: &dyn MemberGates,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<TransferPreparation> {
         self.validate_claim_ttl(claim.lease_ttl_ms)?;
@@ -1988,7 +2149,7 @@ impl SeedScheduler {
         if lease.destructive_step.is_some() {
             return Ok(TransferPreparation::Deferred);
         }
-        if gate.holds(claim.kind) {
+        if gate.gate_of(claim.instance_id).holds(claim.kind) {
             return Ok(TransferPreparation::NoCandidate);
         }
         if self.instances.values().any(|state| {
@@ -2005,6 +2166,7 @@ impl SeedScheduler {
         }
         let queued = QueueEntry {
             request_id: claim.request_id,
+            instance_id: claim.instance_id,
             holder_id: claim.holder_id,
             connection_id: claim.connection_id,
             priority: claim.priority,
@@ -2030,10 +2192,10 @@ impl SeedScheduler {
         connection_id: ConnectionId,
     ) -> SchedulerResult<LeaseEntry> {
         self.validate_epoch(token)?;
-        let instance_id = self.locate_token_instance(token)?;
+        let device = self.locate_token_instance(token)?;
         let state = self
             .instances
-            .get(&instance_id)
+            .get(&device)
             .ok_or(SchedulerError::LeaseMissing)?;
         let lease = state.lease.as_ref().ok_or(SchedulerError::LeaseMissing)?;
         if lease.token != *token {
@@ -2061,10 +2223,12 @@ impl SeedScheduler {
             .mint_lease_id()
             .map_err(|_| SchedulerError::IdentifierIssuance)?
             .transport();
+        // Workflow #437 MAPP-1: the receiving entry's member, which on a device with several
+        // members need not be the holder's.
         let to_token = LeaseToken::new(
             self.owner_epoch,
             lease_id,
-            from.token.instance_id(),
+            queued.instance_id,
             queued.holder_id,
             expires_at_monotonic_ms,
         )
@@ -2092,10 +2256,10 @@ impl SeedScheduler {
         if prepared.to_token.expires_at_monotonic_ms() <= now_monotonic_ms {
             return Err(SchedulerError::LeaseExpired);
         }
-        let instance_id = prepared.from.token.instance_id();
+        let device = self.device(prepared.from.token.instance_id());
         let state = self
             .instances
-            .get_mut(&instance_id)
+            .get_mut(&device)
             .ok_or(SchedulerError::LeaseMissing)?;
         if state.lease.as_ref() != Some(&prepared.from) {
             return Err(SchedulerError::LeaseMismatch);
@@ -2146,7 +2310,7 @@ impl SeedScheduler {
         });
         refresh_preempt_requested(state);
         self.lease_locations.remove(&prepared.from.token.lease_id());
-        self.lease_locations.insert(token.lease_id(), instance_id);
+        self.lease_locations.insert(token.lease_id(), device);
         Ok(token)
     }
 
@@ -2164,9 +2328,10 @@ impl SeedScheduler {
         self.validate_epoch(submitted_token)?;
         let expires_at = self.expiry_from_ttl(now_monotonic_ms, lease_ttl_ms)?;
         let owner_epoch = self.owner_epoch;
+        let device = self.device(submitted_token.instance_id());
         let lease = self
             .instances
-            .get_mut(&submitted_token.instance_id())
+            .get_mut(&device)
             .and_then(|state| state.lease.as_mut())
             .filter(|lease| lease.token.lease_id() == submitted_token.lease_id())
             .ok_or(SchedulerError::LeaseMissing)?;
@@ -2184,22 +2349,26 @@ impl SeedScheduler {
     }
 
     /// Workflow #369 §5.2: an install drain cancels every waiting entry of `instance_id` except
-    /// the holder-owned continuation.
+    /// the holder-owned continuation. Workflow #437 MAPP-1: the entries that serve `instance_id`
+    /// itself, on its device.
     pub fn remove_queued_for_drain(
         &mut self,
         instance_id: InstanceId,
     ) -> SchedulerResult<Vec<CancelledQueuedLease>> {
-        let Some(state) = self.instances.get_mut(&instance_id) else {
+        let device = self.device(instance_id);
+        let Some(state) = self.instances.get_mut(&device) else {
             return Ok(Vec::new());
         };
         let mut removed = Vec::new();
         let mut position = 0;
         while position < state.queue.len() {
-            if state.queue[position].kind.holder_owned() {
+            if state.queue[position].kind.holder_owned()
+                || state.queue[position].instance_id != instance_id
+            {
                 position += 1;
             } else {
                 removed.push(CancelledQueuedLease {
-                    queued: queued_at_position(state, instance_id, position)?,
+                    queued: queued_at_position(state, position)?,
                 });
                 state.queue.remove(position);
             }
@@ -2219,18 +2388,19 @@ impl SeedScheduler {
             return Ok(renewed);
         }
         self.validate_epoch(submitted_token)?;
-        let instance_id = self.locate_token_instance(submitted_token)?;
+        let device = self.locate_token_instance(submitted_token)?;
         let expires_at = self.expiry_from_ttl(now_monotonic_ms, self.config.lease_ttl_ms)?;
         let state = self
             .instances
-            .get_mut(&instance_id)
+            .get_mut(&device)
             .ok_or(SchedulerError::LeaseMissing)?;
         let lease = state.lease.as_mut().ok_or(SchedulerError::LeaseMissing)?;
         validate_active_lease(lease, submitted_token, connection_id, now_monotonic_ms)?;
+        // Workflow #437 MAPP-1: the token keeps the member's id, not its device's key.
         let renewed = LeaseToken::new(
             self.owner_epoch,
             lease.token.lease_id(),
-            instance_id,
+            lease.token.instance_id(),
             lease.token.holder_id(),
             expires_at,
         )
@@ -2254,7 +2424,7 @@ impl SeedScheduler {
         self.validate_epoch(submitted_token)?;
         let Some(lease) = self
             .instances
-            .get(&submitted_token.instance_id())
+            .get(&self.device(submitted_token.instance_id()))
             .and_then(|state| state.lease.as_ref())
         else {
             return Ok(None);
@@ -2318,7 +2488,7 @@ impl SeedScheduler {
         self.validate_epoch(submitted_token)?;
         let Some(record) = self
             .instances
-            .get(&submitted_token.instance_id())
+            .get(&self.device(submitted_token.instance_id()))
             .and_then(|state| state.last_release.as_ref())
             .filter(|record| record.request_id == request_id)
         else {
@@ -2370,17 +2540,17 @@ impl SeedScheduler {
         now_monotonic_ms: u64,
     ) -> SchedulerResult<&LeaseEntry> {
         self.validate_epoch(token)?;
-        if let Some(state) = self.instances.get(&token.instance_id())
+        if let Some(state) = self.instances.get(&self.device(token.instance_id()))
             && state.cooldown_until_monotonic_ms > now_monotonic_ms
         {
             return Err(SchedulerError::Cooldown {
                 retry_after_ms: state.cooldown_until_monotonic_ms - now_monotonic_ms,
             });
         }
-        let instance_id = self.locate_token_instance(token)?;
+        let device = self.locate_token_instance(token)?;
         let state = self
             .instances
-            .get(&instance_id)
+            .get(&device)
             .ok_or(SchedulerError::LeaseMissing)?;
         if state.cooldown_until_monotonic_ms > now_monotonic_ms {
             return Err(SchedulerError::Cooldown {
@@ -2521,9 +2691,11 @@ impl SeedScheduler {
             .collect()
     }
 
+    /// The lease that holds `instance_id`'s device. Workflow #437 MAPP-1: whichever member its
+    /// token names; an answer about one member compares the token's instance.
     pub fn active_lease(&self, instance_id: InstanceId) -> Option<ActiveLease> {
         self.instances
-            .get(&instance_id)
+            .get(&self.device(instance_id))
             .and_then(|state| state.lease.as_ref())
             .map(|lease| ActiveLease {
                 token: lease.token.clone(),
@@ -2535,38 +2707,44 @@ impl SeedScheduler {
             })
     }
 
+    /// The entries waiting on `instance_id`'s device (Workflow #437 MAPP-1), whichever member
+    /// each serves.
     pub fn queued_count(&self, instance_id: InstanceId) -> usize {
         self.instances
-            .get(&instance_id)
+            .get(&self.device(instance_id))
             .map_or(0, |state| state.queue.len())
     }
 
+    /// Whether `instance_id`'s device is in its takeover cooldown (Workflow #437 MAPP-1: one
+    /// per device).
     pub fn cooldown_active(&self, instance_id: InstanceId, now_monotonic_ms: u64) -> bool {
         self.instances
-            .get(&instance_id)
+            .get(&self.device(instance_id))
             .is_some_and(|state| state.cooldown_until_monotonic_ms > now_monotonic_ms)
     }
 
     /// Workflow #369 W-1: the kind of the first entry the gate lets through on `instance_id`,
-    /// whether or not the instance is held.
+    /// whether or not the instance is held. Workflow #437 MAPP-1: on its device, each entry by
+    /// its own member's gate.
     pub fn first_eligible_kind(
         &self,
         instance_id: InstanceId,
-        gate: ClaimGate,
+        gate: impl MemberGates,
         now_monotonic_ms: u64,
     ) -> Option<ClaimKind> {
-        let state = self.instances.get(&instance_id)?;
-        first_eligible(state, gate, now_monotonic_ms).map(|position| state.queue[position].kind)
+        let state = self.instances.get(&self.device(instance_id))?;
+        first_eligible(state, &gate, now_monotonic_ms).map(|position| state.queue[position].kind)
     }
 
     /// Workflow #369 W-1: how long the instance's takeover cooldown still runs, if it does.
+    /// Workflow #437 MAPP-1: its device's.
     pub fn cooldown_remaining_ms(
         &self,
         instance_id: InstanceId,
         now_monotonic_ms: u64,
     ) -> Option<u64> {
         self.instances
-            .get(&instance_id)
+            .get(&self.device(instance_id))
             .and_then(|state| {
                 state
                     .cooldown_until_monotonic_ms
@@ -2575,19 +2753,25 @@ impl SeedScheduler {
             .filter(|remaining_ms| *remaining_ms > 0)
     }
 
+    /// The instances a lease holds. Workflow #437 MAPP-1: the member each device's token names.
     pub fn active_instance_ids(&self) -> Vec<InstanceId> {
         self.instances
-            .iter()
-            .filter_map(|(instance_id, state)| state.lease.as_ref().map(|_| *instance_id))
+            .values()
+            .filter_map(|state| state.lease.as_ref().map(|lease| lease.token.instance_id()))
             .collect()
     }
 
+    /// The instances the owner journal lists: held by a lease or in their takeover cooldown.
+    /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "Derived, never stored"): member ids,
+    /// one per device: the holding member, else the device key (a member's id); the next start
+    /// maps each to its group by the configuration in effect. For an instance alone on its
+    /// device the ids are as before.
     pub fn protected_instance_ids(&self, now_monotonic_ms: u64) -> Vec<InstanceId> {
         self.instances
             .iter()
-            .filter_map(|(instance_id, state)| {
-                (state.lease.is_some() || state.cooldown_until_monotonic_ms > now_monotonic_ms)
-                    .then_some(*instance_id)
+            .filter_map(|(device, state)| match &state.lease {
+                Some(lease) => Some(lease.token.instance_id()),
+                None => (state.cooldown_until_monotonic_ms > now_monotonic_ms).then_some(*device),
             })
             .collect()
     }
@@ -2613,11 +2797,12 @@ impl SeedScheduler {
         connection_id: ConnectionId,
         priority: LeasePriority,
     ) -> SchedulerResult<Option<QueueAdmissionDecision>> {
-        for (candidate_instance, state) in &self.instances {
+        // Workflow #437 MAPP-1: a replay names the member its lease or entry serves.
+        for state in self.instances.values() {
             if let Some(lease) = &state.lease
                 && lease.acquire_request_id == request_id
             {
-                if *candidate_instance != instance_id
+                if lease.token.instance_id() != instance_id
                     || lease.token.holder_id() != holder_id
                     || lease.priority != priority
                 {
@@ -2636,7 +2821,7 @@ impl SeedScheduler {
                 .enumerate()
                 .find(|(_, queued)| queued.request_id == request_id)
             {
-                if *candidate_instance != instance_id
+                if queued.instance_id != instance_id
                     || queued.holder_id != holder_id
                     || queued.priority != priority
                 {
@@ -2646,28 +2831,29 @@ impl SeedScheduler {
                     return Err(SchedulerError::QueueConnectionMismatch);
                 }
                 return Ok(Some(QueueAdmissionDecision::Queued(queued_at_position(
-                    state,
-                    *candidate_instance,
-                    position,
+                    state, position,
                 )?)));
             }
         }
         Ok(None)
     }
 
+    /// The expired entries of `instance_id`'s device, removed (Workflow #437 MAPP-1: whichever
+    /// member each serves; each names its member).
     pub fn take_expired_for_instance(
         &mut self,
         instance_id: InstanceId,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<Vec<QueuedLease>> {
-        let Some(state) = self.instances.get_mut(&instance_id) else {
+        let device = self.device(instance_id);
+        let Some(state) = self.instances.get_mut(&device) else {
             return Ok(Vec::new());
         };
         let mut expired = Vec::new();
         let mut position = 0;
         while position < state.queue.len() {
             if state.queue[position].deadline_monotonic_ms <= now_monotonic_ms {
-                expired.push(queued_at_position(state, instance_id, position)?);
+                expired.push(queued_at_position(state, position)?);
                 state.queue.remove(position);
             } else {
                 position += 1;
@@ -2725,20 +2911,23 @@ impl SeedScheduler {
         Ok(())
     }
 
+    /// The device key of the lease `token` names (Workflow #437 MAPP-1: `lease_locations` maps
+    /// a lease to its device key, and the token names the member).
     fn locate_token_instance(&self, token: &LeaseToken) -> SchedulerResult<InstanceId> {
+        let device = self.device(token.instance_id());
         let located = self
             .lease_locations
             .get(&token.lease_id())
             .copied()
             .ok_or_else(|| {
-                let state = self.instances.get(&token.instance_id());
+                let state = self.instances.get(&device);
                 if state.is_some_and(|state| state.cooldown_until_monotonic_ms > 0) {
                     SchedulerError::LeaseMissing
                 } else {
                     SchedulerError::LeaseMismatch
                 }
             })?;
-        if located != token.instance_id() {
+        if located != device {
             return Err(SchedulerError::InstanceMismatch);
         }
         Ok(located)
@@ -2758,8 +2947,13 @@ fn sort_queue(queue: &mut [QueueEntry]) {
     });
 }
 
-/// The first entry the gate lets through now (Q-3 (4)).
-fn first_eligible(state: &InstanceState, gate: ClaimGate, now_monotonic_ms: u64) -> Option<usize> {
+/// The first entry the gate lets through now (Q-3 (4)); Workflow #437 MAPP-1: each entry by its
+/// own member's gate.
+fn first_eligible(
+    state: &InstanceState,
+    gate: &dyn MemberGates,
+    now_monotonic_ms: u64,
+) -> Option<usize> {
     state
         .queue
         .iter()
@@ -2777,36 +2971,31 @@ fn queue_ahead(state: &InstanceState, position: usize) -> SchedulerError {
     }
 }
 
-/// C3, Q-7: only a client entry at the head of the queue requests a preemption.
+/// C3, Q-7: only a client entry at the head of the queue requests a preemption; Workflow #437
+/// MAPP-1: of a holder that serves the entry's own member.
 fn refresh_preempt_requested(state: &mut InstanceState) {
     let preempt_requested = state
         .lease
         .as_ref()
         .zip(state.queue.first())
-        .is_some_and(|(lease, queued)| queued.may_preempt && queued.priority > lease.priority);
+        .is_some_and(|(lease, queued)| queued.asks_preemption_of(lease));
     if let Some(lease) = state.lease.as_mut() {
         lease.preempt_requested = preempt_requested;
     }
 }
 
-fn queued_by_request(
-    state: &InstanceState,
-    instance_id: InstanceId,
-    request_id: RequestId,
-) -> SchedulerResult<QueuedLease> {
+fn queued_by_request(state: &InstanceState, request_id: RequestId) -> SchedulerResult<QueuedLease> {
     let position = state
         .queue
         .iter()
         .position(|entry| entry.request_id == request_id)
         .ok_or(SchedulerError::QueueMissing)?;
-    queued_at_position(state, instance_id, position)
+    queued_at_position(state, position)
 }
 
-fn queued_at_position(
-    state: &InstanceState,
-    instance_id: InstanceId,
-    position: usize,
-) -> SchedulerResult<QueuedLease> {
+/// The entry at `position` of a device's queue, naming the member it serves (Workflow #437
+/// MAPP-1).
+fn queued_at_position(state: &InstanceState, position: usize) -> SchedulerResult<QueuedLease> {
     let entry = state
         .queue
         .get(position)
@@ -2815,14 +3004,13 @@ fn queued_at_position(
         .ok()
         .and_then(|position| position.checked_add(1))
         .ok_or(SchedulerError::QueueSequenceOverflow)?;
-    let preempt_requested = entry.may_preempt
-        && state
-            .lease
-            .as_ref()
-            .is_some_and(|lease| entry.priority > lease.priority);
+    let preempt_requested = state
+        .lease
+        .as_ref()
+        .is_some_and(|lease| entry.asks_preemption_of(lease));
     Ok(QueuedLease {
         request_id: entry.request_id,
-        instance_id,
+        instance_id: entry.instance_id,
         holder_id: entry.holder_id,
         connection_id: entry.connection_id,
         priority: entry.priority,

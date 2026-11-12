@@ -208,6 +208,14 @@ actingcommand_contract::outcome_codes! {
         ConfigSubsystemAlwaysOn => "config_subsystem_always_on": info / none,
         ConfigSubsystemDiscoveryBound => "config_subsystem_discovery_bound": info / none,
         ConfigSubsystemDiscoveryUnbound => "config_subsystem_discovery_unbound": info / none,
+        /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "The configuration form"): the
+        /// entries that share one device break a rule of device groups (`aliases`,
+        /// `config_key`, `device_group_problem`); check-config and a start refuse at assembly,
+        /// and a start after its discovery.
+        DeviceGroupConfigInvalid => "device_group_config_invalid": error / none,
+        /// Workflow #437 MAPP-1: the daemon line of a device group of several at a start
+        /// (`aliases`, `device_label`); nothing is recorded in the ledger.
+        DeviceGroupAssembled => "device_group_assembled": info / none,
     }
 }
 
@@ -230,6 +238,31 @@ actingcommand_contract::outcome_vocabulary! {
         BackendKindUnsupported => "backend_kind_unsupported",
         /// A handset's alias is longer than 248 bytes, so its label would not fit a name.
         AliasTooLong => "alias_too_long",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Which rule of device groups the entries that share one device break (vocabulary
+    /// `device_group_problem`, Workflow #437 MAPP-1, `contracts/device-group.md`, "The
+    /// configuration form").
+    pub enum DeviceGroupProblem: "device_group_problem" {
+        /// The members of a group of several name the device by different keys or values.
+        DeviceMismatch => "device_mismatch",
+        /// A member of a group of several is a handset.
+        HandsetMember => "handset_member",
+        /// A member of a group of several is a fixture entry.
+        FixtureMember => "fixture_member",
+        /// Two members of a group of several have one `application_id`.
+        ApplicationShared => "application_shared",
+        /// A member of a group of several declares no `startup_package`.
+        StartupPackageMissing => "startup_package_missing",
+        /// A member of a group of several turns on a device-level action the first slice
+        /// refuses there.
+        DeviceActionUnsupported => "device_action_unsupported",
+        /// Two entries outside one group name the same device.
+        UndeclaredSharedDevice => "undeclared_shared_device",
+        /// A group of several, refused until the slice "order within one device".
+        SeveralMembersUnsupported => "several_members_unsupported",
     }
 }
 

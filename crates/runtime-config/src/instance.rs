@@ -104,7 +104,7 @@ pub const CAPTURE_BACKEND_TOKENS: &[&str] = &["adb", "droidcast_raw", "nemu_ipc"
 /// #402 HS-1: Nemu IPC, a word of both lists; Nemu touch works only beside Nemu capture.
 const NEMU_IPC: &str = "nemu_ipc";
 /// The [`DEVICE_KIND`] of a handset.
-const HANDSET: &str = "handset";
+pub(crate) const HANDSET: &str = "handset";
 
 /// #402 HS-1 (HS-M §2.1; register §1.267): the instance's two backends. A device instance's
 /// entry always names both and a fixture's names neither (actingd refuses the rest), so they have
@@ -288,6 +288,9 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "SCHED-C1e",
         since: "0.12.54",
     },
+    // Workflow #437 MAPP-1 (`contracts/device-group.md`, "The configuration form"): the entry's
+    // device group, reported only for an entry that names it, read once at assembly.
+    crate::device_group::ROW,
 ];
 
 /// SCH-M ED-1: one instance's expected-duration member, named as the section-level key whose

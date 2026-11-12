@@ -340,8 +340,34 @@ actingcommand_contract::outcome_codes! {
         /// `unknown_reason`, `consumption` the whole units the decision reads with the fallback).
         ConsumptionFactUnusable => "consumption_fact_unusable": warning / none,
         // ---- SCHED-C1f1: end ----
+        // ---- Workflow #437 MAPP-1 (`contracts/device-group.md`, "One pick per device per
+        // round"): begin ----
+        /// Info. A candidate of a member of a device group waits because another member of its
+        /// device has the device (keys `instance_id` the candidate's alias, `alias` the member
+        /// that has the device, `device_group_wait`; `task_id` that member's task with `selected`
+        /// and `held`, `holder_kind` with `held`). It takes the place of the code a lone
+        /// instance's candidate would give and has no wake of its own.
+        DeviceGroupWaiting => "device_group_waiting": info / none,
+        // ---- Workflow #437 MAPP-1: end ----
     }
 }
+
+// ---- Workflow #437 MAPP-1: begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a member of a device group waits for the device (the vocabulary `device_group_wait`),
+    /// a value of `device_group_waiting`.
+    pub enum DeviceGroupWait: "device_group_wait" {
+        /// The other member's candidate won the device this round.
+        Selected => "selected",
+        /// A claim or a run of the other member holds the device, or waits for it first.
+        Held => "held",
+        /// A person holds the device through the other member.
+        PlayerHold => "player_hold",
+        /// The other member is fenced.
+        Fenced => "fenced",
+    }
+}
+// ---- Workflow #437 MAPP-1: end ----
 
 // ---- SS-2h: begin ----
 actingcommand_contract::outcome_vocabulary! {

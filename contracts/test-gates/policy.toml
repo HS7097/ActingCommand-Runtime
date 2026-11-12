@@ -1344,3 +1344,18 @@ tests = [
     "actingcommand-policy::lib::tests::gate_d2_s4::r6b2_a_stopped_reader_is_no_failure_in_a_row",
 ]
 incident = ["#429 R-6b2"]
+
+# Workflow #437 MAPP-1 (0.12.56; register §1.323 MAPP-1's tests, §1.328; brief rd-1112/brief-437-mapp-1.md; contracts/device-group.md, "One queue, one worker, one lease per device", "One pick per device per round", "Never interrupted", "Derived, never stored"): with the member → device key map the assembly derives, one member's lease holds the device for the other, whose admission and claim are busy, whose claim waits in the device's one queue naming its own member, and who holds the device only after a transfer whose token, and its renewal, name it; another device goes on (1); a client QueueLease of one member asks no preemption of a holder that serves another member and keeps today's rule on its own member (2); each queued claim is judged by its own member's gate, a pause of one member counts only that member's claims, a dedicated lease every member's, and removing one member's claims leaves the other's (3); a member the owner journal lists gives its whole device the takeover cooldown, the journal lists one member id per device, and a start whose configuration names no group cools down the listed member alone (4); an instance keyed by its own id decides as without a map (5); a round selects one candidate per device: the other member's candidate is deferred device_group_waiting selected with instance_id, alias and task_id and the wake of a candidate behind its own instance's winner, a later candidate of the winner keeps instance_already_selected, and an instance alone on its device decides as before (6); the device goes to its first candidate whichever member it serves (7); without a device of several members the evaluation is byte for byte the one of the entry point before (8)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::gate_mapp1::mapp1_two_members_never_hold_their_device_at_once_lease_queue_and_admission",
+    "actingcommand-scheduler::lib::tests::gate_mapp1::mapp1_a_client_queue_lease_asks_no_preemption_of_a_holder_that_serves_another_member",
+    "actingcommand-scheduler::lib::tests::gate_mapp1::mapp1_each_queued_claim_is_judged_by_its_own_members_gate",
+    "actingcommand-scheduler::lib::tests::gate_mapp1::mapp1_the_takeover_cooldown_of_a_listed_member_covers_its_group",
+    "actingcommand-scheduler::lib::tests::gate_mapp1::mapp1_an_instance_keyed_by_its_own_id_decides_as_without_a_map",
+    "actingcommand-policy::lib::tests::gate_mapp1::mapp1_one_pick_per_device_the_other_member_waits_device_group_waiting_selected",
+    "actingcommand-policy::lib::tests::gate_mapp1::mapp1_the_device_goes_to_its_first_candidate_whichever_member_it_serves",
+    "actingcommand-policy::lib::tests::gate_mapp1::mapp1_without_a_device_of_several_the_evaluation_is_byte_for_byte_the_one_before",
+]
+incident = ["#437 MAPP-1"]

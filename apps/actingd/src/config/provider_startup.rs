@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use crate::codes::ActingdLocation;
+use crate::codes::{ActingdLocation, DeviceGroupProblem};
 use actingcommand_contract::outcome::Record;
 use actingcommand_contract::{
     DiscoveredInstanceObservation, LifecycleNativeDetail, ProviderBackend, ProviderNativeFailure,
@@ -15,7 +15,8 @@ use actingcommand_device::{
 use actingcommand_execution_kernel::InstanceDiscoveryFailure;
 use actingcommand_ppocr_onnx_json_provider::PpocrCtcLoader;
 use actingcommand_runtime_host::{
-    DiscoveredInstanceBinding, ProviderStartup, RuntimeHostResult, admit_emulator_capabilities,
+    DiscoveredInstanceBinding, ProviderStartup, ResolvedInstanceEndpoint, RuntimeHostResult,
+    admit_emulator_capabilities,
 };
 use actingcommand_vision_ffi::{ONNXRUNTIME_LIBRARY, VISION_RUNTIME_DIRECTORY, VisionListingCode};
 
@@ -33,15 +34,17 @@ impl ConfiguredProvider {
             deferred,
             vision,
             env_overrides,
+            device_groups,
             ..
         } = self;
         if !deferred.is_empty() {
-            instances.extend(bind_discovered_instances(
+            instances.extend(bind_discovered_instances_of_groups(
                 startup,
                 discovery.mumu_root(),
                 || discovery.discover(),
                 &mut std::io::stderr(),
                 deferred,
+                &device_groups,
             )?);
         }
         // The injected diagnostic value is carried verbatim; the provider validates it (a
@@ -81,15 +84,101 @@ impl ConfiguredProvider {
         if vision_configured {
             startup.record(ProviderBackend::Configured, Observation::Ready)?;
         }
+        write_device_group_lines(&registry, &device_groups, &mut std::io::stderr());
         Ok(Arc::new(registry))
     }
 }
 
-/// Runs `MuMuManager` discovery once per startup (`discover`, tried again while it is
-/// unavailable: `discover_at_start`, whose warnings also go to `daemon_log`, actingd's stderr)
-/// and completes every deferred instance into its registration; the registry registers them
-/// together with the explicit ones. Every refusal is recorded as a Provider startup failure
-/// before startup fails.
+/// Workflow #437 MAPP-1 (`contracts/device-group.md`, "What check-config and the start print"):
+/// one daemon line per device group of several, `device_group_assembled`, with its members and
+/// the label of the endpoint its first member is bound to (`HOST:PORT`; absent while that
+/// endpoint is pending, its emulator stopped). It goes to the daemon log only; each member
+/// records its own `runtime.instance_bound`. A group of one prints nothing, and until the slice
+/// "order within one device" the assembly refuses every group of several, so no start of this
+/// build prints one.
+fn write_device_group_lines(
+    registry: &ExecutionBackendRegistry,
+    groups: &DeviceGroups,
+    daemon_log: &mut dyn std::io::Write,
+) {
+    let lines = groups
+        .several()
+        .into_iter()
+        .map(|aliases| {
+            let label = aliases
+                .first()
+                .and_then(|alias| registry.resolve(alias))
+                .and_then(|resolved| {
+                    resolved
+                        .adb_endpoint()
+                        .and_then(ResolvedInstanceEndpoint::bound)
+                        .map(|endpoint| format!("{}:{}", endpoint.host(), endpoint.port()))
+                });
+            let outcome = Outcome::new(ActingdCode::DeviceGroupAssembled).aliases(&aliases);
+            match label {
+                Some(label) => outcome.device_label(label),
+                None => outcome,
+            }
+        })
+        .collect::<Vec<_>>();
+    // A failed write never stops the start (P3 L2): stderr is the last place actingd reports to.
+    let _unwritten = crate::write_daemon_reports(&lines, daemon_log);
+}
+
+/// Workflow #437 MAPP-1 (`contracts/device-group.md`, "Undeclared sharing"): after the start's
+/// discovery, the first two entries outside one device group that resolve to one device: two
+/// discovery-bound entries bound to the same discovered index (an index and a name of one
+/// emulator; `config_key` `instance_index`), or a discovery-bound entry whose discovered ADB
+/// endpoint is an explicit entry's `host` and `port` (`config_key` `port`). `resolved` holds each
+/// resolved entry's alias, discovered index and discovered endpoint (none while the emulator is
+/// stopped), in configuration order. The refusal is a Provider startup failure, as every
+/// discovery refusal is.
+pub(super) fn undeclared_sharing_after_discovery(
+    resolved: &[(String, u16, Option<(String, u16)>)],
+    groups: &DeviceGroups,
+) -> Option<DeferredRefusal> {
+    let apart = |left: &str, right: &str| {
+        let group = groups.group_of(left);
+        group.is_none() || group != groups.group_of(right)
+    };
+    let refused = |aliases: [&String; 2], key: &'static str| {
+        let refusal = device_group::DeviceGroupRefusal::new(
+            aliases.into_iter().cloned(),
+            key,
+            DeviceGroupProblem::UndeclaredSharedDevice,
+        );
+        (
+            refusal.code(),
+            ProviderNativeFailure {
+                module: "actingd.config".into(),
+                outcome: refusal.outcome(),
+            },
+        )
+    };
+    for (at, (alias, index, _)) in resolved.iter().enumerate() {
+        for (other, other_index, _) in &resolved[at + 1..] {
+            if index == other_index && apart(alias, other) {
+                return Some(refused([alias, other], device_group::INSTANCE_INDEX_KEY));
+            }
+        }
+    }
+    let explicit = groups.explicit_endpoints();
+    for (alias, _, endpoint) in resolved {
+        let Some((host, port)) = endpoint else {
+            continue;
+        };
+        for (other, other_host, other_port) in &explicit {
+            if host == other_host && port == other_port && apart(alias, other) {
+                return Some(refused([other, alias], device_group::PORT_KEY));
+            }
+        }
+    }
+    None
+}
+
+/// [`bind_discovered_instances_of_groups`] for a configuration whose entries name no device
+/// group.
+#[cfg(test)]
 pub(super) fn bind_discovered_instances(
     startup: &mut ProviderStartup<'_>,
     mumu_root: Option<&Path>,
@@ -97,19 +186,68 @@ pub(super) fn bind_discovered_instances(
     daemon_log: &mut dyn std::io::Write,
     deferred: Vec<DeferredInstance>,
 ) -> RuntimeHostResult<Vec<InstanceSpec>> {
+    bind_discovered_instances_of_groups(
+        startup,
+        mumu_root,
+        discover,
+        daemon_log,
+        deferred,
+        &DeviceGroups::default(),
+    )
+}
+
+/// Runs `MuMuManager` discovery once per startup (`discover`, tried again while it is
+/// unavailable: `discover_at_start`, whose warnings also go to `daemon_log`, actingd's stderr)
+/// and completes every deferred instance into its registration; the registry registers them
+/// together with the explicit ones. Every refusal is recorded as a Provider startup failure
+/// before startup fails. Workflow #437 MAPP-1: so is two entries outside one of `groups` that
+/// resolve to one device (`undeclared_shared_device`), and a discovered index several entries
+/// of one group share names the group's first member by alias as its `bound_alias`.
+pub(super) fn bind_discovered_instances_of_groups(
+    startup: &mut ProviderStartup<'_>,
+    mumu_root: Option<&Path>,
+    discover: impl FnMut() -> Result<MumuDiscoveryReport, Box<InstanceDiscoveryFailure>>,
+    daemon_log: &mut dyn std::io::Write,
+    deferred: Vec<DeferredInstance>,
+    groups: &DeviceGroups,
+) -> RuntimeHostResult<Vec<InstanceSpec>> {
     let backend = ProviderBackend::MumuManager;
     let stage = Stage::InstanceDiscovery;
     startup.record(backend, Observation::Started { stage })?;
     let report = discover_at_start(startup, mumu_root, discover, daemon_log)?;
     let profile = admit_capability_profile(startup, &report, mumu_root)?;
-    let mut bound = BTreeMap::new();
+    let mut bound = BTreeMap::<u16, String>::new();
     let mut resolved = Vec::new();
+    // Workflow #437 MAPP-1: each resolved entry's alias, discovered index and endpoint.
+    let mut endpoints = Vec::new();
     let mut refusal = None;
     for entry in deferred {
         let alias = entry.alias.clone();
         match resolve_deferred_instance(entry, &report, &profile) {
             Ok((instance_index, spec)) => {
-                bound.insert(instance_index, alias);
+                let endpoint = report
+                    .instances
+                    .iter()
+                    .find(|instance| instance.instance_index == instance_index)
+                    .and_then(|instance| {
+                        instance.adb_port.map(|port| {
+                            (
+                                instance
+                                    .adb_host
+                                    .clone()
+                                    .unwrap_or_else(default_device_host),
+                                port,
+                            )
+                        })
+                    });
+                endpoints.push((alias.clone(), instance_index, endpoint));
+                // Workflow #437 MAPP-1 (`contracts/device-group.md`, "Device-level actions", row
+                // 6): the first entry by alias names the index; an index one entry resolves to
+                // names that entry, as before.
+                let named = bound.entry(instance_index).or_insert_with(|| alias.clone());
+                if alias < *named {
+                    *named = alias;
+                }
                 resolved.push(spec);
             }
             Err(failure) => {
@@ -117,6 +255,9 @@ pub(super) fn bind_discovered_instances(
                 break;
             }
         }
+    }
+    if refusal.is_none() {
+        refusal = undeclared_sharing_after_discovery(&endpoints, groups);
     }
     // `run_json` already refused a non-UTF-8 MuMuManager path, so this is lossless here.
     startup.record(

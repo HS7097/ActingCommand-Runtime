@@ -605,6 +605,10 @@ pub struct RuntimeHostConfig {
     /// Workflow #369 S6c: the aliases whose stopped emulator the daemon starts at its start, in
     /// configuration order (actingd's `start_emulator`, S6a). Empty by default: nothing starts.
     emulator_autostart: Vec<String>,
+    /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "Derived, never stored"): the member →
+    /// device key map actingd derives at assembly; an instance it does not name keys its own id
+    /// (a group of one). Memory only: the scheduler and the evaluator take it at the start.
+    device_keys: BTreeMap<InstanceId, InstanceId>,
     /// Per instance alias: the default resource package the daemon admitted from its
     /// configuration (slice #324-r1). Reported by instance status only; never opened here.
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
@@ -722,6 +726,7 @@ impl RuntimeHostConfig {
             config_selection: None,
             startup_packages: BTreeMap::new(),
             emulator_autostart: Vec::new(),
+            device_keys: BTreeMap::new(),
             resource_packages: BTreeMap::new(),
             stuck_recovery: BTreeMap::new(),
             recognition_packages: BTreeMap::new(),
@@ -1076,6 +1081,16 @@ impl RuntimeHostConfig {
     /// order comes first in the start turn.
     pub fn with_emulator_autostart(mut self, emulator_autostart: Vec<String>) -> Self {
         self.emulator_autostart = emulator_autostart;
+        self
+    }
+
+    /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "Derived, never stored"): installs the
+    /// member → device key map actingd derived at assembly. The start hands it to the scheduler,
+    /// whose state, queue and lease are then one per device and whose takeover cooldown covers a
+    /// listed member's whole group; a member it does not name keys its own id, as every instance
+    /// did before MAPP-1. Never stored.
+    pub fn with_device_keys(mut self, device_keys: BTreeMap<InstanceId, InstanceId>) -> Self {
+        self.device_keys = device_keys;
         self
     }
 
@@ -1517,8 +1532,17 @@ impl RuntimeHost {
                 fresh_storage = false;
             }
         }
-        let scheduler = SeedScheduler::new(owner_epoch, config.scheduler, takeover_instances, 0)
-            .map_err(|error| RuntimeHostError::scheduler(HostLocation::StartRuntimeHost, &error))?;
+        // Workflow #437 MAPP-1 (`contracts/device-group.md`, "Derived, never stored"): the member
+        // → device key map of this start's configuration; a listed member's whole group gets the
+        // takeover cooldown.
+        let scheduler = SeedScheduler::new_for_devices(
+            owner_epoch,
+            config.scheduler,
+            config.device_keys.clone(),
+            takeover_instances,
+            0,
+        )
+        .map_err(|error| RuntimeHostError::scheduler(HostLocation::StartRuntimeHost, &error))?;
         let ledger_owner = format!("actingd-{}-{started_at_unix_ms}", std::process::id());
         // LN-8 (#422, LEAN-L §3.2 step 1): the existing storage opens without the whole-file
         // `quick_check(1)`; `ledger-maintenance verify --full` keeps it.

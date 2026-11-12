@@ -19,7 +19,8 @@ mod strategy;
 mod validation;
 
 pub use codes::{
-    PolicyCode, PolicyInput, PolicyInputProblem, RefreshLimit, SchedulingRulePolicyCode,
+    DeviceGroupWait, PolicyCode, PolicyInput, PolicyInputProblem, RefreshLimit,
+    SchedulingRulePolicyCode,
 };
 pub use compiler::*;
 pub use compose::*;
@@ -153,4 +154,7 @@ mod tests {
     // #428 S168-LB1a (0.12.55; register §1.309 LB1-4, §1.311): a catalog that names a key under
     // `inventory.list.` to read is refused at compile.
     mod gate_428_s168_lb1a;
+    // Workflow #437 MAPP-1 (0.12.56; register §1.328): one pick per device per round, the other
+    // member deferred `device_group_waiting` `selected`.
+    mod gate_mapp1;
 }

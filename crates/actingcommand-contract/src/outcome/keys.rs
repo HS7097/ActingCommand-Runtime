@@ -792,4 +792,9 @@ outcome_keys! {
     // in codes mode, and the declared id of the stage a phased route's run was in. ----
     state_problem: vocab(state_problem),
     phase_id: id,
+    // ---- Workflow #437 MAPP-1 (contracts/device-group.md): which rule of device groups a
+    // configuration breaks, and why a member of a device group waits for its device; both kept
+    // in codes mode. ----
+    device_group_problem: vocab(device_group_problem),
+    device_group_wait: vocab(device_group_wait),
 }

@@ -1632,10 +1632,12 @@ written. 114-A freezes the shapes, the index keys and every vocabulary of the re
 read `ScheduleHistory`, and writes nothing: until 114-B, this table is still not written to the
 ledger.
 
-**A member that waits for another member of its device** (Workflow #437 MAPP, not built yet;
-[device-group.md](../device-group.md), "One pick per device per round"). In a device group of
+**A member that waits for another member of its device** (Workflow #437 MAPP; MAPP-1 builds the
+evaluator's one pick per device and `selected`, register §1.328; `held`, `player_hold` and
+`fenced`, which the host's gates give, are not built yet; [device-group.md](../device-group.md),
+"One pick per device per round"). In a device group of
 several, a candidate of a member that does not get the device because another member has it is
-deferred with `device_group_waiting` (proposed; info; `instance_id` the alias, `alias` the member
+deferred with `device_group_waiting` (registered; info; `instance_id` the alias, `alias` the member
 that has the device, `device_group_wait` `selected`, `held`, `player_hold` or `fenced`, optional
 `task_id` and `holder_kind`) and no wake of its own. This takes the place of
 `instance_already_selected`, `dispatch_instance_held` or a control gate's code, which a candidate
@@ -2742,8 +2744,11 @@ finishes and is settled there whatever the switch says afterwards.
   to actingd's host handle, so the host is released and closed, and its close joins the
   workers: a run a worker took finishes and is settled, one still queued is refused
   (`runtime_stopping`) and settled as interrupted, as above.
-- **Device groups (Workflow #437 MAPP, not built yet; [device-group.md](../device-group.md)).**
-  Several instances on one device are one device group. The group is derived from the
+- **Device groups (Workflow #437 MAPP; [device-group.md](../device-group.md)).** MAPP-1 (register
+  §1.328) builds the derived map, the scheduler state keyed by the device key and the round's one
+  pick per device; the one worker, the in-flight registration across the group and the switch are
+  not built yet, and the load refuses every group of several until the slice "order within one
+  device". Several instances on one device are one device group. The group is derived from the
   configuration at assembly and never stored.
   - A group has one lane: one scheduler state (one lease, one queue, one cooldown), keyed by the
     group's device key, and one worker. The in-flight registration of any member's run holds the
