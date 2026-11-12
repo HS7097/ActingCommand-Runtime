@@ -2065,10 +2065,10 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
-      "source": ["MCP ac_binding_draft", "actinglab package preflight (its first step)"],
+      "source": ["actinglab record draft", "MCP ac_binding_draft"],
       "slice": "LAB-5",
       "status": "planned",
-      "notes": "LAB-2 moved it to LAB-5: its source is MCP's ac_binding_draft (package preflight and an actingd check-config child), no command of actinglab; LAB-5 builds it with MCP from the table. LAB-5A: writes false: its only code, MCP ac_binding_draft, changes nothing (readOnlyHint true): it reads the record stop answer, runs package preflight and actingd check-config, which only read, and exports check-config's report as a read exports its answer"
+      "notes": "LAB-2 moved it to LAB-5: its source is MCP's ac_binding_draft (package preflight and an actingd check-config child), no command of actinglab; LAB-5 builds it with MCP from the table. LAB-5A: writes false: its only code, MCP ac_binding_draft, changes nothing (readOnlyHint true): it reads the record stop answer, runs package preflight and actingd check-config, which only read, and exports check-config's report as a read exports its answer. LAB-5G4c: a command of actinglab since then, actinglab record draft, on the command line and in serve --stdio (the coordinator's ruling 3 of 6775192250 on board #434), MCP's ac_binding_draft ported and kept until LAB-7; its first step, package preflight, runs in actinglab's own process, and check-config stays the installation's actingd child; the new MCP server refuses its call until its serve children (LAB-5G4b)"
     },
     {
       "name": "package check",

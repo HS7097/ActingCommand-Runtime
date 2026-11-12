@@ -187,6 +187,7 @@ pub(crate) fn listed_help(mut help: Value) -> CliOutcome<Value> {
 
 /// Test-only: the program whose place this thread reads the authoring module from, in place of
 /// this process's (a made-up installation root in a temporary folder), until the guard drops.
+/// Workflow #434 LAB-5G4c: `record draft` locates its installation there too.
 #[cfg(test)]
 pub(crate) mod test_place {
     use std::cell::RefCell;

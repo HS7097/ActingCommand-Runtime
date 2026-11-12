@@ -62,6 +62,13 @@ use serde_json::{Map, Value};
 /// the slice that opens it.
 pub(crate) const BUILT_SLICES: [&str; 5] = ["LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8"];
 
+/// Workflow #434 LAB-5G4c (register §1.287, "Slice LAB-5G4c"): the planned rows of a slice this
+/// program does not build whose command it has all the same: `record draft`, a row of slice LAB-5
+/// whose command `record draft` is (`engine::COMMANDS`; the coordinator's ruling 3 of 6775192250
+/// on board #434), MCP's `ac_binding_draft` before. The new MCP server offers the row as its own
+/// slice's.
+pub(crate) const OWN_ROWS_BEYOND_SLICES: [&str; 1] = ["record draft"];
+
 /// Workflow #434 LAB-3: whether the rescue module serves the rescue row `name` (on Windows, where
 /// it runs); its rows of a source command not built yet, and LAB-5's, are not offered.
 pub(crate) fn rescue_served(name: &str) -> bool {
@@ -198,8 +205,8 @@ pub(crate) struct Call {
 }
 
 /// Whether this program offers `operation`: a planned row of the core, debugging or authoring
-/// module whose slice is built, or (Workflow #434 LAB-3) a planned rescue row the rescue module
-/// serves.
+/// module whose slice is built or (Workflow #434 LAB-5G4c) that [`OWN_ROWS_BEYOND_SLICES`] names,
+/// or (Workflow #434 LAB-3) a planned rescue row the rescue module serves.
 pub(crate) fn offered(operation: &Operation) -> bool {
     if operation.status != OperationStatus::Planned {
         return false;
@@ -208,6 +215,7 @@ pub(crate) fn offered(operation: &Operation) -> bool {
         return rescue_served(&operation.name);
     }
     BUILT_SLICES.contains(&operation.slice.as_str())
+        || OWN_ROWS_BEYOND_SLICES.contains(&operation.name.as_str())
 }
 
 /// The offered operation whose name begins the command line `words`, the longest; `None` when no

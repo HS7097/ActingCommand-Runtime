@@ -119,6 +119,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("record step", ["offline", "device"], "available"),
         command_cap("record candidates", ["offline"], "available"),
         command_cap("record amend", ["offline"], "available"),
+        // Workflow #434 LAB-5G4c: the binding draft of a `record stop` answer; it changes nothing.
+        command_cap("record draft", ["offline", "read_only"], "available"),
         command_cap("capture --record", ["device"], "available"),
         command_cap("session capture --record", ["device"], "available"),
         command_cap("session app --record", ["device"], "available"),

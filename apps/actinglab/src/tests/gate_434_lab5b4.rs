@@ -4,8 +4,9 @@
 // rd-1108/arch-013/brief-lab5b4.md): an own command refuses a flag it does not read, a switch takes
 // no value from the next word but `true` or `false`, and a positional a command does not read is
 // refused.
-// - `every_own_command_refuses_a_flag_it_does_not_read`: each of the 28 commands (the 24 rows that
-//   were lenient, and `run list`, `capture`, `lab receipt` and `lab evidence`, the register's
+// - `every_own_command_refuses_a_flag_it_does_not_read`: each of the 29 commands (the 24 rows that
+//   were lenient, `record draft` since Workflow #434 LAB-5G4c, and `run list`, `capture`, `lab
+//   receipt` and `lab evidence`, the register's
 //   `own_flags::READ_LIST_ROWS` and `own_flags::UNROWED_READS`) refuses an unknown
 //   flag before it does anything: `validation_failed` naming it (`argument`, `argument_problem`
 //   `unknown`), the line, the exit code and the developer line those the CLI module gives a strict
@@ -101,11 +102,12 @@ impl Isolated {
     }
 }
 
-/// The 28 commands, each by the name its refusal gives it and the words of a command line that
-/// reaches it: the 24 rows that were lenient (their command's words), then the four own commands
-/// outside the operation table. `state` names the recording session's directory, `out` the frame
-/// file `capture` would write.
-fn commands<'a>(state: &'a str, out: &'a str) -> [(&'static str, Vec<&'a str>); 28] {
+/// The 29 commands, each by the name its refusal gives it and the words of a command line that
+/// reaches it: the 24 rows that were lenient and `record draft` (Workflow #434 LAB-5G4c, a row of
+/// `READ_LIST_ROWS` since that slice built its command), by their command's words, then the four
+/// own commands outside the operation table. `state` names the recording session's directory,
+/// `out` the frame file `capture` would write.
+fn commands<'a>(state: &'a str, out: &'a str) -> [(&'static str, Vec<&'a str>); 29] {
     let record = |action: &'a str| vec!["record", action, "--state-dir", state];
     [
         ("touch-probe", vec!["touch-probe"]),
@@ -120,6 +122,7 @@ fn commands<'a>(state: &'a str, out: &'a str) -> [(&'static str, Vec<&'a str>); 
         ("record candidates", record("candidates")),
         ("record amend", record("amend")),
         ("record step", record("step")),
+        ("record draft", vec!["record", "draft"]),
         ("package validate", vec!["package", "validate"]),
         ("package inspect", vec!["package", "inspect"]),
         ("package bundle", vec!["package", "bundle"]),
@@ -144,7 +147,7 @@ fn every_own_command_refuses_a_flag_it_does_not_read() {
     let _guard = env_lock();
     let isolated = Isolated::new();
     let (state, out) = (isolated.path("session"), isolated.path("frame.png"));
-    // The 28 are the register's: the rows of `READ_LIST_ROWS`, then the read lists of the own
+    // The 29 are the register's: the rows of `READ_LIST_ROWS`, then the read lists of the own
     // commands outside the table, each by the name its refusal gives it.
     let registered = own_flags::READ_LIST_ROWS
         .iter()

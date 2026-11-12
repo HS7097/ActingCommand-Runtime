@@ -781,8 +781,9 @@ sentence fails that test.
       process, but a row whose `detach` the front forces (`tools::SUPPLIED`: `deploy` and
       `rollback`, section 5's "Not yet"). Every other call answers `mcp_operation_unsupported` as
       below: the three `app` rows and `standard-pack check`, the debugging and authoring rows
-      actinglab's own commands serve (the `serve` children, G4b), `record draft`, which no code
-      serves yet, and `deploy` and `rollback`.
+      actinglab's own commands serve (the `serve` children, G4b), `record draft` among them
+      (actinglab's own command since LAB-5G4c, 0.12.57: MCP's `ac_binding_draft` ported; register
+      §1.287, "Slice LAB-5G4c"), and `deploy` and `rollback`.
     - *A rescue row* (the second part) is checked as a core row is (the refusals below), then
       answered by the module for the root the program runs from with the initiator `Lab-MCP`
       (`lab_rescue::rescue::answer_here`), and its answer is the line actinglab's `--json` and

@@ -150,6 +150,10 @@ mod gate_434_cli_comp;
 // evaluation of saved scenes names it in the answer and is refused off a saved scene.
 #[path = "gate_428_lab_ocr_dl.rs"]
 mod gate_428_lab_ocr_dl;
+// Workflow #434 LAB-5G4c: `record draft` is a command of actinglab, MCP's `ac_binding_draft`
+// ported.
+#[path = "gate_434_lab5g4c.rs"]
+mod gate_434_lab5g4c;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
