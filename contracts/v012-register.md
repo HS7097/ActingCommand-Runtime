@@ -15559,6 +15559,90 @@ ids it reads as before. Going back from MAPP-2 to MAPP-1 alone is not a release 
 - how a clone is addressed;
 - whether the report's readers deny unknown members.
 
+### 1.327 Slice HELD-1 (0.12.56): a task held too long leaves a record, and its end (Workflow #438; the contract of §1.322, slice HELD-C, with the coordinator's rulings and answers of 11-12 written into it, not the owner's words; coordinator work order `rd-1112/brief-438-held-1.md`, read on main `fbb457a4`, main `c7dc14ec` merged)
+
+1.327 is the coordinator's number, appended after the last section of part 1 on main `c7dc14ec`
+(§1.323); §1.325 and §1.326 belong to slices not merged yet. HELD-1 builds rows HELD-R1 to
+HELD-R9 of §1.322; HELD-R10, the wake kind `task_held` and its `codes`, is HELD-2's and stays
+planned ([agent-wake.md](agent-wake.md)). The contract's "(HELD, not built yet)" and "proposed"
+marks are dropped for HELD-1's parts ([scheduling/README.md](scheduling/README.md), "Held records"
+and the paragraph in "Why A Candidate Does Not Run"; [runtime-config.md](runtime-config.md), the
+two key rows and "Held records"; [component-interfaces.md](component-interfaces.md)), and kept for
+HELD-2's.
+
+| Row | Built | Where |
+|---|---|---|
+| HELD-R1, HELD-R2 | `task_held` (warning, `none`) and `task_held_ended` (info, `none`), each with its description, common causes and handling | `crates/runtime-host/src/codes.rs`, `TaskHeldCode`; `contracts/outcome-codes/runtime-host.json`; built by `crates/runtime-host/src/policy_host/held.rs`, `held_signal`, `ended_signal`, `restarted_end` |
+| HELD-R3 | the keys `held_state`, `held_end`, `held_since_unix_ms`, `held_for_ms`, `held_after_ms`; `gate_code`'s description widened to a candidate's gate | `crates/actingcommand-contract/src/outcome/keys.rs`; `contracts/outcome-codes/catalog.json` |
+| HELD-R4 | the vocabularies `held_state` (`due`, `undecidable`) and `held_end` (`selected`, `why_changed`, `row_gone`, `instance_gone`, `restarted`) | `crates/runtime-host/src/codes.rs`, `HeldState`, `HeldEnd`; `catalog.json` |
+| HELD-R5 | the two records, `goal_missed` planning signals `signal:task_held:held:<hex>` and `signal:task_held:ended:<hex>` (`<hex>` the SHA-256 of `task \0 alias \0 since`), each checked against the projection first; appended after the cycle's clock-slot records | `held.rs`, `held_signal_id`, `ended_signal_id`; `crates/runtime-host/src/host/policy_dispatch.rs`, `evaluate_policy_cycle_authoritative` (`PolicyCycle::task_held_signals`) |
+| HELD-R6 | the detector: after `record_held_back`, the ends first, then the held records; the held set (`HELD_CODES`, 17 codes, and the two codes a value decides); the memory of the holds this run reported; the one clock of the three fact refresh waits of one `fact_key` | `held.rs`, `HeldMemory::observe`, `held`, `held_code`; `crates/runtime-host/src/policy_host.rs`, `PolicyHost::evaluate`; `crates/runtime-host/src/schedule_explanation.rs`, `same_clock`, `candidate_rows` |
+| HELD-R7 | the start's end pass: the `policy.planning_signal_observed` records between the settled anchor's start and this start, by the type index, page by page; each held record without an end ended `restarted` (no `held_for_ms`), before `host.contained_settlement` is recorded | `crates/runtime-host/src/host/contained_task.rs`, `settle_previous_epoch_contained_runs`, `end_task_holds_between`; `held.rs`, `reported_hold` |
+| HELD-R8 | `scheduling.task_held.enabled` (`true`) and `.after_ms` (`60000..=86400000`, `1800000`), section and per instance, settable, read for every instance of the snapshot at every evaluated cycle | `crates/runtime-config/src/scheduling.rs`, `TaskHeldFile`, `TaskHeldConfig`, `instance_task_held`; `crates/runtime-config/src/instance.rs`; `crates/runtime-config/src/effective.rs`, `EffectiveConfig::task_held`; `distribution/windows/actingd.defaults.json`; `crates/runtime-host/src/host/runtime_config.rs`, `task_held_context`; `PolicyEvaluationContext::task_held` |
+| HELD-R9 | `actingd suspended` `held` (and `held_total`); `ac_diagnose` (and `actingctl diagnose`) `held` rows of the instance and `held_reported: true` on the `not_run` row an open held row names | `crates/runtime-host/src/suspension_report.rs`, `held`; `crates/lab-ops/src/diagnose.rs`, `held_rows`, `mark_held_reported`, `Diagnosis::held`; `apps/actingctl/src/mcp/tools.rs`, the description and the result schema; [policy-suspension.md](policy-suspension.md), `held` |
+
+**The interface.** `actingd-config` goes to 29: the row 29 of
+[component-interfaces.md](component-interfaces.md) holds HELD-1's member `task_held` of the
+section and of an entry's `scheduling` member; `distribution/windows/component-interfaces.json`
+and `tools/actinglab-architecture/tests/component_interfaces.rs` declare [5, 29]. HELD-2's word
+and MAPP-1's members join that row when they ship in 0.12.56. `ledger`, `runtime-client`,
+`runtime-outcomes` and every other interface stay (§1.322, "The interface walk").
+
+**Where the code reads the contract, and why** (no point the contract's text leaves open is
+guessed; each is a reading of its own words):
+
+- *An end by the row's start.* A reported hold ends `why_changed` when the pair's row carries
+  another start than the hold's: the table's `since_unix_ms` changes exactly when the `why` code
+  does, or when a fact refresh wait names another `fact_key`. So `fact_refresh_pending` of one key
+  followed by `fact_refresh_pending` of another restarts the row, which before HELD-1 kept its
+  start ("another `fact_key` … starts another run").
+- *The not-running row too.* The one clock of the three fact refresh waits applies to the
+  not-running row's `since_unix_ms` as to the candidate rows' ("count as one `why` code for
+  `since_unix_ms`").
+- *Reported means in the projection.* A held record is written when the projection does not hold
+  its id, also again at the next cycle when its append failed (the cycle failed loudly); an end is
+  written only when the projection holds the held record ("a hold that was never reported leaves
+  nothing"). A held record the projection holds for the row's start is taken as open.
+- *A capped pair stopped by a gate.* `pool_line_held` with `capped_not_dispatchable` is held when
+  its `gate_code` is one of the 17 codes held whatever their values; a gate code a value decides
+  cannot be decided from the code alone and is not held.
+- *An instance the context does not name* (it is not in the snapshot) writes no new held record.
+- *A held record the start cannot read back* (its id is not the digest of its own task, alias and
+  start, or a value is missing) fails the start with the existing
+  `policy_planning_signal_identity_conflict`: no build writes such a record, and the contract names
+  no third code. The pass runs over the range the settlement of direct runs reads, when it holds a
+  record.
+- *`ac_diagnose`'s cut.* Its `held` rows are cut after the clock slots and before `not_run`; the
+  whole list stays in `actingd suspended`, and the records in `ac_events`' errors view.
+
+**Tests** (`crates/runtime-host/src/tests/gate_438_held.rs`; host gate row "Workflow #438
+HELD-1"). Logic tests on the policy host's own table and memory with a fake projection and a
+manual clock: `held_t1`, `held_t2` (a pause, a cooldown, a false trigger, a blackout, an
+exhausted budget, the benefit gaps that wait for a value, a hard line and a capped pair a budget
+stops, beside a row that is reported), `held_t4`, `held_t5`, `held_t7`, `held_t10`. Through the
+host on a manual Runtime clock: `held_t3` (a client lease holds the instance; the restart's end;
+counting again), `held_t6` (two hosts, the record on and off, the same decisions, intents and
+other records at every cycle; only decisions, reason codes and records are compared), `held_t8`,
+`held_t9`'s `actingd suspended` half. `held_t9`'s diagnose half has the same name in
+`crates/lab-ops/src/gate_438_held.rs` (the host's tests cannot reach lab-ops). Adapted: the five
+tests that build a `Diagnosis` by its members (`crates/lab-ops/src/gate_434_lab5d.rs`,
+`apps/actingctl/src/mcp/tests/clock_slots.rs`, `gate_386_sr3.rs`, `gate_411_b15w2.rs`,
+`gate_mcp19b.rs`) name the new member `held`, empty; what they assert is unchanged.
+
+**What an operator sees after deploy.** A pair that should run and is held by a held code for
+`scheduling.task_held.after_ms` (30 minutes by default) leaves one `task_held` warning in the
+ledger, in the errors view of `ac_events` and of an `ac_diagnose` without an instance, in
+`actingd suspended` `held` and in the instance's `ac_diagnose` `held` rows, whose `not_run` row
+then carries `held_reported: true`; its end leaves one `task_held_ended` info record; a start ends
+the holds the runs before it left open (`restarted`). No decision, intent, eligibility age, guard,
+pause, ladder or streak changes, and nothing reaches a channel until HELD-2 and a wake rule exist.
+The configuration lists the two keys and each instance's two. A console edits them only once its
+`actingd-config` range reaches 29.
+
+**Rollback** (below 0.12.56), as §1.322 says: remove `task_held` from the `scheduling` section and
+from every entry's `scheduling` member, since an older build refuses the member; it reads the
+records and ignores them, and a hold open at the change keeps no end.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
