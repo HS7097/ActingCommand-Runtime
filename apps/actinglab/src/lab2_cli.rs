@@ -115,6 +115,8 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     // to the form the register gives it.
     #[cfg(test)]
     flags.reading_forms("observe");
+    // Workflow #428 LAB-OCR-DL: the switch only on a saved scene, refused before anything else.
+    let ocr_deadline_max = super::offline_ocr::ocr_deadline_max(&flags, saved_scene(&flags))?;
     let path = if flags.bool("--capture") {
         &OBSERVE_CAPTURE
     } else {
@@ -135,7 +137,8 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     }
     let ids = Lab2Ids::new();
     let instance = lab2_instance(global, &flags);
-    let resources = super::contained_resources::load(&flags, "observe")?;
+    let resources =
+        super::contained_resources::load_with_ocr_deadline(&flags, "observe", ocr_deadline_max)?;
     let (evaluator, _) = super::contained_resources::recognition_pipeline(&resources)?;
     super::offline_ocr::require_pages(&resources)?;
     let view = super::contained_resources::observation_resources(&resources)?;
@@ -177,7 +180,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         super::offline_ocr::lab_ocr(),
         &explicit,
     )?;
-    let mut payload = json!({
+    let payload = json!({
         "req_id": ids.req_id,
         "state": if outcome.matched { "observed" } else { "unknown" },
         "instance": instance,
@@ -192,6 +195,8 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         "actions": actions,
         "arbitration": isolated_offline_projection(),
     });
+    // Workflow #428 LAB-OCR-DL: the deadline the switch raised the OCR inference to, when given.
+    let mut payload = super::offline_ocr::with_ocr_deadline(payload, ocr_deadline_max)?;
     // Workflow #396 LAB-3: actions whose OCR target was not evaluated without an OCR model are
     // named with the unavailable OCR state; observe does not fail for them.
     if !ocr_not_evaluated.is_empty() {
@@ -1549,8 +1554,9 @@ const LAB2_EVERY_PATH_READS: [&str; 4] = ["--instance", "--fields", "--pretty", 
 /// Workflow #434 LAB-5B2: the flags of `observe`, `do`, `ensure` and `wait` that take no value
 /// (read with `FlagArgs::bool`); a verb's paths read some of them. Workflow #434 LAB-5B4: nor do
 /// they take one from the next word, but `true` or `false` (`FlagArgs::parse_switches`); the
-/// register reads them (`cli_module::own_flags`).
-pub(crate) const LAB2_SWITCHES: [&str; 8] = [
+/// register reads them (`cli_module::own_flags`). Workflow #428 LAB-OCR-DL: the switch that raises
+/// the OCR inference deadline, which only the `--scene` paths read.
+pub(crate) const LAB2_SWITCHES: [&str; 9] = [
     "--capture",
     "--dry-run",
     "--allow-destructive",
@@ -1559,6 +1565,7 @@ pub(crate) const LAB2_SWITCHES: [&str; 8] = [
     "--preview",
     "--pretty",
     "--verbose",
+    super::offline_ocr::OCR_DEADLINE_MAX_FLAG,
 ];
 
 /// Workflow #434 LAB-5B4: the positionals each of the four verbs reads (as
@@ -1588,6 +1595,8 @@ impl UnreadFlag {
     }
 }
 
+/// Workflow #428 LAB-OCR-DL: each `--scene` path of the four verbs reads the switch that raises the
+/// OCR inference deadline of its evaluation; no `--capture` path does.
 const OBSERVE_SCENE: Lab2Path = Lab2Path {
     name: "observe --scene",
     reads: &[
@@ -1599,6 +1608,7 @@ const OBSERVE_SCENE: Lab2Path = Lab2Path {
         "--with-frame",
         "--preview",
         "--test-capture-delay-ms",
+        super::offline_ocr::OCR_DEADLINE_MAX_FLAG,
     ],
     repeats: &["--scene"],
 };
@@ -1634,6 +1644,7 @@ const DO_SCENE: Lab2Path = Lab2Path {
         "--after-page",
         "--after-timeout-ms",
         "--seed",
+        super::offline_ocr::OCR_DEADLINE_MAX_FLAG,
     ],
     repeats: &["--scene"],
 };
@@ -1708,6 +1719,7 @@ const ENSURE_SCENE: Lab2Path = Lab2Path {
         "--page",
         "--allow-destructive",
         "--test-capture-delay-ms",
+        super::offline_ocr::OCR_DEADLINE_MAX_FLAG,
     ],
     repeats: &["--scene"],
 };
@@ -1755,6 +1767,7 @@ const WAIT_SCENE: Lab2Path = Lab2Path {
         "--timeout-ms",
         "--poll-ms",
         "--test-capture-delay-ms",
+        super::offline_ocr::OCR_DEADLINE_MAX_FLAG,
     ],
     repeats: &["--scene"],
 };
@@ -1902,6 +1915,12 @@ pub(super) fn refuse_repeated_options(
     })))
 }
 
+/// Workflow #428 LAB-OCR-DL: whether the frame of a line of the four verbs is a saved scene:
+/// `--scene` names one and `--capture` is not given.
+fn saved_scene(flags: &FlagArgs) -> bool {
+    !flags.bool("--capture") && flags.optional_path("--scene").is_some()
+}
+
 fn reject_mixed_online_and_offline_scene(flags: &FlagArgs, command: &str) -> CliOutcome<()> {
     if flags.optional_path("--scene").is_some() {
         return Err(CliError::usage(format!(
@@ -1953,6 +1972,8 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     #[cfg(test)]
     flags.reading_forms("do");
     let dry_run = global.dry_run || flags.bool("--dry-run");
+    // Workflow #428 LAB-OCR-DL: the switch only on a saved scene, refused before anything else.
+    let ocr_deadline_max = super::offline_ocr::ocr_deadline_max(&flags, saved_scene(&flags))?;
     // #411 Lab L1: online `do --capture` does not read the destructive guard flags.
     refuse_unread_flags(&flags, do_path(&flags, dry_run), &DO_PATHS)?;
     refuse_operation_conflicts(global, &flags)?;
@@ -2006,7 +2027,8 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         return run_runtime_do(&flags, &target, &instance, dry_run, allow_destructive, draw);
     }
     let result = (|| -> CliOutcome<Value> {
-        let resources = super::contained_resources::load(&flags, "do")?;
+        let resources =
+            super::contained_resources::load_with_ocr_deadline(&flags, "do", ocr_deadline_max)?;
         let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
         let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
         guard_evaluable_target(&evaluator, &target, "do")?;
@@ -2106,7 +2128,8 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         }
         attach_draw(&mut payload, draw.as_ref(), sampling);
         attach_env_resolved(&mut payload, &env_resolved);
-        Ok(payload)
+        // Workflow #428 LAB-OCR-DL: the deadline the switch raised the OCR inference to.
+        super::offline_ocr::with_ocr_deadline(payload, ocr_deadline_max)
     })();
     result.and_then(|payload| project_lab2_payload(&payload, &flags))
 }
@@ -2117,6 +2140,8 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
     #[cfg(test)]
     flags.reading_forms("ensure");
     let dry_run = global.dry_run || flags.bool("--dry-run");
+    // Workflow #428 LAB-OCR-DL: the switch only on a saved scene, refused before anything else.
+    let ocr_deadline_max = super::offline_ocr::ocr_deadline_max(&flags, saved_scene(&flags))?;
     refuse_unread_flags(&flags, ensure_path(&flags, dry_run), &ENSURE_PATHS)?;
     // Workflow #434 LAB-5B4: it reads one positional, its page; a second is refused.
     flags.refuse_unread_positionals("ensure", &ENSURE_POSITIONALS)?;
@@ -2135,7 +2160,8 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
         return run_runtime_ensure(&flags, &to, &instance, dry_run, allow_destructive, draw);
     }
     let result = (|| -> CliOutcome<Value> {
-        let resources = super::contained_resources::load(&flags, "ensure")?;
+        let resources =
+            super::contained_resources::load_with_ocr_deadline(&flags, "ensure", ocr_deadline_max)?;
         let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
         let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
         let graph = super::contained_resources::navigation_graph(&resources)?;
@@ -2156,7 +2182,8 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
                 "arbitration": isolated_offline_projection(),
             });
             attach_env_resolved(&mut payload, &env_resolved);
-            return Ok(payload);
+            // Workflow #428 LAB-OCR-DL: the deadline the switch raised the OCR inference to.
+            return super::offline_ocr::with_ocr_deadline(payload, ocr_deadline_max);
         }
         if !start.matched {
             let details = isolated_offline_error_details(
@@ -2200,7 +2227,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             "arbitration": isolated_offline_projection(),
         });
         attach_env_resolved(&mut payload, &env_resolved);
-        Ok(payload)
+        super::offline_ocr::with_ocr_deadline(payload, ocr_deadline_max)
     })();
     result.and_then(|payload| project_lab2_payload(&payload, &flags))
 }
@@ -2210,6 +2237,8 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
     let flags = FlagArgs::parse_switches(args, &LAB2_SWITCHES);
     #[cfg(test)]
     flags.reading_forms("wait");
+    // Workflow #428 LAB-OCR-DL: the switch only on a saved scene, refused before anything else.
+    let ocr_deadline_max = super::offline_ocr::ocr_deadline_max(&flags, saved_scene(&flags))?;
     let path = if flags.bool("--capture") {
         &WAIT_CAPTURE
     } else {
@@ -2225,7 +2254,8 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
     let wf_id = ids.issue(IdKind::Wf);
     let instance = lab2_instance(global, &flags);
     let result = (|| -> CliOutcome<Value> {
-        let resources = super::contained_resources::load(&flags, "wait")?;
+        let resources =
+            super::contained_resources::load_with_ocr_deadline(&flags, "wait", ocr_deadline_max)?;
         let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
         let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
         let timeout = parse_optional_duration_ms(&flags, "--timeout-ms", 5_000)?;
@@ -2250,7 +2280,8 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         payload["instance"] = json!(instance);
         payload["arbitration"] = isolated_offline_projection();
         attach_env_resolved(&mut payload, &env_resolved);
-        Ok(payload)
+        // Workflow #428 LAB-OCR-DL: the deadline the switch raised the OCR inference to.
+        super::offline_ocr::with_ocr_deadline(payload, ocr_deadline_max)
     })();
     result.and_then(|payload| project_lab2_payload(&payload, &flags))
 }
@@ -2395,9 +2426,11 @@ fn lab2_projection_request(flags: &FlagArgs, evidence_id: Option<String>) -> Pro
         } else {
             ProjectionVerbosity::Min
         },
+        // Workflow #428 LAB-OCR-DL: Min never drops the raised deadline's member either.
         fields: fields_from_flags(flags)
             .into_iter()
             .chain(FRAME_MEMBERS.map(str::to_string))
+            .chain([super::offline_ocr::OCR_DEADLINE_MEMBER.to_string()])
             .collect(),
         evidence_id,
     }

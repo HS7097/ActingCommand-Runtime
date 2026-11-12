@@ -10704,7 +10704,8 @@
       "pack-containment"
     ],
     "mcp_": [
-      "actingctl"
+      "actingctl",
+      "actinglab-mcp"
     ],
     "mcp_entry_": [
       "mcp-entry"
@@ -12193,6 +12194,7 @@
     "actingctl-app": "apps/actingctl",
     "actingd": "apps/actingd",
     "actinglab": "apps/actinglab",
+    "actinglab-mcp": "apps/actinglab-mcp",
     "actingledger": "apps/ledger-forensics",
     "vision-provider-check": "apps/vision-provider-check",
     "contract": "crates/actingcommand-contract",

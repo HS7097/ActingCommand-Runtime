@@ -3119,6 +3119,20 @@
       "description": "A step of the installer operation install_operation_id failed after it had changed the disk, or the operation could not end (its end journalled, install\\current.json not renamed), or its ledger verification was still running at its deadline (ledger_verify_failed with pid and config_key, nothing swapped yet); operation names the journalled command (release stage, adopt, update, rollback and the like). The journal names the step; until install resume or install undo runs, the root cannot run normally (a half-swapped program tree), and for an update or rollback the watchdog stands aside (watchdog_installer_unfinished). The step's own failure is the caused_by link. Exit 2.",
       "common_causes": "A file system error, a full disk, a process holding a file, or the installer killed in the middle of an operation.",
       "handling": "Fix the cause, then run actingctl install resume --operation <id> to finish the operation or install undo --operation <id> to reverse it."
+    },
+    "lab_operation_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.47",
+      "description": "Workflow #434 LAB-2: an operation of actinglab's CLI module (or of actinglab serve --stdio) whose source has no success code of its own ran to its end: an operation whose only source was an MCP tool (run show, material, targets, run stop), and since Workflow #434 LAB-2b every one of actinglab's own commands (resource validate, package preflight, observe, do and the rest) that succeeded. The line carries the answer beside this outcome, its members flat at the top level (a result that is no JSON object under result; the two results whose top level has a member named outcome whole, resource verify's under report and run summary's under summary); warnings a result carries stay its member warnings in their own shape {code, values}, the category stays success; exit 0. A command line with --via (MCP's actinglab child) still answers the envelope, not this code, until LAB-5.",
+      "common_causes": "The operation succeeded.",
+      "handling": "None."
     }
   },
   "locations": {

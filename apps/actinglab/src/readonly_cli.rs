@@ -97,10 +97,12 @@ pub(super) const IS_VISIBLE_READS: FlagReads = FlagReads {
 /// [`prepare_recognition_input_with_config`]), a part of the read lists of `recognize`,
 /// `detect-page`, `current-page`, `is-visible`, `tap-target` and `navigate`: `--capture` only to
 /// refuse it (the legacy semantic capture is retired), so `--fresh-delay-ms`, which only a capture
-/// would read, is never read.
+/// would read, is never read. Workflow #428 LAB-OCR-DL: and its switch `--ocr-deadline-max`, which
+/// raises the OCR inference deadline of the evaluation of the saved scene and is refused without
+/// one.
 pub(super) const READONLY_INPUT_READS: ReadPart = ReadPart {
     options: &["--scene"],
-    switches: &["--require-fresh"],
+    switches: &["--require-fresh", super::offline_ocr::OCR_DEADLINE_MAX_FLAG],
     refused: &["--capture"],
 };
 
@@ -143,11 +145,15 @@ pub(super) fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutco
     let mut lab = super::env_detection::build_readonly_lab_for_capture(
         prepared.capture_instance_alias.as_deref(),
     )?;
+    let ocr_deadline_max = prepared.ocr_deadline_max;
     let request = RecognizeRequest {
         input: prepared.input,
         target,
     };
-    serialize_response(lab.recognize(request)?)
+    super::offline_ocr::with_ocr_deadline(
+        serialize_response(lab.recognize(request)?)?,
+        ocr_deadline_max,
+    )
 }
 
 pub(super) fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -165,12 +171,16 @@ pub(super) fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOut
         let mut lab = super::env_detection::build_readonly_lab_for_capture(
             prepared.capture_instance_alias.as_deref(),
         )?;
+        let ocr_deadline_max = prepared.ocr_deadline_max;
         let request = DetectPageRequest {
             input: prepared.input,
             check_pages,
         };
         let output = lab.detect_page(request)?;
-        record_detect_page_output(&mut ledger, output)
+        super::offline_ocr::with_ocr_deadline(
+            record_detect_page_output(&mut ledger, output)?,
+            ocr_deadline_max,
+        )
     })();
     finish_semantic_result_with_ledger(global, ledger, result)
 }
@@ -184,10 +194,14 @@ pub(super) fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOu
     let mut lab = super::env_detection::build_readonly_lab_for_capture(
         prepared.capture_instance_alias.as_deref(),
     )?;
+    let ocr_deadline_max = prepared.ocr_deadline_max;
     let request = CurrentPageRequest {
         input: prepared.input,
     };
-    serialize_response(lab.current_page(request)?)
+    super::offline_ocr::with_ocr_deadline(
+        serialize_response(lab.current_page(request)?)?,
+        ocr_deadline_max,
+    )
 }
 
 pub(super) fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -200,11 +214,15 @@ pub(super) fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutc
     let mut lab = super::env_detection::build_readonly_lab_for_capture(
         prepared.capture_instance_alias.as_deref(),
     )?;
+    let ocr_deadline_max = prepared.ocr_deadline_max;
     let request = IsVisibleRequest {
         input: prepared.input,
         target,
     };
-    serialize_response(lab.is_visible(request)?)
+    super::offline_ocr::with_ocr_deadline(
+        serialize_response(lab.is_visible(request)?)?,
+        ocr_deadline_max,
+    )
 }
 
 /// #411 Lab B-2 R7 (coordinator decision Q9 of 2026-10-19): the only option `recognize`,
@@ -216,6 +234,9 @@ const FRAME_SET_REPEATS: [&str; 1] = ["--scene"];
 struct PreparedReadonlyInput {
     input: ReadonlyRecognitionInput,
     capture_instance_alias: Option<String>,
+    /// Workflow #428 LAB-OCR-DL: whether `--ocr-deadline-max` raised the OCR inference deadline of
+    /// the evaluation of the saved scene; its answer then names it.
+    ocr_deadline_max: bool,
 }
 
 /// Workflow #396 LAB-3: an OCR target (or a composite with an OCR member) is refused with
@@ -394,13 +415,16 @@ pub(super) fn read_scene_frames(paths: &[PathBuf]) -> CliOutcome<Vec<(Vec<u8>, S
     Ok(frames)
 }
 
+/// The input of `tap-target` and `navigate`, and (Workflow #428 LAB-OCR-DL) whether
+/// `--ocr-deadline-max` raised the OCR inference deadline of its evaluation.
 pub(super) fn recognition_input_with_config(
     global: &GlobalOptions,
     flags: &FlagArgs,
     require_pages: bool,
     config: &super::UserConfig,
-) -> CliOutcome<ReadonlyRecognitionInput> {
-    Ok(prepare_recognition_input_with_config(global, flags, require_pages, config)?.input)
+) -> CliOutcome<(ReadonlyRecognitionInput, bool)> {
+    let prepared = prepare_recognition_input_with_config(global, flags, require_pages, config)?;
+    Ok((prepared.input, prepared.ocr_deadline_max))
 }
 
 fn prepare_recognition_input_with_config(
@@ -414,7 +438,12 @@ fn prepare_recognition_input_with_config(
             "legacy semantic --capture is retired; use observe/do/ensure/wait so one Runtime debug correlation owns capture, input, and ledger facts",
         ));
     }
-    let resources = super::contained_resources::load(flags, "readonly")?;
+    // Workflow #428 LAB-OCR-DL: the switch only where the frame is a saved scene, refused before
+    // the package is loaded or the scene read.
+    let ocr_deadline_max =
+        super::offline_ocr::ocr_deadline_max(flags, flags.optional_path("--scene").is_some())?;
+    let resources =
+        super::contained_resources::load_with_ocr_deadline(flags, "readonly", ocr_deadline_max)?;
     if require_pages {
         super::contained_resources::recognition_pipeline(&resources)?;
     }
@@ -442,6 +471,7 @@ fn prepare_recognition_input_with_config(
             fresh_delay,
         },
         capture_instance_alias,
+        ocr_deadline_max,
     })
 }
 

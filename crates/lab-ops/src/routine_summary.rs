@@ -131,13 +131,30 @@ pub fn dispatch_on(
     detail: Detail,
     connection: Connection<'_>,
 ) -> Option<cli_line::Exit> {
+    dispatch_within(arguments, detail, connection, None)
+}
+
+/// Workflow #434 LAB-5G1b: [`dispatch_on`] within the caller's `budget`: none, the whole page, as
+/// the command line prints it; with one, [`within_budget`], a page written whole carried on the
+/// line as its header with `answer_exported` its warning. A page that could not be written whole
+/// to the caller's export is that write's failure.
+pub fn dispatch_within(
+    arguments: &[OsString],
+    detail: Detail,
+    connection: Connection<'_>,
+    budget: Option<&Budget<'_>>,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
-    Some(match answer_on(arguments, detail, connection) {
-        Ok(members) => {
-            cli_line::success(members, &Outcome::new(ReceiptCode::RoutineSummaryCompleted))
-        }
+    Some(match page_on(arguments, detail, connection) {
+        Ok(page) => match within_budget(page, budget) {
+            Ok(fitted) => cli_line::success(
+                budget::line_members(fitted, COMMAND, Vec::new()),
+                &Outcome::new(ReceiptCode::RoutineSummaryCompleted),
+            ),
+            Err(failure) => cli_line::refused(&failure, None),
+        },
         Err(Ended::Usage(outcome)) => cli_line::failure(&outcome, Some(USAGE)),
         // A refused read prints the Runtime's receipt beside its outcome and exits non-zero.
         Err(Ended::Failure(Failure::Runtime(error))) => match error.received_receipt() {
@@ -167,6 +184,16 @@ fn answer_on(
     detail: Detail,
     connection: Connection<'_>,
 ) -> Result<Map<String, Value>, Ended> {
+    page_on(arguments, detail, connection).map(|page| cli_line::members(page, COMMAND))
+}
+
+/// Workflow #434 LAB-5G1b: the page's JSON for `arguments`, read on the caller's `connection`; or
+/// why it ended ([`answer_on`] gives its members).
+fn page_on(
+    arguments: &[OsString],
+    detail: Detail,
+    connection: Connection<'_>,
+) -> Result<Value, Ended> {
     let parsed = parse(arguments).map_err(Ended::Usage)?;
     let client = connection
         .reach(&parsed.state_root, |config| match detail {
@@ -181,7 +208,7 @@ fn answer_on(
         parsed.since_revision,
     )
     .map_err(Ended::Failure)?;
-    Ok(cli_line::members(json!(page), COMMAND))
+    Ok(json!(page))
 }
 
 /// `routine-summary` and the flags `flags_of` names for it, each once: exactly one of `--hour`

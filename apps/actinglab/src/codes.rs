@@ -157,13 +157,10 @@ actingcommand_contract::outcome_codes! {
         /// 1 with it, its details nested whole; a `--via` line (MCP's actinglab child) exits 5.
         LabOperationCheckFailed => "lab_operation_check_failed": error / none,
         // ---- end of LABDO-1
-        // ---- Workflow #434 LAB-2 (pending): the CLI module's success of an operation whose
-        // source has no success code of its own.
-        /// Success. An operation of the CLI module (or of `serve --stdio`) whose only source was
-        /// an MCP tool, or (Workflow #434 LAB-2b) one of actinglab's own commands, ran to its
-        /// end; its line carries the answer.
-        LabOperationCompleted => "lab_operation_completed": success / none,
-        // ---- end of LAB-2
+        // Workflow #434 LAB-5G1b: `lab_operation_completed` (LAB-2) is registered in
+        // `crates/lab-ops` (`ActingctlCode::LabOperationCompleted`), its fragment owner
+        // `actingctl`'s, so that every program that serves a row through the operation layer
+        // answers it; actinglab's own commands answer it from there.
     }
 }
 

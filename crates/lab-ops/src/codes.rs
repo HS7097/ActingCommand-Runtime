@@ -245,6 +245,12 @@ actingcommand_contract::outcome_codes! {
         InstallCommandRefused => "install_command_refused": error / none,
         InstallOperationInterrupted => "install_operation_interrupted": fatal / none,
         // ---- Workflow #421 INST-0 (end)
+        // ---- Workflow #434 LAB-2 (pending; registered here since LAB-5G1b, actinglab's before):
+        // the success of an operation of the Lab whose source has no success code of its own,
+        // whichever program serves it (the core rows' serving code, `core_ops`, and actinglab's
+        // own commands).
+        LabOperationCompleted => "lab_operation_completed": success / none,
+        // ---- end of LAB-2
     }
 }
 

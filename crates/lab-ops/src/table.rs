@@ -208,6 +208,19 @@ impl Operation {
     pub fn mcp_tool(&self) -> String {
         format!("ac_{}", self.name.replace([' ', '-'], "_"))
     }
+
+    /// Workflow #434 LAB-5G1b: the names among `members` that this row does not declare (none of
+    /// its `params`), in the order given, for the caller to refuse. The table is the only source,
+    /// and it declares a row's parameters for every front end alike (`required_in` says only where
+    /// a declared one is also required), so no front end is asked for. What a front adds beside
+    /// the table's parameters (the command line's kept flags, the MCP front's own members) is that
+    /// front's to take out before it asks.
+    pub fn undeclared<'m>(&self, members: impl IntoIterator<Item = &'m str>) -> Vec<&'m str> {
+        members
+            .into_iter()
+            .filter(|member| !self.params.iter().any(|param| param.name == *member))
+            .collect()
+    }
 }
 
 /// The module that serves an operation (§8.1).

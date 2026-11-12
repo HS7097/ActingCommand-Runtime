@@ -1344,7 +1344,8 @@
         {"name": "test_capture_delay_ms", "form": "option", "type": "integer", "required": false, "note": "test only"},
         {"name": "fields", "form": "option", "type": "string", "required": false, "note": "comma-separated answer members kept whole"},
         {"name": "verbose", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --verbose"},
-        {"name": "pretty", "form": "switch", "type": "boolean", "required": false}
+        {"name": "pretty", "form": "switch", "type": "boolean", "required": false},
+        {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: offline on saved scenes only (with scene, not capture): each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused elsewhere"}
       ],
       "help": "Acts once on an instance through the Runtime and answers the action and its after frame; offline it plans the action on a saved scene.",
       "output": "as today's command: the action and its after frame",
@@ -1377,7 +1378,8 @@
         {"name": "test_capture_delay_ms", "form": "option", "type": "integer", "required": false, "note": "test only"},
         {"name": "fields", "form": "option", "type": "string", "required": false, "note": "comma-separated answer members kept whole"},
         {"name": "verbose", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --verbose"},
-        {"name": "pretty", "form": "switch", "type": "boolean", "required": false}
+        {"name": "pretty", "form": "switch", "type": "boolean", "required": false},
+        {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: offline on saved scenes only (with scene, not capture): each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused elsewhere"}
       ],
       "help": "Routes an instance from its current page to a requested page through guarded actions; offline it plans the route on a saved scene.",
       "output": "as today's command",
@@ -1406,7 +1408,8 @@
         {"name": "test_capture_delay_ms", "form": "option", "type": "integer", "required": false, "note": "test only"},
         {"name": "fields", "form": "option", "type": "string", "required": false, "note": "comma-separated answer members kept whole"},
         {"name": "verbose", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --verbose"},
-        {"name": "pretty", "form": "switch", "type": "boolean", "required": false}
+        {"name": "pretty", "form": "switch", "type": "boolean", "required": false},
+        {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: offline on saved scenes only (with scene, not capture): each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused elsewhere"}
       ],
       "help": "Waits until an instance shows a page, or until a target is stable, and answers what it observed.",
       "output": "as today's command",
@@ -1431,7 +1434,8 @@
         {"name": "scene", "form": "option", "type": "file", "required": false, "note": "an offline PNG frame"},
         {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false},
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
-        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"}
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: with a saved scene only: each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused without scene"}
       ],
       "help": "Recognizes one target of a package on an instance's current frame and taps it through the Runtime.",
       "output": "as today's command",
@@ -1458,7 +1462,8 @@
         {"name": "scene", "form": "option", "type": "file", "required": false, "note": "an offline PNG frame"},
         {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false},
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
-        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"}
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: with a saved scene only: each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused without scene"}
       ],
       "help": "Navigates an instance to a page along the package's navigation graph, pressing each route through the Runtime.",
       "output": "as today's command",
@@ -1803,7 +1808,8 @@
         {"name": "test_capture_delay_ms", "form": "option", "type": "integer", "required": false, "note": "test only"},
         {"name": "fields", "form": "option", "type": "string", "required": false, "note": "comma-separated answer members kept whole"},
         {"name": "verbose", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --verbose"},
-        {"name": "pretty", "form": "switch", "type": "boolean", "required": false}
+        {"name": "pretty", "form": "switch", "type": "boolean", "required": false},
+        {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: offline on saved scenes only (with scene, not capture): each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused elsewhere"}
       ],
       "help": "Detects the current page and its targets with a package, on saved scenes offline or on frames the Runtime captures.",
       "output": "as today's command",
@@ -2571,7 +2577,8 @@
         {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
-        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false},
+        {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: with a saved scene only: each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused without scene"}
       ],
       "help": "Recognizes one target of a package on a saved frame or on a frame the Runtime captures.",
       "output": "as today's command",
@@ -2593,7 +2600,8 @@
         {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
-        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false},
+        {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: with a saved scene only: each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused without scene"}
       ],
       "help": "Detects which page of a package a saved or captured frame shows, or checks the package's page set.",
       "output": "as today's command",
@@ -2614,7 +2622,8 @@
         {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
-        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false},
+        {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: with a saved scene only: each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused without scene"}
       ],
       "help": "Answers the page of a package that a saved or captured frame shows, by the same detection as detect-page.",
       "output": "as today's command",
@@ -2636,7 +2645,8 @@
         {"name": "scene", "form": "option", "type": "file", "required": false, "repeat": true, "note": "offline PNG frames, 1 to 5, oldest first, the last the current frame"},
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
-        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false}
+        {"name": "require_fresh", "form": "switch", "type": "boolean", "required": false},
+        {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: with a saved scene only: each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused without scene"}
       ],
       "help": "Answers whether one target of a package is visible on a saved or captured frame.",
       "output": "as today's command",
