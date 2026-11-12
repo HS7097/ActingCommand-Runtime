@@ -397,7 +397,10 @@ fn zip_entries(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
 // The package of `task` with `policy` as its select steps' document. A task of schema 0.9 has a
 // control of `Lab-1y.control.v2` holding the task's phases. The recognition pack declares the
 // task's candidate layouts and their targets; the template images and a declared truth set are
-// entries of the package.
+// entries of the package. Workflow #448 SBUD-1 (register §1.333): the step timeout is the
+// 32 000 ms a single-frame select over the card list needs (its 2 000 ms name read for each of
+// the 16 instances one projection evaluates), which admission compares since 0.12.57; it was
+// 10 000 ms.
 fn package(task: &Value, policy: &Value) -> Vec<u8> {
     let mut control = json!({
         "schema_version": "Lab-1y.control.v1",
@@ -408,7 +411,7 @@ fn package(task: &Value, policy: &Value) -> Vec<u8> {
         "resolution": {"width": WIDTH, "height": HEIGHT},
         "entry_task_id": "task",
         "capture_interval_ms": 100,
-        "step_timeout_ms": 10_000,
+        "step_timeout_ms": 32_000,
         "timeout_ms": TASK_TIMEOUT_MS
     });
     if task["schema_version"] == "0.9" {

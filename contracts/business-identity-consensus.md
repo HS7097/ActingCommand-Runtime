@@ -175,6 +175,20 @@ timeouts. H1 and H2 each add `F-1` page capture transactions, H2 has one fresh i
 and an H2 projection that adds frames also checks its guard on the final frame. The initial
 page transaction before StepStarted has its own entry-observation budget. The sum must fit
 the original step/task limits at preparation and the remaining budget before selection starts.
+The sum is taken where the pack declares target consensus or the layout declares consensus.
+Workflow #448 SBUD-1 (since 0.12.57; [v012-register.md](v012-register.md) §1.333): a layout
+with consensus, or with a feature that reads an identity or an integer, is projected through
+the candidate sampling even without consensus, and the projection checks, once its frames are
+taken and before any provider call, that what is left of the step's deadline holds `C` less
+the waits between its frames. Admission compares that need, taken from the same function, with
+the step's limit for every select step, single-frame or over a scan, and every list reading
+([resource-readings.md](resource-readings.md), "List readings"): the smaller of the step and
+task timeouts, or a scan's `max_ms` capped by the task's. A larger need is refused with
+`recognition_sample_budget_invalid` (`required_ms`, `limit_ms`, `pack_operation_id`); a need
+equal to the limit is admitted. In a pack with target consensus a list reading's `P` is compared
+with its scan's `max_ms` too, since every capture of its scan samples its page. Before 0.12.57
+only the sum was compared, so a layout without consensus passed admission whatever its need
+and its step failed at every run with `candidate_sample_budget_insufficient`.
 Page references include all predicate roles and composite members; sampled target cache reuse
 is counted once per context, while ordinary provider references retain their actual call count.
 Capture, local computation and ledger costs use the same absolute deadline without a separate

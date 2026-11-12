@@ -97,6 +97,12 @@ impl PreparedListReading {
     pub(super) const fn max_ms(&self) -> u64 {
         self.scan.max_ms()
     }
+
+    /// Workflow #448 SBUD-1: the layout the step projects on each viewport, whose candidate
+    /// provider need admission compares with the step's limit.
+    pub(super) fn layout_id(&self) -> &str {
+        &self.layout_id
+    }
 }
 
 /// One list reading's declaration, as the host publishes it: the operation that read it, the
