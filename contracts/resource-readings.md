@@ -677,6 +677,14 @@ package that declares one is refused as for readings
 (`contained_task_resource_reading_run_kind_unsupported`); a bound recovery entry and
 `recognize_only` take none.
 
+Workflow #448 SBUD-1 (since 0.12.57; [v012-register.md](v012-register.md) §1.333): admission also
+compares the step's sampling with its scan's `max_ms`, capped by the task's `timeout_ms`, as for a
+select over a scan: in a pack that declares target consensus, one page recognition, which every
+capture of the scan samples; then the candidate projection's provider need of its layout
+([selection-graph.md](selection-graph.md), "Select step"), which a list reading's identity key
+feature always makes compared. A larger need is refused with `recognition_sample_budget_invalid`
+(`required_ms`, `limit_ms`, `pack_operation_id`); a need equal to the limit is admitted.
+
 **Once per run.** A `read_list` step runs at most once in a run: once it ran, the page's
 operations are chosen without it, as for an operation whose `max_runs` 1 was reached with
 `on_max_runs` `next_candidate` ([README.md](README.md), "Per-run operation caps"). The static walk

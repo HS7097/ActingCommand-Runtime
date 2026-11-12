@@ -588,7 +588,9 @@ comes with Workflow #389 U-3.
 
 **What is suspended.** When admission refuses a task package with a code listed in
 `scheduling.pack_admission.suspend_codes` (default only `recognition_sample_budget_invalid`:
-the package's declared sampling needs more than the smaller of its step and task timeouts), the
+the package's declared sampling needs more than the smaller of its step and task timeouts, or a
+scan's `max_ms`; since 0.12.57 this includes a select step's or a list reading's candidate
+provider need, Workflow #448 SBUD-1, [v012-register.md](v012-register.md) §1.333), the
 Runtime suspends that task package, identified by its `package_id`, under the Runtime build that
 refused it. Admission depends only on the package's content and the kernel, so the object is
 neither a (task, instance) pair nor a standard package: a standard package is always installed

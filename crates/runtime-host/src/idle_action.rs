@@ -16,9 +16,16 @@
 //! - **The action** runs only when the instance is in no one's use (no lease, no queued request,
 //!   no keyless manual, Lab or ladder work), no scheduling pause holds it, its emulator runs (the
 //!   state both actions leave), it can be brought back (a startup package, and for
-//!   `stop_emulator` its configured emulator start), and the plan, made after the instance was
-//!   last seen in use, has no due task or fact-refresh reading and none closer than
-//!   `idle.min_gap_ms`. It runs once: the instance is `Acting` until the host reports the end
+//!   `stop_emulator` its configured emulator start), and the plan, one that counts the end of the
+//!   instance's last run, has no due task or fact-refresh reading and none closer than
+//!   `idle.min_gap_ms`. IDLE-3 (#447, register §1.332): a plan counts the end of the instance's
+//!   last run when its evaluation counted the end of every run the policy dispatched on the
+//!   instance (as it read its inputs the policy held no dispatch of the instance that was still
+//!   open, from its intent to its completion, and none has been opened since:
+//!   [`IdleView::run_uncounted`] is false) and, for work the policy does not dispatch (manual,
+//!   direct, Lab, ladder and host runs), it was evaluated after the last check that found the
+//!   instance in use. On the action's key the host reads the latest plan again by the same rule
+//!   ([`stands_on_key`]). It runs once: the instance is `Acting` until the host reports the end
 //!   ([`IdleEnd`]). Done, it is
 //!   `Idle` and owes its wake. Sent and failed with its result unknown (a `close_app` whose stop
 //!   request failed: the application may be closed), it is `Idle` and owes its wake all the
@@ -55,8 +62,9 @@
 //!   does one whose configured start met that hold on its key ([`IdlePlanner::wake_held`]).
 //! - **Never acted on again before the wake.** An `Idle` instance is never acted on. Work in
 //!   between neither strands it (the owed wake follows at its time) nor cycles it: after the
-//!   wake, the action runs again only once a plan made after the instance's last work shows a
-//!   gap of at least `idle.min_gap_ms`, so a gap has at most one action and one wake.
+//!   wake, the action runs again only once a plan that counts the instance's last work (by the
+//!   rule above) shows a gap of at least `idle.min_gap_ms`, so a gap has at most one action and
+//!   one wake.
 //! - **A start keeps them** (IDLE-1P, #405; production 10-27: a restart at 17:32 forgot a game
 //!   closed since 14:35 and its 17:54 wake, and its 18:01 task met the closed game). The host
 //!   keeps the instances the action closed or is closing, each with its action and wake
@@ -131,6 +139,12 @@ pub(crate) struct IdleView {
     /// instance's emulator now (the host's `automatic_start_hold`: its own scheduling pause), so
     /// a wake that starts the emulator is not queued and stays owed ([`IdleStep::WakeHeld`]).
     pub(crate) start_held: bool,
+    /// IDLE-3 (#447, register §1.332): the scheduler's latest plan does not count the end of
+    /// every run the policy dispatched on the instance: as its evaluation read its inputs a
+    /// dispatch of the instance was still open (from its intent to its completion), or one has
+    /// been opened since ([`RunsRead::counts_every_run`]). No action and no rest is decided on
+    /// such a plan; an owed wake reads it as it reads every plan.
+    pub(crate) run_uncounted: bool,
 }
 
 impl IdleView {
@@ -273,6 +287,69 @@ impl IdlePlan {
             (due, None) | (None, due) => due,
         }
     }
+
+    /// Whether a task or a reading is due in this plan: a task due now, or a reading due at the
+    /// evaluation's time.
+    fn work_due(&self) -> bool {
+        self.due_now
+            || self
+                .reading_due_unix_ms
+                .is_some_and(|at| at <= self.evaluated_at_unix_ms)
+    }
+}
+
+/// IDLE-3 (#447, register §1.332): what an evaluation read of the runs the policy dispatched on
+/// one instance, kept with its plan: whether one of them was still open as it read its inputs
+/// (from its intent to its completion, whose record is what the next task of a chain reads: its
+/// predecessor's terminal state and outcome), and the ledger position it read them at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RunsRead {
+    pub(crate) open: bool,
+    pub(crate) through: u64,
+}
+
+impl RunsRead {
+    /// Whether the plan counts the end of every run the policy dispatched on the instance, with
+    /// `latest_intent` the ledger sequence of the latest intent of a dispatch of the instance the
+    /// policy holds now (none: it holds none): no dispatch was open as the evaluation read its
+    /// inputs, and none has been opened since (an intent after its read position).
+    pub(crate) fn counts_every_run(self, latest_intent: Option<u64>) -> bool {
+        !self.open && latest_intent.is_none_or(|intent| intent <= self.through)
+    }
+}
+
+/// IDLE-3 (#447, register §1.332): whether an action or a rest asked for still stands on its
+/// claim's key, by the scheduler's latest plan read there (`plan`) and whether that plan counts
+/// the end of every run the policy dispatched on the instance (`run_uncounted`, as
+/// [`IdleView::run_uncounted`]). It does not when the plan does not count them, shows a task or a
+/// reading due, or its next work closer to `now_unix_ms` than `min_gap_ms`, the gap the step is
+/// taken from ([`action_min_gap_ms`]; a rest's `idle.return_home_min_gap_ms`): the host then leaves
+/// the instance alone, as for a pause that came meanwhile ([`IdlePlanner::abandoned`]). No plan (no
+/// evaluated cycle since the start, which decides no step) leaves the step as it was decided.
+pub(crate) fn stands_on_key(
+    plan: Option<IdlePlan>,
+    run_uncounted: bool,
+    min_gap_ms: u64,
+    now_unix_ms: u64,
+) -> bool {
+    let Some(plan) = plan else {
+        return true;
+    };
+    !run_uncounted
+        && !plan.work_due()
+        && plan
+            .next_work_unix_ms()
+            .is_none_or(|due| due.saturating_sub(now_unix_ms) >= min_gap_ms)
+}
+
+/// IDLE-3 (#447): the gap from which `action` (`close_app` or `stop_emulator`), asked for under
+/// `config`, is taken: under `auto` its tier's threshold (`close_app` from `idle.min_gap_ms`,
+/// `stop_emulator` from `idle.stop_emulator_min_gap_ms`), otherwise `idle.min_gap_ms`.
+pub(crate) fn action_min_gap_ms(config: &IdleConfig, action: IdleAction) -> u64 {
+    match (config.action, action) {
+        (IdleAction::Auto(gaps), IdleAction::StopEmulator) => gaps.stop_emulator_min_gap_ms,
+        _ => config.min_gap_ms,
+    }
 }
 
 /// IDLE-1P (#405): an instance the idle action closed, or is closing, as the Runtime keeps it
@@ -409,7 +486,9 @@ enum Phase {
 #[derive(Debug, Clone, Copy)]
 struct InstanceIdle {
     phase: Phase,
-    /// The last check that found the instance in use: an action waits for a plan made after it.
+    /// The last check that found the instance in use: an action waits for a plan made after it
+    /// (the sampled rule, for work the policy does not dispatch; IDLE-3: the policy's own runs
+    /// count through [`IdleView::run_uncounted`]).
     in_use_at_unix_ms: Option<u64>,
     /// The action in effect last reported as unable to work on the instance: it is reported
     /// once, and again only for another action.
@@ -579,8 +658,9 @@ impl IdlePlanner {
         true
     }
 
-    /// The host did not carry the action out (on its key it met a pause or work, or no key came):
-    /// the instance is active again. IDLE-2: so is an instance whose rest was not carried out.
+    /// The host did not carry the action out (on its key it met a pause or work, or IDLE-3 a
+    /// latest plan by which it no longer stands, [`stands_on_key`]; or no key came): the instance
+    /// is active again. IDLE-2: so is an instance whose rest was not carried out.
     pub(crate) fn abandoned(&mut self, alias: &str) {
         if let Some(entry) = self.instances.get_mut(alias)
             && matches!(entry.phase, Phase::Acting { .. } | Phase::Resting)
@@ -774,13 +854,14 @@ fn decide(
     }
     let plan = plan?;
     // A plan made before the instance's work settled does not know what follows that work.
-    if entry
-        .in_use_at_unix_ms
-        .is_some_and(|at| plan.evaluated_at_unix_ms < at)
-        || plan.due_now
-        || plan
-            .reading_due_unix_ms
-            .is_some_and(|at| at <= plan.evaluated_at_unix_ms)
+    // IDLE-3 (#447): for the runs the policy dispatched, that is a plan whose evaluation did not
+    // count the end of each of them (`run_uncounted`), whatever time it was evaluated at; for
+    // other work, one evaluated before the last check that found the instance in use.
+    if view.run_uncounted
+        || entry
+            .in_use_at_unix_ms
+            .is_some_and(|at| plan.evaluated_at_unix_ms < at)
+        || plan.work_due()
     {
         return None;
     }

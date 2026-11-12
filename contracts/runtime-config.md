@@ -1184,8 +1184,9 @@ before IDLE-2 refuses a file that names any of them.
 `auto` (IDLE-2, since 0.12.54; Alice's words of 11-11: 「根据任务间隔时间自动选择是关闭模拟器还是关闭应用还是回到主页面」;
 the coordinator's rulings on Workflow #386, comment 6787682270). When the idle check finds an
 instance free on every condition below but the gap (no lease, no queued request, no keyless
-work, no pause, player hold, blackout or fence, its emulator running, a plan made after its last
-work with nothing due), it reads the gap `g` to the instance's next work in that plan (its next
+work, no pause, player hold, blackout or fence, its emulator running, a plan that counts the end of
+its last run, below, with nothing due), it reads the gap `g` to the instance's next work in that
+plan (its next
 task's wake or its fact-refresh reading, the earlier, as `idle.min_gap_ms` reads it) and takes one
 tier, directly, a gap of exactly a threshold taking the tier that starts there:
 
@@ -1236,10 +1237,24 @@ check takes each registered physical instance the configuration names. The actio
 the instance has no lease, no queued request and no keyless work holding its admission guard, no
 scheduling pause holds it (nor a resource fence), its emulator runs, it can be brought back (a
 startup package, and for `stop_emulator` its configured emulator start), and the latest policy
-evaluation, made after the instance was last seen in use, has no due task for it and no next wake
-closer than `idle.min_gap_ms` (the not-run explanation's due candidates and next wake of the
-instance, the evaluator's own; no other estimate). It runs on an emulator-control claim of the
-instance's key. `close_app` stops the application `<standard_packs.root>/<game>/applications.json`
+evaluation, one that counts the end of the instance's last run, has no due task for it and no next
+wake closer than `idle.min_gap_ms` (the not-run explanation's due candidates and next wake of the
+instance, the evaluator's own; no other estimate). An evaluation counts the end of the instance's
+last run (IDLE-3, #447, since 0.12.57, [v012-register.md](v012-register.md) §1.332) when it
+counted the end of every run the policy dispatched on the instance: at the time it read its inputs
+the policy held no dispatch of the instance that was still open (from its intent to the record of
+its completion, which the settlement appends with the record of its execution and which the next
+task of a chain reads), and none has been opened since; and, for work the policy does not dispatch
+(manual, direct, Lab, ladder and host runs), when it was evaluated after the last idle check that
+found the instance in use. This holds for every idle step, a rest under `auto` too, whichever check
+reads the plan, the cycle's or the lease sweep's; a wake is unchanged. It runs on an
+emulator-control claim of the instance's key, where the instance is checked once more: a scheduling
+pause, a blackout or a fence, a request queued meanwhile, or (IDLE-3) a latest policy evaluation,
+read again, that does not count the end of the instance's last run or that shows work due or closer
+than the gap the step is taken from (`close_app`'s `idle.min_gap_ms`; under `auto`
+`stop_emulator`'s `idle.stop_emulator_min_gap_ms` and a rest's `idle.return_home_min_gap_ms`) leaves
+the instance alone: nothing is sent and nothing is recorded, and a later check decides again.
+`close_app` stops the application `<standard_packs.root>/<game>/applications.json`
 declares for the instance's server (`servers.<server>.application_id`), which must be the
 instance's assigned application, through the application lifecycle path; `stop_emulator` is the
 emulator-control Stop on the claim's key (the fence on the key, the retained session's close, the
