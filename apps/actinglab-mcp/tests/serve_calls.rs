@@ -1,19 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #434 LAB-5G2b (register §1.287, "Slice LAB-5G2b"; contracts/lab-two-entries.md §9.3):
-//! the real `actinglab-mcp` over pipes serves the calls of the core rows in its own process (the
-//! rescue rows are the slice's second part). The Runtime is the runtime client's scripted one
-//! (`test_support`) on loopback in a temporary state root, which the server finds through
-//! `ACTINGCOMMAND_RUNTIME_STATE_ROOT`, as actinglab does; `TMP` and `TEMP` name a temporary
-//! folder, so its exports stay there. No device, no clock, no sleep; `GATE_WAIT` only bounds a
-//! broken run.
+//! Workflow #434 LAB-5G2b (register §1.287, "Slice LAB-5G2b" and its second part;
+//! contracts/lab-two-entries.md §9.3): the real `actinglab-mcp` over pipes serves the calls of the
+//! core rows in its own process and, on Windows, those of the rescue rows (the slice's second
+//! part, from a copy of the program in a made-up root). The Runtime is the runtime client's
+//! scripted one (`test_support`) on loopback in a temporary state root, which the server finds
+//! through `ACTINGCOMMAND_RUNTIME_STATE_ROOT`, as actinglab does; `TMP` and `TEMP` name a
+//! temporary folder, so its exports stay there. No device, no clock, no sleep; `GATE_WAIT` only
+//! bounds a broken run.
 //!
 //! - `mcp_stdio_one_row_per_kind`: a core read (`discover`) on the server's kept connection and a
 //!   core write (`pause`) on a connection of its own, each refused by the scripted Runtime: each
 //!   answer's text is the line the command line's code (`lab_ops::core_ops`) gives for the same
 //!   parameters, the ids each run issues masked, `structuredContent` repeats it and `isError` is
 //!   true exactly when that line exits non-zero. The write's connection carries today's
-//!   provenance before the write, the read's nothing of it.
+//!   provenance before the write, the read's nothing of it. The second part, on Windows: a rescue
+//!   row that needs no Runtime (`leftovers`), answered by a copy of the program in a made-up root,
+//!   is the line the rescue module's code gives for it on that root.
 //! - `mcp_refusals_send_nothing`: a member the row does not declare and a parameter the front
 //!   gives itself (`unknown`), a member of the wrong type (`wrong_type`), a required one missing
 //!   (`required`) and a relative path (`not_absolute`), each `arguments_invalid`, and a string
@@ -26,6 +29,18 @@
 //!   left out (`Health`, `BindChannel` on the MCP channel, the identity card `actingctl-mcp`, the
 //!   client action of `ac_pause` on surface `mcp`, then `PauseScheduling`), each with the envelope
 //!   (Cli, Cli).
+//!
+//! The second part's own (Windows, where the rescue module runs; a made-up single-location root in
+//! a temporary folder whose build carries a copy of this program in `tools\`, adopted, no Runtime):
+//! - `mcp_plan_through_the_server_is_the_command_lines`: `ac_mcp_plan` answers the line the rescue
+//!   module's code gives for `mcp plan` on that root, in the shape of LAB-5G5b's checked-in sample,
+//!   its child the server's own file.
+//! - `mcp_detached_rows_refused_and_nothing_started`: `ac_deploy` and `ac_rollback` answer
+//!   `mcp_operation_unsupported` with their tool, and the root holds the same files after them (no
+//!   detached log, no journal).
+//! - `mcp_rescue_rows_refused_before_the_module`: an undeclared member (`unknown`) and a relative
+//!   path in `release stage`'s `dir` (`not_absolute`) are `arguments_invalid`, which the rescue
+//!   module never answers, with the argument; the root holds the same files after them.
 
 use actingcommand_contract::{
     EventActor, EventSource, IdentifierIssuer, RuntimeErrorCode, RuntimeErrorProjection,
@@ -464,6 +479,10 @@ fn mcp_stdio_one_row_per_kind() {
         (&json!("mcp"), &json!("ac_pause")),
         "{action}"
     );
+
+    // Workflow #434 LAB-5G2b, second part: the rescue row.
+    #[cfg(windows)]
+    rescue_row_on_a_made_up_root(temp.path());
 }
 
 #[test]
@@ -639,4 +658,311 @@ fn mcp_write_provenance_as_todays_server() {
             "{request}"
         );
     }
+}
+
+// ---- Workflow #434 LAB-5G2b, second part: the rescue rows, on Windows, where the rescue module
+// runs, served by a copy of the program in a made-up root.
+
+/// The build the made-up root installs, and another, the current build `mcp plan` is asked with.
+#[cfg(windows)]
+const BUILD: &str = "2222222222222222222222222222222222222222";
+#[cfg(windows)]
+const CURRENT: &str = "1111111111111111111111111111111111111111";
+/// A file a deploy kept aside in the made-up root's `tools\`, which `leftovers` lists.
+#[cfg(windows)]
+const KEPT_ASIDE: &str = "neutral.exe.old-1000";
+/// LAB-5G5b's checked-in answer of `mcp plan`, whose shape the server's answer has.
+#[cfg(windows)]
+const PLAN_SAMPLE: &str =
+    include_str!("../../../crates/lab-rescue/tests/fixtures/mcp-plan-entry-protocol-2.json");
+
+/// Writes `bytes` to `path`, its folders made first.
+#[cfg(windows)]
+fn write_file(path: &Path, bytes: &[u8]) {
+    std::fs::create_dir_all(path.parent().expect("a parent")).expect("make the folder");
+    std::fs::write(path, bytes).expect("write the file");
+}
+
+/// A made-up single-location root in `base` whose build carries this server, and the program in
+/// it: the program copied as `tools\actinglab-mcp.exe` and listed with its size and SHA-256 in the
+/// Tools manifest, the Runtime manifest of the same build listing nothing, a configuration whose
+/// state root is in `base`, `install\state.json` of an adopted root without a kept build (so that
+/// a detached run would start there), and a file a deploy kept aside in `tools\`.
+#[cfg(windows)]
+fn made_up_root(base: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    use sha2::{Digest, Sha256};
+    let root = base.join("root");
+    let program = root.join("tools").join("actinglab-mcp.exe");
+    std::fs::create_dir_all(root.join("tools")).expect("make the Tools folder");
+    std::fs::copy(PROGRAM, &program).expect("copy the program into the root");
+    let copied = std::fs::read(&program).expect("read the copy");
+    let runtime = json!({
+        "repository": "neutral/runtime",
+        "commit_sha": BUILD,
+        "files": [],
+        "runtime_payload_layout": "distribution-v1",
+    });
+    write_file(
+        &root.join("runtime").join("BUILD-MANIFEST.json"),
+        runtime.to_string().as_bytes(),
+    );
+    let tools = json!({
+        "repository": "neutral/runtime",
+        "commit_sha": BUILD,
+        "files": [{
+            "path": "actinglab-mcp.exe",
+            "size_bytes": copied.len(),
+            "sha256": format!("{:x}", Sha256::digest(copied.as_slice())),
+        }],
+        "tools_payload_layout": "platform-tools-v3",
+    });
+    write_file(
+        &root.join("tools").join("BUILD-MANIFEST.json"),
+        tools.to_string().as_bytes(),
+    );
+    write_file(&root.join("tools").join(KEPT_ASIDE), b"neutral");
+    let config = json!({"state_root": base.join("state"), "instances": []});
+    write_file(
+        &root.join("actingd.config.json"),
+        config.to_string().as_bytes(),
+    );
+    let state = json!({
+        "schema_version": "actingcommand.install-state.v1",
+        "live": null,
+        "builds": [],
+        "packs": [],
+        "config_sha256": null,
+    });
+    write_file(
+        &root.join("install").join("state.json"),
+        state.to_string().as_bytes(),
+    );
+    (root, program)
+}
+
+/// The line the rescue module's code gives for its row `name` with `params` on the root of the
+/// program at `program`, with the initiator `Lab-MCP`, as actinglab's `--json` prints a line
+/// (`apps/actinglab/src/cli_module.rs`, `rescue::line`); these rows answer one.
+#[cfg(windows)]
+fn module_line(program: &Path, name: &str, params: Value) -> (Value, u8) {
+    use actingcommand_lab_ops::initiator::Initiator;
+    use actingcommand_lab_ops::locate;
+    use actingcommand_lab_rescue::agent_channel::Answer;
+    let Value::Object(params) = params else {
+        panic!("parameters are an object");
+    };
+    let program = std::fs::canonicalize(program).expect("the copy's path");
+    let location = locate::locate_from(&program, None).expect("the copy's root locates");
+    let Answer::Line(exit) =
+        actingcommand_lab_rescue::rescue::answer(name, &params, &location, Initiator::LabMcp)
+    else {
+        panic!("{name} answers a line");
+    };
+    line_and_code(exit)
+}
+
+/// The line a `tools/call` answer carries as its text.
+#[cfg(windows)]
+fn answered_line(answer: &Value) -> Value {
+    let text = answer["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("an answer without its text: {answer}"));
+    serde_json::from_str(text)
+        .unwrap_or_else(|error| panic!("the text is no JSON ({error}): {answer}"))
+}
+
+/// Every file under `root`, as a path relative to it.
+#[cfg(windows)]
+fn files_under(root: &Path) -> std::collections::BTreeSet<std::path::PathBuf> {
+    let mut found = std::collections::BTreeSet::new();
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(folder).expect("read a folder of the root") {
+            let path = entry.expect("an entry of the root").path();
+            if path.is_dir() {
+                folders.push(path);
+            } else {
+                let relative = path.strip_prefix(root).expect("a file under the root");
+                found.insert(relative.to_path_buf());
+            }
+        }
+    }
+    found
+}
+
+/// `mcp_stdio_one_row_per_kind`'s rescue row: `leftovers`, which needs no Runtime, answered over
+/// pipes by a copy of the program in a made-up root, is the line the rescue module's code gives
+/// for it on that root (the file kept aside listed). Its exports go under `temp`.
+#[cfg(windows)]
+fn rescue_row_on_a_made_up_root(temp: &Path) {
+    let base = TempDir::new().expect("tempdir");
+    let (_, program) = made_up_root(base.path());
+    let mut server = Server::start(actinglab_mcp(&program, None, temp));
+    server.initialize();
+    let answer = server.call_tool(2, "ac_leftovers", json!({}));
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    let expected = module_line(&program, "leftovers", json!({}));
+    let listed = expected.0["leftovers"].as_array().is_some_and(|rows| {
+        rows.iter().any(|row| {
+            row["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with(KEPT_ASIDE))
+        })
+    });
+    assert!(
+        listed,
+        "setup: the module lists the file kept aside: {}",
+        expected.0
+    );
+    assert_served_as(&answer, &expected);
+}
+
+#[cfg(windows)]
+#[test]
+fn mcp_plan_through_the_server_is_the_command_lines() {
+    use std::collections::BTreeSet;
+    let base = TempDir::new().expect("tempdir");
+    let temp = TempDir::new().expect("tempdir");
+    let (_, program) = made_up_root(base.path());
+    let arguments = json!({"entry_protocol": 2, "current_build": CURRENT});
+    let mut server = Server::start(actinglab_mcp(&program, None, temp.path()));
+    server.initialize();
+    let answer = server.call_tool(2, "ac_mcp_plan", arguments.clone());
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    let expected = module_line(&program, "mcp plan", arguments);
+    assert_served_as(&answer, &expected);
+
+    // The shape of LAB-5G5b's sample: its members, the build's and the tunables', the plan given
+    // (not refused), a switch from the current build, and one child, the server's own file.
+    let line = &expected.0;
+    let sample = serde_json::from_str::<Value>(PLAN_SAMPLE).expect("the sample is JSON");
+    let members = |value: &Value| {
+        value
+            .as_object()
+            .map(|object| object.keys().cloned().collect::<BTreeSet<_>>())
+            .unwrap_or_default()
+    };
+    for (given, sampled) in [
+        (line, &sample),
+        (&line["build"], &sample["build"]),
+        (&line["tunables"], &sample["tunables"]),
+    ] {
+        assert_eq!(
+            members(given),
+            members(sampled),
+            "the sample's members: {line}"
+        );
+    }
+    assert_eq!(
+        (
+            &line["outcome"]["code"],
+            &line["switch"],
+            &line["build"]["commit"],
+            &line["entry_protocol"],
+        ),
+        (
+            &sample["outcome"]["code"],
+            &json!(true),
+            &json!(BUILD),
+            &json!(2),
+        ),
+        "{line}"
+    );
+    let [child] = line["child"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    else {
+        panic!("one child: {line}");
+    };
+    let child = child
+        .as_str()
+        .unwrap_or_else(|| panic!("the child is a path: {line}"));
+    assert_eq!(
+        std::fs::canonicalize(child).expect("the child is in place"),
+        std::fs::canonicalize(&program).expect("the copy's path"),
+        "the child is the server's own file: {line}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn mcp_detached_rows_refused_and_nothing_started() {
+    let base = TempDir::new().expect("tempdir");
+    let temp = TempDir::new().expect("tempdir");
+    let (root, program) = made_up_root(base.path());
+    let before = files_under(&root);
+    let mut server = Server::start(actinglab_mcp(&program, None, temp.path()));
+    server.initialize();
+    let deploy = server.call_tool(2, "ac_deploy", json!({"target": BUILD}));
+    let rollback = server.call_tool(3, "ac_rollback", json!({}));
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    for (tool, answer) in [("ac_deploy", &deploy), ("ac_rollback", &rollback)] {
+        assert_eq!(answer["result"]["isError"], json!(true), "{tool}: {answer}");
+        let line = answered_line(answer);
+        assert_eq!(
+            (
+                &line["outcome"]["code"],
+                &line["outcome"]["values"]["mcp_tool"]
+            ),
+            (&json!("mcp_operation_unsupported"), &json!(tool)),
+            "{tool}: {line}"
+        );
+    }
+    assert_eq!(
+        files_under(&root),
+        before,
+        "nothing started: no detached log, no journal"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn mcp_rescue_rows_refused_before_the_module() {
+    let base = TempDir::new().expect("tempdir");
+    let temp = TempDir::new().expect("tempdir");
+    let (root, program) = made_up_root(base.path());
+    let before = files_under(&root);
+    let mut server = Server::start(actinglab_mcp(&program, None, temp.path()));
+    server.initialize();
+    // Each case: the tool, its arguments, and the argument refused with its problem.
+    let cases = [
+        (
+            "ac_leftovers",
+            json!({"neutral_undeclared": true}),
+            "neutral_undeclared",
+            "unknown",
+        ),
+        (
+            "ac_release_stage",
+            json!({"dir": "relative\\release"}),
+            "dir",
+            "not_absolute",
+        ),
+    ];
+    for (id, (tool, arguments, argument, problem)) in (2_u64..).zip(cases) {
+        let answer = server.call_tool(id, tool, arguments);
+        assert_eq!(answer["result"]["isError"], json!(true), "{tool}: {answer}");
+        let line = answered_line(&answer);
+        let outcome = &line["outcome"];
+        assert_eq!(
+            (
+                &outcome["code"],
+                &outcome["values"]["argument"],
+                &outcome["values"]["argument_problem"],
+            ),
+            (
+                &json!("arguments_invalid"),
+                &json!(argument),
+                &json!(problem)
+            ),
+            "{tool}: {line}"
+        );
+    }
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    assert_eq!(files_under(&root), before, "the module wrote nothing");
 }

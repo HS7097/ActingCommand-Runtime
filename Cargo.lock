@@ -118,6 +118,7 @@ dependencies = [
  "actingcommand-runtime-client",
  "actingcommand-watchdog",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

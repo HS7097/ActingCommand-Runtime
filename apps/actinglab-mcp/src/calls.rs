@@ -5,9 +5,11 @@
 //! rulings amend them).
 //!
 //! - **Which rows are served** (`tools::serving`): a row `lab_ops::core_ops` serves, by
-//!   `core_ops` in this process ([`Service::core`]). Every other call answers
-//!   `mcp_operation_unsupported`, its arguments unread, as before; the rescue rows wait for the
-//!   slice's second part.
+//!   `core_ops` in this process ([`Service::core`]); and (the slice's second part) on Windows a
+//!   rescue row the rescue module serves, by the module in this process with the initiator
+//!   `Lab-MCP` ([`rescue_line`]), but `deploy` and `rollback`, whose run the front forces
+//!   detached. Every other call answers `mcp_operation_unsupported`, its arguments unread, as
+//!   before.
 //! - **The arguments** ([`prepare`]), before anything is sent or written: a member the row does
 //!   not declare (`Operation::undeclared`), and a parameter the front gives itself, is refused as
 //!   today's server refuses an argument it does not know (`arguments_invalid`, `unknown`); so is a
@@ -77,10 +79,12 @@ impl Service {
         arguments: &Map<String, Value>,
         era: Era,
     ) -> Exit {
-        if tools::serving(operation) == Serving::Refused {
+        let serving = tools::serving(operation);
+        if serving == Serving::Refused {
             return cli_line::failure(&tools::unsupported(tool), None);
         }
         match prepare(operation, arguments, &self.exports) {
+            Ok(params) if serving == Serving::Rescue => rescue_line(operation, &params),
             Ok(params) => self.core(operation, tool, &params, era),
             Err(refused) => cli_line::failure(&refused.outcome, refused.text),
         }
@@ -207,6 +211,41 @@ impl Service {
         };
         core_ops::answer(operation, params, &caller)
     }
+}
+
+/// Workflow #434 LAB-5G2b, second part: a rescue row, served by the rescue module in this process
+/// for the root this program runs from, with the initiator `Lab-MCP`
+/// (`lab_rescue::rescue::answer_here`), its answer the line actinglab's `--json` and `serve
+/// --stdio` print for it (`apps/actinglab/src/cli_module.rs`, `rescue::line`): a line as it is, a
+/// notice the line `agent_channel_reported` with its `text`, a hook that did its work that line
+/// without members, a registered session's failed hook its failure, refused. No provenance is
+/// recorded here: the module makes its own connection on its own channel and its journal records
+/// the initiator (ruling 17 of 6775192250). Its budget is the core rows' (`call_result`).
+#[cfg(windows)]
+fn rescue_line(operation: &Operation, params: &Map<String, Value>) -> Exit {
+    use actingcommand_lab_ops::initiator::Initiator;
+    use actingcommand_lab_rescue::agent_channel::Answer;
+    match actingcommand_lab_rescue::rescue::answer_here(&operation.name, params, Initiator::LabMcp)
+    {
+        Answer::Line(exit) => exit,
+        Answer::Text(text) => {
+            let mut members = Map::new();
+            members.insert("text".to_owned(), Value::String(text.to_owned()));
+            cli_line::success(members, &Outcome::new(ActingctlCode::AgentChannelReported))
+        }
+        Answer::Silent => cli_line::success(
+            Map::new(),
+            &Outcome::new(ActingctlCode::AgentChannelReported),
+        ),
+        Answer::Hook { outcome, text } => cli_line::refused(&outcome, Some(&text)),
+    }
+}
+
+/// Elsewhere the rescue module does not run, and `tools::serving` serves no rescue row: the call
+/// is refused as one this build does not serve.
+#[cfg(not(windows))]
+fn rescue_line(operation: &Operation, _params: &Map<String, Value>) -> Exit {
+    cli_line::failure(&tools::unsupported(&tools::tool_name(operation)), None)
 }
 
 /// The instance a write names, when its row declares the parameter and the call gives it.
