@@ -1731,12 +1731,14 @@ impl ActingdConfigFile {
             let instance_id = manifest::instance_id_text(instance.instance_id)?;
             instance_aliases.push((instance.alias.clone(), instance_id.clone()));
             // Workflow #437 MAPP-1: the entry's group is a name of 1 to 64 bytes under the alias
-            // rules.
-            if let Some(name) = instance.device_group.as_deref()
-                && (name.len() > device_group::MAX_DEVICE_GROUP_BYTES
-                    || actingcommand_contract::validate_instance_alias(name).is_err())
+            // rules, the first of the group checks (`name_invalid`).
+            if let Some(refusal) = instance
+                .device_group
+                .as_deref()
+                .and_then(|name| device_group::name_refusal(&instance.alias, name))
             {
-                return Err(SharedCode::InvalidInstanceAlias.code());
+                *refused = Some(refusal.outcome());
+                return Err(refusal.code());
             }
             group_entries.push(device_group::GroupEntry::of(
                 instance,

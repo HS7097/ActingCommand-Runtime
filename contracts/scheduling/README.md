@@ -1636,12 +1636,14 @@ ledger.
 evaluator's one pick per device and `selected`, register §1.328; `held`, `player_hold` and
 `fenced`, which the host's gates give, are not built yet; [device-group.md](../device-group.md),
 "One pick per device per round"). In a device group of
-several, a candidate of a member that does not get the device because another member has it is
-deferred with `device_group_waiting` (registered; info; `instance_id` the alias, `alias` the member
+several, a candidate of a member that does not get the device because another member has it
+waits with `device_group_waiting` (registered; info; `instance_id` the alias, `alias` the member
 that has the device, `device_group_wait` `selected`, `held`, `player_hold` or `fenced`, optional
 `task_id` and `holder_kind`) and no wake of its own. This takes the place of
 `instance_already_selected`, `dispatch_instance_held` or a control gate's code, which a candidate
-of a lone instance gets, and a member's own holder or gate keeps its own code. It is the `why` of
+of a lone instance gets; with `selected` the candidate has exactly the state, the eligibility and
+the wake of one behind its own instance's winner (`instance_already_selected`), and only the code
+and its values differ. A member's own holder or gate keeps its own code. It is the `why` of
 the member's not-running row while it waits. In a group of one it never occurs.
 After a failed switch (`application_switch_failed`, proposed) the member's own candidates wait out
 its switch cooldown, `scheduling.device_group.switch_failure_cooldown_ms` (proposed, default

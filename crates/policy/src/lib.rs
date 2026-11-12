@@ -155,6 +155,6 @@ mod tests {
     // `inventory.list.` to read is refused at compile.
     mod gate_428_s168_lb1a;
     // Workflow #437 MAPP-1 (0.12.56; register §1.328): one pick per device per round, the other
-    // member deferred `device_group_waiting` `selected`.
+    // member waits with `device_group_waiting` `selected`.
     mod gate_mapp1;
 }

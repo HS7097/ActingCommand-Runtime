@@ -1705,7 +1705,9 @@ switch cooldown is MAPP-2's, not built yet):
   for an entry that names it; so it is a row of the key table (`device_group::ROW`, default none,
   `NotSettable::ReadAtAssembly`), as `device_kind` is, because every manifest row is one. Its
   console tier is `hidden` (`advanced` holds its eight keys; how the console shows a group is the
-  console slice's).
+  console slice's). A value that is not a name of 1 to 64 bytes under the alias rules is refused
+  at assembly, first of the group checks (`device_group_config_invalid`, `config_key`
+  `device_group`, `name_invalid`; MAPP-1).
 - **Keys a member of a group of several may not turn on**, refused at assembly
   (`device_group_config_invalid`, `device_action_unsupported`; MAPP-1):
   `instance.<id>.start_emulator` `true`; `idle.action` in effect other than `none`, the instance's
@@ -1734,10 +1736,14 @@ switch cooldown is MAPP-2's, not built yet):
   with `dispatch_instance_cooldown`, as during a takeover cooldown, while the other members go on;
   a change applies to cooldowns that start after it. No per-instance or per-group form
   ([device-group.md](device-group.md), "The switch before a run").
-- **A group of one is unchanged:** none of these rules applies to it, and no key, default or row of
-  today changes for it. The switch cooldown's key is one more row of the `scheduling` section on
-  every root, in the manifest and in `config.parameters.scheduling`, which a group of one never
-  meets: it makes no switch.
+- **A group of one is unchanged:** none of these rules applies to it but the name's, and no key of
+  today changes for it. The switch cooldown's key is one more row of the `scheduling`
+  section on every root, in the manifest and in `config.parameters.scheduling`, which a group of
+  one never meets: it makes no switch. The default of `recovery_ladder.profiles` gains
+  `without_emulator_restart`: on a root that leaves the key at its default, the row's value, the
+  program fact `config.parameters.recovery_ladder` and the ladder's `config_digest` change, and
+  nothing climbs by the profile unless an entry names it ([device-group.md](device-group.md), "A
+  group of one is today").
 
 ## Facts
 

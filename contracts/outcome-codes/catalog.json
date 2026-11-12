@@ -9172,6 +9172,9 @@
         "enum": "DeviceGroupProblem"
       },
       "tokens": {
+        "name_invalid": {
+          "description": "An entry's device_group is not a name of 1 to 64 bytes under the alias rules (empty, longer than 64 bytes, or holding a control character). The first of the group checks, on every entry that names a group, before the kind rules; aliases is the entry and config_key is device_group."
+        },
         "device_mismatch": {
           "description": "The members of a group of several name the device by different keys or values: all must name the same instance_index, all the same instance_name, or all the same host and port (and serial when one is named). config_key is the key that differs."
         },

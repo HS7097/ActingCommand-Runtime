@@ -10,8 +10,9 @@ those MAPP-1 registers: `device_group`, `instance.<instance id>.device_group`,
 MAPP-1 builds the configuration form and its checks, the refusal of every group of several, the
 member → device key map, the scheduler keyed by device and the evaluator's one pick per device; the
 host's worker, occupancy, admission guard and pause per device, the gates of the group, the
-session rule and the refusals of device-level actions are not built yet. The other contracts point
-here instead of repeating the rules.
+session rule and the refusals of device-level actions are not built yet: the coordinator cut
+MAPP-1 in two, and these are slice MAPP-1b's ([v012-register.md](v012-register.md) §1.328,
+"MAPP-1b"; MAPP-1a built the rest). The other contracts point here instead of repeating the rules.
 
 Alice settled the direction on 2026-11-11 (board #437): one device may hold several applications
 that the scheduler serves in turn; one application is in front at any time; one device has one
@@ -53,7 +54,8 @@ in force from Runtime 0.12.56: [component-interfaces.md](component-interfaces.md
 ```
 
 - `device_group` is a name of 1 to 64 bytes under the alias rules (`validate_alias`,
-  `crates/runtime-host/src/provider.rs`). It names no device value: no serial, no port, no index.
+  `crates/runtime-host/src/provider.rs`); any other value is refused with `name_invalid` (below).
+  It names no device value: no serial, no port, no index.
   Entries that name the same value are one group. An entry that names it alone is a group of one
   and behaves as an entry without it.
 - It is read once at assembly and is not settable. The manifest reports it as the row
@@ -71,11 +73,13 @@ rule below holds. Each broken rule refuses the configuration at stage `assemble`
 and at start alike, with `device_group_config_invalid`. That code is registered (MAPP-1): error,
 ladder class `none`, owner `actingd`. Its values are `aliases` (the entries concerned), `config_key`
 (the member that breaks the rule) and `device_group_problem` (a registered vocabulary). MAPP-1
-checks the kind rules (`handset_member`, `fixture_member`) before `device_mismatch`, then the
-table's order ([v012-register.md](v012-register.md) §1.328, point 1).
+checks the name first, on every entry that names a group (`name_invalid`), then the kind rules
+(`handset_member`, `fixture_member`) before `device_mismatch`, then the table's order
+([v012-register.md](v012-register.md) §1.328, points 1 and 4).
 
 | Rule | `config_key` | `device_group_problem` |
 |---|---|---|
+| Every entry that names `device_group` names it by a name of 1 to 64 bytes under the alias rules: not empty, at most 64 bytes, no control character. It applies to a group of one too, and `aliases` is the entry: its alias is right, its member is not | `device_group` | `name_invalid` |
 | Every member names the same device by the same key with the same value: all the same `instance_index`, all the same `instance_name`, or all the same `host` and `port` (and the same `serial` when one is named). check-config never runs discovery ([actingd-check-config.md](actingd-check-config.md), "Discovery-bound instances"), so it cannot prove that an index and a name reach one emulator | the key that differs | `device_mismatch` |
 | No member is a handset (`device.kind` `handset`). The private binding file binds one serial to one alias ([device-binding.md](device-binding.md), "The private binding file", `duplicate_serial`); a group-aware binding is a later slice | `device` | `handset_member` |
 | No member is a fixture entry | `fixture_backend` | `fixture_member` |
@@ -147,7 +151,8 @@ data is migrated. It holds because:
   today's keys and values ("One queue, one worker, one lease per device").
 - The new reason (`device_group_waiting`), the switch and its cooldown exist only when another
   member has the device, which a group of one never has. The group rules of the form apply only to
-  a group of several.
+  a group of several, but the name's (`name_invalid`), which a file without `device_group` never
+  meets.
 - No record type, payload member, phase word, fact key, tag or closed vocabulary of the ledger is
   added ("Interfaces").
 - A file without `device_group` keeps its revision (28 or lower). check-config's report and the
@@ -157,14 +162,27 @@ data is migrated. It holds because:
   `crates/scheduler/src/lib.rs:2585-2593`, written by `persist_active_instances`,
   `crates/runtime-host/src/host/lease.rs:3242-3247`).
 
-There are two exceptions:
+There are three exceptions:
 
 - the refusal of undeclared sharing above;
 - the switch cooldown's key `scheduling.device_group.switch_failure_cooldown_ms` ("The switch
   before a run"). From MAPP-2 on, like every key of the `scheduling` section, it is a row of the
   manifest and of the program fact `config.parameters.scheduling` on every root, with its default
   ([runtime-config.md](runtime-config.md), "The `scheduling` section"). Nothing a group of one does
-  reads it.
+  reads it;
+- the defaults file's ladder profile `without_emulator_restart` (MAPP-1, "The configuration
+  form"), a member of the default of `recovery_ladder.profiles`. On a root whose file and
+  instructions leave that key at its default (a profile set the file names replaces the default
+  whole), three things change, and only these: the value of the manifest's row
+  `recovery_ladder.profiles`, which gains the profile; the program fact
+  `config.parameters.recovery_ladder`, which carries that row; and the ladder's configuration
+  digest, `config_digest` of `recovery_ladder_started`, the SHA-256 of the section's values in
+  effect ([runtime-config.md](runtime-config.md), "The recovery ladder section"). A root whose
+  instruction set the key keeps the instruction's value, and its start notes
+  `config_override_base_changed` on the key, as for any default that changed under an
+  instruction. Nothing climbs by the profile unless an entry names it
+  (`instance.<id>.recovery_ladder_profile`): the defaults' `kind_profiles` do not name it, so
+  every ladder climbs the rungs it climbs today.
 
 ## Derived, never stored (MAPP-1: the map, the scheduler and the evaluator; the workers and the guards, not built yet)
 
@@ -272,7 +290,10 @@ configuration form").
 carries this reason. It takes the place of the code a lone instance would give
 (`instance_already_selected`, `dispatch_instance_held`, the control gates' codes) and has no wake
 of its own: the other member's settlement, release or lifting wakes the next evaluation, as today.
-Its values:
+With `selected` the candidate waits with exactly the state, the eligibility and the wake of a
+candidate behind its own instance's winner (`instance_already_selected`); only the code and its
+values differ (settled by the coordinator, [v012-register.md](v012-register.md) §1.328). Its
+values:
 
 - `instance_id` (required): the candidate's alias, as the policy's reasons name it.
 - `alias` (required): the member that has the device.
@@ -618,9 +639,9 @@ them, and it comes before the first real use of a group of several.
 
 New value keys, each with its vocabulary:
 
-- `device_group_problem` (registered, MAPP-1): `device_mismatch`, `handset_member`,
-  `fixture_member`, `application_shared`, `startup_package_missing`, `device_action_unsupported`,
-  `undeclared_shared_device`, `several_members_unsupported`.
+- `device_group_problem` (registered, MAPP-1): `name_invalid`, `device_mismatch`,
+  `handset_member`, `fixture_member`, `application_shared`, `startup_package_missing`,
+  `device_action_unsupported`, `undeclared_shared_device`, `several_members_unsupported`.
 - `device_group_wait` (registered, MAPP-1): `selected`, `held`, `player_hold`, `fenced`.
 - `application_switch_step` (proposed, MAPP-2): `foreground_read`, `stop`, `startup_package`.
 

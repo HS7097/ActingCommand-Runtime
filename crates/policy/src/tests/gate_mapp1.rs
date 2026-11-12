@@ -4,11 +4,13 @@
 // device per round"): the evaluator takes the device each instance runs on as an argument of its
 // own (`DeviceGroups`), and a round selects at most one candidate per device. The device's first
 // candidate in the allocation order wins it; every later candidate of another member of the
-// device is deferred `device_group_waiting` (`device_group_wait` `selected`, `alias` the winner,
-// `task_id` its task) with no wake, where a lone instance's waits `instance_already_selected`.
-// Members rank by today's scores, unchanged. The load refuses every group of several until the
-// slice "order within one device", so the test hands the evaluator the map as the Runtime builds
-// it from the assembly's member → device key map.
+// device waits with `device_group_waiting` (`device_group_wait` `selected`, `alias` the winner,
+// `task_id` its task), with exactly the state, the eligibility and the wake of a candidate behind
+// its own instance's winner (`instance_already_selected`): only the code and its values differ
+// (the coordinator's settled point of 11-12, register §1.328). Members rank by today's scores,
+// unchanged. The load refuses every group of several until the slice "order within one device",
+// so the test hands the evaluator the map as the Runtime builds it from the assembly's member →
+// device key map.
 //
 // Two members A and B of one device and an instance L alone: P (priority 900) and Q (100) on A,
 // R (500) on B and Z (300) on L, every task hourly and due at NOW. Every expected value comes from
@@ -25,8 +27,8 @@ use crate::{
     CompiledCatalog, DeviceGroups, DispatchIntent, EvaluationFacts, EvaluationResources,
     EvaluationTime, FactRefreshInputs, FactRefreshSettings, HostResourceSnapshot, InstanceHolds,
     InstancePoolLines, LeftOutFacts, NoProgressGuards, OwedReruns, PolicyCode, PolicyEvaluation,
-    PolicyEvaluationError, RemedyPlan, RunSlots, SchedulingDecisionState, TaskDecision,
-    compile_catalog, evaluate_with_device_groups, evaluate_with_left_out_facts,
+    PolicyEvaluationError, RemedyPlan, RunSlots, TaskDecision, compile_catalog,
+    evaluate_with_device_groups, evaluate_with_left_out_facts,
 };
 
 const A: &str = "neutral.a";
@@ -49,7 +51,19 @@ fn mapp1_one_pick_per_device_the_other_member_waits_device_group_waiting_selecte
     // With them A and B share one device: P, first in the allocation order, wins it.
     assert_eq!(dispatched(&grouped), vec![(P, A), (Z, L)]);
     let waiting = decision(&grouped, R, B);
-    assert_eq!(waiting.state, SchedulingDecisionState::Deferred);
+    // Q waits behind its own instance's winner, with the code a lone instance's gets.
+    let behind = decision(&grouped, Q, A);
+    assert!(
+        behind
+            .reasons
+            .last()
+            .is_some_and(|reason| reason.outcome.is(PolicyCode::InstanceAlreadySelected)),
+        "{:?}",
+        behind.reasons
+    );
+    // R waits for its device with exactly Q's state, eligibility and wake; only its code and
+    // values differ.
+    assert_waits_as(waiting, behind);
     let reason = waiting.reasons.last().expect("a reason");
     assert!(
         reason.outcome.is(PolicyCode::DeviceGroupWaiting),
@@ -68,18 +82,6 @@ fn mapp1_one_pick_per_device_the_other_member_waits_device_group_waiting_selecte
             ("task_id", json!(P)),
         ],
     );
-    // A later candidate of the winning member keeps the code a lone instance's gets; the waiting
-    // member has no wake of its own, as that candidate has none.
-    let behind = decision(&grouped, Q, A);
-    assert_eq!(waiting.next_wake_unix_ms, behind.next_wake_unix_ms);
-    assert!(
-        behind
-            .reasons
-            .last()
-            .is_some_and(|reason| reason.outcome.is(PolicyCode::InstanceAlreadySelected)),
-        "{:?}",
-        behind.reasons
-    );
     // The instance alone on its device decides as without the groups.
     assert_eq!(decision(&grouped, Z, L), decision(&plain, Z, L));
 }
@@ -90,9 +92,22 @@ fn mapp1_the_device_goes_to_its_first_candidate_whichever_member_it_serves() {
     // R outranks P now: it wins the device, and both of A's candidates wait for it.
     let grouped = round(1000, Some(&groups));
     assert_eq!(dispatched(&grouped), vec![(R, B), (Z, L)]);
+    // Without the groups P wins A and Q waits behind it, with the code a lone instance's gets.
+    let plain = round(1000, None);
+    assert_eq!(dispatched(&plain), vec![(P, A), (R, B), (Z, L)]);
+    let behind = decision(&plain, Q, A);
+    assert!(
+        behind
+            .reasons
+            .last()
+            .is_some_and(|reason| reason.outcome.is(PolicyCode::InstanceAlreadySelected)),
+        "{:?}",
+        behind.reasons
+    );
     for task in [P, Q] {
         let waiting = decision(&grouped, task, A);
-        assert_eq!(waiting.state, SchedulingDecisionState::Deferred, "{task}");
+        // Each waits for the device with exactly that candidate's state, eligibility and wake.
+        assert_waits_as(waiting, behind);
         let reason = waiting.reasons.last().expect("a reason");
         assert!(reason.outcome.is(PolicyCode::DeviceGroupWaiting), "{task}");
         assert_values(
@@ -374,6 +389,24 @@ fn dispatched(evaluation: &PolicyEvaluation) -> Vec<(&str, &str)> {
         .collect::<Vec<_>>();
     dispatched.sort_by(|left, right| left.1.cmp(right.1));
     dispatched
+}
+
+/// `waiting` waits with exactly the state, the eligibility and the wake of `behind`, a candidate
+/// behind its own instance's winner (`instance_already_selected`).
+fn assert_waits_as(waiting: &TaskDecision, behind: &TaskDecision) {
+    assert_eq!(
+        (
+            &waiting.state,
+            &waiting.eligibility,
+            &waiting.next_wake_unix_ms
+        ),
+        (
+            &behind.state,
+            &behind.eligibility,
+            &behind.next_wake_unix_ms
+        ),
+        "{waiting:?} beside {behind:?}"
+    );
 }
 
 /// The reason's values are exactly these.

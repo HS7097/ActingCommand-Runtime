@@ -4,6 +4,8 @@
 //! sharing", "Derived, never stored"; register §1.323, §1.328): the device groups of a
 //! configuration, derived at assembly from the entries' `device_group` and never stored.
 //!
+//! - **The name** comes first, on every entry that names a group: 1 to 64 bytes under the alias
+//!   rules (`name_invalid`, [`name_refusal`]).
 //! - **The rules of a group of several**, at assembly, in check-config and at start alike, each a
 //!   refusal `device_group_config_invalid` with its `device_group_problem`: no member is a handset
 //!   (`handset_member`) or a fixture (`fixture_member`); every member names the device by the same
@@ -31,7 +33,7 @@ use std::collections::BTreeMap;
 /// The longest `device_group` name, in bytes (`contracts/device-group.md`, "The configuration
 /// form": 1 to 64 bytes under the alias rules, whose own bound is longer). A bound of the form,
 /// not a tunable.
-pub(super) const MAX_DEVICE_GROUP_BYTES: usize = 64;
+const MAX_DEVICE_GROUP_BYTES: usize = 64;
 /// The entry's member a refusal names for a handset member: its `device` (kind).
 const DEVICE_KEY: &str = "device";
 /// The entry's member a refusal names for a fixture member.
@@ -209,6 +211,22 @@ impl DeviceGroupRefusal {
             .config_key(self.config_key)
             .device_group_problem(self.problem)
     }
+}
+
+/// The first of the group checks, on every entry that names a group, before the kind rules: the
+/// refusal of an entry `alias` whose `device_group` `name` is not 1 to 64 bytes under the alias
+/// rules (`name_invalid`, `aliases` the entry, `config_key` `device_group`). The alias is right;
+/// the refusal names the member that is wrong.
+pub(super) fn name_refusal(alias: &str, name: &str) -> Option<DeviceGroupRefusal> {
+    (name.len() > MAX_DEVICE_GROUP_BYTES
+        || actingcommand_contract::validate_instance_alias(name).is_err())
+    .then(|| {
+        DeviceGroupRefusal::new(
+            [alias.to_owned()],
+            actingcommand_runtime_config::DEVICE_GROUP,
+            DeviceGroupProblem::NameInvalid,
+        )
+    })
 }
 
 /// Why the rules refused the configuration: a rule of device groups, or the configuration

@@ -125,16 +125,19 @@ fn write_device_group_lines(
     let _unwritten = crate::write_daemon_reports(&lines, daemon_log);
 }
 
+/// Workflow #437 MAPP-1: one entry the start's discovery resolved: its alias, its discovered index
+/// and its discovered ADB endpoint (`host`, `port`; none while the emulator is stopped).
+pub(super) type DiscoveredEntry = (String, u16, Option<(String, u16)>);
+
 /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "Undeclared sharing"): after the start's
 /// discovery, the first two entries outside one device group that resolve to one device: two
 /// discovery-bound entries bound to the same discovered index (an index and a name of one
 /// emulator; `config_key` `instance_index`), or a discovery-bound entry whose discovered ADB
 /// endpoint is an explicit entry's `host` and `port` (`config_key` `port`). `resolved` holds each
-/// resolved entry's alias, discovered index and discovered endpoint (none while the emulator is
-/// stopped), in configuration order. The refusal is a Provider startup failure, as every
+/// resolved entry, in configuration order. The refusal is a Provider startup failure, as every
 /// discovery refusal is.
 pub(super) fn undeclared_sharing_after_discovery(
-    resolved: &[(String, u16, Option<(String, u16)>)],
+    resolved: &[DiscoveredEntry],
     groups: &DeviceGroups,
 ) -> Option<DeferredRefusal> {
     let apart = |left: &str, right: &str| {

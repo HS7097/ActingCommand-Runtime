@@ -1642,12 +1642,13 @@ pub fn evaluate_with_left_out_facts<E: From<PolicyEvaluationError>>(
 /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "One pick per device per round"):
 /// `evaluate_with_left_out_facts` with the device each instance runs on ([`DeviceGroups`]). A
 /// round selects at most one candidate per device: the device's first candidate in the
-/// allocation order wins it, and every later candidate of another member of the device is
-/// deferred with `device_group_waiting` (`device_group_wait` `selected`, `alias` the winning
-/// member, `task_id` its task) and no wake of its own, where a lone instance's would wait with
-/// `instance_already_selected`; a later candidate of the winning member keeps that code. Members
-/// rank by today's scores, unchanged. With no device of several members the evaluation is the
-/// one `evaluate_with_left_out_facts` gives.
+/// allocation order wins it, and every later candidate of another member of the device waits
+/// with `device_group_waiting` (`device_group_wait` `selected`, `alias` the winning member,
+/// `task_id` its task), with exactly the state, the eligibility and the wake (none of its own)
+/// of a candidate that waits behind its own instance's winner with `instance_already_selected`;
+/// a later candidate of the winning member keeps that code. Members rank by today's scores,
+/// unchanged. With no device of several members the evaluation is the one
+/// `evaluate_with_left_out_facts` gives.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_with_device_groups<E: From<PolicyEvaluationError>>(
     catalog: &CompiledCatalog,

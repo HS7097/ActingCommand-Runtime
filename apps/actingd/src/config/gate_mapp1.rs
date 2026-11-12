@@ -202,7 +202,9 @@ fn mapp1_a_lone_device_group_assembles_as_the_entry_without_it() {
 // Register §1.323, MAPP-1's tests: "the entry still denies unknown members" (with the declared
 // range [5, 29], pinned by the architecture test of the interface declarations, this is what makes
 // a build before revision 29 refuse the new form). A name under the alias rules is taken; one that
-// breaks them is refused as an alias is.
+// is empty, longer than 64 bytes or broken by the alias rules (a control character) is refused
+// device_group_config_invalid, name_invalid, on the entry's alias and its member device_group:
+// the first of the group checks (register §1.328, the coordinator's settled point 4).
 #[test]
 fn mapp1_the_entry_takes_device_group_and_still_denies_unknown_members() {
     let root = TempDir::new().expect("tempdir");
@@ -219,13 +221,34 @@ fn mapp1_the_entry_takes_device_group_and_still_denies_unknown_members() {
         .is_err(),
         "an unknown member of the entry is refused"
     );
-    for name in [String::new(), "x".repeat(65)] {
+    for name in [String::new(), "x".repeat(65), "device\tone".to_owned()] {
         let mut entry = member(&root, FIRST, "com.example.fixture.a");
         entry["device_group"] = json!(name);
-        let (code, _) = refusal(&root, vec![entry]);
-        assert_eq!(code, SharedCode::InvalidInstanceAlias.code(), "{name:?}");
+        let refused = refusal(&root, vec![entry]);
+        assert_eq!(
+            refused.1.value("device_group_problem"),
+            Some(&json!(DeviceGroupProblem::NameInvalid.as_str())),
+            "{name:?}: {:?}",
+            refused.1
+        );
+        assert_group_refusal(
+            &refused,
+            &[FIRST],
+            "device_group",
+            DeviceGroupProblem::NameInvalid,
+        );
     }
 }
+
+/// One row of the group rules' table: the case, the entries, and the `aliases`, `config_key` and
+/// `device_group_problem` of their refusal.
+type RuleRow<'a> = (
+    &'a str,
+    Vec<Value>,
+    Vec<&'a str>,
+    &'a str,
+    DeviceGroupProblem,
+);
 
 // Register §1.323, MAPP-1's tests: "each group rule refused with its device_group_problem", and "a
 // group of several that breaks no rule refused at load with several_members_unsupported". Each
@@ -247,7 +270,7 @@ fn mapp1_each_group_rule_is_refused_with_its_problem_and_a_valid_group_of_severa
             "fixture_backend": {"frames": [{"width": 1, "height": 1, "rgb": [0, 0, 0]}], "max_inputs": 1},
         })
     };
-    let rows: Vec<(&str, Vec<Value>, Vec<&str>, &str, DeviceGroupProblem)> = vec![
+    let rows: Vec<RuleRow<'_>> = vec![
         (
             "another port",
             vec![first(), changed(&|entry| entry["port"] = json!(16416))],
@@ -672,7 +695,7 @@ fn mapp1_after_the_discovery_only_entries_outside_one_group_share_undeclared() {
         };
         DeviceGroups::new(vec![entry(FIRST, first), entry(SECOND, second)])
     };
-    let resolved: [(String, u16, Option<(String, u16)>); 2] = [
+    let resolved: [provider_startup::DiscoveredEntry; 2] = [
         (FIRST.to_owned(), 2, Some(("127.0.0.1".to_owned(), 16384))),
         (SECOND.to_owned(), 2, Some(("127.0.0.1".to_owned(), 16384))),
     ];

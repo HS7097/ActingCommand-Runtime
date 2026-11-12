@@ -1188,6 +1188,8 @@ Checked here, without discovery:
   (`duplicate_instance_alias` / `duplicate_instance_id`);
 - (Workflow #437 MAPP-1, since 0.12.56; [device-group.md](device-group.md), "The configuration
   form"; register §1.328) the device groups, refused with `device_group_config_invalid`:
+  - first, an entry whose `device_group` is not a name of 1 to 64 bytes under the alias rules
+    (`name_invalid`, `aliases` the entry, `config_key` `device_group`);
   - a group of several whose members name the device by different keys or values, include a
     handset or a fixture, share an `application_id`, lack a `startup_package`, or turn on a
     device-level action the first slice refuses;

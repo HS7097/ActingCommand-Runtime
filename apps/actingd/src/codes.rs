@@ -208,10 +208,10 @@ actingcommand_contract::outcome_codes! {
         ConfigSubsystemAlwaysOn => "config_subsystem_always_on": info / none,
         ConfigSubsystemDiscoveryBound => "config_subsystem_discovery_bound": info / none,
         ConfigSubsystemDiscoveryUnbound => "config_subsystem_discovery_unbound": info / none,
-        /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "The configuration form"): the
-        /// entries that share one device break a rule of device groups (`aliases`,
-        /// `config_key`, `device_group_problem`); check-config and a start refuse at assembly,
-        /// and a start after its discovery.
+        /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "The configuration form"): an
+        /// entry's `device_group` is no valid name, or the entries that share one device break a
+        /// rule of device groups (`aliases`, `config_key`, `device_group_problem`); check-config
+        /// and a start refuse at assembly, and a start after its discovery.
         DeviceGroupConfigInvalid => "device_group_config_invalid": error / none,
         /// Workflow #437 MAPP-1: the daemon line of a device group of several at a start
         /// (`aliases`, `device_label`); nothing is recorded in the ledger.
@@ -246,6 +246,9 @@ actingcommand_contract::outcome_vocabulary! {
     /// `device_group_problem`, Workflow #437 MAPP-1, `contracts/device-group.md`, "The
     /// configuration form").
     pub enum DeviceGroupProblem: "device_group_problem" {
+        /// An entry's `device_group` is not a name of 1 to 64 bytes under the alias rules; the
+        /// first of the group checks.
+        NameInvalid => "name_invalid",
         /// The members of a group of several name the device by different keys or values.
         DeviceMismatch => "device_mismatch",
         /// A member of a group of several is a handset.
