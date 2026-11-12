@@ -2566,6 +2566,11 @@ fn mcp_capture_records_client_action() {
         record.unscripted.is_empty(),
         "a recording past the four captures: {record:?}"
     );
+    assert_eq!(
+        record.connections.len(),
+        4,
+        "one connection per capture a child answered, the dry-run's too: {record:?}"
+    );
     let expected = [
         (LAB_OBSERVE, "neutral.observe", Some(OBSERVE_REQ_ID)),
         (LAB_DO, "neutral.unnamed", None),
