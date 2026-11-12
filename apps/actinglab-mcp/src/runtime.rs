@@ -21,13 +21,17 @@
 //!   `RecordClientAction{surface_id: "mcp", control_id: <tool>, kind: command}` naming the
 //!   instance, all under that one correlation, and the write after them. The instance is
 //!   resolved as today's server resolves it, by one status read on the kept connection
-//!   ([`Runtime::alias`]).
+//!   ([`Runtime::alias`]). Workflow #434 LAB-5G4b, second part: the same steps record the client
+//!   action after a capture, its value the Lab request's id ([`record_provenance`],
+//!   `crate::after_child`).
 
 use crate::codes::McpCode;
 use crate::lock;
 use actingcommand_contract::codes::{GovernanceIdentityRefusal, SharedCode};
 use actingcommand_contract::outcome::{Detail, Outcome};
-use actingcommand_contract::{ClientActionKind, ClientActionRecord, GovernanceIdentityCard};
+use actingcommand_contract::{
+    ClientActionKind, ClientActionRecord, ClientActionValue, GovernanceIdentityCard,
+};
 use actingcommand_lab_ops::cli_line::{self, Exit};
 use actingcommand_lab_ops::core_ops::Place;
 use actingcommand_lab_ops::events;
@@ -211,23 +215,69 @@ pub(crate) struct Write {
 }
 
 /// A connection of its own to the Runtime of `state_root` for one write of the tool `tool`, with
-/// today's provenance recorded on it: `begin_interaction`, the identity card, then the client
-/// action naming `instance_alias`. A card the Runtime refuses because its `allowed_clients` does
-/// not list the client is no failure, as today: the client action and the write go ahead, and
-/// the line carries the warning `mcp_identity_declaration_refused` caused by the refusal (where
-/// today's server answers `mcp_identity_card_refused` with `mcp_blocker`, a vocabulary only
-/// actingctl's server builds). Any other failure ends the call with the client's failure, and
-/// nothing is written.
+/// today's provenance recorded on it ([`record_provenance`], the client action without a value).
+/// A step that fails ends the call with its line, as the serving code answers a client's failure,
+/// and nothing is written.
 pub(crate) fn begin_write(
     state_root: &Path,
     tool: &str,
     instance_alias: Option<&str>,
 ) -> Result<Write, Ended> {
-    let connection =
-        RuntimeClient::connect(config(state_root)).map_err(|error| client_failed(&error))?;
+    record_provenance(state_root, tool, instance_alias, None).map_err(|failed| failed.ended())
+}
+
+/// A step of today's provenance that failed (Workflow #434 LAB-5G4b, second part: a write ends
+/// with its line, the client action after a capture reads its outcome).
+pub(crate) enum NotRecorded {
+    /// The Runtime client's failure: to connect, to begin the interaction, a card refused for
+    /// another reason than the client not allowed, or the client action refused.
+    Client(Box<RuntimeClientError>),
+    /// A client action the contract does not build (`client_action_invalid`).
+    Invalid,
+}
+
+impl NotRecorded {
+    fn client(error: RuntimeClientError) -> Self {
+        Self::Client(Box::new(error))
+    }
+
+    /// Its outcome: the client's, or `client_action_invalid`.
+    pub(crate) fn outcome(&self) -> Outcome {
+        match self {
+            Self::Client(error) => error.outcome(),
+            Self::Invalid => Outcome::new(SharedCode::ClientActionInvalid),
+        }
+    }
+
+    /// The line a write ends with: the client's failure as the serving code answers it, or the
+    /// failure `client_action_invalid`.
+    fn ended(&self) -> Ended {
+        match self {
+            Self::Client(error) => client_failed(error),
+            Self::Invalid => Box::new(cli_line::failure(&self.outcome(), None)),
+        }
+    }
+}
+
+/// Today's provenance (`apps/actingctl/src/mcp/operator.rs`, `record_provenance`) on a connection
+/// of its own to the Runtime of `state_root`: `begin_interaction`, the identity card, then the
+/// client action of the tool `tool` naming `instance_alias` and carrying `value` when given
+/// (Workflow #434 LAB-5G4b, second part: the Lab request's id after a capture, as today's
+/// `record_action` gives it). A card the Runtime refuses because its `allowed_clients` does not
+/// list the client is no failure, as today: the client action goes ahead, and the connection's
+/// warnings carry `mcp_identity_declaration_refused` caused by the refusal (where today's server
+/// answers `mcp_identity_card_refused` with `mcp_blocker`, a vocabulary only actingctl's server
+/// builds). Any other failure is the step's ([`NotRecorded`]), and nothing more is sent.
+pub(crate) fn record_provenance(
+    state_root: &Path,
+    tool: &str,
+    instance_alias: Option<&str>,
+    value: Option<ClientActionValue>,
+) -> Result<Write, NotRecorded> {
+    let connection = RuntimeClient::connect(config(state_root)).map_err(NotRecorded::client)?;
     let client = connection
         .begin_interaction()
-        .map_err(|error| client_failed(&error))?;
+        .map_err(NotRecorded::client)?;
     let mut warnings = Vec::new();
     let card = GovernanceIdentityCard {
         client: MCP_CLIENT.to_owned(),
@@ -237,7 +287,7 @@ pub(crate) fn begin_write(
     if let Err(error) = client.declare_governance_identity(&card) {
         let refusal = error.outcome();
         if !refusal.is(GovernanceIdentityRefusal::ClientNotAllowed) {
-            return Err(client_failed(&error));
+            return Err(NotRecorded::client(error));
         }
         warnings.push(cli_line::warning(
             &Outcome::new(McpCode::IdentityDeclarationRefused).caused_by(refusal),
@@ -248,16 +298,11 @@ pub(crate) fn begin_write(
         tool,
         ClientActionKind::Command,
         instance_alias.map(str::to_owned),
-        None,
+        value,
     )
-    .map_err(|_| {
-        Box::new(cli_line::failure(
-            &Outcome::new(SharedCode::ClientActionInvalid),
-            None,
-        ))
-    })?;
+    .map_err(|_| NotRecorded::Invalid)?;
     client
         .record_client_action(action)
-        .map_err(|error| client_failed(&error))?;
+        .map_err(NotRecorded::client)?;
     Ok(Write { client, warnings })
 }

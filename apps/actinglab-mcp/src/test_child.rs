@@ -10,9 +10,16 @@
 //! request it reads, and its end at its input's end. One row (`watch`) is held until the file
 //! `release` appears in that folder; another (`record draft`) ends the process with a line on
 //! stderr and exit 3, without an answer. Never shipped.
+//!
+//! Workflow #434 LAB-5G4b, second part (`mcp_lab_overflow_rule` and
+//! `mcp_capture_records_client_action`): a request whose `instance` is `<key>` is answered with the
+//! envelope a test wrote in that folder as `answer-<key>.json` when it is there, whatever its row:
+//! the test's made-up line (a line far past the budget with the parts the server keeps, a
+//! failure), its exit code and its request id. A file that cannot be read as JSON ends the process
+//! with a line on stderr and exit 1.
 
 use serde_json::{Map, Value, json};
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -31,6 +38,11 @@ const FAILURE_EXIT: i32 = 3;
 /// How often a held request looks for the release, and for how long at most.
 const POLL: Duration = Duration::from_millis(20);
 const HOLD_LIMIT: Duration = Duration::from_secs(120);
+/// The file in that folder whose envelope answers a request of the instance `<key>`:
+/// `answer-<key>.json`; and the exit code when it cannot be read.
+const CANNED_PREFIX: &str = "answer-";
+const CANNED_SUFFIX: &str = ".json";
+const CANNED_EXIT: i32 = 1;
 
 fn main() {
     let log = std::env::var_os(LOG_VARIABLE).map(PathBuf::from);
@@ -72,10 +84,13 @@ fn main() {
         if row == HELD {
             held(log);
         }
-        let mut answer = Map::new();
-        answer.insert("exit_code".to_owned(), json!(0));
-        answer.insert("line".to_owned(), json!({"child_pid": pid, "op": row}));
-        if writeln!(stdout, "{}", Value::Object(answer))
+        let answer = canned(log, &request).unwrap_or_else(|| {
+            let mut answer = Map::new();
+            answer.insert("exit_code".to_owned(), json!(0));
+            answer.insert("line".to_owned(), json!({"child_pid": pid, "op": row}));
+            Value::Object(answer)
+        });
+        if writeln!(stdout, "{answer}")
             .and_then(|()| stdout.flush())
             .is_err()
         {
@@ -83,6 +98,28 @@ fn main() {
         }
     }
     record(log, pid, &json!({"event": "ended", "pid": pid}));
+}
+
+/// The envelope a test wrote for `request`: the file `answer-<instance>.json` in `log`, when the
+/// request's parameters name an `instance` and the file is there. A file that cannot be read as
+/// JSON ends the process (stderr says why, exit [`CANNED_EXIT`]), so the server answers
+/// `lab_process_failed` with that text.
+fn canned(log: Option<&Path>, request: &Value) -> Option<Value> {
+    let key = request.get("params")?.get("instance")?.as_str()?;
+    let path = log?.join(format!("{CANNED_PREFIX}{key}{CANNED_SUFFIX}"));
+    if !path.is_file() {
+        return None;
+    }
+    let read = fs::read_to_string(&path)
+        .map_err(|error| error.to_string())
+        .and_then(|text| serde_json::from_str::<Value>(&text).map_err(|error| error.to_string()));
+    match read {
+        Ok(envelope) => Some(envelope),
+        Err(error) => {
+            eprintln!("cannot read {}: {error}", path.display());
+            std::process::exit(CANNED_EXIT);
+        }
+    }
 }
 
 /// Waits until the release file appears in `log`, for at most [`HOLD_LIMIT`].

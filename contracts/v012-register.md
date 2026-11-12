@@ -10720,27 +10720,83 @@ reads changes; no code, key, location or vocabulary token is added; one catalog 
   path and saying so in the property's description (`tools::input_schema`, `calls::prepare`,
   `relative_path`). Built as for every served row; the other reading would also change
   `gate_434_lab5g2a::mcp_tools_from_op_table`'s helper `assert_definition_from_row`, which ties
-  the sentence to every row not refused.
+  the sentence to every row not refused. Settled by the coordinator on 2026-11-13: as built.
 - (2) For the second part: the work order excludes `do`'s dry-run form from the client action
   after a capture; today's server records one for `capture` whatever `dry_run` says
-  (`apps/actingctl/src/mcp/lab.rs`, `author`).
+  (`apps/actingctl/src/mcp/lab.rs`, `author`). Settled by the coordinator on 2026-11-13: as
+  today's server records it (built in the second part, below).
 
-**For the second part (the work order's points 5 and 6, not started).** The Lab overflow rule: a
-child's success line (`exit_code` 0) that does not fit the budget as sent is written whole to the
-export directory (`budget::write_export`, content-addressed `.json`) and answered `{req_id, export,
-overflowed: true}` with `answer_exported` first among its warnings (when the export cannot be
-written, no `export` and its `material_export_failed` is that warning); `record stop` keeps its
-four binding parts under `lab`, and `observe` and `do` (today's `ac_lab_observe`, `ac_lab_do`)
-`frame_coordinates`, `frame_path`, `preview` and `after_attachment` in that order, each while the
-answer still fits, named in one table with the reason that the operation table cannot say it; a
-failure line is never exported; one that does not fit even so is point 10's. The client action
-after a capture: after the child of `observe` or `do` with `capture` true returned, one
-`RecordClientAction{surface mcp, control_id the tool, kind command, value the envelope's req_id}`
-on a connection of its own (`runtime::begin_write`'s), with today's warnings
-(`client_action_without_req_id`, the recording's own, `client_action_not_recorded`), the child
-never run again. Its tests: `mcp_lab_overflow_rule` and `mcp_capture_records_client_action`. Until
-then a child's line that fits the budget neither way answers as L5G4b-7 says, and no client action
-is recorded after a capture.
+**The second part (the work order's points 5 and 6), built.** Coordinator work order
+`rd-1113/brief-lab5g4b2.md`, on the first part's branch at `f1b653fd` (pull request #1651), with
+the coordinator's rulings of 2026-11-13 on the first part's two open points (board #434, not the
+owner's words): (1) a child row's arguments are checked as every served row's, relative paths
+refused and said so in the property's description, as built; (2) the client action after a
+capture is recorded as today's server records it, for a call whose `capture` is true whatever
+`dry_run` says (ruling 12 of 6775192250 keeps today's records until LAB-6; the work order's words
+"not their offline or dry-run forms" are withdrawn). What today's MCP server does around its Lab
+child (`apps/actingctl/src/mcp/lab.rs`: `author`, `record_action`, `finish`, `fits_as_job`,
+`keep_frame_parts`, `BINDING_PARTS`, `FRAME_PARTS`) is ported to the child's line in a module of the
+server, `after_child`, copied and not moved: today's server is not touched.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G4b-10 | which rows keep which parts and record a capture (`after_child::LAB_ROWS`) | behaviour | LAB-5G4b | — | one table in one place: `record stop` (today's `ac_record_stop`) keeps its four binding parts (`binding_example`, `binding_requires`, `prerequisite_entry_example`, `catalog_on_failure_example`) together under `lab`; `observe` (`ac_lab_observe`) and `do` (today's `ac_lab_do`, this server's `ac_do`) keep `frame_coordinates`, `frame_path`, `preview` and `after_attachment`, each in turn, and record a client action after a capture. The operation table cannot say it: it declares a row's parameters, the request kinds it sends and its `output` as a sentence, but no member of the line it answers; and `capture` is a parameter of seven rows (`observe`, `do`, `recover`, `ensure`, `wait`, `record step`, `locate`), after two of which today's server records the client action (the Lab requests the Runtime records, `lab.request`) |
+| L5G4b-11 | the client action after a capture (`after_child::client_action`; `runtime::record_provenance`, which `runtime::begin_write` now calls without a value) | behaviour (ledger, as today) | LAB-5G4b | — | once the child of a call of `observe` or `do` with `capture` true answered its envelope, whatever `dry_run` says (ruling (2) above): on a connection of its own to the Runtime of the server's state root (`runtime::place`), the steps of a write's provenance: `begin_interaction`, the identity card `actingctl-mcp`, then `RecordClientAction{surface_id mcp, control_id <the tool called>, kind command, instance_alias <the call's instance as given>, value PathSafeString(<the envelope's req_id>)}`, the connection (Cli, Cli) on the MCP channel. Its warnings join the line's after its own: `client_action_without_req_id` when the envelope carries no `req_id` (recorded without a value), the recording's own (`mcp_identity_declaration_refused`), and `client_action_not_recorded` caused by the failure (the state root's outcome, the client's, or `client_action_invalid`) when it was not recorded; the call's answer stands, `isError` by the child's exit code. The Lab command is never run again. A call no child answered (`job_capacity_exhausted` past `--children`, `lab_process_failed`) records nothing. The warnings join before the overflow rule measures the line, as today's `author` passes them to `command_end` |
+| L5G4b-12 | the Lab overflow rule (`after_child::overflow_rule`, `exported`, `parts`) | behaviour | LAB-5G4b | — | a child's success line (`exit_code` 0), its warnings joined, that `budget::fits` refuses in the call's era (the server's measure of an answer as sent, L5G2b) is written whole, the child's line as it gave it, by the server's export writer (`lab_ops::budget::write_json` through `budget::write_export`: `<sha256>.json` in `%TEMP%\actingcommand-mcp\materials`, a JSON that does not encode `material_export_failed`) and answered `{req_id, export, overflowed: true}` (`req_id` the envelope's, `null` without one; `export` `{path, sha256, size}`, absent when the file could not be written), then the row's parts (L5G4b-10), each added and kept only while the whole answer still fits, then `warnings`: `answer_exported` (`path`, `actual_sha256`, `actual_bytes`) or the writer's `material_export_failed` first, the line's own warnings and L5G4b-11's after it, then the line's `outcome`; `isError` false. A failure line (`exit_code` not 0) is never exported: it is answered as L5G4b-7 says, as is an answer that does not fit even so (`structuredContent` alone beside a summary text, else `output_budget_exceeded` with its job's handle, LAB-5G3 point 10) |
+| L5G4b-13 | the children's answer (`children::Answer`, `children::enveloped`) | behaviour | LAB-5G4b | — | `Children::line` answers the exit, the envelope's `req_id` and whether a child answered; an envelope whose `line` is no JSON object is no envelope (`lab_process_failed` with a `foreign_data_error`, L5G4b-4): every line `serve` answers is one, so the warnings of L5G4b-11 always have a line to join |
+| L5G4b-14 | the instructions (`tools::INSTRUCTIONS`) | text | LAB-5G4b | — | the sentence on an answer over 24 KiB now says what each kind of row does: "written whole to %TEMP%\actingcommand-mcp\materials with the warning answer_exported first: in this process an operation answers its header beside the file; through a child a success answers {req_id, export, overflowed: true}, ac_record_stop keeping its lab binding parts and ac_lab_observe and ac_do their frame parts while they fit (material_export_failed first and no export when the file cannot be written). Any other answer, a refusal too, is sent in structuredContent alone beside a summary text"; the rest of the sentence and `tools/list` are unchanged |
+
+**What an operator and a client see (the second part).** A client calling `ac_lab_observe` or
+`ac_do` with `capture` gets the child's line, and the Runtime's ledger holds, after the Lab
+request, one `client.action` from (Cli, Cli) on the MCP channel naming the tool, the instance and
+the Lab request's id, preceded by the identity card's declaration, as after today's server's
+`ac_lab_observe` and `ac_lab_do`; a warning of the line says when the action carries no request id
+or was not recorded. A client whose `ac_record_stop`, `ac_lab_observe` or `ac_do` answer is past
+the budget gets `{req_id, export, overflowed: true}` with the parts it needs inline (the binding
+snippets; the frame's coordinates and files) and `answer_exported` naming the file, which it reads
+whole from `%TEMP%\actingcommand-mcp\materials` (the directory today's server writes to); any
+other row a child serves exports its success the same way, without parts. An operator sees those
+files in that directory, content-addressed, beside today's server's.
+
+**Tests (the second part).** New, apps row "#434 LAB-5G4b, second part", in `tests/serve_calls.rs`
+beside the first part's (outside `tests/gate/`), over pipes with this package's made-up `actinglab`
+(`src/test_child.rs`), which now answers a request whose `instance` is `<key>` with the envelope a
+test wrote as `answer-<key>.json` in its log folder (its line, exit code and request id):
+`mcp_lab_overflow_rule` (the server's exports in a temporary folder through `TMP`, `TEMP` and
+`TMPDIR`): `ac_record_stop`'s line of some 20 KB is written whole (the file holds the child's
+line, its SHA-256 and size as the reference says, in the export directory) and answered
+`{req_id: null, export, overflowed: true, lab, warnings, outcome}`, `lab` the four binding parts,
+`answer_exported` first naming the file and the child's own warning after it; `ac_lab_observe`'s
+keeps `frame_coordinates`, `frame_path` and `after_attachment` in order, its 12 KB `preview` left
+out, `req_id` the envelope's; `ac_do`'s keeps the four frame parts in order; a failure line of
+some 16 KB is sent whole in `structuredContent` alone beside a summary, no file written; with a
+file where the export directory would be, no `export`, `material_export_failed` first, the binding
+parts kept. `mcp_capture_records_client_action` (a scripted Runtime): `ac_lab_observe` with
+`capture` and a request id, `ac_do` with `capture` and none, `ac_do` whose client action the
+Runtime denies, `ac_lab_observe` without `capture`, `ac_do` with `capture` false, and `ac_do` with
+`capture` and `dry_run`: four connections, each `health`, `bind_channel`, the identity card and
+the client action alone (surface `mcp`, the tool, kind `command`, the instance, the request id as
+its value or none), from (Cli, Cli); the lines are the child's, with
+`client_action_without_req_id`, and `client_action_not_recorded` caused by the denial (the answer
+standing), where they belong; each Lab command reached the child once. No existing test changes.
+
+**Interface (the second part).** None raised: the ledger receives the records today's server
+writes after a capture; the files are written where today's server writes its exports; no code,
+key, location or vocabulary token is added, and no catalog text changes.
+
+**Where the second part differs from its work order's letter.**
+
+- (g) The client action's `control_id` is the tool called: `ac_lab_observe`, and `ac_do` where
+  today's server names `ac_lab_do`, as every write's client action has named this server's tool
+  since LAB-5G2b (`runtime::begin_write`).
+- (h) The export holds the child's line as it gave it; the answer's warnings, and the measure,
+  take the line with the client action's warnings joined (today's export holds the envelope's
+  `data` and the job's warnings stay beside it).
+- (i) On a failure line the client action's warnings join its `warnings`, as a write's provenance
+  warnings join its line since LAB-5G2b, where today's server makes them `note` links of the
+  error.
+- (j) An envelope whose `line` is no JSON object is no envelope (L5G4b-13), a tightening of the
+  first part.
 
 **What LAB-5G4b changes live.** Nothing a person or a client sees: no registration starts the
 program until G7. A deployed `actinglab serve --stdio --front mcp` answers the envelope, which

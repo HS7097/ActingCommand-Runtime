@@ -931,8 +931,10 @@ sentence fails that test.
       server's, without waiting for the next call (ruling 5: a resident server keeps no idle
       child, which would block a deploy). Both options are refused as `--jobs` is: outside the
       range, no whole number, twice, without a value, and beside `--list-tools`.
-    - *The answer.* The child's envelope (section 8.2): its `line` is the call's line, text and
-      `structuredContent`, and `isError` is true exactly when its `exit_code` is not 0; a refusal
+    - *The answer.* The child's envelope (section 8.2): its `line` (a JSON object, as every line
+      `serve` answers; since the slice's second part an envelope whose `line` is none is no
+      envelope) is the call's line, text and `structuredContent`, and `isError` is true exactly
+      when its `exit_code` is not 0, after what the server does with it (below); a refusal
       the child answers is passed on as it is (`record draft`, which no command of actinglab
       serves yet, is refused so). The server checks the arguments first as for every row it
       serves (undeclared and the front's own members, types, required members, relative paths,
@@ -953,18 +955,48 @@ sentence fails that test.
       recorded and sent), loses its answer (the child's write fails and it ends with
       `actingctl_output_failed` on its own stderr) and its job's handle, which ends with the
       server's process: read the effect before sending the call again.
-    - *The slice's second part* (not in this build): the Lab overflow rule for a child's line
-      over the budget (today's export of the whole line with the binding and frame parts kept
-      beside it) and the client action after a capture (ruling 12). Until then a child's line
-      that fits the budget neither way answers as a line over the budget after its work was done
-      (above: `output_budget_exceeded` with its job's handle), and no client action is recorded
-      after a capture.
+    - *What the server does with a child's answer* (the slice's second part, 0.12.57; register
+      §1.287, "Slice LAB-5G4b", rows L5G4b-10 to L5G4b-14; the coordinator's rulings of
+      2026-11-13 on board #434, not the owner's words): the two things today's server does around
+      its Lab child (`apps/actingctl/src/mcp/lab.rs`), ported to the child's line, for the rows
+      of one table (`after_child::LAB_ROWS`): `record stop` (today's `ac_record_stop`), `observe`
+      (`ac_lab_observe`) and `do` (today's `ac_lab_do`, this server's `ac_do`). The operation
+      table cannot say what that table says: it names no member of a row's line, and seven of its
+      rows take `capture`, of which today's server records a client action after two.
+      - *The client action after a capture* (ruling 12 of 6775192250; today's `author` and
+        `record_action`): once the child of a call of `observe` or `do` with `capture` true
+        answered, whatever `dry_run` says, the server records one client action on a connection
+        of its own, through the steps of a write's provenance (above): the identity card
+        `actingctl-mcp`, then `{surface_id: mcp, control_id: <the tool called>, kind: command,
+        instance_alias: <the call's instance as given>, value: <the envelope's req_id as a
+        path-safe string>}`, on the MCP channel from (Cli, Cli). Its warnings, today's three,
+        join the line's after its own: `client_action_without_req_id` when the envelope carries
+        no `req_id` (the action is recorded without a value), the recording's own
+        (`mcp_identity_declaration_refused`), and `client_action_not_recorded` caused by the
+        failure (the state root not located, the Runtime's or the client's failure) when it was
+        not recorded. The call's answer stands, and the Lab command is never run again. A call no
+        child answered (refused past `--children`, or a child that gave no answer) records
+        nothing.
+      - *The Lab overflow rule* (today's `finish`, `fits_as_job` and `keep_frame_parts`): a
+        child's success line (`exit_code` 0), with those warnings joined, that does not fit the
+        budget as the server measures an answer in the call's protocol version (above, "The
+        budget") is written whole, the child's line, by the server's export writer
+        (`<sha256>.json` in `%TEMP%\actingcommand-mcp\materials`), and the call answers
+        `{req_id, export, overflowed: true}`: `req_id` the envelope's (`null` without one),
+        `export` the file's `{path, sha256, size}`; then the parts its row keeps, each while the
+        answer still fits, in today's order (`record stop` its four binding parts together under
+        `lab`; `observe` and `do` `frame_coordinates`, `frame_path`, `preview` and
+        `after_attachment`, each tried in turn); then `warnings`, `answer_exported` first (or the
+        export's `material_export_failed`, and no `export`, when the file could not be written)
+        and the line's own after it; then the line's `outcome`. A failure line is never exported:
+        it is sent as every line over the budget is (`structuredContent` alone beside a summary
+        text, or `output_budget_exceeded` with its job's handle), and so is an answer that does
+        not fit even so.
   - **Not yet:** a call of a row the server does not serve answers `mcp_operation_unsupported`
     (`mcp_tool`) as the CLI line of a refusal, `{outcome}`, its arguments unread, nothing sent,
     run or written; a name that is no offered row's tool answers as today's server answers an
     unknown tool (-32602 `mcp_params_invalid`). `deploy` and `rollback` (until a detached run
-    carries `Lab-MCP`, section 5), the second part of the `serve` children (G4b) and the manual
-    (G7) come with their slices. The program is in the Tools archive since LAB-5G6 (0.12.57;
+    carries `Lab-MCP`, section 5) and the manual (G7) come with their slices. The program is in the Tools archive since LAB-5G6 (0.12.57;
     section 8.1, "Packaging"); nothing starts it until a client is registered with the second
     entry (G7).
 - **The answer budget is the caller's** (Workflow #434 LAB-5D, 0.12.52; register §1.287, "Slice
