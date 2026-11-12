@@ -15288,6 +15288,277 @@ start does not end it, and records its own anchor, after which a newer start rea
 the next start record after a held record without an end as its end. After HELD-2, an open wake row
 of kind `task_held` fails loudly on the older build (`kind_unknown`).
 
+### 1.323 Slice MAPP-C (contracts only): several applications on one device, one queue, one application in front (Workflow #437; Alice's direction of 2026-11-11 in the body of board #437, of which one sentence is quoted below; the coordinator's fourteen rulings of 11-11 and its answers of 11-12 to the fourteen questions this section held, `rd-1112/answers-437-mapp-c.md`, not Alice's words; the read-only survey `rd-1111/agent-report-multiapp-survey.txt`, made on `bb5f850d`, every line used here read again on main `e2b5590f`, and no Rust file changed from there to main `6e4119c7`; coordinator work orders `rd-1111/brief-mapp-contract.md` and `rd-1112/brief-437-mapp-c-fix.md`)
+
+The contract is in these files:
+
+- [device-group.md](device-group.md) (new): the whole contract;
+- [application-lifecycle.md](application-lifecycle.md): the paragraph after the opening, and the
+  startup package hook;
+- [runtime-config.md](runtime-config.md): the new "Device groups";
+- [scheduling/README.md](scheduling/README.md): "Per-Instance Lanes" and "Why A Candidate Does Not
+  Run";
+- [device-binding.md](device-binding.md): "Identity, label and fingerprint";
+- [emulator-control.md](emulator-control.md): "Operation and origin gate";
+- [player-hold.md](player-hold.md): the opening;
+- [actingd-check-config.md](actingd-check-config.md): "Discovery-bound instances";
+- [component-interfaces.md](component-interfaces.md): the new "Planned: Workflow #437 MAPP";
+- [README.md](README.md): the index line.
+
+The number 1.323 is the coordinator's. Sections stand in merge order: §1.321, §1.324 and §1.322
+were merged first (main `fbb457a4`, merged into this slice), so this section follows them.
+
+**MAPP-C itself.** Contracts only: no code, no test, no schema file, no catalog entry, no gate row,
+no CI file, no configuration key in the defaults, and no live revision raised. Every rule is
+marked "(MAPP, not built yet)", and device-group.md is so as a whole. Every code, value key,
+vocabulary word and the one configuration key it names is proposed. The text names no game and no
+store. Alice's one sentence it quotes is 「切换到另一个应用时，原先的应用直接杀掉就行」.
+
+**Why.** Today one device runs one application:
+
+- one entry has one `application_id`, one `nemu_app_index`, one policy identity and one startup
+  package;
+- the scheduler has one queue, one worker and one lease per instance;
+- the evaluator selects one task per instance per round.
+
+Alice wants one device to hold several applications that the scheduler serves in turn (her rules
+in neutral words open [device-group.md](device-group.md)). The model is the survey's model B:
+today's instance entry stays one application on one device, and several entries declare one
+device as a device group.
+
+**What the code slices build**
+
+| Kind | What | First writer | Notes |
+|---|---|---|---|
+| configuration | the entry member `device_group`, check-config's report member, the manifest row `instance.<id>.device_group` | MAPP-1 | `actingd-config` 29 (planned row) |
+| check | the group's rules at assembly, the instruction rule by `section_check`, and undeclared sharing at assembly and after discovery | MAPP-1 | `device_group_config_invalid` and the vocabulary `device_group_problem` (proposed) |
+| check | every group of several refused at load after the group's rules, until the slice "order within one device" removes it | MAPP-1 | `device_group_config_invalid`, `several_members_unsupported` (proposed) |
+| daemon line | `device_group_assembled`, one per group of several | MAPP-1 | daemon log only; no ledger record |
+| memory | the member → device key map, derived at assembly | MAPP-1 | never stored |
+| scheduler | `InstanceState` keyed by device; the member kept in each queue entry; the token kept the member's | MAPP-1 | lib.rs:892-908, 594-607, 1167-1173 |
+| host | one worker per device; occupancy across the group; the admission guard per device; a pause's wait per member; the owner journal's ids kept member ids | MAPP-1 | host_claims.rs:107-143; policy_dispatch.rs:101-134, 3126-3170; lease.rs:3230-3247 |
+| policy | one pick per device (a separate in-memory argument) and the reason `device_group_waiting` | MAPP-1 | evaluator.rs:2186, 2236, 2502; vocabulary `device_group_wait` (proposed) |
+| host | the gates: a fence or a player hold of one member holds the group; a second hold is refused | MAPP-1 | `fenced`, `player_hold` |
+| host | no session kept across lease ends for a member of a group of several | MAPP-1 | resource_close.rs:105-139 |
+| host | refusing operator emulator control and keyless observation | MAPP-1 | `device_group_action_refused` (proposed) |
+| host | the switch: foreground read, host-minted stops, the startup run on the key, the key handed back | MAPP-2 | contained_task.rs:7812-8087 |
+| host | the switch before every start of a member's application: a direct run, `ApplicationLifecycle` `launch` or `restart`, the ladder's application restart rung, a hold's release | MAPP-2 | |
+| host | the switch's failure | MAPP-2 | `application_switch_failed` and the vocabulary `application_switch_step` (proposed); settled by policy_outcome.rs:1544-1567 |
+| host, policy | the member's switch cooldown: one in-memory deadline per member after a failed switch, its candidates deferred at position 2 as during a takeover cooldown | MAPP-2 | `dispatch_instance_cooldown` with `failure_code` `application_switch_failed`; `InstanceHolds`, evaluator.rs:343-380 |
+| configuration | `scheduling.device_group.switch_failure_cooldown_ms`, milliseconds `1..=3600000`, default `300000`, settable | MAPP-2 | added to `actingd-config` 29 (planned row) and to the defaults file |
+| catalog | the five codes and three vocabularies, each in its writer's slice, and the optional value `failure_code` of `dispatch_instance_cooldown` | MAPP-1, MAPP-2 | `runtime-outcomes` stays 1 |
+
+**Device-level actions** (ruling 8; the full table with files and lines is
+[device-group.md](device-group.md), "Device-level actions"). There are fifteen; slice 1 refuses six
+of them in a group of several.
+
+| # | Action | Slice 1 in a group of several |
+|---|---|---|
+| 1 | configured start at daemon start (`start_emulator`) | refused at assembly and by instruction |
+| 2 | emulator watch (status read, restart, recognition) | the read and the recognition stay per member; no restart (row 1) |
+| 3 | idle action (`close_app`, `stop_emulator`, `auto`) and its wake | refused unless `none` |
+| 4 | ladder rung `emulator_restart` | refused in the profile in effect |
+| 5 | operator emulator control (start, stop, restart) | refused, `device_group_action_refused` |
+| 6 | device binding (handset file, discovery) | handsets refused; one `bound_alias` per index, the first member by alias |
+| 7 | capture and input sessions | per member, none kept across lease ends |
+| 8 | backend switch | per member, on the device's key |
+| 9 | self-check, resume reconnect, connection preparation | per member, on the device's key |
+| 10 | resource fence and its recheck | per member; the group waits (`fenced`) |
+| 11 | device facts a device event invalidates | per member, as today |
+| 12 | performance pacing per instance | per member, as today |
+| 13 | shared run limits | unchanged; one run per group at most |
+| 14 | handset device state | not reached (handsets refused) |
+| 15 | keyless read-only observation | refused while another member holds the device |
+
+**Where the contract differs from the rulings or completes them**
+
+1. *Ruling 3, completed.* "The queue" is three things keyed by instance: the scheduler state
+   (lib.rs:892-908), the worker (host_claims.rs:107-143) and the in-flight registration
+   (policy_dispatch.rs:101-134). Two more places read the instance as the device: the admission
+   guard (lease.rs:3230-3240) and the owner journal's active instances (lease.rs:3242-3247,
+   lib.rs:2585-2593). All of them are keyed by the device key, the token keeps the member's id, and
+   a pause's wait reads the member's lease, not the device's (policy_dispatch.rs:3164-3170).
+2. *Ruling 4, completed.* The group cannot go into the evaluator's input: `InstanceSnapshot` denies
+   unknown members (evaluator.rs:181-191), and the input feeds the snapshot and decision
+   identities. It is a separate in-memory argument, as `InstanceHolds` is.
+3. *Ruling 4, completed.* "Today's scores as they are" includes the business tier's turns across
+   instances. These put the members of one device in alternation, so slice 1 may switch at every
+   dispatch there.
+4. *Ruling 6, completed.* "Starts the member's application by its package" is the startup
+   package's own first step (`application` `restart`, provider.rs:902-929): there is no separate
+   launch.
+   - When the front is unknown or no member's, every other member's application is stopped.
+   - The switch also runs before every other start of a member's application.
+   - The startup run's end hands the key back to the run.
+5. *Ruling 6, completed (the member's ladder).* A failed switch starts no ladder. The run is
+   refused before its request lifecycle, so it has no `task.failed` terminal at the task stage, and
+   startup runs never start one.
+6. *Ruling 8, completed.*
+   - Idle `close_app` is device-level too: its wake runs a member's startup package ahead of the
+     device's pick.
+   - The defaults make every emulator climb a ladder with `emulator_restart` and take `idle.action`
+     `close_app`, so every member of a group of several must name `idle.action` `none` and a profile
+     without that rung (the neutrally named profile MAPP-1 adds, or the defaults file's `handset`).
+   - Operator emulator control and keyless observation are added to the list.
+7. *Ruling 9, decided.* A fence of one member holds the whole group, because slice 1 cannot tell a
+   device's cause of a fence from an application's.
+8. *Rulings 2 and 11.* Two entries on one device can be proven at assembly only when they name it
+   by the same key and value. An index beside a name, or `HOST:PORT` beside a discovery binding, is
+   seen only after the start's discovery, which check-config never runs. So the check runs in two
+   places. Handsets are covered already by the binding file. The refusal of undeclared sharing is
+   the one thing a configuration without groups can see, so ruling 2 holds with that one
+   exception.
+9. *The coordinator's claim of 11-11, corrected.* The claim that putting the switch time into the
+   expected duration makes the scheduler finish one application's due work before switching does
+   not hold, because the order across members is decided by the business tier's turns across
+   instances before any duration is compared (scheduling/README.md, "Turns across instances"),
+   which is why the slice "order within one device" exists.
+10. *Rulings 1 and 7.* Handsets cannot be members in slice 1 (the binding file binds one serial to
+    one alias). So a clone "perhaps on a phone" needs the binding made group-aware as well as the
+    Android user.
+11. *Ruling 10, completed.* A second hold on another member of the same group is refused, and a
+    hold's release runs the member's startup package through the switch.
+12. *Ruling 13, confirmed.* Neither `ledger` nor `runtime-client` moves (the walk below).
+
+**Settled by the coordinator on 11-12** (its answers to the fourteen questions this section held,
+`rd-1112/answers-437-mapp-c.md`). Questions 4, 5 and 6 were meant for Alice; the coordinator
+answered them and informs her, so no line below is her words. Each stands as settled text in the
+section of [device-group.md](device-group.md) it names.
+
+1. The form is the entry member `device_group`, not a top-level list ("The configuration form").
+2. The device key is the smallest instance id of the group's members, in memory only ("Derived, never stored").
+3. A member's conflicting device-level setting is refused, never overridden; MAPP-1 adds a neutrally named profile without `emulator_restart` to the defaults file's `recovery_ladder.profiles` ("The configuration form").
+4. On a device with several members, slice 1 does not start, stop or restart the emulator, does not close the application or the emulator when idle and does not restart the emulator after a major failure; the slice "device-level actions by device" lifts this, before the first real use ("Device-level actions", "Later slices").
+5. While a person uses one member by hand, the whole device waits ("Pause and hold").
+6. The first two slices may switch application after every task; the first release that accepts a group of several also carries the slice "order within one device", and until then such a group is refused at load with `several_members_unsupported` ("One pick per device per round", "The configuration form", "Later slices").
+7. A failed switch starts no ladder, and the member then does not compete for the device for `scheduling.device_group.switch_failure_cooldown_ms`, default five minutes ("The switch before a run").
+8. With the front unknown or no member's, every other member's application is stopped ("The switch before a run").
+9. A fence of one member holds the whole group until it is lifted ("A failure stays where it belongs").
+10. Before MAPP-1 ships, the production configuration files are read, read only, for two entries on one device ("The configuration form", "Undeclared sharing").
+11. In slice 1 a keyless observation of a member is refused while another member holds the device ("Device-level actions", row 15).
+12. A refused device-level action has the one new code `device_group_action_refused` with `operation` ("Device-level actions", row 5).
+13. A discovered index a group shares names the group's first member by alias as its `bound_alias`, in the discovery answer and the startup record ("Device-level actions", row 6).
+14. MAPP-1 and MAPP-2 ship in one Runtime release ("Later slices", "Release").
+
+**The interface walk** (ruling 13: what an older reader or an older build does with each new
+thing, and what decides it)
+
+| New thing | Older reader or build | What it does | Decided by |
+|---|---|---|---|
+| the entry member `device_group` | actingd up to 0.12.55 (`actingd-config` [5, 28]), check-config and start | refuses the file, `config_decode_failed` | `InstanceConfig`, `#[serde(deny_unknown_fields)]`, apps/actingd/src/config.rs:1036-1038; the decode error, config.rs:1476 |
+| the same file | a console or installer whose range ends at 28 | no common revision holds the member: the three-party negotiation combines the Runtime only with parties whose ranges hold 29 | component-interfaces.md, "The two checks" |
+| two entries on one device without `device_group` | every build before MAPP-1 | accepts and registers both; two workers drive one device | provider.rs:1161-1186 (only alias and id refused); provider_startup.rs:105-120 (every deferred entry resolved, `bound` overwritten); host_claims.rs:117-143 (one worker per registered instance) |
+| check-config's report member `device_group` | the installer and the Lab reading the report | not verified whether they deny unknown members: MAPP-1 checks | actingd-check-config.md, the report |
+| the manifest row `instance.<id>.device_group` | an older console reading `config.parameters.instance` | not verified how it shows a row it does not know: MAPP-1 checks with the UI repository | runtime-config.md, "Facts" |
+| `device_group_waiting` with its values, in a decision record's `decision_candidate_not_selected` `why` and the not-run history's rows | a Runtime that declares `ledger` [3, 8], the console, the Tools | reads it as any reason: a code and value words the reader only spells, relayed unchanged | component-interfaces.md, the `ledger` rows 5 and 6; outcome/check.rs:3-6 |
+| the switch's `ApplicationLifecycle { stop }` records, under the stopped member's links and causation C | every reader | existing records | application-lifecycle.md; emulator-control.md, "Rungs" (the same records of the application restart rung) |
+| `runtime.lifecycle_observed` phase `startup_package_scheduled` under the run's request links, and the startup run's `task.*` chain | every reader | an existing phase word and chain | application-lifecycle.md, "Expected ledger sequence" |
+| the run's failed settlement with `application_switch_failed` | every reader and the settlement folds | a failure of an existing result kind with a new code: counted as a failure | policy_outcome.rs:1544-1567 |
+| `device_group_action_refused` | a `runtime-client` reader | a denied receipt with a code: an existing shape | runtime-outcomes.md |
+| `Status`, `ScheduleExplanation` | the console | the same shapes; a waiting member's `why` is the new code | runtime-interface.md |
+| the owner journal's active instances | a build before MAPP-1 after a rollback | member ids, read as today | lease.rs:3242-3247 |
+| a group of several | a build with MAPP-1 and without the slice "order within one device" | refuses the file at assembly, in check-config and at start: `device_group_config_invalid`, `several_members_unsupported` | device-group.md, "The configuration form" |
+| the `scheduling` member `device_group.switch_failure_cooldown_ms` | actingd up to the build before MAPP-2 (`actingd-config` [5, 28]), check-config and start | refuses the file, `config_decode_failed` | the `scheduling` section denies unknown members (component-interfaces.md, the `actingd-config` rows 19, 20 and 23) |
+| the key's row in the manifest and in `config.parameters.scheduling` | an older console | not verified how it shows a row it does not know: MAPP-2 checks with the UI repository | runtime-config.md, "The `scheduling` section" |
+| `dispatch_instance_cooldown` with `failure_code` | a Runtime that declares `ledger` [3, 8], the console, the Tools | an existing code with one more value, which the reader only spells, relayed unchanged | outcome/check.rs:3-6 |
+
+**The code slices** (ruling 14). Each slice must not start before the point named in its row.
+
+| Slice | Builds | Must not start before | Tests (by behaviour) |
+|---|---|---|---|
+| MAPP-1 | the form, its checks, the refusal of a group of several until the order slice, the group's queue and the one pick, the gates and the refusals | this contract merged (its questions are settled) | listed below |
+| MAPP-2 | the switch before a run, its failure and the member's switch cooldown | MAPP-1 merged | listed below |
+
+**Release** (settled points 6 and 14):
+
+- MAPP-1 and MAPP-2 ship in one Runtime release.
+- The first release that accepts a device group of more than one member also carries the slice
+  "order within one device" (device-group.md, "Later slices"). Until then every build refuses such
+  a group at load (`device_group_config_invalid`, `several_members_unsupported`), and no release
+  ships the switch after every task.
+- The slice "device-level actions by device" comes before the first real use of a group of
+  several.
+
+Until the order slice the load refuses a group of several. So the tests of a running group of
+several hand the member → device map to the scheduler, the host and the evaluator as the assembly
+builds it, and the tests of the instruction rule build the configuration in effect directly; the
+load itself is tested with a group of one, with each refusal, and with the refusal of a group of
+several that passes every rule.
+
+MAPP-1's tests:
+
+- a group of one writes what today writes: the same file with and without a lone `device_group`
+  gives the same decisions, outcomes, records, owner journal ids and thread names, compared within
+  one host;
+- the entry still denies unknown members and the Runtime declares `actingd-config` [5, 29], which is
+  what makes an older revision's build refuse the new form;
+- two members never hold the device at once (lease, queue, admission);
+- one pick per device, the other member deferred `device_group_waiting` `selected` with `alias` and
+  `task_id`;
+- a due task of one member waits (`held`) while the other member's package runs, and runs after it;
+- each group rule refused with its `device_group_problem`;
+- a group of several that breaks no rule refused at load with `several_members_unsupported`, and a
+  group of one accepted;
+- undeclared sharing refused, at assembly and after a fake discovery;
+- the instruction refused by `section_check`;
+- a fence or a hold of one member holds the others, and its end frees them;
+- a second hold refused;
+- a pause of one member leaves the others scheduled and does not wait for their runs;
+- emulator control and keyless observation refused;
+- a member's session closed at its lease end;
+- a restart rebuilds the member → device map from the configuration in effect, and the takeover
+  cooldown covers the group.
+
+MAPP-2's tests:
+
+- a switch kills the first application, starts the second and reaches its home before the task,
+  under one causation id, the key never granted to another claim in between;
+- no switch when the member is in front;
+- the front unknown stops every other member;
+- a failed switch fails that task only: each step, the run settled failed with
+  `application_switch_failed`, its step and cause, the other member's pairs untouched, no ladder;
+- a failed switch starts the member's switch cooldown, on a fake clock: every other candidate of
+  the member, an owed rerun included, deferred with `dispatch_instance_cooldown` (`failure_code`
+  `application_switch_failed`, `next_eligible_unix_ms` and the wake at its end) for the key's value,
+  the other member dispatched meanwhile, no ladder, and the member a candidate again at its end;
+  the key's default `300000` and its range `1..=3600000`;
+- a direct run (the Lab) goes through the same switch;
+- `ApplicationLifecycle` `launch`, the application restart rung and a hold's release stop the
+  member in front first;
+- at most one member's application is alive after any sequence of these on the fake device.
+
+**Later slices**, named and not written here (device-group.md, "Later slices"): the order within
+one device (with the switch's time as a cost), the normalized weight (board #437 comment
+6799803829), the device-level actions by device, the console and the command line, and clones.
+
+**What changes live.** Nothing until MAPP-1 and MAPP-2 ship; this slice changes no build. When they
+ship:
+
+- a root without `device_group` runs as today, except that a file naming one device from two entries
+  is refused at its start (settled point 10) and the `scheduling` section has one more key, the
+  switch cooldown's, with its default;
+- the five production roots stay groups of one, and no data is migrated;
+- a file with a group of several is refused at its start until the release that carries the order
+  within one device. From that release on, a person who puts two applications on one device
+  writes, for each member, `device_group`, the same device key, its own `application_id`, a
+  `startup_package`, `idle.action` `none`, a ladder profile without `emulator_restart`, and no
+  `start_emulator`.
+
+**Rollback.** Going back to a build before MAPP-1 needs a file of revision 28 or lower: every
+`device_group` removed, and at most one entry kept per device, because an older build accepts two
+entries on one device and drives it from two workers. The ledger written by MAPP builds is
+readable by the older build (no ledger revision moved), and the owner journal's ids are instance
+ids it reads as before. Going back from MAPP-2 to MAPP-1 alone is not a release (settled point
+14).
+
+**Not verified** (the repository does not say; device-group.md, "Not verified"):
+
+- what `am force-stop` does to a package that is not running;
+- whether two members' sessions can be open on one emulator;
+- whether an emulator's ADB port survives its restart;
+- how a clone is addressed;
+- whether the report's readers deny unknown members.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

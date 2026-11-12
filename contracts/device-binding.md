@@ -185,6 +185,14 @@ availability"); the other instances run. Binding it and restarting makes it a bo
 ## Identity, label and fingerprint
 
 - **Identity.** A handset is its serial; an emulator is its port (#322).
+- **One device, several instances** (Workflow #437 MAPP, not built yet;
+  [device-group.md](device-group.md)). Several instance entries may drive one emulator only as one
+  device group (`device_group`), whose members name the device by one key with one value. Two
+  entries outside one group that name the same device are refused at assembly, and after the
+  start's discovery when two keys resolve to one emulator (`device_group_config_invalid`,
+  `undeclared_shared_device`, proposed). Before MAPP nothing refuses them, and both drive the
+  device. A handset cannot be a member in the first slice: the private binding file binds one
+  serial to one alias (`duplicate_serial`, below).
 - **Label** (`device_label`): what people, logs and records see. An emulator's is `HOST:PORT`, a
   handset's `handset:<alias>`. The device layer's `DeviceSerial` shows only the label in `Debug`
   and `Display`, has no `Serialize`, and hands the raw serial out for the adb command line only;

@@ -26,6 +26,15 @@ confirmation and in a step plan's wait after an input or an application effect, 
 takes its next observation in the same window, after the same pause; a window it spends ends
 the wait with the wait's own code, as before.
 
+(MAPP, not built yet; Workflow #437, [device-group.md](device-group.md).) Several instances may
+declare one device as a device group. Each is still one application, and everything above and
+below holds for each member with its own `application_id`; the foreground gate compares a
+member's input with that member's application. In a group of several, before a member's run and
+before every start of a member's application, the Runtime makes the switch: it stops the
+application of the member in front (or of every other member when the front is no member's) and
+runs the member's startup package to its home ("The switch before a run" there). So at most one
+member's application is alive on a device. A group of one is today's instance, byte for byte.
+
 Before the application write, Host holds the instance's existing admission mutex
 and prepares its retained Session through the original resource-close owner. A
 current ResourceClose step closes independent capture/input backends in their
@@ -341,6 +350,15 @@ before the run as `runtime.failed` (category `startup_package`, stage
 `runtime_lifecycle_operation_cleanup`) under the instance and the causation id. Failures after
 admission are the ordinary contained task failures (`task.failed`, lease
 release, `runtime.failed` on the cleanup path).
+
+(MAPP, not built yet; [device-group.md](device-group.md).) Every member of a device group of
+several declares a startup package (`device_group_config_invalid`, `startup_package_missing`,
+proposed). Each of its runs goes through the switch first: after an emulator start, after a player
+hold, on the ladder's application restart rung, and before the member's own runs. In a switch, the
+startup run's end hands the key back to the run it serves, not to another claim. A startup run
+that fails in a switch fails the run it serves with `application_switch_failed` (proposed), and as
+always starts no ladder; the member then waits out its switch cooldown before it competes for the
+device again.
 
 ## Expected ledger sequence (one `emulator restart` with a startup package)
 
