@@ -796,8 +796,10 @@ sentence fails that test.
       process, but a row whose `detach` the front forces (`tools::SUPPLIED`: `deploy` and
       `rollback`, section 5's "Not yet"). Since LAB-5G4b every other offered row (the three `app`
       rows and `standard-pack check`, the debugging and authoring rows actinglab's own commands
-      serve, and `record draft`) is served by a `serve` child ("Calls served by `serve` children",
-      below); only `deploy` and `rollback` answer `mcp_operation_unsupported` as below.
+      serve, `record draft` among them: actinglab's own command since LAB-5G4c, 0.12.57, MCP's
+      `ac_binding_draft` ported; register §1.287, "Slice LAB-5G4c") is served by a `serve` child
+      ("Calls served by `serve` children", below); only `deploy` and `rollback` answer
+      `mcp_operation_unsupported` as below.
     - *A rescue row* (the second part) is checked as a core row is (the refusals below), then
       answered by the module for the root the program runs from with the initiator `Lab-MCP`
       (`lab_rescue::rescue::answer_here`), and its answer is the line actinglab's `--json` and
@@ -933,8 +935,9 @@ sentence fails that test.
       range, no whole number, twice, without a value, and beside `--list-tools`.
     - *The answer.* The child's envelope (section 8.2): its `line` is the call's line, text and
       `structuredContent`, and `isError` is true exactly when its `exit_code` is not 0; a refusal
-      the child answers is passed on as it is (`record draft`, which no command of actinglab
-      serves yet, is refused so). The server checks the arguments first as for every row it
+      the child answers is passed on as it is (a row no command of actinglab serves would be
+      refused so; since LAB-5G4c, in the same release, there is none: `record draft` has its
+      command). The server checks the arguments first as for every row it
       serves (undeclared and the front's own members, types, required members, relative paths,
       values that begin with `--`), so a call it refuses starts no child; the child checks them
       again.

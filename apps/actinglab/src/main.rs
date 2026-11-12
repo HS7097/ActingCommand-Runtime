@@ -203,6 +203,8 @@ mod package_tool;
 pub mod project_interface;
 mod readonly_cli;
 mod recognition_regression;
+// Workflow #434 LAB-5G4c: `record draft`, the binding draft of a `record stop` answer.
+mod record_draft;
 pub mod recovery_exec;
 mod replay_cli;
 mod resource_restore;
@@ -558,7 +560,8 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "stream" => {
             runtime_stream_adapter::run_stream(&invocation.global, &invocation.args)
         }
-        [cmd] if cmd == "record" => run_session_record(&invocation.global, &invocation.args),
+        // Workflow #434 LAB-5G4c: `record draft` beside `session record`'s actions.
+        [cmd] if cmd == "record" => record_draft::run_record(&invocation.global, &invocation.args),
         [cmd] if cmd == "explain" => run_explain_run(&invocation.args),
         // Workflow #434 CLI-COMP: the completion script of a shell, and the scripts' callback,
         // which `main` answers first on a line that begins with it; on any other line that

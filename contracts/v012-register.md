@@ -10749,6 +10749,88 @@ nothing starts.
 **LAB-5G4b rollback** (to the release before it). Nothing persisted: the children live in the
 server's memory, and each served row writes what the command line would.
 
+#### Slice LAB-5G4c (0.12.57): record draft, a command of actinglab
+
+Coordinator work order `rd-1113/brief-lab5g4c.md` with `rd-1112/brief-lab5g-common.md`, on main
+`18cb44a9` (LAB-5G3's second part merged); the coordinator's ruling 3 of 6775192250 on board #434,
+not the owner's words: the row `record draft` becomes a command of actinglab, usable on the
+command line and in `serve --stdio`, not code of the new MCP server, so that the server's `serve`
+children (G4b) serve it as every row of actinglab's own commands. The contract is
+[lab-two-entries.md](lab-two-entries.md) §9.3 and the row in
+[lab-operations.json](lab-operations.json). The command is today's MCP tool `ac_binding_draft`
+ported (`apps/actingctl/src/mcp/lab.rs`: `binding_draft`, `read_export`, `check_config`), copied
+into `apps/actinglab/src/record_draft.rs` and not moved: today's server and its tool are untouched
+until LAB-7 deletes them. The new MCP server's product code is unchanged; it keeps refusing the
+row's call (`mcp_operation_unsupported`) until G4b.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5G4c-1 | `actinglab record draft --record-stop <json>` or `--record-stop-export <json>` (`record_draft`) | behaviour | LAB-5G4c | — | the tool's inputs: exactly one of the two (neither or both: `--record-stop` `conflicting`), each the JSON text the table's `json` type reads (LAB-5A: text that is not JSON is `wrong_type`, here caused by the parser's refusal; given twice `repeated`); a JSON `null` is absent, as the tool reads it. The tool's refusals, with the flag as the argument: an answer without `lab`, without one of `binding_example`, `prerequisite_entry_example` and `catalog_on_failure_example`, whose package path begins with `--` or whose `binding_requires` is neither a list nor absent (or null) is `--record-stop` `unusable` (also one read from an export, as today); an export that is not `{path, sha256, size?}` is `--record-stop-export` `wrong_type`, one not directly inside the export directory, over 64 MiB, whose sha256 (with or without `sha256:`) does not match or that is not JSON is `unusable`, caused by the I/O or parse failure where there is one. The export directory is today's server's, `%TEMP%\actingcommand-mcp\materials` |
+| L5G4c-2 | its answer | behaviour | LAB-5G4c | — | the tool's members in its order: the four binding parts verbatim (`binding_example`, `binding_requires`, `prerequisite_entry_example`, `catalog_on_failure_example`), `admission` (`{package, preflight}` or `{package, preflight_error}`), `check_config` (`{config, exit_code, outcome?, report_export}`, or `{error: {class: runtime, outcome}}` as the tool writes it), `manual_steps` (`binding_requires`, then the tool's sentence "edit the configuration, approve in the UI, restart the daemon"); the warnings `binding_requires_unavailable`, `preflight_failed` (`path`: the package) and `check_config_unavailable` (`path`: the configuration), in that order, in `warnings` (present when not empty), each `{outcome}`. check-config's whole stdout goes to the export directory as `<sha256>.json` (`lab_ops::material_export::write`), and `report_export` names it |
+| L5G4c-3 | what follows from being a command | behaviour | LAB-5G4c | — | (a) the answer is the command's line, `lab_operation_completed` with its members flat and `warnings` among them, with `--json` and in `serve --stdio` alike; no `{ok, result}` envelope, no job, no handle and no overflow rule (a command prints its whole line; the MCP front's overflow rule is G4b's); MCP's `--via mcp` child gets the envelope, as for every own command. (b) `package preflight --package <package>` runs in this process through the code its command runs (`lab_package_control::run_package`), not as a child of itself: its answer is `preflight`, as today; its failure, with the warning, is `preflight_error`, the line `actinglab --json package preflight` prints for it (`{outcome, message, details?}`), where today's tool gives its child's failure as `{class, outcome}` (`lab_tool_failed`). (c) check-config stays a child of the installation's daemon program, `<program root>\runtime\actingcommand-actingd.exe check-config --config <configuration>`, pinned to the selection (`lab_ops::child::pin_child`) and waited for to its end (`run_to_end`), as the tool starts it; the program root (the selected slot, or the root of a layout without slots) and the configuration in force are those `lab_ops::locate` finds for actinglab's own commands. (d) the refusals of the arguments are the command line's: `actingctl_usage_invalid` with `argument` (the flag) and `argument_problem` on the line, the outcome whole with its causes in `details.outcome`, where the tool answers `arguments_invalid` naming its argument; a flag the command does not read, a word and an option without its value at the end of the line are refused by its read list (`validation_failed`, `unknown` or `value_missing`), as every own command's are. (e) it locates its installation as actinglab's own commands do, which ask the selected configuration for an absolute `state_root`: a configuration without one is refused as the location's failure (`install_state_root_unresolved`, L5G4c-4), where today's tool, which reads no state root for this tool, runs check-config on it (the coordinator's ruling of 2026-11-13 on this slice: accepted as it is) |
+| L5G4c-4 | outside an installation | behaviour | LAB-5G4c | — | once its arguments pass, a location that finds no installed root (`install_root_unresolved`) answers what the tool answers where it locates none: `lab_tool_unavailable` with `mcp_blocker` `install_root`, class usage, the location's failure in `details.outcome`; any other failure of the location (a selection or a configuration that does not read, a state root it cannot tell) is that failure itself, as the tool answers a location failure. Nothing runs and nothing is written then |
+| L5G4c-5 | the row offered, its kind and its router | contract table, behaviour | LAB-5G4c | — | `own_flags::NO_COMMAND_ROWS` is empty; the row is one of `READ_LIST_ROWS` (its list `record_draft::RECORD_DRAFT_READS`: the two options, no switch, no positional) and of `engine::COMMANDS` (`record draft`, `AsWritten`); actinglab offers it (`words::OWN_ROWS_BEYOND_SLICES`: its slice stays LAB-5, which `BUILT_SLICES` and the new server's `ACTINGLAB_SLICES` do not name), so `help` (its list, the detail, the group `record`), the completion and `serve --stdio` have it, the offered rows growing by one. `record` gives `draft` to it and every other action to `session record`'s code as before; `session record` has no `draft`. `list commands` and `capabilities` list `record draft` (`offline`, `read_only`; where section 8.3 lists the authoring rows), its dry-run mode `no_effect` ([actinglab-dry-run.md](actinglab-dry-run.md)). The command inventory (`ratchet/actinglab_commands.json`) is unchanged: `record` stays one arm of `execute` |
+| L5G4c-6 | the row's `source` and `notes` | contract table | LAB-5G4c | — | `source` is `actinglab record draft` and `MCP ac_binding_draft`: `actinglab package preflight (its first step)` would have made `help` read the row as replacing `package preflight` (`cli_help::replaced`) and answer `help package preflight` with it, the row standing before `package preflight` in the table. The notes keep their history and add that the row is a command of actinglab since this slice, its first step run in the same process |
+| L5G4c-7 | contract text | contract | LAB-5G4c | — | §9.3, "Calls served in the server's process": `record draft` is no longer a row "which no code serves yet" but one of the rows actinglab's own commands serve, refused by the new server until G4b |
+| L5G4c-8 | the row's `help` | contract table text | LAB-5G4c | — | the coordinator's ruling of 2026-11-13 on this slice: "a check-config of the draft" was untrue (check-config runs on the configuration in force, and the draft is in no configuration); the sentence is now "Gives the binding parts of a record stop answer, the preflight of its package and the check-config report of the configuration in force; changes nothing." (153 bytes, 121 before; L5E-2's total stays that slice's record). `actinglab help` and the new server's tool description read it from the table; no test or golden pins it or a byte total |
+| L5G4c-9 | the catalog texts of `binding_requires_unavailable`, `preflight_failed` and `check_config_unavailable` | outcome catalog text | LAB-5G4c | — | the same ruling: where a text named `ac_binding_draft` it names `record draft` beside it (the three `description`s; the `common_causes` of the first and the third); nothing else in them changes; the index is regenerated and current |
+
+**Tests.** New: apps row "#434 LAB-5G4c", `apps/actinglab/src/tests/gate_434_lab5g4c.rs` (made-up
+roots and exports in temporary folders, the export directory used as today's tool's tests use it;
+no Runtime, no device, no clock): `record_draft_answers_the_binding_parts`,
+`record_draft_refuses_what_the_tool_refuses`, `record_draft_reads_only_checked_exports`,
+`record_draft_without_daemon_program_says_so` and `serve_answers_record_draft_as_the_command_line`.
+**Adapted**, where the row's change moves what it pins: `gate_434_lab5b4::every_own_command_refuses_a_flag_it_does_not_read`,
+whose list of the register's read-list commands pins `READ_LIST_ROWS`: 28 commands become 29,
+`record draft` by its words, refused `record draft: unknown --frobnicate` as every other (and the
+comments that count them). No other existing test changes: those that read the offered rows,
+`engine::COMMANDS`, the read lists or the four kinds derive what they check (`gate_434_lab5a`,
+`gate_434_lab5b2`, `gate_434_lab5b3`, `gate_434_lab5e`, `gate_434_cli_help`, `gate_434_cli_comp`,
+`gate_434_cli_in`), and the new server's tests count no row actinglab's commands serve (`record
+draft` stays "refused: an authoring row" there).
+
+**Interface.** None raised: nothing on the wire, in the ledger or in a file a released peer reads
+changes; the table's schema string stays; no code, key, location or vocabulary token is added (the
+codes are the tool's registered ones; three of their catalog texts name the operation beside the
+tool, L5G4c-9).
+
+**Where LAB-5G4c differs from its work order's letter.**
+
+- (a) `preflight_error` is the line of the in-process command's failure (L5G4c-3 (b)), not the
+  tool's `{class, outcome}` of a child; `check_config`'s `{error}` keeps the tool's
+  `{class, outcome}`, since check-config is still a child.
+- (b) A refusal names the flag (`--record-stop`), not the tool's argument (`record_stop`); a flag
+  it does not read is `validation_failed` from its read list, as for every own command (the work
+  order's `actingctl_usage_invalid` is the code of the refusals of the arguments' content).
+- (c) Outside an installation, `mcp_blocker` is a vocabulary only actingctl builds (the outcome
+  guard's G7 allows one build of it): the command carries the value as its error's registered
+  value, which its line reads from the error's details, and names `install_root` as what blocks
+  it. A configuration without an absolute `state_root` is refused as the location's failure
+  (L5G4c-3 (e)). The coordinator accepted both on 2026-11-13, and (b).
+- (d) `list commands`, `capabilities` and the dry-run declaration gain `record draft` (L5G4c-5),
+  so that the commands this build declares hold the new one; and the row's `source` changes
+  (L5G4c-6), both accepted by the same ruling. The same ruling corrected the row's `help` and the
+  three catalog texts (L5G4c-8, L5G4c-9).
+- (e) The 64 MiB bound of an export is ported, not tested.
+
+**What LAB-5G4c changes live.** `actinglab record draft` exists: on the command line, in `serve
+--stdio`, in `help`, in the completion, in `list commands` and `capabilities`. Nothing else is
+visible: today's `ac_binding_draft` is unchanged, and the new MCP server refuses the row until G4b.
+
+**With LAB-5G4b, merged before this slice into the same release** (the coordinator's merge of
+2026-11-13). The two slices were built side by side on main `18cb44a9`, so each says "until" of
+the other: LAB-5G4b's L5G4b rows say the child refuses `record draft` "until LAB-5G4c", and this
+subsection that the new MCP server refuses the row "until G4b". In 0.12.57 both hold at once: the
+row has its command, the server's rule sends its call to a `serve` child, and the child runs that
+command. No row is left that no command of actinglab serves (`NO_COMMAND_ROWS` is empty).
+[lab-two-entries.md](lab-two-entries.md) §9.3 says the state of both ("Calls served in the
+server's process", *Which*; "Calls served by `serve` children", *The answer*). The two doc
+comments of `apps/actinglab-mcp/src/tools.rs` that still say "until actinglab has its command"
+(`OWN_SLICE`, `serving`) are left to LAB-5G4b's second part, which is in flight on that file.
+
+**Rollback** (to the release before it). Nothing persisted but the check-config reports exported,
+as today's tool exports them.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
