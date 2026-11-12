@@ -8,7 +8,9 @@
 //   `ACTINGCOMMAND_INITIATOR` set (to anything) are refused, each with its code and its argument
 //   or variable; without the option the words are checked as before. A recording step added
 //   through the loop under the option carries `Lab-MCP` and is answered with the loop's line,
-//   never the envelope; without it, `Lab-CLI` and the two words the variable may name. The
+//   never the envelope of a `--via` line (Workflow #434 LAB-5G4b, adapted: that line inside the
+//   envelope `{exit_code, line}`, exit 0); without it, `Lab-CLI` and the two words the variable
+//   may name. The
 //   connection configuration under the option equals MCP's `--via mcp` child's (the Lab channel,
 //   `via` `mcp`); without it there is no `via`.
 // - `serve_refuses_values_that_begin_with_two_dashes`: a string value beginning with `--`, alone
@@ -193,7 +195,11 @@ fn serve_front_mcp_records_lab_mcp() {
         started[0]
     );
     let mut lines = served(None, &[step("cli-anchor")]);
-    lines.extend(served(mcp, &[step("mcp-anchor")]));
+    // Workflow #434 LAB-5G4b (adapted): under the option the loop's line is the envelope's `line`,
+    // the command line's exit code beside it.
+    let enveloped = served(mcp, &[step("mcp-anchor")]);
+    assert_eq!(enveloped[0]["exit_code"], json!(0), "{}", enveloped[0]);
+    lines.push(enveloped[0]["line"].clone());
     for (word, step_id) in [
         ("Lab-制包", "workbench-anchor"),
         ("Lab-救急", "rescue-anchor"),

@@ -398,8 +398,9 @@ under `g2\` only.
 The MCP module's program exists since LAB-5G2a as the server's shell (section 9.3, "The server's
 shell"): it lists its tools and, since LAB-5G2b, serves in its own process the calls of the rows
 the CLI module serves and, since its second part, on Windows those of the rescue module's rows but
-`deploy` and `rollback` (section 9.3, "Calls served in the server's process"); the MCP entry `g2`
-is slice G5a's.
+`deploy` and `rollback` (section 9.3, "Calls served in the server's process"), and since LAB-5G4b
+every other offered row through `actinglab.exe serve --stdio --front mcp` children (section 9.3,
+"Calls served by `serve` children"); the MCP entry `g2` is slice G5a's.
 
 **Packaging** (Workflow #434 LAB-5G6, 0.12.57; register §1.287, "Slice LAB-5G6"; the
 coordinator's rulings 5 and 21 on board #434, not the owner's words). Every build's Tools archive
@@ -435,7 +436,21 @@ from their core rows.
   with `via` `mcp` and the envelope (Lab, Lab), until LAB-6 replaces `via` with the initiator;
   the core rows `lab-ops` serves, which that child never serves, connect as without the option.
   The lines stay `serve`'s (each operation's `--json` line), never the envelope a `--via` line
-  prints. Without the option nothing changes.
+  prints; since LAB-5G4b each answer line carries its line inside the envelope below. Without the
+  option nothing changes.
+- **The answer envelope under `--front mcp`** (LAB-5G4b, 0.12.57; register §1.287, "Slice
+  LAB-5G4b"; the coordinator's ruling on board #434, 6827665631, not the owner's words). With the
+  option
+  each answer line is `{"exit_code": <n>, "req_id": <id>, "line": <line>}`: `line` is the line
+  the loop answers without the option, byte for byte; `exit_code` the code the command line would
+  exit with for that line (0, 1 or 2; 1 for a line that did not encode, which the command line
+  does not print); `req_id` the request id of the own command that served the row, when its
+  result carries one (the result's `req_id` on a success, its details' on a failure, where MCP's
+  `--via mcp` child reads it), absent otherwise. The MCP server answers `isError` by `exit_code`,
+  and the client action after a capture names `req_id`; neither can be read from every line. The
+  refusals before the loop (the option itself, the installation, the initiator, the table) stay
+  one line each, without the envelope. Without the option every line is as before, byte for
+  byte.
 - **Values that begin with `--`** (LAB-5G4a; board #434 6775192250 point 16). `serve` builds a
   command line for the command that serves a row, and a string beginning with `--` would reach
   that command's parser as a flag. So a parameter whose value is a string that begins with `--`,
@@ -779,11 +794,12 @@ sentence fails that test.
       module runs, a rescue row the module serves (`lab_rescue::rescue::serves`; its MCP rows
       `mcp config`, `mcp entries` and `mcp plan` among them) is served by it in the server's
       process, but a row whose `detach` the front forces (`tools::SUPPLIED`: `deploy` and
-      `rollback`, section 5's "Not yet"). Every other call answers `mcp_operation_unsupported` as
-      below: the three `app` rows and `standard-pack check`, the debugging and authoring rows
-      actinglab's own commands serve (the `serve` children, G4b), `record draft` among them
-      (actinglab's own command since LAB-5G4c, 0.12.57: MCP's `ac_binding_draft` ported; register
-      §1.287, "Slice LAB-5G4c"), and `deploy` and `rollback`.
+      `rollback`, section 5's "Not yet"). Since LAB-5G4b every other offered row (the three `app`
+      rows and `standard-pack check`, the debugging and authoring rows actinglab's own commands
+      serve, `record draft` among them: actinglab's own command since LAB-5G4c, 0.12.57, MCP's
+      `ac_binding_draft` ported; register §1.287, "Slice LAB-5G4c") is served by a `serve` child
+      ("Calls served by `serve` children", below); only `deploy` and `rollback` answer
+      `mcp_operation_unsupported` as below.
     - *A rescue row* (the second part) is checked as a core row is (the refusals below), then
       answered by the module for the root the program runs from with the initiator `Lab-MCP`
       (`lab_rescue::rescue::answer_here`), and its answer is the line actinglab's `--json` and
@@ -894,11 +910,63 @@ sentence fails that test.
       `ac_runs`' own `cursor` carry their own position and filters and bind to no session: they
       pass as the command line takes them. A cursor that begins with `--` is refused as `serve`
       refuses such a value.
+  - **Calls served by `serve` children** (Workflow #434 LAB-5G4b, 0.12.57, its first part;
+    register §1.287, "Slice LAB-5G4b"; the survey's §2, "Children, as the server must handle
+    them"; the coordinator's rulings on board #434, 6775192250 points 2, 5 and 20 and 6827665631
+    on this slice, not the owner's words).
+    - *Which.* A row the server gives neither to `lab_ops::core_ops` nor to the rescue module, and
+      that is not refused for a reason of its own (`deploy` and `rollback`; a rescue row where the
+      module does not run), is served by a child: one rule (`tools::serving`, `Serving::Child`),
+      no list of row names. On Windows 141 of the 143 offered rows are served (49 by `core_ops`
+      and 31 by the rescue module in the server's process, 61 by children) and 2 refused;
+      elsewhere all 110 are served (49 and 61).
+    - *The children.* `actinglab.exe` beside the server's own file, started as `actinglab.exe
+      serve --stdio --front mcp` (section 8.2) with the environment today's server gives its Lab
+      child: `ACTINGCOMMAND_RUNTIME_STATE_ROOT` set to the server's state root when it is known,
+      `ACTINGCOMMAND_INITIATOR` removed, pinned to the server's installation as today
+      (`lab_ops::child::pin_child`); its streams piped, no console window. A call takes an idle
+      child or starts one and sends it one line `{op, params}`, one request per child at a time.
+      At most `--children <n>` live (1 to 64, default 8); a call while every one is busy is
+      refused, not queued, with the code a job past `--jobs` answers, `job_capacity_exhausted`,
+      its `limit_count` the children's limit. A child idle for `--child-idle <seconds>` (0 to 600,
+      default 10; 0: at once after its answer) is ended by closing its input, by a thread of the
+      server's, without waiting for the next call (ruling 5: a resident server keeps no idle
+      child, which would block a deploy). Both options are refused as `--jobs` is: outside the
+      range, no whole number, twice, without a value, and beside `--list-tools`.
+    - *The answer.* The child's envelope (section 8.2): its `line` is the call's line, text and
+      `structuredContent`, and `isError` is true exactly when its `exit_code` is not 0; a refusal
+      the child answers is passed on as it is (a row no command of actinglab serves would be
+      refused so; since LAB-5G4c, in the same release, there is none: `record draft` has its
+      command). The server checks the arguments first as for every row it
+      serves (undeclared and the front's own members, types, required members, relative paths,
+      values that begin with `--`), so a call it refuses starts no child; the child checks them
+      again.
+    - *A child that fails.* A child that ends, or whose output ends, before its answer, or whose
+      answer is no envelope, is answered `lab_process_failed` (`exit_code` when it exited) caused
+      by a `foreign_other_error` from the process holding the tail of its stderr (its last 2 KiB,
+      `raw_text_truncated` when cut), as today's server answers a Lab child that printed no
+      answer; the request is never sent again, the child is dropped, and the next call starts a
+      new one. A child's stderr is read as it comes, so a full pipe never stops it.
+    - *Long calls and the end of input.* A call not done within the call budget answers its job's
+      handle as every job does (above); its child stays busy until its line comes and is never
+      killed. At the end of the server's input every idle child's input is closed at once, and a
+      working one's once its line came or when the server's process ends after its 2 s grace:
+      none is killed, each ends after the line it is working on. A call still running then
+      leaves its operation running to its end in the child (what it records or sends stays
+      recorded and sent), loses its answer (the child's write fails and it ends with
+      `actingctl_output_failed` on its own stderr) and its job's handle, which ends with the
+      server's process: read the effect before sending the call again.
+    - *The slice's second part* (not in this build): the Lab overflow rule for a child's line
+      over the budget (today's export of the whole line with the binding and frame parts kept
+      beside it) and the client action after a capture (ruling 12). Until then a child's line
+      that fits the budget neither way answers as a line over the budget after its work was done
+      (above: `output_budget_exceeded` with its job's handle), and no client action is recorded
+      after a capture.
   - **Not yet:** a call of a row the server does not serve answers `mcp_operation_unsupported`
     (`mcp_tool`) as the CLI line of a refusal, `{outcome}`, its arguments unread, nothing sent,
     run or written; a name that is no offered row's tool answers as today's server answers an
     unknown tool (-32602 `mcp_params_invalid`). `deploy` and `rollback` (until a detached run
-    carries `Lab-MCP`, section 5), the `serve --stdio --front mcp` children (G4b) and the manual
+    carries `Lab-MCP`, section 5), the second part of the `serve` children (G4b) and the manual
     (G7) come with their slices. The program is in the Tools archive since LAB-5G6 (0.12.57;
     section 8.1, "Packaging"); nothing starts it until a client is registered with the second
     entry (G7).

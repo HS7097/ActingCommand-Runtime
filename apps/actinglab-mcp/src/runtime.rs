@@ -39,8 +39,9 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// The variable that names the state root when it is set, as actinglab reads it.
-const STATE_ROOT_VARIABLE: &str = "ACTINGCOMMAND_RUNTIME_STATE_ROOT";
+/// The variable that names the state root when it is set, as actinglab reads it (Workflow #434
+/// LAB-5G4b: and as this server sets it for its `serve` children, `crate::children`).
+pub(crate) const STATE_ROOT_VARIABLE: &str = "ACTINGCOMMAND_RUNTIME_STATE_ROOT";
 /// The developer text of a state root this server could not locate.
 pub(crate) const UNLOCATED: &str = "actinglab-mcp finds its root from its own place and the \
      state root from the selected configuration: run the installed actinglab-mcp, or name the \

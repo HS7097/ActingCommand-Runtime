@@ -12,7 +12,7 @@
 //!
 //! The command answers as it does under its own words: on the command line `main` prints its line
 //! and exits with its exit code, and `serve --stdio` answers the line its `--json` prints
-//! ([`line`]; Workflow #434 LAB-2b, the CLI module's line, `super::own_line`).
+//! ([`answered`]; Workflow #434 LAB-2b, the CLI module's line, `super::own_line`).
 
 use super::serve::Front;
 use super::{JSON, own_line, words};
@@ -199,16 +199,19 @@ pub(crate) fn as_written(operation: &Operation) -> bool {
 /// for the command line of its command (Workflow #434 LAB-2b), with its exit code. Workflow #434
 /// LAB-5G4a: under `--front mcp` (`front`) the command runs with the `via` MCP's `--via mcp` child
 /// gives it, so that what it adds to a recording carries `Lab-MCP`; its line stays this one.
-pub(super) fn line(
+/// Workflow #434 LAB-5G4b: and the request id its result carries (`own_line::request_id`), which
+/// `serve --stdio --front mcp` puts beside the line.
+pub(super) fn answered(
     operation: &Operation,
     params: &Map<String, Value>,
     front: Option<Front>,
-) -> Exit {
+) -> (Exit, Option<String>) {
     let Some(words) = arguments(operation, params) else {
-        return cli_line::failure(
+        let refused = cli_line::failure(
             &cli_line::usage_invalid(Some(operation.name.as_str()), ArgumentProblem::Unknown),
             Some("no command of actinglab serves this operation"),
         );
+        return (refused, None);
     };
     let line = std::iter::once(JSON.to_owned()).chain(words);
     let mut invocation = crate::cli_parse::parse_invocation(line, true);
@@ -217,7 +220,8 @@ pub(super) fn line(
     {
         invocation.global.via = Some(front.via());
     }
-    own_line::exit(&crate::run_invocation(invocation))
+    let result = crate::run_invocation(invocation);
+    (own_line::exit(&result), own_line::request_id(&result))
 }
 
 /// The command line of `operation`: its words, the row's positional words, the further words,

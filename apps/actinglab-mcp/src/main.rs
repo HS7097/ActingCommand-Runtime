@@ -18,10 +18,12 @@
 //!   Runtime connection of `lab_ops::front`'s `Front::Mcp` (a write on a connection of its own,
 //!   after today's provenance); on Windows a rescue row the rescue module serves is served here
 //!   by the module, with the initiator `Lab-MCP` (LAB-5G2b's second part), but `deploy` and
-//!   `rollback`; every other call is refused with `mcp_operation_unsupported`
-//!   ([`codes`]) until a later slice serves it. It ships in the Tools archive since LAB-5G6
-//!   (0.12.57); nothing starts it until a client is registered with the MCP entry's second
-//!   generation.
+//!   `rollback`, which are refused with `mcp_operation_unsupported` ([`codes`]);
+//! - [`children`] (Workflow #434 LAB-5G4b): every other offered row is served through a child
+//!   `actinglab.exe serve --stdio --front mcp`, one request per child at a time.
+//!
+//! It ships in the Tools archive since LAB-5G6 (0.12.57); nothing starts it until a client is
+//! registered with the MCP entry's second generation.
 //!
 //! The command line: `--list <module>[,<module>...]` names the modules whose tools `tools/list`
 //! lists (the ids of the table's module rows of role `operations`); without it every installed
@@ -31,15 +33,20 @@
 //! LAB-5G3 ([`jobs`]; ruling 20: a tunable is a start option with a default): `--call-budget
 //! <seconds>` (1 to 300, today's 25) is how long a call may take before it answers its job's
 //! handle, `--jobs <n>` (1 to 64, today's 8) how many jobs run at once and `--kept-jobs <n>` (1 to
-//! 1024, today's 64) how many are kept. `--list-tools`
-//! prints the `tools/list` result and exits, and takes no `--workers`, `--jobs` or `--kept-jobs`
-//! (a `--call-budget` beside it sets the waits the list describes). `--tier`, today's server's
+//! 1024, today's 64) how many are kept. Workflow #434 LAB-5G4b ([`children`]; ruling 20):
+//! `--children <n>` (1 to 64, default 8) is how many `serve` children live at once and
+//! `--child-idle <seconds>` (0 to 600, default 10) how long one may stay idle before its input is
+//! closed. `--list-tools`
+//! prints the `tools/list` result and exits, and takes no `--workers`, `--jobs`, `--kept-jobs`,
+//! `--children` or `--child-idle` (a `--call-budget` beside it sets the waits the list
+//! describes). `--tier`, today's server's
 //! option, is refused: this server has no tiers. Nothing else is taken. stdout is the protocol, or the printed list; a start that
 //! fails writes its developer line on stderr and exits by its outcome's category, as
 //! `actingctl mcp-serve` does.
 
 mod budget;
 mod calls;
+mod children;
 mod codes;
 mod jobs;
 mod protocol;
@@ -75,9 +82,9 @@ use tools::{Catalog, Listing};
 
 /// The program's name in its developer lines and its `serverInfo`.
 const PROGRAM: &str = "actinglab-mcp";
-const USAGE: &str = "usage: actinglab-mcp [--list <module>[,<module>...]] [--workers <n>] [--call-budget <seconds>] [--jobs <n>] [--kept-jobs <n>] | actinglab-mcp --list-tools [--list <module>[,<module>...]] [--call-budget <seconds>]; <module>: core, debugging, authoring, rescue; --workers 1 to 64, default 8; --call-budget 1 to 300, default 25; --jobs 1 to 64, default 8; --kept-jobs 1 to 1024, default 64";
+const USAGE: &str = "usage: actinglab-mcp [--list <module>[,<module>...]] [--workers <n>] [--call-budget <seconds>] [--jobs <n>] [--kept-jobs <n>] [--children <n>] [--child-idle <seconds>] | actinglab-mcp --list-tools [--list <module>[,<module>...]] [--call-budget <seconds>]; <module>: core, debugging, authoring, rescue; --workers 1 to 64, default 8; --call-budget 1 to 300, default 25; --jobs 1 to 64, default 8; --kept-jobs 1 to 1024, default 64; --children 1 to 64, default 8; --child-idle 0 to 600, default 10";
 /// The developer text of a refused `--tier`.
-const NO_TIERS: &str = "actinglab-mcp has no tiers: tools/list lists every tool of the modules --list names, by default every installed module; usage: actinglab-mcp [--list <module>[,<module>...]] [--workers <n>] [--call-budget <seconds>] [--jobs <n>] [--kept-jobs <n>] | actinglab-mcp --list-tools [--list <module>[,<module>...]] [--call-budget <seconds>]";
+const NO_TIERS: &str = "actinglab-mcp has no tiers: tools/list lists every tool of the modules --list names, by default every installed module; usage: actinglab-mcp [--list <module>[,<module>...]] [--workers <n>] [--call-budget <seconds>] [--jobs <n>] [--kept-jobs <n>] [--children <n>] [--child-idle <seconds>] | actinglab-mcp --list-tools [--list <module>[,<module>...]] [--call-budget <seconds>]";
 const LIST: &str = "--list";
 const LIST_TOOLS: &str = "--list-tools";
 const WORKERS: &str = "--workers";
@@ -100,6 +107,15 @@ const DEFAULT_JOBS: usize = 8;
 const JOBS_RANGE: (u64, u64) = (1, 64);
 const DEFAULT_KEPT_JOBS: usize = 64;
 const KEPT_JOBS_RANGE: (u64, u64) = (1, 1024);
+/// Workflow #434 LAB-5G4b (work order point 2; ruling 20 of 6775192250): the `serve` children
+/// that live at once, and how long one may stay idle in seconds (0: its input is closed at once
+/// after its answer), each with its default and its range.
+const CHILDREN: &str = "--children";
+const CHILD_IDLE: &str = "--child-idle";
+const DEFAULT_CHILDREN: usize = 8;
+const CHILDREN_RANGE: (u64, u64) = (1, 64);
+const DEFAULT_CHILD_IDLE_S: u64 = 10;
+const CHILD_IDLE_RANGE: (u64, u64) = (0, 600);
 
 /// Why the program ended without serving (Workflow #378 A5, model v2.2 §7.3): one outcome, and
 /// the developer text of its line (the usage line of a usage error). Nothing is printed on
@@ -151,7 +167,7 @@ fn main() -> ExitCode {
 }
 
 fn run(arguments: &[OsString]) -> Result<ExitCode, Ended> {
-    let (invocation, job_options) = parse_all(arguments)?;
+    let (invocation, job_options, child_options) = parse_every(arguments)?;
     // Without ACTINGCOMMAND_DETAIL, full (class (b), model v2.2 §7.1), as actingctl's server.
     let detail = cli_line::detail().map_err(|outcome| Ended {
         outcome,
@@ -186,11 +202,13 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, Ended> {
     #[cfg(windows)]
     let _ =
         actingcommand_lab_ops::overview::set_watchdog_block(actingcommand_watchdog::overview_block);
+    // Workflow #434 LAB-5G4b: the `serve` children, whose idle ones a thread of their own ends.
+    let service = calls::Service::new(budget::export_directory()).with_children(child_options)?;
     server::serve(server::ServerConfig {
         catalog,
         listing,
         workers: invocation.workers,
-        service: calls::Service::new(budget::export_directory()),
+        service,
         call_budget: job_options.call_budget,
         limits: job_options.limits,
     })
@@ -203,19 +221,31 @@ fn parse(arguments: &[OsString]) -> Result<Invocation, Ended> {
     parse_all(arguments).map(|(invocation, _)| invocation)
 }
 
+/// The command line's options without the children's ([`parse_every`]).
+#[cfg(test)]
+fn parse_all(arguments: &[OsString]) -> Result<(Invocation, JobOptions), Ended> {
+    parse_every(arguments).map(|(invocation, job_options, _)| (invocation, job_options))
+}
+
 /// The command line's options; every other word, an option given twice, an option without its
 /// value, a `--workers` value outside its range or that is no number and `--workers` beside
 /// `--list-tools` are `actingctl_usage_invalid` naming the word, before anything is read or
 /// served. Workflow #434 LAB-5G3: the jobs' options (`--call-budget`, `--jobs`, `--kept-jobs`) are
 /// refused as `--workers` is; `--jobs` and `--kept-jobs` beside `--list-tools`, which runs no call,
 /// are `conflicting`, and `--call-budget` beside it sets the waits the printed list describes.
-fn parse_all(arguments: &[OsString]) -> Result<(Invocation, JobOptions), Ended> {
+/// Workflow #434 LAB-5G4b: the children's options (`--children`, `--child-idle`) are refused as
+/// `--jobs` is, beside `--list-tools` too.
+fn parse_every(
+    arguments: &[OsString],
+) -> Result<(Invocation, JobOptions, children::Options), Ended> {
     let mut list: Option<Vec<String>> = None;
     let mut list_tools = false;
     let mut workers: Option<usize> = None;
     let mut call_budget: Option<u64> = None;
     let mut running: Option<u64> = None;
     let mut kept: Option<u64> = None;
+    let mut child_count: Option<u64> = None;
+    let mut child_idle: Option<u64> = None;
     let mut index = 0;
     while index < arguments.len() {
         let word = arguments[index]
@@ -253,7 +283,24 @@ fn parse_all(arguments: &[OsString]) -> Result<(Invocation, JobOptions), Ended> 
                     KEPT_JOBS_RANGE,
                 )?);
             }
-            LIST | LIST_TOOLS | WORKERS | CALL_BUDGET | JOBS | KEPT_JOBS => {
+            CHILDREN if child_count.is_none() => {
+                index += 1;
+                child_count = Some(whole_number(
+                    option_value(arguments, index, word)?,
+                    CHILDREN,
+                    CHILDREN_RANGE,
+                )?);
+            }
+            CHILD_IDLE if child_idle.is_none() => {
+                index += 1;
+                child_idle = Some(whole_number(
+                    option_value(arguments, index, word)?,
+                    CHILD_IDLE,
+                    CHILD_IDLE_RANGE,
+                )?);
+            }
+            LIST | LIST_TOOLS | WORKERS | CALL_BUDGET | JOBS | KEPT_JOBS | CHILDREN
+            | CHILD_IDLE => {
                 return Err(usage(ArgumentProblem::Repeated, Some(word)));
             }
             // Today's server's tiers: this one has none, and says so.
@@ -278,6 +325,13 @@ fn parse_all(arguments: &[OsString]) -> Result<(Invocation, JobOptions), Ended> 
     if list_tools && kept.is_some() {
         return Err(usage(ArgumentProblem::Conflicting, Some(KEPT_JOBS)));
     }
+    // Workflow #434 LAB-5G4b: nor would the children's.
+    if list_tools && child_count.is_some() {
+        return Err(usage(ArgumentProblem::Conflicting, Some(CHILDREN)));
+    }
+    if list_tools && child_idle.is_some() {
+        return Err(usage(ArgumentProblem::Conflicting, Some(CHILD_IDLE)));
+    }
     let limits = jobs::Limits {
         running: count(running, DEFAULT_JOBS, JOBS, JOBS_RANGE)?,
         kept: count(kept, DEFAULT_KEPT_JOBS, KEPT_JOBS, KEPT_JOBS_RANGE)?,
@@ -286,12 +340,16 @@ fn parse_all(arguments: &[OsString]) -> Result<(Invocation, JobOptions), Ended> 
         call_budget: Duration::from_secs(call_budget.unwrap_or(tools::DEFAULT_CALL_BUDGET_S)),
         limits,
     };
+    let child_options = children::Options {
+        children: count(child_count, DEFAULT_CHILDREN, CHILDREN, CHILDREN_RANGE)?,
+        idle: Duration::from_secs(child_idle.unwrap_or(DEFAULT_CHILD_IDLE_S)),
+    };
     let invocation = Invocation {
         list,
         list_tools,
         workers: workers.unwrap_or(DEFAULT_WORKERS),
     };
-    Ok((invocation, job_options))
+    Ok((invocation, job_options, child_options))
 }
 
 /// Workflow #434 LAB-5G3: the value of the option `word`, read as `--workers`' is: a whole number

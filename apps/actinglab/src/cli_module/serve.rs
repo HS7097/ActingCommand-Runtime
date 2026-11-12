@@ -21,13 +21,25 @@
 //!   connections actinglab's own commands open bind as that child's do
 //!   (`crate::lab_client_config`: the Lab channel, `via` `mcp`, the envelope (Lab, Lab)), until
 //!   LAB-6; the core rows `lab-ops` serves, which that child never serves, connect as before. Its
-//!   lines stay this loop's, never the envelope a `--via` line prints. With the option,
+//!   lines stay this loop's (since LAB-5G4b each inside the envelope below), never the envelope a
+//!   `--via` line prints. With the option,
 //!   `ACTINGCOMMAND_INITIATOR` set to anything is refused before the loop starts: the variable
 //!   and the option name different initiators, and the MCP server removes the variable for its
 //!   children. Without the option nothing changes.
 //! - **A value that begins with `--`**: a parameter whose string value, or a string in its list,
 //!   begins with `--` is refused for every row before anything runs (`words::from_json`): the
 //!   command line of its row would read it as a flag.
+//!
+//! Workflow #434 LAB-5G4b (register §1.287, "Slice LAB-5G4b"; contract §8.2; the coordinator's
+//! ruling on board #434, 6827665631, not the owner's words): **under `--front mcp` each answer
+//! line is the envelope** `{"exit_code", "req_id"?, "line"}` ([`enveloped`]): `line` is the line
+//! the loop answers without the option, byte for byte, `exit_code` the code the command line would
+//! exit with for it, and `req_id` the request id of the own command that served the row, when its
+//! result carries one (`super::own_line::request_id`). The MCP server answers `isError` by the
+//! exit code, and the client action after a capture names the request id; neither can be read
+//! from every line. Without the option every line is as before. The refusals before the loop
+//! (`--front` itself, the installation, the initiator, the table) stay one line each, without the
+//! envelope.
 
 use super::{PROGRAM, words};
 use actingcommand_contract::outcome::{Detail, Outcome};
@@ -36,7 +48,7 @@ use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_lab_ops::initiator;
 use actingcommand_lab_ops::table::OperationTable;
 use actingcommand_runtime_client::ChannelVia;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::ffi::OsStr;
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
@@ -55,6 +67,10 @@ const FRONT_USAGE: &str = "serve --stdio takes --front mcp at most once: the fro
 /// The developer text of `--front mcp` with `ACTINGCOMMAND_INITIATOR` set.
 const FRONT_INITIATOR_TEXT: &str = "serve --stdio --front mcp records Lab-MCP; \
      ACTINGCOMMAND_INITIATOR names another initiator and may not be set with it";
+/// Workflow #434 LAB-5G4b: the members of the envelope an answer line is under `--front mcp`.
+const EXIT_CODE: &str = "exit_code";
+const REQ_ID: &str = "req_id";
+const LINE: &str = "line";
 
 /// Workflow #434 LAB-5G4a: the front end that started `serve --stdio`, as `--front` names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,7 +211,8 @@ pub(crate) fn serve(
 
 /// Answers every request line of `input` on `output`, one line each, and writes the developer
 /// lines to `developer`; ends with `input`. `front` is the front end `--front` named (Workflow
-/// #434 LAB-5G4a), `None` without the option.
+/// #434 LAB-5G4a), `None` without the option. Workflow #434 LAB-5G4b: with it each line is the
+/// envelope of the line ([`enveloped`]).
 pub(crate) fn serve_as(
     table: &OperationTable,
     front: Option<Front>,
@@ -209,24 +226,33 @@ pub(crate) fn serve_as(
         if input.read_until(b'\n', &mut bytes)? == 0 {
             return Ok(());
         }
-        let exit = match String::from_utf8(bytes.clone()) {
+        let (exit, request_id) = match String::from_utf8(bytes.clone()) {
             Ok(line) if line.trim().is_empty() => continue,
             Ok(line) => answer_line(table, front, line.trim_end_matches(['\r', '\n'])),
-            Err(_) => cli_line::failure(
-                &cli_line::usage_invalid(None, ArgumentProblem::NotUtf8),
-                Some(SERVE_USAGE),
+            Err(_) => (
+                cli_line::failure(
+                    &cli_line::usage_invalid(None, ArgumentProblem::NotUtf8),
+                    Some(SERVE_USAGE),
+                ),
+                None,
             ),
         };
-        let line = match &exit.line {
-            Ok(line) => line.clone(),
+        let (line, code) = match &exit.line {
+            Ok(line) => (line.clone(), exit.code),
             Err(text) => {
                 writeln!(
                     developer,
                     "{}",
                     cli_line::developer_text(PROGRAM, &Exit::output_failed(), Some(text))
                 )?;
-                output_failed_line()
+                // The command line prints no line then, and exits as the failure's category says.
+                let code = cli_line::exit_code(Exit::output_failed().category(), false);
+                (output_failed_line(), code)
             }
+        };
+        let line = match front {
+            None => line,
+            Some(Front::Mcp) => enveloped(code, request_id.as_deref(), line),
         };
         writeln!(output, "{line}")?;
         output.flush()?;
@@ -238,11 +264,26 @@ pub(crate) fn serve_as(
     }
 }
 
-/// The answer to one request line, for the front end `front`.
-fn answer_line(table: &OperationTable, front: Option<Front>, line: &str) -> Exit {
+/// Workflow #434 LAB-5G4b: the answer line under `--front mcp`, `{"exit_code", "req_id"?,
+/// "line"}`: `line` as the loop answers it without the option, `exit_code` the code the command
+/// line would exit with for it, `req_id` the request id of the own command that served the row,
+/// absent when its result carries none.
+pub(crate) fn enveloped(exit_code: u8, request_id: Option<&str>, line: Value) -> Value {
+    let mut envelope = Map::new();
+    envelope.insert(EXIT_CODE.to_owned(), Value::from(exit_code));
+    if let Some(request_id) = request_id {
+        envelope.insert(REQ_ID.to_owned(), Value::String(request_id.to_owned()));
+    }
+    envelope.insert(LINE.to_owned(), line);
+    Value::Object(envelope)
+}
+
+/// The answer to one request line, for the front end `front`, and (Workflow #434 LAB-5G4b) the
+/// request id of the own command that served it, when its result carries one.
+fn answer_line(table: &OperationTable, front: Option<Front>, line: &str) -> (Exit, Option<String>) {
     match words::from_json(table, line) {
-        Ok(call) => super::answer(table, &call, front),
-        Err(refusal) => cli_line::failure(&refusal, Some(SERVE_USAGE)),
+        Ok(call) => super::answered(table, &call, front),
+        Err(refusal) => (cli_line::failure(&refusal, Some(SERVE_USAGE)), None),
     }
 }
 
