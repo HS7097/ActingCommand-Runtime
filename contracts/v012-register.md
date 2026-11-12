@@ -10126,14 +10126,14 @@ archive's two readers; on main `4f1e5da5`. The contracts are [install-cli.md](in
 | L5G6-1 | the Tools archive's files `actinglab-mcp.exe` (LAB-5G2a's program) and `actingcommand-mcp-entry-g2.exe` (LAB-5G5a's) | packaging | LAB-5G6 | the `build` job of `.github/workflows/windows-remote-build.yml` | built by its `--bin` list (`actinglab-mcp`, `actingcommand-mcp-entry-g2`) and staged from `$toolFiles`, from which the same step writes the Tools `BUILD-MANIFEST.json` (`New-BuildManifest`): each is an entry with its `size_bytes` and `sha256`, like every other file of the archive, and no file is in the archive that the manifest does not list. Named wherever the first entry `actingcommand-mcp-entry.exe` is named in a list that decides what the archive carries or what its checks expect (the `--bin` list, `$toolFiles`, `Test-WindowsRemoteBuildTools.ps1`'s exact split, `Get-ExactBuildArtifact.ps1`'s exact list) and in no other; the first entry, its file name and its lists are unchanged; the fake children of both entries stay unshipped. The workspace and CI's `apps` job already held both packages (LAB-5G2a, LAB-5G5a) |
 | L5G6-2 | `Get-ExactBuildArtifact.ps1`: the exact Tools list | behaviour (script) | LAB-5G6 | — | a `platform-tools-v3` manifest that declares `actinglab-mcp.exe` or `actingcommand-mcp-entry-g2.exe` requires it, as one that declares the first entry requires it since v0.12.18; a manifest that declares neither (a build before this slice: nine payloads, ten with the first entry) is verified as before |
 | L5G6-3 | `install::plan`: the renamable images by file name, `RENAMABLE_IMAGES` = `actingctl.exe`, `actinglab-mcp.exe` (was the one `RENAMABLE_IMAGE`) | behaviour (installer) | LAB-5G6 | — | ruling 5, first half: a running image under the root whose file a plan replaces and whose file name is `actinglab-mcp.exe`, in `tools\` or `runtime\`, is classed by the rule and in the place that class `actingctl.exe`: listed under the plan's `running.renamed`, refusing nothing (neither the plan, nor the composite's gate before the stop, nor the rollback's gate before the close, which read `running.blocked`); its file renamed `<file>.old-<ms>` and the new one put in its place by the swap step every replaced file takes; listed in the apply's `running_renamed` and counted by the caveat `mcp_clients_on_previous_build`. `actinglab.exe` is not on the list: a running one that is not the planning process still refuses `running_image_blocks` (ruling 5, third line). A root on which no `actinglab-mcp.exe` runs plans, deploys, rolls back and reports as before |
+| L5G6-4 | `install::host::serves_mcp`, the probe's one predicate of `RunningImage.mcp_serve` (`parse_processes`) | behaviour (installer) | LAB-5G6 (second commit) | — | the coordinator's ruling of 2026-11-12 on board #434: a process serves MCP when its command line holds `mcp-serve` (as before) or its image's file name is `actinglab-mcp.exe`, also renamed aside (`actinglab-mcp.exe.<kept suffix>`, as the probe names a process that runs on a file an update renamed), whatever its command line. The probe (one CIM query) is unchanged. So `install status` lists a server still running on its replaced file among `mcp_servers_on_old_images` as it lists `actingctl.exe mcp-serve`, and the plan's `mcp_clients_reconnect` counts a renamed server as it counts that one. The rows keep their members (`pid`, `path`, `mcp_serve`); `path` names the program, so no member is added |
+| L5G6-5 | `install::plan`: the MCP entries' images, `MCP_ENTRY_IMAGES` = `actingcommand-mcp-entry.exe`, `actingcommand-mcp-entry-g2.exe` (was the one `MCP_ENTRY_IMAGE`) | behaviour (installer) | LAB-5G6 (second commit) | — | the same ruling: a running second entry is an MCP entry as the first is, so a renamed server it started (its parent) asks no client to reconnect, as a renamed `actingctl.exe mcp-serve` the first entry started asks none; a server started without an entry asks its client to reconnect, as today's does. The two names are data in one place |
 
-**Not changed.** The plan's notice `mcp_clients_reconnect` and `install status`'s
-`mcp_servers_on_old_images` count an image whose command line holds `mcp-serve` (the process
-probe's `mcp_serve`), and the notice exempts the children of a running `actingcommand-mcp-entry.exe`
-only. An `actinglab-mcp.exe` command line holds no `mcp-serve`, so neither counts the server, and
-a running `actingcommand-mcp-entry-g2.exe` is not taken as an entry. This slice changes the one
-rule; whether those two reports count the server and the second entry is left open. Until G7 no
-registration starts the server, so no deploy meets one.
+**Every other answer** (the second commit, the coordinator's ruling's point 4): a root on which no
+`actinglab-mcp.exe` runs answers byte for byte as before. The predicate only adds images named
+`actinglab-mcp.exe`, and a second entry's children are only `actinglab-mcp.exe` (L5G5a-3), so no
+other image is counted or exempted otherwise; member names, row shapes and codes are unchanged.
+Until G7 no registration starts the server, so no deploy meets one.
 
 **`<root>\mcp-entry\g2\`** (read on this main). No installer code writes under `<root>\mcp-entry\`:
 an update's and a rollback's file plan holds the files of the two manifests under `tools\` and
@@ -10163,8 +10163,15 @@ host of the installer's gates, a made-up root, the rescue module's `deploy`): wi
 server alone, holding its file open, the plan lists it under `running.renamed` and nothing under
 `running.blocked`, the deploy is applied, its apply lists the pid under `running_renamed` with the
 caveat `mcp_clients_on_previous_build` (`count` 1), the new build's server is in place, the old
-one kept as `actinglab-mcp.exe.old-<ms>` and still read through the open handle; a build that
-carries the server in `runtime\` is planned and applied the same way. In the `build` job's "Test
+one kept as `actinglab-mcp.exe.old-<ms>` and still read through the open handle; then (second
+commit) `install status` (the module's `op status`) lists the server running on its kept file
+among `mcp_servers_on_old_images` beside an `actingctl.exe mcp-serve` on its kept file, and not
+an `actingledger.exe` on its kept file; a build that carries the server in `runtime\` is planned
+and applied the same way. `gate_434_lab5g6::deploy_notice_counts_the_mcp_server_as_todays`
+(second commit): the plan's `mcp_clients_reconnect` is `false` for a renamed server the second
+entry started, as for a renamed `actingctl.exe mcp-serve` the first entry started, and `true` for
+a server started without an entry, as for today's started without one. Both tests read their
+running images from probe-shaped rows through `host::parse_processes`. In the `build` job's "Test
 Windows artifact tooling" step, `Test-WindowsRemoteBuildTools.ps1`: its exact Tools split grows by
 the two names (the one existing expectation that enumerates the Tools files), and three new cases:
 `artifact-tools-v3-mcp-programs` (a v3 artifact with the first entry verifies ten payloads, one

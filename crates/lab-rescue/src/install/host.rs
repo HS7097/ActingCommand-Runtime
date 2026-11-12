@@ -41,7 +41,8 @@ pub(crate) struct Installer {
 pub(crate) struct RunningImage {
     pub(crate) pid: u32,
     pub(crate) path: String,
-    /// Whether its command line serves MCP (`mcp-serve`).
+    /// Whether it serves MCP (`serves_mcp`): its command line holds `mcp-serve`, or (Workflow
+    /// #434 LAB-5G6) its image is the Lab's MCP server.
     pub(crate) mcp_serve: bool,
     /// #411 P49 (MCP-ENTRY review L9): the pid of the process that started it, as the operating
     /// system recorded it; the plan reads it to tell an MCP entry's child from a server a client
@@ -445,7 +446,7 @@ pub(crate) fn parse_processes(output: &str, root: &Path) -> Result<Vec<RunningIm
             images.push(RunningImage {
                 pid,
                 path: path.to_owned(),
-                mcp_serve: row["mcp"].as_bool().unwrap_or(false),
+                mcp_serve: serves_mcp(row["mcp"].as_bool().unwrap_or(false), path),
                 parent_pid: row["parent"]
                     .as_u64()
                     .and_then(|parent| u32::try_from(parent).ok()),
@@ -453,4 +454,23 @@ pub(crate) fn parse_processes(output: &str, root: &Path) -> Result<Vec<RunningIm
         }
     }
     Ok(images)
+}
+
+/// Workflow #434 LAB-5G6 (the coordinator's ruling of 2026-11-12 on board #434): the image name of
+/// the Lab's MCP server, which serves MCP whatever its command line.
+const MCP_SERVER_IMAGE: &str = "actinglab-mcp.exe";
+
+/// Whether the process whose image is `path` serves MCP: its command line holds `mcp-serve`
+/// (`command_line_serves`, as the probe reads it: `actingctl.exe mcp-serve`), or, Workflow #434
+/// LAB-5G6, its image is the Lab's MCP server `actinglab-mcp.exe`, by its file name, also while it
+/// runs on a file an update renamed aside (`actinglab-mcp.exe.old-<ms>`).
+fn serves_mcp(command_line_serves: bool, path: &str) -> bool {
+    let name = Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    command_line_serves
+        || name
+            .strip_prefix(MCP_SERVER_IMAGE)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
 }

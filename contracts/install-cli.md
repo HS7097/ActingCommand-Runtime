@@ -304,9 +304,11 @@ stopped, and until INST-3 it leaves the configuration alone.
   `runtime\` or `tools\` refuses `foreign_part` (`path`).
 - **Notice block** for the person's notice before the change: what changes, whether MCP servers
   must reconnect, and whether the rollback window will be bounded (a one-way ledger edge).
-  `mcp_clients_reconnect` counts only a renamed `mcp-serve` image whose parent process is not an
-  MCP entry running under the root (`actingcommand-mcp-entry.exe`): an entry switches its own
-  child to the live build ("The MCP entry"; #411 P49, v0.12.25).
+  `mcp_clients_reconnect` counts only a renamed image that serves MCP (an `mcp-serve` command
+  line, or since 0.12.57 the image `actinglab-mcp.exe`, "Running images") whose parent process
+  is not an MCP entry running under the root (`actingcommand-mcp-entry.exe`, and since 0.12.57
+  `actingcommand-mcp-entry-g2.exe`): an entry switches its own child to the live build ("The MCP
+  entry"; #411 P49, v0.12.25).
 
 **Apply.** Steps in order, each journalled:
 
@@ -601,9 +603,10 @@ does not read the journals of kind `stop` or `start` or with `rollback` (review 
   at once (done, `installation_changed: false`, `pid`, `log`; `next` names `install status`).
   A stale `--plan` or a refusing guard still shows only in that log.
 - **MCP servers on old images.** `install status` lists `mcp_servers_on_old_images: [{pid,
-  path, mcp_serve}]`, the running `mcp-serve` processes under the root whose image an update
-  renamed aside (`<file>.old-<ms>`); their clients reconnect, except an MCP entry's child, which
-  its entry switches.
+  path, mcp_serve}]`, the running processes under the root that serve MCP (an `mcp-serve`
+  command line, or since 0.12.57 the image `actinglab-mcp.exe`, "Running images") whose image an
+  update renamed aside (`<file>.old-<ms>`); their clients reconnect, except an MCP entry's child,
+  which its entry switches.
 
 ### The post-start checks (INST-2)
 
@@ -1010,9 +1013,15 @@ entry switches its own child; #411 P49). The Lab's MCP server (Workflow #434 LAB
 the coordinator's ruling 5 on board #434): an `actinglab-mcp.exe` image, in `tools\` or
 `runtime\`, is renamed aside as an `actingctl.exe` image is, by the same rule (the file name), and
 listed with them (`running.renamed` in the plan, `running_renamed` and the caveat
-`mcp_clients_on_previous_build` after apply); the process probe marks `mcp_serve` only for a
-command line that holds `mcp-serve`, which the server's does not. The Lab's rescue module (LAB-3
-fix 1): the image of the
+`mcp_clients_on_previous_build` after apply). It serves MCP by its image name, whatever its
+command line: the process probe's one predicate marks `mcp_serve` for an `mcp-serve` command line
+and for an image named `actinglab-mcp.exe`, also once renamed aside (`actinglab-mcp.exe.old-<ms>`),
+so `install status` lists it among `mcp_servers_on_old_images` and the notice's
+`mcp_clients_reconnect` counts it as an `actingctl.exe mcp-serve`; and the second MCP entry,
+`actingcommand-mcp-entry-g2.exe`, is an entry as the first is, so a server it started asks no
+client to reconnect (the coordinator's ruling of 2026-11-12). The rows keep their members (`pid`,
+`path`, `mcp_serve`): `path` names the program. The Lab's rescue module (LAB-3 fix 1): the image
+of the
 process that plans, matched by its process id (`<root>\tools\actinglab.exe` running the module),
 is renamed aside the same way and listed as `running.renamed_own`; another running
 `actinglab.exe` still refuses. `actingctl install`'s planning is unchanged: its own image is

@@ -9,7 +9,13 @@
 // read by the process that holds it) and the new build's file takes its place; the apply lists it
 // under `running_renamed`, noted by the caveat `mcp_clients_on_previous_build`; in `tools\` and in
 // `runtime\` alike. A running `tools\actinglab.exe` that is not the planning process still blocks
-// (`running_image_blocks`). The machine is the fake host of `fixture.rs` with its fake Runtime (not
+// (`running_image_blocks`). The second commit (the coordinator's ruling of 2026-11-12 on board
+// #434) adds: the server serves MCP by its image name (`host::serves_mcp`), so `install status`
+// lists it on its replaced file among `mcp_servers_on_old_images` as it lists today's
+// `actingctl.exe mcp-serve`; and the second entry is an entry (`plan::MCP_ENTRY_IMAGES`), so
+// `deploy_notice_counts_the_mcp_server_as_todays` finds the notice `mcp_clients_reconnect`
+// counting the server as it counts today's. The running images are read from probe-shaped rows by
+// `host::parse_processes`. The machine is the fake host of `fixture.rs` with its fake Runtime (not
 // running) and fake clock: no device, no sleep; every root is a temporary folder with neutral
 // files.
 
@@ -92,21 +98,42 @@ fn prepared(base: &Path, name: &str, host: &FakeHost, in_runtime: bool) -> PathB
     root
 }
 
-/// The process `pid` whose image is `<root>\<half>\<name>`, as the process probe names it. The
-/// probe marks `mcp_serve` only for a command line that holds `mcp-serve`, and the server's holds
-/// none.
-fn image(root: &Path, half: &str, name: &str, pid: u32) -> RunningImage {
-    RunningImage {
-        pid,
-        path: super::files::plain(
-            &fs::canonicalize(root)
-                .expect("the canonical root")
-                .join(half)
-                .join(name),
-        ),
-        mcp_serve: false,
-        parent_pid: None,
-    }
+/// A process the probe reports: its image relative to the root (`/` separators), its pid, whether
+/// its command line holds `mcp-serve`, and its parent's pid.
+type Probed<'a> = (&'a str, u32, bool, u32);
+
+/// The running images of `rows` under `root`, read from the probe's rows as the installer reads
+/// them (`host::parse_processes`, where an image serves MCP by `mcp-serve` in its command line or
+/// by the server's image name).
+fn probed(root: &Path, rows: &[Probed<'_>]) -> Vec<RunningImage> {
+    let canonical = fs::canonicalize(root).expect("the canonical root");
+    let plain = super::files::plain(&canonical);
+    let rows = rows
+        .iter()
+        .map(|(relative, pid, mcp, parent)| {
+            json!({
+                "pid": pid,
+                "path": format!("{plain}\\{}", relative.replace('/', "\\")),
+                "mcp": mcp,
+                "parent": parent,
+            })
+        })
+        .collect::<Vec<_>>();
+    super::host::parse_processes(&Value::Array(rows).to_string(), &canonical)
+        .expect("the probe's rows")
+}
+
+/// The name of the one file of `dir` an update kept for `name` (`<name>.old-<ms>`).
+fn kept_name(dir: &Path, name: &str) -> String {
+    let prefix = format!("{name}.old-");
+    let kept = fs::read_dir(dir)
+        .expect("the folder")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|found| found.starts_with(prefix.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(kept.len(), 1, "one kept {name}: {kept:?}");
+    kept[0].clone()
 }
 
 /// The rescue row `name` with `params` on `root`, as [`WORD`]; its one line and exit code.
@@ -181,10 +208,13 @@ fn deploy_not_blocked_by_mcp() {
     let tools = root.join("tools");
     // A client's server (5201) and another actinglab (5202: a recording, say) run the live files
     // of `tools\`, which C2 replaces.
-    *host.processes.borrow_mut() = vec![
-        image(&root, "tools", SERVER, 5201),
-        image(&root, "tools", "actinglab.exe", 5202),
-    ];
+    *host.processes.borrow_mut() = probed(
+        &root,
+        &[
+            ("tools/actinglab-mcp.exe", 5201, false, 1),
+            ("tools/actinglab.exe", 5202, false, 1),
+        ],
+    );
 
     // The counter-case: the other actinglab blocks; the server is renamed, not blocked.
     let (planned, exit) = rescue_line(&host, &root, "deploy", json!({"target": C2, "plan": true}));
@@ -244,28 +274,46 @@ fn deploy_not_blocked_by_mcp() {
         fs::read(tools.join(SERVER)).expect("the new server"),
         server_bytes(C2)
     );
-    let kept = fs::read_dir(tools.as_path())
-        .expect("the tools folder")
-        .flatten()
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.file_name()
-                .is_some_and(|name| name.to_string_lossy().starts_with("actinglab-mcp.exe.old-"))
-        })
-        .expect("the kept old server");
+    let kept_server = kept_name(&tools, SERVER);
     assert_eq!(
-        fs::read(kept).expect("the kept old server"),
+        fs::read(tools.join(&kept_server)).expect("the kept old server"),
         server_bytes(C1)
     );
     let mut read = Vec::new();
     open.read_to_end(&mut read).expect("read the open image");
     assert_eq!(read, server_bytes(C1));
     drop(open);
+
+    // The status lists the server still running on the replaced file among the MCP servers on
+    // old images, as it lists today's `actingctl.exe mcp-serve` on its replaced file; a program
+    // that serves no MCP on its replaced file is not listed. The probe names each running image
+    // by the file it runs, now the kept one.
+    let old_server = format!("tools/{kept_server}");
+    let old_control = format!(
+        "runtime/{}",
+        kept_name(&root.join("runtime"), "actingctl.exe")
+    );
+    let old_ledger = format!("tools/{}", kept_name(&tools, "actingledger.exe"));
+    *host.processes.borrow_mut() = probed(
+        &root,
+        &[
+            (old_server.as_str(), 5201, false, 1),
+            (old_control.as_str(), 7701, true, 1),
+            (old_ledger.as_str(), 5401, false, 1),
+        ],
+    );
+    let (status, exit) = rescue_line(&host, &root, "op status", json!({}));
+    assert_eq!(exit, 0, "{status}");
+    assert_eq!(
+        pids(&status["mcp_servers_on_old_images"]),
+        [5201, 7701],
+        "{status}"
+    );
     host.processes.borrow_mut().clear();
 
     // Should a build carry the server in `runtime\`, it is treated the same there.
     let root = prepared(temp.path(), "runtime-server", &host, true);
-    *host.processes.borrow_mut() = vec![image(&root, "runtime", SERVER, 5301)];
+    *host.processes.borrow_mut() = probed(&root, &[("runtime/actinglab-mcp.exe", 5301, false, 1)]);
     let (deployed, exit) = rescue_line(&host, &root, "deploy", json!({"target": C2}));
     assert_eq!(exit, 0, "{deployed}");
     assert_eq!(
@@ -282,5 +330,60 @@ fn deploy_not_blocked_by_mcp() {
         fs::read(root.join("runtime").join(SERVER)).expect("the new server"),
         server_bytes(C2)
     );
+    host.processes.borrow_mut().clear();
+}
+
+/// The images of the two MCP entries' programs, in their generations' folders.
+const ENTRY_G1: &str = "mcp-entry/g1/actingcommand-mcp-entry.exe";
+const ENTRY_G2: &str = "mcp-entry/g2/actingcommand-mcp-entry-g2.exe";
+
+/// The plan notice's `mcp_clients_reconnect` of a deploy to C2 on `root` while `rows` run.
+fn reconnect(host: &FakeHost, root: &Path, rows: &[Probed<'_>]) -> Value {
+    *host.processes.borrow_mut() = probed(root, rows);
+    let (planned, exit) = rescue_line(host, root, "deploy", json!({"target": C2, "plan": true}));
+    assert_eq!(exit, 0, "{planned}");
+    step(&planned, "plan")["result"]["notice"]["mcp_clients_reconnect"].clone()
+}
+
+// The coordinator's ruling of 2026-11-12 on board #434 (LAB-5G6's second commit): the plan's
+// notice counts a renamed `actinglab-mcp.exe` by the rule it counts today's `actingctl.exe
+// mcp-serve` by. One started by the second entry is switched by that entry and asks no client to
+// reconnect, as one started by the first entry; one started without an entry asks its client to
+// reconnect, as today's started without one does.
+#[test]
+fn deploy_notice_counts_the_mcp_server_as_todays() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = prepared(temp.path(), "notice", &host, false);
+    let control = "runtime/actingctl.exe";
+    let server = "tools/actinglab-mcp.exe";
+
+    // Started by an entry.
+    let today = reconnect(
+        &host,
+        &root,
+        &[(ENTRY_G1, 50, true, 1), (control, 77, true, 50)],
+    );
+    assert_eq!(today, json!(false));
+    let new = reconnect(
+        &host,
+        &root,
+        &[(ENTRY_G2, 60, false, 1), (server, 81, false, 60)],
+    );
+    assert_eq!(new, today, "a server the second entry started");
+
+    // Started without an entry.
+    let today = reconnect(
+        &host,
+        &root,
+        &[(ENTRY_G1, 50, true, 1), (control, 78, true, 99)],
+    );
+    assert_eq!(today, json!(true));
+    let new = reconnect(
+        &host,
+        &root,
+        &[(ENTRY_G2, 60, false, 1), (server, 82, false, 99)],
+    );
+    assert_eq!(new, today, "a server a client started itself");
     host.processes.borrow_mut().clear();
 }
