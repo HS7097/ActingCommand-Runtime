@@ -1634,6 +1634,12 @@ that has the device, `device_group_wait` `selected`, `held`, `player_hold` or `f
 `instance_already_selected`, `dispatch_instance_held` or a control gate's code, which a candidate
 of a lone instance gets, and a member's own holder or gate keeps its own code. It is the `why` of
 the member's not-running row while it waits. In a group of one it never occurs.
+After a failed switch (`application_switch_failed`, proposed) the member's own candidates wait out
+its switch cooldown, `scheduling.device_group.switch_failure_cooldown_ms` (proposed, default
+`300000`): each is deferred as during a takeover cooldown, with `dispatch_instance_cooldown`, the
+cooldown's end as `next_eligible_unix_ms` and its wake, and the proposed optional value
+`failure_code` `application_switch_failed`, while the device's other members go on
+([device-group.md](../device-group.md), "The switch before a run").
 
 Besides the deferrals, one reason ends a decision after admission: a dispatch that was admitted
 but has not started is withdrawn when its task package is unloaded, and its decision record and

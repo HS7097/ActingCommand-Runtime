@@ -1192,7 +1192,9 @@ Checked here, without discovery:
     handset or a fixture, share an `application_id`, lack a `startup_package`, or turn on a
     device-level action the first slice refuses;
   - two entries outside one group that name the same `instance_index`, `instance_name`, `serial`,
-    or `host` and `port` (`undeclared_shared_device`).
+    or `host` and `port` (`undeclared_shared_device`);
+  - until the slice "order within one device", every group of several, after the rules above
+    (`several_members_unsupported`).
 
   The report row of an entry that names `device_group` carries it. Until MAPP nothing here
   refuses two entries on one device;

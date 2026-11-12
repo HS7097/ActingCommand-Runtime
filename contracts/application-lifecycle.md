@@ -357,7 +357,8 @@ proposed). Each of its runs goes through the switch first: after an emulator sta
 hold, on the ladder's application restart rung, and before the member's own runs. In a switch, the
 startup run's end hands the key back to the run it serves, not to another claim. A startup run
 that fails in a switch fails the run it serves with `application_switch_failed` (proposed), and as
-always starts no ladder.
+always starts no ladder; the member then waits out its switch cooldown before it competes for the
+device again.
 
 ## Expected ledger sequence (one `emulator restart` with a startup package)
 

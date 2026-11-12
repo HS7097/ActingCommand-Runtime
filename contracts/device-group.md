@@ -10,8 +10,9 @@ that the scheduler serves in turn; one application is in front at any time; one 
 queue, and a task of another application that comes due waits in it even where waiting loses some
 yield; a task package that is running is never interrupted; the queue's order is by weight and by
 time; and 「切换到另一个应用时，原先的应用直接杀掉就行」, starting and killing by package name through
-ADB. Everything else in this file is the coordinator's rulings of 11-11 and 11-12, written as the
-code allows them, not her words.
+ADB. Everything else in this file is the coordinator's rulings of 11-11 and its answers of 11-12 to
+the fourteen questions of §1.323, written as the code allows them, not her words. Those questions
+are settled; each answer stands in the section it belongs to, and §1.323 lists them.
 
 ## Words (MAPP, not built yet)
 
@@ -69,14 +70,24 @@ that breaks the rule) and `device_group_problem` (a proposed vocabulary).
 | No member is a fixture entry | `fixture_backend` | `fixture_member` |
 | Every member has its own `application_id`. The kill and the foreground gate tell members apart by package name ("Identity on the device") | `application_id` | `application_shared` |
 | Every member declares a `startup_package`. The switch reaches the member's home only through it ("The switch before a run") | `startup_package` | `startup_package_missing` |
-| No member turns on a device-level action that slice 1 does not make group-aware ("Device-level actions"): `start_emulator` `true`; an `idle.action` in effect other than `none` (the defaults file's `close_app` included, so a member names `none`); a ladder profile in effect whose rungs hold `emulator_restart`. The profile in effect is the member's `recovery_ladder_profile`, else its kind's profile, else the section's `rungs` ([emulator-control.md](emulator-control.md), "Ladder profiles"). An emulator names no profile by default and climbs the section's `rungs`, which hold that rung, so a member names a profile such as the defaults file's `handset` (`return_home`, `application_restart`). Under the default `rules.start_beyond_profile` `exhaust`, a trigger that starts beyond it (`navigation_exhausted`, start rung 3) ends `exhausted`, as on a handset | `start_emulator`, `idle.action`, `recovery_ladder_profile` | `device_action_unsupported` |
+| No member turns on a device-level action that slice 1 does not make group-aware ("Device-level actions"): `start_emulator` `true`; an `idle.action` in effect other than `none` (the defaults file's `close_app` included, so a member names `none`); a ladder profile in effect whose rungs hold `emulator_restart`. The profile in effect is the member's `recovery_ladder_profile`, else its kind's profile, else the section's `rungs` ([emulator-control.md](emulator-control.md), "Ladder profiles"). An emulator names no profile by default and climbs the section's `rungs`, which hold that rung, so a member names a profile without it: the neutrally named profile MAPP-1 adds to the defaults file's `recovery_ladder.profiles` (a value of that existing key, with no `emulator_restart`; its name is MAPP-1's), or the defaults file's `handset` (`return_home`, `application_restart`). Under the default `rules.start_beyond_profile` `exhaust`, a trigger that starts beyond it (`navigation_exhausted`, start rung 3) ends `exhausted`, as on a handset | `start_emulator`, `idle.action`, `recovery_ladder_profile` | `device_action_unsupported` |
 
-While the Runtime runs, an instruction that would break the last rule on a member of a group of
-several is refused by the whole-instance check: `config_value_invalid` with `config_value_problem`
-`section_check` on the key ([runtime-config.md](runtime-config.md), "`ConfigureSettings`"). The
-keys are `instance.<id>.start_emulator`, `instance.<id>.idle.action`, the section's `idle.action`
-where a member takes it, `instance.<id>.recovery_ladder_profile`, and the `recovery_ladder`
-profile a member climbs by.
+A member's setting that conflicts with its group is refused, never overridden: the file is
+corrected by a person (fail loud).
+
+**Until the slice "order within one device"** ("Later slices", "Release"), a build refuses every
+group of several at stage `assemble`, in check-config and at start alike, with
+`device_group_config_invalid`, `config_key` `device_group` and `device_group_problem`
+`several_members_unsupported` (proposed). It is checked after the rules of the table, so a group
+that breaks one of them is refused with that rule's problem first. A group of one is accepted. The
+slice that builds the order within one device removes this refusal.
+
+While the Runtime runs, an instruction that would break the table's last rule on a member of a
+group of several is refused by the whole-instance check: `config_value_invalid` with
+`config_value_problem` `section_check` on the key ([runtime-config.md](runtime-config.md),
+"`ConfigureSettings`"). The keys are `instance.<id>.start_emulator`, `instance.<id>.idle.action`,
+the section's `idle.action` where a member takes it, `instance.<id>.recovery_ladder_profile`, and
+the `recovery_ladder` profile a member climbs by.
 
 **Undeclared sharing.** Today nothing refuses two entries on one device. The registry refuses only
 a duplicate alias and a duplicate instance id (`crates/runtime-host/src/provider.rs:1161-1186`).
@@ -99,7 +110,9 @@ the shared key. The check runs in two places:
 
 Handsets are already covered: the private binding file refuses one serial bound to two aliases.
 This refusal is the one difference a configuration without `device_group` can see, and only a
-configuration that drives one device from two workers today meets it.
+configuration that drives one device from two workers today meets it. Before MAPP-1 ships, the
+production configuration files are read, read only, for two entries that name one device, so that
+no production root meets the refusal at its start unannounced.
 
 **What check-config and the start print.**
 
@@ -119,18 +132,26 @@ data is migrated. It holds because:
 - The group is derived from the file at assembly ("Derived, never stored") and is the member
   alone. Its device key is the member's own instance id, so every map keyed by the device key has
   today's keys and values ("One queue, one worker, one lease per device").
-- The new reason (`device_group_waiting`) and the switch exist only when another member has the
-  device, which a group of one never has. The group rules of the form apply only to a group of
-  several.
+- The new reason (`device_group_waiting`), the switch and its cooldown exist only when another
+  member has the device, which a group of one never has. The group rules of the form apply only to
+  a group of several.
 - No record type, payload member, phase word, fact key, tag or closed vocabulary of the ledger is
   added ("Interfaces").
 - A file without `device_group` keeps its revision (28 or lower). check-config's report and the
-  manifest gain nothing for it. The worker thread keeps its name, `actingd-instance-<alias>`.
+  manifest gain nothing for it but the switch cooldown's key (below). The worker thread keeps its
+  name, `actingd-instance-<alias>`.
 - The owner journal's active instances are the same ids (`protected_instance_ids`,
   `crates/scheduler/src/lib.rs:2585-2593`, written by `persist_active_instances`,
   `crates/runtime-host/src/host/lease.rs:3242-3247`).
 
-The one exception is the refusal of undeclared sharing above.
+There are two exceptions:
+
+- the refusal of undeclared sharing above;
+- the switch cooldown's key `scheduling.device_group.switch_failure_cooldown_ms` ("The switch
+  before a run"). From MAPP-2 on, like every key of the `scheduling` section, it is a row of the
+  manifest and of the program fact `config.parameters.scheduling` on every root, with its default
+  ([runtime-config.md](runtime-config.md), "The `scheduling` section"). Nothing a group of one does
+  reads it.
 
 ## Derived, never stored (MAPP, not built yet)
 
@@ -225,8 +246,13 @@ today's scores, unchanged.
   1 may switch at every dispatch there.
 - **Values.** The values of two members (`B`, the resource terms) are never compared, as today.
 
-None of this is a defect of slice 1: it is today's ranking applied to one device. The normalized
-weight and the switch's cost are later slices.
+None of this is a defect of slice 1: it is today's ranking applied to one device. So in the first
+two slices the members of one device may switch application after every task, each switch a kill,
+a start and a return home: correct but slow, and accepted for these two slices. No release runs
+it: the first release that accepts a group of several also carries the slice "order within one
+device", which ranks the members of one device by the normalized weight with the switch's time as
+a cost ("Later slices", "Release"), and until then a group of several is refused at load ("The
+configuration form").
 
 **The reason a member waits: `device_group_waiting`** (proposed; info, ladder class `none`, owner
 `policy`). A candidate of a member that does not get the device because another member has it
@@ -362,6 +388,42 @@ What a failed switch does to each party:
 - **To the other members:** their applications are as the step left them; a stopped member is
   started again by its own next switch. A fence holds the whole group ("A failure stays where it
   belongs").
+- **To the member's other due work:** the member's switch cooldown (below).
+
+**The member's switch cooldown.** After a failed switch the member does not compete for the device
+for `scheduling.device_group.switch_failure_cooldown_ms` (proposed key; milliseconds
+`1..=3600000`, default `300000`, five minutes). Without it, a member with many due tasks would try
+each of them in turn, each try a kill and a restart of an application, and starve the device's
+other members. It is the scheduling contract's takeover cooldown, kept per member: position 2 of
+[scheduling-blackout.md](scheduling-blackout.md), "Order of the deferrals", and the scheduler
+state's `cooldown_until_monotonic_ms`.
+
+- **Start and end.** It starts when the run the switch served is settled failed with
+  `application_switch_failed` (a policy run's failed settlement, a direct run's failed receipt) and
+  ends at that instant plus the value in effect then. A change of the key applies to cooldowns that
+  start after it.
+- **Where it lives.** In memory, one deadline per member beside the device's scheduler state, on
+  the monotonic clock as `cooldown_until_monotonic_ms` is, never stored: a restart drops it as it
+  drops leases and queues ("Derived, never stored"). The device's own cooldown (the takeover
+  cooldown) stays one per device.
+- **What it holds.** Every policy candidate of the member, an owed rerun, an immediate rerun, a
+  remedy request or retry and a chain's successor included. Each is deferred at position 2, as on
+  an instance in its takeover cooldown, with `dispatch_instance_cooldown`: `instance_id` the
+  member, `next_eligible_unix_ms` the cooldown's end, and the existing key `failure_code`
+  `application_switch_failed`, a proposed optional value of that code that tells it from a takeover
+  cooldown. Its wake is the cooldown's end, and like any hold of positions 1 and 2 it raises no fact
+  refresh demand ([scheduling/README.md](scheduling/README.md), "Fact Refresh"). The evaluator
+  learns it as it learns the instance holds (`InstanceHolds`, evaluator.rs:343-380).
+- **What it does not hold.** The device's other members compete for the device as before, so the
+  device serves them meanwhile. A person's request for the member (a direct run, an
+  `ApplicationLifecycle` request) is not held. A direct run goes through the switch, and its failed
+  switch starts the cooldown again.
+- **No ladder.** The failure still starts no recovery ladder (above), and the cooldown is no rung.
+- **The key.** A member of the `scheduling` section (`actingd-config` 29, planned), settable,
+  default `file`, read at every policy cycle. It has no per-instance or per-group form: a group has
+  no configuration of its own beyond its members' `device_group` ("The configuration form"), and
+  the section's nearest failure wait, `scheduling.fact_refresh.failure_backoff_ms`, has none
+  either. A group of one never makes a switch, so it never meets the key.
 
 ## Identity on the device (MAPP, not built yet)
 
@@ -403,6 +465,13 @@ lists each action, where it is today, and what slice 1 does in a group of severa
 | 14 | Handset device state (sampling, holds, start gate) | `crates/runtime-host/src/host/device_state.rs:1-30`, `:1017` | Not reached: handsets are refused (row 6) |
 | 15 | Keyless read-only observations (`observe`, `capture_sequence`) | [emulator-control.md](emulator-control.md), "The operator's claim and the fence" | Under the device's admission guard. **Refused** with `device_group_action_refused` while another member holds the device, because it would open a second member's session on the device (row 7) |
 
+**The limits of slice 1 on a device with several members.** The Runtime does not start, stop or
+restart that device's emulator (rows 1, 2 and 5); it does not close the application or the
+emulator when the device is idle (row 3); and it does not restart the emulator after a major
+failure (row 4). A person restarts it by hand in the emulator manager. These are limits of slice
+1, not of the design: the later slice "device-level actions by device" ("Later slices") lifts
+them, and it comes before the first real use of a group of several.
+
 ## A failure stays where it belongs (MAPP, not built yet)
 
 - **An application's failure** (its run, its startup, its ladder up to the application restart)
@@ -426,7 +495,8 @@ lists each action, where it is today, and what slice 1 does in a group of severa
   scheduled, and its drain waits only for the paused member's own work ("One queue, one worker,
   one lease per device").
 - **A player hold** holds the device, not dispatch ([player-hold.md](player-hold.md): "a hold holds
-  the device"). Proposed: a hold on one member holds the device for the whole group.
+  the device"). A hold on one member holds the device for the whole group: while a person uses
+  one member by hand, the whole device waits.
   - The acquire drains the device's holder, whichever member's work it is, as it drains the
     member's own work today (finished or cancelled within `drain_timeout_ms`).
   - While held, no member is dispatched (the other members' candidates carry `device_group_waiting`
@@ -444,8 +514,10 @@ lists each action, where it is today, and what slice 1 does in a group of severa
 
 - **`actingd-config` 29** (planned; [component-interfaces.md](component-interfaces.md), "Planned:
   Workflow #437 MAPP"): the entry member `device_group` and check-config's report member
-  `device_group`. A build before it refuses a file that names the member (`config_decode_failed`).
-  A file that does not name it keeps its revision, so the Runtime reads 5 to 29 and declares
+  `device_group` (MAPP-1), and the `scheduling` section's member
+  `device_group.switch_failure_cooldown_ms` (MAPP-2, same release). A build before it refuses a
+  file that names either member (`config_decode_failed`: the entry and the section deny unknown
+  members). A file that names neither keeps its revision, so the Runtime reads 5 to 29 and declares
   [5, 29]. The console and the installer, the other two parties, follow.
 - **`ledger` does not move.** Every record that a group of several writes and a group of one never
   writes has an existing shape:
@@ -458,7 +530,9 @@ lists each action, where it is today, and what slice 1 does in a group of severa
     `startup_package_scheduled` and the startup run's `task.*` chain, all existing types, members
     and phases;
   - the failed settlement with `application_switch_failed`, an existing result kind with a new
-    code.
+    code;
+  - the switch cooldown's reason `dispatch_instance_cooldown`, an existing code with one more
+    optional value (`failure_code`, an existing key).
 
   `EventLinks` keep `instance_id` alone, the member's, and deny unknown members
   (`crates/actingcommand-contract/src/event/envelope.rs:46-49`), so no group member is added to
@@ -469,23 +543,30 @@ lists each action, where it is today, and what slice 1 does in a group of severa
   `not_running` row has `why` `device_group_waiting` with its values, and every request takes an
   alias, the member's. Showing the group in `Status` (a member `device_group?` per row) is proposed
   for the console slice, which then raises `runtime-client`.
-- **`runtime-outcomes`:** new codes and words in the catalog only.
+- **`runtime-outcomes`:** new codes and words in the catalog only, and the optional value
+  `failure_code` of the existing `dispatch_instance_cooldown`.
 - **Untouched:** `package`, `install-selection`, `install-control`, `install-cli`, `tools-layout`
   and `player-hold`.
 
 ## Later slices (named, not written here)
 
-- **The switch's cost.** The expected duration of a task whose run needs a switch includes the
-  switch (the stops, the start and the home: the mean of that member's last five switches). Slice 1
-  leaves room: each switch's records share one causation id, which gives its time. Note: `E` today
-  orders only a member's own judged candidates (`B ÷ E` within an instance) and the reservations.
-  Across instances the turns decide first, so "finish one application's due work before switching"
-  also needs the turns of the members of one device to be read per device.
+- **Order within one device**, designed together with the normalized weight. The members of one
+  device no longer take turns against each other: they rank by the normalized weight, and the time
+  a switch takes counts as a cost (the stops, the start and the home: the mean of that member's
+  last five switches). Slice 1 leaves room: each switch's records share one causation id, which
+  gives its time. It is a slice of its own because a switch's time in the expected duration alone
+  changes nothing across members: `E` today orders only a member's own judged candidates (`B ÷ E`
+  within an instance) and the reservations, and across instances the turns decide first
+  ([scheduling/README.md](scheduling/README.md), "Turns across instances"), so the turns of the
+  members of one device are read per device. Its design is the coordinator's, written when it is
+  made; what in it touches the queue rules Alice set goes to her.
 - **The normalized weight.** A task's weight divided by the largest weight of its own catalog, 0.5
   for a task without a price, with a per-application preference factor on top, default 1 (board
   #437, comment 6799803829). Slice 1 leaves room: members already rank in one ordered list, by
   today's scores.
-- **Device-level actions made group-aware.** Rows 1, 3, 4, 5, 11 and 15 of the table, per device:
+- **Device-level actions by device.** It lifts the limits of slice 1 ("Device-level actions") and
+  comes before the first real use of a group of several. Rows 1, 3, 4, 5, 11 and 15 of the table,
+  per device:
   - one configured start and one watch restart per group;
   - the idle action per device: close the application in front, and stop the emulator only when no
     member has work soon;
@@ -501,6 +582,17 @@ lists each action, where it is today, and what slice 1 does in a group of severa
   a device of how a clone is addressed: whether a clone is another package or another user is not
   verified.
 
+**Release.**
+
+- MAPP-1 and MAPP-2 ship in one Runtime release, so that no released build has the group's queue
+  without the switch.
+- The first release that accepts a device group of more than one member also carries the slice
+  "order within one device". Until then every build refuses such a group at load
+  (`device_group_config_invalid`, `several_members_unsupported`; "The configuration form"), and no
+  release ships the switch after every task.
+- The slice "device-level actions by device" comes before the first real use of a group of
+  several.
+
 ## Proposed codes, value keys and words
 
 | Code | Owner | Category, ladder class | Values |
@@ -515,12 +607,20 @@ New value keys, each with a proposed vocabulary:
 
 - `device_group_problem`: `device_mismatch`, `handset_member`, `fixture_member`,
   `application_shared`, `startup_package_missing`, `device_action_unsupported`,
-  `undeclared_shared_device`.
+  `undeclared_shared_device`, `several_members_unsupported`.
 - `device_group_wait`: `selected`, `held`, `player_hold`, `fenced`.
 - `application_switch_step`: `foreground_read`, `stop`, `startup_package`.
 
 Every other key is an existing key of the one key table
 (`crates/actingcommand-contract/src/outcome/keys.rs`).
+
+One existing code takes one more optional value: `dispatch_instance_cooldown` (`runtime-host`,
+info) takes `failure_code`, an existing key, which is `application_switch_failed` for a member's
+switch cooldown and is absent for a takeover cooldown. Its description and causes name both
+cooldowns (MAPP-2).
+
+One configuration key (proposed): `scheduling.device_group.switch_failure_cooldown_ms`,
+milliseconds `1..=3600000`, default `300000`, settable ("The switch before a run").
 
 ## Not verified
 
