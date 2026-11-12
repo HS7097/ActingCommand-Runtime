@@ -105,25 +105,25 @@ mod tests {
     };
     use std::path::Path;
 
-    const PATH: &str = r"F:\AC\state\agent-wakes\w1793000000000.json";
+    const PATH: &str = r"C:\ActingCommand\state\agent-wakes\w1793000000000.json";
 
     #[test]
     fn message_counts_unicode_scalars_including_the_header() {
         let message = render_message("总览", "阶梯用尽", Some("node-1"), PATH, 100)
             .expect("the typical message fits");
         // Chinese characters count one each, whatever their bytes.
-        assert_eq!(message.chars, 78);
-        assert_eq!(message.text.chars().count(), 78);
-        assert!(message.text.len() > 78);
+        assert_eq!(message.chars, 89);
+        assert_eq!(message.text.chars().count(), 89);
+        assert!(message.text.len() > 89);
         assert!(!message.alias_cut);
         // At exactly its own length it still fits whole; one less cuts the alias.
         assert_eq!(
-            render_message("总览", "阶梯用尽", Some("node-1"), PATH, 78),
+            render_message("总览", "阶梯用尽", Some("node-1"), PATH, 89),
             Ok(message.clone())
         );
-        let cut = render_message("总览", "阶梯用尽", Some("node-1"), PATH, 77).expect("it fits");
+        let cut = render_message("总览", "阶梯用尽", Some("node-1"), PATH, 88).expect("it fits");
         assert!(cut.alias_cut);
-        assert_eq!(cut.chars, 77);
+        assert_eq!(cut.chars, 88);
     }
 
     #[test]
@@ -211,14 +211,14 @@ mod tests {
 
     #[test]
     fn message_floor_is_refused_for_a_channel_that_cannot_fit() {
-        let root = Path::new(r"F:\AC\state");
+        let root = Path::new(r"C:\ActingCommand\state");
         let longest = "频".repeat(16);
         // The floor is a real message: the longest file name, with no alias.
         let folder = body_folder_text(root, "agent-wakes");
-        assert_eq!(folder, r"F:\AC\state\agent-wakes\");
+        assert_eq!(folder, r"C:\ActingCommand\state\agent-wakes\");
         let path = format!("{folder}w1793000000000-99.json");
         let floor = message_floor_chars(&longest, &folder);
-        assert_eq!(floor, 88);
+        assert_eq!(floor, 99);
         assert_eq!(floor, MESSAGE_FIXED_CHARS + 16 + folder.chars().count());
         assert_eq!(
             render_message(&longest, "发送测试", None, &path, floor).map(|message| message.chars),
@@ -227,9 +227,9 @@ mod tests {
         assert!(render_message(&longest, "发送测试", None, &path, floor - 1).is_err());
         // `check-config` passes at the floor and refuses below it, naming the key.
         let channels = ["总览", longest.as_str()];
-        refuse_channels_that_cannot_fit(88, root, "agent-wakes", channels)
+        refuse_channels_that_cannot_fit(99, root, "agent-wakes", channels)
             .expect("every channel fits at the floor");
-        let refused = refuse_channels_that_cannot_fit(87, root, "agent-wakes", channels)
+        let refused = refuse_channels_that_cannot_fit(98, root, "agent-wakes", channels)
             .expect_err("the longest channel does not fit");
         assert_eq!(refused.failure_code(), ConfigCode::AgentWakeConfigInvalid);
         assert_eq!(refused.config_key(), "agent_wake.summary.max_chars");

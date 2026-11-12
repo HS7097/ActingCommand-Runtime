@@ -115,7 +115,7 @@ fn audit_all() -> AuditInput {
     AuditInput::new()
         .with_account("account-secret-c1@example.invalid")
         .with_authentication("authentication-secret-c1")
-        .with_machine_path(r"C:\Users\Alice\private\runtime.json")
+        .with_machine_path(r"C:\Users\example\private\runtime.json")
         .with_device_endpoint("127.0.0.1:16384")
 }
 
@@ -1182,7 +1182,7 @@ fn producer_cannot_select_redaction_policy() {
 fn machine_path_audit_retains_basename_and_full_path_sha256_without_parent_path() {
     let cases = [
         (
-            r#"C:\Users\Alice\private\報告 "final" #1.json"#,
+            r#"C:\Users\example\private\報告 "final" #1.json"#,
             r#"報告 "final" #1.json"#,
             "Users",
         ),
@@ -1293,7 +1293,7 @@ fn all_runtime_secret_classes_follow_schema_owned_policy_independently() {
     }
 
     type AuditBuilder = fn(&str) -> AuditInput;
-    const MACHINE_PATH: &str = r"C:\Users\Alice\private\runtime.json";
+    const MACHINE_PATH: &str = r"C:\Users\example\private\runtime.json";
     let machine_basename = "runtime.json";
     let machine_audit = format!(
         "basename:{}|sha256:{:x}",
@@ -1470,7 +1470,7 @@ fn artifact_secret_classes_cannot_survive_any_metadata_or_diagnostic_surface() {
     for secret in [
         "token-secret-artifact",
         "account-secret-artifact@example.invalid",
-        r"C:\Users\Alice\private\artifact.png",
+        r"C:\Users\example\private\artifact.png",
         "127.0.0.1:16384",
         &format!("sha256:{}", "d".repeat(64)),
     ] {

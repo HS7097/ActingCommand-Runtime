@@ -2,7 +2,7 @@
 
 Date: 2026-07-09
 
-Source task: `C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md`
+Source task: `%WORKSPACE%\ActingCommand\TASK-runtime-ledger-chain.md`
 
 ## Scope
 

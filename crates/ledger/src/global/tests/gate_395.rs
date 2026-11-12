@@ -4,7 +4,7 @@
 //! material` read and `actingledger facts --at` give each phase its own deadline, taken when
 //! the phase starts, and a deadline that runs out names its phase as the failure's location.
 //!
-//! Field failure (F:\AC, 10-06): two sealed frames read with `actingledger material` reported
+//! Field failure (10-06): two sealed frames read with `actingledger material` reported
 //! `ledger_read_budget_exceeded` during `read_only_snapshot` and no bytes; the two metadata
 //! openings, the identity check and the verified read shared one 4000 ms deadline.
 //! `actingledger facts --at` reported the same code from the read-only snapshot under its one

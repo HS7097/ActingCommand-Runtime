@@ -2,7 +2,7 @@
 
 Date: 2026-07-03
 
-Task: `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`
+Task: `%WORKSPACE%\ActingCommand\TASK-Lab-selfheal-chain.md`
 
 ## Scope
 
@@ -14,9 +14,9 @@ Before wiring resource recovery behavior, the local resource repositories were r
 
 | Repository | Local path | Commit |
 | --- | --- | --- |
-| ActingCommand-Resources-Arknights | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` | `2ab7ccddd63054ee16d3441ff71683a3feae1a6a` |
-| ActingCommand-Resources-AzurLane | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane` | `e778cc7c8576c57bfc8f4df72b0c86efb5f65fb4` |
-| ActingCommand-Resources-BlueArchive | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive` | `7cf3bae27d473d29efde1f5605f106b28a2df9fb` |
+| ActingCommand-Resources-Arknights | `%USERPROFILE%\Documents\Azur\ActingCommand-Resources-Arknights` | `2ab7ccddd63054ee16d3441ff71683a3feae1a6a` |
+| ActingCommand-Resources-AzurLane | `%USERPROFILE%\Documents\Azur\ActingCommand-Resources-AzurLane` | `e778cc7c8576c57bfc8f4df72b0c86efb5f65fb4` |
+| ActingCommand-Resources-BlueArchive | `%USERPROFILE%\Documents\Azur\ActingCommand-Resources-BlueArchive` | `7cf3bae27d473d29efde1f5605f106b28a2df9fb` |
 
 ## Implemented behavior
 

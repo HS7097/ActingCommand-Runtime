@@ -1017,7 +1017,7 @@ fn critical_debug_does_not_disclose_value_error_payload_path_or_endpoint() {
     const VALUE_SECRET: &str = "critical-value-secret-571b";
     const ERROR_SECRET: &str = "critical-error-secret-d92a";
     const ACCOUNT_SECRET: &str = "critical-account@example.invalid";
-    const PATH_SECRET: &str = r"C:\Users\Alice\critical-private.json";
+    const PATH_SECRET: &str = r"C:\Users\example\critical-private.json";
     const ENDPOINT_SECRET: &str = "127.0.0.1:16384";
 
     struct SecretValue(&'static str);

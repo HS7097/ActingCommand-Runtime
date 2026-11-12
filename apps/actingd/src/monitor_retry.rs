@@ -28,7 +28,7 @@ use std::time::Duration;
 
 /// `policy.monitor.io_timeout_ms` default. The subscription is answered at once (`wait_ms` 0), so
 /// the timeout only matters while the host is slow to answer: 5 s (the client default, v0.11.4
-/// flaky-tests report B1) did not cover a host at 100 % CPU on F:\AC (#397).
+/// flaky-tests report B1) did not cover a host at 100 % CPU in the field (#397).
 pub(super) const DEFAULT_IO_TIMEOUT_MS: u64 = 15_000;
 /// `policy.monitor.retry_limit` default.
 pub(super) const DEFAULT_RETRY_LIMIT: u16 = 5;

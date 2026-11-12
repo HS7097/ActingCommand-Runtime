@@ -4,7 +4,7 @@
 //! failure of the policy monitor's own request to its Runtime is retried with a warning, not
 //! fatal.
 //!
-//! Real-device failure, F:\AC 2026-10-11 20:12 JST (Runtime ceef6f90): with the host at 100 % CPU
+//! Real-device failure, 2026-10-11 20:12 JST (Runtime ceef6f90): with the host at 100 % CPU
 //! the receipt header of one subscription did not arrive within the monitor's 5 s I/O timeout
 //! (`runtime_receipt_header_failed` during `exchange_runtime_request`, `TimedOut`, OS error
 //! 10060). actingd ended as fatal (ledger seq 269802 `runtime.failed`, 269803
@@ -25,7 +25,7 @@ use serde_json::json;
 use std::io::ErrorKind;
 use std::time::Duration;
 
-/// The OS error of the F:\AC receipt-header read (`WSAETIMEDOUT`).
+/// The OS error of the field failure's receipt-header read (`WSAETIMEDOUT`).
 const RECEIPT_TIMEOUT_OS_ERROR: i32 = 10_060;
 /// The bound these runs configure: three retries in a row.
 const RETRY_LIMIT: u16 = 3;
@@ -152,7 +152,7 @@ fn gate_receipt_header_timeouts_under_the_bound_are_warnings_and_the_monitor_goe
     let issuer = IdentifierIssuer::new().expect("identifier issuer");
     let own = identity(&issuer, 72_564);
 
-    // The F:\AC case: one timeout between batches.
+    // The field case: one timeout between batches.
     let run = monitor(
         &[
             Answer::Batch,
