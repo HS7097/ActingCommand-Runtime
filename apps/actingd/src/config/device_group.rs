@@ -68,7 +68,7 @@ pub(super) enum DeviceNaming {
 
 impl DeviceNaming {
     /// The key this naming uses, as a refusal names it.
-    const fn key(&self) -> &'static str {
+    const fn naming_member(&self) -> &'static str {
         match self {
             Self::Unnamed => DEVICE_KEY,
             Self::Index(_) => INSTANCE_INDEX_KEY,
@@ -97,7 +97,7 @@ impl DeviceNaming {
                     PORT_KEY
                 }
             }
-            _ => other.key(),
+            _ => other.naming_member(),
         }
     }
 
