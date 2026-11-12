@@ -1186,6 +1186,18 @@ Checked here, without discovery:
 - alias and application identity as the execution registry accepts them
   (`instance_registration_invalid`), and duplicate aliases or instance ids
   (`duplicate_instance_alias` / `duplicate_instance_id`);
+- (Workflow #437 MAPP, not built yet; [device-group.md](device-group.md), "The configuration
+  form") the device groups, refused with `device_group_config_invalid` (proposed):
+  - a group of several whose members name the device by different keys or values, include a
+    handset or a fixture, share an `application_id`, lack a `startup_package`, or turn on a
+    device-level action the first slice refuses;
+  - two entries outside one group that name the same `instance_index`, `instance_name`, `serial`,
+    or `host` and `port` (`undeclared_shared_device`);
+  - until the slice "order within one device", every group of several, after the rules above
+    (`several_members_unsupported`).
+
+  The report row of an entry that names `device_group` carries it. Until MAPP nothing here
+  refuses two entries on one device;
 - Workflow #369 S6a: the optional `start_emulator` (boolean, absent is off) is
   allowed only on a discovery-bound instance; on a fixture or on an instance bound
   otherwise it fails assembly with `start_emulator_requires_discovery_binding`,
@@ -1204,7 +1216,9 @@ capability admission, exactly one discovered instance matching the key
 (`instance_discovery_no_match`, `instance_discovery_ambiguous`), a declared
 `host` or `port` against the discovered values and any other declared
 `adb_path` against the discovered MuMu adb (`instance_discovery_conflict`),
-and the ADB endpoint itself. A declared `adb_path` that names the install
+the ADB endpoint itself, and (Workflow #437 MAPP, not built yet) two entries outside one device
+group that resolve to the same discovered index or ADB port (`device_group_config_invalid`,
+`undeclared_shared_device`, proposed). A declared `adb_path` that names the install
 root's adb is recognised and hashed here instead, without the discovery
 result; every other declared `adb_path` is only compared at startup, never
 resolved here (see "Default ADB").

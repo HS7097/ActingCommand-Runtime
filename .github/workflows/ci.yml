@@ -40,11 +40,28 @@ name: CI
 #   Test step. A parse failure (a libtest result line outside any session, more or fewer
 #   sessions than headers, an exe missing from the table, a binary whose attributed lines differ
 #   from its `running N tests` or its `test result:` counts) fails the attribution step and
-#   writes no file. `gate` runs the logic tests of ci/gate_check.py (ci/test_gate_check.py).
+#   writes no file. A log that stops in the middle because its Test step ran out of time (#71
+#   FLK-13) is no parse failure: the document gains "timed_out" {"line", "stamp" (where the log
+#   stops), "in" (the binary), "running", "finished", "unfinished": [{"test", "line", "stamp",
+#   "seen"}]}, the tests that had started and not finished as far as the log tells (libtest's
+#   60-second notice multi-threaded, its `test <path> ... ` single-threaded), and `check` is red
+#   on it, naming them. `gate` runs the logic tests of ci/gate_check.py (ci/test_gate_check.py).
 # - `gate` downloads every `test-results-*` and runs `ci/gate_check.py check`: each name of
 #   contracts/test-gates/*.toml runs exactly once per configuration of its job and passes; a name
 #   of ci/flaky-tests.toml is reported as skipped; on pull requests a name or key that leaves the
 #   map since the merge base must be listed in ci/retired-gates.toml, and no key may be new.
+#
+# Time limits (#71 FLK-13: in run 43070595705 host-lab reached its 35-minute job limit inside its
+# Test step; the job was cancelled, so its log was never attributed or uploaded):
+# - Each module job's `Test` step has its own `timeout-minutes`, below the job's by enough for
+#   the steps before it (setup and test build, at most 6.1 minutes in runs 43061732707,
+#   43066570070, 43068096890, 43070595705 and 43073298211) and the attribution and upload after
+#   it. The runner kills a step that runs out of its own limit and fails it; the job is not
+#   cancelled. So `!cancelled()` holds and `steps.test.outcome` is `failure`, the two steps after
+#   it run, and the uploaded log is the log up to the kill.
+# - light: job 15, Test 8. host-lab: job 45, Test 35. exec-core, exec-tooling, ledger,
+#   runtime-client, apps: job 35, Test 15. lint, flaky and gate have no such Test step and keep
+#   only their job limit.
 
 on:
   push:
@@ -103,6 +120,7 @@ jobs:
           }
       - name: Test
         id: test
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
@@ -167,6 +185,7 @@ jobs:
           }
       - name: Test
         id: test
+        timeout-minutes: 15
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
@@ -231,6 +250,7 @@ jobs:
           }
       - name: Test
         id: test
+        timeout-minutes: 15
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
@@ -292,6 +312,7 @@ jobs:
           }
       - name: Test
         id: test
+        timeout-minutes: 15
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
@@ -334,7 +355,9 @@ jobs:
   host-lab:
     if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
     runs-on: windows-latest
-    timeout-minutes: 35
+    # #71 FLK-13: its Test step takes 20 to 23.5 minutes (one run reached 29.6 and the old
+    # 35-minute job limit); 45 leaves the step's 35 and 10 for setup, build, attribution, upload.
+    timeout-minutes: 45
     env:
       CI_PACKAGES: -p actingcommand-runtime-host -p actingcommand-host-metrics -p actingcommand-agent-forward -p actingcommand-actinglab -p actingcommand-lab-ops -p actingcommand-watchdog -p actingcommand-lab-rescue
       # actinglab's dev-dependency turns it on anyway; written out so the selection says it.
@@ -358,6 +381,7 @@ jobs:
           }
       - name: Test
         id: test
+        timeout-minutes: 35
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
@@ -431,6 +455,7 @@ jobs:
           }
       - name: Test
         id: test
+        timeout-minutes: 15
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
@@ -525,6 +550,7 @@ jobs:
       # with `--doc` join here in that PR.
       - name: Test
         id: test
+        timeout-minutes: 15
         shell: pwsh
         env:
           # Workflow #374: the watchdog's install test registers a real scheduled task here only.
