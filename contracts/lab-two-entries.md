@@ -999,7 +999,9 @@ sentence fails that test.
     (`mcp_tool`) as the CLI line of a refusal, `{outcome}`, its arguments unread, nothing sent,
     run or written; a name that is no offered row's tool answers as today's server answers an
     unknown tool (-32602 `mcp_params_invalid`). `deploy` and `rollback` (until a detached run
-    carries `Lab-MCP`, section 5) and the manual (G7) come with their slices. The program is in
+    carries `Lab-MCP`, section 5) come with their slice. The manual is
+    [apps/actinglab-mcp/MANUAL.md](../apps/actinglab-mcp/MANUAL.md) since LAB-5G7 (0.12.57;
+    register §1.287, "Slice LAB-5G7"), which the instructions name. The program is in
     the Tools archive since LAB-5G6 (0.12.57; section 8.1, "Packaging"); nothing starts it until
     a client is registered with the second entry (G7).
 - **The answer budget is the caller's** (Workflow #434 LAB-5D, 0.12.52; register §1.287, "Slice

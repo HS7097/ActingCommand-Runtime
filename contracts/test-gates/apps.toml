@@ -1759,3 +1759,12 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_434_lab5b1c::config_restore_refuses_a_wrong_sha_as_config_replace_does",
 ]
 incident = ["#434 LAB-5B1c"]
+
+# Workflow #434 LAB-5G7 (0.12.57; register §1.287, "Slice LAB-5G7"; brief rd-1113/brief-lab5g7.md; apps/actinglab-mcp/MANUAL.md): the manual of actinglab-mcp pastes no list of tools, and every tool name it and the server's instructions write is held to the operation table this build embeds: each is the tool of a planned row the server offers (off Windows, where no rescue row is offered, a rescue row's too), but ac_observe, which both name as no tool and which no row's tool is; both name the tools of tools::NAMED (ac_frame, ac_lab_observe), each its row's; the instructions name the manual by its repository path; the tools the manual's section on the one exception names are exactly those of the rows the front forces detached (tools::SUPPLIED, deploy and rollback), and on Windows exactly the offered rows the server refuses (elsewhere none)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g7::mcp_manual_names_only_offered_tools",
+    "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g7::mcp_manual_exception_is_the_refused_rows",
+]
+incident = ["#434 LAB-5G7"]
