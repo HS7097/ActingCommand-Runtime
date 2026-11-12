@@ -15698,11 +15698,22 @@ guessed; each is a reading of its own words):
   its `gate_code` is one of the 17 codes held whatever their values; a gate code a value decides
   cannot be decided from the code alone and is not held.
 - *An instance the context does not name* (it is not in the snapshot) writes no new held record.
-- *A held record the start cannot read back* (its id is not the digest of its own task, alias and
-  start, or a value is missing) fails the start with the existing
-  `policy_planning_signal_identity_conflict`: no build writes such a record, and the contract names
-  no third code. The pass runs over the range the settlement of direct runs reads, when it holds a
-  record.
+- *A held record the start cannot read back* stops no start (settled by the coordinator on 11-12
+  at the slice's review; not the owner's words). The start reads a held record back by its own
+  values: its outcome is `task_held`, its task and alias are the record's own, its `gate_code` is
+  a code the catalog this build embeds registers (whether this build's held set holds it is not
+  asked: the set is closed per build, a later slice may change it, and a hold another build
+  reported is ended all the same), and its id is the digest of its task, alias and start. A
+  record that fails one of these (a spelling this build does not register, a missing value,
+  another digest) is left as it is, without an end, and the start goes on; the pass names such
+  records on one developer line, `actingd task_held unreadable sequences=<s1,s2,…> more=<n>`
+  (their ledger sequences, the first eight in ledger order, and the number of the rest; Fail
+  Loud), and `actingd suspended` keeps listing each of them open. The reason: no decision reads
+  these records, the ledger keeps what an earlier or a later build wrote, and a start that failed
+  here would leave the settlement anchor where it was, so every later start would fail the same
+  way until another build was installed. The slice's first form failed the start with
+  `policy_planning_signal_identity_conflict`; that form was not merged. The pass runs over the
+  range the settlement of direct runs reads, when it holds a record.
 - *`ac_diagnose`'s cut.* Its `held` rows are cut after the clock slots and before `not_run`; the
   whole list stays in `actingd suspended`, and the records in `ac_events`' errors view.
 
@@ -15714,7 +15725,11 @@ stops, beside a row that is reported), `held_t4`, `held_t5`, `held_t7`, `held_t1
 host on a manual Runtime clock: `held_t3` (a client lease holds the instance; the restart's end;
 counting again), `held_t6` (two hosts, the record on and off, the same decisions, intents and
 other records at every cycle; only decisions, reason codes and records are compared), `held_t8`,
-`held_t9`'s `actingd suspended` half. `held_t9`'s diagnose half has the same name in
+`held_t9`'s `actingd suspended` half, and `held_t11`, added at the slice's review (the start's
+read of a held record: a registered code outside the held set reads back, an unregistered
+spelling, a missing start and another digest do not; the developer line; then through the host a
+start that leaves the record it cannot read back, ends the two it reads and completes, and the
+start after it, which writes nothing more). `held_t9`'s diagnose half has the same name in
 `crates/lab-ops/src/gate_438_held.rs` (the host's tests cannot reach lab-ops). Adapted: the five
 tests that build a `Diagnosis` by its members (`crates/lab-ops/src/gate_434_lab5d.rs`,
 `apps/actingctl/src/mcp/tests/clock_slots.rs`, `gate_386_sr3.rs`, `gate_411_b15w2.rs`,
@@ -15725,7 +15740,9 @@ tests that build a `Diagnosis` by its members (`crates/lab-ops/src/gate_434_lab5
 ledger, in the errors view of `ac_events` and of an `ac_diagnose` without an instance, in
 `actingd suspended` `held` and in the instance's `ac_diagnose` `held` rows, whose `not_run` row
 then carries `held_reported: true`; its end leaves one `task_held_ended` info record; a start ends
-the holds the runs before it left open (`restarted`). No decision, intent, eligibility age, guard,
+the holds the runs before it left open (`restarted`), and a start that meets held records it
+cannot read back says so on the line `actingd task_held unreadable` of the daemon's log and goes
+on. No decision, intent, eligibility age, guard,
 pause, ladder or streak changes, and nothing reaches a channel until HELD-2 and a wake rule exist.
 The configuration lists the two keys and each instance's two. A console edits them only once its
 `actingd-config` range reaches 29.

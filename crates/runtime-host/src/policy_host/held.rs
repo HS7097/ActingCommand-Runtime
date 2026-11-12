@@ -17,7 +17,7 @@
 use crate::RuntimeHostResult;
 use crate::codes::{ApplicationUpdateCode, HeldEnd, HeldState, HostCode, TaskHeldCode};
 use crate::schedule_explanation::ScheduleExplanationTable;
-use actingcommand_contract::outcome::{Code, Outcome};
+use actingcommand_contract::outcome::{Code, CodeStr, Outcome};
 use actingcommand_contract::{
     PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ScheduleCandidateEligibility,
     ScheduleExplanationCandidate,
@@ -410,23 +410,21 @@ pub(crate) enum HeldRecordRead {
     Other,
     /// A held record HELD-1 writes, read back.
     Held(ReportedHold),
-    /// A held record that does not read back as one HELD-1 writes: its outcome is not `task_held`
-    /// with its task, alias, a held set's `gate_code` and its start, or its id is not their
-    /// digest.
+    /// A held record this build cannot read back: its outcome is not `task_held` with its task,
+    /// alias, a `gate_code` the catalog this build embeds registers and its start, or its id is
+    /// not the digest of its task, alias and start. The start's end pass leaves it as it is and
+    /// names it on a developer line ([`unreadable_holds_line`]).
     Unreadable,
 }
 
-/// The held set's code spelled `name`: one of [`HELD_CODES`], `benefit_unknown` or
-/// `pool_line_held`.
-fn held_set_code(name: &str) -> Option<Code> {
-    HELD_CODES
-        .iter()
-        .copied()
-        .chain([
-            PolicyCode::BenefitUnknown.code(),
-            PolicyCode::PoolLineHeld.code(),
-        ])
-        .find(|code| code.as_str() == name)
+/// The registered code a held record's `gate_code` value names, by the catalog this build embeds,
+/// so its end can carry it again. Whether this build's held set holds the code is not asked: the
+/// set is closed per build, and a hold another build reported is ended all the same. `None` for a
+/// value that is no code spelling of this build.
+fn registered_gate_code(value: &Value) -> Option<Code> {
+    serde_json::from_value::<CodeStr>(value.clone())
+        .ok()?
+        .registered()
 }
 
 /// One planning signal as the ledger or the cycle holds it.
@@ -450,7 +448,7 @@ pub(crate) fn reported_hold(signal: &SignalView<'_>) -> HeldRecordRead {
     let text = |key: &str| outcome.value(key).and_then(Value::as_str);
     let read = || {
         let task_id = signal.task_id?;
-        let gate_code = text(GATE_CODE).and_then(held_set_code)?;
+        let gate_code = outcome.value(GATE_CODE).and_then(registered_gate_code)?;
         let since_unix_ms = outcome.value(HELD_SINCE_UNIX_MS).and_then(Value::as_u64)?;
         let consistent = outcome.is(TaskHeldCode::Held)
             && text(TASK_ID) == Some(task_id)
@@ -464,6 +462,31 @@ pub(crate) fn reported_hold(signal: &SignalView<'_>) -> HeldRecordRead {
         })
     };
     read().map_or(HeldRecordRead::Unreadable, HeldRecordRead::Held)
+}
+
+/// The start's end pass names at most this many unreadable held records on its developer line and
+/// counts the rest. A bound of one log line, not a threshold.
+const UNREADABLE_HOLDS_NAMED: usize = 8;
+
+/// Workflow #438 HELD-1 (register §1.327): the developer line of the start's end pass for the
+/// held records it could not read back ([`HeldRecordRead::Unreadable`]) and left as they are,
+/// without an end: their ledger sequences, the first [`UNREADABLE_HOLDS_NAMED`] in ledger order
+/// and the number of the rest; `None` when it read every held record. Fail Loud: a record the
+/// start leaves open is never silent.
+pub(crate) fn unreadable_holds_line(sequences: &[u64]) -> Option<String> {
+    if sequences.is_empty() {
+        return None;
+    }
+    let named = sequences
+        .iter()
+        .take(UNREADABLE_HOLDS_NAMED)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    Some(format!(
+        "actingd task_held unreadable sequences={} more={}",
+        named.join(","),
+        sequences.len().saturating_sub(named.len()),
+    ))
 }
 
 /// The start's end of a hold an earlier run of the Runtime reported: `held_end` `restarted`,

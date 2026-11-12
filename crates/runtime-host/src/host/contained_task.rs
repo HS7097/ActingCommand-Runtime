@@ -10235,10 +10235,18 @@ impl HostShared {
     /// does not hold is ended `restarted` (no `held_for_ms`), observed at the start's time. A
     /// start that stops before recording its anchor leaves the anchor where it was, so the next
     /// one reads the range again and finds the ends already written. A held record that does not
-    /// read back as one this build writes (its id not the digest of its own task, alias and
-    /// start) fails the start: `policy_planning_signal_identity_conflict`.
+    /// read back as one this build writes (a `gate_code` outside this build's held set, a value
+    /// missing, or an id that is not the digest of its own task, alias and start) is left as it
+    /// is, without an end, and the start goes on (register §1.327, settled by the coordinator on
+    /// 11-12): no decision reads these records, another build's held set or digest may differ
+    /// from this one's, and a start that failed here would fail again at every later start, the
+    /// anchor staying where it was. Such records are named by their ledger sequence on one
+    /// developer line, `actingd task_held unreadable` (Fail Loud), and `actingd suspended` lists
+    /// each of them open, unparsed.
     fn end_task_holds_between(&self, previous: u64, current: u64) -> RuntimeHostResult<()> {
-        use crate::policy_host::held::{HeldRecordRead, SignalView, reported_hold, restarted_end};
+        use crate::policy_host::held::{
+            HeldRecordRead, SignalView, reported_hold, restarted_end, unreadable_holds_line,
+        };
 
         let records = LedgerPages::new(
             &self.ledger,
@@ -10255,6 +10263,8 @@ impl HostShared {
         .read_all()
         .map_err(|error| ledger_error_caused_by(PREVIOUS_EPOCH_SETTLEMENT_OPERATION, &error))?;
         let mut observed_at_unix_ms = None;
+        // The held records this build cannot read back, by ledger sequence.
+        let mut unreadable = Vec::new();
         for event in &records {
             let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload)) =
                 event.payload()
@@ -10271,11 +10281,8 @@ impl HostShared {
                 HeldRecordRead::Other => continue,
                 HeldRecordRead::Held(hold) => hold,
                 HeldRecordRead::Unreadable => {
-                    return Err(RuntimeHostError::fatal(
-                        SharedCode::PolicyPlanningSignalIdentityConflict,
-                        PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
-                        RuntimeErrorCode::RuntimeHalted,
-                    ));
+                    unreadable.push(event.sequence());
+                    continue;
                 }
             };
             let ended = lock(self.policy()?, HostLocation::RecordPolicyPlanningSignal)?
@@ -10293,6 +10300,9 @@ impl HostShared {
                 }
             };
             self.record_policy_planning_signal(restarted_end(&hold, at))?;
+        }
+        if let Some(line) = unreadable_holds_line(&unreadable) {
+            println!("{line}");
         }
         Ok(())
     }

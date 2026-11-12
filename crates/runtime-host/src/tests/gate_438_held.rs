@@ -1185,6 +1185,154 @@ fn held_t3_one_hold_is_reported_once_and_a_start_ends_the_holds_left_open() {
     slots.close();
 }
 
+/// The start's read of a held record, then a start that meets one it cannot read back. A
+/// `gate_code` this build registers and does not hold still reads back (the held set is closed
+/// per build, and a hold another build reported is ended all the same); a spelling this build's
+/// catalog does not register, a missing start, or an id that is not the digest of the record's own
+/// task, alias and start does not. Through the host: the start leaves such a record without an
+/// end, still ends the holds it reads after it, and completes; so does the start after it, which
+/// writes nothing more (register §1.327, settled by the coordinator on 11-12).
+#[test]
+fn held_t11_a_start_leaves_the_held_records_it_cannot_read_back_and_goes_on() {
+    use crate::policy_host::held::{
+        HeldRecordRead, ReportedHold, SignalView, reported_hold, unreadable_holds_line,
+    };
+
+    let since = at(0, 8, 0);
+    let not_held = PolicyCode::TriggerFalse.code();
+    let of_the_set = HostCode::DispatchInstanceHeld.code();
+    let values = |gate_code: &str| {
+        json!({
+            "task_id": HOST_HEAD,
+            "alias": POLICY_INSTANCE_ALIAS,
+            "gate_code": gate_code,
+            "held_state": HeldState::Due.as_str(),
+            "held_since_unix_ms": since,
+            "held_for_ms": DEFAULT.after_ms,
+            "held_after_ms": DEFAULT.after_ms,
+        })
+    };
+    let own_id = held_signal_id(HOST_HEAD, POLICY_INSTANCE_ALIAS, since);
+    let read = |signal_id: &str, values: Value| {
+        let outcome = why(TaskHeldCode::Held, values);
+        reported_hold(&SignalView {
+            signal_id,
+            kind: PolicyPlanningSignalKind::GoalMissed,
+            task_id: Some(HOST_HEAD),
+            alias: POLICY_INSTANCE_ALIAS,
+            outcome: &outcome,
+        })
+    };
+    assert_eq!(
+        read(&own_id, values(not_held.as_str())),
+        HeldRecordRead::Held(ReportedHold {
+            task_id: HOST_HEAD.to_owned(),
+            alias: POLICY_INSTANCE_ALIAS.to_owned(),
+            gate_code: not_held,
+            since_unix_ms: since,
+        }),
+        "a registered code outside the held set reads back"
+    );
+    assert_eq!(
+        read(&own_id, values("fixture_code_of_another_build")),
+        HeldRecordRead::Unreadable,
+        "a spelling this build's catalog does not register"
+    );
+    let mut without_start = values(of_the_set.as_str());
+    without_start
+        .as_object_mut()
+        .expect("the values")
+        .remove("held_since_unix_ms");
+    assert_eq!(
+        read(&own_id, without_start),
+        HeldRecordRead::Unreadable,
+        "no start"
+    );
+    assert_eq!(
+        read(
+            &held_signal_id(HOST_HEAD, POLICY_INSTANCE_ALIAS, since + MINUTE_MS),
+            values(of_the_set.as_str())
+        ),
+        HeldRecordRead::Unreadable,
+        "an id that is not the digest of the record's own start"
+    );
+
+    // The developer line: none when every record was read, else the first eight sequences and
+    // the number of the rest.
+    assert_eq!(unreadable_holds_line(&[]), None);
+    assert_eq!(
+        unreadable_holds_line(&[41, 57]).as_deref(),
+        Some("actingd task_held unreadable sequences=41,57 more=0")
+    );
+    assert_eq!(
+        unreadable_holds_line(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).as_deref(),
+        Some("actingd task_held unreadable sequences=1,2,3,4,5,6,7,8 more=2")
+    );
+
+    // Through the host. The run before left three held records without an end: one whose id is
+    // not the digest of its own start, one whose code this build registers and does not hold,
+    // one of the held set.
+    let slots = Slots::start(&held_sources(), at(0, 7, 0));
+    let cause = trigger_false();
+    let record = |task_id: &'static str, gate_code: Code, since_unix_ms: u64| {
+        held_signal(
+            &HeldRow {
+                task_id,
+                alias: POLICY_INSTANCE_ALIAS,
+                why: &cause,
+                gate_code,
+                state: HeldState::Due,
+                since_unix_ms,
+                after_ms: DEFAULT.after_ms,
+            },
+            since_unix_ms + DEFAULT.after_ms,
+        )
+    };
+    let mut other_digest = record(HOST_HEAD, of_the_set, since);
+    other_digest.signal_id = held_signal_id(HOST_HEAD, POLICY_INSTANCE_ALIAS, since + MINUTE_MS);
+    let other_set = record(HOST_LATE, not_held, since);
+    let own_set = record(HOST_LATE, of_the_set, since + 2 * MINUTE_MS);
+    for signal in [&other_digest, &other_set, &own_set] {
+        slots
+            .host
+            .record_policy_planning_signal(signal.clone())
+            .expect("record the held signal");
+    }
+
+    // The start completes: it leaves the first record as it is and ends the two it reads.
+    let slots = slots.restart(at(0, 9, 0));
+    let records = held_records(&slots.host);
+    assert_eq!(
+        records
+            .iter()
+            .map(|(signal_id, ..)| signal_id.clone())
+            .collect::<Vec<_>>(),
+        [
+            other_digest.signal_id.clone(),
+            other_set.signal_id.clone(),
+            own_set.signal_id.clone(),
+            ended_signal_id(HOST_LATE, POLICY_INSTANCE_ALIAS, since),
+            ended_signal_id(HOST_LATE, POLICY_INSTANCE_ALIAS, since + 2 * MINUTE_MS),
+        ],
+        "{records:#?}"
+    );
+    for ((_, _, end, observed), gate_code) in records[3..].iter().zip([not_held, of_the_set]) {
+        assert!(end.is(TaskHeldCode::Ended), "{end:?}");
+        assert_eq!(
+            end.value("held_end"),
+            Some(&json!(HeldEnd::Restarted.as_str()))
+        );
+        assert_eq!(end.value("gate_code"), Some(&json!(gate_code.as_str())));
+        assert_eq!(*observed, at(0, 9, 0), "observed at the start");
+    }
+
+    // That start recorded its anchor, so the one after it reads none of these records again:
+    // it completes and writes nothing more.
+    let slots = slots.restart(at(0, 9, 10));
+    assert_eq!(held_records(&slots.host).len(), 5);
+    slots.close();
+}
+
 /// With the record on and off, every evaluation decides the same (each decision's task,
 /// instance, state, eligibility and reason codes), dispatches the same pairs and records the same
 /// other planning signals; only the held records and their ends differ.

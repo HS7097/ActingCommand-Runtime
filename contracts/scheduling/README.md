@@ -2119,7 +2119,13 @@ that hold ended.
     record among them that has no end record. The projection answers only one `signal_id` at a
     time, so it cannot list the open holds itself; the read covers the runs since the last settled
     start and is exact, since a start that stopped before recording its anchor leaves the anchor
-    where it was. Counting begins again at the first evaluated cycle.
+    where it was. Counting begins again at the first evaluated cycle. A held record the start
+    cannot read back (its `gate_code` is no code this build's catalog registers, a value is
+    missing, or its id is not the digest of its own task, alias and start, as another build may
+    have written it) stops no start: it is left without an end, named by its ledger sequence on
+    the developer line `actingd task_held unreadable sequences=<s1,s2,…> more=<n>`, and stays
+    listed open in `actingd suspended` (settled by the coordinator on 11-12, register §1.327). A
+    `gate_code` this build registers and no longer holds reads back, and its hold is ended.
 - **How many.** Two reports of one pair are at least one threshold apart (a
   new run starts after the last one ended and must last the threshold again), so one pair writes
   at most ⌈86 400 000 / `after_ms`⌉ held records a day and as many ends, 48 and 48 at the default,
