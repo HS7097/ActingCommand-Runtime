@@ -630,6 +630,9 @@ mod gate_rl1c_fix2;
 // ROUT-L RL-1c follow-ups (#411 L1 and review 2 L1; 0.12 wave 1 slice W1-9): a run's read within
 // the deadline, and the bounded walk for the daemon start that leaves the rest answered.
 mod gate_rl1c_follow;
+// Workflow #442 REM-1 (register §1.326): in composer mode the remedy table the start builds reads
+// the composed packages, and every table says what it found.
+mod gate_442_rem1;
 mod home_entry;
 mod input;
 mod input_failure;

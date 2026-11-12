@@ -3273,9 +3273,12 @@ impl PolicyHost {
         // the first evaluation under it, and again at most once per interval while a round is
         // open or a stop is recorded; UPD-1: or while an instance waits for its client update,
         // so a store update package placed in place is known as one at the next interval.
+        // Workflow #442 REM-1: and at once when the procedure manifest of this evaluation is not
+        // the one the table was built from.
         if let Some(active) = &self.active
             && self.remedies.table_due(
                 active.generation.catalog_hash(),
+                Some(procedure_manifest.digest().as_str()),
                 time.unix_ms,
                 remedy.table_interval_ms,
                 !update_pending.is_empty(),
