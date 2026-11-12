@@ -27,6 +27,9 @@ pub mod agent_channel;
 pub mod install;
 // Workflow #434 LAB-3: the rescue module's operations.
 pub mod rescue;
+// Workflow #434 LAB-5B1b: the parameters the code of each rescue row reads, and the command line
+// each row that hands one on builds, one constant per row.
+pub mod rescue_reads;
 // Workflow #389 MCP-10: `actingctl start` and `restart`.
 pub mod runtime_start;
 

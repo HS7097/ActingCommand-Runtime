@@ -1737,3 +1737,15 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5b1::lab5c_parameters_reach_lab_ops_through_the_module",
 ]
 incident = ["#434 LAB-5B1"]
+
+# Workflow #434 LAB-5B1b (0.12.57; register §1.287, "Slice LAB-5B1b"; brief rd-1113/brief-lab5b1b.md; contracts/lab-operations.json): the command line each rescue row whose answer is an installer command (up, down, undo, op status, op resume, leftovers, guards, release-hold, release verify, release stage, adopt) hands to install, and the words each agent row hands to the agent channel, are pinned word by word for no parameter, each declared parameter alone and all of them given in an order of their own (op status also with the installer's own --operation), written on the code before the slice's refactor and kept by it; the parameters the code of each row the rescue module serves reads are one constant per row (lab_rescue::rescue_reads: READ_HERE, INSTALLER, AGENT), which that code reads them through and builds the command line from; each constant holds exactly its row's declared parameters, in both directions, but config restore's sha (an exception the coordinator decides); a parameter handed on as a further flag goes under the flag of its name, after the parts written in their place; no row the module serves declares a parameter it refuses by name; a read of a name outside its row's constant fails the debug assertion test builds have. LAB-5B1's every_table_driven_row_has_one_list now also holds every row the rescue module serves in exactly one of these constants. Left for one more slice: the flags each handed command line writes held to its receiver's lists, and each receiver fed every declared parameter
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5b1b_lines::rescue_handed_lines_are_pinned",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5b1b::rescue_read_here_rows_read_what_they_declare",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5b1b::rescue_handed_rows_hand_what_they_declare",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5b1b::rescue_exceptions_are_outside_the_table",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5b1b::rescue_a_read_outside_its_constant_fails",
+]
+incident = ["#434 LAB-5B1b"]

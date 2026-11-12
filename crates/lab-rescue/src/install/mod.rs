@@ -101,6 +101,14 @@ mod gate_434_lab5g6;
 #[cfg(test)]
 mod gate_434_lab5g5b;
 
+// Test-only: Workflow #434 LAB-5B1b, the command lines the rescue module's handed rows build,
+// pinned before the slice's refactor.
+#[cfg(test)]
+mod gate_434_lab5b1b_lines;
+// Test-only: Workflow #434 LAB-5B1b, the rescue rows' constants held to their rows.
+#[cfg(test)]
+mod gate_434_lab5b1b;
+
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
 pub(crate) use state::unfinished_operation;
