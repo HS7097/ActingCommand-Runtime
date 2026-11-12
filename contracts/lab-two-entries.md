@@ -719,8 +719,11 @@ sentence fails that test.
     `outputSchema`, no `idempotentHint`. `--list <module>[,<module>...]` names the modules whose
     tools are listed (the ids of the table's module rows of role `operations`); without it every
     installed module is, the authoring module where section 8.3's key lists it, read at each
-    listing. A tool left out of the list is callable as a listed one. `--list-tools` prints the
-    `tools/list` result. `--tier` is refused (`actingctl_usage_invalid`; the server has no tiers).
+    listing. A tool left out of the list is callable as a listed one; only a name that belongs to
+    no offered row is an unknown tool. `--workers <n>` is the number of threads that run
+    `tools/call` (1 to 64, 8 when not given; a value outside the range or no whole number is
+    refused as a usage error). `--list-tools` prints the `tools/list` result. `--tier` is refused
+    (`actingctl_usage_invalid`; the server has no tiers).
   - **Not yet:** no call is served. Every `tools/call` of an offered row's tool answers
     `mcp_operation_unsupported` (`mcp_tool`) as the CLI line of a refusal, `{outcome}`, nothing
     sent, run or written; a name that is no offered row's tool answers as today's server answers

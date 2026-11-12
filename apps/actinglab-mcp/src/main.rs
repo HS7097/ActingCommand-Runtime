@@ -16,9 +16,11 @@
 //!
 //! The command line: `--list <module>[,<module>...]` names the modules whose tools `tools/list`
 //! lists (the ids of the table's module rows of role `operations`); without it every installed
-//! module is listed, the authoring module only where its option lists it. `--list-tools` prints
-//! the `tools/list` result and exits. `--tier`, today's server's option, is refused: this server
-//! has no tiers. Nothing else is taken. stdout is the protocol, or the printed list; a start that
+//! module is listed, the authoring module only where its option lists it. `--workers <n>` is the
+//! number of threads that run `tools/call`, 1 to 64, 8 when not given (board #434, the
+//! coordinator's rulings 6775192250 points 20 and 22, and of 2026-11-12 on #1639). `--list-tools`
+//! prints the `tools/list` result and exits, and takes no `--workers`. `--tier`, today's server's
+//! option, is refused: this server has no tiers. Nothing else is taken. stdout is the protocol, or the printed list; a start that
 //! fails writes its developer line on stderr and exits by its outcome's category, as
 //! `actingctl mcp-serve` does.
 
@@ -45,12 +47,19 @@ use tools::{Catalog, Listing};
 
 /// The program's name in its developer lines and its `serverInfo`.
 const PROGRAM: &str = "actinglab-mcp";
-const USAGE: &str = "usage: actinglab-mcp [--list <module>[,<module>...]] [--list-tools]; <module>: core, debugging, authoring, rescue";
+const USAGE: &str = "usage: actinglab-mcp [--list <module>[,<module>...]] [--workers <n>] | actinglab-mcp --list-tools [--list <module>[,<module>...]]; <module>: core, debugging, authoring, rescue; <n>: 1 to 64, default 8";
 /// The developer text of a refused `--tier`.
-const NO_TIERS: &str = "actinglab-mcp has no tiers: tools/list lists every tool of the modules --list names, by default every installed module; usage: actinglab-mcp [--list <module>[,<module>...]] [--list-tools]";
+const NO_TIERS: &str = "actinglab-mcp has no tiers: tools/list lists every tool of the modules --list names, by default every installed module; usage: actinglab-mcp [--list <module>[,<module>...]] [--workers <n>] | actinglab-mcp --list-tools [--list <module>[,<module>...]]";
 const LIST: &str = "--list";
 const LIST_TOOLS: &str = "--list-tools";
+const WORKERS: &str = "--workers";
 const TIER: &str = "--tier";
+/// The threads that run `tools/call` when `--workers` is not given (board #434, the
+/// coordinator's ruling 6775192250, point 22: eight, as the job cap).
+const DEFAULT_WORKERS: usize = 8;
+/// The fewest and the most `--workers` takes.
+const MIN_WORKERS: usize = 1;
+const MAX_WORKERS: usize = 64;
 
 /// Why the program ended without serving (Workflow #378 A5, model v2.2 §7.3): one outcome, and
 /// the developer text of its line (the usage line of a usage error). Nothing is printed on
@@ -77,6 +86,8 @@ struct Invocation {
     list: Option<Vec<String>>,
     /// `--list-tools`: print the `tools/list` result and exit.
     list_tools: bool,
+    /// `--workers`, or [`DEFAULT_WORKERS`] without it: the threads that run `tools/call`.
+    workers: usize,
 }
 
 fn main() -> ExitCode {
@@ -117,14 +128,22 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, Ended> {
         print_text(&text)?;
         return Ok(ExitCode::SUCCESS);
     }
-    server::serve(server::ServerConfig { catalog, listing }).map_err(Ended::from)
+    server::serve(server::ServerConfig {
+        catalog,
+        listing,
+        workers: invocation.workers,
+    })
+    .map_err(Ended::from)
 }
 
-/// The command line's options; every other word, an option given twice and an option without its
-/// value are `actingctl_usage_invalid` naming the word, before anything is read or served.
+/// The command line's options; every other word, an option given twice, an option without its
+/// value, a `--workers` value outside its range or that is no number and `--workers` beside
+/// `--list-tools` are `actingctl_usage_invalid` naming the word, before anything is read or
+/// served.
 fn parse(arguments: &[OsString]) -> Result<Invocation, Ended> {
     let mut list: Option<Vec<String>> = None;
     let mut list_tools = false;
+    let mut workers: Option<usize> = None;
     let mut index = 0;
     while index < arguments.len() {
         let word = arguments[index]
@@ -133,15 +152,17 @@ fn parse(arguments: &[OsString]) -> Result<Invocation, Ended> {
         match word {
             LIST if list.is_none() => {
                 index += 1;
-                let value = arguments
-                    .get(index)
-                    .ok_or_else(|| usage(ArgumentProblem::ValueMissing, Some(word)))?
-                    .to_str()
-                    .ok_or_else(|| usage(ArgumentProblem::NotUtf8, Some(word)))?;
+                let value = option_value(arguments, index, word)?;
                 list = Some(value.split(',').map(str::to_owned).collect());
             }
             LIST_TOOLS if !list_tools => list_tools = true,
-            LIST | LIST_TOOLS => return Err(usage(ArgumentProblem::Repeated, Some(word))),
+            WORKERS if workers.is_none() => {
+                index += 1;
+                workers = Some(worker_count(option_value(arguments, index, word)?)?);
+            }
+            LIST | LIST_TOOLS | WORKERS => {
+                return Err(usage(ArgumentProblem::Repeated, Some(word)));
+            }
             // Today's server's tiers: this one has none, and says so.
             _ if word == TIER || word.starts_with("--tier=") => {
                 return Err(Ended {
@@ -153,7 +174,43 @@ fn parse(arguments: &[OsString]) -> Result<Invocation, Ended> {
         }
         index += 1;
     }
-    Ok(Invocation { list, list_tools })
+    // The printed list runs no call: the worker count would change nothing there.
+    if list_tools && workers.is_some() {
+        return Err(usage(ArgumentProblem::Conflicting, Some(WORKERS)));
+    }
+    Ok(Invocation {
+        list,
+        list_tools,
+        workers: workers.unwrap_or(DEFAULT_WORKERS),
+    })
+}
+
+/// The value of the option `word`, the argument at `index`: `value_missing` when there is none,
+/// `not_utf8` when it is not UTF-8.
+fn option_value<'a>(arguments: &'a [OsString], index: usize, word: &str) -> Result<&'a str, Ended> {
+    arguments
+        .get(index)
+        .ok_or_else(|| usage(ArgumentProblem::ValueMissing, Some(word)))?
+        .to_str()
+        .ok_or_else(|| usage(ArgumentProblem::NotUtf8, Some(word)))
+}
+
+/// `--workers`' value: a whole number from [`MIN_WORKERS`] to [`MAX_WORKERS`]. Text that is no
+/// whole number is `wrong_type`; a number outside the range is `out_of_range` with the range
+/// (`range_min`, `range_max`).
+fn worker_count(value: &str) -> Result<usize, Ended> {
+    let count = value
+        .parse::<i64>()
+        .map_err(|_| usage(ArgumentProblem::WrongType, Some(WORKERS)))?;
+    match usize::try_from(count) {
+        Ok(count) if (MIN_WORKERS..=MAX_WORKERS).contains(&count) => Ok(count),
+        _ => Err(Ended {
+            outcome: cli_line::usage_invalid(Some(WORKERS), ArgumentProblem::OutOfRange)
+                .range_min(MIN_WORKERS)
+                .range_max(MAX_WORKERS),
+            text: Some(USAGE),
+        }),
+    }
 }
 
 /// `actingctl_usage_invalid` for `word` and what is wrong with it, with the usage line.

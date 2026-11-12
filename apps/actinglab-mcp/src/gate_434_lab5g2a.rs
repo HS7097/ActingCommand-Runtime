@@ -21,10 +21,15 @@
 //!   module and one given twice; without it the authoring module is listed outside any
 //!   installation root and where `lab_module_authoring` is true, and not where it is false,
 //!   absent, no boolean, in a configuration that is no JSON or none; neither changes a tool's
-//!   definition or which tools a call may name.
+//!   definition or which tools a call may name. The start option `--workers` (the coordinator's
+//!   ruling of 2026-11-12 on #1639): 8 without it, the count given from 1 to 64; 0, 65 and -1
+//!   refused `out_of_range` with the range, a word that is no whole number `wrong_type`, the
+//!   option without its value `value_missing`, twice `repeated`, beside `--list-tools`
+//!   `conflicting`, each with the usage line.
 
 use crate::tools::{self, ACTINGLAB_SLICES, AuthoringPlace, Catalog, Listing, NAMED};
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{Detail, Outcome};
+use actingcommand_lab_ops::cli_line;
 use actingcommand_lab_ops::codes::ArgumentProblem;
 use actingcommand_lab_ops::locate::{self, AuthoringModule};
 use actingcommand_lab_ops::table::{
@@ -547,6 +552,15 @@ fn program_at(base: &Path, place: Place) -> PathBuf {
     runtime.join("actinglab-mcp.exe")
 }
 
+/// The command line `words`, as the program reads its arguments.
+fn parse_words(words: &[&str]) -> Result<crate::Invocation, crate::Ended> {
+    let arguments = words
+        .iter()
+        .map(|word| OsString::from(*word))
+        .collect::<Vec<_>>();
+    crate::parse(&arguments)
+}
+
 /// The module of the row whose tool is `name`.
 fn module_of(table: &OperationTable, name: &str) -> OperationModule {
     table
@@ -580,7 +594,8 @@ fn mcp_list_option_and_authoring_gate() {
         crate::parse(&[]).expect("no option parses"),
         crate::Invocation {
             list: None,
-            list_tools: false
+            list_tools: false,
+            workers: 8,
         }
     );
     let invocation = crate::parse(&[
@@ -610,6 +625,44 @@ fn mcp_list_option_and_authoring_gate() {
     ] {
         let given = given.into_iter().map(str::to_owned).collect::<Vec<_>>();
         assert_eq!(catalog.named(&given), Err(problem), "--list {given:?}");
+    }
+
+    // The start option `--workers` (the coordinator's ruling of 2026-11-12 on #1639): eight
+    // without it, the count given from 1 to 64, and a usage refusal for anything else.
+    for (words, workers) in [
+        (vec!["--list", "core"], 8),
+        (vec!["--workers", "3", "--list", "core"], 3),
+        (vec!["--workers", "1"], 1),
+        (vec!["--workers", "64"], 64),
+    ] {
+        let invocation = parse_words(&words).expect("the line parses");
+        assert_eq!(invocation.workers, workers, "{words:?}");
+    }
+    for (words, problem, ranged) in [
+        (vec!["--workers", "0"], "out_of_range", true),
+        (vec!["--workers", "65"], "out_of_range", true),
+        (vec!["--workers", "-1"], "out_of_range", true),
+        (vec!["--workers", "many"], "wrong_type", false),
+        (vec!["--workers", "2.5"], "wrong_type", false),
+        (vec!["--workers"], "value_missing", false),
+        (vec!["--workers", "2", "--workers", "3"], "repeated", false),
+        (vec!["--list-tools", "--workers", "2"], "conflicting", false),
+    ] {
+        let ended = parse_words(&words).expect_err("the line is refused");
+        let outcome = cli_line::outcome_value(&ended.outcome, Detail::Full);
+        assert_eq!(outcome["code"], "actingctl_usage_invalid", "{words:?}");
+        assert_eq!(outcome["values"]["argument"], "--workers", "{words:?}");
+        assert_eq!(outcome["values"]["argument_problem"], problem, "{words:?}");
+        let range = (
+            &outcome["values"]["range_min"],
+            &outcome["values"]["range_max"],
+        );
+        if ranged {
+            assert_eq!(range, (&json!(1), &json!(64)), "{words:?}: the range");
+        } else {
+            assert_eq!(range, (&Value::Null, &Value::Null), "{words:?}: no range");
+        }
+        assert_eq!(ended.text, Some(crate::USAGE), "{words:?}: the usage line");
     }
 
     // The authoring option decides only the default.

@@ -2,9 +2,9 @@
 
 //! The stdio server (#338 §四 线程 / 启动预算 / 关闭 / 双代协议), copied from today's MCP server
 //! (`apps/actingctl/src/mcp/server.rs`; Workflow #434 LAB-5G2a: copied, not shared). One thread
-//! reads stdin (lines up to 4 MiB), the calling thread dispatches, at most eight workers run
-//! `tools/call` (board #434, the coordinator's ruling 6775192250, point 22), one thread writes
-//! stdout in order and one sends progress. stdout carries protocol messages only; diagnostics go
+//! reads stdin (lines up to 4 MiB), the calling thread dispatches, the workers `--workers` names
+//! (eight unless it says otherwise; board #434, the coordinator's ruling 6775192250, points 20 and
+//! 22) run `tools/call`, one thread writes stdout in order and one sends progress. stdout carries protocol messages only; diagnostics go
 //! to stderr. Startup reads no file and opens no connection, so `initialize` and
 //! `server/discover` answer at once. At stdin EOF the server takes no new request, gives answers
 //! in flight up to 2 s and exits with 0. Every JSON-RPC error carries its outcome
@@ -16,8 +16,8 @@
 //! (handles and cursors come with the slice of jobs, G3); `tools/list` is the table's
 //! (`tools::Catalog`); a `tools/call` of an offered row's tool runs on a worker as before, and
 //! answers `mcp_operation_unsupported` (`tools::unsupported`), since this build serves no call.
-//! The worker count is a constant here as in the original: ruling 20's start option for it comes
-//! with the slices that run calls on the workers.
+//! The worker count is the start option `--workers` (`ServerConfig::workers`), where the original
+//! has a constant.
 
 use crate::lock;
 use crate::protocol::{
@@ -40,8 +40,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
-/// Board #434, the coordinator's ruling 6775192250, point 22: eight workers, as the job cap.
-const WORKERS: usize = 8;
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 const PROGRESS_TICK: Duration = Duration::from_millis(500);
 /// The MCP entry's private request (Workflow #421 MCP-ENTRY D4).
@@ -55,6 +53,8 @@ pub(crate) struct ServerConfig {
     pub(crate) catalog: Catalog,
     /// Which of them `tools/list` lists.
     pub(crate) listing: Listing,
+    /// The threads that run `tools/call` (`--workers`, at least one).
+    pub(crate) workers: usize,
 }
 
 struct Shared {
@@ -199,7 +199,7 @@ pub(crate) fn serve(config: ServerConfig) -> Result<ExitCode, Outcome> {
     let job_receiver = Arc::new(Mutex::new(job_receiver));
     // Workers, the progress sender and the stdin reader run detached; the process ends
     // with this function.
-    for index in 0..WORKERS {
+    for index in 0..config.workers {
         let shared = Arc::clone(&shared);
         let jobs = Arc::clone(&job_receiver);
         let _worker = spawn(&format!("mcp-worker-{index}"), move || {
