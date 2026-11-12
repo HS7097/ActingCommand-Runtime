@@ -17016,6 +17016,101 @@ the refusal beside `--capture` and without `--scene`). The lists extended are th
 ten rows. No golden and no list of CLI-HELP or CLI-COMP changes (both read the table), and no
 existing test changes.
 
+### 1.332 Slice IDLE-3 (0.12.57): an idle action is taken only on a plan that counts the end of the instance's last run (Workflow #447; a production defect of v0.12.54; the coordinator's rulings of 11-12 on board #447, not the owner's words)
+
+1.332 is the coordinator's number. [runtime-config.md](runtime-config.md), "The `idle` section", is
+the contract and says when the action runs in the terms below. No persisted ledger shape, wire
+shape, configuration key, outcome code, record shape, closed vocabulary or interface revision
+changes.
+
+**The defect** (production, v0.12.54; the idle code was the same on main). A chain of two
+scheduled tasks on one instance: the second becomes due once the first has ended (it reads the
+first's end). Within one second the ledger holds, in this order: `task.completed` (the first task
+ends), `lease.released` (its lease), `lease.requested` (the idle action asks for the instance's key,
+granted at once), `policy.execution_recorded` and `policy.dispatch_completed` (the policy records
+the first task's execution), `command.received` to `application.completed` (the application is
+stopped), `instance_idle_action` `run_idle_action` `close_app` (its next occurrence about an hour
+later), `instance_idle_action` `queue_idle_wake` (a wake queued at once), `policy.dispatch_intent`
+(the second task), and 0.13 s later `policy.dispatch_rejected` `dispatch_instance_held` behind the
+startup package. The cold start took about 50 s and ended at the home page; the second task's
+package starts from the page the first one ends on, so it failed at its first step, and the work of
+that cycle was not done.
+
+**The cause.**
+
+1. The idle action waited for a plan evaluated after the last idle check that found the instance in
+   use (`in_use_at_unix_ms`): a sample of the lease, taken at each policy cycle and once a second.
+2. A run's lease is released before its settlement, which appends `policy.execution_recorded` and
+   `policy.dispatch_completed` in one hold of the policy's guard.
+3. The next task of a chain is due only from the completion: its predecessor's terminal state
+   (`task_runtime_snapshots`) and outcome (`outcome_key_snapshot`) come from completed dispatches.
+4. An evaluation that read its inputs before that completion, but was evaluated after the last check
+   that saw the lease, passed the sample: its plan had the next task's trigger unknown and the next
+   work an hour away.
+5. The first check after the release that read it, the evaluation's own check or a lease sweep's
+   (the ledger does not say which, and the rule does not depend on it), closed the application;
+   the evaluation that counted the completion came a fraction of a second later.
+
+**The rule.** An idle action step (`IdleStep::Act` and `IdleStep::Rest`: return home, close the
+application, stop the emulator) is decided only on a plan from an evaluation that already counted
+the end of every run the policy dispatched on the instance: at the time that evaluation read its
+inputs, the policy held no dispatch of the instance that was still open (from its intent to the
+record of its execution), and none has been opened since. A dispatch is open from its intent until
+its completion (`policy.dispatch_completed`) or its refusal: the settlement appends the completion
+with the record of the execution, in the same hold of the policy's guard, and the completion is what
+makes the next task of a chain due (3 above), so it is the anchor. A dispatch the start could not
+settle (`quarantine_dispatch`) is not counted, as it is not among the pending settlements: no end of
+it comes in that start. How the host knows it: the evaluation reads, under the guard it projects
+its inputs under, the instances with an open dispatch and the ledger position of its inputs
+(`PolicyHost::idle_dispatches_read`), kept with its not-run explanation; at a check,
+`PolicyHost::idle_runs_counted` holds that a dispatch opened since has its intent after that
+position, and the dispatch journal keeps every open dispatch and each pair's latest intent. The
+check reads the plan and this answer under one guard (`IdleView::run_uncounted`), the cycle's check
+and the sweep's alike. The sampled rule stays beside it for work the policy does not dispatch
+(manual, direct, Lab, ladder and host runs). A wake reads every plan as before: an owed wake, the
+switch, `none` and the kept state across a start are unchanged.
+
+**On the key.** The action's claim checked a pause and a request queued meanwhile; it now also reads
+the latest plan again by the same rule (`idle_action::stands_on_key`): a plan that does not count
+the end of every run the policy dispatched on the instance, or that shows a task or a reading due,
+or its next work closer than the gap the step is taken from (`idle_action::action_min_gap_ms`:
+`idle.min_gap_ms`, under `auto` `stop_emulator`'s `idle.stop_emulator_min_gap_ms`; a rest's
+`idle.return_home_min_gap_ms`), leaves the instance alone as for a pause: the planner's `abandoned`,
+nothing sent, no record of an action. A skipped step needs no record: it is decided again at the
+next check, on a plan that counts the run's end, normally within the same second.
+
+**What an operator sees.** Nothing new: no record, code or key. The action comes at the first idle
+check after the evaluation that counts the run's end, and a chain's next task is no longer met by a
+closed application. **Older builds** (below 0.12.57) keep the defect; a rollback brings it back and
+changes nothing else, since nothing is persisted.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| IDLE3-1 | when an idle action or rest is decided ([runtime-config.md](runtime-config.md), "The `idle` section") | rule (no shape change) | IDLE-3 | — | a plan that counts the end of the instance's last run; `IdleView::run_uncounted`, `RunsRead` |
+| IDLE3-2 | the check on the action's key | rule (no shape change) | IDLE-3 | — | the latest plan read again (`stands_on_key`); abandoned as for a pause |
+| IDLE3-3 | `PolicyHost::idle_dispatches_read`, `PolicyHost::idle_runs_counted` | memory only | IDLE-3 | — | read with the evaluation's inputs; replaced with its not-run explanation; a start begins with none |
+
+Tests (host gate row "IDLE-3", the idle planner on a manual clock, in the defect's order with the
+ledger positions of the dispatches): `gate_idle3::idle_action_waits_for_plan_after_run_end` (no step
+after the release on the plan that read the first dispatch open, though the sampled rule passes it;
+none on the next plan with the second task due; the second task's claim and run meet an instance
+never closed), `idle_action_waits_for_plan_after_run_end_under_auto` (the same with `auto`, the
+next work in a rest's gap and in `close_app`'s), `idle_action_runs_after_fresh_plan` (the next plan
+counts the end and shows the next task an hour away: one `close_app`, its wake at next due minus the
+lead) and `idle_action_abandoned_on_key_for_newer_plan` (`close_app` and a rest under `auto` do not
+stand on their key against a task due, work closer than the gap, a reading due or a dispatch opened
+after the read; the planner is active again and decides once more). On a real policy host, through
+the mapped chain of two tasks on one neutral instance (the second due once the first has completed)
+and evaluated cycles at fixed times on the manual Runtime clock:
+`gate_idle3_host::idle_runs_counted_follows_the_policys_dispatches` (`PolicyHost::idle_runs_counted`
+is true before any evaluated cycle and after a cycle evaluated with nothing open; false once that
+cycle's dispatch is admitted, after a cycle evaluated while it is admitted and after its execution
+and completion with no new evaluation; true after the cycle evaluated after the completion, whose
+plan shows the second task due; false once the second task's dispatch is admitted). Not reached
+there: an intent apart from its admission (the live admission records both under one guard) and a
+dispatch a start could not settle (it needs a start that refuses the run's settlement). No existing
+test changes.
+
 ### 1.333 Slice SBUD-1 (0.12.57): admission refuses a step whose declared sampling need cannot fit its deadline (Workflow #448; a released package whose select step failed at every run in production on v0.12.54, though `standard-pack check` and the Runtime's admission had passed it; the coordinator's rulings of 11-13 on board #448, not the owner's words; coordinator work order `rd-1113/brief-448-sbud-1.md`, read on main `a01fac44`)
 
 1.333 is the coordinator's number: 1.332 belongs to a pull request not merged yet.
