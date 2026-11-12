@@ -593,6 +593,20 @@ fn run(
     Ok(result)
 }
 
+/// Workflow #434 LAB-5B1: the flags `runs` takes, each with a value; [`parse`] refuses any other
+/// as `unknown`.
+pub const FLAGS: [&str; 9] = [
+    "--state-root",
+    "--instance",
+    "--since-unix-ms",
+    "--until-unix-ms",
+    "--task-prefix",
+    "--dispatch",
+    "--state",
+    "--limit",
+    "--cursor",
+];
+
 /// `--state-root` and the flags of §4.3, each at most once and with a value; any other flag, a
 /// repeated one or a malformed value is `actingctl_usage_invalid` with the flag (`argument`) and
 /// what is wrong with it (`argument_problem`).
@@ -608,6 +622,10 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, RunsRequest), Failure> {
     let mut cursor = None;
     let mut rest = arguments[1..].iter();
     while let Some(flag) = rest.next() {
+        // Workflow #434 LAB-5B1: the flags it takes are [`FLAGS`].
+        if flag.to_str().is_some_and(|name| !FLAGS.contains(&name)) {
+            return Err(Failure::argument(flag, ArgumentProblem::Unknown));
+        }
         let (name, slot) = match flag.to_str() {
             Some(name @ "--state-root") => (name, &mut state_root),
             Some(name @ "--instance") => (name, &mut instance),
@@ -675,4 +693,11 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, RunsRequest), Failure> {
     let (_, state_root) =
         state_root.ok_or_else(|| Failure::argument("--state-root", ArgumentProblem::Required))?;
     Ok((PathBuf::from(state_root), request))
+}
+
+/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_within`]
+/// is given, if any.
+#[cfg(test)]
+pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
+    parse(arguments).err().map(|failure| failure.outcome())
 }

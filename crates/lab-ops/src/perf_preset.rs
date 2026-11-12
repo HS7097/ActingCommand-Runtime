@@ -166,6 +166,13 @@ pub fn dispatch_on(
     })
 }
 
+/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_on`] is
+/// given, if any.
+#[cfg(test)]
+pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
+    parse(arguments).err()
+}
+
 /// `perf-preset set <preset>` or `perf-preset get`, then `--state-root <path>` once; any other
 /// word is `unknown`.
 fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {

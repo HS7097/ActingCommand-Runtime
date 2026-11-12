@@ -1719,3 +1719,21 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g4c::serve_answers_record_draft_as_the_command_line",
 ]
 incident = ["#434 LAB-5G4c"]
+
+# Workflow #434 LAB-5B1 (0.12.57; register §1.287, "Slice LAB-5B1"; brief rd-1113/brief-lab5b1.md; contracts/lab-operations.json): the parameters the code of each planned row lab_ops::core_ops serves reads are one constant per row (lab_ops::core_reads), which that code reads them through and builds a row's command line from; each constant holds exactly its row's declared parameters, in both directions (a failure names the row, the parameter and the direction); the flags a row's command line can carry, with the module's own --state-root and --root, are what its lab-ops parser takes (flags_of, or the list lifted from a parser it does not cover), but the named exceptions (words, devices bind's root, the --cursor of codes and events); each parser, fed the command line its row builds for each declared parameter with a made-up value of its type, refuses none as unknown; a read of a name outside its row's constant fails the debug assertion test builds have; the rows whose command line reaches an own command of actinglab as their declared words (app launch, restart and stop; user-config, user-config set) are held equal to that command's read list but session app's --record; every planned core row and every table-driven row of LAB-5B2's register is in exactly one list; LAB-5C's uncovered cases, on the command line and in serve: since and since_unix_ms at once on events, runs and diagnose refused --since-unix-ms repeated, events' wait_s above 20 out_of_range and below 0 --wait-s wrong_type, and LAB-5C's parameters reaching lab-ops through the CLI module
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::gate_434_lab5b1::lab_ops_read_here_rows_read_what_they_declare",
+    "actingcommand-lab-ops::lib::gate_434_lab5b1::lab_ops_handed_rows_hand_what_they_declare",
+    "actingcommand-lab-ops::lib::gate_434_lab5b1::lab_ops_handed_flags_are_what_the_parsers_take",
+    "actingcommand-lab-ops::lib::gate_434_lab5b1::lab_ops_parsers_refuse_no_declared_parameter",
+    "actingcommand-lab-ops::lib::gate_434_lab5b1::lab_ops_exceptions_are_outside_the_table",
+    "actingcommand-lab-ops::lib::gate_434_lab5b1::lab_ops_a_read_outside_its_constant_fails",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5b1::declared_rows_match_their_commands",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5b1::every_table_driven_row_has_one_list",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5b1::lab5c_both_starting_points_are_refused_as_repeated",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5b1::lab5c_a_wait_outside_its_range_is_refused",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5b1::lab5c_parameters_reach_lab_ops_through_the_module",
+]
+incident = ["#434 LAB-5B1"]

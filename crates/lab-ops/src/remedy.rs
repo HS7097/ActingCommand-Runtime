@@ -437,6 +437,13 @@ enum Ended {
     Failure(Failure),
 }
 
+/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_within`]
+/// is given (`inline`: those [`dispatch_rows_on`] is given, beside the rows), if any.
+#[cfg(test)]
+pub(crate) fn parse_refusal(arguments: &[OsString], inline: bool) -> Option<Outcome> {
+    parse(arguments, inline).err()
+}
+
 /// `remedy <set|get|lift>` and the flags `flags_of` names for the action, each once with a
 /// value; for `set`, exactly one target form (`--instance` or `--game`) and `--rows`; for `get`
 /// and `lift`, `--instance`; `--state-root` always. Any other word, `--server` included, is

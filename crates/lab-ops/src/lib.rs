@@ -133,6 +133,10 @@ pub mod budget;
 // own (`core_ops::Caller`).
 pub mod core_ops;
 
+// Workflow #434 LAB-5B1: the parameters the code of each row `core_ops` serves reads, one constant
+// per row, which that code reads them through and builds a row's command line from.
+pub mod core_reads;
+
 // Test-only: Workflow #434 LAB-1, the slice's named tests (`lab_ops_table_complete`,
 // `lab_ops_locate_defaults`).
 #[cfg(test)]
@@ -148,6 +152,10 @@ mod gate_434_lab5d;
 // (`lab_ops_undeclared_members_follow_the_table`).
 #[cfg(test)]
 mod gate_434_lab5g1b;
+// Test-only: Workflow #434 LAB-5B1, the slice's named tests of the core rows' constants
+// (`core_reads`): each held equal to its row, the command lines held to their parsers.
+#[cfg(test)]
+mod gate_434_lab5b1;
 // Test-only: Workflow #438 HELD-1, the diagnose half of `held_t9` (the instance's held rows and
 // the mark on its `not_run` rows).
 #[cfg(test)]

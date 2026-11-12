@@ -808,6 +808,15 @@ fn run(
     Ok(cli_line::members(evidence.within_budget(budget), ACTION))
 }
 
+/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_within`]
+/// is given (its command's two words first), if any.
+#[cfg(test)]
+pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
+    parse(&arguments[2..])
+        .err()
+        .map(|failure| failure.outcome())
+}
+
 /// The flags `flags_of` names for `run evidence`, each at most once and with a value; any other
 /// word, a repeated flag or a malformed value is `actingctl_usage_invalid` with the word
 /// (`argument`) and what is wrong with it (`argument_problem`). Exactly one of `--request-id`

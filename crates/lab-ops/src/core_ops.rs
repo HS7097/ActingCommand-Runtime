@@ -29,6 +29,11 @@
 //! ([`Caller::cursor`]). An answer whose only source was an MCP tool answers
 //! `lab_operation_completed`, a code of this crate's registry since that slice, whichever program
 //! serves the row.
+//!
+//! Workflow #434 LAB-5B1 (register §1.287, "Slice LAB-5B1"): the code reads a row's parameters by
+//! name only through the row's constant in [`crate::core_reads`] (`core_reads::Params`), and
+//! builds the command line a row hands to a command of this crate from that row's constant there
+//! ([`core_reads::Handed`]); the slice's tests hold each constant equal to the row.
 
 // Workflow #434 LAB-5G1: as in actinglab, where this code was written (its `main.rs` allows it for
 // the crate): a step that ends the call returns the call's line, `Exit`, as its error.
@@ -37,10 +42,11 @@
 use crate::budget::{self, Budget};
 use crate::cli_line::{self, Exit};
 use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::core_reads::{self, Handed, Params, Part, Written};
 use crate::events::CursorBinding;
 use crate::front::{Connection, Reached};
 use crate::instance_selector::{self, SelectorMiss};
-use crate::table::{Operation, ParamForm};
+use crate::table::Operation;
 use crate::wait::{Waited, wait_at_most};
 use crate::{
     capability_gap, code_lookup, configure, devices, diagnose, emulators, events, evidence_read,
@@ -69,24 +75,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const RESULT_MEMBER: &str = "result";
 /// `pause`'s drain when none is given (the operation table's default).
 const DEFAULT_DRAIN: Duration = Duration::from_secs(300);
-/// Workflow #434 LAB-5C: the options of `events` that MCP `ac_events` took and the row gained,
-/// each handed on under the flag of its name (`exclude_event_types`, a list, goes as one comma
-/// list beside them).
-const EVENTS_OPTIONS: [&str; 13] = [
-    "view",
-    "since_unix_ms",
-    "until_unix_ms",
-    "through_sequence",
-    "event_type",
-    "fact_key",
-    "min_severity",
-    "max_severity",
-    "origin_module",
-    "task_id",
-    "correlation_id",
-    "detail",
-    "wait_s",
-];
+/// Workflow #434 LAB-5B1: the rows whose steps other programs call with the parameters alone
+/// ([`stop_target`], [`pack_schedule_rows`], [`run_start_prepared`], [`material_read`]), which read
+/// them through that row's constant.
+const TASK_STOP: &str = "task stop";
+const PACK_SCHEDULE_SET: &str = "pack-schedule set";
+const RUN_START: &str = "run start";
+const MATERIAL: &str = "material";
 
 /// Workflow #434 LAB-5G1: where the program acts, as it finds it (actinglab's CLI module: from its
 /// own place, `apps/actinglab/src/cli_module/place.rs`).
@@ -173,6 +168,9 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
     if let Some((further, _)) = further_flags(operation, params).first() {
         return usage(&flag_name(further), ArgumentProblem::Unknown);
     }
+    // Workflow #434 LAB-5B1: from here every parameter is read by name through the row's constant
+    // (`words`, which no row declares, is one of `core_reads::EXCEPTIONS`).
+    let params = Params::of(&operation.name, params);
     if let Some(word) = list_of(params, MORE_WORDS).and_then(|words| words.first().cloned()) {
         return usage(&word, ArgumentProblem::Unknown);
     }
@@ -194,11 +192,7 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
 /// is given to the wait, which closes its connection first (Workflow #434 LAB-5G1: a connection
 /// made for this call; a kept one is the caller's, and the wait drops only a clone of it, so the
 /// caller's connection stays open while the wait reads the shutdown).
-fn shutdown_line(
-    params: &Map<String, Value>,
-    client: Reached<'_>,
-    state_root: &Path,
-) -> Result<Exit, Exit> {
+fn shutdown_line(params: Params<'_>, client: Reached<'_>, state_root: &Path) -> Result<Exit, Exit> {
     let receipt = shutdown::request(&client).map_err(|error| client_failed(&error))?;
     let mut members = Map::new();
     members.insert(
@@ -226,40 +220,26 @@ fn shutdown_line(
 
 /// Workflow #434 LAB-5C: the words of `codes`, `gap` and `packs`, the offline rows LAB-1 moved
 /// with their parsing, as their command in `lab-ops` is given them (`root`: the install root, which
-/// only `packs` reads); `None` for another row.
+/// only `packs` reads); `None` for another row. Workflow #434 LAB-5B1: built from the row's
+/// constant, `core_reads::OFFLINE`.
 pub fn offline_words(
     operation: &Operation,
     params: &Map<String, Value>,
     root: Option<&Path>,
 ) -> Option<Vec<OsString>> {
-    let argv = match operation.name.as_str() {
-        "codes" => {
-            let mut argv = Argv::new(&["codes"]);
-            argv.word_of(params, "code");
-            // LAB-5C: the list's filters and page (the survey's difference 8), under their flags.
-            argv.flag_of(params, "prefix", "--prefix");
-            argv.flag_of(params, "owner", "--owner");
-            argv.flag_of(params, "limit", "--limit");
-            argv
-        }
-        "gap" => {
-            let mut argv = Argv::new(&[capability_gap::COMMAND]);
-            argv.options_of(operation, params, &[]);
-            argv
-        }
-        "packs" => {
-            let mut argv = Argv::new(&["packs"]);
-            argv.flag_of(params, "instance", "--instance");
-            if let Some(root) = root {
-                argv.flag("--root", root);
-            }
-            // LAB-5C: the rows of one role.
-            argv.flag_of(params, "role", "--role");
-            argv
-        }
-        _ => return None,
-    };
-    Some(argv.0)
+    let handed = core_reads::OFFLINE
+        .iter()
+        .find(|handed| handed.row == operation.name)?;
+    // No part of an offline row is refused while the words are built: none reads the clock
+    // (`Written::SinceNow`, the one part that can be; the slice's test holds it).
+    handed_line(
+        handed,
+        operation,
+        Params::of(&operation.name, params),
+        root,
+        None,
+    )
+    .ok()
 }
 
 /// The operations LAB-1 moved with their parsing, given actingctl's words, on the caller's
@@ -286,7 +266,7 @@ fn dispatched_with_state_root(
         "run evidence" => run_evidence::dispatch_within(&argv, connection, budget),
         "diagnose" => diagnose::dispatch_within(&argv, connection, budget, cursor),
         // Workflow #434 LAB-5C: `remedy set`'s rows given inline go beside its words.
-        "remedy set" => match params.get("rows") {
+        "remedy set" => match Params::of(&operation.name, params).get("rows") {
             Some(rows) => remedy::dispatch_rows_on(&argv, rows, detail, connection),
             None => remedy::dispatch_on(&argv, detail, connection),
         },
@@ -307,170 +287,71 @@ fn dispatched_with_state_root(
 /// `lab-ops` (actingctl's words for the row's parameters), built apart from the run so that a test
 /// reads what a row hands on; `root` is the install root, `state_root` the state root. `None` for
 /// a row served here with its parameters; a parameter refused while the words are built is its
-/// line. `remedy set`'s rows given inline are no word: they go beside the words.
+/// line. `remedy set`'s rows given inline are no word: they go beside the words. Workflow #434
+/// LAB-5B1: built from the row's constant, `core_reads::HANDED`; `frame` hands words only with
+/// `out` (without it, it is served here).
 pub fn handed_words(
     operation: &Operation,
     params: &Map<String, Value>,
     root: Option<&Path>,
     state_root: &Path,
 ) -> Option<Result<Vec<OsString>, Exit>> {
-    let argv = match operation.name.as_str() {
-        "status" => {
-            let mut argv = Argv::new(&["overview"]);
-            argv.state_root(state_root);
-            argv.flag_of(params, "instance", "--instance");
-            if let Some(sections) = list_of(params, "sections") {
-                argv.flag("--sections", sections.join(","));
+    let handed = core_reads::HANDED
+        .iter()
+        .find(|handed| handed.row == operation.name)?;
+    let params = Params::of(&operation.name, params);
+    if let Some(only_with) = handed.only_with
+        && !params.contains_key(only_with)
+    {
+        return None;
+    }
+    Some(handed_line(
+        handed,
+        operation,
+        params,
+        root,
+        Some(state_root),
+    ))
+}
+
+/// Workflow #434 LAB-5B1: the command line the row's constant `handed` gives for `params`: the
+/// command's words, then each part in its place (the state root when there is one, the install
+/// root when the program runs from one); a parameter refused while it is written is its line.
+fn handed_line(
+    handed: &Handed,
+    operation: &Operation,
+    params: Params<'_>,
+    root: Option<&Path>,
+    state_root: Option<&Path>,
+) -> Result<Vec<OsString>, Exit> {
+    let mut argv = Argv::new(handed.command);
+    for part in handed.parts {
+        match *part {
+            Part::Param(name, written) => argv.param(params, name, written)?,
+            Part::StateRoot => {
+                if let Some(state_root) = state_root {
+                    argv.state_root(state_root);
+                }
             }
-            if let Some(root) = root {
-                argv.flag("--root", root);
-            }
-            argv
-        }
-        "summary" => {
-            let mut argv = Argv::new(&[routine_summary::COMMAND]);
-            argv.state_root(state_root);
-            argv.flag_of(params, "instance", "--instance");
-            argv.switch_of(params, "hour", routine_summary::HOUR);
-            argv.switch_of(params, "day", routine_summary::DAY);
-            argv.flag_of(params, "since", routine_summary::SINCE);
-            argv
-        }
-        "events" => {
-            let mut argv = Argv::new(&["events"]);
-            argv.state_root(state_root);
-            argv.flag_of(params, "instance", "--instance");
-            if let Err(exit) = argv.since(params) {
-                return Some(Err(exit));
-            }
-            if let Some(types) = list_of(params, "type") {
-                argv.flag("--event-types", types.join(","));
-            }
-            argv.flag_of(params, "run", "--run-id");
-            argv.flag_of(params, "request", "--request-id");
-            argv.flag_of(params, "after", "--after-sequence");
-            argv.flag_of(params, "limit", "--limit");
-            // LAB-5C: what MCP `ac_events` took, after the words the row gave before.
-            for name in EVENTS_OPTIONS {
-                argv.flag_of(params, name, &flag_name(name));
-            }
-            if let Some(types) = list_of(params, "exclude_event_types") {
-                argv.flag("--exclude-event-types", types.join(","));
-            }
-            argv
-        }
-        "runs" => {
-            let mut argv = Argv::new(&["runs"]);
-            argv.state_root(state_root);
-            argv.flag_of(params, "instance", "--instance");
-            if let Err(exit) = argv.since(params) {
-                return Some(Err(exit));
-            }
-            argv.options_of(operation, params, &["since"]);
-            argv
-        }
-        "run evidence" => {
-            let mut argv = Argv::new(&[run_evidence::COMMAND, run_evidence::ACTION]);
-            argv.state_root(state_root);
-            if let Some(id) = text(params, "id") {
-                let flag =
-                    if run_show::by_request_id(id).is_none() && run_show::by_run_id(id).is_some() {
-                        "--run-id"
-                    } else {
-                        "--request-id"
-                    };
-                argv.flag(flag, id);
-            }
-            argv.flag_of(params, "detail", "--detail");
-            argv.options_of(operation, params, &["detail"]);
-            argv
-        }
-        "diagnose" => {
-            let mut argv = Argv::new(&["diagnose"]);
-            argv.state_root(state_root);
-            if let Some(root) = root {
-                argv.flag("--root", root);
-            }
-            argv.flag_of(params, "instance", "--instance");
-            argv.flag_of(params, "task", "--task-id");
-            if let Err(exit) = argv.since(params) {
-                return Some(Err(exit));
-            }
-            // LAB-5C: the window's start in unix ms, as MCP `ac_diagnose` took it.
-            argv.flag_of(params, "since_unix_ms", "--since-unix-ms");
-            argv
-        }
-        "remedy" | "remedy set" | "remedy lift" => {
-            let action = match operation.name.as_str() {
-                "remedy set" => remedy::SET,
-                "remedy lift" => remedy::LIFT,
-                _ => remedy::GET,
-            };
-            let mut argv = Argv::new(&[remedy::COMMAND, action]);
-            argv.state_root(state_root);
-            argv.flag_of(params, "instance", "--instance");
-            argv.flag_of(params, "game", "--game");
-            argv.flag_of(params, "file", "--rows");
-            argv
-        }
-        "frame" if params.contains_key("out") => {
-            let mut argv = Argv::new(&["observe"]);
-            argv.state_root(state_root);
-            argv.flag_of(params, "instance", "--instance");
-            argv.flag_of(params, "out", "--export");
-            argv
-        }
-        "preset" | "preset set" => {
-            let mut argv = Argv::new(&[perf_preset::COMMAND]);
-            if operation.name == "preset set" {
-                argv.word(perf_preset::SET);
-                argv.word_of(params, "name");
-            } else {
-                argv.word(perf_preset::GET);
-            }
-            argv.state_root(state_root);
-            argv
-        }
-        "evidence read" => {
-            let mut argv = Argv::new(&[evidence_read::COMMAND, evidence_read::CONFIRM_READ]);
-            argv.state_root(state_root);
-            argv.flag_of(params, "artifact", "--artifact");
-            argv.flag_of(params, "run", "--run");
-            argv
-        }
-        "devices" | "devices bind" | "devices unbind" => {
-            let action = match operation.name.as_str() {
-                "devices bind" => devices::BIND,
-                "devices unbind" => devices::UNBIND,
-                _ => devices::LIST,
-            };
-            let mut argv = Argv::new(&[devices::COMMAND, action]);
-            argv.word_of(params, "instance");
-            // Workflow #434 LAB-5A: `devices bind`'s handle, a declared positional (a further word
-            // before).
-            argv.word_of(params, "handle");
-            argv.state_root(state_root);
-            if action != devices::UNBIND
-                && let Some(root) = root
-            {
-                argv.flag("--root", root);
+            Part::Root => {
+                if let Some(root) = root {
+                    argv.flag(core_reads::ROOT_FLAG, root);
+                }
             }
             // Workflow #434 LAB-5A fix 1: `devices bind`'s `--root` from the command line
             // (`words::KEPT_FLAGS`), after the module's own, as its further flags went before:
             // `devices` takes it only when the module located none.
-            argv.further(operation, params);
-            argv
+            Part::Further => argv.further(operation, params.map()),
         }
-        _ => return None,
-    };
-    Some(Ok(argv.0))
+    }
+    Ok(argv.0)
 }
 
 /// The other operations, called with their parameters on `client`. Workflow #434 LAB-5G1b:
 /// `facts`, `config` and `schedule` shape their answer within the caller's `budget`.
 fn served(
     name: &str,
-    params: &Map<String, Value>,
+    params: Params<'_>,
     client: &RuntimeClient,
     budget: Option<&Budget<'_>>,
 ) -> Result<Exit, Exit> {
@@ -532,7 +413,7 @@ fn served(
             let status = run_show::read(client, key).map_err(|error| client_failed(&error))?;
             completed(run_show::answer(&status))
         }
-        "material" => match material_read(params)? {
+        "material" => match material_read(params.map())? {
             MaterialRead::Text {
                 reference,
                 offset,
@@ -869,9 +750,9 @@ fn served(
 /// the run and resets the device itself, with the run's own lease. The answer is the stop and its
 /// receipt's outcome, which carries a failed reset's failure as its cause; a refusal (a run no
 /// client may stop, with `run_origin`) is the refused receipt beside its outcome.
-fn task_stop(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit, Exit> {
+fn task_stop(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> {
     let alias = alias_of(client, required_text(params, "instance")?)?;
-    let (request_id, wait) = stop_target(params)?;
+    let (request_id, wait) = stop_target(params.map())?;
     let stopped = match client.stop_instance_run(&alias, request_id, wait) {
         Ok(stopped) => stopped,
         Err(error) => return receipt_refused(error),
@@ -886,6 +767,7 @@ fn task_stop(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit
 /// end (`wait`; absent: it answers at once, `wait_ms` 0), the same from the command line's words
 /// and from a `serve --stdio` line.
 pub fn stop_target(params: &Map<String, Value>) -> Result<(RequestId, Duration), Exit> {
+    let params = Params::of(TASK_STOP, params);
     let id = required_text(params, "request")?;
     let request_id = serde_json::from_value::<RequestId>(Value::String(id.to_owned()))
         .map_err(|_| usage("<request>", ArgumentProblem::NotRecognised))?;
@@ -896,7 +778,7 @@ pub fn stop_target(params: &Map<String, Value>) -> Result<(RequestId, Duration),
 /// Workflow #429 R-8: `pack-schedule <inst>`, `PackScheduleView`: each scope's pack schedule list
 /// version and, per task package of the instance's tasks, whether it is schedulable now and which
 /// layer decided, beside the read's success code; a refusal is the client's failure.
-fn pack_schedule_view(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit, Exit> {
+fn pack_schedule_view(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> {
     let alias = alias_of(client, required_text(params, "instance")?)?;
     let view = client
         .pack_schedule_view(&alias)
@@ -915,7 +797,7 @@ fn pack_schedule_view(params: &Map<String, Value>, client: &RuntimeClient) -> Re
 /// them), compared with the list's version when one is given (`0`: the scope has no list yet).
 /// The answer is the edit (the list's version after it, the next `--expected-version`, and its
 /// event) beside the edit's success code; a refusal is the refused receipt beside its outcome.
-fn pack_schedule_set(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit, Exit> {
+fn pack_schedule_set(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> {
     let scope = match pack_schedule_scope(required_text(params, "scope")?)? {
         ScheduleScope::Instance(selector) => actingcommand_contract::FactScope::Instance {
             instance_id: alias_of(client, selector)?,
@@ -928,7 +810,7 @@ fn pack_schedule_set(params: &Map<String, Value>, client: &RuntimeClient) -> Res
         },
     };
     let package_id = required_text(params, "package_id")?;
-    let rows = pack_schedule_rows(params)?;
+    let rows = pack_schedule_rows(params.map())?;
     let expected_version = unsigned(params, "expected_version")?;
     let edited = match client.edit_pack_schedule(scope, package_id, rows, expected_version) {
         Ok(edited) => edited,
@@ -976,7 +858,7 @@ pub fn pack_schedule_scope(word: &str) -> Result<ScheduleScope<'_>, Exit> {
 pub fn pack_schedule_rows(
     params: &Map<String, Value>,
 ) -> Result<Vec<actingcommand_contract::PackScheduleEditRow>, Exit> {
-    let rows = params
+    let rows = Params::of(PACK_SCHEDULE_SET, params)
         .get("rows")
         .ok_or_else(|| usage("--rows", ArgumentProblem::Required))?;
     serde_json::from_value(rows.clone()).map_err(|_| usage("--rows", ArgumentProblem::WrongType))
@@ -985,7 +867,7 @@ pub fn pack_schedule_rows(
 /// `run start <inst> <package> [--recovery] [--deadline] [--wait]` (actingctl's `task-run`): the
 /// package, and its recovery package, by their paths; with a wait, the run is prepared so that it
 /// is named before its receipt, and a wait that ends first answers `command_wait_expired`.
-fn run_start(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit, Exit> {
+fn run_start(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> {
     let (alias, request) = run_start_request(params, client)?;
     let output = match duration(params, "wait")? {
         None => client
@@ -1019,7 +901,7 @@ fn run_start(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit
 /// absolute, and the deadline (absent: the longest a run may have). `run start` reads them so
 /// before it runs or prepares the run, as before.
 fn run_start_request(
-    params: &Map<String, Value>,
+    params: Params<'_>,
     client: &RuntimeClient,
 ) -> Result<(String, ContainedTaskRequest), Exit> {
     let alias = alias_of(client, required_text(params, "instance")?)?;
@@ -1053,7 +935,7 @@ pub fn run_start_prepared(
     params: &Map<String, Value>,
     client: &RuntimeClient,
 ) -> Result<PreparedContainedTask, Exit> {
-    let (alias, request) = run_start_request(params, client)?;
+    let (alias, request) = run_start_request(Params::of(RUN_START, params), client)?;
     client
         .prepare_contained_task(&alias, request)
         .map_err(|error| client_failed(&error))
@@ -1088,7 +970,7 @@ fn run_start_answer(output: &RuntimeFlowOutput) -> Result<Exit, Exit> {
 
 /// `run stop <id> [--cancel-only]` (MCP `ac_stop_run`): the run's cancellation, and without
 /// `--cancel-only` the reset of its instance after it, waited for up to the longest run deadline.
-fn run_stop(params: &Map<String, Value>, client: &RuntimeClient) -> Result<Exit, Exit> {
+fn run_stop(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> {
     let id = required_text(params, "id")?;
     let request_id = serde_json::from_value::<RequestId>(Value::String(id.to_owned()))
         .map_err(|_| usage("<id>", ArgumentProblem::NotRecognised))?;
@@ -1267,6 +1149,7 @@ pub enum MaterialRead<'a> {
 /// belong to the slice and are refused beside it (`conflicting`), as MCP refuses them with its
 /// mode export.
 pub fn material_read(params: &Map<String, Value>) -> Result<MaterialRead<'_>, Exit> {
+    let params = Params::of(MATERIAL, params);
     let reference = required_text(params, "ref")?;
     let Some(out) = text(params, "out") else {
         let offset = unsigned(params, "offset")?.unwrap_or(0);
@@ -1370,10 +1253,7 @@ fn alias_of(client: &RuntimeClient, selector: &str) -> Result<String, Exit> {
 }
 
 /// The alias of the optional `instance` parameter.
-fn optional_alias(
-    client: &RuntimeClient,
-    params: &Map<String, Value>,
-) -> Result<Option<String>, Exit> {
+fn optional_alias(client: &RuntimeClient, params: Params<'_>) -> Result<Option<String>, Exit> {
     match text(params, "instance") {
         Some(selector) => alias_of(client, selector).map(Some),
         None => Ok(None),
@@ -1397,19 +1277,21 @@ fn canonical(path: &str) -> Result<PathBuf, Exit> {
 
 // ---- parameters
 
-fn text<'a>(params: &'a Map<String, Value>, name: &str) -> Option<&'a str> {
+// Workflow #434 LAB-5B1: each reads by name through the row's constant ([`Params`]).
+
+fn text<'a>(params: Params<'a>, name: &str) -> Option<&'a str> {
     params.get(name).and_then(Value::as_str)
 }
 
-fn required_text<'a>(params: &'a Map<String, Value>, name: &str) -> Result<&'a str, Exit> {
+fn required_text<'a>(params: Params<'a>, name: &str) -> Result<&'a str, Exit> {
     text(params, name).ok_or_else(|| usage(&format!("<{name}>"), ArgumentProblem::Required))
 }
 
-fn switch(params: &Map<String, Value>, name: &str) -> bool {
+fn switch(params: Params<'_>, name: &str) -> bool {
     params.get(name).and_then(Value::as_bool).unwrap_or(false)
 }
 
-fn unsigned(params: &Map<String, Value>, name: &str) -> Result<Option<u64>, Exit> {
+fn unsigned(params: Params<'_>, name: &str) -> Result<Option<u64>, Exit> {
     match params.get(name) {
         None => Ok(None),
         Some(value) => value
@@ -1420,7 +1302,7 @@ fn unsigned(params: &Map<String, Value>, name: &str) -> Result<Option<u64>, Exit
 }
 
 /// A `list<string>`, `key` or `key_value` parameter: its strings.
-fn list_of(params: &Map<String, Value>, name: &str) -> Option<Vec<String>> {
+fn list_of(params: Params<'_>, name: &str) -> Option<Vec<String>> {
     match params.get(name)? {
         Value::Array(items) => Some(
             items
@@ -1434,7 +1316,7 @@ fn list_of(params: &Map<String, Value>, name: &str) -> Option<Vec<String>> {
     }
 }
 
-fn duration(params: &Map<String, Value>, name: &str) -> Result<Option<Duration>, Exit> {
+fn duration(params: Params<'_>, name: &str) -> Result<Option<Duration>, Exit> {
     match params.get(name) {
         None => Ok(None),
         Some(Value::String(text)) => parse_duration(text)
@@ -1474,58 +1356,78 @@ impl Argv {
     }
 
     fn state_root(&mut self, state_root: &Path) {
-        self.flag("--state-root", state_root);
+        self.flag(core_reads::STATE_ROOT_FLAG, state_root);
+    }
+
+    /// Workflow #434 LAB-5B1: the parameter `name`, when given, as its row's constant writes it.
+    /// Before the slice each row's arm wrote its parameters itself, in the same order and forms
+    /// (Workflow #434 LAB-5A's `options_of` the `Written::Each` ones, in the row's order).
+    fn param(&mut self, params: Params<'_>, name: &str, written: Written) -> Result<(), Exit> {
+        match written {
+            Written::Word => self.word_of(params, name),
+            Written::Flag(flag) => self.flag_of(params, name, flag),
+            Written::Switch(flag) => self.switch_of(params, name, flag),
+            Written::Joined(flag) => {
+                if let Some(items) = list_of(params, name) {
+                    self.flag(flag, items.join(","));
+                }
+            }
+            Written::Each(flag) => {
+                if let Some(value) = params.get(name) {
+                    self.written(flag, value);
+                }
+            }
+            Written::SinceNow(flag) => self.since(params, name, flag)?,
+            Written::RunOrRequest(run_flag, request_flag) => {
+                if let Some(id) = text(params, name) {
+                    let flag = if run_show::by_request_id(id).is_none()
+                        && run_show::by_run_id(id).is_some()
+                    {
+                        run_flag
+                    } else {
+                        request_flag
+                    };
+                    self.flag(flag, id);
+                }
+            }
+            // Read where it goes, beside the words (`dispatched_with_state_root`).
+            Written::Beside => {}
+        }
+        Ok(())
     }
 
     /// The parameter `name` as a word, when given.
-    fn word_of(&mut self, params: &Map<String, Value>, name: &str) {
+    fn word_of(&mut self, params: Params<'_>, name: &str) {
         if let Some(value) = params.get(name) {
             self.word(scalar(value));
         }
     }
 
     /// The parameter `name` as `flag <value>`, when given.
-    fn flag_of(&mut self, params: &Map<String, Value>, name: &str, flag: &str) {
+    fn flag_of(&mut self, params: Params<'_>, name: &str, flag: &str) {
         if let Some(value) = params.get(name) {
             self.flag(flag, scalar(value));
         }
     }
 
     /// The switch `name` as `flag`, when set.
-    fn switch_of(&mut self, params: &Map<String, Value>, name: &str, flag: &str) {
+    fn switch_of(&mut self, params: Params<'_>, name: &str, flag: &str) {
         if switch(params, name) {
             self.word(flag);
         }
     }
 
-    /// `--since-unix-ms`: now less the `since` duration.
-    fn since(&mut self, params: &Map<String, Value>) -> Result<(), Exit> {
-        let Some(since) = duration(params, "since")? else {
+    /// `flag` (`--since-unix-ms`): now less the duration of the parameter `name` (`since`).
+    fn since(&mut self, params: Params<'_>, name: &str, flag: &str) -> Result<(), Exit> {
+        let Some(since) = duration(params, name)? else {
             return Ok(());
         };
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| cli_line::refused(&Outcome::new(ActingctlCode::ClockUnavailable), None))?;
         let since = now.saturating_sub(since);
-        self.flag("--since-unix-ms", millis(since).to_string());
+        self.flag(flag, millis(since).to_string());
         Ok(())
-    }
-
-    /// Workflow #434 LAB-5A: the row's options and switches but those in `handled`, in the row's
-    /// order, each under the flag of its name (`--` and the name with `_` as `-`), as the command's
-    /// parser in `lab-ops` names them: a switch set as the flag alone, a list item by item,
-    /// another value as the flag and its value. Before LAB-5A they were the row's further flags,
-    /// handed on under the same names.
-    fn options_of(&mut self, operation: &Operation, params: &Map<String, Value>, handled: &[&str]) {
-        for param in &operation.params {
-            if param.form == ParamForm::Positional || handled.iter().any(|name| *name == param.name)
-            {
-                continue;
-            }
-            if let Some(value) = params.get(&param.name) {
-                self.written(&flag_name(&param.name), value);
-            }
-        }
     }
 
     /// Workflow #434 LAB-5A fix 1: the members the row does not declare, which only the command

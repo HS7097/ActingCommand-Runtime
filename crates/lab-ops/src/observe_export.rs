@@ -135,6 +135,10 @@ struct Parsed {
     directory: PathBuf,
 }
 
+/// Workflow #434 LAB-5B1: the flags `observe` takes here, each with a value; [`parse`] refuses
+/// any other as `unknown`.
+pub const FLAGS: [&str; 3] = ["--state-root", "--instance", "--export"];
+
 /// `--state-root`, `--instance` and `--export`, each exactly once; any other flag, a repeated
 /// one or a missing value is `actingctl_usage_invalid` with the flag (`argument`) and what is
 /// wrong with it (`argument_problem`).
@@ -142,6 +146,10 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Failure> {
     let (mut state_root, mut selector, mut directory) = (None, None, None);
     let mut rest = arguments[1..].iter();
     while let Some(flag) = rest.next() {
+        // Workflow #434 LAB-5B1: the flags it takes are [`FLAGS`].
+        if flag.to_str().is_some_and(|name| !FLAGS.contains(&name)) {
+            return Err(Failure::usage(flag, ArgumentProblem::Unknown));
+        }
         let (name, slot) = match flag.to_str() {
             Some(name @ "--state-root") => (name, &mut state_root),
             Some(name @ "--instance") => (name, &mut selector),
@@ -174,6 +182,13 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Failure> {
         selector,
         directory,
     })
+}
+
+/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_on`] is
+/// given, if any.
+#[cfg(test)]
+pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
+    parse(arguments).err().map(|failure| failure.outcome())
 }
 
 fn run(arguments: &[OsString], connection: Connection<'_>) -> Result<Value, Failure> {

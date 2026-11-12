@@ -1513,6 +1513,10 @@ fn install_roots(root: Option<&Path>) -> Result<(Option<PathBuf>, Option<PathBuf
     Ok((program_root, install_root))
 }
 
+/// Workflow #434 LAB-5B1: the flags `overview` takes, each with a value; [`parse`] refuses any
+/// other as `unknown`.
+pub const FLAGS: [&str; 4] = ["--state-root", "--root", "--instance", "--sections"];
+
 /// `--state-root` (required), `--root` and the flags of §4.9, each at most once and with a
 /// value; any other flag, a repeated one or a malformed value is `actingctl_usage_invalid` with
 /// the flag (`argument`) and what is wrong with it (`argument_problem`). `--sections` is a
@@ -1524,6 +1528,10 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, Option<PathBuf>, OverviewRe
     let mut sections = None;
     let mut rest = arguments[1..].iter();
     while let Some(flag) = rest.next() {
+        // Workflow #434 LAB-5B1: the flags it takes are [`FLAGS`].
+        if flag.to_str().is_some_and(|name| !FLAGS.contains(&name)) {
+            return Err(Failure::argument(flag, ArgumentProblem::Unknown));
+        }
         let (name, slot) = match flag.to_str() {
             Some(name @ "--state-root") => (name, &mut state_root),
             Some(name @ "--root") => (name, &mut root),
@@ -1556,6 +1564,13 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, Option<PathBuf>, OverviewRe
         root.map(PathBuf::from),
         OverviewRequest { instance, sections },
     ))
+}
+
+/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_within`]
+/// is given, if any.
+#[cfg(test)]
+pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
+    parse(arguments).err().map(|failure| failure.outcome())
 }
 
 // Test-only: Workflow #389 MCP-9a (MCP-0 command table v1.1 §4.10; register A5), the catalog and
