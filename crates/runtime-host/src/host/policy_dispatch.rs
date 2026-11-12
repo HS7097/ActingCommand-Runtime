@@ -1289,6 +1289,7 @@ impl HostShared {
             missing_instance_facts,
             unknown_offset_tasks,
             left_out_lists,
+            dispatches_read,
         ) = {
             let _outcome_gate = lock(
                 &self.policy_outcome_gate,
@@ -1329,6 +1330,10 @@ impl HostShared {
                     Some(time.unix_ms),
                     Some(time.unix_ms),
                 )?;
+            // IDLE-3 (#447, register §1.332): the policy's own dispatches as these inputs count
+            // them, read under the guard they were projected under (a settlement that comes
+            // between this read and the evaluation below is not in them).
+            let dispatches_read = policy.idle_dispatches_read(facts.ledger_position);
             (
                 time,
                 observed_monotonic_ms,
@@ -1338,6 +1343,7 @@ impl HostShared {
                 missing_instance_facts,
                 unknown_offset_tasks,
                 left_out_lists,
+                dispatches_read,
             )
         };
         // Workflow #428 S168-LB1a (`contracts/instance-fact-store.md`, "Left out of the
@@ -1476,6 +1482,7 @@ impl HostShared {
                     task_held: &task_held_context,
                     device_groups: &device_groups,
                     device_group_holds: &device_group_holds,
+                    dispatches_read,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
