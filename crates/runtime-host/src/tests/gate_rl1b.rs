@@ -71,7 +71,7 @@ fn strip_scopes(value: &mut Value) {
 /// catalog-a's task as the rule `id` of `package_id` at `priority`: no scope, entrypoint,
 /// procedure or instance override; no yield point (the package operation has none); it never
 /// stops by feedback; it produces into `pool` when given.
-fn rule(id: &str, package_id: &str, priority: u64, pool: Option<&str>) -> Value {
+pub(super) fn rule(id: &str, package_id: &str, priority: u64, pool: Option<&str>) -> Value {
     let tasks = parse(include_str!(
         "../../../../contracts/scheduling/examples/catalog-a/tasks.json"
     ));
@@ -118,7 +118,7 @@ fn rule(id: &str, package_id: &str, priority: u64, pool: Option<&str>) -> Value 
 /// so a composed rule that produces into it has a known positive net benefit and is dispatched as
 /// before; the composer judges every rule here, none of the fixture packages being
 /// maintenance-role.
-fn pool(id: &str) -> Value {
+pub(super) fn pool(id: &str) -> Value {
     let pools = parse(include_str!(
         "../../../../contracts/scheduling/examples/catalog-a/pools.json"
     ));
@@ -132,7 +132,7 @@ fn pool(id: &str) -> Value {
 
 /// catalog-a's profiles with no scope, their ids suffixed by `suffix`; a profile's goals name
 /// `pool`, or none without one.
-fn profiles(suffix: &str, pool: Option<&str>) -> Vec<Value> {
+pub(super) fn profiles(suffix: &str, pool: Option<&str>) -> Vec<Value> {
     let activity = parse(include_str!(
         "../../../../contracts/scheduling/examples/catalog-a/activity.json"
     ));

@@ -473,13 +473,19 @@ priority offset on its task.
 
 ### 7.1 The remedy table
 
-Built at start and when a catalog is activated; rebuilt at most once per
-`scheduling.suspension.lift_check_min_interval_ms` while a round is open or a stop is recorded, so
-a package fixed in place is seen without a restart; and, once Workflow #389 U-3 implements them,
-at `LoadPack` and `UnloadPack`. For each catalog task, its bound package (the procedure manifest's
-location) is read metadata-only, as the fact refresh reads its marks: its mappings' remedies and
-its `provides`. The table maps (task, outcome key) to its remedy and each capability to its
-provider tasks (with their scope, irreversibility and parameters). Then:
+Built at start and when a catalog is activated; rebuilt at once when the procedure manifest in
+place is not the one the table was built from (the table keeps that manifest's digest, or that
+there was none); rebuilt at most once per `scheduling.suspension.lift_check_min_interval_ms` while
+a round is open or a stop is recorded, so a package fixed in place is seen without a restart; and,
+once Workflow #389 U-3 implements them, at `LoadPack` and `UnloadPack`. In composer mode the
+procedure manifest is the active composed generation's: the start puts its bindings in place
+before it builds the table, as the scheduler workbench's first check would, and that check does
+not adopt the generation again; a start without a composed generation builds from a manifest
+that binds no procedure (#442 REM-1, [v012-register.md](v012-register.md) §1.326). For each
+catalog task, its bound package (the procedure manifest's location) is read metadata-only, as the
+fact refresh reads its marks: its mappings' remedies and its `provides`. The table maps (task,
+outcome key) to its remedy and each capability to its provider tasks (with their scope,
+irreversibility and parameters). Then:
 
 - **cycles:** the task graph "blocked task to the providers of its remedies' capabilities" is
   checked; every edge on a cycle is refused (`cycle`); the rest stays usable;
@@ -492,6 +498,19 @@ A package that cannot be read contributes nothing and is named in the finding; b
 never fails a start or an activation. Each finding is a check-config note
 `policy_remedy_declaration_unusable` (warning) and, at use, the stop of section 5.5. The table is
 memory only.
+
+Every table the Runtime takes into effect says in the log what it found, in one developer line:
+
+    actingd remedy_table built catalog_hash=<hash> manifest=<sha256:…|none> tasks=<n> located=<n> remedy_tasks=<n> providers=<n> unbound=<n>
+
+the catalog it was built for, the manifest's digest (`none` when it was built without one), the
+catalog's tasks, those whose procedure has a package location, those that declare a remedy, the
+provider tasks and the tasks without a package location. When some task has none, a second line
+names the first ten in catalog order and counts the rest (`actingd remedy_table unbound
+tasks=<id>,<id> more=<n>`): such a task declares no remedy, so its blocked results open no round.
+A finding and an unreadable package the previous table did not have are each one more line
+(`actingd remedy_table finding …`, `actingd remedy_table unreadable …`). These lines are not
+records: nothing in the ledger changes.
 
 ### 7.2 Inputs to the evaluator
 

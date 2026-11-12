@@ -7,6 +7,10 @@
 //!   catalog task's procedure location, with the cycles over tasks refused edge by edge and the
 //!   findings `capability_unbound` and `parameters_mismatch`. A package that cannot be read
 //!   contributes nothing and is named; building never fails a start or an activation. Memory only.
+//!   Workflow #442 REM-1: the table keeps the digest of the procedure manifest it was built from
+//!   (or that there was none) and is built again when the manifest in place differs; each table
+//!   taken into effect says in one developer line what it found, and names the catalog tasks
+//!   without a package location.
 //! - **The state** (§7.8): the outcome key each settled run of a task that declares a remedy
 //!   ended on (read from its terminal's `scheduling_disposition` whether or not the catalog
 //!   references it), the `signal:remedy:` planning signals already recorded and the stops no
@@ -42,6 +46,10 @@ pub(crate) const SIGNAL_PREFIX: &str = "signal:remedy:";
 const DECLARATIONS_LABEL: &str = "remedy-table";
 /// How long the table may read one package's declarations.
 const DECLARATIONS_BUDGET: Duration = Duration::from_secs(60);
+/// Workflow #442 REM-1: how many catalog tasks without a package location the developer line
+/// `actingd remedy_table unbound` names; it counts the rest. A bound of one log line, not a
+/// scheduling value.
+const UNBOUND_TASKS_NAMED: usize = 10;
 
 /// What the evaluation and the admission check read of the configuration (model §5.2): the
 /// switch, the requests per layer and round, the choice rows in effect per instance alias, and
@@ -104,11 +112,71 @@ pub(crate) struct BuiltTable {
     /// Workflow #429 R-8: the `package_id` the bound package of each catalog task declares, by
     /// task id, read by the same scan; a task whose package the scan could not read has none.
     task_packages: BTreeMap<String, String>,
+    /// Workflow #442 REM-1: the digest of the procedure manifest the table was built from
+    /// ([`ProcedureManifest::digest`]); `None` when it was built without one.
+    manifest_digest: Option<String>,
+    /// Workflow #442 REM-1: how many catalog tasks the table read and how many of them had a
+    /// package location.
+    catalog_tasks: usize,
+    located_tasks: usize,
+    /// Workflow #442 REM-1: the catalog tasks whose procedure the manifest binds to no package
+    /// location (no binding, a binding without one, or no manifest), in catalog order. Such a
+    /// task declares no remedy and provides nothing.
+    unbound_tasks: Vec<String>,
     catalog_hash: String,
     built_at_unix_ms: u64,
 }
 
 impl BuiltTable {
+    /// Workflow #442 REM-1: the catalog tasks without a package location, in catalog order.
+    pub(crate) fn unbound_tasks(&self) -> &[String] {
+        &self.unbound_tasks
+    }
+
+    /// Workflow #442 REM-1 (`contracts/remedies.md` section 7.1): the developer line that says
+    /// what this build found: the catalog it was built for, the manifest's digest (`none`
+    /// without a manifest), the catalog's tasks, those with a package location, those that
+    /// declare a remedy, the provider tasks and the tasks without a package location.
+    pub(crate) fn summary_line(&self) -> String {
+        let remedy_tasks = self
+            .table
+            .remedies
+            .iter()
+            .map(|remedy| remedy.task_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len();
+        format!(
+            "actingd remedy_table built catalog_hash={} manifest={} tasks={} located={} remedy_tasks={} providers={} unbound={}",
+            self.catalog_hash,
+            self.manifest_digest.as_deref().unwrap_or("none"),
+            self.catalog_tasks,
+            self.located_tasks,
+            remedy_tasks,
+            self.table.providers.len(),
+            self.unbound_tasks.len(),
+        )
+    }
+
+    /// Workflow #442 REM-1: the developer line that names the tasks without a package location,
+    /// the first [`UNBOUND_TASKS_NAMED`] in catalog order and the number of the rest; `None`
+    /// when every task has one.
+    pub(crate) fn unbound_line(&self) -> Option<String> {
+        if self.unbound_tasks.is_empty() {
+            return None;
+        }
+        let named = self
+            .unbound_tasks
+            .iter()
+            .take(UNBOUND_TASKS_NAMED)
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        Some(format!(
+            "actingd remedy_table unbound tasks={} more={}",
+            named.join(","),
+            self.unbound_tasks.len().saturating_sub(named.len()),
+        ))
+    }
+
     /// Workflow #429 R-8: the task package each catalog task runs (its bound package's
     /// `package_id`), by task id: what the pack schedule opens and closes.
     pub(crate) fn task_packages(&self) -> &BTreeMap<String, String> {
@@ -162,7 +230,9 @@ impl BuiltTable {
 /// Builds the table of `catalog` (model §9.1): each catalog task's package, located by its
 /// procedure binding, is read metadata-only (`read_remedy_declarations`), each location once; a
 /// location that cannot be read contributes nothing and is listed. Then the cycles over tasks are
-/// refused edge by edge, and the findings are collected over `instances`.
+/// refused edge by edge, and the findings are collected over `instances`. Workflow #442 REM-1: a
+/// task whose procedure has no package location is listed too, and the table keeps the digest of
+/// `manifest` (none without one).
 pub(crate) fn build_table(
     catalog: &CompiledCatalog,
     manifest: Option<&ProcedureManifest>,
@@ -171,12 +241,14 @@ pub(crate) fn build_table(
 ) -> BuiltTable {
     let tasks = &catalog.catalog().tasks.tasks;
     let mut locations = BTreeMap::<&str, Vec<&TaskSpec>>::new();
+    let mut unbound_tasks = Vec::new();
     for task in tasks {
-        if let Some(path) = manifest
+        match manifest
             .and_then(|manifest| manifest.binding(&task.procedure_ref))
             .and_then(ProcedureBinding::package_path)
         {
-            locations.entry(path).or_default().push(task);
+            Some(path) => locations.entry(path).or_default().push(task),
+            None => unbound_tasks.push(task.id.clone()),
         }
     }
     let mut declared = BTreeMap::<&str, RemedyDeclarations>::new();
@@ -276,6 +348,10 @@ pub(crate) fn build_table(
         unreadable,
         store_tasks,
         task_packages,
+        manifest_digest: manifest.map(ProcedureManifest::digest),
+        catalog_tasks: tasks.len(),
+        located_tasks: tasks.len().saturating_sub(unbound_tasks.len()),
+        unbound_tasks,
         catalog_hash: catalog.catalog_hash().to_owned(),
         built_at_unix_ms,
     }
@@ -691,10 +767,17 @@ impl RemedyState {
         self.table.as_ref()
     }
 
-    /// Takes `table` as the table in effect. Each finding and each unreadable package the table
-    /// it replaces did not have is written as a developer line (Fail Loud: a remedy nothing can
-    /// serve, or a package the table could not read, is never silent).
+    /// Takes `table` as the table in effect. Workflow #442 REM-1: every table taken writes its
+    /// summary line and, when some catalog task has no package location, the line naming them
+    /// (Fail Loud: a table built from no manifest, or one that binds none of the catalog's
+    /// packages, is never silent). Each finding and each unreadable package the table it replaces
+    /// did not have is written as a developer line (Fail Loud: a remedy nothing can serve, or a
+    /// package the table could not read, is never silent).
     pub(crate) fn set_table(&mut self, table: BuiltTable) {
+        println!("{}", table.summary_line());
+        if let Some(line) = table.unbound_line() {
+            println!("{line}");
+        }
         let previous = self.table.take();
         for finding in &table.findings {
             if previous
@@ -727,12 +810,16 @@ impl RemedyState {
     }
 
     /// Whether the table is to be (re)built for the active catalog `catalog_hash` at `now`: there
-    /// is none or it is another catalog's (the start, an activation), or, while a round is open
-    /// or a stop is recorded, at most once per `interval_ms` (a package fixed in place is seen
-    /// without a restart, as the suspension lift checks see it).
+    /// is none or it is another catalog's (the start, an activation), or, Workflow #442 REM-1, it
+    /// was built from another procedure manifest than the one in place, whose digest is
+    /// `manifest_digest` (`None`: no manifest), so a manifest put in place after the table was
+    /// built is read at once; or, while a round is open or a stop is recorded, at most once per
+    /// `interval_ms` (a package fixed in place is seen without a restart, as the suspension lift
+    /// checks see it).
     pub(crate) fn table_due(
         &self,
         catalog_hash: &str,
+        manifest_digest: Option<&str>,
         now_unix_ms: u64,
         interval_ms: u64,
         update_pending: bool,
@@ -740,6 +827,7 @@ impl RemedyState {
         match &self.table {
             None => true,
             Some(table) if table.catalog_hash != catalog_hash => true,
+            Some(table) if table.manifest_digest.as_deref() != manifest_digest => true,
             Some(table) => {
                 // UPD-1 (design §4.2): an instance that waits for its client update rebuilds the
                 // table at the same interval, so a store update package placed in place counts.
