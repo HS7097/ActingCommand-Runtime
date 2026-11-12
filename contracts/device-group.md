@@ -117,7 +117,11 @@ From MAPP on, two or more entries that are not one group and name the same devic
 the shared key. The check runs in two places:
 
 - **At assembly and in check-config**, when the entries name the same `instance_index`,
-  `instance_name`, `serial`, or `host` and `port`.
+  `instance_name`, `serial`, or `host` and `port`. An explicit entry that names a `serial` is
+  addressed by it, so two entries that name different serials are two devices whatever their
+  `host` and `port` (the daemon's defaults when they name none); the same `host` and `port` is
+  one device unless both entries name a serial ([v012-register.md](v012-register.md) §1.328,
+  point 10).
 - **At start, after the discovery**, when entries of different groups resolve to the same
   discovered index or ADB port: an explicit `HOST:PORT` beside a discovery-bound entry, or an index
   and a name of one emulator. It is recorded as every discovery refusal is, as a Provider startup

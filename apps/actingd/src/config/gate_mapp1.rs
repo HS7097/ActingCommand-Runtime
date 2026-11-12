@@ -498,6 +498,43 @@ fn mapp1_undeclared_sharing_is_refused_at_assembly() {
     );
 }
 
+// Register §1.328 (the coordinator's review, 11-12): an endpoint entry that names a serial is
+// addressed by it. Two entries of different serials are two devices whatever their host and port
+// (the daemon's defaults when they name none), so a file that names two devices by their serials
+// alone is accepted as before; one serial, or one host and port where no two serials tell the
+// entries apart, is one device.
+#[test]
+fn mapp1_two_serials_are_two_devices_whatever_their_host_and_port() {
+    let endpoint = |port: u16, serial: Option<&str>| device_group::DeviceNaming::Endpoint {
+        host: "127.0.0.1".to_owned(),
+        port,
+        serial: serial.map(str::to_owned),
+    };
+    let rows = [
+        (
+            endpoint(5555, Some("serial.a")),
+            endpoint(5555, Some("serial.b")),
+            None,
+        ),
+        (
+            endpoint(5555, Some("serial.a")),
+            endpoint(16384, Some("serial.a")),
+            Some("serial"),
+        ),
+        (
+            endpoint(5555, Some("serial.a")),
+            endpoint(5555, None),
+            Some("port"),
+        ),
+        (endpoint(5555, None), endpoint(5555, None), Some("port")),
+        (endpoint(5555, None), endpoint(16384, None), None),
+    ];
+    for (left, right, shared) in rows {
+        assert_eq!(left.shared_key(&right), shared, "{left:?} beside {right:?}");
+        assert_eq!(right.shared_key(&left), shared, "{right:?} beside {left:?}");
+    }
+}
+
 /// The discovery answer of one running emulator, index 2, named `neutral-a`, at 127.0.0.1:16384.
 fn one_emulator() -> MumuDiscoveryReport {
     let version = MumuManagerVersion::parse("6.5.7.0").expect("a four-part version");

@@ -15755,6 +15755,16 @@ is today", below) on 11-12.
    candidate behind its own instance's winner (`instance_already_selected`); only the code and its
    values differ. Neither is deferred by a later pass keyed by the instance: both keep the state
    the placement found, and the policy tests compare the one with the other.
+10. *Two serials are two devices* (settled by the coordinator at the slice's review, 11-12). An
+    explicit entry that names a `serial` is addressed by it (ADB's `-s`), and its `host` and `port`
+    are the daemon's defaults when it names none. So undeclared sharing reads two explicit
+    entries as one device when both name the same serial (`config_key` `serial`), or when they
+    have the same `host` and `port` and do not both name a serial (`config_key` `port`); two
+    entries that name different serials are two devices whatever their `host` and `port`, as the
+    group's own mismatch rule already reads them. The first form compared `host` and `port`
+    alone, so a file that named two devices by their serials and no endpoint, accepted today,
+    would have been refused; that form was not merged. Test
+    `mapp1_two_serials_are_two_devices_whatever_their_host_and_port`.
 
 **A group of one is today.** With no entry naming one device twice, every decision, record, key
 and byte the Runtime persists is as before, but for the contract's three exceptions

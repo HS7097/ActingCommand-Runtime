@@ -104,9 +104,12 @@ impl DeviceNaming {
     }
 
     /// The key two entries share when they name the same device by the same key and value:
-    /// `instance_index`, `instance_name`, `serial`, or `host` and `port` (named `port`). `None`
+    /// `instance_index`, `instance_name`, `serial`, or `host` and `port` (named `port`). An
+    /// endpoint entry that names a `serial` is addressed by it, so two entries that name
+    /// different serials are two devices whatever their `host` and `port` (the daemon's defaults
+    /// when they name none), as the group's own rule reads them ([`Self::differing_key`]). `None`
     /// for entries that name no device or different devices.
-    fn shared_key(&self, other: &Self) -> Option<&'static str> {
+    pub(super) fn shared_key(&self, other: &Self) -> Option<&'static str> {
         match (self, other) {
             (Self::Index(index), Self::Index(other)) if index == other => Some(INSTANCE_INDEX_KEY),
             (Self::Name(name), Self::Name(other)) if name == other => Some(INSTANCE_NAME_KEY),
@@ -119,7 +122,7 @@ impl DeviceNaming {
                     serial: Some(other),
                     ..
                 },
-            ) if serial == other => Some(SERIAL_KEY),
+            ) => (serial == other).then_some(SERIAL_KEY),
             (
                 Self::Endpoint { host, port, .. },
                 Self::Endpoint {
