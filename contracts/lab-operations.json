@@ -2058,7 +2058,7 @@
         {"name": "record_stop", "form": "option", "type": "json", "required": false, "note": "an ac_record_stop answer with its lab parts; one of record_stop and record_stop_export"},
         {"name": "record_stop_export", "form": "option", "type": "json", "required": false, "note": "{path, sha256}: an exported ac_record_stop answer, read only from MCP's export directory and only when its sha256 matches; one of record_stop and record_stop_export"}
       ],
-      "help": "Turns a record stop answer into a binding draft, with package preflight and a check-config of the draft; changes nothing.",
+      "help": "Gives the binding parts of a record stop answer, the preflight of its package and the check-config report of the configuration in force; changes nothing.",
       "output": "the binding draft: preflight and the actingd check-config child",
       "writes": false,
       "irreversible": false,
