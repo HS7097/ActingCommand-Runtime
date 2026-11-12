@@ -1170,7 +1170,7 @@ pub fn material_read(params: &Map<String, Value>) -> Result<MaterialRead<'_>, Ex
     };
     if let Some(slice) = ["offset", "max_bytes"]
         .into_iter()
-        .find(|name| params.contains_key(*name))
+        .find(|name| params.contains_key(name))
     {
         return Err(usage(&flag_name(slice), ArgumentProblem::Conflicting));
     }
