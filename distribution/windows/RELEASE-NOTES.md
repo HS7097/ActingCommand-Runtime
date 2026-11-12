@@ -9,6 +9,214 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.56
+
+本版是 v0.12.55 之后合并的 10 个 PR：#439 CODES-IX（#1622）、CODES-T1（#1626）、CODES-T2（#1632），#441 许可声明（只改文档，#1627），#438 HELD-C（只有契约，#1625）、
+HELD-1（#1630），#71 FLK-13（只动 CI，#1628），#437 MAPP-C（只有契约，#1624）、MAPP-1a（#1631），以及 #442 REM-1（#1629）。先说部署：**v0.12.55 发布了、但一直没有部署，
+生产上跑的是 v0.12.54，本版从 v0.12.54 直接装，所以 v0.12.55 那一步单向的修订就在这次部署里跨过去**：`ledger` 从 [3, 7] 到 [3, 8]，`runtime-client` 从 [3, 6] 到 [3, 7]，`package`
+从 [3, 8] 到 [3, 9]（这三处是 v0.12.55 升的，本版没再动）；本版自己只把 `actingd-config` 从 [5, 28] 升到 [5, 29]，`runtime-outcomes` 仍是 [1, 1]。部署要带
+`--accept-ledger-one-way`（预览、`install update plan` 和 `install update apply` 都要带），计划多一步 `ledger_verify`；**装上并跑过以后，同一个状态根上没有退回的路**（见下面的升级与退回）；
+控制台要先换成读得到 `ledger` 8、`runtime-client` 7 的 UI v0.12.16。新键是 `scheduling.task_held` 的两个（整节和每台）和实例条目的 `device_group`；默认值文件多这两个键和一份恢复档；
+`config.subsystems` 不变。**部署前要只读看一遍配置文件**：两个条目指向同一台设备、又没有编成一组的，本版拒收（check-config 和启动都拒）。运行上要知道的是这几处：
+
+- **从 v0.12.54 部署，跨过 v0.12.55 的单向一步**（为什么是单向的、修订 7 的读者碰到什么会失败，见下面 v0.12.55 一节的开头；`contracts/component-interfaces.md` 的 `ledger` 8 一行 141、
+  `runtime-client` 7 一行 148、`package` 9 一行 157；`distribution/windows/component-interfaces.json` 4–10）。在本版的代码上又核了一遍，操作员要做的是：
+  - **标志**：`install update plan --root <根> --build <提交> --preview`、不带 `--preview` 的 `install update plan` 和 `install update apply … --plan <id> …` 都加 `--accept-ledger-one-way`。
+    不带时 `ledger` 的 `one_way` 边不过（`crates/lab-rescue/src/install/plan.rs` 295–301），计划以 `interface_edge` 拒（1030–1041），什么都不改；计划 id 是整份计划的哈希、含这个输入
+    （966–992），所以 apply 要用带了标志的预览给的 id。
+  - **多的一步**：计划的 `ledger_verify` 是 true（915），apply 在换任何文件之前先跑目标构建的 `actingcommand-actingd.exe ledger-maintenance verify --config <根>\actingd.config.json`
+    （`update.rs` 528–538、836–862），期限是 `install.child.ledger_verify_timeout_ms`（默认 1800000，`distribution/windows/actingd.defaults.json` 576）。不过或到期限时什么文件都没换，
+    但带 `--stop` 的部署这时 Runtime 已经停了、hold 还在。
+  - **退不回去**：声明 `ledger` [3, 8] 的 Runtime 在一个状态根上跑过以后，声明 [3, 7] 的 v0.12.54 及更早的版本都不能再在这个根上跑，不论写没写过新形状的记录；从 v0.12.54 装上来的根，
+    连 v0.12.55 也退不过去（见退回）。
+  - **控制台先换**：UI v0.12.16（11-12 发布，钉 Runtime v0.12.55）声明 `ledger` [3, 8]、`runtime-client` [3, 7]，读得了本版；UI v0.12.15 读不了（见 v0.12.55 一节的配对）。没有机器检查替你
+    守这个次序：控制台的边只在门测试里算（`plan.rs` 414–431），`actingctl install` 不看控制台。
+  - **配置**：部署前只读核一遍，没有两个条目指向同一台设备（见下面的设备组）；也不要提前往文件里写本版的新成员（v0.12.54 自己拒，它的安装工具也不认识 `scheduling.task_held`）。
+  - **生产上**：自 2026-11-11 起有一台实例在试跑调度，其余实例暂停着；部署本身不改变派单。
+- **重启以后补救照常生效**（#442 REM-1，登记 §1.326；`contracts/remedies.md` 7.1）。
+  - **原来的毛病**：组合模式（调度器工作台组合任务包）的根上，启动时先建补救表、后装组合出来的过程清单：表建成空的，却带着当前目录的哈希，目录不变就不重建，建表时也不打任何一行。
+    所以每次重启以后，包里声明了补救的结果都不开补救的一轮，直到下一次放包引起激活；没有码、记录或日志说明。
+  - **现在**：组合模式下，启动在建表之前先认领当前生效的组合代、把它的过程清单装上（`crates/runtime-host/src/host.rs` 2361–2384，`host/standard_pack_schedule.rs` 421
+    `adopt_standard_pack_generation_on_start`、449 `adopt_active_generation`），第一轮工作台检查看到已经认领过，不再认领一次，读各游戏目录、组合照旧；表记下它所用清单的摘要，评估时清单的
+    摘要变了就立刻重建（`crates/runtime-host/src/remedy.rs` 的 `table_due`）。认领不出清单时和以前一样用一份什么都不绑的清单，没有新的失败路径。配置模式不变。
+  - **每张生效的表打一行**（`remedy.rs` 142–180）：`actingd remedy_table built catalog_hash=<哈希> manifest=<sha256:…|none> tasks=<n> located=<n> remedy_tasks=<n> providers=<n> unbound=<n>`；
+    有任务找不到包位置时再打一行 `actingd remedy_table unbound tasks=<前十个> more=<其余的个数>`。原有的 `finding`、`unreadable` 两行照旧。
+  - **怎么看**：重启后的启动日志里，`actingd startup_recovery` 之前应有一行 `remedy_table built`。组合模式下健康的样子是 `manifest=sha256:…`、`located` 等于 `tasks`、`unbound=0`，
+    `remedy_tasks`、`providers` 是声明了补救的任务和提供方的个数，没有 `unbound` 那一行。`manifest=none` 是说这张表建的时候没有清单，哪个任务都没读到包；出现 `unbound` 那一行，是说列出的
+    那些任务没读到包，它们的阻塞结果不开补救的一轮。之后每次激活、清单变化、补救轮次开着时的每次重建各再打一行；还没有组合代的第一次启动，第一行在第一轮评估时才出现。
+  - 没有配置键、记录形状或接口变化；旧版本照旧有这个毛病。本版上线以后，重启不再要靠放包引起的激活来把表建对。
+- **压着太久留一条记录**（#438 HELD-1，登记 §1.322 契约、§1.327；`contracts/scheduling/README.md` 的 “Held records”）。
+  - **记什么、什么时候记**：一对（任务、实例）该跑（或判断不出该不该跑），被「压着」那一类原因里的同一个挡过门限，记一条警告 `task_held`（`policy.planning_signal_observed`，种类
+    `goal_missed`，`signal:task_held:held:<hex>`；值 `gate_code`、`held_state`（`due` 或 `undecidable`）、`held_since_unix_ms`、`held_for_ms`、`held_after_ms`，挡住它的原因整条挂成一个
+    `caused_by`）；这次压着结束，再记一条信息 `task_held_ended`（`held_end`）。同一次压着只报一次，重启前后也一样（`crates/runtime-host/src/policy_host/held.rs`）。计时用「为什么没跑」
+    那张表自己的 `since_unix_ms`；同一个读数（`fact_key`）的三种刷新等待共用一个计时。
+  - **哪些原因算「压着」**：封闭的 18 个码（`held.rs` 44 `HELD_CODES`），加两个按值定的；比如无进展护栏、实例不可用、排在别的运行后面、等读数刷新、判断不出触发条件。人、配置或数值
+    说了不跑的（暂停、免打扰、关着的包、用完的预算）、等它自己的时间的（冷却、间隔、退避）和没到点的，从不算；正在派单或在跑的一对也不算。
+  - **不改任何决定**：记录在评估和它的解释之后才找，没有决定读它；开着、关着，每一轮的决定、派单和别的记录都一样。
+  - **两个键**：`scheduling.task_held.enabled`（默认 `true`）和 `scheduling.task_held.after_ms`（默认 1800000，即 30 分钟；60000 到 86400000），每台也可以单独设
+    （`instance.<实例 id>.scheduling.task_held.<成员>`，默认取整节的），运行中可改，下一轮评估生效；关掉只是不再记新的，已经报过的照样记结束。默认值文件带着它们，配置文件不用写。
+  - **在哪里看**：`actingd suspended` 的 `held`（还开着的、或在账本最新一条的 48 小时内结束的，新的在前，最多 200 条，结束了的带 `ended`；另有 `held_total`）；带实例的 `ac_diagnose`
+    和 `actingctl diagnose` 的 `held` 行，对得上的 `not_run` 行标 `held_reported: true`；`ac_events` 和不带实例的 `ac_diagnose` 的错误视图。规划信号不挂实例，按实例过滤的事件读法看不到它。
+  - **什么结束一次压着**：这一对被选中（`selected`）；换了原因（`why_changed`：触发条件变假、包被关、暂停，或者换了读数键的刷新等待）；这一对的行没了（`row_gone`）；实例不在评估里了
+    （`instance_gone`）；Runtime 重启（`restarted`：启动在记结算锚点之前，给之前的运行留下的、没结束的压着各补一条，不带 `held_for_ms`）。本版第一次启动没有要结束的。
+  - **部署以后**：一台实例上有一对被压过 30 分钟，错误视图里就出现 `task_held` 警告；生产上暂停着的实例，暂停这一原因本身不算「压着」。启动日志里要是出现
+    `actingd task_held unreadable sequences=<序号,…> more=<n>`，是启动收尾时碰到了读不回的压着记录（原因码不是本版目录登记过的、缺值、或者编号和内容对不上，比如别的版本写的）：
+    它不结束这几条、照常启动，把它们的账本序号（前八条，其余计数）打在这一行，`actingd suspended` 一直把它们列成未结束；不影响运行，报给维护的人。
+  - **不叫醒任何人**：叫醒那一半（HELD-2，规则种类 `task_held`）不在本版，没有消息会到人的频道。
+- **一台设备上几个应用：先做写法和检查**（#437 MAPP-1a，登记 §1.323 契约、§1.328；`contracts/device-group.md`）。
+  - **写法**：实例条目多一个可选成员 `device_group`，1 到 64 字节、照别名规则的名字，不写任何设备值；写同一个名字的条目是一组。只在装配时读一次，不能运行中改；配置清单只给写了它的
+    条目一行 `instance.<实例 id>.device_group`，check-config 的那一行多 `device_group`。名字不合规拒成 `device_group_config_invalid`、`name_invalid`
+    （`apps/actingd/src/config/device_group.rs` 229）。
+  - **不写它的条目、只有一个成员的组，和以前一样**。
+  - **两个条目没编成一组、却指向同一台设备，现在拒收**（`device_group_config_invalid`、`undeclared_shared_device`）。check-config 和启动在装配时比 `instance_index`、`instance_name`、
+    `serial`，或 `host` 加 `port`（端点只在都没写序列号的条目之间比；`device_group.rs` 363–376）；启动在发现之后再比一次（同一台模拟器的编号和名字，或者一个写死的端点和一个靠发现绑定的
+    条目），这一处是 Provider 启动失败，整个启动失败（`apps/actingd/src/config/provider_startup.rs` 139–180、262–264），check-config 不跑发现、看不出来。以前的版本会给这样两个条目各起一个
+    工作线程去开同一台设备。**部署前只读看一遍配置文件，确认没有这样的两个条目**；有的话先改好文件再部署。
+  - **多个成员的组这一版一律拒收**：组内的规则（成员指同一台、不是手机或夹具、`application_id` 各不相同、都有 `startup_package`、不开整台设备的动作）查过以后，最后照样拒成
+    `several_members_unsupported`（`device_group.rs` 377–383），等带「同一台上先后怎么排」那一片的版本才放开。宿主那一半（MAPP-1b）和开跑前的切换（MAPP-2）都不在本版，这一版收的配置
+    走不到它们。
+  - **调度器和评估器已经按设备认**：一台设备一份租约、一个队列，一轮每台只选一个，同台别的成员带 `device_group_waiting` 等（这个码已归进「压着」那一类）；只有一个成员时设备键就是它
+    自己的实例 id，决定和以前逐字节相同。设备组只在内存里，什么都不落盘。
+  - **默认值文件多一份恢复档** `without_emulator_restart`（`return_home`、`application_restart`；`distribution/windows/actingd.defaults.json` 111–113），给组的成员点名用。照
+    `contracts/device-group.md` 的 “A group of one is today”：文件和指令都没改 `recovery_ladder.profiles` 的根上，变的只有三样：配置清单里 `recovery_ladder.profiles` 那一行的值、带着它的
+    程序事实 `config.parameters.recovery_ladder`、恢复阶梯的配置摘要（`recovery_ladder_started` 的 `config_digest`）；文件自己写了一组档的根，整组替换默认值，什么都不变；用指令设过这个键的
+    根保留指令的值，启动时记 `config_override_base_changed`。没有条目点名它，就没有阶梯按它爬，每条阶梯照旧爬原来的档。
+- **结果码说清原因和处理办法，仓里有了索引**（#439 CODES-IX、CODES-T1、CODES-T2，登记 §1.321、§1.324、§1.329）。
+  - **索引**：`contracts/outcome-codes/index/`（一份总表、每个属主一份，共 30 个文件），由 `ci/outcome_codes_index.py` 从码目录生成，CI 的 `rust` 一项用 `--check` 守它是最新的；
+    没有程序读它，运行上没有变化。
+  - **第一批**：54 个致命和警告级的码（致命 4、警告 50）写上「常见原因」和「处理办法」；`display_map_stale`、`fact_reader_document_mismatch` 代码里已经没有地方发出，没写。**第二批**：
+    生产上近七天碰到过、还没写的 21 个错误码（合同 9、执行内核 10、宿主 2）。另改写了 13 条描述。`actingctl codes <码>`、MCP `ac_outcome_code` 看得到；类别、阶梯分类、值、状态都没动。
+- **只改文档或 CI 的两片**：#441 把仓库的许可声明和第三方声明更新到现状（`NOTICE.md`、两份 README 的许可一节，和 `resources/upstream-manifest.toml` 里一条只给人读的来源记录）；#71 FLK-13
+  给 CI 每个模块作业的测试步骤加了比作业低的时限（`host-lab` 作业 45 分钟），步骤超时后日志照样上传，`ci/gate_check.py` 认得中途停下的日志、点名没跑完的测试。产品不变。
+- **LAB-3 的运维规矩到 LAB-7 前照旧：生产照旧用 `actingctl install` 部署**，不对生产根用 Lab 救急模块的 `deploy`、`rollback`、`place`、`config replace`、`instance add`。
+  `crates/lab-rescue` 自 v0.12.55 没改，`actingctl install` 走的就是 v0.12.55 说明核过的那份代码。
+
+配置：只升 `actingd-config` 一次，按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过。`component-interfaces.json` 是 `actingd-config` [5, 29]、
+`install-selection` [1, 1]、`install-control` [0, 1]、`ledger` [3, 8]、`runtime-client` [3, 7]、`package` [3, 9]、`runtime-outcomes` [1, 1]；架构测试
+`tools/actinglab-architecture/tests/component_interfaces.rs` 的 `V0120`（141 起）钉 [5, 29]。
+
+- 升 `actingd-config` 一次，两片共用（`contracts/component-interfaces.md` 修订 29 那一行，129）：HELD-1 的 `scheduling` 一节和实例条目 `scheduling` 成员里的 `task_held`
+  （`crates/runtime-config/src/scheduling.rs` 的 `SchedulingFile::task_held`、`InstanceSchedulingFile::task_held`），和 MAPP-1a 的实例条目成员 `device_group`（`apps/actingd/src/config.rs`
+  1158–1163）及 check-config 报告里的 `device_group`。都是可选的：不写它们的文件还是原来的修订，本版照读修订 5 到 28；本版以前的 Runtime 拒收写了它们的文件（那一节和条目都不收未知成员，
+  `config_decode_failed`）。HELD-2 的规则词和 MAPP-2 的切换冷却键不在本版，契约里写的是同一版就并进 29、否则取下一个空号，那几处原文没动。
+- `ledger` [3, 8]、`runtime-client` [3, 7]、`package` [3, 9]、`runtime-outcomes` [1, 1] 和 v0.12.55 一样，本版没动：压着记录是现成的 `policy.planning_signal_observed`（`goal_missed`），
+  读者只拼写码（`ledger` 修订 5 的规矩）；设备组不落盘；没有请求或回答改形状（`ac_diagnose` 的 `held` 是 actingctl 自己拼的）。`install-selection`、`install-control` 不变。
+- 配置键（`distribution/windows/actingd.defaults.json` 和 `contracts/runtime-config.md` 的键表）：新增 `scheduling.task_held.enabled`（布尔，默认 `true`）、`scheduling.task_held.after_ms`
+  （毫秒 60000 到 86400000，默认 1800000），每台的 `instance.<实例 id>.scheduling.task_held.enabled`、`.after_ms`（默认取整节的；这四个都能经 `ConfigureSettings` 运行中改：Lab 的
+  `config set`、MCP `ac_config_set`），和 `instance.<实例 id>.device_group`（字符串，没有默认值，不能改，装配时读，只在写了它的条目上有这一行）。默认值文件多两处：`scheduling.task_held`
+  （382–385）和 `recovery_ladder.profiles` 的 `without_emulator_restart`（111–113，是已有键的一个值）。没有去掉的键。
+- `config.subsystems` 不变：`apps/actingd/src/config/manifest.rs` 和 `crates/policy/src/compose.rs` 自 v0.12.55 都没改，没有新的子系统，也没有新的 `requires` 词。
+- 结果码：目录从 3912 个码变成 3917 个（在用的 3894 → 3899，退役的仍是 18 个），位置仍是 1750 个，仍是 29 个分片，键从 635 个变成 642 个，词表从 223 个变成 227 个，没有退役或定稿的码。
+  新码 5 个（都待定稿，since 0.12.56，文字都写了）：`task_held`（runtime-host，warning，ladder `none`）、`task_held_ended`（runtime-host，info，`none`）、`device_group_config_invalid`
+  （actingd，error，`none`）、`device_group_assembled`（actingd，info，`none`；这一版没有哪次启动会打它，多成员的组都被拒）、`device_group_waiting`（policy，info，`none`）。新键 7 个：
+  `held_state`、`held_end`、`held_since_unix_ms`、`held_for_ms`、`held_after_ms`、`device_group_problem`、`device_group_wait`；新词表 4 个：`held_state`（`due`、`undecidable`）、`held_end`
+  （`selected`、`why_changed`、`row_gone`、`instance_gone`、`restarted`）、`device_group_problem`（`name_invalid`、`device_mismatch`、`handset_member`、`fixture_member`、`application_shared`、
+  `startup_package_missing`、`device_action_unsupported`、`undeclared_shared_device`、`several_members_unsupported`）、`device_group_wait`（`selected`、`held`、`player_hold`、`fenced`）。
+  改了的：75 个在用码的「常见原因」和「处理办法」从待填写成了（CODES-T1 54 个、CODES-T2 21 个），13 条描述改写（`sqlite_backup_busy`、`sqlite_backup_locked` 和 CODES-T2 的 11 条），
+  键 `gate_code` 只改了说明，前缀 `device_` 的域多给了 `policy`；没有哪个码的类别、阶梯分类、值、状态或审阅变了。在用的码里两段文字都写了的从 625 个变成 705 个。本版的发布文件是空的：
+  没有新定稿或退役的条目。
+- 程序文件：`Cargo.toml`、`Cargo.lock` 自 v0.12.55 都没改，没有新的依赖；`.github/` 只改了 `ci.yml`（FLK-13 的步骤时限，CODES-IX 的两步）；`ci/` 多了索引脚本和它的测试，`gate_check.py`
+  认得中途停下的日志，`ci/outcome_release.py` 把读分片的那段提成了一个函数（发布文件的写法不变）；`ci/retired-gates.toml` 没改，没有测试离开门表。`crates/lab-rescue`、`apps/actinglab`、
+  `apps/ledger-forensics`、`apps/mcp-entry`、`ratchet/`、`contracts/lab-operations.json` 都没改；`apps/actingctl` 只改了 `ac_diagnose` 的说明和结果模式（多 `held`），MCP 工具仍是 41 个。
+  不稳定表照旧是 FLK-08 和 FLK-10，这几片都没动它，也没动它们读的测试和金样；FLK-13 是 CI 的超时，不在表里。
+
+升级与退回（安装工具的代码 `crates/lab-rescue` 自 v0.12.55 没改，自 v0.12.54 只改了救急模块的用法文字和一个配对测试；其中 `plan.rs`、`update.rs`、`undo.rs`、`programs.rs`、`postcheck.rs`、
+`host.rs` 自 v0.12.51 没改，`deploy.rs` 自 v0.12.54 没改，所以 v0.12.54、v0.12.55 和本版的安装工具走的是同一份代码，下面的行号对三者都对；判法和 v0.12.55 说明核过的一样，这里是本版的数）：
+
+- **v0.12.54 的安装工具装本版：能装，要带 `--accept-ledger-one-way`，不带就被拒。** 安装工具的声明是它自己构建里的 `component-interfaces.json`（`host.rs` 23–25），v0.12.54 的是
+  `actingd-config` [5, 28]、`ledger` [3, 7]、`runtime-client` [3, 6]、`package` [3, 8]、`runtime-outcomes` [1, 1]。计划的边逐条（`plan.rs`）：
+  - `ledger` `previous_max_in_next`（288–294）：Rp [3, 7] 的上限 7 在 R\* [3, 8] 里，过。`one_way`（295–301）：8 大于 7，只有带了标志才过；不带时这是唯一不过的边。带了以后
+    `inputs.accept_ledger_one_way` 是 true，`notice.rollback_window_bounded` 是 true（203），`ledger_verify` 是 true（915）。
+  - `runtime-outcomes` `next_max_in_installer`（302–314）：R\* 的 1 在安装工具的 [1, 1] 里，过。
+  - `install-control`、`runtime-client` 的 `installer_meets_previous` 和 `installer_meets_next`（315–331）：安装工具的 `runtime-client` [3, 6] 和 Rp [3, 6]、R\* [3, 7] 都相交；
+    `install-control` 三方都是 [0, 1]。都过。
+  - `package` `bundle_max_in_next`（332–355）：目标是 [3, 9]，现装的包声明的上限都落在里面（没有声明的照旧是 `pack_declaration_unknown` 警告），过。`speaks` `runtime_equals_tools`
+    （756–763）：两半的声明相同，过。
+  - `actingd-config`：**更新计划里没有一条边拿安装工具的 [5, 28] 去比目标的 [5, 29]**（三方共有一个修订的那条边只在 `ui_edges` 里，门测试才算，430）。`installer_knows_keys`（359–376、
+    764；`unknown_keys` 506–536）拿安装工具自己构建里的键表和默认值比：现在的文件不写新键，过；v0.12.54 不认识 `scheduling.task_held`，文件里写了它这条边就不过（`instances` 不是它查的
+    一节，`device_group` 不进这条边）。`next_check_config`（902–914）：本版的 check-config 带 `--install-root`（29 ≥ 17，854–868）读现行的文件，过；只有文件里有两个条目在装配时就看得出
+    指向同一台设备时，计划以 `config_refused_by_target` 拒（1021–1029），原因是 `device_group_config_invalid` `undeclared_shared_device`。只有发现之后才看得出的那一种，预览看不出，要到
+    新 Runtime 启动时才拒（见上面的设备组）。
+  - 计划的 `defaults_diff`（574–598）：从 v0.12.54 装是三行，`recovery_ladder.profiles.without_emulator_restart.rungs`、`scheduling.task_held.after_ms`、`scheduling.task_held.enabled`，
+    `live` 都没有，`source` 是 `default`（文件写了那个路径时是 `file`；文件自己写了一组档的根，第一行照样是 `default`，但新档被文件的那一组替换，不生效）。
+  - 部署后检查的 `new_keys`（`postcheck.rs` 494–526；`added_keys` 593–601 取 `defaults_diff` 里 `live` 为空的行，就是这三行）：两个压着键在 `config.parameters.scheduling` 里的来源应是
+    `default`；那份档的路径不是配置清单的一行（清单只有 `recovery_ladder.profiles` 一行），列在 `unseen` 里，不算不过。
+  - **操作员要做的**：先换控制台（UI v0.12.16）；只读核一遍配置（两个条目、一台设备）；`install update plan --root <根> --build <提交> --preview --accept-ledger-one-way`，在预览里看到
+    `ledger` 的 `one_way` 是过的、`ledger_verify` 是 true、`defaults_diff` 是上面三行；再用这次预览给的计划 id 跑 `install update apply --root <根> --build <提交> --plan <id>
+    --accept-ledger-one-way --stop --hold <理由> … --start --detach`；日志的 `acknowledged` 记下 `accept_ledger_one_way`（`update.rs` 700–704，`deploy.rs` 1720–1724）。
+- **从 v0.12.55 装本版**（v0.12.55 没有部署过，只作对照）：两边的 `ledger` 都是 [3, 8]，`one_way` 不触发，不用标志，计划里没有 `ledger_verify`；v0.12.55 的安装工具的 `runtime-client`
+  [3, 7] 和两边相交；别的边和上面一样，`installer_knows_keys` 同样不认识 `scheduling.task_held`；`defaults_diff` 也是那三行（v0.12.55 的默认值文件和 v0.12.54 的一样）。
+- **退回：从 v0.12.54 装上本版并跑过以后，安装工具哪一版都不让退回。**
+  - **退到 v0.12.54 或更早**：本版声明 `ledger` [3, 8]，它们声明 [3, 7]，`rollback plan`、`rollback apply` 的 `previous_max_in_next` 不过（8 ∉ [3, 7]），在算回退门之前就以
+    `interface_edge` 拒（`plan.rs` 288–294、1030–1041），带不带标志都一样（标志只放行 `one_way`，退回方向本来就过）。
+  - **退到 v0.12.55**：边都过（8 ∈ [3, 8]，`runtime-client`、`package` 两边相同；`actingd-config` 29 对 28 没有边要比，`installer_knows_keys` 用的是在线的本版安装工具，认识新键），但回退门的
+    第 2 部分 `ledger_readability` 只对「本版替换掉的那一版」放行（`update.rs` 400–437，`live_operation` 181–204；`contracts/install-cli.md` 的 “The rollback gate” 第 2 条）。从 v0.12.54
+    装上来的根，替换掉的是 v0.12.54，所以退到 v0.12.55 以 `rollback_gate_failed`（部分 `ledger_readability`，`s0` 为空，`previous` 是 v0.12.54 的提交）拒。
+  - **部署的自动回退也走不了**：新 Runtime 起来以后部署后检查不过时，部署按回退到 v0.12.54 算计划（`deploy.rs` 763–854，813 不带标志），同一条边不过，以 `rollback_gate_failed`（部分
+    `interface_edges`，803）结束，新构建和 hold 都留着。起过本版 Runtime 的操作，`install undo` 也按回退判（`undo.rs` 376–406，388 不带标志），同样被拒；没起过 Runtime 的未完成操作照旧能
+    撤销。部署以后 `install status` 的 `rollback_window` 把 v0.12.54 及更早的保留构建列成 `ledger_edge_passes: false`。
+  - **对操作员一句话：从 v0.12.54 装上本版并跑过以后，同一个状态根上没有退回的路。** 出了问题剩下的是：配置的问题，改好文件再起（比如上面那两个条目）；程序的问题，往前修（装更新的版本）；
+    或者换一个全新的状态根（空账本：之前的账本、事实、运行中设的指令、封顶回合和空闲状态都留在旧根上）。
+  - **如果是从 v0.12.55 装上来的**（只作对照）：退回 v0.12.55 边都过，回退门第 2 部分对它放行（它就是被替换的那一版），要过的是第 4 部分 `config`：v0.12.55 的 check-config 读现行的文件
+    （`update.rs` 490–503），文件里写了 `scheduling.task_held`（整节或条目）或 `device_group` 就拒（`config_decode_failed`），所以先把它们去掉，去掉以后照常过。
+  - **旧版在这个根上会怎样**（只作说明）：v0.12.55 读得了压着记录和它的结束，什么也不做（登记 §1.322 的 “The interface walk”：读者只拼写码、不查登没登记；它的 `actingd suspended`
+    只读它自己的前缀）；换版时还开着的压着不会有结束记录。补救表的毛病在旧版上照旧。设备组什么都没落盘，没有要清的。
+- 配对：
+  - **v0.12.54 写的配置文件**：本版照收，不用改。两个新成员都是可选的；一个文件只有写了 `scheduling.task_held`（整节或某个条目的 `scheduling`）或某个条目的 `device_group`，才算修订 29。
+    唯一的例外是上面的「两个条目、一台设备」：v0.12.54 收，本版拒。v0.12.55 写的文件同样。
+  - **安装工具**：见上；从 v0.12.54 部署跑的是在线的 v0.12.54 的安装工具，要带 `--accept-ledger-one-way`。
+  - **部署工具包的命令行**：它跑的全是在线安装工具的 `actingctl install`：`release stage --root --dir --facts --expect-tag --expect-commit`、`guards --root --for stop --hold --known-pause …`、
+    `status --root [--operation]`、`update plan --root --build [--preview]`、`update apply --root --build --plan --stop --hold --known-pause … --start --detach`、`release-hold --root --reason`；
+    回答它们的是 v0.12.54 的安装工具，代码就是上面核过的那份。**被拒的**：不带 `--accept-ledger-one-way` 的 `update plan`（连预览）和 `update apply`，以 `interface_edge` 拒，不过的是
+    `ledger` 的 `one_way`。**答法变了的**（带了标志以后）：计划的 `ledger_verify` 是 true、步骤以 `ledger_verify` 开头、`notice.rollback_window_bounded` 是 true、
+    `inputs.accept_ledger_one_way` 是 true，日志的 `acknowledged` 多这一项；`defaults_diff` 是上面三行；部署后检查的 `new_keys` 核这三个键；部署以后 `install status` 的
+    `rollback_window` 里 v0.12.54 及更早的构建 `ledger_edge_passes` 是 false。`release stage`、`guards`、`status`、`release-hold` 答法照旧。工具包另用新版 actinglab 跑的
+    `--json standard-pack check --root <游戏根>` 照旧收：`apps/actinglab` 自 v0.12.55 没改，这一行不带 `--help`、不以 `--instance` 开头、不是 `events`，v0.12.55 的命令行改动碰不到它，
+    也没有新的检查警告码。**工具包要跟着改的**（它上一次用在 v0.12.54）：预览、计划、apply 三步都加 `--accept-ledger-one-way`；说明里「不带单向标志、没有 `ledger_verify`」和退回那一段
+    不再对（从 v0.12.54 装上本版以后没有退回）；安装工具是在线的 v0.12.54 的那一份；给热放置工具包写构建记录的那一步，核新包清单的 `actingd-config`、`package`、`ledger` 现在是
+    [5, 29]、[3, 9]、[3, 8]，要记成 `5,29`、`3,9`、`3,8`（热放置工具包重钉时拿这三个值和清单比，照旧的 `5,28`、`3,8`、`3,7` 会让重钉不过），重钉前核记录的那几处也要换成这三个值。
+  - **热放置工具包的命令行，本版都照旧收**：actinglab 两行，`--json standard-pack check --root <游戏根>` 和 `--json standard-pack compose --root <包根> --instance <别名>=<游戏>/<区服>
+    … --out <新目录>`：`apps/actinglab` 自 v0.12.55 没改；`compose` 的 `--instance` 是这一行自己的绑定选项，CLI-IN 不碰它；两行都不带 `--help`。actingctl 的 `status`、`status --config`、
+    `pause --instance <别名> --reason <理由> --drain-timeout-ms <毫秒>`、`resume --instance <别名>`、`schedule --instance <别名>`、`overview --root <根> --instance <别名> --sections catalog`
+    （都带 `--state-root`）：`apps/actingctl` 的命令行代码本版没改。读账本用的是 actingledger 的 `events --after … --through … --limit …`（`apps/ledger-forensics` 没改，而且给了位置），
+    v0.12.55 改的 `events` 默认次序碰不到它。**没有一条被拒，也没有一条的行换了次序。** 答的内容上看得到的：`status --config` 的参数行多 `scheduling.task_held.enabled`、`.after_ms`
+    （整节和每台），`recovery_ladder.profiles` 那一行的值多一份档，子系统行不变；`schedule --instance` 的行形状不变，同一个读数的三种刷新等待之间换不再重新计时，换了读数键的刷新等待则从新
+    计时；账本里会多出 `task_held`、`task_held_ended` 这种规划信号；激活以后的日志多一行 `actingd remedy_table built`。**热放置工具包要学的**：重钉时比的构建记录是上面那三个值和新的默认值
+    文件；本版没有新的子系统、新的检查警告码或新的 `requires` 词。
+  - **控制台 UI**（最新发版 UI v0.12.16 就是 UI main 的 `6c2e30f2`，把 Runtime crate 钉在 `c0f75c7e`，即 v0.12.55；`Cargo.toml` 的 `[workspace.dependencies]`）：
+    - 它声明 `actingd-config` [5, 28]、`ledger` [3, 8]、`runtime-client` [3, 7]、`runtime-outcomes` [1, 1]（`crates/acui-setup/component-interfaces.json`）：`ledger` 8 在 [3, 8] 里，
+      `runtime-client` 两边都是 [3, 7]，`runtime-outcomes` 1 在 [1, 1] 里；`actingd-config` 三方（安装工具 [5, 28]、控制台 [5, 28]、本版 [5, 29]）共有修订 28，不写新成员的文件就在 28 以下，
+      照它自己 README 的规矩配得上。它的 README 说适配 Runtime v0.12.47 到 v0.12.55，先换控制台、再换 Runtime。
+    - 压着记录对它是现成形状的事件，公开投影里只有码，它钉的合同 crate 照读（登记 §1.322 的 walk）；它不认识的码怎么显示是 UI 仓的事。
+    - **在控制台的范围升到 29 以前**：不要用它改 `scheduling.task_held` 的键，不要用它编辑写了 `device_group` 的配置，也不要指望它显示这个成员（契约：控制台要先到修订 29 才能改、才能显示）。
+      它的任务列表照旧只读，不发 `EditPackSchedule`。
+  - **MCP**：带实例的 `ac_diagnose` 多 `held` 行（`held_truncated`），`not_run` 行可能带 `held_reported`；不带实例时错误视图里会有 `task_held`。别的工具答法不变。
+
+运行上的变化：
+
+- 从 v0.12.54 部署：带 `--accept-ledger-one-way`，多一步 `ledger_verify`，装上就没有退回的路；先换 UI v0.12.16，先核配置里没有两个条目指向同一台设备。
+- 组合模式下重启以后补救表就是对的，启动日志里每次都有一行 `actingd remedy_table built` 说清建出了什么。
+- 一对被压过 30 分钟留一条 `task_held` 警告、结束时一条 `task_held_ended`，在 `actingd suspended` 和 `ac_diagnose` 里看；不改任何决定，也不叫醒人。
+- 实例条目可以写 `device_group`，但这一版只收一个成员的组；默认恢复档多一份，阶梯照旧。
+- `actingctl codes`、`ac_outcome_code` 多了 75 个码的原因和处理办法；仓里有结果码的索引。
+
+本版合并的 PR：
+
+- #1622 CODES-IX（#439，登记 §1.321）：`ci/outcome_codes_index.py` 和它的 5 个 Python 测试，CI 的 `gate` 作业（检查 `rust`）多两步，`ci/outcome_release.py` 读分片的那段提成
+  `owner_fragments`（发布文件不变）；索引 30 个文件。没有 Rust 改动，没有新码。
+- #1626 CODES-T1（#439，登记 §1.324）：11 个分片里 54 个码的文字和 2 条描述，重新生成的索引；没有测试。
+- #1627（#441）：`NOTICE.md`、`README.md`、`README.zh-CN.md`、`resources/upstream-manifest.toml`；只改文档。
+- #1625 HELD-C（#438，登记 §1.322）：只有契约：压着记录、它的结束、原因的普查、计时、两个键、启动收尾、读法和接口的逐项推演；没有代码和测试。
+- #1628 FLK-13（#71）：`.github/workflows/ci.yml` 的测试步骤时限和 `host-lab` 的 45 分钟，`ci/gate_check.py` 的 `timed_out`；`ci/test_gate_check.py` 新加 5 个测试、改造一个辅助函数。
+  没有 Rust 改动，没动门表和不稳定表。
+- #1624 MAPP-C（#437，登记 §1.323）：只有契约：新文件 `contracts/device-group.md` 和八份契约里的指引；没有代码和测试。
+- #1629 REM-1（#442，登记 §1.326）：启动次序、表跟着清单走、两行日志；主机门行 `#442 REM-1` 的 4 个测试，`gate_rl1b` 的三个造数据函数放开共用，断言没动。没有新码、新键。
+- #1630 HELD-1（#438，登记 §1.327）：`policy_host/held.rs`、启动收尾、两个键和两种读法；主机门行 `#438 HELD-1` 的 12 个测试（`held_t1` 到 `held_t11`，`held_t9` 的诊断那一半在 lab-ops），
+  改造 5 个按成员构造诊断结果的测试（补空的 `held`，断言没动）；`actingd-config` [5, 29]，新码 2 个、新键 5 个、新词表 2 个。
+- #1631 MAPP-1a（#437，登记 §1.328）：配置成员、装配检查、调度器和评估器按设备认、默认值文件的档；19 个测试（apps 门表 actingd 7 个、runtime-config 3 个，策略门表调度器 5 个、策略 3 个，
+  主机门行 `#438 HELD-1` 里的 `held_t12`），没有改现有测试；新码 3 个、新键 2 个、新词表 2 个。
+- #1632 CODES-T2（#439，登记 §1.329）：3 个分片里 21 个码的文字和 11 条描述，重新生成的索引；没有测试。
+
 ## v0.12.55
 
 本版是 v0.12.54 之后合并的 15 个 PR：合并列车 #1608 带进的 #434 CLI-EV（#1606）、CLI-IN（#1604）、#429 R-8（#1607）和 #428 S168-LB1（只有契约，#1603）；列车 #1614
