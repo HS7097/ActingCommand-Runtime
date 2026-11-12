@@ -33,7 +33,7 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 | LAB-2 | Runtime | the CLI module: short words, output for people, `--json`, `actinglab serve --stdio`; actinglab's debugging and authoring commands on the table; its retired command words deleted |
 | LAB-3 | Runtime | the rescue and installation module (section 7): the journal's initiator, no confirmation parameters (section 5), guards that report (section 6) |
 | LAB-4 | Runtime | `crates/watchdog`; `actingwatch.exe` does its own tick |
-| LAB-5 | Runtime | `actinglab-mcp.exe`: tools from the table, no tiers; the MCP entry `g2` |
+| LAB-5 | Runtime | `actinglab-mcp.exe`: tools from the table, no tiers; the MCP entry `g2`, a second program (section 8.1) |
 | LAB-6 | Runtime | the door of section 2 and the UI list of section 3; the initiator in receipts, G14 and the `host.config_overrides` rows (section 4.3); `runtime-client` 7, `ledger` 8, `actingd-config` 28 |
 | UI-L1 | UI | the console on `runtime-client` 7: Lab children instead of actingctl, refusals shown, no second press (the stop note stays beside the button, section 6); the settings page shows a row's initiator, else its channel (section 4.3); the READMEs' install line names the rescue module's command |
 | LAB-7 | Runtime | `apps/actingctl` deleted; `install-cli` 2 |
@@ -358,12 +358,25 @@ Alice's answer 4. From LAB-3, in the rescue module:
 | Part | Program | Detachable | How |
 |---|---|---|---|
 | Lab core: the operation layer, the CLI, the debugging operations, the rescue module | `actinglab.exe` in the runtime member, where actingctl was | no | the one command line and the one installer; the debugging operations stay with it (Alice's answer 2) |
-| MCP | `actinglab-mcp.exe` and the MCP entry `g2` | yes | not installed, or not registered with a client; the CLI does not depend on it |
+| MCP | `actinglab-mcp.exe` and the MCP entry `g2` (`actingcommand-mcp-entry-g2.exe`) | yes | not installed, or not registered with a client; the CLI does not depend on it |
 | Authoring | `crates/lab`, through the cargo feature `authoring`, in `actinglab.exe` | yes | a build without the feature; `lab_module_authoring` absent or `false` only leaves its operations unlisted (section 8.3) |
 | Watchdog | `tools\actingwatch.exe` | its own program | `watchdog uninstall` removes its scheduled task |
 
 The table's `modules` lists them with the module id each operation names (`core`, `debugging`,
 `authoring`, `rescue`) and the front ends (`cli`, `mcp`, `serve`, `watchdog`).
+
+**The MCP entry's generations** (LAB-5G5a; the coordinator's ruling of 2026-11-12 on board
+#434, which replaces ruling 6 of 6775192250; [install-cli.md](install-cli.md), "The MCP entry").
+The second generation is a second program with its own file name, `actingcommand-mcp-entry-g2.exe`,
+whose child is `actinglab-mcp.exe`; it goes only into `<root>\mcp-entry\g2\`. `g1\` only ever holds
+the first program, `actingcommand-mcp-entry.exe`, which stays generation 1 in every build (child
+`actingctl mcp-serve`, plan `actingctl mcp-entry plan --entry-protocol 1`) until the slice that
+removes actingctl, after the owner's registrations have moved. Why two programs: no installer
+code writes under `<root>\mcp-entry\`; placing `g1` is a copy of `tools\actingcommand-mcp-entry.exe`
+by hand, as the documents of every earlier build say, so a second generation under that file name
+would reach `g1\` by that copy, and a rollback would make one file name mean two generations.
+Placing the second program stays a manual step until an installer step exists, which creates
+under `g2\` only.
 
 ### 8.2 `actinglab serve --stdio`
 
@@ -808,7 +821,8 @@ when a member's meaning changes.
 Planned, not in force: [component-interfaces.md](component-interfaces.md), "Planned: Workflow
 #434". LAB-6 raises `runtime-client` to 7, `ledger` to 8 and `actingd-config` to 28; LAB-7
 `install-cli` to 2. `install-control` retires, `tools-layout` becomes 5, `install-selection` does
-not move, and the MCP entry's `entry_protocol` becomes 2 (LAB-5). LAB-0 changes no declaration.
+not move, and the MCP entry's second generation, a program of its own (section 8.1), speaks
+`entry_protocol` 2 while the first keeps 1 (LAB-5). LAB-0 changes no declaration.
 
 ## 11 What this replaces, and from when
 

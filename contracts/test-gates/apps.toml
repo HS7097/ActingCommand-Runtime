@@ -1552,3 +1552,38 @@ tests = [
     "actingcommand-runtime-config::lib::gate_mapp1::mapp1_the_device_level_actions_in_effect_name_the_key_that_turns_each_on",
 ]
 incident = ["#437 MAPP-1"]
+
+# Workflow #434 LAB-5G5a (0.12.57; register §1.287, "Slice LAB-5G5a"; briefs rd-1112/brief-lab5g5a.md and rd-1112/brief-lab5g-common.md; contracts/install-cli.md, "The MCP entry"): the MCP entry's second generation is a program of its own, actingcommand-mcp-entry-g2, copied from the first (apps/mcp-entry, unchanged), whose copied tests E-1 to E-25 hold for it with its child, plan, codes and generation (E-11: the status file says generation 2 and entry_protocol 2); it starts actinglab-mcp.exe, looked for under runtime\ then tools\ again at each fresh start, with the words after -- unchanged (mcp_entry_g2_child, the register's named test); --client stays the entry's, in its status file and given to no child, every word after -- reaches the server unchanged, and none is allowed; the stamp watches runtime\BUILD-MANIFEST.json and the server program it would start now, not runtime\actingctl.exe; the plan is actinglab.exe --json mcp plan --entry-protocol 2 [--current-build <commit>], found as the server is, with no --root and no server words; an answer of another entry_protocol is a refusal (no build taken, no candidate), and of protocol 2 its switch, build, child[0] (the rest unread), tunables and outcome are read; the real binary prints generation 2, gives the fake server the words after -- and not --client, writes a status file of generation 2 and switches once (process)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e1_the_entry_pipes_both_ways_and_keeps_ids",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e2_the_handshake_is_replayed_and_a_changed_protocol_version_is_refused",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e3_a_switch_happens_only_between_calls",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e4_a_failed_candidate_keeps_the_old_child_and_is_reported",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e5_a_child_that_dies_mid_call_gives_outcome_unknown_and_is_never_resent",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e6_outstanding_handles_defer_the_switch_until_they_reach_zero",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e7_a_child_without_entry_status_counts_as_zero",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e8_no_plan_while_an_install_operation_is_under_way",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e9_the_legacy_notice_is_sent_and_the_refetch_recorded",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e10_the_2026_07_28_notice_goes_through_subscriptions_listen",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e11_the_status_file_says_what_the_entry_runs",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e13_an_initial_plan_after_the_install_changed_under_the_child_is_a_switch",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e14_an_unfinished_operation_file_alone_does_not_hold_the_entry_back",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e16_the_status_names_the_outstanding_handles",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e18_consecutive_refusals_back_off_and_carry_the_tunables",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e19_a_stopped_child_is_ended_only_past_its_grace",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e20_a_rejected_candidate_is_tried_once_more_after_settle",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e21_a_fresh_child_of_another_build_sends_the_notice",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e22_the_status_drops_an_answered_call_at_once",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e23_a_zero_count_is_ignored_after_a_call_reached_the_child",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e24_the_status_records_the_entry_process_creation_time",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::e25_a_newer_install_during_a_deferred_switch_is_planned_again",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::mcp_entry_g2_child",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::g2_client_is_kept_and_the_other_words_pass_unchanged",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::g2_watched_files_are_the_manifest_and_the_server",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::g2_the_plan_is_asked_of_actinglab_with_protocol_2",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::g2_the_plan_answer_is_read_for_protocol_2_only",
+    "actingcommand-mcp-entry-g2::entry_process::mcp_entry_g2_process_pipes_a_session_and_switches_once",
+]
+incident = ["#434 LAB-5G5a"]

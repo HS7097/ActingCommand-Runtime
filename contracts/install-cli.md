@@ -1202,15 +1202,21 @@ check-config takes `--install-root` (17). The MCP entry's tunables are its `mcp_
 ## The MCP entry (Workflow #421 MCP-ENTRY, Runtime v0.12.18)
 
 Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry instead of
-`actingctl mcp-serve`:
+`actingctl mcp-serve`; the first generation's form is:
 
 `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <name> -- mcp-serve --tier …`
 
 - **What it is.** A small program shipped in the Tools half (listed in its `BUILD-MANIFEST.json`).
   `g1` is the entry's own generation (`--generation` prints it); it changes only when the contract
-  between the entry and its children changes (`entry_protocol`, now 1). A new generation goes in a
-  new `g<N>` directory; nothing overwrites a running entry. Placing `g1` is a deploy step today
-  (copy `tools\actingcommand-mcp-entry.exe`); placement by `install update` is a follow-up.
+  between the entry and its children changes (`entry_protocol`, 1 for `g1`). Each generation is a
+  program of its own with its own file name, in its own `g<N>` directory: `g1\` only ever holds
+  the first program, `actingcommand-mcp-entry.exe`, and `tools\actingcommand-mcp-entry.exe` is
+  that first generation in every build; `g2\` only ever holds the second (below). Nothing
+  overwrites a running entry. Placing an entry is a deploy step today (`g1\`: copy
+  `tools\actingcommand-mcp-entry.exe`); placement by `install update` is a follow-up, and that
+  step, when built, creates under `g2\` only and never writes `g1\`. The bullets below, up to
+  and including "Registration", describe the first generation; the second differs from it as its
+  own bullet, the last, says.
 - **What it does.** It pipes JSON-RPC between the client and one current child,
   `<root>\runtime\actingctl.exe` with the words after `--` unchanged (so `--tier` and the client's
   permission scope stay as they are), and keeps the client's handshake to replay it. It watches
@@ -1278,6 +1284,35 @@ Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry inst
   M1). Nothing deletes a status file.
 - **Registration.** `actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root
   <root> [--tier …]` prints the snippet; it writes no client file.
+- **The second generation** (Workflow #434 LAB-5G5a, 0.12.57; the coordinator's ruling of
+  2026-11-12 on board #434, which replaces ruling 6 of 6775192250). A second program,
+  `actingcommand-mcp-entry-g2.exe`, the first generation's code with these differences only:
+  `<root>\mcp-entry\g2\actingcommand-mcp-entry-g2.exe --root <root> [--client <name>] -- [<server words>…]`.
+  - `--generation` prints 2, and it asks for `entry_protocol` 2.
+  - Its child is `actinglab-mcp.exe`, looked for at each fresh start in `<root>\runtime\`, then in
+    `<root>\tools\`, with every word after `--` unchanged and none required (`--tier` reaches the
+    server, which refuses it). `--client` stays the entry's: the status file's `client` and the
+    refresh entry, as for `g1`; no child is given it.
+  - It watches the size and time of `runtime\BUILD-MANIFEST.json` and of the `actinglab-mcp.exe`
+    it would start now (not `runtime\actingctl.exe`).
+  - Its plan is `actinglab.exe --json mcp plan --entry-protocol 2 [--current-build <commit>]`,
+    that program found the same way, with no `--root` (the rescue module acts on the root of the
+    program that runs it) and no server words; the last line printed is the answer. Of the answer
+    it reads `entry_protocol` (2; any other value makes the answer a refusal), `switch`, `build
+    {commit, manifest_sha256}`, `child[0]` (the server program to start; the rest of `child` is
+    not read, and the entry's own words follow it), `tunables` (the five members above; a
+    refusal's too) and `outcome` (kept in the status file's `last_plan`); `reason` is not read.
+    The rescue row `mcp plan` is slice LAB-5G5b's, built to this.
+  - Its own refusals are `mcp_entry_g2_outcome_unknown` (inspect with `ac_run_show` or
+    `ac_status`), `mcp_entry_g2_child_unavailable` and `mcp_entry_g2_usage_invalid`: the meanings
+    of `g1`'s three codes, owned by the second program.
+  - Its status file is the same file with the same members, `<root>\mcp-entry\state\entry-<pid>.json`
+    (`actingcommand.mcp-entry-status.v1`), with `entry_generation` and `entry_protocol` 2, so
+    `mcp-entry list` lists both generations' entries side by side.
+  - No release or Tools archive carries it before the packaging slice (LAB-5G6), and placing it in
+    `g2\` is a manual step until an installer step exists. `actingctl mcp-serve` and
+    `actingctl mcp-entry plan --entry-protocol 1` stay until the slice that removes actingctl,
+    which comes after the owner's registrations have moved to `g2\`.
 
 ## The A/B layout (Workflow #429 R-15b, frozen; built by R-15c to R-15e)
 

@@ -319,6 +319,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-mcp-entry-g2"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "actingcommand-host-metrics",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "actingcommand-onnx-provider-support"
 version = "0.1.0"
 dependencies = [
