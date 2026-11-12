@@ -82,8 +82,13 @@ An example with the shipped values:
 A rule is `{id, on: {kinds, codes?, at_minute_of_day?, utc_offset_minutes?}, instances, to,
 cooldown_ms, daily_cap}`. `id` is 1 to 64 bytes of letters, digits, `_` and `-`. `kinds` come from
 the closed list `ladder_exhausted`, `instance_fenced`, `run_failed`, `daily_summary`,
-`delivery_test`; these are configuration words, not the ledger's `AgentWakeKind`. `codes` applies to
-`run_failed` only, which needs it. `instances` is `"*"` or a list of aliases. `to` is a channel name:
+`delivery_test` and (HELD, not built yet; Workflow #438 HELD-2) `task_held`; these are
+configuration words, not the ledger's `AgentWakeKind`. A Runtime before HELD-2 refuses a rule that
+names `task_held` (`agent_wake_config_invalid`, `kind_unknown`), so the word raises `actingd-config`
+([component-interfaces.md](component-interfaces.md), "Planned: Workflow #438 HELD"). `codes` applies to
+`run_failed`, which needs it, and (HELD, not built yet; HELD-2) to `task_held`, where it is
+optional: the gate codes the rule wakes for ("Rules" below). `instances` is `"*"` or a list of
+aliases. `to` is a channel name:
 1 to 16 Unicode scalars with no control character, opaque to the section. `cooldown_ms` is at most a
 week, and `daily_cap` is at least 1. **A `daily_summary` rule** (AGT-2b) names that kind alone, no
 `codes`, `at_minute_of_day` (0 to 1439) and `utc_offset_minutes` (−720 to 840, minutes east of UTC,
@@ -103,7 +108,7 @@ rendered, as in every section. A broken rule below is `agent_wake_config_invalid
 | A key left out; an empty section | `required_missing` |
 | Two rules with one id | `duplicate_id` |
 | A kind outside the closed list | `kind_unknown` |
-| A rule with no kind; `run_failed` with no `codes` | `match_missing` |
+| A rule with no kind; `run_failed` with no `codes`; (HELD, not built yet; HELD-2) a rule that names `task_held` with an empty `codes` list | `match_missing` |
 | A `daily_summary` rule with another kind or `codes`, without its minute or offset or with one out of range, or a `daily_cap` other than 1; another kind's rule that names a minute or an offset | `daily_summary_shape` |
 | A code the catalog does not list, or has retired | `code_unknown`, `code_retired` |
 | `instances` neither `"*"` nor a non-empty list of configured aliases | `instance_unknown` |
@@ -136,13 +141,17 @@ counts it (`delivery.queue_capacity`); the worker then says it once (`agent_wake
 the host's shared state, so a record committed during the start, before the worker's thread runs,
 waits for it. Candidates live in memory: a crash loses those not yet made rows.
 
-**The first triggers.** A candidate needs an instance link.
+**The first triggers.** A candidate needs an instance link, except a held record (HELD, not built
+yet): a planning signal is appended with the system links and no instance link, so its instance is
+the registered instance whose alias the record's `instance_id` names, and a record whose alias no
+registered instance has is no candidate (dropped, not counted; never a failure, #419).
 
 | Kind | Record | Word | Never a candidate |
 |---|---|---|---|
 | `ladder_exhausted` | the end (`recovery_ladder_finished`, `exhausted`) of a ladder a trigger started, with `recovery_ladder_exhausted` | 阶梯用尽 | an interrupted ladder (its code is `recovery_ladder_interrupted`), a person's drill (tagged `drill`), a plan drill (`planned`) |
 | `instance_fenced` | `runtime.failed` with `instance_resources_fence_awaiting_person`: a fence began to wait for a person | 实例隔离 | `instance_resources_fenced`, the code of a fence's own record and of the failure of work that met it |
 | `run_failed` | a run's failed terminal (`task.failed`, `terminal_committed`), by the run's failure code (a relayed spelling the catalog does not register is its `raw_code`) | 运行失败 | a code no rule lists; another writer's `task.failed`, which is no terminal |
+| `task_held` (HELD, not built yet; HELD-2) | a held record: `policy.planning_signal_observed` of kind `goal_missed` whose outcome is `task_held` ([scheduling/README.md](scheduling/README.md), "Held records") | 任务滞留 | its end (`task_held_ended`), and every other planning signal |
 
 The worker's own codes (`agent_wake_*`) and `agent_budget_exhausted` are never candidates, so a
 delivery failure or a used-up budget cannot make a wake. `daily_summary` is no record's kind: its
@@ -150,12 +159,23 @@ rule's clock makes it ("The daily summary").
 
 **Rules.** A rule matches a candidate of one of its `kinds` on an instance its `instances` covers;
 `run_failed` also needs the candidate's code in the rule's `codes`: no list, no wake. A candidate no
-rule matches is dropped and not counted.
+rule matches is dropped and not counted. A `task_held` rule (HELD, not built yet; HELD-2; settled
+by the coordinator on 11-12) may name `codes`, a list of gate codes: with it, the rule matches only
+a held record whose `gate_code` is in the list, so that a wait behind a long run
+(`dispatch_instance_held`) need wake no one; without it, every held record of the instances it
+covers, whatever the reason or the task. The list is checked as a `run_failed` rule's is
+("Refusals"): an entry the catalog does not list, or has retired, is refused (`code_unknown`,
+`code_retired`); a listed code outside the held set is not refused and matches no held record, as
+a `run_failed` rule's code that no run fails with. An empty list is refused (`match_missing`), as
+an empty `kinds`, a `run_failed` rule's empty `codes` and an empty `instances` list
+(`instance_unknown`) are: it never means "none", and the file's `[]` is not the absent member. A
+rule that names both `run_failed` and `task_held` reads its one list for both.
 
 **Coalescing.** One instance's matched candidates are gathered for `delivery.coalesce_ms` from the
 first one (0: those taken in the same pass). Then each channel receives at most one wake: of the rules
 that send to it, the one whose matched candidate is the strongest (`ladder_exhausted`, then
-`instance_fenced`, then `run_failed`; the earlier one on a tie, then the rule written first). The
+`instance_fenced`, then `run_failed`, then, the weakest (HELD, not built yet), `task_held`; the
+earlier one on a tie, then the rule written first). The
 burst's other candidates are listed in the body's `related` as `{kind, event_id, code}`. A ladder's
 end followed by its fence's wait for a person is therefore one wake; the burst is by instance, not by
 correlation, because the person-wait record has fresh links. A burst holds at most
@@ -166,6 +186,8 @@ one left out is counted as suppressed.
 restart forgets none of them:
 
 1. **Cool-down:** no second wake of one rule, instance and code within the rule's `cooldown_ms`.
+   A held record's code is `task_held` whatever its reason (HELD, not built yet), so one instance's
+   held records wake a rule at most once per `cooldown_ms`, whatever the task or the reason.
 2. **Rule cap:** at most the rule's `daily_cap` wakes per local day.
 3. **Budget:** at most `budget.daily_cap` wakes per local day over all rules.
 
@@ -185,7 +207,12 @@ candidates wait in the queue.
 **The body of an automatic wake** carries `rule`, `instance_alias`, `trigger` (the record's type, id,
 sequence and links, its outcome codes only) and `related`, and `next_reads`: for a failed run first
 `ac_get_run` with the run's request id, then `ac_events` with the instance and `after_sequence` just
-before the burst's first record.
+before the burst's first record. For a held record (HELD, not built yet): first `ac_schedule` with
+the instance (the not-run explanation of that instance, whose row carries the hold's
+`since_unix_ms`), then `ac_events` with `event_types` `["policy.planning_signal_observed"]` and
+`after_sequence` just before the burst's first record and no instance, since a planning signal has
+no instance link and a read filtered to the instance would not return it. Its `trigger` has no
+request, run or correlation id (the system links carry none).
 
 ## The daily summary
 
@@ -247,7 +274,10 @@ ActingCommand to <channel>
 - Line 1 is fixed apart from the channel, and a channel name cannot forge it: it has no control
   character. There is one `\n`, no blank line, no footer.
 - Kind words: `ladder_exhausted` 阶梯用尽, `instance_fenced` 实例隔离, `run_failed` 运行失败,
-  `daily_summary` 今日汇总, `delivery_test` 发送测试. A wake with no instance omits the alias:
+  `daily_summary` 今日汇总, `delivery_test` 发送测试, and (HELD, not built yet) `task_held` 任务滞留,
+  four characters as the others, so the floor of every channel is unchanged. A build before HELD-2
+  that meets an open row of kind `task_held` (after a rollback) closes it `failed` with the problem
+  `kind_unknown`, loudly (`agent_wake_delivery_failed`). A wake with no instance omits the alias:
   `发送测试 正文 <path>`. A daily summary names its date there: `今日汇总 2026-11-03 正文 <path>`.
 - **The limit counts the whole message in Unicode scalars,** header included.
 - **Only the alias (a summary's date) is ever cut,** ending in `…`; the body holds it whole. With no

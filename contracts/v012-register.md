@@ -14985,11 +14985,315 @@ descriptions included); every category, ladder class, owner, layer, value, `sinc
 review (`pending`) stays, `runtime-outcomes` stays 1, and no release file changes, since a release
 file holds no text.
 
+### 1.322 Slice HELD-C (contracts only): a task that should run but has been held for too long says so (Workflow #438; the owner approved the coordinator's proposal on 11-12, her words 「好兄弟，你的提案批准了，错误码可以分批做，并且可以搞个索引」; the coordinator's thirteen rulings of 11-12, not the owner's words; coordinator work order `rd-1111/brief-held-contract.md`, read on main `e2b5590f`; the coordinator's answers of 11-12 to the draft's nine questions, not the owner's words, `rd-1112/answers-438-held-c.md`, written in by the work order `rd-1112/brief-438-held-c-fix.md` with main `6e4119c7` merged)
+
+1.322 is the coordinator's number, appended after §1.320 on main `e2b5590f`. Main `6e4119c7`,
+merged into this slice, holds §1.321 and §1.324, so this section stands after §1.324: sections are
+in merge order; §1.323 belongs to a slice not merged yet. Everything here is **(HELD, not built
+yet)**: no code, test, catalog entry, schema, gate row, CI file, default or live revision is
+touched. The contract is [scheduling/README.md](scheduling/README.md) ("Held records", and one
+paragraph in "Why A Candidate Does Not Run"), [agent-wake.md](agent-wake.md) (the kind
+`task_held` and its `codes`), the two key rows and the paragraph "Held records" of
+[runtime-config.md](runtime-config.md), and the planned row of
+[component-interfaces.md](component-interfaces.md) ("Planned: Workflow #438 HELD"). Every code,
+key and vocabulary named was proposed and is settled by the coordinator's answers of 11-12: each
+"proposed" in the texts of this slice reads as settled, and the code slice that registers the
+name drops the mark. The first code slice carries Runtime 0.12.56.
+
+**What happened** (production, 11-11, in neutral words). The head of a chain of tasks on one
+instance was held by the no-progress guard for about 50 minutes, while the tasks that could change
+the reading it waited for waited on the head. Nothing failed. The not-run explanation said why
+each task did not run (`policy_no_progress` on the head, `trigger_unknown` on the followers), in
+memory and at info only: the ledger held no warning and no error for that instance in those 50
+minutes, the diagnosis listed nothing, and no wake rule could match. A person found it by looking.
+From 0.12.55 that deadlock no longer forms (SS-4b, §1.310); the record is for the next one,
+whatever its cause.
+
+**The census** (ruling 2; every `why` code a candidate row can carry on `e2b5590f`, from the
+evaluator `crates/policy/src/evaluator.rs` and its modules, the host's eligibility closure in
+`crates/runtime-host/src/policy_host.rs:3401-3551` and the catalog). "Eligibility" is the row's,
+which the evaluator sets before the code: `false` with a false trigger or a true stop
+(`evaluator.rs:1857-1864`, `:1963-1971`), `unknown` from `TaskWork::new` (`:2579-2591`) with an
+unknown trigger or stop, `true` once the stop is false (`:1990-1996`), kept by every later
+deferral. Classes: *not due*, *said no* and *own time* are never held; *held* is held.
+
+| `why` code | Decided by | Eligibility | Class | Deciding value | Reason |
+|---|---|---|---|---|---|
+| `trigger_false` | evaluator, trigger | false | not due | — | the trigger says there is nothing to do; most rows of a catalog sit here |
+| `feedback_stop_true` | evaluator, stop | false | not due | — | the task's result in this window stops it |
+| `task_cooldown_active` | evaluator | true | own time | — | wakes at the cooldown's end |
+| `score_deferred` | evaluator, score stage | true | own time | — | the selection document defers it and names its re-evaluation (`now + defer_for_ms`) |
+| `dispatch_instance_cooldown` | host, position 2 | true | own time | — | a takeover cooldown, its end the wake |
+| `policy_activity_interval_active` | host, position 8 | true | own time | — | the activity interval, with its next eligible time |
+| `policy_retry_backoff_active` | host, position 8 | true | own time | — | a failure's backoff |
+| `dispatch_random_delay_waiting` | host, position 9 | true | own time | — | its planned start |
+| `policy_rerun_waiting` | host, position 6 | true | own time | — | an owed rerun bounded by its window, recorded already (`signal:policy_rerun:waiting:`) |
+| `policy_remedy_waiting` | host, position 8a | true | own time | — | a remedy round bounded by its window, whose expiry is recorded (`policy_remedy_expired`) |
+| `dispatch_player_held` | host, 1a | true | said no | — | a person holds the instance |
+| `dispatch_paused_instance` | host, 1b | true | said no | — | an operator's pause |
+| `dispatch_paused_global` | host, 1c | true | said no | — | an operator's pause |
+| `dispatch_resource_fenced` | host, 1d | true | said no | — | the fence has its own records and waits for a self-check or a person |
+| `pack_admission_suspended` | host, position 3 | true | said no | — | waits for a person; copied as `signal:pack_admission:suspended:` |
+| `blackout_active` | host, position 4 | true | said no | — | the configuration's blackout, its end the wake |
+| `blackout_approaching` | host, position 7 | true | said no | — | the quiet before a blackout |
+| `policy_day_boundary_approaching` | host, position 7 | true | said no | — | the run does not fit its window |
+| `pack_schedule_closed` | host, position 5 | true | said no | — | a package's closing row |
+| `policy_remedy_unchosen` | host, 8a | true | said no | — | stopped for a person; `signal:remedy:stopped:` says it |
+| `policy_remedy_unavailable` | host, 8a | true | said no | — | as above |
+| `policy_remedy_exhausted` | host, 8a | true | said no | — | as above |
+| `policy_budget_exhausted` | host, position 8 | true | said no | — | an exhausted budget, its reset the wake |
+| `policy_activity_window_closed` | host, position 8 | true | said no | — | a closed activity window, its opening the wake |
+| `policy_task_paused` | host, position 8 | true | said no | — | a failure paused the pair for a person; `actingd suspended` lists it |
+| `instance_override_disabled` | evaluator, placement | true | said no | — | a disabled override |
+| `capability_missing` | evaluator, placement | true | said no | — | the configuration gives the instance no such capability |
+| `activity_profile_missing` | evaluator, placement | true | said no | — | the catalog gives the instance no profile |
+| `host_capacity_insufficient` | evaluator, placement | true | said no | — | the host cannot carry the task's load at all; nothing in the round is deducted (#427-B) |
+| `resource_reserve_insufficient` | evaluator, reserve gate | true | said no | — | the catalog's reserve keeps the pool |
+| `policy_benefit_nonpositive` | evaluator, benefit gate | true | said no | — | the values say a run is worth nothing |
+| `benefit_within_tolerance` | evaluator, benefit gate | true | said no | — | within its rounding error, deferred in the zero tier |
+| `pool_lines_unspendable` | evaluator, capped order | true | said no | — | the configured lines cannot spend the pool |
+| `benefit_unknown` | evaluator, benefit gate | true | held, or said no | `benefit_gap` | `reading_unknown`: waits for a reading, held; `no_effects`, `entry_pending`, `valuation_pending`, `valuation_missing`: the catalog or the model must give a value, said no |
+| `pool_line_held` | evaluator, capped order | true | held, or said no | `pool_line_hold` | `capped_not_head` (waits for the order's head to run) and `capped_cap_unknown` (a fact gives no value): held; `capped_not_dispatchable`: the class of its `gate_code`; the others (`would_cross_hard_line`, `capped_limited_spent`, `capped_would_cross_hard_line`, `capped_round_empty`, `lines_invalid`): the lines or the order decide, said no |
+| `policy_no_progress` | evaluator, guard | true | held | — | waits for a reading of another value, no wake (11-11's head) |
+| `instance_unavailable` | evaluator, placement | true | held | — | waits for the instance to come back, no wake |
+| `heavy_scene_budget_exhausted` | evaluator, placement | true | held | — | waits for heavy runs to end |
+| `heavy_scene_budget_deferred` | evaluator, round | true | held | — | as above, in the round |
+| `policy_concurrent_runs_deferred` | evaluator, round | true | held | — | waits for the shared run limit |
+| `instance_already_selected` | evaluator, round | true | held | — | waits behind the instance's selected run |
+| `policy_chain_handover_waiting` | evaluator, round | true | held | — | waits for the chain step that goes first |
+| `dispatch_instance_held` | host, position 2 | true | held | any `holder_kind` | waits for a run, a ladder or a claim; a registration a failed settlement leaves holds the instance with no time ("Per-Instance Lanes", Failures) |
+| `application_update_pending` | host, position 4a | true | held | — | waits for the client update, no wake |
+| `selection_input_unknown` | evaluator, score stage | true | held | — | an input no reading can supply; waits for the facts or the catalog |
+| `decision_reason_missing` | evaluator, round end | true | held | — | a programming error; nothing names a time |
+| `trigger_unknown` | evaluator, trigger | unknown | held | — | 11-11's followers; a trigger that reads its own task's fact can stay unknown for ever |
+| `feedback_stop_unknown` | evaluator, stop | unknown | held | — | the trigger passed, the stop cannot be decided |
+| `fact_refresh_pending` | evaluator, fact refresh plan | unknown or true | held | — | waits for the instance's reader to read a key (after an unknown trigger or stop: unknown; after a selection input: true) |
+| `fact_refresh_unresolved` | evaluator, fact refresh plan | unknown or true | held | — | the reader ran and left the key unknown |
+| `fact_refresh_exhausted` | evaluator, fact refresh plan | unknown or true | held | — | a reader's limit; the pair's own decision names no time |
+| `fact_refresh_unbound` | evaluator, fact refresh plan | unknown or true | held | — | no reader can refresh the key |
+
+Counts: not due 2; own time 8; said no 23; held 17 (11 due, 2 undecidable, 4 either); by a value
+2. The table is settled by the coordinator on 11-12 as classed, the six rows the draft was unsure
+of included, each with its reason: `dispatch_instance_held` (a long run of another task makes
+waiting due pairs held: kept held for the abandoned registration, settled 3),
+`instance_already_selected` and the round's waits (they switch with `dispatch_instance_held` at
+each run, so a queue of short runs never reaches the threshold), `selection_input_unknown` and
+`fact_refresh_unbound` (configuration defects that no other record says), held;
+`host_capacity_insufficient` (static), said no; `fact_refresh_exhausted` (a daily limit has a
+reset, but not the pair's), held; `score_deferred` (re-deferred at each evaluation by its rule),
+own time. `benefit_unknown` held back because the benefit has no price yet (`no_effects`,
+`entry_pending`, `valuation_pending`, `valuation_missing`) is not held: it waits for the model to
+give a value and is not stuck.
+
+Not rows, so not classed: `scope_without_instance` (a decision without an instance is no row,
+`crates/runtime-host/src/schedule_explanation.rs:293-295`); `due_task_missing` (the not-running
+row's code); the host's notes `eligible_since_unknown`, `policy_instance_fact_missing` and an unknown
+priority offset (added after the table is recorded); the predicate reasons before `trigger_false`
+or `trigger_unknown` (`fact_time_*`, `fact_reference_unavailable`, `fact_probe`,
+`dependency_already_served`, `clock_occurrence_expired`, `timeline_*`); first reasons
+(`failure_retry_immediate`, `policy_rerun_owed`, a remedy request or retry, `consumption_fact_unusable`,
+`benefit_fixed_value`); a selected decision's (`capped_spend`, `placement_selected`, `rank_assigned`);
+the fact refresh read's own reasons (the read is never held). Registered or ordered but not emitted
+on `e2b5590f`, classed for the slice that emits them: `feature_locked` (own time with its expiry,
+said no without), `pack_registry_not_loaded` (said no), `perf_scheduling_paused` (said no: the
+performance control's own records say it), `perf_pacing_gap` and `policy_cost_commit_waiting` (own
+time).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| HELD-R1 | `task_held` (warning, ladder class `none`): `task_id`, `alias`, `gate_code`, `held_state`, `held_since_unix_ms`, `held_for_ms`, `held_after_ms` required; one `caused_by` link, the row's `why` outcome | outcome code, `runtime-outcomes` 1 | HELD-1 | runtime-host (the policy host) | prefix `task_` is runtime-host's; `gate_code`'s description widens to "the code of the gate that held back a clock slot or a candidate" |
+| HELD-R2 | `task_held_ended` (info, ladder class `none`): `task_id`, `alias`, `gate_code`, `held_since_unix_ms`, `held_end` required; `held_for_ms` optional (absent for `restarted`) | outcome code, `runtime-outcomes` 1 | HELD-1 | runtime-host | |
+| HELD-R3 | keys `held_state` (`vocab:held_state`), `held_end` (`vocab:held_end`), `held_since_unix_ms` (`unix_ms`), `held_for_ms` (`duration_ms`), `held_after_ms` (`duration_ms`) | outcome keys, `runtime-outcomes` 1 | HELD-1 | — | `held_ms` (a pace hold) has another meaning and is not reused |
+| HELD-R4 | vocabularies `held_state` (`due`, `undecidable`) and `held_end` (`selected`, `why_changed`, `row_gone`, `instance_gone`, `restarted`) | outcome vocabularies, `runtime-outcomes` 1 | HELD-1 | — | closed; kept in codes mode |
+| HELD-R5 | the records: `policy.planning_signal_observed`, kind `goal_missed`, `signal:task_held:held:<hex>` and `signal:task_held:ended:<hex>` (`<hex>` the SHA-256 of `task \0 alias \0 since`) | persisted record of an existing type | HELD-1 | runtime-host | no new member; `ledger` unmoved (the walk below) |
+| HELD-R6 | the detector: after `record_held_back` at every evaluated cycle, the held set, the open holds in memory, ends before helds, appended with the cycle's planning signals | behaviour (Runtime) | HELD-1 | runtime-host | memory only; nothing decides by it |
+| HELD-R7 | the start's end pass (`restarted`) over the planning signals since the last settled start | behaviour (Runtime start) | HELD-1 | runtime-host | before the settlement anchor is recorded |
+| HELD-R8 | `scheduling.task_held.enabled`, `.after_ms`, and per instance | configuration keys, `actingd-config` 29 | HELD-1 | — | settable; defaults `true`, `1800000` |
+| HELD-R9 | `actingd suspended` `held`; `ac_diagnose` `held` rows and `not_run` `held_reported` | read faces (CLI and MCP of one build) | HELD-1 | actingd, actingctl | no wire shape |
+| HELD-R10 | the rule kind `task_held`: matching, its optional `codes` of gate codes, instance by alias, weakest, word 任务滞留, `next_reads` | configuration word, `actingd-config` 29 | HELD-2 | runtime-host (the worker) | `AgentWakeKind` unchanged |
+
+**Where the contract differs from the rulings or completes them.**
+
+- *Ruling 1.* The record has one side effect, the one every planning signal has: it invalidates
+  each active fact whose `invalidate_on` lists `policy.planning_signal_observed`, on every instance
+  (`crates/runtime-host/src/fact_store.rs:401-427` at replay and `:1245-1271` live, by event type;
+  `:120-138` a record without an instance link matches every instance). Having none takes a `ledger`
+  revision either way: another record type (`EventType` has no catch-all), or an exception in both
+  derivations that a reader of 0.12.55 does not make, which then derives an invalidation the newer
+  build never wrote, so the first persisted invalidation of the same fact snapshot fails its replay
+  (`fact_invalidation_source_mismatch`, `:393-398`). No fact the Runtime or a run writes lists the
+  type (`invalidate_on` is empty in every reading of `host/contained_task.rs:351`, `:475`, `:528`
+  and every host fact of `host/facts.rs:302`, `:890`, `:964`); only a client's `PublishFacts` can.
+  The contract keeps the effect and says so (settled 4). No other path acts on it: the old agent
+  dispatcher takes only `timeline_reached` and `drift_predicted` (`host/planning.rs:131-139`), the
+  remedy state only its prefix (`:114-121`), the detection quota only the detection kinds
+  (`runtime-state/src/store/planning.rs:188-200`).
+- *Ruling 2.* A fourth class, *not due* (`trigger_false`, `feedback_stop_true`): ruling 3 keeps a
+  false trigger out ("not due"), and neither fits "said no" or "its own time". Two codes are
+  decided by a value (`benefit_gap`, `pool_line_hold`). The held set is closed: a code outside it,
+  one a later slice adds included, is never held until the census names it. The fact refresh read
+  and a pair with a dispatch in flight are never held (the clock-slot rule,
+  `policy_host/clock_slot.rs:530`, `:587`, `:621`); the latter keeps a run of a pair due during its
+  own run (a cooldown shorter than the run) from being reported for that run.
+- *Ruling 3.* One code is the better form: one record, one wake rule, one catalog entry for one
+  state; two codes would double what reads them for one meaning (#420 S4: one domain code with
+  values). The value `held_state` is the row's eligibility,
+  not its code: `true` is `due`, `unknown` is `undecidable` (the fact refresh codes come with
+  either).
+- *Ruling 5.* No one rhythm of the pair exists for every trigger, so the threshold is the floor
+  alone. The task's `cooldown_ms` is a lower bound between two dispatches, not a rhythm, and a held
+  pair is past it (the cooldown comes first, `evaluator.rs:2051-2058`). A clock's period exists only
+  for a trigger with a counted clock; a `fact`, `resource_projection`, `fact_time_reached`,
+  `dependency_completed` or `outcome` trigger has none, an `any` of a clock and a fact has two
+  causes, and 11-11's head was due by a fact. The expected duration E exists for every pair but
+  says how long a run takes, not how often it should run; a wait behind another run would be
+  measured by the other run's E. The default floor is the coordinator's 30 minutes: the guard holds
+  until a reading changes, the fact refresh's interval (5 minutes) and failure backoff (10 minutes)
+  are shorter, so a transient wait clears first, and 11-11's hold would have been reported about
+  20 minutes before a person found it. The range, one minute to one day, is the idle gap keys'.
+  The coordinator's proposal of 11-12, a default by the task's own rhythm, was dropped for these
+  reasons, and the coordinator agreed to the floor alone on 11-12.
+- *Ruling 6.* The reason's values go in a `caused_by` link, whole, not beside the record's own:
+  they collide (`task_id` names another task in `pool_line_held`, `gate_code` is a fact refresh
+  wait's own gate, `instance_id` is beside `alias`). The link adds nothing that needs another
+  observation. `gate_code` is reused with its description widened. A `trigger_unknown` reason has no
+  values (`evaluator.rs:1878-1881`), so an undecidable hold names no fact key: a stated limit of
+  HELD-1 (settled 8).
+- *Ruling 7.* "Left the table" for a trigger turned false or a package closed is a `why` change:
+  the row stays with `trigger_false` or `pack_schedule_closed`. "Dispatched" is `selected`: the
+  explanation sees the selection, the dispatch records the admission. The restart end is written by
+  the start, before it records its settlement anchor, not at the first evaluation (settled 1), and
+  carries no `held_for_ms`: the last evaluation of the run before is not known to the start.
+- *Ruling 4 and 8.* With the table's clock, a pair that changes held codes faster than the
+  threshold is never reported. The three waits for one fact's refresh change codes that fast, so
+  from HELD-1 they share one clock per `fact_key` and are reported (settled 2).
+- *Ruling 9.* `ac_diagnose` with an instance shows no held record today: its errors page filters by
+  the instance link (`crates/lab-ops/src/diagnose.rs:439-446`), which a planning signal does not
+  have (`host/planning.rs:90`, the system links).
+- *Ruling 10.* The second `next_reads` entry names no instance, for the same reason.
+
+**Settled by the coordinator on 11-12** (its answers to the draft's nine questions, and to the
+census and the threshold; the coordinator's, not the owner's words). Each is written into the
+contract as a rule.
+
+1. Settled by the coordinator on 11-12: the start writes the restart ends before it records its settlement anchor, over the planning signals since the last settled start (`host/contained_task.rs:10180-10225`, `host.rs:2510-2525`).
+2. Settled by the coordinator on 11-12: `fact_refresh_pending`, `fact_refresh_unresolved` and `fact_refresh_exhausted` of one `fact_key` share one clock, which HELD-1 builds by carrying the table's `since_unix_ms` over between them (the plan switches the code at each reader dispatch, `crates/policy/src/evaluator/fact_refresh.rs:789-826`).
+3. Settled by the coordinator on 11-12: a wait behind a run in flight stays held, an instance with long runs gets its own `after_ms`, and HELD-2's `task_held` rule takes an optional `codes` list of gate codes ([agent-wake.md](agent-wake.md), "Rules").
+4. Settled by the coordinator on 11-12: the fact invalidation every planning signal causes is kept, with no `ledger` revision.
+5. Settled by the coordinator on 11-12: the reason is one `caused_by` link with the whole `why` outcome, and `gate_code` is the record's own value.
+6. Settled by the coordinator on 11-12: `trigger_false` and `feedback_stop_true` are the class *not due* and never held.
+7. Settled by the coordinator on 11-12: `enabled` `false` stops new held records only, and the ends of reported holds are still written.
+8. Settled by the coordinator on 11-12: an undecidable hold names no fact key in HELD-1, a stated limit of the first slice.
+9. Settled by the coordinator on 11-12: `actingd suspended` `held` and the `ac_diagnose` rows ship with HELD-1, and a mark on `ScheduleExplanation`'s row waits for a `runtime-client` slice.
+10. Settled by the coordinator on 11-12: the census table as classed, the six uncertain rows included, and a benefit with no price yet is not held.
+11. Settled by the coordinator on 11-12: one floor, `after_ms` (default 1 800 000, one minute to one day), per instance and settable, with the switch `enabled`; the coordinator's proposal "by the task's own rhythm" is dropped.
+
+**The interface walk** (ruling 11; what each older reader does with each new thing, on
+`e2b5590f`, the code 0.12.55 runs). The first code slice raises neither `ledger` nor
+`runtime-client`.
+
+- *A Runtime of 0.12.55 opening a ledger with held and end records.* The type and the kind exist
+  (`crates/actingcommand-contract/src/event/codes.rs:389-396`, `goal_missed`). The record decodes and
+  validates as every planning signal: `validate_policy_planning_signal_data` checks the id's and the
+  code's spelling only (`event/payload.rs:8106-8160`, `validate_policy_token` `:8806-8819`, at most 256
+  bytes; the two ids are 86 and 87), never that the code is registered; an outcome keeps an unknown code as
+  written and its category from the wire (`outcome.rs:732-736`, `:1698-1714`), and a link the same way
+  (`:1622-1638`); the severity is that category (`event/envelope.rs:583-594`). The open's tail check
+  is this decode (`crates/ledger/src/global/sqlite.rs:4107-4153`), and revision 5's rule says it:
+  the reader "never" checks "whether a code is registered" ([component-interfaces.md](component-interfaces.md), `ledger` 5).
+  At its start the planning projection recovers them as any goal-missed signal, by id
+  (`policy_host.rs:5675-5714`; `runtime-state/src/store/planning.rs:496-514`, `:248-300`, no member
+  added to `StoredPlanningSignal` `:25-36`, schema `actingcommand.policy-planning-signal.v2`
+  unchanged); the remedy recovery skips them by prefix (`host/policy_outcome.rs:3441-3454`); the old
+  dispatcher's reconciliation skips the kind (`host/agent_control.rs:312-320`); the fact history
+  derives the same invalidations as the newer build, by type (`fact_store.rs:401-427`); `actingd
+  suspended` reads only its own prefixes (`suspension_report.rs:70`, `:1203-1206`, `:1316-1319`,
+  `:1706-1708`, `:1873-1878`); the agent-wake tap takes no record without an instance link
+  (`host/agent_wake.rs:174`). It reads them and does nothing with them.
+- *A console of `runtime-client` 7 reading an event page with one.* The row's public projection
+  carries the outcome codes only (`event/payload.rs:13323`), `policy_signal_id` as text and
+  `policy_signal_kind` `goal_missed` (`:13398-13399`); `PublicPayload` denies unknown members
+  (`:13736-13738`) but none is added; the outcome, its `held_state` and `held_end` values and its link
+  decode as above. What the console shows of a code it does not know is the UI repository's.
+- *`actingledger` of 0.12.55.* It reads through the same ledger decode (`crates/ledger-forensics/src/lib.rs:773`,
+  `:1336`, `:1433`), so the records list as written; `actingledger codes task_held` answers
+  `outcome_code_unknown` (`apps/ledger-forensics/src/catalog_codes.rs:161-163`), a lookup and not a
+  read failure.
+- *The planning-signal projection replayed by an older build.* Entries are keyed by the id and staged
+  whatever the code; an identity conflict needs the same id with other data, which a held id never
+  has; the detection quota is staged only for the detection kinds (`runtime-state/src/store/planning.rs:188-200`).
+- *HELD-2's rows after a rollback.* A `host.agent_wake` row's `kind` is text (`agent_wake/rows.rs:84`,
+  `:243`), so 0.12.55 loads it, and an open row of kind `task_held` ends `failed` with `kind_unknown`
+  when tried (`host/agent_wake.rs:1306-1316`), loudly; `AgentWakeKind` (`agent.rs:17-31`) is the
+  ledger's `agent.wake_requested` word and gains nothing; `Status.agent_wake` has no kind
+  ([agent-wake.md](agent-wake.md), "Read faces"). Neither `ledger` nor `runtime-client` moves for
+  HELD-2.
+- *What moves.* `actingd-config`, to the next free revision (29 on `e2b5590f`, and still on
+  `6e4119c7`, merged here, which changes no Rust file and declares 28): the section and the
+  entry deny unknown members (`crates/runtime-config/src/scheduling.rs:299-300`, `:356-357`), and the
+  rule kinds are a closed list (`crates/runtime-config/src/agent_wake.rs:98-106`, refused as
+  `kind_unknown` at `:523-530`). `runtime-outcomes` stays 1, additive.
+
+**The code slices** (ruling 13).
+
+- **HELD-1 (0.12.56): the record, its end, the start pass, the keys and the readers** (rows
+  HELD-R1 to HELD-R9), with the one clock of the fact refresh waits (settled 2). Not before this
+  contract is merged. Tests
+  (the host's fixtures, a fake clock, compared within one host): `held_t1_a_chain_head_held_by_its_guard_and_its_unknown_followers_are_reported_once_after_the_threshold_and_end_when_the_head_runs`
+  (11-11's shape in neutral names: a head held by the no-progress guard, two followers whose
+  triggers are unknown; nothing before the threshold; at the first evaluation past it one
+  `task_held` each, the head `due` with its guard's link, the followers `undecidable`; nothing more
+  at later evaluations; when the head's reading changes and it is selected, its end `selected`, and
+  the followers' ends when their rows change); `held_t2_a_pair_said_no_waiting_for_its_own_time_or_not_due_is_never_reported`
+  (table-driven over the classes it can drive: a pause, a cooldown, a false trigger, a blackout, an
+  exhausted budget, each past the threshold); `held_t3_one_hold_is_reported_once_and_a_start_ends_the_holds_left_open`
+  (the projection holds the id; a start writes `restarted` for each open hold of the runs since the
+  last settled start and nothing for a hold never reported; counting begins again);
+  `held_t4_another_why_code_ends_a_reported_hold_and_starts_a_new_count` (a move between the
+  three fact refresh waits of one key excepted, t10);
+  `held_t5_the_switch_and_the_threshold_per_instance` (off: no new held record, ends still written;
+  a lower threshold reports at the next evaluation; a higher one withdraws nothing);
+  `held_t6_the_decisions_are_the_same_with_the_record_on_and_off`;
+  `held_t7_a_pair_in_flight_and_the_fact_refresh_read_are_never_reported`;
+  `held_t8_the_records_round_trip_through_the_ledger_the_projection_and_an_event_page`;
+  `held_t9_actingd_suspended_and_diagnose_list_an_instance_held_records`;
+  `held_t10_the_fact_refresh_waits_of_one_key_keep_one_clock` (a row that moves between
+  `fact_refresh_pending` and `fact_refresh_unresolved` of one key, then to
+  `fact_refresh_exhausted`, keeps its `since_unix_ms` and is reported once past the threshold, and
+  its hold does not end at the moves; another key starts a new count).
+- **HELD-2: the wake kind `task_held`** (row HELD-R10). Not before HELD-1 is merged; in the same
+  release it shares `actingd-config` 29, in a later one it takes the next free revision. Tests:
+  `held_wake_t1_a_task_held_rule_wakes_for_a_held_record_and_never_for_its_end`;
+  `held_wake_t2_task_held_is_the_weakest_kind_of_a_burst_and_cools_down_by_rule_instance_and_code`;
+  `held_wake_t3_the_message_word_and_the_next_reads` (任务滞留; `ac_schedule` with the instance first,
+  then `ac_events` without one); `held_wake_t4_an_alias_no_registered_instance_has_is_no_candidate`;
+  `held_wake_t5_a_task_held_rule_with_codes_wakes_only_for_its_gate_codes` (settled 3; without
+  `codes` every held record); and the section check accepting `task_held` in `on.kinds` with or
+  without `codes`, and refusing an empty `codes` (`match_missing`) and an unlisted code
+  (`code_unknown`).
+
+**What changes live** (once HELD-1 is deployed). A due or undecidable pair held by a held code for
+30 minutes leaves one warning in the ledger, in the errors view (`ac_events`, an `ac_diagnose`
+without an instance) and, with HELD-1's readers, in `actingd suspended` and the instance's
+`ac_diagnose`; its end leaves one info record; a start ends the holds the runs before it left open.
+No decision, intent, eligibility age, guard, pause, ladder or streak changes, and nothing reaches
+a person's channel until HELD-2 and a rule exist. The configuration manifest lists the two keys
+(and each instance's two). A console edits them only once its `actingd-config` range reaches the
+revision.
+
+**Rollback** (below 0.12.56). A build before reads both records and ignores them (the walk). Its
+configuration must not name `scheduling.task_held` (refused as an unknown member): remove the
+member before going back. A hold open when the build changes keeps no end record: the older build's
+start does not end it, and records its own anchor, after which a newer start reads; a reader takes
+the next start record after a held record without an end as its end. After HELD-2, an open wake row
+of kind `task_held` fails loudly on the older build (`kind_unknown`).
+
 ### 1.326 Slice REM-1 (0.12.56): in composer mode the remedy table is built from the composed manifest at start, and every build says what it found (Workflow #442; a production run of 11-12 on v0.12.52 whose outcome key declares a remedy opened no round and recorded nothing; the read-only investigation of that run at `b44eea2d`; coordinator work order `rd-1112/brief-442-rem-1.md`, read on main `6e4119c7`)
 
 [remedies.md](remedies.md) section 7.1 is the contract. 1.326 is the coordinator's number,
-appended after §1.324 on main `6e4119c7`; §1.322, §1.323 and §1.325 belong to slices not merged
-yet. No persisted ledger shape, wire shape, request kind, configuration key, outcome code,
+written after §1.324 on main `6e4119c7`. Sections stand in merge order: §1.322 was merged first
+(main `af43ac3f`, merged into this slice), so this section follows it; §1.323 belongs to a slice
+not merged yet, and §1.325 was not used. No persisted ledger shape, wire shape, request kind, configuration key, outcome code,
 vocabulary or interface revision is new or changed. On main `6e4119c7` the start order,
 `table_due` and `build_table` are the ones the investigation read at `b44eea2d`; since then only
 Workflow #429 R-8 added the task packages to the table, which the pack schedule view reads.

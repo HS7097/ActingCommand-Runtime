@@ -9,11 +9,15 @@ attribute (every module job, on the Windows runner)
     (`cargo test --no-run --message-format=json-render-diagnostics`), checks every test binary's
     count against libtest's `running N tests` and `test result:` lines, and writes
     `<log stem>.results.json` next to the log. Any parse failure exits 1 and writes nothing.
+    A log that stops in the middle (the Test step ran out of its `timeout-minutes`, #71 FLK-13)
+    is no parse failure: the document then holds `timed_out`, where the log stops and the tests
+    that had started and not finished as far as the log tells, and `check` is red on it.
 
 check (the `gate` job, check name `rust`, on ubuntu)
     Holds the gate map contracts/test-gates/<module>.toml against the attributed results of every
     module job: each map name runs exactly once per configuration its job runs it in, and passes.
-    A name of ci/flaky-tests.toml is reported as "flaky, skipped". On pull requests the head is
+    A results document with `timed_out` is a violation that names its unfinished tests. A name
+    of ci/flaky-tests.toml is reported as "flaky, skipped". On pull requests the head is
     held against its merge base with the base branch (a base that moves while the run is under
     way adds no row the head could lack): a test name or a row `key` the merge base holds and the
     head does not leaves only when ci/retired-gates.toml lists it (Alice 10-09: a retirement
@@ -49,7 +53,7 @@ GATE_FRAGMENTS = ("contract", "ledger", "host", "policy", "exec", "apps")
 # cargo colours its status lines (CARGO_TERM_COLOR=always); the job log shows ESC as `^[`.
 ANSI = re.compile(r"(?:\x1b|\^\[)\[[0-9;]*[A-Za-z]")
 # The Test step prefixes every line with `HH:mm:ss.fff `.
-STAMP = re.compile(r"^\d{2}:\d{2}:\d{2}\.\d{3} ")
+STAMP = re.compile(r"^(?P<stamp>\d{2}:\d{2}:\d{2}\.\d{3}) ")
 RUNNING = re.compile(r"^\s*Running (?:unittests )?\S.*\((?P<exe>[^()]+)\)\s*$")
 DOCTESTS = re.compile(r"^\s*Doc-tests \S+\s*$")
 COUNT = re.compile(r"^running (?P<count>\d+) tests?$")
@@ -63,6 +67,11 @@ SUMMARY = re.compile(
 LIBTEST_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$")
 # trybuild's per-file line of a compile_fail UI test (`test tests/ui/<name>.rs ... ok|error`).
 TRYBUILD = re.compile(r"^test \S+\.rs \.\.\.(?: .*)?$")
+# libtest's notice for a test that has run 60 seconds and not finished. Multi-threaded, libtest
+# names a test only when it ends, so this is the only line naming one that is still running.
+LONG_RUNNING = re.compile(r"^test (?P<name>.+) has been running for over (?P<seconds>\d+) seconds$")
+# cargo's line after a test binary that ended without passing: failed tests or a crash.
+CARGO_TEST_FAILED = re.compile(r"^error: test failed, to rerun pass ")
 SHOULD_PANIC = " - should panic"
 LIB_KINDS = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
 
@@ -140,6 +149,8 @@ class Binary:
         self.summary = None
         self.results = {}
         self.pending = None
+        self.pending_at = None  # (line, stamp) of the pending test's `test <path> ... `
+        self.long = {}  # libtest path → (line, stamp, seconds) of its first LONG_RUNNING notice
         self.foreign = 0
         self.nested = 0
 
@@ -156,7 +167,8 @@ def libtest_name(name):
 
 
 def parse_log(log, table):
-    """Every test binary of one log with its attributed results; a list of failures.
+    """Every test binary of one log with its attributed results; a list of failures; and where
+    the log stops in the middle (`timed_out` of the results document), None when it does not.
 
     cargo prints its `Running` and `Doc-tests` headers on stderr and libtest prints each
     binary's session (`running N tests` … `test result:`) on stdout. The Test step merges the two
@@ -166,12 +178,23 @@ def parse_log(log, table):
     (one or two per `Doc-tests` header: rustdoc runs standalone and merged doc tests apart).
     trybuild writes its `test tests/ui/<name>.rs ... ok` lines on stderr too, so one can land after
     its binary's `test result:` (run 38122467672); it is no libtest result and is never attributed.
+    A Test step that runs out of its `timeout-minutes` leaves a log that stops in the middle
+    (#71 FLK-13, run 43070595705): `stop_point` tells it from a log cargo finished.
     """
-    headers, sessions, failures = [], [], []
+    headers, sessions, failures, cargo_failed = [], [], [], []
     session = None  # the open session, from its `running N tests` to its `test result:`
+    last = (0, None)  # line number and stamp of the log's last line that is not blank
     lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
     for number, raw in enumerate(lines, 1):
-        line = STAMP.sub("", ANSI.sub("", raw), count=1).rstrip()
+        clean = ANSI.sub("", raw)
+        stamped = STAMP.match(clean)
+        stamp = stamped["stamp"] if stamped else None
+        line = (clean[stamped.end():] if stamped else clean).rstrip()
+        if clean.strip():
+            last = (number, stamp)
+        if CARGO_TEST_FAILED.match(line):
+            cargo_failed.append(number)
+            continue
         running = RUNNING.match(line)
         if running:
             headers.append((exe_name(running["exe"].strip()), number))
@@ -183,6 +206,7 @@ def parse_log(log, table):
         result = RESULT.match(line)
         summary = SUMMARY.match(line)
         started = None if result else STARTED.match(line)
+        notice = LONG_RUNNING.match(line)
         if session is None:
             if count:
                 session = Binary(None, None, None, number)
@@ -223,16 +247,24 @@ def parse_log(log, table):
                 session.foreign += 1
             else:
                 session.pending = name
+                session.pending_at = (number, stamp)
+        elif notice:
+            name = libtest_name(notice["name"])
+            if name is not None:
+                session.long.setdefault(name, (number, stamp, int(notice["seconds"])))
     tests = [header for header in headers if header[0] is not None]
     docs = len(headers) - len(tests)
     if any(exe is None for exe, _ in headers[: len(tests)]):
         failures.append("a Doc-tests header comes before a Running header")
-        return [], failures
-    if len(sessions) < len(tests) + docs or (docs == 0 and len(sessions) != len(tests)):
+        return [], failures, None
+    stop = stop_point(headers, len(tests), docs, sessions, session, cargo_failed)
+    if stop is None and (
+        len(sessions) < len(tests) + docs or (docs == 0 and len(sessions) != len(tests))
+    ):
         failures.append(
             f"{len(tests)} Running and {docs} Doc-tests headers but {len(sessions)} libtest sessions"
         )
-        return [], failures
+        return [], failures, None
     binaries = []
     for (exe, header_line), binary in zip(tests, sessions):
         if exe not in table:
@@ -241,8 +273,117 @@ def parse_log(log, table):
         binary.package, binary.target = table[exe]
         binary.exe = exe
         binaries.append(binary)
-        failures.extend(check_binary(binary))
-    return binaries, failures
+        if stop != "session" or binary is not session:
+            failures.extend(check_binary(binary))  # the session the log stops in has no end
+    if stop is not None:
+        stop = stopped_at(stop, last, headers, tests, sessions, session, table)
+    return binaries, failures, stop
+
+
+def stop_point(headers, tests, docs, sessions, session, cargo_failed):
+    """`session` or `header` when the log stops in the middle, None when cargo finished it.
+
+    cargo runs the test binaries one after another, the doc tests last; it prints a binary's
+    `Running` header before it starts it, the next one only after it ended, and `error: test
+    failed, to rerun pass …` after one that failed or crashed. So the log stops in the middle
+    when it ends
+    - inside the session of its last test binary or of a doc test, with no cargo failure line
+      after that session began (`session`), or
+    - after a header whose session never began, with no cargo failure line after it: the last
+      `Running` header with every binary before it matched, or the last `Doc-tests` header with
+      a session missing (`header`).
+    Anything else is the log of a finished cargo run and the parse checks hold it as before. A
+    log that stops between a `test result:` and the next header reads as finished; the gate
+    then names the map names that did not run. `tests` is the number of `Running` headers.
+    """
+    failed = cargo_failed[-1] if cargo_failed else 0
+    if session is not None:
+        index = len(sessions) - 1
+        last_binary = index >= tests - 1 and (index >= tests or docs == 0)
+        return "session" if last_binary and failed < session.line else None
+    if not headers:
+        return None
+    exe, line = headers[-1]
+    if (sessions and line < sessions[-1].line) or failed > line:
+        return None
+    if exe is not None:
+        return "header" if docs == 0 and len(sessions) == tests - 1 else None
+    return "header" if tests <= len(sessions) < tests + docs else None
+
+
+def stopped_at(kind, last, headers, tests, sessions, session, table):
+    """The `timed_out` member of a results document (see `stop_point` for `kind`): the log's last
+    line and its stamp, the binary the log stops in, and the tests that had started and not
+    finished as far as the log tells. Multi-threaded, libtest names a running test only in its
+    60-second notice; single-threaded it writes `test <path> ... ` as the test starts."""
+    line, stamp = last
+    binary = session if kind == "session" else None
+    if kind == "session":
+        index = len(sessions) - 1
+        exe = tests[index][0] if index < len(tests) else None
+    else:
+        exe = headers[-1][0]
+    prefix = ""
+    if exe is not None:
+        if exe in table:
+            package, target = table[exe]
+            where = f"{package}::{target}"
+            prefix = f"{where}::"
+        else:
+            where = f"{exe} (missing from the test build table)"
+    elif any(name is None for name, _ in headers):
+        where = "the doc tests"
+        binary = None  # doc tests are no #[test] fn: not attributed
+    else:
+        where = "a test binary whose `Running` line the log lacks"
+    unfinished = []
+    if binary is not None:
+        for name, (at, when, seconds) in binary.long.items():
+            if name not in binary.results:
+                unfinished.append({
+                    "test": prefix + name,
+                    "line": at,
+                    "stamp": when,
+                    "seen": f"running for over {seconds} seconds",
+                })
+        if binary.pending is not None and binary.pending not in binary.long:
+            at, when = binary.pending_at
+            unfinished.append(
+                {"test": prefix + binary.pending, "line": at, "stamp": when, "seen": "started"}
+            )
+        unfinished.sort(key=lambda entry: entry["line"])
+    return {
+        "line": line,
+        "stamp": stamp,
+        "in": where,
+        "running": binary.running if binary is not None else None,
+        "finished": len(binary.results) if binary is not None else None,
+        "unfinished": unfinished,
+    }
+
+
+def stop_message(job, log, stop):
+    """One line naming the job as timed out and its unfinished tests, for `attribute` and `check`."""
+    at = f"line {stop['line']}" + (f" ({stop['stamp']})" if stop["stamp"] else "")
+    progress = ""
+    if stop["running"] is not None:
+        progress = f", where {stop['finished']} of its {stop['running']} tests had finished"
+    named = [
+        f"{entry['test']} ({entry['seen']}, line {entry['line']}"
+        + (f" at {entry['stamp']})" if entry["stamp"] else ")")
+        for entry in stop["unfinished"]
+    ]
+    if named:
+        tests = "started and not finished: " + "; ".join(named)
+    else:
+        tests = (
+            "the log names no test that had started and not finished (libtest names a running "
+            "test once it has run 60 seconds, or as it starts when single-threaded)"
+        )
+    return (
+        f"job {job} timed out: {log} stops in the middle at {at}, in {stop['in']}{progress}; "
+        f"{tests}"
+    )
 
 
 def record(binary, name, result, number, failures):
@@ -279,9 +420,11 @@ def check_binary(binary):
 
 def cmd_attribute(args):
     log = Path(args.log)
+    if not log.is_file():
+        fail(f"{log} does not exist: the Test step ended before it wrote this log")
     table = exe_table([Path(path) for path in args.build])
-    binaries, failures = parse_log(log, table)
-    if not binaries:
+    binaries, failures, stop = parse_log(log, table)
+    if not binaries and stop is None:
         failures.append("the log has no Running line")
     print(f"{log.name} (configuration {args.configuration!r}):")
     for binary in binaries:
@@ -292,6 +435,9 @@ def cmd_attribute(args):
             f"ignored {summary.get('ignored')} filtered out {summary.get('filtered')}; "
             f"foreign lines {binary.foreign}, child libtest lines {binary.nested}"
         )
+    if stop is not None:
+        # A workflow command: the run's summary shows it as an error of this job.
+        print(f"::error::{stop_message(args.job, log.name, stop)}")
     if failures:
         for failure in failures:
             print(f"parse failure: {failure}", file=sys.stderr)
@@ -314,6 +460,8 @@ def cmd_attribute(args):
             for binary in binaries
         ],
     }
+    if stop is not None:
+        document["timed_out"] = stop  # `check` is red on it, naming the unfinished tests
     out.write_text(json.dumps(document, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     print(f"wrote {out.name}")
 
@@ -527,6 +675,8 @@ def load_results(results_dir, modules, violations):
             if document.get("format") != RESULTS_FORMAT or document.get("job") != job:
                 violations.append(f"job {job}: {document_path.name} is not {RESULTS_FORMAT} of {job}")
                 continue
+            if document.get("timed_out") is not None:
+                violations.append(stop_message(job, document["log"], document["timed_out"]))
             configuration = document["configuration"]
             for binary in document["binaries"]:
                 for path, result in binary["tests"].items():
