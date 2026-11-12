@@ -16,7 +16,7 @@ handover's successor before the device's other members. The player hold's own ac
 and second-hold refusal are not built (the player hold itself is not built yet, Workflow #429
 R-7b), and the switch is MAPP-2's. The other contracts point here instead of repeating the rules.
 
-Alice settled the direction on 2026-11-11 (board #437): one device may hold several applications
+The owner settled the direction on 2026-11-11 (board #437): one device may hold several applications
 that the scheduler serves in turn; one application is in front at any time; one device has one
 queue, and a task of another application that comes due waits in it even where waiting loses some
 yield; a task package that is running is never interrupted; the queue's order is by weight and by
@@ -508,7 +508,7 @@ lists each action, where it is today, and what slice 1 does in a group of severa
 | 12 | Performance pacing per instance (level, factor, share, `R_eff`) | [performance-control.md](performance-control.md), "Directive", "Tracked value" | Per member as today. It acts on no device: it slows a member's own steps, and a group runs one member at a time |
 | 13 | Shared run limits (`max_concurrent_runs`, heavy-scene slots) | [scheduling/README.md](scheduling/README.md), "Shared Run Limits" | Unchanged; a group adds at most one run |
 | 14 | Handset device state (sampling, holds, start gate) | `crates/runtime-host/src/host/device_state.rs:1-30`, `:1017` | Not reached: handsets are refused (row 6) |
-| 15 | Keyless read-only observations (`observe`, `capture_sequence`) | [emulator-control.md](emulator-control.md), "The operator's claim and the fence" | Under the device's admission guard. **Refused** with `device_group_action_refused` (`operation` `observe_readonly`, with `scheduler.denied` and the failure's record) while another member holds the device, because it would open a second member's session on the device (row 7) |
+| 15 | Keyless read-only observations (`observe`, `capture_sequence`) | [emulator-control.md](emulator-control.md), "The operator's claim and the fence" | Under the device's admission guard. **Refused** with `device_group_action_refused` (`operation` `observe_readonly`, with `scheduler.denied` and the failure's record) while another member holds the device, because it would open a second member's session on the device (row 7). Served on a free device it keeps no session: for its duration (each frame's capture, under the device's guard) no other member's run starts, and its session is closed before the guard frees the device (MAPP-1b, the coordinator's ruling of 11-12, register §1.330) |
 
 **The limits of slice 1 on a device with several members.** The Runtime does not start, stop or
 restart that device's emulator (rows 1, 2 and 5); it does not close the application or the
@@ -543,14 +543,16 @@ them, and it comes before the first real use of a group of several.
   the device"). A hold on one member holds the device for the whole group: while a person uses
   one member by hand, the whole device waits.
   - The acquire drains the device's holder, whichever member's work it is, as it drains the
-    member's own work today (finished or cancelled within `drain_timeout_ms`).
+    member's own work today (finished or cancelled within `drain_timeout_ms`). Not built yet: it
+    comes with the slice that builds player holds (Workflow #429 R-7b).
   - While held, no member is dispatched (the other members' candidates carry `device_group_waiting`
-    `player_hold`, `alias` the holding member), and no claim of any member is granted except those
-    a hold admits today.
-  - A second hold on another member of the same group is refused, as a second hold of one instance
-    is (`player_hold_already_held`), naming the hold.
+    `player_hold`, `alias` the holding member; MAPP-1b), and no claim of any member is granted
+    except those a hold admits today (with R-7b).
+  - A second hold on another member of the same group is to be refused, as a second hold of one
+    instance is (`player_hold_already_held`), naming the hold. Not built yet: no build refuses it
+    until the slice that builds player holds (R-7b).
   - The release runs the holding member's startup package as today, through the switch, since a
-    person may have left any application in front.
+    person may have left any application in front. Not built yet (R-7b, and MAPP-2's switch).
   - The hold's record and state stay the holding member's (`runtime-client` and `ledger` are
     unchanged). What it takes in code: the hold's drain and gate read the device's holder (the
     scheduler's per-device answer), and every member's control gates read the group's holds.
@@ -631,12 +633,15 @@ them, and it comes before the first real use of a group of several.
 
 **Release.**
 
-- MAPP-1 and MAPP-2 ship in one Runtime release, so that no released build has the group's queue
-  without the switch.
-- The first release that accepts a device group of more than one member also carries the slice
-  "order within one device". Until then every build refuses such a group at load
-  (`device_group_config_invalid`, `several_members_unsupported`; "The configuration form"), and no
-  release ships the switch after every task.
+- MAPP-1a shipped in Runtime 0.12.56 with every group of several refused at load (corrected by the
+  coordinator on 11-12, register §1.330).
+- The release that first accepts a device group of more than one member carries the host's rows
+  (MAPP-1b), the switch before a run (MAPP-2) and the slice "order within one device" together,
+  so that no released build runs a group of several without the switch. Until then every build
+  refuses such a group at load (`device_group_config_invalid`, `several_members_unsupported`;
+  "The configuration form"), and no release ships the switch after every task.
+- MAPP-2's key `scheduling.device_group.switch_failure_cooldown_ms` comes with MAPP-2 and takes
+  the next free revision of `actingd-config`.
 - The slice "device-level actions by device" comes before the first real use of a group of
   several.
 

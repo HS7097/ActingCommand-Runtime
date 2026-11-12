@@ -343,11 +343,13 @@ impl HostShared {
 
     /// `contracts/device-group.md`, "Device-level actions", row 15: a keyless read-only
     /// observation of a member of a device group of several, under the device's admission guard
-    /// (`_admission`), is refused while another member holds the device, because it would open a
-    /// second member's session on the device: `scheduler.denied` and the failure's record under
-    /// `links`, then a denied receipt, `device_group_action_refused` (`alias` the member,
-    /// `operation` `observe_readonly`). Nothing is captured. A member that holds the device
-    /// itself, a free device and an instance alone on its device are not refused here.
+    /// (`_admission`), is refused while another member holds the device (its lease, lapsed or
+    /// not, or the device held for the member by another member's run or waiting claim, as its
+    /// occupancy reads it), because it would open a second member's session on the device:
+    /// `scheduler.denied` and the failure's record under `links`, then a denied receipt,
+    /// `device_group_action_refused` (`alias` the member, `operation` `observe_readonly`).
+    /// Nothing is captured. A member that holds the device itself, a free device and an instance
+    /// alone on its device are not refused here.
     pub(super) fn refuse_keyless_observation_of_group(
         &self,
         instance_alias: &str,
@@ -358,9 +360,15 @@ impl HostShared {
         if !self.in_group_of_several(instance_id) {
             return Ok(());
         }
-        let held_by_another = lock(&self.scheduler, HostLocation::ReadInstanceAdmission)?
+        let lease_of_another = lock(&self.scheduler, HostLocation::ReadInstanceAdmission)?
             .active_lease(instance_id)
             .is_some_and(|lease| lease.token().instance_id() != instance_id);
+        let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
+        let held_by_another = lease_of_another
+            || self
+                .device_occupancy(instance_id, now_unix_ms)?
+                .holder
+                .is_some_and(|holder| holder.member != instance_id);
         if !held_by_another {
             return Ok(());
         }

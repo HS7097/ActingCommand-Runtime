@@ -515,6 +515,65 @@ impl HostShared {
         }
     }
 
+    /// Workflow #437 MAPP-1b (`contracts/device-group.md`, "Device-level actions", rows 7 and
+    /// 15; register §1.330): a keyless observation of a member of a device group of several,
+    /// served on a free device under the device's admission guard (`admission`), keeps no
+    /// session: the member's session is closed before the guard frees the device, through a
+    /// dedicated close lease, as a lease end closes it. A device a lease holds (the member's own:
+    /// another member's refused the observation) leaves the session to that lease's end; a close
+    /// lease the member's own waiting claim refuses leaves it to that claim's lease end, recorded
+    /// once. An instance alone on its device keeps its session, as before.
+    pub(super) fn close_keyless_session_of_group(
+        &self,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+        admission: &MutexGuard<'_, ()>,
+    ) -> Result<(), RequestFailure> {
+        if !self.in_group_of_several(instance_id)
+            || lock(&self.scheduler, HostLocation::ReadResourceCloseLease)?
+                .active_lease(instance_id)
+                .is_some()
+        {
+            return Ok(());
+        }
+        // The close's own failure fails the observation (fail loud); a fatal one poisons it.
+        let failed = |error: RuntimeHostError| {
+            if error.is_fatal() {
+                RequestFailure::poison_without_terminal(error)
+            } else {
+                RequestFailure::request(error, RuntimeReceiptState::Failed, None)
+            }
+        };
+        match self.close_retained_instance_while_guarded(
+            instance_id,
+            links.clone(),
+            false,
+            LeaseReleaseReason::Explicit,
+            admission,
+        ) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(close_error)) => match self.settle_retained_close_failure(
+                HostLocation::CloseExecutionSession,
+                instance_id,
+                &close_error,
+            )? {
+                None => Ok(()),
+                Some(error) => Err(failed(error)),
+            },
+            Err(mut refused) if close_lease_refused_by_queue(&refused) => {
+                refused.lifecycle.instance_id = Some(instance_id);
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::SessionClose,
+                    RuntimeLifecycleFailure::Host(&refused),
+                    links,
+                    None,
+                )?;
+                Ok(())
+            }
+            Err(error) => Err(failed(error)),
+        }
+    }
+
     pub(super) fn close_instance_resources_result(
         &self,
         token: &LeaseToken,

@@ -93,6 +93,8 @@ struct Group {
     resources: EvaluationResources,
     approved: bool,
     root: TempDir,
+    /// A's fake device.
+    a_state: Arc<FakeState>,
 }
 
 impl Group {
@@ -101,8 +103,9 @@ impl Group {
         let a = instance_id();
         let b = instance_id();
         let device = a.min(b);
+        let a_state = Arc::new(FakeState::default());
         let mut entries = vec![
-            (A.to_owned(), a, Arc::new(FakeState::default())),
+            (A.to_owned(), a, Arc::clone(&a_state)),
             (B.to_owned(), b, Arc::new(FakeState::default())),
         ];
         if lone {
@@ -152,6 +155,7 @@ impl Group {
             resources,
             approved: false,
             root,
+            a_state,
         }
     }
 
@@ -651,5 +655,73 @@ fn mapp1b_a_member_keeps_no_session_and_its_device_level_actions_are_refused() {
     release(&mut holder, token);
     drop(holder);
     drop(client);
+    group.close();
+}
+
+/// The coordinator's ruling of 11-12 on a keyless observation (register §1.330): a keyless
+/// observation of A on a free device is served under the device's admission guard, so B's
+/// dispatch, admitted while A's capture is in flight, meets the guard and does not start
+/// (`dispatch_instance_contended`); the session the observation opened is closed before the
+/// device is free again (every capture backend A opened is closed); then B's dispatch is
+/// admitted on the free device.
+#[test]
+fn mapp1b_a_keyless_observation_of_a_member_keeps_no_session_and_no_other_member_runs_under_it() {
+    let group = Group::start(200, 300, false);
+    let first = group.evaluate(POLICY_NOW_UNIX_MS);
+    assert_eq!(intents(&first), vec![pair(TASK_B, B)]);
+    let (intent, chain) = intent_of(&first, TASK_B);
+    record_policy_approval(&group.host, &intent);
+    let (entered_tx, entered) = mpsc::channel::<()>();
+    let (proceed_tx, proceed) = mpsc::channel::<()>();
+    *group.a_state.capture_hook.lock().expect("capture hook") = Some(Box::new(move || {
+        let _ = entered_tx.send(());
+        let _ = proceed.recv_timeout(GATE_WAIT);
+    }));
+    let host = &group.host;
+    let (observed, contended) = thread::scope(|scope| {
+        let observer = scope.spawn(move || {
+            let mut client = TestClient::connect(host);
+            let observe = client.request(RuntimeOperation::ObserveReadonly {
+                instance_alias: A.to_owned(),
+            });
+            client.send(&observe)
+        });
+        entered
+            .recv_timeout(GATE_WAIT)
+            .expect("A's capture is in flight");
+        let contended = host
+            .admit_policy_dispatch(&intent, &chain, &policy_context(host, &intent))
+            .expect_err("B's dispatch meets the device's admission guard");
+        proceed_tx.send(()).expect("A's capture goes on");
+        (observer.join().expect("the observer"), contended)
+    });
+    assert_eq!(
+        contended.code(),
+        HostCode::DispatchInstanceContended.as_str(),
+        "{contended:?}"
+    );
+    assert_eq!(
+        observed.state(),
+        RuntimeReceiptState::Completed,
+        "{observed:?}"
+    );
+    let opened = group.a_state.capture_open_count.load(Ordering::Acquire);
+    assert!(opened > 0, "the observation opened A's capture");
+    assert_eq!(
+        group.a_state.capture_close_count.load(Ordering::Acquire),
+        opened,
+        "A holds no open session"
+    );
+
+    let after = group.evaluate(POLICY_NOW_UNIX_MS + MINUTE_MS);
+    assert_eq!(intents(&after), vec![pair(TASK_B, B)]);
+    let (intent, chain) = intent_of(&after, TASK_B);
+    let admitted = host
+        .admit_policy_dispatch(&intent, &chain, &policy_context(host, &intent))
+        .expect("B's dispatch is admitted on the free device");
+    assert!(
+        matches!(admitted, PolicyDispatchAdmission::Granted { .. }),
+        "{admitted:?}"
+    );
     group.close();
 }
