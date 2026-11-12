@@ -21,7 +21,17 @@
 //!   for a process of another account) is listed always, with `stale: null` and `probe_failed`
 //!   (`process_probe_failed`, `pid`, caused by the probe's reason), and the answer's `warnings`
 //!   holds one `process_probe_failed` caused by each of them. Nothing is deleted.
+//!
+//! Workflow #434 LAB-5G5b (register §1.287, "Slice LAB-5G5b"): the rescue module's rows `mcp plan`
+//! and `mcp entries` share this module's code with the first generation's two commands, which
+//! answer as before:
+//! - [`plan_g2`] is the second generation's plan (`entry_protocol` 2), the answer its entry
+//!   `actingcommand-mcp-entry-g2` reads, on the rescue module's own root: the same checks and
+//!   refusals as `plan`, its child the server `actinglab-mcp.exe` of the installed build;
+//! - [`entries`] is `list` of the same status files, both generations side by side, each row with
+//!   the generation its file states.
 
+use super::manifest::{self, Half};
 use super::state::{self, Paths};
 use super::{Answer, Flags, adopt, files, refusal, resolve_root};
 use crate::cli_line;
@@ -31,6 +41,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::fs::{self, File, TryLockError};
 use std::io::ErrorKind;
+use std::path::PathBuf;
 
 /// The contract version between the entry and `mcp-entry plan` (D1: `entry_protocol` 1).
 const ENTRY_PROTOCOL: u64 = 1;
@@ -293,3 +304,123 @@ pub(super) fn list_with(words: &[&str], created_at: CreatedAt<'_>) -> Result<Ans
     );
     answer.with("warnings", [cli_line::warning(&warning)])
 }
+
+// ---- Workflow #434 LAB-5G5b (begin): the second generation's plan, and both generations' list.
+
+/// Workflow #434 LAB-5G5b: the contract version between the entry's second generation
+/// (`actingcommand-mcp-entry-g2`) and the rescue row `mcp plan` (`entry_protocol` 2).
+pub(crate) const ENTRY_PROTOCOL_G2: u64 = 2;
+/// Workflow #434 LAB-5G5b: the second generation's child, the MCP server.
+const SERVER_PROGRAM: &str = "actinglab-mcp.exe";
+
+/// Workflow #434 LAB-5G5b: the rescue row `mcp plan` on the root `paths`, the module's own, with
+/// `current_build` the commit of the entry's current child when the entry names one. It answers
+/// what the second generation reads of a plan (register §1.287, "Slice LAB-5G5a"): `switch`
+/// (whether the installed build differs from `current_build`; false without it), `build {commit,
+/// manifest_sha256}`, `child` (one element: the server program of the installed build, as
+/// [`carried_server`] finds it), `tunables` and `entry_protocol` 2, beside the outcome; no
+/// `reason`, which that entry does not read. The rules of the first generation's plan hold: an
+/// A/B root and a root that is no single-location root refuse, the configuration is read before
+/// the installed files are hashed, and every refusal after that read carries `tunables`; an
+/// unfinished operation, a held writer lock and a live build that does not verify refuse as
+/// there. A build whose manifests list no `actinglab-mcp.exe` refuses `mcp_server_not_in_build`
+/// (`commit_sha`, `path` the last place looked): never a path that does not exist, never another
+/// program.
+pub(crate) fn plan_g2(paths: &Paths, current_build: Option<&str>) -> Result<Answer, Outcome> {
+    let operation = InstallLocation::McpEntryPlan;
+    super::refuse_ab(operation, paths)?;
+    if !paths.is_single_location() {
+        return Err(refusal(operation, InstallRefusal::NotSingleLocation).path(&paths.root));
+    }
+    let settings = install_settings(paths, operation)?;
+    let tunables = Tunables {
+        poll_ms: settings.mcp_entry_poll_ms,
+        settle_ms: settings.mcp_entry_settle_ms,
+        verify_timeout_ms: settings.mcp_entry_verify_timeout_ms,
+        drain_max_ms: settings.mcp_entry_drain_max_ms,
+        refused_retry_max_ms: settings.mcp_entry_refused_retry_max_ms,
+    };
+    match planned_g2(operation, paths, current_build, &tunables) {
+        Ok(answer) => Ok(answer),
+        Err(refused) => Answer::new(refused).with("tunables", &tunables),
+    }
+}
+
+/// The second generation's plan once the tunables are known: the checks that may refuse, in the
+/// first generation's order, then the answer.
+fn planned_g2(
+    operation: InstallLocation,
+    paths: &Paths,
+    current_build: Option<&str>,
+    tunables: &Tunables,
+) -> Result<Answer, Outcome> {
+    if state::unfinished_operation(&paths.root).is_some() {
+        return Err(refusal(operation, InstallRefusal::OperationUnfinished).path(paths.current()));
+    }
+    writer_lock_free(paths, operation)?;
+    let build = adopt::verify_live(operation, paths)?;
+    let server = carried_server(paths, &build).ok_or_else(|| {
+        refusal(operation, InstallRefusal::McpServerNotInBuild)
+            .commit_sha(build.commit.clone())
+            .path(paths.root.join(Half::Tools.dir()).join(SERVER_PROGRAM))
+    })?;
+    let manifest = paths.root.join("runtime").join("BUILD-MANIFEST.json");
+    let manifest_bytes = files::read_all(&manifest).map_err(|cause| {
+        refusal(operation, InstallRefusal::LiveBuildInvalid)
+            .path(&manifest)
+            .caused_by(cause)
+    })?;
+    let switch = current_build.is_some_and(|current| !current.eq_ignore_ascii_case(&build.commit));
+    Answer::new(super::done(operation))
+        .with("switch", switch)?
+        .with(
+            "build",
+            PlannedBuild {
+                commit: build.commit,
+                manifest_sha256: files::sha256_bytes(&manifest_bytes),
+            },
+        )?
+        .with("child", [files::plain(&server)])?
+        .with("tunables", tunables)?
+        .with("entry_protocol", ENTRY_PROTOCOL_G2)
+}
+
+/// The server program the build `build` carries, where the second generation looks for it:
+/// `runtime\actinglab-mcp.exe` when the Runtime member's manifest lists it, else
+/// `tools\actinglab-mcp.exe` when the Tools member's does (a listed file is checked against its
+/// manifest with the rest of the build); `None` when neither lists it.
+fn carried_server(paths: &Paths, build: &manifest::Build) -> Option<PathBuf> {
+    [Half::Runtime, Half::Tools].into_iter().find_map(|half| {
+        build
+            .manifest(half)
+            .files
+            .iter()
+            .any(|file| file.path.eq_ignore_ascii_case(SERVER_PROGRAM))
+            .then(|| paths.root.join(half.dir()).join(SERVER_PROGRAM))
+    })
+}
+
+/// Workflow #434 LAB-5G5b: the rescue row `mcp entries` on the root `paths`, the module's own:
+/// `list` of the entries' status files as it lists them (every `entry-*.json` of
+/// `mcp-entry\state\`, whichever generation wrote it; the stale ones only with `all`), each row
+/// with `generation` when its file states one (`entry_generation`, a whole number).
+pub(crate) fn entries(paths: &Paths, all: bool) -> Result<Answer, Outcome> {
+    let mut words = vec!["--root", paths.plain.as_str()];
+    if all {
+        words.push("--all");
+    }
+    let mut answer = list_with(&words, &crate::process_probe::pid_created_at)?;
+    if let Some(Value::Array(rows)) = answer.members.get_mut("entries") {
+        for row in rows.iter_mut() {
+            let generation = row
+                .pointer("/status/entry_generation")
+                .and_then(Value::as_u64);
+            if let (Some(generation), Some(row)) = (generation, row.as_object_mut()) {
+                row.insert("generation".to_owned(), Value::from(generation));
+            }
+        }
+    }
+    Ok(answer)
+}
+
+// ---- Workflow #434 LAB-5G5b (end) ----

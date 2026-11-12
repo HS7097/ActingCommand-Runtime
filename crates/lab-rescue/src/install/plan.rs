@@ -30,10 +30,18 @@ pub(crate) const PLAN_SCHEMA: &str = "actingcommand.install-plan.v1";
 /// The configuration member that names the state root.
 const STATE_ROOT_MEMBER: &str = "state_root";
 const DEFAULTS_FILE: &str = "actingd.defaults.json";
-/// The image that may be renamed aside while it runs.
-const RENAMABLE_IMAGE: &str = "actingctl.exe";
-/// #411 P49 (MCP-ENTRY review L9): the MCP entry's image (`<root>\mcp-entry\g<N>\`).
-const MCP_ENTRY_IMAGE: &str = "actingcommand-mcp-entry.exe";
+/// The images that may be renamed aside while they run, by file name, in `tools\` and `runtime\`
+/// alike: `actingctl.exe` and, Workflow #434 LAB-5G6 (the coordinator's ruling 5 on board #434),
+/// the Lab's MCP server `actinglab-mcp.exe`, which its client keeps running as it keeps
+/// `actingctl.exe mcp-serve`. `actinglab.exe` is not one of them.
+const RENAMABLE_IMAGES: [&str; 2] = ["actingctl.exe", "actinglab-mcp.exe"];
+/// #411 P49 (MCP-ENTRY review L9): the MCP entries' images (`<root>\mcp-entry\g<N>\`), one
+/// program per generation: `actingcommand-mcp-entry.exe` (`g1`) and, Workflow #434 LAB-5G6 (the
+/// coordinator's ruling of 2026-11-12 on board #434), `actingcommand-mcp-entry-g2.exe` (`g2`).
+const MCP_ENTRY_IMAGES: [&str; 2] = [
+    "actingcommand-mcp-entry.exe",
+    "actingcommand-mcp-entry-g2.exe",
+];
 
 /// What is planned: an update to a kept build, or a rollback to one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -124,7 +132,8 @@ pub(crate) struct Running {
     /// `actingcommand-actingd.exe` under the root.
     pub(crate) runtime: Vec<RunningImage>,
     pub(crate) owner_lock_held: bool,
-    /// Running `actingctl.exe` images that are renamed aside and keep running.
+    /// Running `actingctl.exe` and `actinglab-mcp.exe` images (`RENAMABLE_IMAGES`) that are
+    /// renamed aside and keep running.
     pub(crate) renamed: Vec<RunningImage>,
     /// Workflow #434 LAB-3 fix 1: the image of the process that plans, when it would change and
     /// is not `actingctl.exe` (the Lab's rescue module run from `<root>\tools\actinglab.exe`):
@@ -135,8 +144,8 @@ pub(crate) struct Running {
     /// Running images that would change and may not be renamed (`adb.exe` among them).
     pub(crate) blocked: Vec<RunningImage>,
     /// #411 P49 (MCP-ENTRY review L9): the pids of the MCP entries running under the root
-    /// (`actingcommand-mcp-entry.exe`). An `mcp-serve` image one of them started is switched to
-    /// the live build by that entry; its client does not reconnect.
+    /// (`MCP_ENTRY_IMAGES`). An image serving MCP that one of them started is switched to the
+    /// live build by that entry; its client does not reconnect.
     #[serde(skip)]
     pub(crate) mcp_entries: BTreeSet<u32>,
 }
@@ -941,7 +950,7 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
             .unwrap_or(&lower)
             .replace('\\', "/");
         let name = relative.rsplit('/').next().unwrap_or_default().to_owned();
-        if name == MCP_ENTRY_IMAGE {
+        if MCP_ENTRY_IMAGES.contains(&name.as_str()) {
             running.mcp_entries.insert(image.pid);
         }
         if name == programs::DAEMON {
@@ -954,7 +963,7 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
         if !changes {
             continue;
         }
-        if name == RENAMABLE_IMAGE {
+        if RENAMABLE_IMAGES.contains(&name.as_str()) {
             running.renamed.push(image);
         } else if Some(image.pid) == own_pid {
             // Workflow #434 LAB-3 fix 1: the program that plans, renamed aside like actingctl.exe.

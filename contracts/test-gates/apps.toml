@@ -1613,6 +1613,23 @@ tests = [
 ]
 incident = ["#434 LAB-5G2a"]
 
+# Workflow #434 LAB-5G5b (0.12.57; register §1.287, "Slice LAB-5G5b"; brief rd-1112/brief-lab5g5b.md; contracts/install-cli.md, "The MCP entry"; contracts/lab-two-entries.md §7): the rescue module serves the rows mcp plan, mcp entries and mcp config, read only, on its own root. mcp plan --entry-protocol 2 on a made-up root whose build carries actinglab-mcp.exe in its Tools member answers the checked-in sample crates/lab-rescue/tests/fixtures/mcp-plan-entry-protocol-2.json (the temporary root written as C:\ActingCommand): switch, build {commit, manifest_sha256}, a child of one element, the five tunables, entry_protocol 2 and the outcome, nothing else; switch is false when current_build names the installed build and without it; the Runtime member's server comes before the Tools member's; a build whose manifests list no actinglab-mcp.exe (a file in place that none lists too) refuses install_command_refused mcp_server_not_in_build with commit_sha, the last place looked as path and the tunables, no child; protocol 1 and 3 are refused --entry-protocol not_recognised as the first generation's plan refuses protocol 2; a held writer lock gives the line the first generation's plan gives (writer_lock_failed with the tunables). The second generation's entry reads the same sample with its own reader: as a first plan it names the child's build, as a later one its switch starts child[0] with the entry's words, its build, tunables and outcome taken. mcp entries lists a status file of each generation side by side, each with its generation, a file stating none without one. mcp config gives each client's snippet in actingctl mcp-config's shapes for <root>\mcp-entry\g2\actingcommand-mcp-entry-g2.exe with --root, --client and --, no --tier, --list <modules> after -- when given; a word no module row of role operations names, an empty word, an empty list (not_recognised), a word twice (repeated) and an unknown client are refused; while the program is not placed the snippet carries install_caveat_noted mcp_entry_not_placed as a note and a warning, once placed none, and no file is written. The real actinglab placed as tools\actinglab.exe of a made-up root answers the three rows with the same line on its command line (--json) and in serve --stdio
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5g5b::mcp_plan_answers_the_checked_in_sample",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5g5b::mcp_plan_switch_is_false_for_the_selected_build",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5g5b::mcp_plan_refuses_a_build_without_the_server",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5g5b::mcp_plan_refuses_entry_protocol_1",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5g5b::mcp_plan_refuses_while_the_writer_lock_is_held",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5g5b::mcp_entries_lists_both_generations",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5g5b::mcp_config_gives_each_clients_snippet",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5g5b::mcp_config_refuses_a_list_word_the_server_refuses",
+    "actingcommand-mcp-entry-g2::bin:actingcommand-mcp-entry-g2::tests::g2_the_entry_reads_the_rescue_rows_sample",
+    "actingcommand-actinglab::rescue_mcp_rows::mcp_rows_answer_the_same_line_on_the_command_line_and_in_serve",
+]
+incident = ["#434 LAB-5G5b"]
+
 # Workflow #428 LAB-OCR-DL (0.12.57; register §1.331; brief rd-1112/brief-lab-ocr-deadline.md; contracts/vision-model-folders.md, "Startup and first use"; contracts/lab-operations.json, the switch ocr_deadline_max): an offline evaluation of a saved scene may take each OCR target's timeout_ms as 60000 on the switch --ocr-deadline-max; the readers' evaluation over a provider whose inference takes 3000 ms of an OCR target that declares 1000 fails with the engine's Timeout of today without the switch, its request's deadline 1000, and passes with it, its request's deadline 60000 (with_ocr_deadline_max); on a saved scene observe, do --dry-run, ensure --dry-run, wait, recognize, is-visible, detect-page, current-page, tap-target --dry-run and navigate --dry-run answer ocr_deadline_raised_to_ms 60000 with the switch and no such member without it, recognize's answer otherwise the same; beside --capture or with no --scene the switch is refused validation_failed naming it, conflicting
 [[gate]]
 coverage = "Y"
@@ -1622,3 +1639,12 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_428_lab_ocr_dl::lab_ocr_dl_the_switch_off_a_saved_scene_is_refused",
 ]
 incident = ["#428 LAB-OCR-DL"]
+
+# Workflow #434 LAB-5G6 (0.12.57; register §1.287, "Slice LAB-5G6"; brief rd-1112/brief-lab5g6.md; contracts/install-cli.md, "Running images"; the coordinator's ruling 5 on board #434, 6775192250): on the installer's fake host and a made-up root, a running tools\actinglab-mcp.exe never blocks a deploy that replaces its file: with another running tools\actinglab.exe the rescue module's deploy plan refuses running_image_blocks naming that actinglab and lists the server under running.renamed; with the server alone, holding its file open, the plan lists it under running.renamed and nothing under running.blocked, the deploy is applied, its apply lists the server's pid under running_renamed with the caveat mcp_clients_on_previous_build (count 1), the new build's server is in place and the old one is kept as actinglab-mcp.exe.old-<ms>, still read through the open handle; a build that carries the server in runtime\ is planned and applied the same way. Second commit (the coordinator's ruling of 2026-11-12 on board #434), the running images read from probe-shaped rows: the server serves MCP by its image name, so install status lists it running on its kept file among mcp_servers_on_old_images beside an actingctl.exe mcp-serve on its kept file and not an actingledger.exe on its kept file; and the second entry is an entry, so the plan's mcp_clients_reconnect is false for a renamed server the second entry started, as for an actingctl.exe mcp-serve the first entry started, and true for one started without an entry, as for today's
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5g6::deploy_not_blocked_by_mcp",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5g6::deploy_notice_counts_the_mcp_server_as_todays",
+]
+incident = ["#434 LAB-5G6"]

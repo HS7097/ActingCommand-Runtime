@@ -492,6 +492,10 @@ actingcommand_contract::outcome_locations! {
         Unlock => "install_unlock",
         CheckConfig => "install_check_config",
         LedgerVerify => "install_ledger_verify",
+        // Workflow #434 LAB-5G5b (since 0.12.57): the rescue module's `mcp config`, the
+        // registration snippet of the MCP entry's second generation (its `mcp plan` and `mcp
+        // entries` answer as `install_mcp_entry_plan` and `install_mcp_entry_list`).
+        McpConfig => "install_mcp_config",
     }
 }
 
@@ -578,6 +582,9 @@ actingcommand_contract::outcome_vocabulary! {
         // in its pause step, a `down` reason an instance shows already, or a pause that no longer
         // shows the revision the module recorded is not its own (`hold_reason`, `aliases`).
         HoldNotOwned => "hold_not_owned",
+        // Workflow #434 LAB-5G5b (since 0.12.57): the rescue module's `mcp plan` finds no
+        // `actinglab-mcp.exe` in the manifests of the installed build (`commit_sha`, `path`).
+        McpServerNotInBuild => "mcp_server_not_in_build",
     }
 }
 
@@ -645,6 +652,9 @@ actingcommand_contract::outcome_vocabulary! {
         // its operations folder cannot be read), so its `next` leaves the `release-hold` out and
         // the answer says so (`hold_reason` when the reason parses, the failure as the cause).
         HoldOwnershipUnconfirmed => "hold_ownership_unconfirmed",
+        // Workflow #434 LAB-5G5b (since 0.12.57): the rescue module's `mcp config` gave the
+        // snippet of an entry program that is not placed in `mcp-entry\g2\` (`path`).
+        McpEntryNotPlaced => "mcp_entry_not_placed",
     }
 }
 

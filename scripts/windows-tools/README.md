@@ -20,8 +20,11 @@ MuMu/Nemu, model, provider, or Runtime binaries.
   and `RELEASE-NOTES.md`;
 - `actingcommand-tools-<40-character-commit-sha>`: `actinglab.exe`,
   `actingledger.exe`,
-  `actingcommand-vision-provider-check.exe` and
-  the watchdog launcher `actingwatch.exe` (Workflow #374), plus the official Android platform-tools 37.0.1 files under `platform-tools/`:
+  `actingcommand-vision-provider-check.exe`,
+  the watchdog launcher `actingwatch.exe` (Workflow #374), the MCP entry
+  `actingcommand-mcp-entry.exe` (Workflow #421 MCP-ENTRY, since v0.12.18), the Lab's MCP server
+  `actinglab-mcp.exe` and the MCP entry's second generation `actingcommand-mcp-entry-g2.exe`
+  (Workflow #434 LAB-5G6, since 0.12.57), plus the official Android platform-tools 37.0.1 files under `platform-tools/`:
   `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and
   `source.properties`. The OCR engine is linked into `actingcommand-actingd.exe`;
   no vision provider DLL is built or staged (Workflow #360). The device-test probe
@@ -55,8 +58,13 @@ cannot fall back to the two-file layout. Both layouts retain the flat directory,
 exact case/path, complete declared/physical set, size/hash and source checks.
 
 Tools manifests declare `tools_payload_layout: "platform-tools-v3"`, which requires
-exactly the nine Tools payloads listed above (manifest paths use `/`) and allows no
-directory other than `platform-tools`. A `platform-tools-v3` manifest built before
+exactly `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`,
+`actingwatch.exe` and the five `platform-tools/` files (manifest paths use `/`), plus each of
+the three MCP programs above that the manifest declares, and allows no directory other than
+`platform-tools`. A build since v0.12.18 declares `actingcommand-mcp-entry.exe` (ten payloads),
+and one since 0.12.57 also `actinglab-mcp.exe` and `actingcommand-mcp-entry-g2.exe` (twelve);
+the layout name stays, so an artifact built before either still verifies with nine. A
+`platform-tools-v3` manifest built before
 Runtime v0.11.6 also declares `actingcommand-device-test.exe`, and the verifier then
 requires those ten payloads. Historical `platform-tools-v2` manifests
 require `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`,
