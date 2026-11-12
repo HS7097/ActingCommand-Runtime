@@ -1633,9 +1633,9 @@ read `ScheduleHistory`, and writes nothing: until 114-B, this table is still not
 ledger.
 
 **A member that waits for another member of its device** (Workflow #437 MAPP; MAPP-1 builds the
-evaluator's one pick per device and `selected`, register §1.328; `held`, `player_hold` and
-`fenced`, which the host's gates give, are not built yet; [device-group.md](../device-group.md),
-"One pick per device per round"). In a device group of
+evaluator's one pick per device and `selected`, register §1.328; MAPP-1b builds `held`,
+`player_hold` and `fenced`, which the host's gates give, register §1.330;
+[device-group.md](../device-group.md), "One pick per device per round"). In a device group of
 several, a candidate of a member that does not get the device because another member has it
 waits with `device_group_waiting` (registered; info; `instance_id` the alias, `alias` the member
 that has the device, `device_group_wait` `selected`, `held`, `player_hold` or `fenced`, optional
@@ -1643,8 +1643,12 @@ that has the device, `device_group_wait` `selected`, `held`, `player_hold` or `f
 `instance_already_selected`, `dispatch_instance_held` or a control gate's code, which a candidate
 of a lone instance gets; with `selected` the candidate has exactly the state, the eligibility and
 the wake of one behind its own instance's winner (`instance_already_selected`), and only the code
-and its values differ. A member's own holder or gate keeps its own code. It is the `why` of
-the member's not-running row while it waits. In a group of one it never occurs.
+and its values differ. A member's own holder or gate keeps its own code: its own control gates
+come first, then its own holder; then another member's player hold (`player_hold`), another
+member's fence (`fenced`) and another member's holder (`held`), before the device's takeover
+cooldown. The policy admission refuses a dispatch of the member with the same code and values, at
+info. It is the `why` of the member's not-running row while it waits. In a group of one it never
+occurs.
 After a failed switch (`application_switch_failed`, proposed) the member's own candidates wait out
 its switch cooldown, `scheduling.device_group.switch_failure_cooldown_ms` (proposed, default
 `300000`): each is deferred as during a takeover cooldown, with `dispatch_instance_cooldown`, the
@@ -2758,9 +2762,9 @@ finishes and is settled there whatever the switch says afterwards.
   (`runtime_stopping`) and settled as interrupted, as above.
 - **Device groups (Workflow #437 MAPP; [device-group.md](../device-group.md)).** MAPP-1 (register
   §1.328) builds the derived map, the scheduler state keyed by the device key and the round's one
-  pick per device; the one worker, the in-flight registration across the group and the switch are
-  not built yet, and the load refuses every group of several until the slice "order within one
-  device". Several instances on one device are one device group. The group is derived from the
+  pick per device; MAPP-1b (register §1.330) builds the one worker (`actingd-device-<device_group>`)
+  and the in-flight registration read across the group; the switch is not built yet, and the load
+  refuses every group of several until the slice "order within one device". Several instances on one device are one device group. The group is derived from the
   configuration at assembly and never stored.
   - A group has one lane: one scheduler state (one lease, one queue, one cooldown), keyed by the
     group's device key, and one worker. The in-flight registration of any member's run holds the

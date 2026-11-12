@@ -28,7 +28,13 @@ const DISPATCH_CONTENDED_RETRY_AFTER_MS: u64 = 1_000;
 /// guard stayed contended, is an Info record; every other refusal stays an Error.
 fn policy_rejection_severity(code: &str) -> EventSeverity {
     // Workflow #386 SR-4a2: the blackout and day-boundary refusals are waits, of category info.
+    // Workflow #437 MAPP-1b: a member's wait for another member of its device is the device's
+    // form of `dispatch_instance_held`, of category info.
     if code == HostCode::DispatchInstanceHeld.as_str()
+        || code
+            == actingcommand_policy::PolicyCode::DeviceGroupWaiting
+                .code()
+                .as_str()
         || code == HostCode::DispatchInstanceContended.as_str()
         || code == SchedulingRuleHostCode::BlackoutActive.as_str()
         || code == SchedulingRuleHostCode::BlackoutApproaching.as_str()
@@ -140,6 +146,11 @@ impl HostShared {
         instance_id: InstanceId,
         now_unix_ms: u64,
     ) -> RuntimeHostResult<Option<InstanceOccupancy>> {
+        // Workflow #437 MAPP-1b (`contracts/device-group.md`, "One queue, one worker, one lease per
+        // device"): a member of a device group of several reads its device across the group.
+        if self.in_group_of_several(instance_id) {
+            return Ok(self.device_occupancy(instance_id, now_unix_ms)?.occupancy);
+        }
         let gate = self.routine_gate(instance_id)?;
         let now_monotonic_ms = self.monotonic_ms()?;
         // Workflow #427-A (C3): a policy run handed to the instance's worker holds the instance
@@ -228,6 +239,19 @@ impl HostShared {
             .resolve_instance(instance_alias)
             .map_err(|failure| *failure.error)?
             .instance_id();
+        // Workflow #437 MAPP-1b (`contracts/device-group.md`, "One pick per device per round"):
+        // another member of the device has it (its hold, its fence or its holder): the member's
+        // wait, `device_group_waiting`, named by the alias the intent names, at info.
+        if let Some(hold) = self.admission_device_group_hold(instance_id, now_unix_ms)? {
+            return Ok(Some(
+                RuntimeHostError::request(
+                    actingcommand_policy::PolicyCode::DeviceGroupWaiting.code(),
+                    HostLocation::AdmitPolicyDispatch,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+                .with_outcome_values(|outcome| hold.with_values(outcome, instance_alias)),
+            ));
+        }
         let Some(InstanceOccupancy::Held { holder_kind, count }) =
             self.instance_occupancy(instance_id, now_unix_ms)?
         else {
@@ -722,11 +746,18 @@ impl SchedulingPauseTable {
         resource_fence: bool,
     ) -> actingcommand_contract::ControlGates {
         actingcommand_contract::ControlGates::evaluate(actingcommand_contract::ControlInputs {
-            player_hold: self.player_held.contains(instance_alias),
+            player_hold: self.player_holds(instance_alias),
             instance_pause: self.instances.contains_key(instance_alias),
             global_pause: self.global.is_some(),
             resource_fence,
         })
+    }
+
+    /// Whether a player holds `instance_alias`: the player hold's dimension of its control gates.
+    /// Workflow #437 MAPP-1b: the other members of a device group of several read it too, and
+    /// wait `device_group_waiting` `player_hold` while it holds the device.
+    pub(super) fn player_holds(&self, instance_alias: &str) -> bool {
+        self.player_held.contains(instance_alias)
     }
 
     /// Whether a pause holds `instance_alias`: its own, in any stage, or the global one. The
@@ -1351,6 +1382,10 @@ impl HostShared {
         let occupancy = self.policy_instance_occupancy(time.unix_ms)?;
         // Workflow #437 MAPP-1: the device each member of a group of several runs on.
         let device_groups = self.policy_device_groups()?;
+        // Workflow #437 MAPP-1b: each member of a group of several that another member keeps
+        // from its device (its hold, its fence, its holder), with the pauses and fences above.
+        let device_group_holds =
+            self.policy_device_group_holds(&scheduling_pause, &fenced_aliases, time.unix_ms)?;
         // Workflow #336 L6 (§12.7): a paused pair is judged against the startup configuration;
         // PKG-S3: a due paused pair's packages are measured (at most once per interval).
         let suspension_lift = self.suspension_lift_view(&procedure_manifest)?;
@@ -1440,6 +1475,7 @@ impl HostShared {
                     pool_lines: &pool_lines_context,
                     task_held: &task_held_context,
                     device_groups: &device_groups,
+                    device_group_holds: &device_group_holds,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
@@ -1514,9 +1550,10 @@ impl HostShared {
         if let Some(evaluation) = &cycle.evaluation {
             let overdue_ms = self.fact_refresh_overdue_ms()?;
             let held = |instance_alias: &str| {
-                crate::fact_refresh::instance_hold(
+                crate::fact_refresh::member_hold(
                     instance_alias,
                     &control_gates(instance_alias),
+                    device_group_holds.get(instance_alias),
                     occupancy.get(instance_alias).copied(),
                 )
                 .is_some()
@@ -3213,11 +3250,17 @@ impl HostShared {
             let now_monotonic_ms = self
                 .monotonic_ms()
                 .map_err(RequestFailure::poison_without_terminal)?;
+            // Workflow #437 MAPP-1b (`contracts/device-group.md`, "One queue, one worker, one
+            // lease per device"): the pause of one member of a device group waits only for that
+            // member's own work: a lease whose token names it and the queued claims that serve it.
+            // For an instance alone on its device these are its lease and its queue, as before.
             let (lease_held, queue_waiting) = {
                 let scheduler = lock(&self.scheduler, HostLocation::ReadReleasedInstanceLease)?;
                 (
-                    scheduler.active_lease(instance_id).is_some(),
-                    scheduler.refusing_count(instance_id, gate, now_monotonic_ms) > 0,
+                    scheduler
+                        .active_lease(instance_id)
+                        .is_some_and(|lease| lease.token().instance_id() == instance_id),
+                    scheduler.member_refusing_count(instance_id, gate, now_monotonic_ms) > 0,
                 )
             };
             // The close path's own rule (`prepare_resource_close`: a non-empty queue is

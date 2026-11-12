@@ -13,7 +13,7 @@
 //!   (`fact_refresh_requested`), as any scheduled policy run, through the instance's one queue.
 
 use crate::codes::HostCode;
-use crate::policy_host::{InstanceOccupancy, PolicyRunContext};
+use crate::policy_host::{DeviceGroupHold, InstanceOccupancy, PolicyRunContext};
 use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{ControlGateCode, ControlGates, FactValue, PolicyBudgetDimension};
 use actingcommand_execution_kernel::PreparedContainedTask;
@@ -198,7 +198,7 @@ pub(crate) fn dispatch_schedule_values(outcome: &Outcome) -> Vec<(String, FactVa
 /// `ResumeScheduling`, a self-check or the ladder lifts it), a holder or an eligible waiting claim
 /// (no wake: the driver wakes when a key returns), or a takeover cooldown (a wake at its end).
 pub(crate) struct Hold {
-    gate: HostCode,
+    gate: Code,
     reason: DecisionReason,
     next_wake_unix_ms: Option<u64>,
 }
@@ -211,7 +211,7 @@ impl Hold {
             CandidateEligibility::Refresh {
                 reason: self.reason.clone(),
                 next_wake_unix_ms: self.next_wake_unix_ms,
-                gate: self.gate.code(),
+                gate: self.gate,
                 limit: None,
             }
         } else {
@@ -258,7 +258,7 @@ pub(crate) fn instance_hold(
             ),
         };
         return Some(Hold {
-            gate: code,
+            gate: code.code(),
             reason: DecisionReason {
                 outcome,
                 detail: detail.to_owned(),
@@ -269,7 +269,7 @@ pub(crate) fn instance_hold(
     match occupancy {
         // Workflow #369 W-1: a held instance defers its candidates with no wake.
         Some(InstanceOccupancy::Held { holder_kind, count }) => Some(Hold {
-            gate: HostCode::DispatchInstanceHeld,
+            gate: HostCode::DispatchInstanceHeld.code(),
             reason: DecisionReason {
                 outcome: Outcome::new(HostCode::DispatchInstanceHeld)
                     .instance_id(instance_id)
@@ -281,7 +281,7 @@ pub(crate) fn instance_hold(
         }),
         // A takeover cooldown defers with a wake at its end.
         Some(InstanceOccupancy::Cooldown { until_unix_ms }) => Some(Hold {
-            gate: HostCode::DispatchInstanceCooldown,
+            gate: HostCode::DispatchInstanceCooldown.code(),
             reason: DecisionReason {
                 outcome: Outcome::new(HostCode::DispatchInstanceCooldown)
                     .instance_id(instance_id)
@@ -291,6 +291,33 @@ pub(crate) fn instance_hold(
             next_wake_unix_ms: Some(until_unix_ms),
         }),
         None => None,
+    }
+}
+
+/// Workflow #437 MAPP-1b (`contracts/device-group.md`, "One pick per device per round"): the
+/// closure's positions 1-2 for a member of a device group: [`instance_hold`], except that a
+/// wait for another member of its device (`device`) takes the place of the device's holder or
+/// another member's gate, with `device_group_waiting` and no wake. The member's own control
+/// gates come first and keep their codes, and so does its own holder (the host names no `device`
+/// hold for a member that holds the device itself). An instance alone on its device has no
+/// `device` hold, so this is [`instance_hold`].
+pub(crate) fn member_hold(
+    instance_id: &str,
+    control: &ControlGates,
+    device: Option<&DeviceGroupHold>,
+    occupancy: Option<InstanceOccupancy>,
+) -> Option<Hold> {
+    match device {
+        Some(device) if control.code().is_none() => Some(Hold {
+            gate: PolicyCode::DeviceGroupWaiting.code(),
+            reason: DecisionReason {
+                outcome: device
+                    .with_values(Outcome::new(PolicyCode::DeviceGroupWaiting), instance_id),
+                detail: device.detail(),
+            },
+            next_wake_unix_ms: None,
+        }),
+        _ => instance_hold(instance_id, control, occupancy),
     }
 }
 
