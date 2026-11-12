@@ -161,7 +161,10 @@ bounds inference and not the one-time loading of a model: a session the engine
 builds on the first request that needs it (the detector, on a model's first
 request that detects) is built before that request's deadline starts, and no
 load is bounded by a target's `timeout_ms` (Workflow #428 VIS-LOAD-1, register
-§1.298).
+§1.298). An offline evaluation of a saved scene in the Lab may, on its switch
+`--ocr-deadline-max`, take each OCR target's `timeout_ms` as 60 000, the most
+it may declare, for that evaluation only; production never does (Workflow #428
+LAB-OCR-DL, register §1.331).
 
 An OCR recognizer's output class count must be the dictionary size plus one
 (the CTC blank) or plus two (the blank and the space class); any other count

@@ -146,6 +146,10 @@ mod gate_434_cli_help;
 // candidates.
 #[path = "gate_434_cli_comp.rs"]
 mod gate_434_cli_comp;
+// Workflow #428 LAB-OCR-DL: the switch that raises the OCR inference deadline of an offline
+// evaluation of saved scenes names it in the answer and is refused off a saved scene.
+#[path = "gate_428_lab_ocr_dl.rs"]
+mod gate_428_lab_ocr_dl;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

@@ -16225,6 +16225,145 @@ review (`pending`) stays, `runtime-outcomes` stays 1, and no release file change
 file holds no text. The index under `contracts/outcome-codes/index/` is regenerated with
 `ci/outcome_codes_index.py` in the same pull request.
 
+### 1.331 Slice LAB-OCR-DL (0.12.57): an offline evaluation of a saved scene can raise the OCR inference deadline to the contract's maximum (Workflow #428; after VIS-LOAD-1, §1.298, a resource repository's CI frame regression on a hosted runner, on the CPU, still failed 1 check of 2260 in 1 of 3 runs on Tools v0.12.54 with `candidate_feature_failed` … `Timeout: fatal vision FFI error in ppocr_ctc_engine: PPOCR recognizer could not start before the configured timeout`; the coordinator's rulings of 11-12 on board #428, not the owner's words; coordinator work order `rd-1112/brief-lab-ocr-deadline.md`, read on main `dffd6263`)
+
+1.331 is the next free number: main `dffd6263` holds 1.329, CODES-T2, and 1.330 is MAPP-1b's, in
+flight. [vision-model-folders.md](vision-model-folders.md), "Startup and first use", is the
+contract and gains one sentence; [package-reference.md](package-reference.md) defines no
+`timeout_ms` and does not change; the operation table
+([lab-operations.json](lab-operations.json)) declares the switch. No persisted ledger shape, wire
+shape, configuration key, outcome code, closed vocabulary or interface revision changes, no
+package's `timeout_ms` or its bounds (1 to 60 000), and no file of today's MCP server
+(`apps/actingctl/src/mcp/**`).
+
+**The rulings** (the coordinator's, 11-12, board #428). A package's `timeout_ms` is not changed for
+CI, and production keeps every deadline it has. An offline regression asks whether a saved scene is
+recognised correctly, not whether it is recognised fast enough, and a cold CPU process on a shared
+runner says nothing about production's speed: so an offline evaluation of a saved scene may, on an
+explicit switch, raise each OCR target's inference deadline to the contract's maximum, 60 000 ms.
+Raised, not removed: a hung inference still ends. The switch is refused wherever the frame does not
+come from a saved scene.
+
+**The rows.** The rows that declare `scene` (an offline PNG frame) and whose saved-scene path
+evaluates it with the Lab's OCR provider, so that it can reach an OCR target (page detection
+evaluates every target of every page; a target reaches the members of a composite and the sides of
+a value test). Each loads its package through `contained_resources::load_with_ocr_deadline`, whose
+bundle evaluator holds the provider every evaluation of the line uses.
+
+| Row | The path that takes the switch |
+|---|---|
+| `observe` | `--scene` (not `--capture`): page detection, `--targets`, the actions' targets, the candidate layouts |
+| `do` | `--scene` with `--dry-run`: the page, the guard and the target |
+| `ensure` | `--scene` with `--dry-run`: the page |
+| `wait` | `--scene`: the page or the stable target, each poll |
+| `recognize`, `is-visible` | `--scene` (their `--capture` is retired and refused): the target |
+| `detect-page`, `current-page` | `--scene`: page detection |
+| `tap-target`, `navigate` | `--scene` with `--dry-run`, their only path (`--capture` is retired): the target, the page |
+
+Not given the switch: `recover`, whose planned recovery builds its evaluator without a vision
+provider (`RecognitionEvaluator::new`), so that an OCR target is never inferred there
+(`recognition_pack_provider_missing`); `locate`, template matching only; `recognize-artifact`,
+whose request (`RecognizeArtifact`) the resident Runtime evaluates. The rows that evaluate saved
+frames that are no `scene` are not the rulings' rows and do not take it: `regression` (a run's
+frames, read from a state root's ledger, through the same load and with no time bound of its own),
+`replay` and the dry runs of a package over a directory of frames, and the authoring rows'
+recordings. **Open for the coordinator:** `replay` runs the kernel's contained task, whose sampling
+deadline (`with_sample_deadline`, sized from the declared `timeout_ms`) a raised deadline would
+outgrow; giving it the switch would change the kernel's recognition outside the Lab's own entry, so
+it is not done here.
+
+**Where a target's `timeout_ms` becomes the engine's deadline on these paths.** The recognition
+pack's evaluator builds each OCR request with the target's `timeout_ms` (a candidate layout's shared
+read with its own, `shared_ocr.timeout_ms`) as `OcrProviderRequest.timeout_ms` (`evaluate_ocr`, the
+OCR observation, `read_shared_text`, the text locate) and hands it to the provider the package load
+gave it: the kernel's `VisionFfiProvider` over the `ppocr-ctc` engine on the CPU
+(`LabOcr::from_vision_root`, `crates/lab/src/ocr.rs`). Its `call_ocr` takes it as the request's
+deadline (the wait for the model's lock and, in `load_ocr`, for another request's runtime
+initialisation) and gives the engine what remains, which the engine's `read_request` takes as its
+inference deadline (§1.298). With the switch actinglab gives the package load
+`with_ocr_deadline_max(provider)` instead (`crates/lab/src/ocr.rs`), which hands every OCR request
+on with `timeout_ms` 60 000 (`OCR_DEADLINE_MAX_MS`) and changes nothing else: model admission, NN
+requests and the provider's reports pass through. The kernel's provider then bounds the request and
+the engine its inference by 60 000. No file of the kernel, the recognition pack or the engine
+changes, and no path the resident Runtime runs builds the wrapper.
+
+**The other wall-clock bounds of these paths, with the switch.**
+
+- The recognition pack's sample deadline (an OCR target whose `timeout_ms` exceeds what is left is
+  not started, `recognition sample budget insufficient`; `recognition_sample_deadline_exceeded`
+  after an evaluation): only the kernel's contained task sets one (`with_sample_deadline`); the
+  scene contexts of these rows (`scene_context`, `scene_context_with_samples`) carry none. Nothing
+  to change.
+- The saved artifact's OCR request deadline (`evaluate_saved_artifact_ocr`, 120 s): the Runtime's
+  `RecognizeArtifact`, on no path of these rows. Unchanged.
+- The package admission deadline (`ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS`, in
+  `contained_resources::load_with_ocr_deadline`): it bounds the reading of the package, before
+  anything is evaluated. Unchanged.
+- `wait`'s `--timeout-ms` (default 5 000) and `--poll-ms`: the wait compares the time spent only
+  after a whole evaluation and answers `arrived` when the page or the target is what it waits for,
+  whatever the time; it never refuses or cuts an evaluation. Unchanged.
+- `do`'s `--after-timeout-ms`, `ensure`'s and `navigate`'s `--step-timeout-ms` and `--poll-ms`:
+  online or pressing only, refused or not read on these paths. Unchanged.
+- The text-read budget and a candidate projection's provider budget count calls and area, not time;
+  the 5 s limit of a unique template search is a template's. Unchanged.
+
+So the offline path is consistent without any further change, and no code the production path
+shares changes.
+
+**The switch.** `--ocr-deadline-max`, the proposed name, which the table's naming rule gives the
+parameter `ocr_deadline_max` (form `switch`, type `boolean`, not required, the last parameter of
+each of the ten rows, its `note` saying the above). The command lines read it through their lists:
+`lab2_cli::LAB2_SWITCHES` and the reads of the four `--scene` paths (`OBSERVE_SCENE`, `DO_SCENE`,
+`ENSURE_SCENE`, `WAIT_SCENE`; no `--capture` path reads it), and the switches of
+`readonly_cli::READONLY_INPUT_READS`, a part of the six readers' read lists. `serve --stdio` hands
+it on as any switch of a row; `help` and the completion read it from the table. No row's `help`
+changes: a row's sentence says what the row does and nothing its parameters say (LAB-5E,
+[lab-two-entries.md](lab-two-entries.md) §9.1), and the parameter's note says this.
+
+**Refused off a saved scene.** Given beside `--capture`, or on a line with no `--scene`, the switch
+is refused before any package is loaded or any frame read: `validation_failed`, its details
+`{argument: "--ocr-deadline-max", argument_problem: "conflicting"}`, the message
+"--ocr-deadline-max raises the OCR inference deadline of an offline evaluation of saved scenes
+only: give --scene, without --capture". `detect-page`, `tap-target` and `navigate` carry those
+details in their trace's `details`, as every refusal of theirs.
+
+**The answer.** With the switch every answer of these rows that stands carries the member
+`ocr_deadline_raised_to_ms`, `60000`, beside its others (on actinglab's line flat beside `outcome`,
+LAB-2b); `observe`, `do`, `ensure` and `wait` keep it in Min (`lab2_projection_request`'s kept
+members). Without the switch every line is as before, byte for byte. A failure's line is the
+failure's, unchanged.
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md)): no declared
+interface covers the Lab's lines, and the one member appears only when the switch is given.
+
+**At deploy.** Nothing changes in production, nor for any command line without the switch. A
+resource repository's regression script may pass `--ocr-deadline-max` to `observe --scene` and
+`recognize --scene` once its Tools pin has it; a build without it refuses the switch as a flag it
+does not read. **Rollback** (below 0.12.57): the switch is refused again as unknown.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| OCRDL-1 | `ocr_deadline_max` (`--ocr-deadline-max`) on `observe`, `do`, `ensure`, `wait`, `recognize`, `detect-page`, `current-page`, `is-visible`, `tap-target`, `navigate` | operation table parameter, a switch | LAB-OCR-DL | actinglab | `since` 0.12.57; a saved scene only |
+| OCRDL-2 | `ocr_deadline_raised_to_ms` | member of those rows' answers | LAB-OCR-DL | actinglab | `since` 0.12.57; only with the switch; 60000 |
+| OCRDL-3 | `with_ocr_deadline_max`, `OCR_DEADLINE_MAX_MS` (`crates/lab`) | Lab-internal | LAB-OCR-DL | — | the wrapper of the Lab's provider; the contract's bound, no tunable |
+| OCRDL-4 | what a target's `timeout_ms` bounds offline ([vision-model-folders.md](vision-model-folders.md)) | contract sentence | LAB-OCR-DL | — | the switch; production never |
+
+Tests (apps gate row "#428 LAB-OCR-DL"):
+`gate_428_lab_ocr_dl::lab_ocr_dl_an_inference_longer_than_the_timeout_fails_without_the_switch_and_passes_with_it`
+(`crates/lab`: the readers' evaluation, `ReadonlyRecognitionEngine`, over a fake provider whose
+inference takes 3 000 ms of an OCR target that declares 1 000: without the switch it fails with
+the engine's Timeout of today, its request's deadline 1 000; through `with_ocr_deadline_max` it
+passes, its request's deadline 60 000; no clock, no sleep, no model), and
+`gate_428_lab_ocr_dl::lab_ocr_dl_the_answer_names_the_raised_deadline_only_with_the_switch` and
+`lab_ocr_dl_the_switch_off_a_saved_scene_is_refused` (actinglab's bin, a neutral package and frame:
+the member on each of the ten rows only with the switch, `recognize`'s answer otherwise the same;
+the refusal beside `--capture` and without `--scene`). The lists extended are the code's:
+`lab2_cli::LAB2_SWITCHES` (8 to 9), the reads of `OBSERVE_SCENE`, `DO_SCENE`, `ENSURE_SCENE` and
+`WAIT_SCENE`, and the switches of `readonly_cli::READONLY_INPUT_READS`, which LAB-5B2's
+`strict_rows_match_their_commands` and LAB-5B3's `lenient_rows_match_their_reads` hold equal to the
+ten rows. No golden and no list of CLI-HELP or CLI-COMP changes (both read the table), and no
+existing test changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

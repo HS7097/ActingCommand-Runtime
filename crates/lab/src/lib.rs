@@ -82,7 +82,9 @@ pub use maa_task_graph::{
     MaaFact, MaaFactOrigin, MaaFactSource, MaaFactValue, MaaTaskFacts, MaaTaskGraph,
     MaaTaskGraphStats, compile_maa_task_graph,
 };
-pub use ocr::LabOcr;
+// Workflow #428 LAB-OCR-DL: the provider of an offline evaluation of a saved scene whose switch
+// raises the OCR inference deadline, and the deadline it raises it to.
+pub use ocr::{LabOcr, OCR_DEADLINE_MAX_MS, with_ocr_deadline_max};
 pub use package_api::*;
 pub use ports::*;
 pub use projection::*;
