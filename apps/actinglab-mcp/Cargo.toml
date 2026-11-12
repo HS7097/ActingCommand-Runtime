@@ -2,9 +2,11 @@
 
 # Workflow #434 LAB-5G2a (register §1.287, "Slice LAB-5G2a"; contracts/lab-two-entries.md §8.1 and
 # §9.3): `actinglab-mcp`, the Lab's MCP server, whose tools are the operation table's offered rows.
-# This slice is its shell: the protocol and the loop copied from `actingctl mcp-serve`, the tool
-# list generated from the table, and every call refused with `mcp_operation_unsupported` until the
-# next slices serve them. It is in no release and no Tools archive until slice G6 packages it.
+# LAB-5G2a is its shell: the protocol and the loop copied from `actingctl mcp-serve` and the tool
+# list generated from the table. LAB-5G2b ("Slice LAB-5G2b") serves in its own process the calls of
+# the rows `lab_ops::core_ops` serves; every other call is refused with `mcp_operation_unsupported`
+# until a later slice serves it. It ships in the Tools archive since slice LAB-5G6 (0.12.57);
+# nothing starts it until a client is registered with the MCP entry's second generation.
 
 [package]
 name = "actingcommand-actinglab-mcp"
@@ -26,8 +28,16 @@ actingcommand-lab-ops = { workspace = true }
 # The rescue rows the rescue module serves, on Windows, where it runs: the rescue rows actinglab
 # offers, and so this server.
 actingcommand-lab-rescue = { workspace = true }
+# Workflow #434 LAB-5G2b: the kept Runtime connection and each write's own, with today's
+# provenance.
+actingcommand-runtime-client = { workspace = true }
+# Workflow #434 LAB-5G2b: the overview's `watchdog` block of `status`, read through
+# `crates/watchdog` as actinglab reads it; on Windows only, where the watchdog runs.
+actingcommand-watchdog = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# Workflow #434 LAB-5G2b: the scripted Runtime of the tests over pipes.
+actingcommand-runtime-client = { workspace = true, features = ["test-support"] }
 # The made-up installation roots of the authoring option's test.
 tempfile = "3"

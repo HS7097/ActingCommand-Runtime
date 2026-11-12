@@ -14,12 +14,16 @@
 //!   structuredContent, `isError` true; so does a tool `--list` leaves out; `ac_observe` and a name
 //!   no row has answer what today's server answers for an unknown tool (-32602
 //!   `mcp_params_invalid`, `name`, `not_recognised`), and arguments that are no object -32602.
+//!   Workflow #434 LAB-5G2b (adapted: that slice serves the core rows, `ac_status` and `ac_frame`
+//!   among them): the refused tools called are of rows it still refuses, `ac_app_launch` and
+//!   `ac_lab_observe`.
 //! - `mcp_loop_initialize_list_batch_and_cancel`: `initialize` negotiates as today's server and
 //!   carries the instructions; `tools/list` answers `--list-tools`' list, in either era; under
 //!   2025-03-26 a batch is one array of its answers, under a later version -32600, an empty one
 //!   -32600 always; a cancellation of a request not in flight, or of a call already answered,
 //!   answers nothing and the server goes on; `actingcommand/entryStatus` holds nothing; at stdin
-//!   EOF the server exits 0.
+//!   EOF the server exits 0. Workflow #434 LAB-5G2b (adapted, as above): the call the cancellation
+//!   and the batch hold is `ac_app_launch`'s, a row that slice still refuses.
 
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
@@ -300,10 +304,10 @@ fn mcp_tier_refused() {
 fn mcp_calls_refused_unsupported_and_an_unknown_tool() {
     let mut server = Server::spawn(&[]);
     server.initialize(1, "2025-11-25");
-    let refused = server.call_tool(2, "ac_status", json!({}));
-    assert_unsupported(&refusal(&refused, true), "ac_status");
-    let refused = server.call_tool(3, "ac_frame", json!({"instance": "neutral.shell"}));
-    assert_unsupported(&refusal(&refused, true), "ac_frame");
+    let refused = server.call_tool(2, "ac_app_launch", json!({}));
+    assert_unsupported(&refusal(&refused, true), "ac_app_launch");
+    let refused = server.call_tool(3, "ac_lab_observe", json!({"instance": "neutral.shell"}));
+    assert_unsupported(&refusal(&refused, true), "ac_lab_observe");
     for (id, name) in [(4, "ac_observe"), (5, "ac_no_such_tool")] {
         let answer = server.call_tool(id, name, json!({}));
         let (code, outcome) = rpc_error(&answer);
@@ -415,8 +419,8 @@ fn mcp_loop_initialize_list_batch_and_cancel() {
     let ping = server.request(5, "ping", json!({}));
     assert_eq!(ping["result"], json!({}), "{ping}");
     // A cancellation of a call already answered changes nothing.
-    let refused = server.call_tool(6, "ac_status", json!({}));
-    assert_unsupported(&refusal(&refused, true), "ac_status");
+    let refused = server.call_tool(6, "ac_app_launch", json!({}));
+    assert_unsupported(&refusal(&refused, true), "ac_app_launch");
     server.send(&json!({
         "jsonrpc": "2.0",
         "method": "notifications/cancelled",
@@ -438,7 +442,7 @@ fn mcp_loop_initialize_list_batch_and_cancel() {
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": {"name": "ac_status", "arguments": {}},
+            "params": {"name": "ac_app_launch", "arguments": {}},
         },
     ]);
     let mut server = Server::spawn(&[]);
@@ -458,7 +462,7 @@ fn mcp_loop_initialize_list_batch_and_cancel() {
     );
     for answered in answers {
         if answered["id"] == json!(3) {
-            assert_unsupported(&refusal(answered, false), "ac_status");
+            assert_unsupported(&refusal(answered, false), "ac_app_launch");
         } else {
             assert_eq!(answered["result"], json!({}), "{answer}");
         }

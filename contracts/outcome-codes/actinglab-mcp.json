@@ -14,8 +14,22 @@
       "status": "active",
       "since": "0.12.57",
       "description": "actinglab-mcp lists this tool, the tool of an operation table row, but this build serves no call of it: the call was refused before anything was sent, run or written; mcp_tool names the tool.",
-      "common_causes": "Any call of a tool of this build: it is the server's shell (Workflow #434 LAB-5G2a), which lists the tool of every offered row and serves none; the later slices of LAB-5 serve them.",
+      "common_causes": "A call of a tool whose row this build does not serve yet: since Workflow #434 LAB-5G2b it serves the rows actinglab's CLI module serves, and refuses the three app rows and standard-pack check, the debugging and authoring rows actinglab's own commands serve, record draft and the rescue module's rows; the later slices of LAB-5 serve them.",
       "handling": "Run the operation with actinglab (actinglab --json and the row's words), or through actingctl mcp-serve, until a build of actinglab-mcp that serves the tool is installed; sending the same call again answers the same."
+    },
+    "mcp_identity_declaration_refused": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actinglab-mcp",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.57",
+      "description": "The Runtime refused the governance identity card actinglab-mcp declares before a write (client actingctl-mcp, Workflow #434 LAB-5G2b, until LAB-6 removes the step); the write went ahead without it, and the Runtime's refusal is the caused_by link. It stands where actingctl mcp-serve answers mcp_identity_card_refused with mcp_blocker.",
+      "common_causes": "actingd's governance.allowed_clients does not admit actingctl-mcp, so the Runtime refused the card as a client not allowed (governance_client_not_allowed) and recorded its own warning event; it still takes the write from the (Cli, Cli) envelope.",
+      "handling": "Nothing is lost: the client action and the write were recorded and sent, and the answer is the write's. To stop the warning, the person adds actingctl-mcp to governance.allowed_clients in actingd.config.json, which actingd reads at its start."
     }
   }
 }

@@ -27,7 +27,7 @@
 //!   option without its value `value_missing`, twice `repeated`, beside `--list-tools`
 //!   `conflicting`, each with the usage line.
 
-use crate::tools::{self, ACTINGLAB_SLICES, AuthoringPlace, Catalog, Listing, NAMED};
+use crate::tools::{self, ACTINGLAB_SLICES, AuthoringPlace, Catalog, Listing, NAMED, Serving};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_lab_ops::cli_line;
 use actingcommand_lab_ops::codes::ArgumentProblem;
@@ -176,7 +176,11 @@ fn members(value: &Value) -> Vec<String> {
 }
 
 /// A tool's definition is its row's (contract §9.1; the survey's type table, §1; rulings 13 to
-/// 15): name, description, input schema and hints, and nothing else.
+/// 15): name, description, input schema and hints, and nothing else. Workflow #434 LAB-5G2b
+/// (adapted, its work order's point 4 and 5): but for the front's own members (`tools::SUPPLIED`:
+/// a parameter the front gives itself is no property, `export` follows the parameters of a row
+/// that takes it) and, on a row this build serves, the absolute path a path parameter's
+/// description asks for.
 fn assert_definition_from_row(operation: &Operation, definition: &Value) {
     let row_name = operation.name.as_str();
     let mut wanted = vec!["name"];
@@ -212,17 +216,29 @@ fn assert_definition_from_row(operation: &Operation, definition: &Value) {
     assert_eq!(schema["type"], "object", "{row_name}");
     assert_eq!(schema["additionalProperties"], false, "{row_name}");
     let properties = &schema["properties"];
+    let taken = operation
+        .params
+        .iter()
+        .filter(|param| tools::supplied(row_name, &param.name).is_none())
+        .collect::<Vec<_>>();
+    let mut expected = taken
+        .iter()
+        .map(|param| param.name.clone())
+        .collect::<Vec<_>>();
+    if tools::takes_export(row_name) {
+        expected.push(tools::EXPORT.to_owned());
+        assert_eq!(
+            properties[tools::EXPORT]["type"],
+            "boolean",
+            "{row_name}: export"
+        );
+    }
     assert_eq!(
         members(properties),
-        operation
-            .params
-            .iter()
-            .map(|param| param.name.clone())
-            .collect::<Vec<_>>(),
-        "{row_name}: one property per parameter, in the row's order"
+        expected,
+        "{row_name}: one property per parameter the front does not give, in the row's order"
     );
-    let required = operation
-        .params
+    let required = taken
         .iter()
         .filter(|param| required_through_mcp(param))
         .map(|param| json!(param.name))
@@ -231,14 +247,16 @@ fn assert_definition_from_row(operation: &Operation, definition: &Value) {
         None => assert!(required.is_empty(), "{row_name}: required missing"),
         Some(given) => assert_eq!(given, &json!(required), "{row_name}: required"),
     }
-    for param in &operation.params {
-        assert_property(row_name, param, &properties[param.name.as_str()]);
+    let served = tools::serving(operation) != Serving::Refused;
+    for param in taken {
+        assert_property(row_name, param, &properties[param.name.as_str()], served);
     }
 }
 
 /// One parameter's property: its type's schema, a repeated one an array of at least one, its
-/// typed default and its note.
-fn assert_property(row_name: &str, param: &Param, property: &Value) {
+/// typed default and its note; Workflow #434 LAB-5G2b (adapted): on a row this build serves
+/// (`served`), a path parameter's note followed by the absolute path it takes.
+fn assert_property(row_name: &str, param: &Param, property: &Value, served: bool) {
     let at = format!("{row_name} {}", param.name);
     let value = if param.repeat {
         assert_eq!(property["type"], "array", "{at}: repeat");
@@ -296,9 +314,21 @@ fn assert_property(row_name: &str, param: &Param, property: &Value) {
             assert_eq!(property["default"], typed, "{at}: default");
         }
     }
+    let path = matches!(
+        param.value_type,
+        ParamType::Path | ParamType::File | ParamType::Dir
+    );
+    let described = if served && path {
+        Some(match &param.note {
+            Some(note) => format!("{note}; {}", tools::ABSOLUTE_PATH),
+            None => tools::ABSOLUTE_PATH.to_owned(),
+        })
+    } else {
+        param.note.clone()
+    };
     assert_eq!(
         property.get("description").and_then(Value::as_str),
-        param.note.as_deref(),
+        described.as_deref(),
         "{at}: the note is the description"
     );
 }

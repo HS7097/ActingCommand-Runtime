@@ -1,0 +1,488 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! A call of one of this server's tools (Workflow #434 LAB-5G2b; register §1.287, "Slice
+//! LAB-5G2b"; `contracts/lab-two-entries.md` §9.3; the survey's §2 to §4 as the coordinator's
+//! rulings amend them).
+//!
+//! - **Which rows are served** (`tools::serving`): a row `lab_ops::core_ops` serves, by
+//!   `core_ops` in this process ([`Service::core`]). Every other call answers
+//!   `mcp_operation_unsupported`, its arguments unread, as before; the rescue rows wait for the
+//!   slice's second part.
+//! - **The arguments** ([`prepare`]), before anything is sent or written: a member the row does
+//!   not declare (`Operation::undeclared`), and a parameter the front gives itself, is refused as
+//!   today's server refuses an argument it does not know (`arguments_invalid`, `unknown`); so is a
+//!   member of the wrong type (`wrong_type`; text that is none of its words or no duration
+//!   `not_recognised`) and a required one missing (`required`); a relative path where the
+//!   parameter's type is a path is `not_absolute`, its developer text saying that an absolute
+//!   path is required; a string that begins with `--` is refused as `serve` refuses it
+//!   (`actingctl_usage_invalid`, `not_recognised`). A member given as `null` is absent, as today's
+//!   server reads it. Then the front's own members (`tools::SUPPLIED`, `tools::EXPORT`).
+//! - **The answer** ([`call_result`]) is the line `actinglab --json` prints for the same row and
+//!   parameters: the text content and, from 2025-06-18 on, `structuredContent`; `isError` true
+//!   exactly when the command line would exit non-zero; within the answer budget
+//!   ([`crate::budget`]), which the serving code also cuts or exports a shaped answer to.
+//! - **Every call runs to its end on its worker**: this build has no jobs and no handles (slice
+//!   G3).
+
+use crate::budget;
+use crate::protocol::Era;
+use crate::runtime::{self, Runtime};
+use crate::tools::{self, Serving, Supplied};
+use actingcommand_contract::outcome::Outcome;
+use actingcommand_lab_ops::budget::Budget;
+use actingcommand_lab_ops::cli_line::{self, Exit};
+use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
+use actingcommand_lab_ops::core_ops::{self, Caller};
+use actingcommand_lab_ops::events::CursorBinding;
+use actingcommand_lab_ops::front::{Connection, Front};
+use actingcommand_lab_ops::table::{Operation, Param, ParamForm, ParamType, RuntimeNeed};
+use serde_json::{Map, Value};
+use std::path::{Path, PathBuf};
+
+/// The parameter of the instance a write names in its client action.
+const INSTANCE: &str = "instance";
+
+/// What serves the calls: this server's Runtime connection and its export directory.
+pub(crate) struct Service {
+    runtime: Runtime,
+    exports: PathBuf,
+}
+
+impl Service {
+    /// A service whose exports go to `exports` (`budget::export_directory` in the server).
+    pub(crate) fn new(exports: PathBuf) -> Self {
+        Self {
+            runtime: Runtime::new(),
+            exports,
+        }
+    }
+
+    /// The `tools/call` result of a call of `operation`'s tool `tool` with `arguments`, in `era`.
+    pub(crate) fn call(
+        &self,
+        operation: &Operation,
+        tool: &str,
+        arguments: &Map<String, Value>,
+        era: Era,
+    ) -> Value {
+        call_result(&self.line(operation, tool, arguments, era), era)
+    }
+
+    /// The line of that call: `mcp_operation_unsupported` for a row this build does not serve;
+    /// else the refusal of its arguments, or the line of the code that serves it.
+    pub(crate) fn line(
+        &self,
+        operation: &Operation,
+        tool: &str,
+        arguments: &Map<String, Value>,
+        era: Era,
+    ) -> Exit {
+        if tools::serving(operation) == Serving::Refused {
+            return cli_line::failure(&tools::unsupported(tool), None);
+        }
+        match prepare(operation, arguments, &self.exports) {
+            Ok(params) => self.core(operation, tool, &params, era),
+            Err(refused) => cli_line::failure(&refused.outcome, refused.text),
+        }
+    }
+
+    /// `body` with this server's answer budget in `era`: the measure of the line as sent
+    /// (`budget::fits`) and the export to this service's directory.
+    pub(crate) fn within_budget<R>(&self, era: Era, body: impl FnOnce(&Budget<'_>) -> R) -> R {
+        let fits = |answer: &Value| budget::fits(answer, era);
+        let write = |sha256: &str, extension: &str, bytes: &[u8]| {
+            budget::write_export(&self.exports, sha256, extension, bytes)
+        };
+        body(&Budget::new(&fits).with_export(&write))
+    }
+
+    /// A core row, served by `lab_ops::core_ops` in this process. A row that needs no Runtime,
+    /// and one whose state root this server could not locate, is served as the command line
+    /// serves it (the serving code refuses an unlocated state root before anything is sent). A
+    /// row that writes to the Runtime goes on a write connection of its own ([`Self::write`]);
+    /// any other on the kept connection. A Runtime that does not answer the kept connection is
+    /// left to the serving code, which connects as the command line does and answers its line
+    /// (`status` reports the Runtime offline; any other row the client's failure).
+    fn core(
+        &self,
+        operation: &Operation,
+        tool: &str,
+        params: &Map<String, Value>,
+        era: Era,
+    ) -> Exit {
+        self.within_budget(era, |answer_budget| {
+            let place = runtime::place();
+            let state_root = match (&place.state_root, operation.runtime) {
+                (Ok(state_root), RuntimeNeed::Required | RuntimeNeed::Optional) => {
+                    state_root.clone()
+                }
+                _ => {
+                    return self.served(
+                        operation,
+                        params,
+                        Connection::Connect(Front::Mcp),
+                        self.runtime.generation(),
+                        answer_budget,
+                    );
+                }
+            };
+            if tools::writes_to_runtime(operation) {
+                return self.write(operation, tool, params, &state_root, answer_budget);
+            }
+            match self.runtime.kept(&state_root) {
+                Ok(kept) => {
+                    let exit = self.served(
+                        operation,
+                        params,
+                        Connection::Kept(&kept.client),
+                        kept.generation,
+                        answer_budget,
+                    );
+                    self.runtime.settle(&kept);
+                    exit
+                }
+                Err(_) => self.served(
+                    operation,
+                    params,
+                    Connection::Connect(Front::Mcp),
+                    self.runtime.generation(),
+                    answer_budget,
+                ),
+            }
+        })
+    }
+
+    /// A row that writes to the Runtime: today's provenance on a connection of its own
+    /// (`runtime::begin_write`, the instance it names resolved as today's server resolves it),
+    /// then the row on that connection; the provenance's warnings join the line's. A step of the
+    /// provenance that fails ends the call with its line, and the row is not served.
+    fn write(
+        &self,
+        operation: &Operation,
+        tool: &str,
+        params: &Map<String, Value>,
+        state_root: &Path,
+        answer_budget: &Budget<'_>,
+    ) -> Exit {
+        let alias = match instance_of(operation, params) {
+            Some(selector) => match self.runtime.alias(state_root, selector) {
+                Ok(alias) => Some(alias),
+                Err(ended) => return *ended,
+            },
+            None => None,
+        };
+        let write = match runtime::begin_write(state_root, tool, alias.as_deref()) {
+            Ok(write) => write,
+            Err(ended) => return *ended,
+        };
+        let exit = self.served(
+            operation,
+            params,
+            Connection::Kept(&write.client),
+            self.runtime.generation(),
+            answer_budget,
+        );
+        with_warnings(exit, write.warnings)
+    }
+
+    /// The row's line from `lab_ops::core_ops` on `connection`, within `answer_budget`, its
+    /// cursors bound to this server's session and the connection's `generation`.
+    fn served(
+        &self,
+        operation: &Operation,
+        params: &Map<String, Value>,
+        connection: Connection<'_>,
+        generation: u64,
+        answer_budget: &Budget<'_>,
+    ) -> Exit {
+        let caller = Caller {
+            place: &runtime::place,
+            unlocated: runtime::UNLOCATED,
+            connection,
+            budget: Some(answer_budget),
+            cursor: CursorBinding {
+                session: self.runtime.session(),
+                generation,
+            },
+        };
+        core_ops::answer(operation, params, &caller)
+    }
+}
+
+/// The instance a write names, when its row declares the parameter and the call gives it.
+fn instance_of<'p>(operation: &Operation, params: &'p Map<String, Value>) -> Option<&'p str> {
+    let declared = operation
+        .params
+        .iter()
+        .any(|param| param.name == INSTANCE && param.value_type == ParamType::Instance);
+    if !declared {
+        return None;
+    }
+    params.get(INSTANCE).and_then(Value::as_str)
+}
+
+/// `exit` with `warnings` after the line's own.
+fn with_warnings(mut exit: Exit, warnings: Vec<Value>) -> Exit {
+    if warnings.is_empty() {
+        return exit;
+    }
+    if let Ok(Value::Object(line)) = &mut exit.line {
+        match line.get_mut("warnings") {
+            Some(Value::Array(given)) => given.extend(warnings),
+            _ => {
+                line.insert("warnings".to_owned(), Value::Array(warnings));
+            }
+        }
+    }
+    exit
+}
+
+/// The developer text of a relative path where an absolute one is required.
+const ABSOLUTE_REQUIRED: &str = "an absolute path is required: a resident server's current \
+     directory means nothing to its caller";
+
+/// The refusal of a call's arguments: its outcome, and the developer text of its line.
+#[derive(Debug)]
+pub(crate) struct Refused {
+    pub(crate) outcome: Outcome,
+    pub(crate) text: Option<&'static str>,
+}
+
+impl From<Outcome> for Refused {
+    fn from(outcome: Outcome) -> Self {
+        Self {
+            outcome,
+            text: None,
+        }
+    }
+}
+
+/// The parameters the code that serves `operation` is given for `arguments`, or the refusal of
+/// the first argument at fault; nothing is sent or written before it (see the module's
+/// description). `exports` is this server's export directory, which the front gives `material`
+/// with `export` and `frame` (`tools::SUPPLIED`).
+pub(crate) fn prepare(
+    operation: &Operation,
+    arguments: &Map<String, Value>,
+    exports: &Path,
+) -> Result<Map<String, Value>, Refused> {
+    let row = operation.name.as_str();
+    let takes_export = tools::takes_export(row);
+    let members = arguments
+        .keys()
+        .map(String::as_str)
+        .filter(|member| !(takes_export && *member == tools::EXPORT));
+    if let Some(member) = operation.undeclared(members).first() {
+        return Err(invalid(member, ArgumentProblem::Unknown).into());
+    }
+    if let Some(member) = arguments
+        .keys()
+        .find(|member| tools::supplied(row, member).is_some())
+    {
+        return Err(invalid(member, ArgumentProblem::Unknown).into());
+    }
+    let mut export = false;
+    let mut params = Map::new();
+    for (member, value) in arguments {
+        if value.is_null() {
+            continue;
+        }
+        if takes_export && member == tools::EXPORT {
+            export = value
+                .as_bool()
+                .ok_or_else(|| invalid(member, ArgumentProblem::WrongType))?;
+            continue;
+        }
+        let Some(param) = operation.params.iter().find(|param| &param.name == member) else {
+            return Err(invalid(member, ArgumentProblem::Unknown).into());
+        };
+        checked(param, value).map_err(|problem| invalid(member, problem))?;
+        if flag_like(value) {
+            // As `serve` refuses it (actinglab's `cli_module::words::from_json`, `not_a_flag`).
+            return Err(cli_line::usage_invalid(
+                Some(member.as_str()),
+                ArgumentProblem::NotRecognised,
+            )
+            .into());
+        }
+        if relative_path(param, value) {
+            return Err(Refused {
+                outcome: invalid(member, ArgumentProblem::NotAbsolute),
+                text: Some(ABSOLUTE_REQUIRED),
+            });
+        }
+        params.insert(member.clone(), value.clone());
+    }
+    if let Some(param) = operation.params.iter().find(|param| {
+        tools::required_here(param)
+            && tools::supplied(row, &param.name).is_none()
+            && !params.contains_key(&param.name)
+    }) {
+        return Err(invalid(&param.name, ArgumentProblem::Required).into());
+    }
+    for (_, param, supplied) in tools::SUPPLIED.iter().filter(|(of, _, _)| *of == row) {
+        let value = match supplied {
+            Supplied::ExportDirectory => directory(exports)?,
+            Supplied::ExportDirectoryOnExport if export => directory(exports)?,
+            Supplied::ExportDirectoryOnExport => continue,
+            Supplied::True => Value::Bool(true),
+        };
+        params.insert((*param).to_owned(), value);
+    }
+    Ok(params)
+}
+
+/// The export directory as a parameter's value: its text, which must be UTF-8 to reach the
+/// serving code whole (`material_export_failed` with its path otherwise).
+fn directory(exports: &Path) -> Result<Value, Outcome> {
+    exports
+        .to_str()
+        .map(|text| Value::String(text.to_owned()))
+        .ok_or_else(|| Outcome::new(ActingctlCode::MaterialExportFailed).path(exports))
+}
+
+/// `arguments_invalid` for one argument (`argument`, as the call names it) and what is wrong
+/// with it, as today's server refuses one.
+fn invalid(argument: &str, problem: ArgumentProblem) -> Outcome {
+    Outcome::new(ActingctlCode::ArgumentsInvalid)
+        .argument(argument)
+        .argument_problem(problem)
+}
+
+/// A parameter's JSON value against its declared type, as `serve` takes it: a switch a boolean,
+/// a repeated parameter a list of at least one value of its type; a value of another JSON type
+/// is `wrong_type`, text that is none of an enumeration's words, or no duration,
+/// `not_recognised`.
+fn checked(param: &Param, value: &Value) -> Result<(), ArgumentProblem> {
+    let recognised = |fits: bool| {
+        if fits {
+            Ok(())
+        } else {
+            Err(ArgumentProblem::NotRecognised)
+        }
+    };
+    let one = |value: &Value| -> Result<(), ArgumentProblem> {
+        let fits = match &param.value_type {
+            ParamType::Integer => value.is_i64() || value.is_u64(),
+            ParamType::Unsigned => value.is_u64(),
+            // A JSON number, or the decimal text the command line's words give.
+            ParamType::Decimal => {
+                value.as_f64().is_some_and(f64::is_finite)
+                    || value.as_str().and_then(decimal).is_some()
+            }
+            ParamType::Boolean => value.is_boolean(),
+            ParamType::Json => true,
+            ParamType::ListOfStrings => value
+                .as_array()
+                .is_some_and(|items| items.iter().all(Value::is_string)),
+            ParamType::Duration => {
+                return match value.as_str() {
+                    Some(text) => recognised(core_ops::parse_duration(text).is_some()),
+                    None => Err(ArgumentProblem::WrongType),
+                };
+            }
+            ParamType::Enum(words) => {
+                return match value.as_str() {
+                    Some(text) => recognised(words.iter().any(|known| known == text)),
+                    None => Err(ArgumentProblem::WrongType),
+                };
+            }
+            _ => value.is_string(),
+        };
+        if fits {
+            Ok(())
+        } else {
+            Err(ArgumentProblem::WrongType)
+        }
+    };
+    match (param.repeat, value) {
+        (true, Value::Array(items)) if !items.is_empty() => items.iter().try_for_each(&one),
+        (true, _) => Err(ArgumentProblem::WrongType),
+        (false, _) if param.form == ParamForm::Switch => {
+            if value.is_boolean() {
+                Ok(())
+            } else {
+                Err(ArgumentProblem::WrongType)
+            }
+        }
+        (false, value) => one(value),
+    }
+}
+
+/// A decimal number as written: finite, as Rust reads an `f64`.
+fn decimal(text: &str) -> Option<f64> {
+    text.parse::<f64>().ok().filter(|number| number.is_finite())
+}
+
+/// Whether a value is a string that begins with `--`, or a list holding one: refused for every
+/// row with the code and word `serve` answers for it since LAB-5G4a (`actingctl_usage_invalid`,
+/// `not_recognised`), since the serving code turns many rows' parameters into command words,
+/// where it would be read as a flag. Numbers, booleans, objects and strings that begin with one
+/// dash pass.
+fn flag_like(value: &Value) -> bool {
+    let flag = |value: &Value| value.as_str().is_some_and(|text| text.starts_with("--"));
+    match value {
+        Value::Array(items) => items.iter().any(flag),
+        other => flag(other),
+    }
+}
+
+/// Whether a parameter whose type is a path is given a relative path (or a list holding one):
+/// refused `not_absolute`, since a resident server's current directory means nothing to its
+/// caller. Stricter than today's server, which resolves or passes relative paths.
+fn relative_path(param: &Param, value: &Value) -> bool {
+    if !tools::is_path(&param.value_type) {
+        return false;
+    }
+    let relative = |value: &Value| {
+        value
+            .as_str()
+            .is_some_and(|text| !Path::new(text).is_absolute())
+    };
+    match value {
+        Value::Array(items) => items.iter().any(relative),
+        other => relative(other),
+    }
+}
+
+/// The `tools/call` result of `exit` in `era`: the line as the text content and, where the
+/// version has it, as `structuredContent`, `isError` when the command line would exit non-zero,
+/// within the limit (`budget::carried`); a line over it is `output_budget_exceeded` with both
+/// numbers. A line that did not encode is `actingctl_output_failed`, as `serve` answers it. The
+/// developer line goes to stderr, as `serve` writes it.
+pub(crate) fn call_result(exit: &Exit, era: Era) -> Value {
+    let line = match &exit.line {
+        Ok(line) => {
+            if let Some(developer) = &exit.developer {
+                eprintln!("{}", developer.line(crate::PROGRAM));
+            }
+            line.clone()
+        }
+        Err(text) => {
+            eprintln!(
+                "{}",
+                cli_line::developer_text(crate::PROGRAM, &Exit::output_failed(), Some(text))
+            );
+            refusal_line(&Exit::output_failed())
+        }
+    };
+    let is_error = exit.code != 0;
+    match budget::carried(&line, era, is_error) {
+        Ok(result) => result,
+        Err(sent_bytes) => refusal_result(&budget::exceeded(sent_bytes), era),
+    }
+}
+
+/// The `tools/call` result of a call `refusal` answers: the line of a refusal, `{outcome}`, as
+/// text and, from 2025-06-18 on, as `structuredContent`; `isError` true.
+pub(crate) fn refusal_result(refusal: &Outcome, era: Era) -> Value {
+    let line = refusal_line(refusal);
+    budget::tool_result(&line, era, line.to_string(), true)
+}
+
+/// `{outcome}`, the line of a refusal, in this server's detail.
+fn refusal_line(refusal: &Outcome) -> Value {
+    let mut line = Map::new();
+    line.insert("outcome".to_owned(), tools::envelope(refusal));
+    Value::Object(line)
+}
