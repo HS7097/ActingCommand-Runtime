@@ -24,6 +24,7 @@ use actingcommand_contract::{
 };
 use actingcommand_policy::{
     FACT_REFRESH_TASK_ID, PolicyCode, PolicyEvaluation, SchedulingDecisionState,
+    SchedulingRulePolicyCode,
 };
 use actingcommand_runtime_config::TaskHeldConfig;
 use serde_json::Value;
@@ -51,7 +52,7 @@ pub(crate) const HELD_CODES: [Code; 17] = [
     HostCode::DispatchInstanceHeld.code(),
     ApplicationUpdateCode::Pending.code(),
     PolicyCode::SelectionInputUnknown.code(),
-    PolicyCode::DecisionReasonMissing.code(),
+    SchedulingRulePolicyCode::DecisionReasonMissing.code(),
     // Held, undecidable.
     PolicyCode::TriggerUnknown.code(),
     PolicyCode::FeedbackStopUnknown.code(),
