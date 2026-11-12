@@ -10448,7 +10448,9 @@ points 3 and 4 add them to the schema. No other existing test changes:
 test-only view of `parse_all` without the jobs' options.
 
 **Tests.** New: apps row "#434 LAB-5G3". In the binary's unit tests (`gate_434_lab5g3`, no
-Runtime, made-up job bodies): `mcp_job_start_options` (the three options' defaults, given values
+Runtime, made-up job bodies; its one clock call is `unreached_deadline`, the deadline
+`Job::wait_until` takes and no test reaches, entered in the determinism guard's allow-list as
+today's server's `gate_mcpt1` is): `mcp_job_start_options` (the three options' defaults, given values
 at both ends of their ranges and refusals; `job_capacity_exhausted` past `--jobs`, the oldest
 finished job dropped past `--kept-jobs` and a running one never, the count of a finished job by
 its handle's issue and its read; the added members one table, none a row's parameter, `wait_s`

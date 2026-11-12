@@ -3,8 +3,8 @@
 //! Workflow #434 LAB-5G3 (register §1.287, "Slice LAB-5G3"; contracts/lab-two-entries.md §9.3; the
 //! coordinator's work order `rd-1112/brief-lab5g3.md`, points 2 to 4 and 6): the start options of
 //! the jobs, what happens at each cap, and the members the front adds to the generated tools, in
-//! the server's own code. No Runtime, no clock, no sleep: the jobs here are made-up bodies, ended
-//! by the test.
+//! the server's own code. No Runtime, no sleep, and no clock but the deadline no test reaches
+//! (`unreached_deadline`): the jobs here are made-up bodies, ended by the test.
 //!
 //! - `mcp_job_start_options`: without the options, today's values (a call budget of 25 s, 8 jobs at
 //!   once, 64 kept); the values given, at both ends of their ranges; 0, one past the range and -1
@@ -43,6 +43,12 @@ const EVERY_MODULE: [OperationModule; 4] = [
     OperationModule::Authoring,
     OperationModule::Rescue,
 ];
+
+/// A deadline no test reaches. It only anchors `Job::wait_until`'s bound and measures nothing
+/// (the #672 ruling's form, allowed in `gate_map.rs` `DETERMINISM_ALLOWLIST`).
+fn unreached_deadline() -> Instant {
+    Instant::now() + GATE_WAIT
+}
 
 /// The command line `words`, with the jobs' options, as the program reads its arguments.
 fn parse_words(words: &[&str]) -> Result<(crate::Invocation, crate::JobOptions), crate::Ended> {
@@ -200,18 +206,18 @@ fn mcp_job_start_options() {
     );
     release.send(()).expect("release the first job");
     assert!(
-        first.wait_until(Instant::now() + GATE_WAIT, &never),
+        first.wait_until(unreached_deadline(), &never),
         "the first job ends"
     );
     // At `--kept-jobs`: the oldest finished job goes first.
     let second = jobs
         .start(jobs.handle(), "ac_neutral", false, finished)
         .expect("a job starts once the first ended");
-    assert!(second.wait_until(Instant::now() + GATE_WAIT, &never));
+    assert!(second.wait_until(unreached_deadline(), &never));
     let third = jobs
         .start(jobs.handle(), "ac_neutral", false, finished)
         .expect("a job starts once the second ended");
-    assert!(third.wait_until(Instant::now() + GATE_WAIT, &never));
+    assert!(third.wait_until(unreached_deadline(), &never));
     assert!(
         jobs.find(&first.handle).is_none(),
         "past --kept-jobs the oldest finished job is dropped"
@@ -257,8 +263,8 @@ fn mcp_job_start_options() {
     assert_eq!(running.outstanding().handles.len(), 2, "running jobs count");
     release.send(()).expect("release the job");
     release_too.send(()).expect("release the job");
-    assert!(held.wait_until(Instant::now() + GATE_WAIT, &never));
-    assert!(held_too.wait_until(Instant::now() + GATE_WAIT, &never));
+    assert!(held.wait_until(unreached_deadline(), &never));
+    assert!(held_too.wait_until(unreached_deadline(), &never));
 
     // The front's added members: one table, none of them a parameter of its row or one the front
     // gives itself.

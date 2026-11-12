@@ -664,7 +664,9 @@ const GATE_WAIT: &str = "GATE_WAIT";
 /// same form for Workflow #382 MCP-T1 (coordinator answer CD-27, D2 (a)): the deadline that
 /// `Job::wait_until` takes and no test reaches. The third is the same form for Workflow #411 A5
 /// (coordinator 10-19 00:2x, the CD-27 D2 (a) form): the 60 s admission budget that
-/// `describe_path` takes and no test reaches.
+/// `describe_path` takes and no test reaches. The fourth is the second's form for Workflow #434
+/// LAB-5G3 (the coordinator's ruling of 2026-11-13): the deadline that `Job::wait_until` of the
+/// new MCP server, copied from the second's, takes and no test reaches.
 const DETERMINISM_ALLOWLIST: &[(&str, &str, &str)] = &[
     (
         "apps/actingctl/src/gate_381a.rs",
@@ -679,6 +681,11 @@ const DETERMINISM_ALLOWLIST: &[(&str, &str, &str)] = &[
     (
         "apps/actinglab/src/tests/gate_0121_pkgcheck.rs",
         "runtime_verdict",
+        "Instant::now",
+    ),
+    (
+        "apps/actinglab-mcp/src/gate_434_lab5g3.rs",
+        "unreached_deadline",
         "Instant::now",
     ),
 ];
