@@ -220,6 +220,9 @@ mod gate_idle2_auto_host;
 mod gate_ss2d;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;
+// Workflow #438 HELD-1 (register §1.322, §1.327): a task held too long leaves one record, and its
+// end one more; the start ends the holds left open; `actingd suspended` lists them.
+mod gate_438_held;
 // Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).
 mod gate_372k5;
 // Workflow #373 NAV-3a: page-graph prerequisite packages and the standard-pack registry.

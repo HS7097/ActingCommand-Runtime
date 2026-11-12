@@ -1078,6 +1078,8 @@ impl HostShared {
             pending_dispatch_intents: Vec::new(),
             detection_planning_signals: Vec::new(),
             clock_slot_signals: Vec::new(),
+            // Workflow #438 HELD-1: a skipped evaluation writes no held record and no end.
+            task_held_signals: Vec::new(),
             measurement: None,
             fact_refresh_transitions: Vec::new(),
         })
@@ -1334,6 +1336,10 @@ impl HostShared {
         // this cycle starts.
         let pool_lines_context =
             self.pool_lines_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
+        // Workflow #438 HELD-1 (register §1.322 HELD-R8): each instance's held-record keys in
+        // effect as this cycle starts; only the held records read them, after the evaluation.
+        let task_held_context =
+            self.task_held_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
         // Workflow #411 B41: the page each instance rests on as this cycle starts.
         let chain_handover = self.chain_handover_inputs(&facts.instances)?;
         // Workflow #386 SR-4a2: the blackout keys in effect as this cycle starts.
@@ -1393,6 +1399,7 @@ impl HostShared {
                     max_concurrent_runs: run_limits.max_concurrent_runs,
                     no_progress_enabled: &no_progress_context,
                     pool_lines: &pool_lines_context,
+                    task_held: &task_held_context,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
@@ -1430,6 +1437,11 @@ impl HostShared {
             self.record_policy_planning_signal(signal.clone())?;
         }
         for signal in &cycle.clock_slot_signals {
+            self.record_policy_planning_signal(signal.clone())?;
+        }
+        // Workflow #438 HELD-1 (register §1.322 HELD-R5): the ends of reported holds, then the
+        // held records, appended with the cycle's planning signals; none changes a decision.
+        for signal in &cycle.task_held_signals {
             self.record_policy_planning_signal(signal.clone())?;
         }
         // Workflow #411 B15 R4 (model-b15 §7.5 to §7.7): the remedy stops, lifts and expiries

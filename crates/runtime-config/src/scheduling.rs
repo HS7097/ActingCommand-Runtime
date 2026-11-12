@@ -49,6 +49,11 @@
 //! checked here ([`InstancePoolLineSet`], [`PoolLineValue`]); the host reads them at every
 //! evaluated policy cycle and hands them to the evaluation, where an instance's set replaces the
 //! catalog's lines of that pool whole.
+//! Workflow #438 HELD-1 (register §1.322, §1.327; `actingd-config` revision 29):
+//! `task_held.enabled` (default `true`) and `task_held.after_ms` (`60000..=86400000`, default
+//! `1800000`), each also per instance (`instance.<instance id>.scheduling.task_held.<member>`,
+//! defaulting to the section's), whether a pair held past `after_ms` leaves a held record and
+//! when; read by the host at every evaluated policy cycle, read by no decision.
 //! BX-1 (Workflow #429, register §1.273, since 0.12.39): a blackout entry's parser and shape as a
 //! client surface ([`BlackoutListKey`], [`BlackoutEntry::parse`], [`BlackoutEntry::parse_list`],
 //! [`BlackoutEntry::to_json`], [`BlackoutEntry::list_json`]): the console builds and checks the
@@ -204,6 +209,15 @@ pub const EVALUATION_ESCALATE_AFTER: &str = "scheduling.evaluation.escalate_afte
 /// `false`: the evaluation is the one before SS-4. Also the member of an instance's own value
 /// (`instance.<instance id>.scheduling.no_progress.enabled`).
 pub const NO_PROGRESS_ENABLED: &str = "scheduling.no_progress.enabled";
+/// Workflow #438 HELD-1 (register §1.322 HELD-R8; `actingd-config` revision 29;
+/// `contracts/scheduling/README.md`, "Held records"): whether a pair held past
+/// [`TASK_HELD_AFTER_MS`] leaves a held record; `false` writes no new one and still writes the end
+/// of each hold already reported. Also the member of an instance's own value
+/// (`instance.<instance id>.scheduling.task_held.enabled`).
+pub const TASK_HELD_ENABLED: &str = "scheduling.task_held.enabled";
+/// Workflow #438 HELD-1: how long a pair is held before its held record, in milliseconds, the one
+/// lower bound (also a per-instance member).
+pub const TASK_HELD_AFTER_MS: &str = "scheduling.task_held.after_ms";
 /// #428 SCHED-C1e (register §1.299 SC1-12; `actingd-config` revision 28;
 /// `contracts/scheduling/README.md`, "Lines for one instance"): the member of an instance's own
 /// pool lines (`instance.<instance id>.scheduling.pool_lines`; in the file the
@@ -347,6 +361,11 @@ pub struct SchedulingFile {
     // fields; a file that does not name it keeps its revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     no_progress: Option<NoProgressFile>,
+    // Interface anchor `actingd-config` revision 29 (contracts/component-interfaces.md; Workflow
+    // #438 HELD-1): a Runtime before HELD-1 refuses a file that names it, because the section
+    // denies unknown fields; a file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_held: Option<TaskHeldFile>,
 }
 
 /// Workflow #405: the `scheduling` member of an `instances[]` entry, which holds that instance's
@@ -384,6 +403,12 @@ pub struct InstanceSchedulingFile {
     // revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pool_lines: Option<Value>,
+    // Interface anchor `actingd-config` revision 29 (contracts/component-interfaces.md; Workflow
+    // #438 HELD-1): the instance's own held-record switch and threshold. A Runtime before HELD-1
+    // refuses a file that names them, because the entry denies unknown fields; a file that does
+    // not keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_held: Option<TaskHeldFile>,
 }
 
 file_struct!(RecognitionFile {
@@ -492,6 +517,11 @@ file_struct!(
     /// SS-4 (register §1.231): the no-progress switch, section-level or one instance's.
     NoProgressFile { enabled }
 );
+file_struct!(
+    /// Workflow #438 HELD-1: the held-record switch and threshold, section-level or one
+    /// instance's.
+    TaskHeldFile { enabled, after_ms }
+);
 
 const fn row(
     name: &'static str,
@@ -556,6 +586,21 @@ const EVALUATION_ESCALATE: KeyRange = KeyRange::Integer {
     min: 1,
     max: MAX_COUNT,
 };
+/// Workflow #438 HELD-1 (register §1.322 ruling 5): the held-record threshold, one minute to one
+/// day, the idle gap keys' range. A range, not a threshold.
+pub(crate) const TASK_HELD_AFTER_RANGE: KeyRange = KeyRange::Integer {
+    min: 60_000,
+    max: 86_400_000,
+};
+
+/// Workflow #438 HELD-1: a key of the held records, read by the host from the release that joins
+/// `actingd-config` revision 29.
+const fn held_row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
+    KeyRow {
+        since: "0.12.56",
+        ..row(name, value_type, range, "HELD-1")
+    }
+}
 
 /// ISO-PE (#419): a key of the `evaluation` member, read from the release that joins
 /// `actingd-config` revision 20.
@@ -792,6 +837,14 @@ pub(crate) static ROWS: &[KeyRow] = &[
             "SS-4",
         )
     },
+    // Workflow #438 HELD-1 (register §1.322 HELD-R8): read by the host at every evaluated policy
+    // cycle, so an instruction takes effect at the next one; no decision reads either.
+    held_row(TASK_HELD_ENABLED, ValueType::Boolean, KeyRange::Any),
+    held_row(
+        TASK_HELD_AFTER_MS,
+        ValueType::DurationMs,
+        TASK_HELD_AFTER_RANGE,
+    ),
 ];
 
 /// A pacing stage a stage key names (the vocabulary `pacing_stage`).
@@ -977,6 +1030,16 @@ pub struct EvaluationRetryConfig {
     pub escalate_after: u32,
 }
 
+/// Workflow #438 HELD-1 (`contracts/scheduling/README.md`, "Held records"): the held-record keys
+/// in effect, the section's or, from `EffectiveConfig::task_held`, one instance's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskHeldConfig {
+    /// `false`: no new held record; the end of a hold already reported is still written.
+    pub enabled: bool,
+    /// How long a pair is held before its held record: `60000..=86400000` ms.
+    pub after_ms: u64,
+}
+
 /// The `scheduling` section in effect, read and checked whole.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchedulingConfig {
@@ -1001,6 +1064,8 @@ pub struct SchedulingConfig {
     pub evaluation: EvaluationRetryConfig,
     /// SS-4 (register §1.231): the section's no-progress switch.
     pub no_progress_enabled: bool,
+    /// Workflow #438 HELD-1: the section's held-record keys.
+    pub task_held: TaskHeldConfig,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -1581,8 +1646,35 @@ impl SchedulingConfig {
                 escalate_after: reader.count(EVALUATION_ESCALATE_AFTER)?,
             },
             no_progress_enabled: reader.boolean(NO_PROGRESS_ENABLED)?,
+            task_held: TaskHeldConfig {
+                enabled: reader.boolean(TASK_HELD_ENABLED)?,
+                after_ms: reader.duration(TASK_HELD_AFTER_MS)?,
+            },
         })
     }
+}
+
+/// Workflow #438 HELD-1 (register §1.322 HELD-R8): the held-record keys in effect for the
+/// instance whose registry id is `instance_id`: each member the instance's own key
+/// (`instance.<instance_id>.scheduling.task_held.<member>`) when the configuration carries it,
+/// otherwise the section's.
+pub(crate) fn instance_task_held(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+    instance_id: &str,
+) -> Result<TaskHeldConfig, ConfigFailure> {
+    let [enabled, after_ms] = [TASK_HELD_ENABLED, TASK_HELD_AFTER_MS].map(|member| {
+        let own = instance_key(instance_id, member);
+        if value(&own).is_some() {
+            own
+        } else {
+            member.to_owned()
+        }
+    });
+    let reader = Reader { value };
+    Ok(TaskHeldConfig {
+        enabled: reader.boolean(&enabled)?,
+        after_ms: reader.duration(&after_ms)?,
+    })
 }
 
 /// SS-4 (register §1.231): `scheduling.no_progress.enabled` in effect for the instance whose

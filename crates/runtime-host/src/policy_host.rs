@@ -14,6 +14,8 @@ pub use catalog_preview::{
     CatalogPreview, CatalogPreviewPhases, CatalogPreviewRequest, preview_policy_catalog_transition,
 };
 mod catalog_transaction;
+// Workflow #438 HELD-1 (register §1.322 HELD-R5 to HELD-R7): the held records and their ends.
+pub(crate) mod held;
 pub(crate) use catalog_transaction::catalog_ledger_error;
 mod planning_transaction;
 // Workflow #386 SR-2b-2: owed reruns are promoted, gated by the pacing stage, and expire.
@@ -255,6 +257,9 @@ pub struct PolicyCycle {
     pub detection_planning_signals: Vec<PolicyPlanningSignalEventData>,
     /// Workflow #372 K2: the clock-slot records this cycle appends after its detection signals.
     pub clock_slot_signals: Vec<PolicyPlanningSignalEventData>,
+    /// Workflow #438 HELD-1 (register §1.322 HELD-R6): the ends of reported holds, then the held
+    /// records, this cycle appends after its clock-slot records. No decision reads them.
+    pub task_held_signals: Vec<PolicyPlanningSignalEventData>,
     pub measurement: Option<PolicyEvaluationMeasurement>,
     /// Workflow #384 D2-S5 (D2 model §5.1 MP-3): the fact refresh recorder's transitions at this
     /// cycle's yield point, in memory only: actingd writes them as daemon lines, and no
@@ -308,6 +313,10 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// `scheduling.pool_lines` in effect gives its pools as the cycle starts, by alias; an
     /// instance it does not name takes each pool's catalog lines.
     pub(crate) pool_lines: &'a actingcommand_policy::InstancePoolLines,
+    /// Workflow #438 HELD-1 (register §1.322 HELD-R8): `scheduling.task_held.*` in effect for each
+    /// instance of the snapshot, by alias, as the cycle starts; an instance it does not name writes
+    /// no new held record. Read only after the evaluation, by the held records.
+    pub(crate) task_held: &'a BTreeMap<String, actingcommand_runtime_config::TaskHeldConfig>,
 }
 
 /// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
@@ -1283,6 +1292,9 @@ pub(crate) struct PolicyHost {
     /// start recorded. Memory only, nothing on disk: a restart warns once more.
     rows_exceeded_warned:
         BTreeMap<(actingcommand_contract::FactScope, String), actingcommand_contract::EventId>,
+    /// Workflow #438 HELD-1 (register §1.322 HELD-R6): the holds this start reported and has not
+    /// ended. Memory only; a host starts with none, and no decision reads it.
+    held: held::HeldMemory,
 }
 
 /// SCHED-C1d (register §1.299 SC1-11): what the host recorded of the capped episodes as
@@ -1832,6 +1844,7 @@ impl PolicyHost {
             capped: CappedMemory::default(),
             capped_kept: CappedKept::default(),
             rows_exceeded_warned: BTreeMap::new(),
+            held: held::HeldMemory::default(),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -3236,15 +3249,19 @@ impl PolicyHost {
             max_concurrent_runs,
             no_progress_enabled,
             pool_lines,
+            task_held,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
+            // Workflow #438 HELD-1: a deferred cycle leaves the table as it was and writes
+            // nothing.
             return Ok(PolicyCycle {
                 directive,
                 evaluation: None,
                 pending_dispatch_intents: Vec::new(),
                 detection_planning_signals: Vec::new(),
                 clock_slot_signals: Vec::new(),
+                task_held_signals: Vec::new(),
                 measurement: None,
                 fact_refresh_transitions: Vec::new(),
             });
@@ -3701,6 +3718,22 @@ impl PolicyHost {
                 store_tasks: &store_tasks,
             },
         );
+        // Workflow #438 HELD-1 (register §1.322 HELD-R6; `scheduling/README.md`, "Held records"):
+        // after the evaluation and its explanation, the ends of the holds it found ended, then the
+        // held records of the rows held past the threshold, each checked against the
+        // planning-signal projection first. Nothing above reads them, and nothing after does
+        // either: the cycle's recorder only appends them.
+        let projection = &self.store;
+        let task_held_signals = self.held.observe(
+            &self.explanation,
+            &evaluation,
+            &in_flight,
+            &|alias: &str| task_held.get(alias).copied(),
+            &|signal_id: &str| -> RuntimeHostResult<bool> {
+                Ok(projection.load_planning_signal(signal_id)?.is_some())
+            },
+            time.unix_ms,
+        )?;
         if let Some(decisions) = &remedy_decisions {
             self.remedies.retain_keys(decisions);
         }
@@ -3716,6 +3749,7 @@ impl PolicyHost {
             pending_dispatch_intents,
             detection_planning_signals,
             clock_slot_signals,
+            task_held_signals,
             measurement: Some(PolicyEvaluationMeasurement {
                 sampled_at_monotonic_ms,
                 elapsed_micros,

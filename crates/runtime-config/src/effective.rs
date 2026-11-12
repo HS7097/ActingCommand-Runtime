@@ -27,7 +27,7 @@ use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::{
     BlackoutEntry, ExpectedRuntimeConfig, FactRefreshConfig, InstancePoolLineSet,
-    PackAdmissionConfig, RandomDelay, RemedyConfig, SchedulingConfig,
+    PackAdmissionConfig, RandomDelay, RemedyConfig, SchedulingConfig, TaskHeldConfig,
 };
 use crate::startup_discovery::StartupDiscoveryConfig;
 use crate::store_foreground::StoreForegroundConfig;
@@ -785,6 +785,14 @@ impl EffectiveConfig {
             &|key: &str| self.value_or_shipped(key),
             instance_id,
         )
+    }
+
+    /// Workflow #438 HELD-1 (register §1.322 HELD-R8): the held-record keys in effect for the
+    /// instance whose registry id is `instance_id`: each of `enabled` and `after_ms` its own
+    /// `instance.<instance_id>.scheduling.task_held.<member>` when the configuration carries it,
+    /// otherwise the section's `scheduling.task_held.<member>`.
+    pub fn task_held(&self, instance_id: &str) -> Result<TaskHeldConfig, ConfigFailure> {
+        scheduling::instance_task_held(&|key: &str| self.value_or_shipped(key), instance_id)
     }
 
     /// #428 SCHED-C1e (register §1.299 SC1-12): the own pool lines of the instance whose registry

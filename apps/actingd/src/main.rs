@@ -959,6 +959,8 @@ fn given_up_policy_cycle(policy: &PolicyBootstrap) -> Result<PolicyCycle, Acting
         pending_dispatch_intents: Vec::new(),
         detection_planning_signals: Vec::new(),
         clock_slot_signals: Vec::new(),
+        // Workflow #438 HELD-1: a round given up writes no held record and no end.
+        task_held_signals: Vec::new(),
         measurement: None,
         fact_refresh_transitions: Vec::new(),
     })
@@ -3830,6 +3832,8 @@ mod tests {
             pending_dispatch_intents: Vec::new(),
             detection_planning_signals: Vec::new(),
             clock_slot_signals: Vec::new(),
+            // Workflow #438 HELD-1: the cycle's held records, none here.
+            task_held_signals: Vec::new(),
             measurement: None,
             fact_refresh_transitions: Vec::new(),
         }

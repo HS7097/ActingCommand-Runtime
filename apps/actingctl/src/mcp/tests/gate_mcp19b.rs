@@ -291,6 +291,8 @@ pub(super) fn render(
         packs: Vec::new(),
         remedies: Vec::new(),
         reruns: Vec::new(),
+        // Workflow #438 HELD-1: the diagnosis's held rows, none here.
+        held: Vec::new(),
         lift: Vec::new(),
         report_warnings: Vec::new(),
         report_status: json!({"status": "ok", "through_sequence": 121_000}),
