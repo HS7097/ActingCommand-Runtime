@@ -39,19 +39,27 @@
 //!   A handle this process never issued is `handle_unknown`. `ac_run_start` answers at once with
 //!   `submitting` and a handle that is the request id the Runtime then receives, and its job counts
 //!   while it submits.
+//! - `mcp_cursor_bound_to_connection`: an `events` cursor is taken back on the connection it was
+//!   issued on (the rest of the page) and is `cursor_invalid`, nothing read, once the connection was
+//!   made again; a `codes` cursor gives the page the command line gives for it, and a `runs` cursor
+//!   the line the command line's code gives for it.
 //! - `mcp_run_show_and_run_stop_wait`: `ac_run_show` of a run not found reads it once without a
 //!   wait and once more a second later with one; `ac_run_stop` answers its job's handle after its
 //!   `wait_s`, and `ac_run_show` of the handle then the job's line; a wait past the budget, below
 //!   0 or of another type is refused before anything is sent.
 
 use actingcommand_contract::{
-    EventActor, EventSource, FactScope, IdentifierIssuer, OwnerEpoch, PackSchedulePackage,
-    PackScheduleScopeVersion, PackScheduleSource, PackScheduleView, RuntimeControlPlaneStatus,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryPage, RuntimeInstanceStatus,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    TerminalEvent,
+    AuditInput, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
+    EventPayloadDraft, EventSeverity, EventSource, FactScope, IdentifierIssuer, OriginModule,
+    OwnerEpoch, PackSchedulePackage, PackScheduleScopeVersion, PackScheduleSource,
+    PackScheduleView, ProjectedEvent, ProjectionPayload, RuntimeControlPlaneStatus,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    RuntimeInstanceStatus, RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult, SanitizationError, SecretField,
+    SecretFingerprinter, Sha256Fingerprint, TerminalEvent,
 };
 use actingcommand_lab_ops::cli_line::Exit;
+use actingcommand_lab_ops::code_lookup;
 use actingcommand_lab_ops::core_ops::{self, Caller, Place};
 use actingcommand_lab_ops::events::CursorBinding;
 use actingcommand_lab_ops::front::{self, Connection, Front};
@@ -62,6 +70,7 @@ use actingcommand_runtime_client::test_support::{
 };
 use actingcommand_runtime_client::{RuntimeChannel, RuntimeClient};
 use serde_json::{Value, json};
+use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -669,6 +678,8 @@ const INSTANCE: &str = "neutral.a";
 /// The made-up packages of a pack schedule view: some 70 bytes of JSON each, so the line takes
 /// some 140 KB as text and as much again as `structuredContent`, far past the 24 KiB budget.
 const PACKAGES: usize = 2000;
+/// The time of the made-up record at sequence 0; a record's time is this plus its sequence.
+const RECORDED_FROM_UNIX_MS: u64 = 1_700_000_000_000;
 
 /// `command` with the call budget `seconds` (the start option `--call-budget`).
 fn with_call_budget(mut command: Command, seconds: u64) -> Command {
@@ -847,6 +858,106 @@ fn empty_page(request: &RuntimeRequest) -> ScriptedAnswer {
     let page = RuntimeEventQueryPage::new(Vec::new(), 0, page.limit(), false, None)
         .expect("an empty page");
     ScriptedAnswer::completed(request, RuntimeResult::EventPage { page })
+}
+
+/// One page of `events` for the event query `request` sends, as the scripted ledger answers one:
+/// the records after its cursor and from its first sequence, oldest first, at the snapshot of the
+/// last record, with the cursor after the page while more remain.
+fn page_of(events: &[ProjectedEvent], request: &RuntimeRequest) -> ScriptedAnswer {
+    let RuntimeOperation::QueryEvents {
+        query,
+        profile,
+        page,
+    } = request.operation()
+    else {
+        panic!("an event query, not {:?}", request.operation());
+    };
+    let snapshot = events.last().map_or(0, |event| event.sequence);
+    let after = page
+        .cursor()
+        .map_or(0, RuntimeEventQueryCursor::after_sequence);
+    let mut matching = events.iter().filter(|event| {
+        event.sequence > after
+            && query
+                .from_sequence
+                .is_none_or(|from| event.sequence >= from)
+    });
+    let rows = matching
+        .by_ref()
+        .take(usize::from(page.limit()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let has_more = matching.next().is_some();
+    let next = rows.last().filter(|_| has_more).map(|last| {
+        RuntimeEventQueryCursor::new(snapshot, last.sequence, query, *profile)
+            .expect("the page's next cursor")
+    });
+    let page = RuntimeEventQueryPage::new(rows, snapshot, page.limit(), has_more, next)
+        .expect("an event page");
+    ScriptedAnswer::completed(request, RuntimeResult::EventPage { page })
+}
+
+struct NoSecrets;
+
+impl SecretFingerprinter for NoSecrets {
+    fn fingerprint(
+        &self,
+        _field: SecretField,
+        _original: &str,
+    ) -> Result<Sha256Fingerprint, SanitizationError> {
+        panic!("the made-up records hold no secret")
+    }
+}
+
+/// Made-up records at the sequences 1 to `count`, as a forensic read projects them.
+fn ledger(count: u64) -> Vec<ProjectedEvent> {
+    let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    (1..=count)
+        .map(|sequence| {
+            let payload: EventPayloadDraft =
+                RuntimePayloadDraft::started(EventAction::RuntimeStart, AuditInput::new()).into();
+            let sanitized = EventDraft::new(
+                issuer.mint_event_id().expect("event id"),
+                RECORDED_FROM_UNIX_MS + sequence,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default(),
+                payload,
+            )
+            .sanitize(&NoSecrets)
+            .expect("sanitize a made-up record");
+            ProjectedEvent {
+                views: Vec::new(),
+                artifact_evictions: Vec::new(),
+                schema_version: sanitized.schema_version().to_owned(),
+                sequence,
+                event_id: *sanitized.event_id(),
+                timestamp_unix_ms: sanitized.timestamp_unix_ms(),
+                event_type: sanitized.event_type(),
+                severity: sanitized.severity(),
+                sensitivity: sanitized.sensitivity(),
+                origin: sanitized.origin().clone(),
+                links: sanitized.links().clone(),
+                payload_schema: sanitized.payload_schema().to_owned(),
+                payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
+                artifacts: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+/// The seq of each row of an `events` line.
+fn sequences(line: &Value) -> Vec<u64> {
+    line["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a line without events: {line}"))
+        .iter()
+        .map(|row| row["seq"].as_u64().expect("a row's seq"))
+        .collect()
 }
 
 /// How many event queries a connection received.
@@ -1042,6 +1153,111 @@ fn mcp_jobs_handles_entry_status() {
         json!(submitted.request_id()),
         json!(run),
         "ac_run_start's handle is the run's request id"
+    );
+}
+
+#[test]
+fn mcp_cursor_bound_to_connection() {
+    let state = TempDir::new().expect("tempdir");
+    let temp = TempDir::new().expect("tempdir");
+    let records = ledger(4);
+    let runtime = ScriptedRuntime::start(state.path(), |owner_epoch| {
+        let (first_page, rest) = (records.clone(), records.clone());
+        vec![
+            // The kept connection: a page of two of four records, then the rest from its cursor;
+            // then its Health answered by a close, so the connection is made again.
+            ScriptedConnection::new()
+                .request(move |request| page_of(&first_page, request))
+                .request(healthy(owner_epoch))
+                .request(move |request| page_of(&rest, request))
+                .request(|request| {
+                    assert!(
+                        matches!(request.operation(), RuntimeOperation::Health),
+                        "a kept connection is checked with Health first, not {:?}",
+                        request.operation()
+                    );
+                    ScriptedAnswer::Close
+                }),
+            // The connection made again: the cursor refused, nothing read; then `runs`.
+            ScriptedConnection::new().request(healthy(owner_epoch)),
+            // The command line's code: `runs` with the same cursor.
+            ScriptedConnection::new(),
+        ]
+    });
+    let mut server = Server::start(actinglab_mcp(
+        Path::new(PROGRAM),
+        Some(state.path()),
+        temp.path(),
+    ));
+    server.initialize();
+
+    // `events`: a cursor issued on the kept connection, the first one.
+    let first = line_of(&server.call_tool(2, "ac_events", json!({"after": 0, "limit": 2})));
+    assert_eq!(sequences(&first), [1, 2], "{first}");
+    let cursor = first["next_cursor"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no next_cursor: {first}"))
+        .to_owned();
+    let parts = cursor.split('.').collect::<Vec<_>>();
+    assert_eq!(
+        (parts.first().copied(), parts.get(2).copied()),
+        (Some("v1"), Some("1")),
+        "bound to this server's first connection: {cursor}"
+    );
+    let taken = server.call_tool(3, "ac_events", json!({"cursor": cursor}));
+    assert_eq!(taken["result"]["isError"], json!(false), "{taken}");
+    assert_eq!(sequences(&line_of(&taken)), [3, 4], "the rest of the page");
+    // Once the connection was made again: cursor_invalid, nothing read.
+    let refused = server.call_tool(4, "ac_events", json!({"cursor": cursor}));
+    assert_eq!(refused_code(&refused), json!("cursor_invalid"), "{refused}");
+
+    // `codes`: its cursor carries its own position; the next page is the command line's.
+    let codes =
+        line_of(&server.call_tool(5, "ac_codes", json!({"prefix": "actingctl_", "limit": 2})));
+    let next = codes["next_cursor"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no next_cursor: {codes}"))
+        .to_owned();
+    let second = line_of(&server.call_tool(
+        6,
+        "ac_codes",
+        json!({"prefix": "actingctl_", "limit": 2, "cursor": next}),
+    ));
+    let words = [
+        "codes",
+        "--prefix",
+        "actingctl_",
+        "--limit",
+        "2",
+        "--cursor",
+        next.as_str(),
+    ]
+    .map(OsString::from);
+    let expected = code_lookup::dispatch(&words)
+        .expect("the words of codes")
+        .line
+        .expect("the line encodes");
+    assert_eq!(
+        second, expected,
+        "the next page, as the command line gives it"
+    );
+    assert_ne!(second["codes"], codes["codes"], "the next page");
+
+    // `runs`: its cursor is its row's own and passes as the command line takes it.
+    let runs = server.call_tool(7, "ac_runs", json!({"cursor": "r1.0"}));
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    let expected = command_line_line(state.path(), "runs", json!({"cursor": "r1.0"}));
+    assert_served_as(&runs, &expected);
+    let record = runtime.finish();
+    assert!(
+        record.unscripted.is_empty(),
+        "a connection beyond the three"
+    );
+    assert_eq!(
+        record.connections.iter().map(queries).collect::<Vec<_>>(),
+        [2, 0, 0],
+        "the refused cursor read nothing"
     );
 }
 

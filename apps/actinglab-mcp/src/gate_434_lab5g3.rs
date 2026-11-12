@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Workflow #434 LAB-5G3 (register §1.287, "Slice LAB-5G3"; contracts/lab-two-entries.md §9.3; the
-//! coordinator's work order `rd-1112/brief-lab5g3.md`, points 2 to 4): the start options of
+//! coordinator's work order `rd-1112/brief-lab5g3.md`, points 2 to 4 and 6): the start options of
 //! the jobs, what happens at each cap, and the members the front adds to the generated tools, in
 //! the server's own code. No Runtime, no clock, no sleep: the jobs here are made-up bodies, ended
 //! by the test.
@@ -18,7 +18,8 @@
 //!   front's added members are one table (`tools::ADDED`), none of them a parameter of its row or
 //!   one the front gives; for a call budget given, `ac_run_show`'s and `ac_run_stop`'s `wait_s`
 //!   take 0 to it, their defaults (0 and today's 20) never more than it, their descriptions name
-//!   it; the instructions name the budget given where they named 25 s.
+//!   it, `ac_events` and `ac_codes` take a `cursor`, `ac_runs` keeps its row's; the instructions
+//!   name the budget given where they named 25 s.
 
 use crate::calls::Finished;
 use crate::jobs::{JOB_PREFIX, Jobs, Limits, Outstanding};
@@ -263,7 +264,12 @@ fn mcp_job_start_options() {
     // gives itself.
     assert_eq!(
         tools::ADDED.map(|(row, member, _)| (row, member)),
-        [("run show", "wait_s"), ("run stop", "wait_s")]
+        [
+            ("run show", "wait_s"),
+            ("run stop", "wait_s"),
+            ("events", "cursor"),
+            ("codes", "cursor"),
+        ]
     );
     let table = table::operation_table().expect("the operation table this build embeds reads");
     for (row, member, _) in tools::ADDED {
@@ -303,6 +309,9 @@ fn mcp_job_start_options() {
                     .is_some_and(|text| text.contains(&format!("from 0 to {budget_s},"))),
                 "the description names the budget: {wait}"
             );
+        }
+        for tool in ["ac_events", "ac_codes", "ac_runs"] {
+            assert_eq!(schemas[tool]["cursor"]["type"], "string", "{tool}");
         }
         let instructions = tools::instructions(budget_s);
         assert!(

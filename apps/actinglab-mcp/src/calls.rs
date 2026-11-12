@@ -22,8 +22,9 @@
 //!   exactly when the command line would exit non-zero; within the answer budget
 //!   ([`crate::budget`]), which the serving code also cuts or exports a shaped answer to.
 //! - **Jobs** (Workflow #434 LAB-5G3; `crate::jobs`, `crate::server`): every served call runs as
-//!   a job; what the server's jobs and waits ask of the serving code is the last part of this
-//!   module ([`front_members`], [`finished`], [`Service::watched`], [`Service::run_start`]).
+//!   a job; what the server's jobs, waits and cursors ask of the serving code is the last part of
+//!   this module ([`front_members`], [`finished`], [`Service::watched`], [`Service::taken_back`],
+//!   [`Service::run_start`]).
 
 use crate::budget;
 use crate::protocol::Era;
@@ -32,13 +33,15 @@ use crate::tools::{self, Added, Serving, Supplied};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_lab_ops::budget::Budget;
 use actingcommand_lab_ops::cli_line::{self, Exit};
+use actingcommand_lab_ops::code_lookup;
 use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_lab_ops::core_ops::{self, Caller};
-use actingcommand_lab_ops::events::CursorBinding;
+use actingcommand_lab_ops::events::{self, CursorBinding};
 use actingcommand_lab_ops::front::{Connection, Front};
 use actingcommand_lab_ops::table::{Operation, Param, ParamForm, ParamType, RuntimeNeed};
 use actingcommand_runtime_client::{PreparedContainedTask, RuntimeClient};
 use serde_json::{Map, Value, json};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -503,10 +506,12 @@ fn refusal_line(refusal: &Outcome) -> Value {
     Value::Object(line)
 }
 
-// ---- Workflow #434 LAB-5G3 (register §1.287, "Slice LAB-5G3"): what the server's jobs and waits
-// ask of the serving code. The jobs themselves are `crate::jobs`; when a call waits and what it
-// answers, `crate::server`. Taking cursors back (the work order's point 6) is the slice's second
-// part.
+// ---- Workflow #434 LAB-5G3 (register §1.287, "Slice LAB-5G3"): what the server's jobs, waits and
+// cursors ask of the serving code. The jobs themselves are `crate::jobs`; when a call waits and
+// what it answers, `crate::server`.
+
+/// The command words that give a cursor back to the commands of `lab-ops`.
+const CURSOR_FLAG: &str = "--cursor";
 
 /// Workflow #434 LAB-5G3: a call's line once its job ended, as it is answered ([`finished`]): the
 /// line, and whether the command line would exit non-zero for it.
@@ -522,13 +527,16 @@ pub(crate) struct Finished {
 pub(crate) struct FrontMembers {
     /// `wait_s`, or its default, on a row whose tool takes it.
     pub(crate) wait: Option<Duration>,
+    /// `cursor`, when it is given.
+    pub(crate) cursor: Option<String>,
 }
 
 /// Workflow #434 LAB-5G3: the members the front adds to `operation`'s tool, read from `arguments`
 /// and taken out of them, and the rest, the row's, which [`prepare`] reads. `wait_s` is a whole
 /// number of seconds from 0 to the call budget (`call_budget`), its default when it is absent or
-/// `null` (never more than the budget). A value of another JSON type is `arguments_invalid`
-/// `wrong_type`, a wait outside its range `out_of_range` with the range. Nothing is sent or
+/// `null` (never more than the budget); `cursor` is text. A value of another JSON type is
+/// `arguments_invalid` `wrong_type`, a wait outside its range `out_of_range` with the range, and a
+/// cursor that begins with `--` is refused as `serve` refuses such a value. Nothing is sent or
 /// written before.
 pub(crate) fn front_members(
     operation: &Operation,
@@ -541,17 +549,37 @@ pub(crate) fn front_members(
         .iter()
         .filter(|(row, _, _)| *row == operation.name)
     {
-        let Added::Wait { default_s, .. } = *added;
-        let seconds = match arguments.remove(*member).filter(|value| !value.is_null()) {
-            None => default_s.min(budget_s),
-            Some(value) => match value.as_u64() {
-                Some(seconds) if seconds <= budget_s => seconds,
-                Some(_) => return Err(out_of_range(member, budget_s).into()),
-                None if value.is_i64() => return Err(out_of_range(member, budget_s).into()),
-                None => return Err(invalid(member, ArgumentProblem::WrongType).into()),
-            },
-        };
-        members.wait = Some(Duration::from_secs(seconds));
+        let value = arguments.remove(*member).filter(|value| !value.is_null());
+        match added {
+            Added::Wait { default_s, .. } => {
+                let seconds = match value {
+                    None => (*default_s).min(budget_s),
+                    Some(value) => match value.as_u64() {
+                        Some(seconds) if seconds <= budget_s => seconds,
+                        Some(_) => return Err(out_of_range(member, budget_s).into()),
+                        None if value.is_i64() => return Err(out_of_range(member, budget_s).into()),
+                        None => return Err(invalid(member, ArgumentProblem::WrongType).into()),
+                    },
+                };
+                members.wait = Some(Duration::from_secs(seconds));
+            }
+            Added::Cursor { .. } => {
+                let Some(value) = value else {
+                    continue;
+                };
+                if flag_like(&value) {
+                    return Err(cli_line::usage_invalid(
+                        Some(*member),
+                        ArgumentProblem::NotRecognised,
+                    )
+                    .into());
+                }
+                let cursor = value
+                    .as_str()
+                    .ok_or_else(|| invalid(member, ArgumentProblem::WrongType))?;
+                members.cursor = Some(cursor.to_owned());
+            }
+        }
     }
     Ok((members, arguments))
 }
@@ -562,6 +590,17 @@ fn out_of_range(member: &str, budget_s: u64) -> Outcome {
     invalid(member, ArgumentProblem::OutOfRange)
         .range_min(0_u64)
         .range_max(budget_s)
+}
+
+/// A line `lab-ops`' command built; a command that did not take its first word is a defect of
+/// this server, answered as `lab_ops::core_ops` answers it.
+fn not_served(exit: Option<Exit>) -> Exit {
+    exit.unwrap_or_else(|| {
+        cli_line::failure(
+            &cli_line::usage_invalid(None, ArgumentProblem::Unknown),
+            Some("the operation's command was not served"),
+        )
+    })
 }
 
 /// Workflow #434 LAB-5G3: a run prepared for `ac_run_start` on a connection of its own, after
@@ -640,6 +679,71 @@ impl Service {
         });
         self.runtime.settle(&kept);
         exit
+    }
+
+    /// Workflow #434 LAB-5G3 (work order point 6): a call of `events` or `codes` that gives a
+    /// cursor back, served on the layer below the row with the command's words and `--cursor`,
+    /// within this server's budget. `codes`' cursor carries its own position and filters and binds
+    /// to no session: its words are the command line's (`core_ops::offline_words`). `events`'
+    /// cursor is taken under this server's binding, its session and the kept connection's
+    /// generation (register "Slice LAB-5G1b", L5G1b-3; `events::dispatch_within`), so one issued
+    /// before the connection was made again is `cursor_invalid`, nothing read.
+    pub(crate) fn taken_back(
+        &self,
+        operation: &Operation,
+        arguments: &Map<String, Value>,
+        cursor: &str,
+        era: Era,
+    ) -> Exit {
+        let params = match prepare(operation, arguments, &self.exports) {
+            Ok(params) => params,
+            Err(refused) => return cli_line::failure(&refused.outcome, refused.text),
+        };
+        let cursor_words = [OsString::from(CURSOR_FLAG), OsString::from(cursor)];
+        self.within_budget(era, |answer_budget| {
+            if let Some(mut argv) = core_ops::offline_words(operation, &params, None) {
+                argv.extend(cursor_words);
+                return not_served(code_lookup::dispatch_within(&argv, Some(answer_budget)));
+            }
+            let place = runtime::place();
+            let state_root = match &place.state_root {
+                Ok(state_root) => state_root.clone(),
+                Err(outcome) => return cli_line::failure(outcome, Some(runtime::UNLOCATED)),
+            };
+            let mut argv = match core_ops::handed_words(
+                operation,
+                &params,
+                place.root.as_deref(),
+                &state_root,
+            ) {
+                Some(Ok(argv)) => argv,
+                Some(Err(exit)) => return exit,
+                None => return not_served(None),
+            };
+            argv.extend(cursor_words);
+            let binding = |generation| CursorBinding {
+                session: self.runtime.session(),
+                generation,
+            };
+            match self.runtime.kept(&state_root) {
+                Ok(kept) => {
+                    let exit = not_served(events::dispatch_within(
+                        &argv,
+                        Connection::Kept(&kept.client),
+                        Some(answer_budget),
+                        binding(kept.generation),
+                    ));
+                    self.runtime.settle(&kept);
+                    exit
+                }
+                Err(_) => not_served(events::dispatch_within(
+                    &argv,
+                    Connection::Connect(Front::Mcp),
+                    Some(answer_budget),
+                    binding(self.runtime.generation()),
+                )),
+            }
+        })
     }
 
     /// Workflow #434 LAB-5G3 (work order point 5; today's `ac_run_pack`, `operator.rs`): `run
