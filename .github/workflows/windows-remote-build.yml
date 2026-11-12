@@ -393,7 +393,9 @@ jobs:
             --bin actingctl `
             --bin actingwatch `
             --bin actingcommand-mcp-entry `
+            --bin actingcommand-mcp-entry-g2 `
             --bin actinglab `
+            --bin actinglab-mcp `
             --bin actingledger `
             --bin actingcommand-vision-provider-check
           if ($LASTEXITCODE -ne 0) {
@@ -662,12 +664,17 @@ jobs:
             'INSTALL.md',
             'RELEASE-NOTES.md'
           )
+          # Workflow #434 LAB-5G6: the Lab's MCP server and the MCP entry's second generation, in
+          # platform-tools-v3 as the first entry is since v0.12.18; New-BuildManifest below lists
+          # every file of $toolFiles.
           $toolFiles = @(
             'actinglab.exe',
             'actingledger.exe',
             'actingcommand-vision-provider-check.exe',
             'actingwatch.exe',
-            'actingcommand-mcp-entry.exe'
+            'actingcommand-mcp-entry.exe',
+            'actinglab-mcp.exe',
+            'actingcommand-mcp-entry-g2.exe'
           )
           # Workflow #337: the official platform-tools files the fetch step verified, under platform-tools/.
           $platformToolsFiles = @(

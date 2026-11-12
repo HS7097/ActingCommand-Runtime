@@ -88,6 +88,10 @@ mod gate_434_lab3;
 // `instance add`.
 #[cfg(test)]
 mod gate_421_inst5;
+// Test-only: Workflow #434 LAB-5G6, the register's named test of a running MCP server under a
+// deploy.
+#[cfg(test)]
+mod gate_434_lab5g6;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
