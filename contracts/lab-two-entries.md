@@ -277,6 +277,13 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
   passes it.
 - **Through MCP**, `deploy`, `rollback` and `convert` always run detached: they replace the
   programs MCP itself runs, so the tool answers the operation id at once and `op status` follows it.
+  **Not yet** (Workflow #434 LAB-5G2b, second part, 0.12.57; the coordinator's ruling of
+  2026-11-12, not the owner's words): `actinglab-mcp` answers `ac_deploy` and `ac_rollback` with
+  `mcp_operation_unsupported` and starts nothing (`convert` is not offered). The module's detached
+  run is an `actinglab.exe` handed the operation's initiator in `ACTINGCOMMAND_INITIATOR`, which
+  refuses `Lab-MCP` there (section 4.2), so the operation would answer "detached" and never run.
+  How a detached run carries `Lab-MCP` is decided with LAB-6, which carries the initiator in
+  requests.
 
 ## 6 Guards report, never block
 
@@ -390,8 +397,9 @@ under `g2\` only.
 
 The MCP module's program exists since LAB-5G2a as the server's shell (section 9.3, "The server's
 shell"): it lists its tools and, since LAB-5G2b, serves in its own process the calls of the rows
-the CLI module serves (section 9.3, "Calls served in the server's process"); the MCP entry `g2` is
-slice G5a's.
+the CLI module serves and, since its second part, on Windows those of the rescue module's rows but
+`deploy` and `rollback` (section 9.3, "Calls served in the server's process"); the MCP entry `g2`
+is slice G5a's.
 
 **Packaging** (Workflow #434 LAB-5G6, 0.12.57; register §1.287, "Slice LAB-5G6"; the
 coordinator's rulings 5 and 21 on board #434, not the owner's words). Every build's Tools archive
@@ -762,17 +770,30 @@ sentence fails that test.
     refused as a usage error). `--list-tools` prints the `tools/list` result. `--tier` is refused
     (`actingctl_usage_invalid`; the server has no tiers).
   - **Calls served in the server's process** (Workflow #434 LAB-5G2b, 0.12.57; register §1.287,
-    "Slice LAB-5G2b"; the coordinator's rulings on board #434, 6775192250 points 1, 9, 11, 12, 17
-    and 18, and 6784514298, not the owner's words).
+    "Slice LAB-5G2b" and "Slice LAB-5G2b, second part"; the coordinator's rulings on board #434,
+    6775192250 points 1, 9, 11, 12, 17 and 18, 6784514298 and of 2026-11-12, not the owner's
+    words).
     - *Which.* A row `lab_ops::core_ops` serves (the core rows but `app launch|restart|stop` and
       `standard-pack check`, and `run start`, `run stop`, `reset`, `drill`) is served by it in the
-      server's process. Every other call answers `mcp_operation_unsupported` as below: the three
-      `app` rows and `standard-pack check`, the debugging and authoring rows actinglab's own
-      commands serve (the `serve` children, G4b), `record draft`, and every rescue row, which the
-      slice's second part serves in the server's process (the rescue module, the initiator
-      `Lab-MCP`, its requests on the module's own channel until LAB-6, section 7): the rescue
-      module's MCP rows `mcp config`, `mcp entries` and `mcp plan`, which actinglab serves since
-      LAB-5G5b, with them.
+      server's process. Since the slice's second part (0.12.57), on Windows, where the rescue
+      module runs, a rescue row the module serves (`lab_rescue::rescue::serves`; its MCP rows
+      `mcp config`, `mcp entries` and `mcp plan` among them) is served by it in the server's
+      process, but a row whose `detach` the front forces (`tools::SUPPLIED`: `deploy` and
+      `rollback`, section 5's "Not yet"). Every other call answers `mcp_operation_unsupported` as
+      below: the three `app` rows and `standard-pack check`, the debugging and authoring rows
+      actinglab's own commands serve (the `serve` children, G4b), `record draft`, which no code
+      serves yet, and `deploy` and `rollback`.
+    - *A rescue row* (the second part) is checked as a core row is (the refusals below), then
+      answered by the module for the root the program runs from with the initiator `Lab-MCP`
+      (`lab_rescue::rescue::answer_here`), and its answer is the line actinglab's `--json` and
+      `serve --stdio` print for it: a line as it is; the notice the line `agent_channel_reported`
+      with its `text`; a hook that did its work that line without members; a registered session's
+      failed hook its failure (`agent_channel_failed`, refused). The server records no provenance
+      for it (no identity card, no client action): the module makes its own connection on its own
+      channel until LAB-6 (section 7) and records the initiator in its journal (section 4.3). The
+      budget is the core rows' (below). Each call runs as a job, as a core row's does since
+      LAB-5G3 (below): a start, a stop or a placement that outlasts the call budget answers its
+      job's handle.
     - *The answer* is the line `actinglab --json` prints for the same row and parameters (its
       members, `outcome`, `warnings`): the text content and, from 2025-06-18 on,
       `structuredContent`; `isError` is true exactly when the command line would exit non-zero
@@ -780,13 +801,14 @@ sentence fails that test.
     - *The Runtime.* One kept connection of `lab_ops::front`'s `Front::Mcp` (the MCP channel with
       today's envelope, (Cli, Cli)), made again as today's server makes its own (`Health` must
       answer the owner epoch it was opened on; a latched failure drops it); a Runtime that does
-      not answer gives the line the command line gives (`status` reports it offline). A row the
-      table marks as writing to the Runtime goes on a connection of its own after the provenance
-      today's server records before a write: the identity card `actingctl-mcp`, then the client
-      action `{surface_id: mcp, control_id: <tool>, kind: command}` naming the instance, under
-      the write's correlation (rulings 11 and 12: until LAB-6 the new server looks like today's
-      on the wire and in the ledger). The cursors the code issues bind to the server's session
-      and that connection's generation; taking one back is LAB-5G3's second part's. `status`
+      not answer gives the line the command line gives (`status` reports it offline). A core row
+      the table marks as writing to the Runtime goes on a connection of its own after the
+      provenance today's server records before a write: the identity card `actingctl-mcp`, then
+      the client action `{surface_id: mcp, control_id: <tool>, kind: command}` naming the
+      instance, under the write's correlation (rulings 11 and 12: until LAB-6 the new server
+      looks like today's on the wire and in the ledger). The cursors the code issues bind to the
+      server's session and that connection's generation; taking one back is LAB-5G3's second
+      part's. `status`
       carries the watchdog block on Windows, as on the command line.
     - *The budget.* Today's limits: the whole result as sent at most 24 KiB. The code that
       shapes an answer (section 9.3, "The answer budget is the caller's") cuts or exports it to
@@ -799,7 +821,7 @@ sentence fails that test.
       `out`, the front gives its export directory; `material` takes the boolean `export` (true:
       the whole material is written there and the answer names the file; else its text is read)
       and `frame` is always written there; `deploy` and `rollback` take no `detach`, which is
-      always true once the slice's second part serves them (section 5).
+      always true through MCP (section 5), and are refused for now (section 5's "Not yet").
     - *Refused before anything is sent or written,* with the argument as the call names it: as
       `arguments_invalid`, a member the row does not declare and a parameter the front gives
       itself (`unknown`), a member of the wrong type (`wrong_type`; text that is none of its
@@ -865,12 +887,12 @@ sentence fails that test.
   - **Not yet:** a call of a row the server does not serve answers `mcp_operation_unsupported`
     (`mcp_tool`) as the CLI line of a refusal, `{outcome}`, its arguments unread, nothing sent,
     run or written; a name that is no offered row's tool answers as today's server answers an
-    unknown tool (-32602 `mcp_params_invalid`). The rescue rows (LAB-5G2b's second part; the
-    server lists the tools of the rescue module's MCP rows, `ac_mcp_config`, `ac_mcp_entries` and
-    `ac_mcp_plan`, and serves their calls with the other rescue rows'), taking the cursors of
-    `events` and `codes` back (LAB-5G3's second part; `ac_runs` takes its row's own `cursor`), the
-    `serve --stdio --front mcp` children (G4b) and the manual (G7) come with their slices. The program is in the Tools archive since LAB-5G6 (0.12.57; section 8.1,
-    "Packaging"); nothing starts it until a client is registered with the second entry (G7).
+    unknown tool (-32602 `mcp_params_invalid`). `deploy` and `rollback` (until a detached run
+    carries `Lab-MCP`, section 5), taking the cursors of `events` and `codes` back (LAB-5G3's
+    second part; `ac_runs` takes its row's own `cursor`), the `serve --stdio --front mcp` children
+    (G4b) and the manual (G7) come with their slices. The program is in the Tools archive since
+    LAB-5G6 (0.12.57; section 8.1, "Packaging"); nothing starts it until a client is registered
+    with the second entry (G7).
 - **The answer budget is the caller's** (Workflow #434 LAB-5D, 0.12.52; register §1.287, "Slice
   LAB-5D"). The reads whose answer can outgrow a caller's budget (`status`, `diagnose`, `events`,
   `schedule`, `runs`, `run evidence`, `codes`; `facts`, `packs`, `remedy`, `summary`) take, in
