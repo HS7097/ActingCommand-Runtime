@@ -498,11 +498,13 @@ fn mapp1_undeclared_sharing_is_refused_at_assembly() {
     );
 }
 
-// Register §1.328 (the coordinator's review, 11-12): an endpoint entry that names a serial is
-// addressed by it. Two entries of different serials are two devices whatever their host and port
-// (the daemon's defaults when they name none), so a file that names two devices by their serials
-// alone is accepted as before; one serial, or one host and port where no two serials tell the
-// entries apart, is one device.
+// Register §1.328, point 10 (the coordinator's review, 11-12): an explicit entry that names a
+// serial is addressed by it, and its host and port are the daemon's defaults when it names none.
+// Two entries of different serials are two devices whatever their host and port, so a file that
+// names two devices by their serials alone is accepted as before; a serial beside an endpoint
+// proves no sharing; one serial named twice, or one host and port named by two entries without a
+// serial, is one device. The start's discovery compares only the endpoints of entries without a
+// serial.
 #[test]
 fn mapp1_two_serials_are_two_devices_whatever_their_host_and_port() {
     let endpoint = |port: u16, serial: Option<&str>| device_group::DeviceNaming::Endpoint {
@@ -521,11 +523,7 @@ fn mapp1_two_serials_are_two_devices_whatever_their_host_and_port() {
             endpoint(16384, Some("serial.a")),
             Some("serial"),
         ),
-        (
-            endpoint(5555, Some("serial.a")),
-            endpoint(5555, None),
-            Some("port"),
-        ),
+        (endpoint(5555, Some("serial.a")), endpoint(5555, None), None),
         (endpoint(5555, None), endpoint(5555, None), Some("port")),
         (endpoint(5555, None), endpoint(16384, None), None),
     ];
@@ -533,6 +531,27 @@ fn mapp1_two_serials_are_two_devices_whatever_their_host_and_port() {
         assert_eq!(left.shared_key(&right), shared, "{left:?} beside {right:?}");
         assert_eq!(right.shared_key(&left), shared, "{right:?} beside {left:?}");
     }
+    // After the discovery: an entry that names a serial is left out of the endpoints compared
+    // with the discovered ones, whatever endpoint the daemon's defaults give it.
+    let root = TempDir::new().expect("tempdir");
+    let explicit = |alias: &str, serial: Option<&str>| {
+        let mut entry = member(&root, alias, "com.example.fixture.a");
+        let fields = entry.as_object_mut().expect("an entry");
+        fields.remove("device_group");
+        if let Some(serial) = serial {
+            fields.insert("serial".to_owned(), json!(serial));
+        }
+        let config = serde_json::from_value::<InstanceConfig>(entry).expect("a typed entry");
+        device_group::GroupEntry::of(&config, alias.to_owned(), false)
+    };
+    let groups = DeviceGroups::new(vec![
+        explicit(FIRST, None),
+        explicit(SECOND, Some("serial.a")),
+    ]);
+    assert_eq!(
+        groups.explicit_endpoints(),
+        vec![(FIRST.to_owned(), "127.0.0.1".to_owned(), 16384)]
+    );
 }
 
 /// The discovery answer of one running emulator, index 2, named `neutral-a`, at 127.0.0.1:16384.

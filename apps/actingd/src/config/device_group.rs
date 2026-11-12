@@ -105,10 +105,12 @@ impl DeviceNaming {
 
     /// The key two entries share when they name the same device by the same key and value:
     /// `instance_index`, `instance_name`, `serial`, or `host` and `port` (named `port`). An
-    /// endpoint entry that names a `serial` is addressed by it, so two entries that name
-    /// different serials are two devices whatever their `host` and `port` (the daemon's defaults
-    /// when they name none), as the group's own rule reads them ([`Self::differing_key`]). `None`
-    /// for entries that name no device or different devices.
+    /// explicit entry that names a `serial` is addressed by it, and its `host` and `port` are the
+    /// daemon's defaults when it names none (the default port is the first emulator's). So two
+    /// explicit entries are one device when both name the same serial, or when neither names a
+    /// serial and their `host` and `port` are equal; a serial beside another serial, or beside an
+    /// endpoint, proves no sharing here. `None` for entries that name no device or different
+    /// devices.
     pub(super) fn shared_key(&self, other: &Self) -> Option<&'static str> {
         match (self, other) {
             (Self::Index(index), Self::Index(other)) if index == other => Some(INSTANCE_INDEX_KEY),
@@ -122,13 +124,17 @@ impl DeviceNaming {
                     serial: Some(other),
                     ..
                 },
-            ) => (serial == other).then_some(SERIAL_KEY),
+            ) if serial == other => Some(SERIAL_KEY),
             (
-                Self::Endpoint { host, port, .. },
+                Self::Endpoint {
+                    host,
+                    port,
+                    serial: None,
+                },
                 Self::Endpoint {
                     host: other_host,
                     port: other_port,
-                    ..
+                    serial: None,
                 },
             ) if host == other_host && port == other_port => Some(PORT_KEY),
             _ => None,
@@ -419,14 +425,18 @@ impl DeviceGroups {
     }
 
     /// The explicit endpoints the start's discovery compares with the endpoints it resolves:
-    /// each entry bound by its `host` and `port`, with its alias.
+    /// each entry bound by its `host` and `port` that names no `serial`, with its alias. An entry
+    /// that names a serial is addressed by it, and its endpoint may be the daemon's default, the
+    /// first emulator's port, so it proves no sharing with a discovered emulator.
     pub(super) fn explicit_endpoints(&self) -> Vec<(String, String, u16)> {
         self.entries
             .iter()
             .filter_map(|entry| match &entry.naming {
-                DeviceNaming::Endpoint { host, port, .. } => {
-                    Some((entry.alias.clone(), host.clone(), *port))
-                }
+                DeviceNaming::Endpoint {
+                    host,
+                    port,
+                    serial: None,
+                } => Some((entry.alias.clone(), host.clone(), *port)),
                 _ => None,
             })
             .collect()

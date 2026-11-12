@@ -15755,16 +15755,18 @@ is today", below) on 11-12.
    candidate behind its own instance's winner (`instance_already_selected`); only the code and its
    values differ. Neither is deferred by a later pass keyed by the instance: both keep the state
    the placement found, and the policy tests compare the one with the other.
-10. *Two serials are two devices* (settled by the coordinator at the slice's review, 11-12). An
+10. *A serial names its device* (settled by the coordinator at the slice's review, 11-12). An
     explicit entry that names a `serial` is addressed by it (ADB's `-s`), and its `host` and `port`
-    are the daemon's defaults when it names none. So undeclared sharing reads two explicit
-    entries as one device when both name the same serial (`config_key` `serial`), or when they
-    have the same `host` and `port` and do not both name a serial (`config_key` `port`); two
-    entries that name different serials are two devices whatever their `host` and `port`, as the
-    group's own mismatch rule already reads them. The first form compared `host` and `port`
-    alone, so a file that named two devices by their serials and no endpoint, accepted today,
-    would have been refused; that form was not merged. Test
-    `mapp1_two_serials_are_two_devices_whatever_their_host_and_port`.
+    are the daemon's defaults when it names none; the default port is the first emulator's. So
+    undeclared sharing reads two explicit entries as one device when both name the same serial
+    (`config_key` `serial`), or when neither names a serial and their `host` and `port` are equal
+    (`config_key` `port`). Two different serials, or a serial beside an endpoint, prove no
+    sharing at assembly, and the check after the discovery compares a discovered endpoint only
+    with the explicit entries that name no serial. The first form compared `host` and `port`
+    alone, defaults included: a file that named two devices by their serials and no endpoint, or
+    one such device beside the first emulator, accepted today, would have been refused; that form
+    was not merged. A group's own rule is unchanged: its members name the same `host`, `port` and
+    `serial`. Test `mapp1_two_serials_are_two_devices_whatever_their_host_and_port`.
 
 **A group of one is today.** With no entry naming one device twice, every decision, record, key
 and byte the Runtime persists is as before, but for the contract's three exceptions
