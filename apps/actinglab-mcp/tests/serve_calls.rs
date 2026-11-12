@@ -712,7 +712,7 @@ fn made_up_root(base: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
         "files": [{
             "path": "actinglab-mcp.exe",
             "size_bytes": copied.len(),
-            "sha256": format!("{:x}", Sha256::digest(&copied)),
+            "sha256": format!("{:x}", Sha256::digest(copied.as_slice())),
         }],
         "tools_payload_layout": "platform-tools-v3",
     });
@@ -777,7 +777,7 @@ fn files_under(root: &Path) -> std::collections::BTreeSet<std::path::PathBuf> {
     let mut found = std::collections::BTreeSet::new();
     let mut folders = vec![root.to_path_buf()];
     while let Some(folder) = folders.pop() {
-        for entry in std::fs::read_dir(&folder).expect("read a folder of the root") {
+        for entry in std::fs::read_dir(folder).expect("read a folder of the root") {
             let path = entry.expect("an entry of the root").path();
             if path.is_dir() {
                 folders.push(path);
