@@ -297,8 +297,9 @@ stopped, and until INST-3 it leaves the configuration alone.
 - **Running state.** An `actingcommand-actingd.exe` under the root (`runtime_running`) or a held
   owner lock (`owner_lock_held`) refuses unless `--preview`; a running state that cannot be read
   (the process probe, the state root's owner journal) refuses `processes_unreadable`. Images under the root that would be
-  replaced while running: `actingctl.exe` is renamed aside and keeps running (listed as
-  `running_renamed`); `adb.exe` is never moved and any other image waits
+  replaced while running: `actingctl.exe` and, since 0.12.57 (Workflow #434 LAB-5G6), the Lab's
+  MCP server `actinglab-mcp.exe`, in `tools\` or `runtime\`, are renamed aside and keep running
+  (listed as `running_renamed`); `adb.exe` is never moved and any other image waits
   (`running_image_blocks`, `path`, `pid`). A `.part` of another operation under
   `runtime\` or `tools\` refuses `foreign_part` (`path`).
 - **Notice block** for the person's notice before the change: what changes, whether MCP servers
@@ -967,7 +968,7 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
 
 | Command | Runtime | owner.lock | writer.lock | Other |
 |---|---|---|---|---|
-| `update` / `rollback apply` without `--stop` | stopped: no actingd under the root | unlocked | taken | no unfinished operation; no `.part` of another operation; no running image that would change but `actingctl.exe`; a running `adb.exe` never changes |
+| `update` / `rollback apply` without `--stop` | stopped: no actingd under the root | unlocked | taken | no unfinished operation; no `.part` of another operation; no running image that would change but `actingctl.exe` and `actinglab-mcp.exe`; a running `adb.exe` never changes |
 | with `--stop` (INST-2) | running (stop is step 3) | — | taken before the hold | as above after the stop |
 | `config commit apply` (INST-3) | stopped, or `--while-running` | — | taken | candidate base = live |
 | `pack place` (INST-4) | any (cold when stopped; `--hot` when running) | — | taken | hot: its guards |
@@ -1005,7 +1006,13 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
 `adb.exe` is never moved and `adb kill-server` is never used; any other running image under the
 root that would change refuses (`running_image_blocks`); unchanged files are never
 touched; MCP servers left on renamed images are listed so the person reconnects them (an MCP
-entry switches its own child; #411 P49). The Lab's rescue module (LAB-3 fix 1): the image of the
+entry switches its own child; #411 P49). The Lab's MCP server (Workflow #434 LAB-5G6, 0.12.57;
+the coordinator's ruling 5 on board #434): an `actinglab-mcp.exe` image, in `tools\` or
+`runtime\`, is renamed aside as an `actingctl.exe` image is, by the same rule (the file name), and
+listed with them (`running.renamed` in the plan, `running_renamed` and the caveat
+`mcp_clients_on_previous_build` after apply); the process probe marks `mcp_serve` only for a
+command line that holds `mcp-serve`, which the server's does not. The Lab's rescue module (LAB-3
+fix 1): the image of the
 process that plans, matched by its process id (`<root>\tools\actinglab.exe` running the module),
 is renamed aside the same way and listed as `running.renamed_own`; another running
 `actinglab.exe` still refuses. `actingctl install`'s planning is unchanged: its own image is

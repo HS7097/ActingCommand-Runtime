@@ -1622,3 +1622,11 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_428_lab_ocr_dl::lab_ocr_dl_the_switch_off_a_saved_scene_is_refused",
 ]
 incident = ["#428 LAB-OCR-DL"]
+
+# Workflow #434 LAB-5G6 (0.12.57; register §1.287, "Slice LAB-5G6"; brief rd-1112/brief-lab5g6.md; contracts/install-cli.md, "Running images"; the coordinator's ruling 5 on board #434, 6775192250): on the installer's fake host and a made-up root, a running tools\actinglab-mcp.exe never blocks a deploy that replaces its file: with another running tools\actinglab.exe the rescue module's deploy plan refuses running_image_blocks naming that actinglab and lists the server under running.renamed; with the server alone, holding its file open, the plan lists it under running.renamed and nothing under running.blocked, the deploy is applied, its apply lists the server's pid under running_renamed with the caveat mcp_clients_on_previous_build (count 1), the new build's server is in place and the old one is kept as actinglab-mcp.exe.old-<ms>, still read through the open handle; a build that carries the server in runtime\ is planned and applied the same way
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_434_lab5g6::deploy_not_blocked_by_mcp",
+]
+incident = ["#434 LAB-5G6"]

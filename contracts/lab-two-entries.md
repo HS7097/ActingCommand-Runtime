@@ -33,7 +33,7 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 | LAB-2 | Runtime | the CLI module: short words, output for people, `--json`, `actinglab serve --stdio`; actinglab's debugging and authoring commands on the table; its retired command words deleted |
 | LAB-3 | Runtime | the rescue and installation module (section 7): the journal's initiator, no confirmation parameters (section 5), guards that report (section 6) |
 | LAB-4 | Runtime | `crates/watchdog`; `actingwatch.exe` does its own tick |
-| LAB-5 | Runtime | `actinglab-mcp.exe`: tools from the table, no tiers; the MCP entry `g2`, a second program (section 8.1) |
+| LAB-5 | Runtime | `actinglab-mcp.exe`: tools from the table, no tiers; the MCP entry `g2`, a second program (section 8.1); both in the Tools archive inside `tools-layout` 3, and a running server never blocks a deploy (LAB-5G6, section 8.1) |
 | LAB-6 | Runtime | the door of section 2 and the UI list of section 3; the initiator in receipts, G14 and the `host.config_overrides` rows (section 4.3); `runtime-client` 7, `ledger` 8, `actingd-config` 28 |
 | UI-L1 | UI | the console on `runtime-client` 7: Lab children instead of actingctl, refusals shown, no second press (the stop note stays beside the button, section 6); the settings page shows a row's initiator, else its channel (section 4.3); the READMEs' install line names the rescue module's command |
 | LAB-7 | Runtime | `apps/actingctl` deleted; `install-cli` 2 |
@@ -379,8 +379,20 @@ Placing the second program stays a manual step until an installer step exists, w
 under `g2\` only.
 
 The MCP module's program exists since LAB-5G2a as the server's shell (section 9.3, "The server's
-shell"): it lists its tools and serves no call yet, and it is in no release and no Tools archive
-until slice G6 packages it, so no installation has it; the MCP entry `g2` is slice G5a's.
+shell"): it lists its tools and serves no call yet; the MCP entry `g2` is slice G5a's.
+
+**Packaging** (Workflow #434 LAB-5G6, 0.12.57; register §1.287, "Slice LAB-5G6"; the
+coordinator's rulings 5 and 21 on board #434, not the owner's words). Every build's Tools archive
+carries `actinglab-mcp.exe` and `actingcommand-mcp-entry-g2.exe`, each an entry of the Tools
+`BUILD-MANIFEST.json` (`size_bytes`, `sha256`) written by the step that writes the others, so a
+deploy puts both in `<root>\tools\`. They are added inside `tools-layout` 3
+(`platform-tools-v3`), as the first entry was in v0.12.18: no reader of the archive stops working
+([component-interfaces.md](component-interfaces.md), "Bump rule"). Nothing starts either program:
+no registration names them until the owner registers a client with the second entry (G7), and
+placing that entry in `<root>\mcp-entry\g2\` stays the manual step above; no installer code writes
+under `<root>\mcp-entry\`. A running `actinglab-mcp.exe` never blocks a deploy that replaces its
+file: it is renamed aside as `actingctl.exe` is ([install-cli.md](install-cli.md), "Running
+images"); a running `actinglab.exe` other than the process that plans still blocks.
 
 ### 8.2 `actinglab serve --stdio`
 
@@ -853,9 +865,11 @@ when a member's meaning changes.
 
 Planned, not in force: [component-interfaces.md](component-interfaces.md), "Planned: Workflow
 #434". LAB-6 raises `runtime-client` to 7, `ledger` to 8 and `actingd-config` to 28; LAB-7
-`install-cli` to 2. `install-control` retires, `tools-layout` becomes 5, `install-selection` does
-not move, and the MCP entry's second generation, a program of its own (section 8.1), speaks
-`entry_protocol` 2 while the first keeps 1 (LAB-5). LAB-0 changes no declaration.
+`install-cli` to 2. `install-control` retires, `tools-layout` becomes 5 as that section plans it,
+`install-selection` does not move, and the MCP entry's second generation, a program of its own
+(section 8.1), speaks `entry_protocol` 2 while the first keeps 1 (LAB-5). `actinglab-mcp.exe` and
+the second entry raise no layout: LAB-5G6 adds them inside `tools-layout` 3 (section 8.1). LAB-0
+changes no declaration.
 
 ## 11 What this replaces, and from when
 

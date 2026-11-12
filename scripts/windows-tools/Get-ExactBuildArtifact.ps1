@@ -554,6 +554,24 @@ try {
         if ($layout.Value -ceq 'platform-tools-v3' -and $declaresMcpEntry) {
             $expectedFiles += 'actingcommand-mcp-entry.exe'
         }
+        # Workflow #434 LAB-5G6: a v3 artifact built since 0.12.57 also carries the Lab's MCP
+        # server actinglab-mcp.exe and the MCP entry's second generation
+        # actingcommand-mcp-entry-g2.exe; earlier v3 artifacts do not declare them. Each one the
+        # manifest declares is required, as the entry above is.
+        foreach ($mcpProgram in @('actinglab-mcp.exe', 'actingcommand-mcp-entry-g2.exe')) {
+            $declaresMcpProgram = (
+                $manifest.PSObject.Properties.Name -contains 'files' -and
+                @(
+                    @($manifest.files) | Where-Object { $null -ne $_ } | ForEach-Object {
+                        $path = $_.PSObject.Properties['path']
+                        if ($null -ne $path) { [string]$path.Value }
+                    }
+                ) -ccontains $mcpProgram
+            )
+            if ($layout.Value -ceq 'platform-tools-v3' -and $declaresMcpProgram) {
+                $expectedFiles += $mcpProgram
+            }
+        }
         $expectedFiles += @(
             'platform-tools/adb.exe',
             'platform-tools/AdbWinApi.dll',

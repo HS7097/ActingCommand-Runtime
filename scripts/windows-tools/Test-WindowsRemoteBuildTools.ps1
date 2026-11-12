@@ -210,7 +210,13 @@ function New-ArtifactFixture {
         [Parameter(Mandatory)][string] $TreeSha,
         [Parameter(Mandatory)][string] $CargoLockSha256,
         [Parameter(Mandatory)][bool] $CorruptPayload,
-        [ValidateSet('platform-tools-v2', 'platform-tools-v3')][string] $ToolsLayout = 'platform-tools-v3'
+        [ValidateSet('platform-tools-v2', 'platform-tools-v3')][string] $ToolsLayout = 'platform-tools-v3',
+        # Workflow #434 LAB-5G6: the MCP programs a Tools fixture's build carries, one payload its
+        # archive holds and its manifest does not list, and one its manifest lists and its archive
+        # does not hold.
+        [ValidateSet('actingcommand-mcp-entry.exe', 'actinglab-mcp.exe', 'actingcommand-mcp-entry-g2.exe')][string[]] $McpPrograms = @(),
+        [string] $UnlistedPayload,
+        [string] $UnwrittenPayload
     )
     $directory = Join-Path $Root "artifacts/$Mode/$ArtifactName"
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
@@ -237,6 +243,10 @@ function New-ArtifactFixture {
                 @{ name = 'actingwatch.exe'; content = 'synthetic watchdog launcher payload' }
             }
         ) + @(
+            foreach ($program in $McpPrograms) {
+                @{ name = $program; content = "synthetic $program payload" }
+            }
+        ) + @(
             @{ name = 'platform-tools/adb.exe'; content = 'synthetic adb payload' },
             @{ name = 'platform-tools/AdbWinApi.dll'; content = 'synthetic AdbWinApi payload' },
             @{ name = 'platform-tools/AdbWinUsbApi.dll'; content = 'synthetic AdbWinUsbApi payload' },
@@ -249,6 +259,9 @@ function New-ArtifactFixture {
         $path = Join-Path $directory $payload.name
         Write-Utf8NoBom -Path $path -Text $payload.content
         $item = Get-Item -LiteralPath $path
+        if ($payload.name -ceq $UnlistedPayload) {
+            continue
+        }
         $records += [ordered]@{
             path = $payload.name
             size_bytes = [int64]$item.Length
@@ -274,6 +287,9 @@ function New-ArtifactFixture {
         $manifest.tools_payload_layout = $ToolsLayout
     }
     Write-Utf8NoBom -Path (Join-Path $directory 'BUILD-MANIFEST.json') -Text (($manifest | ConvertTo-Json -Depth 8) + "`n")
+    if ($UnwrittenPayload) {
+        Remove-Item -LiteralPath (Join-Path $directory $UnwrittenPayload) -ErrorAction Stop
+    }
     if ($CorruptPayload) {
         $corruptName = if ($ArtifactKind -ceq 'Runtime') { 'actingctl.exe' } else { 'actinglab.exe' }
         Add-Content -LiteralPath (Join-Path $directory $corruptName) -Value 'corrupt' -NoNewline
@@ -398,7 +414,7 @@ try {
         Assert-True -Condition $workflowText.Contains($required) -Message "workflow is missing '$required'"
     }
     $runtimeSplit = '\$runtimeFiles\s*=\s*@\(\s*''actingcommand-actingd\.exe'',\s*''actingctl\.exe'',\s*''actingd\.config\.example\.json'',\s*''actingd\.defaults\.json'',\s*''INSTALL\.md'',\s*''RELEASE-NOTES\.md''\s*\)'
-    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingwatch\.exe'',\s*''actingcommand-mcp-entry\.exe''\s*\)'
+    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingwatch\.exe'',\s*''actingcommand-mcp-entry\.exe'',\s*''actinglab-mcp\.exe'',\s*''actingcommand-mcp-entry-g2\.exe''\s*\)'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $runtimeSplit)) -Message 'workflow Runtime artifact split is not exact'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $toolsSplit)) -Message 'workflow Tools artifact split is not exact'
     foreach ($retired in @(
@@ -515,6 +531,39 @@ try {
     Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $toolsV2Output 'actingwatch.exe'))) -Message 'platform-tools-v2 Tools artifact carries actingwatch.exe'
     $env:ACTINGCOMMAND_FAKE_GH_MODE = 'success'
     Complete-Case -Name $script:CurrentCase
+
+    # Workflow #434 LAB-5G6: a platform-tools-v3 Tools artifact verifies each MCP program its
+    # manifest declares: a build of v0.12.18 to 0.12.56 the MCP entry (ten payloads), a build since
+    # 0.12.57 also the Lab's MCP server and the entry's second generation (twelve). The nine-payload
+    # artifact above, built before either, still passes. A program the archive holds and the
+    # manifest does not list, or one the manifest lists and the archive does not hold, fails.
+    $mcpPrograms = @('actingcommand-mcp-entry.exe', 'actinglab-mcp.exe', 'actingcommand-mcp-entry-g2.exe')
+    $script:CurrentCase = 'artifact-tools-v3-mcp-programs'
+    New-ArtifactFixture -Root $fixtureRoot -Mode 'tools-mcp-entry' -ArtifactName $toolsArtifactName -ArtifactKind Tools -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $false -McpPrograms @('actingcommand-mcp-entry.exe')
+    New-ArtifactFixture -Root $fixtureRoot -Mode 'tools-mcp' -ArtifactName $toolsArtifactName -ArtifactKind Tools -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $false -McpPrograms $mcpPrograms
+    New-ArtifactFixture -Root $fixtureRoot -Mode 'tools-mcp-unlisted' -ArtifactName $toolsArtifactName -ArtifactKind Tools -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $false -McpPrograms $mcpPrograms -UnlistedPayload 'actinglab-mcp.exe'
+    New-ArtifactFixture -Root $fixtureRoot -Mode 'tools-mcp-unwritten' -ArtifactName $toolsArtifactName -ArtifactKind Tools -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $false -McpPrograms $mcpPrograms -UnwrittenPayload 'actingcommand-mcp-entry-g2.exe'
+    $env:ACTINGCOMMAND_FAKE_GH_MODE = 'tools-mcp-entry'
+    $toolsEntry = (& $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Tools -TaskRoot $testRootFull -OutputPath (Join-Path $testRootFull 'downloads/tools-mcp-entry') -GhExecutable $fakeGh) | ConvertFrom-Json -Depth 20
+    Assert-True -Condition ($toolsEntry.status -ceq 'PASS' -and @($toolsEntry.verified_files).Count -eq 10) -Message 'a platform-tools-v3 Tools artifact with the MCP entry did not verify exactly ten payloads'
+    $env:ACTINGCOMMAND_FAKE_GH_MODE = 'tools-mcp'
+    $toolsMcpOutput = Join-Path $testRootFull 'downloads/tools-mcp'
+    $toolsMcp = (& $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Tools -TaskRoot $testRootFull -OutputPath $toolsMcpOutput -GhExecutable $fakeGh) | ConvertFrom-Json -Depth 20
+    Assert-True -Condition ($toolsMcp.status -ceq 'PASS' -and @($toolsMcp.verified_files).Count -eq 12) -Message 'a platform-tools-v3 Tools artifact with the three MCP programs did not verify exactly twelve payloads'
+    foreach ($program in $mcpPrograms) {
+        Assert-True -Condition ((@($toolsMcp.verified_files) -ccontains $program) -and (Test-Path -LiteralPath (Join-Path $toolsMcpOutput $program) -PathType Leaf)) -Message "the Tools artifact verifier did not verify and publish $program"
+    }
+    $env:ACTINGCOMMAND_FAKE_GH_MODE = 'success'
+    Complete-Case -Name $script:CurrentCase
+    $env:ACTINGCOMMAND_FAKE_GH_MODE = 'tools-mcp-unlisted'
+    Invoke-FailCase -Name 'artifact-tools-file-not-in-manifest' -MessagePattern 'Artifact file count mismatch' -Action {
+        & $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Tools -TaskRoot $testRootFull -OutputPath (Join-Path $testRootFull 'downloads/tools-mcp-unlisted') -GhExecutable $fakeGh
+    }
+    $env:ACTINGCOMMAND_FAKE_GH_MODE = 'tools-mcp-unwritten'
+    Invoke-FailCase -Name 'artifact-tools-manifest-file-not-in-archive' -MessagePattern 'Artifact file count mismatch' -Action {
+        & $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Tools -TaskRoot $testRootFull -OutputPath (Join-Path $testRootFull 'downloads/tools-mcp-unwritten') -GhExecutable $fakeGh
+    }
+    $env:ACTINGCOMMAND_FAKE_GH_MODE = 'success'
 
     Invoke-FailCase -Name 'artifact-wrong-sha' -MessagePattern 'found 0' -Action {
         & $downloader -Repository $repository -SourceSha '1123456789abcdef0123456789abcdef01234567' -ArtifactKind Runtime -TaskRoot $testRootFull -OutputPath (Join-Path $testRootFull 'downloads/wrong-sha') -GhExecutable $fakeGh
