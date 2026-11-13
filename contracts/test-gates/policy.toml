@@ -1367,3 +1367,12 @@ tests = [
     "actingcommand-policy::lib::tests::gate_mapp1b::mapp1b_a_chain_successor_goes_before_the_other_members_of_its_device",
 ]
 incident = ["#437 MAPP-1b"]
+
+# Workflow #437 MAPP-1c (0.12.60; register §1.350; contracts/device-group.md, "The session close of a keyless observation"): the grant of the session close ahead (SeedScheduler::prepare_session_close_ahead) on a device of two members keyed by the map the assembly derives. It is granted only while no lease is on the device: another member's lease refuses it busy, and lapsed but not ended, lease_expired; on the free device a claim of the other member waiting in the queue refuses the dedicated close lease (lease_transfer_not_safe), not the close ahead, which takes nothing out of the queue, lets no queued grant through while it holds the device, carries no write authority (resource_close_only) but its close, and ends with SessionClosed handing the device to no one; the waiting claim is then the device's next grant, in its place, with its own member, holder and lease time (1); in the device's takeover cooldown an acquisition is refused with the cooldown's own remaining time and the queue grants nothing, the close ahead is granted through it and only its token passes for its close, it hands the device to no one (no transfer candidate, the waiting claim included), its end leaves the cooldown's end as it was and its token no longer passes, and at that end the waiting claim is granted (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::gate_mapp1c::mapp1c_a_close_ahead_is_granted_only_on_a_free_device_and_a_queued_claim_keeps_its_place",
+    "actingcommand-scheduler::lib::tests::gate_mapp1c::mapp1c_in_the_cooldown_only_the_close_aheads_token_passes_and_the_cooldown_end_stays",
+]
+incident = ["#437 MAPP-1c"]

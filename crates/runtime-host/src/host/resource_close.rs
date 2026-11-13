@@ -1918,6 +1918,23 @@ impl RuntimeHost {
             .queue_order_lock(instance_id)
             .map_err(|failure| *failure.error)
     }
+
+    /// The key the queue-order lock map holds `instance_alias`'s lock by (the lock
+    /// [`Self::queue_order_lock_for_test`] answers); `None` when the map holds it by no key.
+    pub(crate) fn queue_order_lock_key_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Option<InstanceId>> {
+        let order = self.queue_order_lock_for_test(instance_alias)?;
+        let location = crate::codes::test_spellings::TestLocation::QueueOrderLockForTest;
+        let locks = lock(
+            &self.shared_ref(location)?.queue_order_locks,
+            HostLocation::ReadInstanceQueueOrder,
+        )?;
+        Ok(locks
+            .iter()
+            .find_map(|(key, held)| Arc::ptr_eq(held, &order).then_some(*key)))
+    }
 }
 
 /// One connection preparation attempt (`prepare_instance_connection_with_cooldown`).

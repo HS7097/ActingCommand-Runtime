@@ -13,7 +13,8 @@
 //! resource-close step. A manual Runtime clock whose monotonic time moves only when a test moves
 //! it, so a lease taken stays unexpired and a takeover cooldown lasts until the test ends it;
 //! nothing sleeps. Every expected value is the contract's or the coordinator's ruling; every
-//! comparison is within one host. Neutral names only.
+//! comparison is within one host, the lone instance's records by values and by payloads with every
+//! id and time normalised, never by an identity. Neutral names only.
 
 use super::instance_workers::{all_events, phases};
 use super::*;
@@ -21,7 +22,7 @@ use crate::codes::HostCode;
 use crate::host::HostClaimForTest;
 use actingcommand_contract::{HolderId, ResourceQuiescence, RuntimeLifecyclePhase};
 use actingcommand_scheduler::{ClaimKind, QueuedLease};
-use serde_json::json;
+use serde_json::{Value, json};
 
 const A: &str = POLICY_INSTANCE_ALIAS;
 const B: &str = POLICY_INSTANCE_ALIAS_B;
@@ -157,10 +158,15 @@ impl Device {
             .expect("the claim's lease end");
     }
 
+    /// The device's session log so far, as the device saw it.
+    fn session_log(&self) -> Vec<(String, bool)> {
+        self.log.lock().expect("the device's session log").clone()
+    }
+
     /// The device's session log so far; at every step of it at most one member has a session
     /// open, and no member closes more than it opened.
     fn sessions(&self) -> Vec<(String, bool)> {
-        let entries = self.log.lock().expect("the device's session log").clone();
+        let entries = self.session_log();
         let mut open = BTreeMap::<String, usize>::new();
         for (step, (member, opened)) in entries.iter().enumerate() {
             let count = open.entry(member.clone()).or_default();
@@ -190,16 +196,29 @@ impl Device {
             .expect("the request's records")
     }
 
-    /// The type and severity of every record of `query`, in ledger order, but a frame's retention
-    /// records, which the frame cleaner writes on its own time.
-    fn shapes(&self, query: EventQuery) -> Vec<(EventType, EventSeverity)> {
-        self.host
+    /// Every record of `query`, in ledger order, as the lone instance's comparison reads it
+    /// ([`comparable`]), but a frame's retention records, which the frame cleaner writes on its
+    /// own time.
+    fn comparable_records(&self, query: EventQuery) -> Vec<(EventType, EventSeverity, Value)> {
+        let events = self
+            .host
             .query_persisted_events_for_test(query)
             .expect("records")
-            .iter()
+            .into_iter()
             .filter(|event| event.payload().artifact_retention().is_none())
-            .map(|event| (event.event_type(), event.severity()))
-            .collect()
+            .collect::<Vec<_>>();
+        comparable(&events)
+    }
+
+    /// How many `runtime.failed` records name `alias`.
+    fn failures_of(&self, alias: &str) -> usize {
+        all_events(&self.host)
+            .iter()
+            .filter(|event| {
+                event.event_type() == EventType::RuntimeFailed
+                    && event.links().instance_id() == Some(&self.ids[alias])
+            })
+            .count()
     }
 
     /// How many leases were granted to `alias` (its `lease.granted` records).
@@ -295,6 +314,82 @@ fn assert_refused(receipt: &RuntimeReceipt, alias: &str, operation: &str) {
         Some(&json!(operation)),
         "{receipt:?}"
     );
+}
+
+/// Whether a member is named `key`, whose value is a time or a place in the ledger: an instant on
+/// either clock, a measurement on the process clock (a capture's acquire time, the gap between two
+/// observations), a local day, a ledger position or a record index. Two rounds on one host hold
+/// these apart however alike they are.
+fn time_or_place(key: &str) -> bool {
+    key.ends_with("_unix_ms")
+        || key.ends_with("_monotonic_ms")
+        || key.ends_with("_us")
+        || key.ends_with("_at")
+        || matches!(
+            key,
+            "duration_ms" | "local_day" | "sequence" | "record_index" | "input_ledger_position"
+        )
+}
+
+/// `run` (lowercase hexadecimal digits) as [`without_identities`] writes it: a run of 32 or more
+/// is an identity and is replaced.
+fn push_hex_run(text: &mut String, run: &mut String) {
+    if run.len() >= 32 {
+        text.push_str("<hex>");
+    } else {
+        text.push_str(run);
+    }
+    run.clear();
+}
+
+/// `text` with each run of 32 or more lowercase hexadecimal digits replaced: a minted id (a
+/// request, lease, holder, frame, instance or causation id), a digest.
+fn without_identities(text: &str) -> String {
+    let mut written = String::with_capacity(text.len());
+    let mut run = String::new();
+    for character in text.chars() {
+        if matches!(character, '0'..='9' | 'a'..='f') {
+            run.push(character);
+        } else {
+            push_hex_run(&mut written, &mut run);
+            written.push(character);
+        }
+    }
+    push_hex_run(&mut written, &mut run);
+    written
+}
+
+/// `value` with its ids and times normalised: every member [`time_or_place`] names is replaced
+/// whole, and every string loses its identities ([`without_identities`]). Everything else stays.
+fn normalised(value: &mut Value) {
+    match value {
+        Value::Object(members) => {
+            for (key, member) in members.iter_mut() {
+                if time_or_place(key) {
+                    *member = json!("<normalised>");
+                } else {
+                    normalised(member);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(normalised),
+        Value::String(text) => *text = without_identities(text),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+/// The records as the lone instance's comparison reads them: each one's type, severity and whole
+/// payload, normalised ([`normalised`]).
+fn comparable(events: &[PersistedEvent]) -> Vec<(EventType, EventSeverity, Value)> {
+    events
+        .iter()
+        .map(|event| {
+            let mut payload =
+                serde_json::to_value(event.payload()).expect("a record's payload encodes");
+            normalised(&mut payload);
+            (event.event_type(), event.severity(), payload)
+        })
+        .collect()
 }
 
 // ---- The tests.
@@ -577,37 +672,119 @@ fn mapp1c_no_session_close_runs_while_a_run_of_any_member_holds_the_device() {
     device.close();
 }
 
-/// The work order's lone instance, compared within one host with and without the slice's branch
-/// reachable (`mapp1c_off_for_test`): C, alone on its device beside the group, keeps the session
-/// its first observation opened; then, once with the slice on and once with it off, its keyless
-/// observation and a lease it takes and releases give the same receipts, the same records (types
-/// and severities, in order) and the same device steps (no open, no close), and C's claims are
-/// ordered under the same queue-order lock.
+/// What the test-only switch shows, and what an instance alone on its device never reaches. The
+/// switch (`mapp1c_off_for_test`) exists in this crate's test build only: its flag, its two
+/// branches and its setter are compiled under `cfg(test)`, so no product build carries it.
+///
+/// - A member of the group, where the switch makes a difference, on two hosts started alike: a
+///   keyless observation of A during whose capture B's claim queues. Off (the close MAPP-1b
+///   built): A's dedicated close lease is refused by B's waiting claim and the refusal recorded,
+///   B's claim is granted while A's session is still open, and B's own observation under its lease
+///   opens B's session beside A's: two members' sessions open on the device at once. On: A's
+///   session is closed before B's claim is granted, nothing of A fails, and B's session opens after
+///   A's is closed.
+/// - C, alone on its device, on one host. The switch reaches neither place it changes for C
+///   (`close_keyless_session_of_group` returns before it for an instance alone, and C's
+///   queue-order lock is keyed by C's own id either way), so what must not happen is asserted
+///   directly, once with the switch on and once off: C's observation takes no lease (no session
+///   close ahead), C's claims are ordered under the lock the lock map holds by C's own id, and C's
+///   session is opened by its first observation and closed only by the Host close, as on main.
+///   The two rounds' records (the observation's, the lease's grant and its release) are equal
+///   record by record, type, severity and whole payload, with ids and times normalised
+///   ([`comparable`]), and so are their receipts' states.
 #[test]
-fn mapp1c_a_lone_instances_observation_and_lease_are_the_same_with_and_without_the_slice_reachable()
-{
+fn mapp1c_the_switch_shows_a_members_old_gap_and_a_lone_instance_never_reaches_the_slice() {
+    // A member: the switch where it makes a difference, on two hosts started alike.
+    for off in [true, false] {
+        let device = Device::start(false);
+        device
+            .host
+            .mapp1c_off_for_test(off)
+            .expect("the slice's branch");
+        let (observed, claim) = device.observe_while(A, || device.claim(B, ClaimKind::SelfCheck));
+        assert_eq!(
+            observed.state(),
+            RuntimeReceiptState::Completed,
+            "{observed:?}"
+        );
+        let token = claim
+            .wait_for_grant(GATE_WAIT)
+            .expect("the grant slot")
+            .expect("B's claim is granted once the observation lets the device go");
+        let at_grant = device.session_log();
+        let (_, observed_b) = device.observe(B);
+        assert_eq!(
+            observed_b.state(),
+            RuntimeReceiptState::Completed,
+            "{observed_b:?}"
+        );
+        let a_failed = device.failures_of(A);
+        if off {
+            assert_eq!(
+                at_grant,
+                vec![(A.to_owned(), true)],
+                "off: A's session is still open when B's lease begins"
+            );
+            assert_eq!(
+                device.session_log(),
+                vec![(A.to_owned(), true), (B.to_owned(), true)],
+                "off: two members' sessions open on the device at once"
+            );
+            assert!(
+                a_failed > 0,
+                "off: the refusal of A's close lease is recorded"
+            );
+        } else {
+            assert_eq!(
+                at_grant,
+                vec![(A.to_owned(), true), (A.to_owned(), false)],
+                "on: A's session is closed before B's lease begins"
+            );
+            assert_eq!(
+                device.sessions(),
+                vec![
+                    (A.to_owned(), true),
+                    (A.to_owned(), false),
+                    (B.to_owned(), true),
+                ],
+                "on: B's session opens after A's is closed"
+            );
+            assert_eq!(a_failed, 0, "on: nothing of A failed");
+        }
+        device.release(&claim, &token);
+        device.close();
+    }
+
+    // C, alone on its device: one host, the switch on, then off.
     let device = Device::start(false);
+    let c = Arc::clone(&device.states[C]);
+    let session = || {
+        (
+            c.capture_open_count.load(Ordering::Acquire),
+            c.capture_close_count.load(Ordering::Acquire),
+        )
+    };
     let (_, opened) = device.observe(C);
     assert_eq!(opened.state(), RuntimeReceiptState::Completed, "{opened:?}");
-    let order = device.host.queue_order_lock_for_test(C).expect("C's lock");
-    let c = &device.states[C];
-    let mut readings = Vec::new();
+    assert_eq!(session(), (1, 0), "C's first observation opens its session");
+    let connection = device.connection();
+    let mut rounds = Vec::new();
     for off in [false, true] {
         device
             .host
             .mapp1c_off_for_test(off)
             .expect("the slice's branch");
-        let opens = c.capture_open_count.load(Ordering::Acquire);
-        let closes = c.capture_close_count.load(Ordering::Acquire);
+        let grants = device.grants_to(C);
         let (observe, observed) = device.observe(C);
-        let observation = (
-            observed.state(),
-            device.shapes(EventQuery {
-                correlation_id: Some(observe.correlation_id()),
-                ..EventQuery::default()
-            }),
+        assert_eq!(
+            device.grants_to(C),
+            grants,
+            "C's observation takes no lease: no session close ahead"
         );
-        let connection = device.connection();
+        let observation = device.comparable_records(EventQuery {
+            correlation_id: Some(observe.correlation_id()),
+            ..EventQuery::default()
+        });
         let acquire = device.request(RuntimeOperation::acquire_lease(
             C,
             IdentifierIssuer::new()
@@ -629,47 +806,79 @@ fn mapp1c_a_lone_instances_observation_and_lease_are_the_same_with_and_without_t
             .host
             .process_request_for_test(&release, connection)
             .expect("C's release");
-        let lease = (
-            granted.state(),
-            device.shapes(EventQuery {
-                request_id: Some(acquire.request_id()),
-                ..EventQuery::default()
-            }),
-            released.state(),
-            device.shapes(EventQuery {
-                request_id: Some(release.request_id()),
-                ..EventQuery::default()
-            }),
+        assert_eq!(
+            device
+                .host
+                .queue_order_lock_key_for_test(C)
+                .expect("C's queue-order lock"),
+            Some(device.ids[C]),
+            "C's claims are ordered under the lock its own id keys"
         );
-        let steps = (
-            c.capture_open_count.load(Ordering::Acquire) - opens,
-            c.capture_close_count.load(Ordering::Acquire) - closes,
+        assert_eq!(
+            session(),
+            (1, 0),
+            "C keeps its session: its observation and its lease open and close nothing"
         );
-        let same_lock = Arc::ptr_eq(
-            &order,
-            &device.host.queue_order_lock_for_test(C).expect("C's lock"),
-        );
-        readings.push((observation, lease, steps, same_lock));
+        rounds.push((
+            (observed.state(), observation),
+            (
+                granted.state(),
+                device.comparable_records(EventQuery {
+                    request_id: Some(acquire.request_id()),
+                    ..EventQuery::default()
+                }),
+            ),
+            (
+                released.state(),
+                device.comparable_records(EventQuery {
+                    request_id: Some(release.request_id()),
+                    ..EventQuery::default()
+                }),
+            ),
+        ));
     }
     device
         .host
         .mapp1c_off_for_test(false)
         .expect("the slice's branch");
-    let [on, off] = readings.as_slice() else {
-        panic!("two rounds: {readings:#?}");
+    let [on, off] = rounds.as_slice() else {
+        panic!("two rounds: {rounds:#?}");
     };
-    assert_eq!(
-        on, off,
-        "the same with and without the slice's branch reachable"
-    );
     assert_eq!(on.0.0, RuntimeReceiptState::Completed);
-    assert_eq!(on.2, (0, 0), "C keeps its session: no open, no close");
-    assert!(on.3, "C's own queue-order lock");
+    assert!(
+        !on.0
+            .1
+            .iter()
+            .any(|(event_type, _, _)| *event_type == EventType::LeaseGranted),
+        "no lease is granted for C's observation: {:#?}",
+        on.0.1
+    );
+    for (part, with, without) in [
+        ("the observation", &on.0.1, &off.0.1),
+        ("the lease's grant", &on.1.1, &off.1.1),
+        ("the lease's release", &on.2.1, &off.2.1),
+    ] {
+        assert!(!with.is_empty(), "{part} has records");
+        assert_eq!(
+            with.len(),
+            without.len(),
+            "{part}: as many records: {with:#?} {without:#?}"
+        );
+        for (index, (on_record, off_record)) in with.iter().zip(without).enumerate() {
+            assert_eq!(on_record, off_record, "{part}, record {index}");
+        }
+    }
+    assert_eq!(on, off, "the same receipt states and records");
     assert!(
         device.sessions().is_empty(),
         "the group's device saw nothing"
     );
     device.close();
+    assert_eq!(
+        session(),
+        (1, 1),
+        "C's session is closed by the Host close, as on main"
+    );
 }
 
 /// The lock walk's pins (register §1.350, "The lock order"): a device's paths take the device's
