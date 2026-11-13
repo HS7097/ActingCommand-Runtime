@@ -277,28 +277,28 @@ Today an evaluation selects at most one candidate per instance: `selected_instan
   (`allocation_order`, evaluator.rs:2166). The device's first candidate in that order wins the
   device, and every later candidate of any member of the device waits.
 
-**Ranking across members, as it is today.** Slice 1 is correct, not optimized: members rank by
-today's scores, unchanged.
+**Ranking across members: the order within one device (ORD-1b, since 0.12.60).** With the
+order's inputs beside the map, the members of one device are ordered as
+[scheduling/README.md](scheduling/README.md), "Order within one device", writes (register
+§1.348; the owner's rulings on board #437):
 
-- **Unjudged candidates.** The total is `p*1_000_000 + aging_ms + w*1000 + u*1000 - c (+ e*1000)`
-  ([scheduling/README.md](scheduling/README.md), "Dispatch Decision Record", `rank_breakdown`). The
-  declared priorities of two members' catalogs are not calibrated against each other, so the
-  member whose packs declare higher priorities wins the device more often. A lower one wins once
-  its aging (one point per millisecond of eligibility) makes up the gap, about 1 000 s per priority
-  step, so no member waits forever.
-- **Judged candidates.** In the business tier, candidates of different instances go by their
-  instances' turns before `B ÷ E` ("Turns across instances": the instance whose most recent policy
-  dispatch is the earliest goes first). So members of one device alternate in that tier, and slice
-  1 may switch at every dispatch there.
-- **Values.** The values of two members (`B`, the resource terms) are never compared, as today.
+- **The limit.** Every task has a longest time it may wait in the queue: its `max_queue_wait_ms`
+  ([scheduling/v2/README.md](scheduling/v2/README.md)), else the order's default.
+- **Stay with the front.** The device stays with the application in front while one of its due
+  tasks, in that member's own order, ends before any waiting task of another member passes its
+  limit.
+- **Switch.** Otherwise the waiting task whose limit ends first goes (at equal ends, the earlier
+  in the allocation order), and its run switches the application ("The switch before a run"). A
+  running task is never interrupted.
+- **Within a member** its own order stays (promoted, then the maintenance tier, then the business
+  tier by `B ÷ E`); across members it is replaced by the rule above. The values of two members
+  (`B`, the resource terms) are never compared, and the time a switch takes counts in no order and
+  not in a run's own duration.
 
-None of this is a defect of slice 1: it is today's ranking applied to one device. So in the first
-two slices the members of one device may switch application after every task, each switch a kill,
-a start and a return home: correct but slow, and accepted for these two slices. No release runs
-it: the first release that accepts a group of several also carries the slice "order within one
-device" (ORD-1), which writes the order within one device ("Later slices", "Release"), and until
-then a group of several is refused at load ("The configuration form"). The time a switch takes
-counts in no order and not in a run's own duration.
+Without the order's inputs the device's first candidate in the allocation order wins it, as MAPP-1
+built it; no Runtime build passes them before the host's slice of the order. Until the release
+that first accepts a group of several, the load refuses every such group ("The configuration
+form", "Release").
 
 **The reason a member waits: `device_group_waiting`** (registered by MAPP-1; info, ladder class
 `none`, owner `policy`). A candidate of a member that does not get the device because another member has it
@@ -672,10 +672,8 @@ them, and it comes before the first real use of a group of several.
 - **Order within one device.** The order of the members of one device is written by the slice
   ORD-1; its rules are not written here. The time a switch takes counts in no order and not in a
   run's own duration (board #437, 2026-11-13).
-- **The normalized weight.** A task's weight divided by the largest weight of its own catalog, 0.5
-  for a task without a price, with a per-application preference factor on top, default 1 (board
-  #437, comment 6799803829). Slice 1 leaves room: members already rank in one ordered list, by
-  today's scores.
+- **The normalized weight.** Superseded by the order within one device (ORD-1b, "Ranking across
+  members" above): no weight is compared across the members of one device.
 - **Device-level actions by device.** It lifts the limits of slice 1 ("Device-level actions") and
   comes before the first real use of a group of several. Rows 1, 3, 4, 5, 11 and 15 of the table,
   per device:

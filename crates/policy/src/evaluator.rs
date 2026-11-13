@@ -55,6 +55,8 @@ mod capped;
 // #428 SCHED-C1f1 (register §1.303): a run's consumption read from a fact, resolved once per
 // evaluation and instance, and read by every reader of a consumption.
 mod consumption;
+// Workflow #437 ORD-1b (register §1.348): the selection among the members of one device.
+mod device_order;
 
 use benefit::KnownBenefit;
 pub(crate) use benefit::manual_request;
@@ -392,15 +394,30 @@ impl InstanceHolds {
 /// from its configuration at the start and passes it beside the instance holds
 /// ([`evaluate_with_device_groups`]); memory only, never part of the facts, a snapshot or a
 /// decision identity.
+///
+/// Workflow #437 ORD-1b (`contracts/scheduling/README.md`, "Order within one device"): with the
+/// order inputs ([`DeviceGroups::with_order`]) a device of several selects among its members'
+/// candidates by the order within one device instead; the map alone ([`DeviceGroups::new`])
+/// selects as MAPP-1 does, so nothing changes until the Runtime passes the inputs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeviceGroups {
     devices: BTreeMap<String, String>,
+    order: Option<DeviceOrder>,
 }
 
 impl DeviceGroups {
     /// The device key of each member, by its alias.
     pub fn new(devices: BTreeMap<String, String>) -> Self {
-        Self { devices }
+        Self {
+            devices,
+            order: None,
+        }
+    }
+
+    /// Workflow #437 ORD-1b: the same map with the order inputs of its devices of several.
+    pub fn with_order(mut self, order: DeviceOrder) -> Self {
+        self.order = Some(order);
+        self
     }
 
     /// The device key of `instance_id`: its own alias when the map names it not.
@@ -408,6 +425,64 @@ impl DeviceGroups {
         self.devices
             .get(instance_id)
             .map_or(instance_id, String::as_str)
+    }
+}
+
+/// Workflow #437 ORD-1b: the longest queue wait of a task that declares no `max_queue_wait_ms`,
+/// until the Runtime passes the configured one ([`DeviceOrder::default_max_queue_wait_ms`]).
+pub const DEFAULT_MAX_QUEUE_WAIT_MS: u64 = 1_800_000;
+
+/// Workflow #437 ORD-1b (`contracts/scheduling/README.md`, "Order within one device"): what the
+/// order within a device of several reads beside the device map: the member in front of each
+/// device, when each waiting contender's wait began, and the longest wait of a task that declares
+/// none. Empty, every device has none in front and every wait begins at the evaluation's time.
+/// Memory only, never part of the facts, a snapshot or a decision identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceOrder {
+    /// The aliases named in front of their devices; at most one per device.
+    fronts: BTreeSet<String>,
+    /// When the wait of each (task id, instance alias) began, in Unix milliseconds.
+    wait_starts: BTreeMap<(String, String), u64>,
+    /// The longest queue wait of a task that declares none.
+    default_max_queue_wait_ms: u64,
+}
+
+impl Default for DeviceOrder {
+    fn default() -> Self {
+        Self {
+            fronts: BTreeSet::new(),
+            wait_starts: BTreeMap::new(),
+            default_max_queue_wait_ms: DEFAULT_MAX_QUEUE_WAIT_MS,
+        }
+    }
+}
+
+impl DeviceOrder {
+    /// Names the member `alias` the application in front of its device. Two members of one
+    /// device named in front refuse the evaluation.
+    pub fn front(mut self, alias: impl Into<String>) -> Self {
+        self.fronts.insert(alias.into());
+        self
+    }
+
+    /// The wait of `task_id`'s candidate on `alias` began at `unix_ms`. A contender without one
+    /// waits from the evaluation's time.
+    pub fn wait_start(
+        mut self,
+        task_id: impl Into<String>,
+        alias: impl Into<String>,
+        unix_ms: u64,
+    ) -> Self {
+        self.wait_starts
+            .insert((task_id.into(), alias.into()), unix_ms);
+        self
+    }
+
+    /// The longest queue wait of a task that declares none ([`DEFAULT_MAX_QUEUE_WAIT_MS`]
+    /// without it).
+    pub fn default_max_queue_wait_ms(mut self, limit_ms: u64) -> Self {
+        self.default_max_queue_wait_ms = limit_ms;
+        self
     }
 }
 
@@ -1649,6 +1724,11 @@ pub fn evaluate_with_left_out_facts<E: From<PolicyEvaluationError>>(
 /// a later candidate of the winning member keeps that code. Members rank by today's scores,
 /// unchanged. With no device of several members the evaluation is the one
 /// `evaluate_with_left_out_facts` gives.
+///
+/// Workflow #437 ORD-1b (`contracts/scheduling/README.md`, "Order within one device"): with the
+/// order inputs ([`DeviceGroups::with_order`]) a device of several selects instead by the order
+/// within one device, and its waiting candidates carry the order's values; a device of one never
+/// reads them, and without them the evaluation is MAPP-1's above.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_with_device_groups<E: From<PolicyEvaluationError>>(
     catalog: &CompiledCatalog,
@@ -2285,7 +2365,77 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     // (reason chain index, work index) of every selected candidate, for its decision record.
     let mut selected = Vec::new();
 
-    for candidate in candidates {
+    // Workflow #437 ORD-1b (`contracts/scheduling/README.md`, "Order within one device"): with the
+    // order inputs, a device of several selects among its contenders by the order within one
+    // device, at its first contender's place in the allocation order, and takes them out of turn;
+    // every other candidate takes its turn as before. Without them `ordering` is `None` and the
+    // round is the one of before: each candidate in the allocation order.
+    let ordering = device_order::DeviceOrdering::new(device_groups, &declared_tasks, time.unix_ms)?;
+    let mut queue = candidates.into_iter().map(Some).collect::<Vec<_>>();
+    let mut cursor = 0;
+    let mut device_round: Option<device_order::DeviceRound> = None;
+    let mut ordered_devices = BTreeSet::<String>::new();
+
+    loop {
+        // The next pick of the device whose selection runs, if any: `Some(None)` once it ends.
+        let mut next = None;
+        if let (Some(round), Some(ordering)) = (device_round.as_mut(), ordering.as_ref()) {
+            let contenders = device_order::Contenders {
+                instance_holds,
+                cycle_holds: refresh_inputs.map(|inputs| &inputs.instance_holds),
+                handovers: &handovers,
+            };
+            next = Some(round.next(ordering, &contenders, &queue, &selected_devices));
+        }
+        let place = match next {
+            Some(Some(place)) => place,
+            Some(None) => {
+                if let (Some(round), Some(ordering)) = (device_round.take(), ordering.as_ref()) {
+                    round.finish(
+                        ordering,
+                        &mut queue,
+                        &mut device_order::Rows {
+                            work: &mut work,
+                            refresh_gates: &mut refresh_gates,
+                            selected_devices: &selected_devices,
+                            selected_blocks: &selected_blocks,
+                            amounts: &amounts,
+                        },
+                    );
+                }
+                continue;
+            }
+            None => match (cursor..queue.len()).find(|place| queue[*place].is_some()) {
+                Some(place) => {
+                    cursor = place + 1;
+                    place
+                }
+                None => break,
+            },
+        };
+        let Some(candidate) = queue[place].take() else {
+            continue;
+        };
+        // Workflow #437 ORD-1b: the first contender of a device of several starts the device's
+        // selection; the next turns go to its picks.
+        if device_round.is_none()
+            && let Some(ordering) = ordering.as_ref()
+            && let Some(device) = ordering.starts(
+                &candidate,
+                &device_order::Contenders {
+                    instance_holds,
+                    cycle_holds: refresh_inputs.map(|inputs| &inputs.instance_holds),
+                    handovers: &handovers,
+                },
+                &ordered_devices,
+                &selected_devices,
+            )
+        {
+            ordered_devices.insert(device.clone());
+            device_round = Some(device_order::DeviceRound::new(device, place));
+            queue[place] = Some(candidate);
+            continue;
+        }
         // Workflow #384 D2-S4: the recognition maintenance package's own deferrals are read by
         // the fact refresh's table (D2 model §3.7 rows 4 and 6).
         let refresh = candidate.task_id == FACT_REFRESH_TASK_ID;
@@ -2341,52 +2491,14 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                 );
                 continue;
             }
-            // SS-2h: a candidate of a capped block other than its head waits for the head: the
-            // block's dispatch, or, when another candidate took the instance, the block's lead.
-            if let Some(slot) = &candidate.capped {
-                let head = match selected_blocks.get(&candidate.instance_id) {
-                    Some((pool_id, head)) if *pool_id == slot.pool_id => Some(head.as_str()),
-                    _ if slot.position > 0 => slot.lead.as_ref().map(|lead| lead.task_id.as_str()),
-                    _ => None,
-                };
-                if let Some(head) = head {
-                    let task_work = &mut work[candidate.work_index];
-                    match &slot.wait {
-                        // SS-2h fix 1: a fallback of the block, tried only once every candidate of
-                        // the block before it is refused, is held as its round holds it.
-                        Some(wait) => {
-                            task_work.state = SchedulingDecisionState::Deferred;
-                            task_work.reasons.push(wait.clone());
-                            task_work.next_wake_unix_ms =
-                                min_wake(task_work.next_wake_unix_ms, slot.wake_unix_ms);
-                        }
-                        // SCHED-C1f1 (SC1F-4): with the candidate's consumption of the pool when it
-                        // is read from a fact.
-                        None => task_work.reasons.push(consumption::with_values(
-                            capped::not_head_reason(&slot.pool_id, head),
-                            amounts.values(
-                                &candidate.task_id,
-                                &candidate.instance_id,
-                                &slot.pool_id,
-                            ),
-                        )),
-                    }
-                    continue;
-                }
-            }
-            work[candidate.work_index].reasons.push(reason(
-                PolicyCode::InstanceAlreadySelected,
-                "a higher-ranked task already owns this instance for the evaluation round",
-            ));
-            if refresh {
-                refresh_gates.insert(
-                    candidate.work_index,
-                    RefreshGate::Temporary {
-                        gate: Some(PolicyCode::InstanceAlreadySelected.code()),
-                        wake: None,
-                    },
-                );
-            }
+            settle_behind_instance(
+                &candidate,
+                None,
+                &selected_blocks,
+                &amounts,
+                &mut work,
+                &mut refresh_gates,
+            );
             continue;
         }
         // Workflow #437 MAPP-1 (`contracts/device-group.md`, "One pick per device per round"):
@@ -2773,6 +2885,66 @@ fn hold_unasked(
             work_index,
             RefreshGate::Temporary {
                 gate: Some(hold.gate),
+                wake: None,
+            },
+        );
+    }
+}
+
+/// The settlement of a candidate behind its own instance's selected candidate, its instance not
+/// held. SS-2h: a candidate of a capped block other than its head waits for the head: the block's
+/// dispatch, or, when another candidate took the instance, the block's lead. Every other one waits
+/// with `instance_already_selected` and no wake of its own; a fact refresh's names that gate.
+/// Workflow #437 ORD-1b ("Order within one device"): `fit`, `(required_ms, remaining_ms)` of a
+/// front member's contender walked before a pick that fitted, joins that reason as its values.
+fn settle_behind_instance(
+    candidate: &PlacementCandidate,
+    fit: Option<(u64, u64)>,
+    selected_blocks: &BTreeMap<String, (String, String)>,
+    amounts: &ConsumptionAmounts,
+    work: &mut [TaskWork],
+    refresh_gates: &mut BTreeMap<usize, RefreshGate>,
+) {
+    if let Some(slot) = &candidate.capped {
+        let head = match selected_blocks.get(&candidate.instance_id) {
+            Some((pool_id, head)) if *pool_id == slot.pool_id => Some(head.as_str()),
+            _ if slot.position > 0 => slot.lead.as_ref().map(|lead| lead.task_id.as_str()),
+            _ => None,
+        };
+        if let Some(head) = head {
+            let task_work = &mut work[candidate.work_index];
+            match &slot.wait {
+                // SS-2h fix 1: a fallback of the block, tried only once every candidate of the
+                // block before it is refused, is held as its round holds it.
+                Some(wait) => {
+                    task_work.state = SchedulingDecisionState::Deferred;
+                    task_work.reasons.push(wait.clone());
+                    task_work.next_wake_unix_ms =
+                        min_wake(task_work.next_wake_unix_ms, slot.wake_unix_ms);
+                }
+                // SCHED-C1f1 (SC1F-4): with the candidate's consumption of the pool when it is
+                // read from a fact.
+                None => task_work.reasons.push(consumption::with_values(
+                    capped::not_head_reason(&slot.pool_id, head),
+                    amounts.values(&candidate.task_id, &candidate.instance_id, &slot.pool_id),
+                )),
+            }
+            return;
+        }
+    }
+    let behind = match fit {
+        None => reason(
+            PolicyCode::InstanceAlreadySelected,
+            "a higher-ranked task already owns this instance for the evaluation round",
+        ),
+        Some((required_ms, remaining_ms)) => device_order::walked_reason(required_ms, remaining_ms),
+    };
+    work[candidate.work_index].reasons.push(behind);
+    if candidate.task_id == FACT_REFRESH_TASK_ID {
+        refresh_gates.insert(
+            candidate.work_index,
+            RefreshGate::Temporary {
+                gate: Some(PolicyCode::InstanceAlreadySelected.code()),
                 wake: None,
             },
         );
