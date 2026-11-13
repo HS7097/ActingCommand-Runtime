@@ -46,12 +46,13 @@ the designated operation. The 0.7 OCR comparison still selects its comparison ou
 which Host checks against that same effect/page mapping. Missing or conflicting mappings
 and failed field collection retain their existing failures. No Global event shape changes.
 
-Fields are evidence only: no field value is written as an instance fact. A value the Runtime
-writes back as an instance fact is a resource reading (`resource-readings.md`), declared
-separately even on a task that also collects fields. A list the Runtime writes back as one
-`record_list` fact is a list reading (Workflow #428 S168-4; `resource-readings.md`, "List
-readings"): a `read_list` step reads it from a candidate layout's features over a scan, never
-from fields.
+No field value is written as an instance fact on its own. A value the Runtime writes back as an
+instance fact is a resource reading (`resource-readings.md`), declared separately even on a task
+that also collects fields. A list the Runtime writes back as one `record_list` fact is a list
+reading (Workflow #428 S168-4; `resource-readings.md`, "List readings"), which a `read_list` step
+reads from a candidate layout's features over a scan, or a field list (Workflow #450;
+`resource-readings.md`, "Lists from fields"): one group of these fields, keyed by one of them, one
+position per collected frame. A field list changes neither the fields report nor its projection.
 
 A `0.8` fields task may declare `operations: []` in `navigable_route` mode with
 `stop_on_confirmation` omitted or true. It may declare several outcomes (Workflow #390

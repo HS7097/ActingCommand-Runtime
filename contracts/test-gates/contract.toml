@@ -888,3 +888,11 @@ tests = [
     "actingcommand-lab-ops::lib::gate_434_lab6s3::lab_ops_ui_allows_is_the_tables_ui_kinds",
 ]
 incident = ["#434 LAB-6S3"]
+
+# Workflow #450 FL-1 (0.12.59; register §1.340; brief rd-1113/brief-450-fl1.md; contracts/resource-readings.md, "Lists from fields", "Declaration"): the one rule of a task's field_lists, validate_field_lists, shared by the declaration gate and admission. The declaration reads back as written and refuses an unknown member; task schemas 0.8 and 0.9, a list without columns, a string column and pages with and without the game prefix are declared. The rules of the task are refused at their pointer with their reason: a schema before 0.8 (UnconsumedField at /field_lists), no entry or two (InvalidValue at /field_lists), no post_admission_ocr or no scheduling_outcome (MissingField at each); each rule of an entry InvalidValue at its member below /field_lists/0 (an id that is not an identifier or that an operation or a mark takes; a group the fields lack; a key field that is an integer, personal, of another group or missing; a key column that is no token; 64 columns; a column named like the key column or twice; a column's field that is wider than 2^53-1, personal, the key field, of another group or read twice; a floor of 0 or 1001; a key outside inventory.list. or one the task already writes; a lifetime of 0 or past a year; a start with no condition, with no page, three pages, a page that is no field page, one page twice, nine targets, one target twice or a target that is no identifier; an end without pages, on a field page that is no terminal of the fields' outcome, on a page that is no field page, with nine required targets or a target that is no identifier), and admission's detail is <id>:<member>
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::taskflow::gate_450_fl1::field_list_declaration_rules",
+]
+incident = ["#450 FL-1"]

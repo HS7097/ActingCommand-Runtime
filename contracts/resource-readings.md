@@ -14,7 +14,8 @@ readings as instance facts (slice S5b, "Host" below), the recognition maintenanc
 (D2-S2, "Recognition maintenance packages" below) and the resource adjustments of an operation
 (Workflow #384 D2-S3, "Adjustments" below). A mark writes one number; a list a page shows,
 every position of it, is written as one `record_list` fact by a list reading (Workflow #428
-S168-4, "List readings" below).
+S168-4, "List readings" below) or, for a list a run reads one position per frame, by a field list
+(Workflow #450, "Lists from fields" below).
 
 ## Declaration
 
@@ -581,8 +582,10 @@ Workflow #428 S168-4 (Runtime 0.12.50), written ahead of its code by S168-0
 ([v012-register.md](v012-register.md) §1.291, the S168-4 subsection there). A list reading reads
 a list a page shows, across as many viewports as it takes, and writes it as one instance fact of
 value `record_list`: one row per position, keyed by the position's business identity, with the
-values the package declares for it. It is the one way a package's reading becomes a record-list
-fact; an OCR field never becomes one ([ocr-fields.md](ocr-fields.md)). **Status:** built by
+values the package declares for it. It is one of two ways a package's reading becomes a
+record-list fact; the other is a field list ("Lists from fields" below), which groups OCR fields
+read one position per frame into the same fact. An OCR field never becomes a fact on its own
+([ocr-fields.md](ocr-fields.md)). **Status:** built by
 S168-4, `package` revision 8 ([component-interfaces.md](component-interfaces.md)); a Runtime
 before 0.12.50 refuses a package that declares one (`UnknownField` at
 `/operations/<i>/read_list`).
@@ -613,7 +616,7 @@ only; the numbers and names are neutral examples, not values:
 | `key_feature` | an `identity` feature of the layout; the scan's `identity_feature` | `…/read_list/key_feature` |
 | `key_column` | a token `^[a-z][a-z0-9_]{0,31}$`: the row member that holds the business ID | `…/read_list/key_column` |
 | `columns` | 0 to 63 entries `{column, feature}`: `column` a token as `key_column`, distinct, never the `key_column`; `feature` a feature of the layout other than `key_feature`, each at most once, of value `passed` (a `boolean` column), `ocr_integer` (an `integer` column) or `identity` (a string column, the business ID it reads) | `…/read_list/columns/<j>/column`, `…/columns/<j>/feature` |
-| `fact_key` | starts with `inventory.list.`, satisfies the instance fact key rule, and is unique among every key the task writes (each mark's `fact_key` and `capacity_fact_key`, each other list) | `…/read_list/fact_key` |
+| `fact_key` | starts with `inventory.list.`, satisfies the instance fact key rule, and is unique among every key the task writes (each mark's `fact_key` and `capacity_fact_key`, each other list, a field list's included) | `…/read_list/fact_key` |
 | `valid_for_ms` | `1..=31_536_000_000` | `…/read_list/valid_for_ms` |
 | `scan` | required: a select step's `scan` ([selection-graph.md](selection-graph.md), "Select step"), with every static check admission runs on it, but no `early_stop`: every position is read | `MissingField` @ `…/read_list/scan`; `early_stop`: `UnknownField` @ `…/scan/early_stop`; the static checks as a select step's |
 | `guard` | required, any guard a select step takes; judged on every viewport | `MissingField` @ `/operations/<i>/guard` |
@@ -855,7 +858,8 @@ the run the same way.
   as `InvalidValue` @ `…/fact_key` with reason `resource_reading_fact_key_invalid`, or @
   `…/capacity_fact_key` with `resource_reading_capacity_fact_key_invalid`; Runtime admission
   refuses the program before any input with `contained_task_resource_reading_invalid` and the
-  detail `<id>:<reason>`. So every record under the prefix is a list reading's `record_list`. The
+  detail `<id>:<reason>`. So every record under the prefix is the `record_list` of a list reading
+or of a field list ("Lists from fields" below). The
   key rule is the marks' and the adjustments' one rule, so an adjustment's `fact_key` under the
   prefix is refused too. As for the step (section Declaration), admission runs the gate on the
   sealed task first, which refuses such a mark at its pointer before admission's own check.
@@ -887,6 +891,154 @@ step, with the list reading's own effect:
   followed by its input and by no `task.effect_completed`, as a scan's moves are
   ([selection-graph.md](selection-graph.md), "Select over a scan"); with no tap, the step has no
   `task.effect_completed` of its own.
+
+## Lists from fields
+
+Workflow #450 FL-1 (Runtime 0.12.59; [v012-register.md](v012-register.md) §1.340; the owner
+approved the feature on 11-13, board #450). A package that reads a set of items one by one (it
+opens an item's detail page, reads its name and its exact quantity as OCR fields, and steps to the
+next) groups those fields into one list: a **field list**. The host writes it as one instance fact
+of value `record_list` under `inventory.list.<name>`, exactly as it writes a list reading's
+("List readings" above): the same record shape, row bound and order, so a reader of the fact
+cannot tell the producer. **Status:** built by FL-1 (the declaration, the gate and the kernel)
+with the host's halves in FL-2, one Runtime release; `package` revision 11
+([component-interfaces.md](component-interfaces.md)); a Runtime before it refuses a package that
+declares one (`UnknownField` at `/field_lists`).
+
+### Declaration
+
+`field_lists` is an optional top-level family of a task schema `0.8` or `0.9` `task.json` that
+declares `post_admission_ocr` in the `fields_v1` form ([ocr-fields.md](ocr-fields.md)). The
+names are neutral examples:
+
+```json
+"field_lists": [
+  {"id": "list_a", "group": "row", "key_field": "name", "key_column": "id",
+   "columns": [{"column": "count", "field": "amount"}],
+   "minimum_confidence_milli": 900,
+   "fact_key": "inventory.list.example_kind_a", "valid_for_ms": 86400000,
+   "start": {"forbidden": ["mark/previous"]},
+   "end": {"page_ids": ["last"]}}
+]
+```
+
+| Member | Rule | Refusal (gate: `resource_declaration_invalid` at the pointer) |
+| --- | --- | --- |
+| the array | exactly 1 entry in this revision; task schema `0.8` or `0.9`; the task declares `post_admission_ocr` (`fields_v1`) and `scheduling_outcome` | an older schema: `UnconsumedField` @ `/field_lists`; empty or longer: `InvalidValue` @ `/field_lists`; `MissingField` @ `/post_admission_ocr` or `/scheduling_outcome` |
+| `id` | the identifier rule of a mark's `id`; distinct from every operation id and mark id of the task (it names the producer in `source_detector`) | `…/id` |
+| `group` | a `group` of the task's fields | `…/group` |
+| `key_field` | a field of that group of type `dictionary_entry`; its canonical entry is the row's key | `…/key_field` |
+| `key_column` | a token `^[a-z][a-z0-9_]{0,31}$` | `…/key_column` |
+| `columns` | 0 to 63 `{column, field}`: `column` a distinct token other than `key_column`; `field` another field of the group, at most once: `unsigned_integer` whose `max` is at most 2^53−1 (an integer column) or `dictionary_entry` (a string column) | `…/columns`, `…/columns/<j>/column`, `…/columns/<j>/field` |
+| the named fields | `privacy` `public`, and their targets not marked personal by the projection metadata | `…/key_field`, `…/columns/<j>/field`; admission: `<id>:target_personal` |
+| `minimum_confidence_milli` | `1..=1000`, required; applies to the key and every column, on top of each target's own `minimum_confidence` | `…/minimum_confidence_milli` |
+| `fact_key` | starts with `inventory.list.`, a valid instance fact key, unique among every key the task writes (marks, `read_list` steps, this list) | `…/fact_key` |
+| `valid_for_ms` | `1..=31_536_000_000` | `…/valid_for_ms` |
+| `start` | `{page_ids?, required?, forbidden?}` with at least one condition: `page_ids` 1 or 2 distinct field pages; `required` and `forbidden` each 0 to 8 distinct template or colour targets of the task (no OCR, so a condition makes no provider call) | `…/start`, `…/start/<member>`, `…/start/<member>/<k>` |
+| `end` | `{page_ids, required?, forbidden?}`: `page_ids` 1 or 2 distinct pages, each a field page and a terminal page of the fields' `fields_recorded` mapping; the rest as `start` | `…/end/<member>`, `…/end/<member>/<k>` |
+| any other member | none | `UnknownField` @ `…/<member>` |
+
+The pointers lie below `/field_lists/<i>`. Wrong JSON types are `InvalidType` and absent members
+`MissingField` at their own pointer; a floor beyond 16 bits is `InvalidValue`. The rules of the
+values are one function of the contract crate (`validate_field_lists`), which the declaration
+gate and admission share: the gate reports its pointer and reason, admission its detail. The
+package parser checks the targets of `start` and `end` against the derived recognition pack
+(`package_invalid` naming `…/start/required/<k>`, …). Admission runs the gate on the sealed task
+first, then the same rule against the task's declared fields, then the targets against the
+recognition pack (template or colour) and the fields against the projection metadata; it refuses
+with `contained_task_resource_reading_invalid` and the detail `<id>:<member>` (`list_a:key_field`,
+`list_a:start/required/0`, `list_a:target_personal`), or the task's member alone (`field_lists`,
+`post_admission_ocr`, `scheduling_outcome`). A startup, stuck-recovery return-home or prerequisite
+package that declares one is refused as for readings (`contained_task_resource_reading_run_kind_unsupported`;
+a layer's check names `field_lists`, or `post_admission_ocr` first); a bound recovery entry,
+`recognize_only` and a declared operation's one step read none. Offline, `package dry-run`
+reports the task's post-admission reading as `pending_real_execution`, as for a task with marks.
+
+### When the list is whole
+
+The list's frames are the frames the fields collector collects, in collection order; frame *i* is
+the fields report's `frame_index` *i*. The collector keeps each frame's key and column values with
+the confidences of their observations, in memory; the fields report and its projection do not
+change.
+
+1. **Start.** The list's first frame meets `start`: on one of its `page_ids` when declared, every
+   `required` target passing and no `forbidden` one, each judged with its own declaration as a page
+   rule judges it. Otherwise the list's miss is `list_start_unseen`.
+2. **End.** The first frame that meets `end` ends the list, and the list is decided on that frame.
+   The end pages are terminal pages, where the run ends. A frame of the group collected after the
+   list was decided fails the run (`contained_task_state_invalid`, `runtime_invariant`), so a list
+   is never published with a frame after its end. A successful run that collected frames of the
+   group and met no `end` is `list_end_unseen`; so is a run whose end page lay past `max_frames`
+   and was not collected.
+3. **A frame's reading.** The key and every column are `resolved` ([ocr-fields.md](ocr-fields.md))
+   and each observation's confidence (`ocr_confidence_milli`) is present and at least
+   `minimum_confidence_milli`. Otherwise the frame is unresolved: `list_position_unread`. A
+   low-confidence key or value therefore fails the list, never the run (a field the package marks
+   `required` still ends the run when it does not resolve, as every field does).
+4. **Repeats.** A key read on two frames of the list, adjacent or not, with equal or different
+   columns, is `list_duplicate_key`. The core never folds, never sums and never picks one (the
+   coordinator's decision of 11-13: the measured repeats were different items sharing a display
+   name). A page or tab that shows items sharing a display name cannot be a field list in this
+   revision.
+5. **Every item visited** rests on the start condition on the first frame, the end condition on
+   the last, and one guarded, confirmed tap between consecutive frames. No total is checked.
+6. **Rows.** One row per frame: `{<key_column>: <canonical dictionary entry>, <column>: <value>,
+   …}`, an integer column as an integer and a string column as its canonical entry, in ascending
+   byte order of the key. The record's `confidence_milli` is the lowest confidence of the fields
+   the rows read. A field list is never empty, because its end frame holds a position.
+7. **Order of misses.** Start, unread, repeated key, rows: the first that applies is the list's one
+   miss.
+
+| `reading_problem` | `count` | `frame_indices` |
+| --- | --- | --- |
+| `list_start_unseen` | the frames collected | the first frame |
+| `list_position_unread` | the unresolved frames | those frames |
+| `list_duplicate_key` | the repeated keys | every frame that holds a repeated key |
+| `list_rows_exceeded` | 1025, the position past the bound | its frame |
+| `list_end_unseen` | the frames collected | the last frame |
+| `list_bytes_exceeded` | the rows read (the host's, as for a list reading) | none |
+
+Each is the warning `contained_task_resource_reading_unresolved` (`reading_id` the list's `id`,
+`fact_key`, `reading_problem`, `count`, and the optional value `frame_indices`, the fields report's
+frame indices in ascending order, at most 64 with `frame_indices_total` past that), written at once
+as one task diagnostic row, on the frame the list was decided on, or for `list_end_unseen` on the
+frame captured last at the run's successful end. With the frame index, `run evidence` and the
+fields projection show that frame's text, reason and confidence. A list that is not whole writes
+nothing, in part or empty, and the key's earlier record stays. A failed or cancelled run publishes
+nothing; its fields report is saved as before.
+
+**Bounds.** Rows: at most `max_frames`, at most 256, so the 1024-row bound of a record list
+("Rows" above) is checked (`list_rows_exceeded`) but cannot be reached in this revision; it is
+kept, though its reason (a dictionary of at most 1024 business IDs) does not carry over to a
+fields dictionary of up to 4096 entries. Bytes: the host's 512 KiB check, unchanged. Steps and
+time: one run reads at most about min(`max_frames`, `max_steps` + 1, the task's timeout ÷ the time
+per step) positions. A list longer than one run is split by the package (one reader, one start,
+one end and one key per tab or category; a list maximum reads 1 to 16 lists), not by raising
+`max_frames`, the fields contract's bound that the client's projection checks.
+
+### Kernel and host
+
+- **Admission.** `prepare_field_lists` (`crates/execution-kernel/src/contained_task/field_list.rs`)
+  runs after the fields are prepared, with the key set of the task's marks and `read_list` steps.
+  `has_list_readings` counts field lists, so the startup, layer and offline paths treat them as
+  list readings.
+- **The run.** On each frame of the group the collector keeps the key's and the columns' readings.
+  On the list's first frame the kernel judges `start`, on each its `end`, after the frame's field
+  failure check and before any reading hand-off. On the end frame, the frame captured last, it
+  builds the list (`field_list_of`) and records `ListReadingFrame` when the list is whole, then
+  `ListReading` with the list's declaration (`operation_id` the list's `id`), the frames a miss
+  names riding with it. At a successful end, before the readings join, a list that collected frames
+  and was not decided records `ListReading` with `list_end_unseen` on the frame captured last; the
+  kernel notes every frame a run captures for it.
+- **The host.** Every trace is one the host takes for a `read_list` step, in an order it accepts:
+  a whole list is published at the run's successful end with `source_detector`
+  `list_reading:<entry task>/<list id>` and `source_snapshot_id`
+  `run:<run>/frame:<end frame>/<list id>`, the observation time the end frame's capture time; a
+  miss is its warning row at once. "Publication", "Staleness", "Capacity and reserved keys" and
+  "Evidence" above apply unchanged. FL-2 holds the host's halves on a fake device.
+- **Ledger.** No record shape changes and `ledger` stays 8: a list is a `fact.published` of the
+  existing `record_list` value; a miss is an existing warning row whose outcome gains two words of
+  `reading_problem` and the optional value `frame_indices`, which a reader relays unchanged.
 
 ## Never written
 

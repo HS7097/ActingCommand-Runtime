@@ -94,6 +94,11 @@ mod list_reading;
 // Workflow #428 S168-4: the list reading's named tests, the kernel's halves.
 #[cfg(test)]
 mod gate_428_s168_4;
+// Workflow #450 FL-1a and FL-1b: a list grouped from fields read one position per frame.
+mod field_list;
+// Workflow #450 FL-1a and FL-1b: the field list's named tests, the kernel's halves.
+#[cfg(test)]
+mod gate_450_fl1;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.
@@ -1281,6 +1286,10 @@ struct PostAdmissionOcrCollector<'a> {
     /// Workflow #384 D2-S2: the reading marks and the frames handed to recognition; `None` when
     /// the run does not read them (offline simulation, bound recovery entry, prerequisite).
     reading_relay: Option<readings::ReadingRelay<'a>>,
+    /// Workflow #450 FL-1b: the run's field lists and the frames each collected; `None` when the
+    /// run reads none (no list declared, offline simulation, bound recovery entry,
+    /// `recognize_only`).
+    field_lists: Option<field_list::FieldListRelay<'a>>,
     /// The fields report was recorded by a successful completion; a reading that then fails
     /// must not record it a second time.
     fields_report_recorded: bool,
@@ -1678,6 +1687,8 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         let mut targets = Vec::new();
         let mut regions = BTreeMap::new();
         let mut records: Vec<OcrFieldRecord> = Vec::new();
+        // Workflow #450 FL-1b: each field's observation confidence, which a field list reads.
+        let mut confidences: BTreeMap<&str, Option<f32>> = BTreeMap::new();
         for field in &declaration.fields {
             let mut result = OcrFieldResult {
                 field_id: field.id.clone(),
@@ -1702,6 +1713,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                         Ok(mut evaluated) => {
                             result.region = Some(evaluated.region.clone());
                             regions.insert(field.target_id.clone(), evaluated.region.clone());
+                            confidences.insert(field.id.as_str(), evaluated.confidence);
                             if evaluated.target_id != field.target_id
                                 || !self
                                     .invocation_ids
@@ -1851,6 +1863,10 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             {
                 self.field_failure.get_or_insert(result.reason);
             }
+        }
+        // Workflow #450 FL-1b: each field list keeps the frame's readings of its fields.
+        if let Some(lists) = self.field_lists.as_mut() {
+            lists.collect(frame_index, &records, &confidences);
         }
         self.frames_collected += 1;
         self.field_records.extend(records);
@@ -3416,6 +3432,14 @@ impl PreparedContainedTask {
             post_admission_ocr.is_some(),
             post_admission_fields.as_ref(),
         )?;
+        // Workflow #450 FL-1b: the task's field lists, against its fields, its other keys and
+        // the recognition pack.
+        field_list::prepare_field_lists(
+            &mut program,
+            &control.game,
+            &evaluator,
+            post_admission_fields.as_ref(),
+        )?;
         program.validate_resource_reading_targets(&bundle, &detector, &evaluator)?;
         // Workflow #396 REC-8: a page that names a field, reading or collection target reads
         // it in the page recognition, one more text read of that consumer's budget.
@@ -3558,10 +3582,14 @@ impl PreparedContainedTask {
             Some("resource_readings")
         } else if self.has_resource_adjustments() {
             Some("resource_adjustments")
-        } else {
+        } else if self.program.declares_list_readings() {
             // Workflow #428 S168-4: a list reading is refused as readings are.
-            self.has_list_readings()
-                .then_some(list_reading::READ_LIST_MEMBER)
+            Some(list_reading::READ_LIST_MEMBER)
+        } else {
+            // Workflow #450 FL-1b: so is a field list.
+            self.program
+                .declares_field_lists()
+                .then_some(field_list::FIELD_LISTS_MEMBER)
         }
     }
 
@@ -3874,6 +3902,9 @@ impl PreparedContainedTask {
         } else if self.program.declares_list_readings() {
             // Workflow #428 S168-4: a list reading is refused as readings are.
             Some(list_reading::READ_LIST_MEMBER)
+        } else if self.program.declares_field_lists() {
+            // Workflow #450 FL-1b: so is a field list.
+            Some(field_list::FIELD_LISTS_MEMBER)
         } else if self
             .program
             .operations
@@ -4386,6 +4417,7 @@ impl PreparedContainedTask {
         let frame = runtime
             .capture()
             .map_err(ContainedTaskRunError::operation::<R>)?;
+        self.note_capture(frame.captured_at);
         let scale = self
             .control
             .resolution
@@ -4775,11 +4807,24 @@ impl PreparedContainedTask {
             PostAdmissionOcrExecution::DisabledForOfflineSimulation => None,
         };
         let mut ocr_collector = PostAdmissionOcrCollector::new(post_admission_ocr);
+        // Workflow #450 FL-1b: no frame of this run captured yet.
+        self.program.field_lists.run_started();
         if matches!(
             options.post_admission_ocr,
             PostAdmissionOcrExecution::Enabled
         ) {
             ocr_collector.fields = self.post_admission_fields.as_ref();
+            // Workflow #450 FL-1b: the package's own run reads its field lists; a bound recovery
+            // entry, `recognize_only` and a declared operation's one step (#412 Lab B-3) take
+            // none.
+            let lists = self.program.field_lists.prepared();
+            if options.entry == ContainedTaskEntry::Ordinary
+                && options.declared.is_none()
+                && self.control.execution_mode != "recognize_only"
+                && !lists.is_empty()
+            {
+                ocr_collector.field_lists = Some(field_list::FieldListRelay::new(lists));
+            }
             // Workflow #384 D2-S3: the relay also confirms the task's adjustments.
             if options.entry == ContainedTaskEntry::Ordinary
                 && (self.program.resource_readings.is_some()
@@ -6798,6 +6843,9 @@ impl PreparedContainedTask {
         // #385 P-k: the run's budget clock at its end; the readings join is budget time.
         pace: PaceClock,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        // Workflow #450 FL-1b: a field list that collected frames and met no `end` gives its miss
+        // on the frame captured last, before the readings join.
+        self.record_field_lists_end_unseen(runtime, ocr_collector.field_lists.as_mut())?;
         let reading_relay = ocr_collector.reading_relay.take();
         let selected_scheduling_outcome = if let Some(report) = ocr_collector.fields_report() {
             // Workflow #390 OUT-1 (FCM O-05): the collector reads a frame of every field page
@@ -7574,6 +7622,7 @@ impl PreparedContainedTask {
                     let sample = runtime
                         .capture()
                         .map_err(ContainedTaskRunError::operation::<R>)?;
+                    self.note_capture(sample.captured_at);
                     let sample_scale = self
                         .control
                         .resolution
@@ -7658,6 +7707,8 @@ impl PreparedContainedTask {
             let frame = runtime
                 .capture()
                 .map_err(ContainedTaskRunError::operation::<R>)?;
+            // Workflow #450 FL-1b: the frame captured last, until the next capture.
+            self.note_capture(frame.captured_at);
             let scale = self
                 .control
                 .resolution
@@ -7984,6 +8035,14 @@ impl PreparedContainedTask {
             if let Some(error) = ocr_collector.field_failure_error() {
                 return Err(error.into());
             }
+            // Workflow #450 FL-1b: the run's field lists judge the frame they collected, the frame
+            // captured last, before any reading hand-off captures another.
+            self.judge_field_list_frame(
+                runtime,
+                ocr_collector.field_lists.as_mut(),
+                (page_label.as_str(), &scene),
+                frame.captured_at,
+            )?;
             // Workflow #384 D2-S2 (model §3.5): a frame on which the run reaches a page it reads
             // marks on goes to recognition; the run does not wait for it. Workflow #396 REC-6:
             // the page gate's observations of its marks' targets on this frame go with it.
@@ -9056,6 +9115,10 @@ struct TaskProgram {
     /// Workflow #384 D2-S3.
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     resource_adjustments: Option<Vec<ResourceAdjustmentDeclaration>>,
+    /// Workflow #450 FL-1b: the task's field lists, as the package writes them; admission reads
+    /// them (`field_list::prepare_field_lists`).
+    #[serde(default)]
+    field_lists: field_list::TaskFieldLists,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     stability_termination: Option<StabilityTerminationDeclaration>,
     #[serde(default)]
@@ -16184,6 +16247,7 @@ mod retry_wiring_tests {
             post_admission_ocr: None,
             resource_readings: None,
             resource_adjustments: None,
+            field_lists: Default::default(),
             stability_termination: None,
             recovery: None,
             defaults: TaskOperationDefaults::default(),

@@ -182,6 +182,8 @@ outcome_keys! {
     // Workflow #384 D2-S2: a reading mark that gave no reading.
     reading_id: id,
     reading_problem: vocab(reading_problem),
+    // Workflow #450 FL-1b: the fields report's frames a field list's miss names.
+    frame_indices: list(integer),
     // Workflow #384 D2-S3: why a confirmed resource adjustment wrote nothing.
     adjustment_reason: vocab(adjustment_reason),
     // Workflow #384 D2-S4: which limit holds a recognition maintenance package back.

@@ -103,6 +103,11 @@ impl PreparedListReading {
     pub(super) fn layout_id(&self) -> &str {
         &self.layout_id
     }
+
+    /// Workflow #450 FL-1b: the key the step writes, which a field list's key must differ from.
+    pub(super) fn fact_key(&self) -> &str {
+        &self.fact_key
+    }
 }
 
 /// One list reading's declaration, as the host publishes it: the operation that read it, the
@@ -110,10 +115,14 @@ impl PreparedListReading {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListReadingDeclaration {
     /// The operation's id: the warning's `reading_id`, part of the record's `source_detector`
-    /// and `source_snapshot_id`.
+    /// and `source_snapshot_id`. Workflow #450 FL-1b: a field list's id.
     pub operation_id: String,
     pub fact_key: String,
     pub valid_for_ms: u64,
+    /// Workflow #450 FL-1b: for a field list's miss, the fields report's frame indices it names
+    /// (the warning's `frame_indices`): the unresolved frames, the frames that hold a repeated
+    /// key, or the first or the last frame. Empty for a `read_list` step and for a whole list.
+    pub frame_indices: Vec<u32>,
 }
 
 /// A list read whole: one row per position, `{<key_column>: <business ID>, <column>: <value>,
@@ -136,12 +145,19 @@ pub struct ListReadingMiss {
 impl ListReadingMiss {
     /// The warning of this miss: `contained_task_resource_reading_unresolved` with the
     /// operation's id as `reading_id`, the list's `fact_key`, the `reading_problem` and `count`.
+    /// Workflow #450 FL-1b: and, for a field list's miss, the `frame_indices` its declaration
+    /// carries (at most 64 kept, `frame_indices_total` past that).
     pub fn outcome(&self, declaration: &ListReadingDeclaration) -> Outcome {
-        Outcome::new(ExecutionKernelCode::ContainedTaskResourceReadingUnresolved)
+        let outcome = Outcome::new(ExecutionKernelCode::ContainedTaskResourceReadingUnresolved)
             .reading_id(declaration.operation_id.as_str())
             .fact_key(declaration.fact_key.as_str())
             .reading_problem(self.problem)
-            .count(self.count)
+            .count(self.count);
+        if declaration.frame_indices.is_empty() {
+            outcome
+        } else {
+            outcome.frame_indices(declaration.frame_indices.iter().copied())
+        }
     }
 }
 
@@ -513,9 +529,9 @@ pub(super) fn at_read_list<E>(error: ContainedTaskRunError<E>) -> ContainedTaskR
 
 impl PreparedContainedTask {
     /// Workflow #428 S168-4: whether the task declares a `read_list` step; offline simulation
-    /// reads no list.
+    /// reads no list. Workflow #450 FL-1b: or a field list.
     pub fn has_list_readings(&self) -> bool {
-        self.program.declares_list_readings()
+        self.program.declares_list_readings() || self.program.declares_field_lists()
     }
 
     /// One `read_list` step, whose `StepStarted` (index `step_index`) is written, from its
@@ -575,6 +591,7 @@ impl PreparedContainedTask {
             operation_id: operation.id.clone(),
             fact_key: prepared.fact_key.clone(),
             valid_for_ms: prepared.valid_for_ms,
+            frame_indices: Vec::new(),
         };
         let (captured_at, list): (SystemTime, Result<ListReadingRows, ListReadingMiss>) = match read
         {
