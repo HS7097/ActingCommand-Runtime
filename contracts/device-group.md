@@ -296,9 +296,9 @@ None of this is a defect of slice 1: it is today's ranking applied to one device
 two slices the members of one device may switch application after every task, each switch a kill,
 a start and a return home: correct but slow, and accepted for these two slices. No release runs
 it: the first release that accepts a group of several also carries the slice "order within one
-device", which ranks the members of one device by the normalized weight with the switch's time as
-a cost ("Later slices", "Release"), and until then a group of several is refused at load ("The
-configuration form").
+device" (ORD-1), which writes the order within one device ("Later slices", "Release"), and until
+then a group of several is refused at load ("The configuration form"). The time a switch takes
+counts in no order and not in a run's own duration.
 
 **The reason a member waits: `device_group_waiting`** (registered by MAPP-1; info, ladder class
 `none`, owner `policy`). A candidate of a member that does not get the device because another member has it
@@ -420,10 +420,11 @@ the run (step 3).
      on another member. Nothing is recorded under the member to run.
    - **No session left.** The session the stop used is closed under the key, whatever the stop's
      result ("Device-level actions", row 7).
-   - **The page forgotten.** When the stop succeeds, the stopped member's `application.foreground`
-     and `task.page` are dropped (`runtime.fact_invalidated`, reason `device_closed`, as an
-     emulator stop drops them), so no chain handover of that member fires on a page it no longer
-     shows. Its other facts stay. Who reads `application.foreground` and why dropping it is right:
+   - **The page forgotten.** Once the force-stop has succeeded, before the session's close and
+     whatever that close then does, the stopped member's `application.foreground` and `task.page`
+     are dropped (`runtime.fact_invalidated`, reason `device_closed`, as an emulator stop drops
+     them), so no chain handover of that member fires on a page it no longer shows. Its other
+     facts stay. Who reads `application.foreground` and why dropping it is right:
      the foreground gate (it records a new reading when the value changes, so a dropped value makes
      the next reading recorded), the overview's `foreground` block (`actingctl overview`,
      `ac_overview`, the Lab: it shows no package rather than one no longer running), and the
@@ -445,7 +446,7 @@ the run (step 3).
      new token. When the startup run ends, on success or on failure, the key is the run's again,
      its token unchanged and valid, and a claim of another member queued on the device stays
      queued. A key the startup run lost (it no longer validates) fails the step.
-   - **The key's time.** Before any device step of the switch, the key's remaining time must cover
+   - **The key's time.** Before any stop of the switch, the key's remaining time must cover
      the startup run's lease time (its response deadline and the heartbeat reserve) and the run's
      own (its response deadline and the heartbeat reserve); the startup run's deadline is the
      earlier of its response deadline and the key's expiry less the run's own lease time. So a
@@ -471,7 +472,13 @@ with `application_switch_failed` (registered by MAPP-2a: error, ladder class `no
 `foreground_read`, `stop`, `startup_package`), `failure_code` (the step's own code) and
 `application_id` (the package the step concerned: the member's own for `foreground_read` and
 `startup_package`, the stopped member's for `stop`). The steps done before the failed one stay
-done. In MAPP-2a the parts return this failure and nothing settles a run with it.
+done. In MAPP-2a the parts return this failure and nothing settles a run with it. Two refusals come
+back as themselves, not as `application_switch_failed`, because that code's required `alias` or
+`application_id` would name nothing: a member to run, a key's holder or a member to stop that the
+registry does not hold (`instance_mismatch`), and a member to run or a member to stop whose
+registration assigns no application (`application_effect_requires_assigned_application`). Each
+comes before any device step of the part that meets it, and neither is reachable while the load
+refuses every group of several.
 
 From MAPP-2b on, a policy run is settled as every run refused before its request lifecycle is: a
 failed settlement of the pair, with its lease released (`run_scheduled_policy_task`,
@@ -482,7 +489,7 @@ direct run's receipt is failed with the code.
 | Step | What its failure is and does |
 |---|---|
 | `foreground_read` | A key that no longer validates as the device's (the scheduler's refusal), before any device step. The query's ADB failure is handled as the gate's: the member's `device.connected`, `application.foreground` and `task.page` are invalidated with `adb_unreachable`, and an unconfirmed ADB cleanup fences the member. `failure_code` is `application_foreground_unknown` or `instance_resources_fenced` |
-| `stop` | A key of another device or a member outside the holder's group, before any device step (`instance_mismatch`), or a key that no longer validates. The stop's own failure records, as the rung's (`application.failed` and the lifecycle failure). A fatal device error with confirmed resources fences the member whose application was being stopped (#411 A46). The stopped member's page is not forgotten |
+| `stop` | A key of another device or a member outside the holder's group, before any device step (`instance_mismatch`), or a key that no longer validates. The stop's own failure records, as the rung's (`application.failed` and the lifecycle failure). A fatal device error with confirmed resources fences the member whose application was being stopped (#411 A46). The stopped member's page is not forgotten. A failed close of the session the stop used fails the step too: after a force-stop that succeeded, with the close's own code, the page forgotten all the same; after a failed one, as that failure's related cleanup failure |
 | `startup_package` | A key whose remaining time does not cover the startup run and the run after it, before any stop (`contained_task_deadline_unavailable`); no startup package (`startup_package_missing`); the startup run's admission refusal (`startup_package_admission_failed`, `startup_package_adb_not_ready`) or its failed terminal; a key the startup run lost. A home that is not reached is the step's timeout. The stopped member's application stays stopped, and the key stays with the run |
 
 What a failed switch does to each party:
@@ -662,16 +669,9 @@ them, and it comes before the first real use of a group of several.
 
 ## Later slices (named, not written here)
 
-- **Order within one device**, designed together with the normalized weight. The members of one
-  device no longer take turns against each other: they rank by the normalized weight, and the time
-  a switch takes counts as a cost (the stops, the start and the home: the mean of that member's
-  last five switches). Slice 1 leaves room: each switch's records share one causation id, which
-  gives its time. It is a slice of its own because a switch's time in the expected duration alone
-  changes nothing across members: `E` today orders only a member's own judged candidates (`B ÷ E`
-  within an instance) and the reservations, and across instances the turns decide first
-  ([scheduling/README.md](scheduling/README.md), "Turns across instances"), so the turns of the
-  members of one device are read per device. Its design is the coordinator's, written when it is
-  made; what in it touches the queue rules Alice set goes to her.
+- **Order within one device.** The order of the members of one device is written by the slice
+  ORD-1; its rules are not written here. The time a switch takes counts in no order and not in a
+  run's own duration (board #437, 2026-11-13).
 - **The normalized weight.** A task's weight divided by the largest weight of its own catalog, 0.5
   for a task without a price, with a per-application preference factor on top, default 1 (board
   #437, comment 6799803829). Slice 1 leaves room: members already rank in one ordered list, by

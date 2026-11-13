@@ -2770,6 +2770,7 @@ pub(crate) mod test_spellings {
             RunBorrowedStartupForTest => "run_borrowed_startup_for_test",
             SwitchEntriesForTest => "switch_entries_for_test",
             KeyRemainingForTest => "key_remaining_for_test",
+            FailNextMemberCloseForTest => "fail_next_member_close_for_test",
         }
     }
 }

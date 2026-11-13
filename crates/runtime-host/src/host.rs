@@ -2099,6 +2099,8 @@ impl RuntimeHost {
             config_persist_failure_for_test: AtomicBool::new(false),
             #[cfg(test)]
             switch_entries_for_test: AtomicU64::new(0),
+            #[cfg(test)]
+            member_close_failure_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             device_keys: config.device_keys,
             device_group_names: config.device_group_names,
@@ -6008,6 +6010,10 @@ struct HostShared {
     // Workflow #437 MAPP-2a, test only: how many times the switch's entry was reached.
     #[cfg(test)]
     switch_entries_for_test: AtomicU64,
+    // Workflow #437 MAPP-2a, test only: the next close of the session a member's stop used fails
+    // after the stop, as a paired session's close can; the fake device keeps nothing open there.
+    #[cfg(test)]
+    member_close_failure_for_test: AtomicBool,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Workflow #437 MAPP-1b (`contracts/device-group.md`, "Derived, never stored"): the member →

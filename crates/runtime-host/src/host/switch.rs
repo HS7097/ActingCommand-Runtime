@@ -116,7 +116,7 @@ impl HostShared {
     ///    handled as the foreground gate's (the member's ADB facts dropped, an unconfirmed
     ///    cleanup fences the member). The member's own package in front: nothing more is done
     ///    and nothing is recorded (the contract's step 1).
-    /// 3. Otherwise, before any device step, the key's remaining time must cover the startup
+    /// 3. Otherwise, before any stop, the key's remaining time must cover the startup
     ///    run and `after_ms` (`HostShared::borrowed_key_admits`). The member in front, when the
     ///    package in front is another member's, is stopped; with no member's package in front,
     ///    or none, every other member is stopped, in id order, one stop each. All share one
@@ -125,8 +125,11 @@ impl HostShared {
     ///    goes back to the member's run.
     ///
     /// A failed step is `application_switch_failed` with its step, the step's code and the
-    /// package it concerned (`Ok(Err)`); the steps before it stay done. `Err` is a Runtime-level
-    /// failure of the step's own records.
+    /// package it concerned (`Ok(Err)`); the steps before it stay done. A member or a member to
+    /// stop that the registry does not hold (`instance_mismatch`), or whose registration assigns
+    /// no application (`application_effect_requires_assigned_application`), is refused as itself
+    /// (`Ok(Err)`): the code's required `alias` or `application_id` would name nothing. `Err` is a
+    /// Runtime-level failure of the step's own records.
     pub(super) fn switch_application(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -299,11 +302,12 @@ impl HostShared {
     /// `causation_id`, writes `command.received` and `command.validated` and runs the existing
     /// application command on the member (`control_member_application`): `scheduler.admitted`,
     /// `application.intent` and `application.completed` (or `application.failed`), all under
-    /// the member's links with the key's lease. The session the stop used is closed under the
-    /// key, and the stopped member's `application.foreground` and `task.page` are dropped. A
-    /// failure is written as the rung's stop writes it (the command's records, then the
-    /// lifecycle failure) and returned as `application_switch_failed` at step `stop`, with the
-    /// stopped member's package; the key stays with its run whatever the result.
+    /// the member's links with the key's lease. Once the force-stop succeeded, the stopped
+    /// member's `application.foreground` and `task.page` are dropped; then the session the stop
+    /// used is closed under the key, whatever the stop's result. A failure of the stop is
+    /// written as the rung's stop writes it (the command's records, then the lifecycle failure);
+    /// it, or a failed close, is returned as `application_switch_failed` at step `stop`, with the
+    /// stopped member's package. The key stays with its run whatever the result.
     pub(super) fn stop_member_application(
         &self,
         token: &LeaseToken,
@@ -395,7 +399,12 @@ impl HostShared {
         }
         let stop_failure =
             match self.control_member_application(&stop, token, &target, action, connection_id) {
-                Ok(_) => None,
+                // F4: once the force-stop succeeded the member shows no page any more, whatever
+                // the close of its session below then does.
+                Ok(_) => {
+                    self.forget_stopped_application_facts(member)?;
+                    None
+                }
                 Err(mut failure) => {
                     // Workflow #403: an unconfirmed close fences the stopped member (or, when no
                     // single instance owns it, retains the owner and marks the Runtime fatal);
@@ -437,6 +446,8 @@ impl HostShared {
         let close_failure = closed.err().map(|close_error| {
             RuntimeHostError::execution(HostLocation::CloseExecutionSession, &close_error)
         });
+        #[cfg(test)]
+        let close_failure = close_failure.or_else(|| self.take_member_close_failure_for_test());
         match (stop_failure, close_failure) {
             (Some(stop_failure), Some(close_failure)) => {
                 return Ok(Err(failed(
@@ -446,7 +457,6 @@ impl HostShared {
             (Some(failure), None) | (None, Some(failure)) => return Ok(Err(failed(&failure))),
             (None, None) => {}
         }
-        self.forget_stopped_application_facts(member)?;
         Ok(Ok(target.instance_alias))
     }
 }
@@ -475,6 +485,24 @@ impl RuntimeHost {
         })?;
         self.work_ref(HostLocation::SwitchApplication)?
             .switch_application(&validated, token, connection_id, after_ms)
+    }
+}
+
+/// Workflow #437 MAPP-2a, tests: the failed close a test asked for.
+#[cfg(test)]
+impl HostShared {
+    /// The failure of the close of the session a member's stop used, once, when a test asked for
+    /// it ([`RuntimeHost::fail_next_member_close_for_test`]); `None` otherwise.
+    fn take_member_close_failure_for_test(&self) -> Option<RuntimeHostError> {
+        self.member_close_failure_for_test
+            .swap(false, Ordering::AcqRel)
+            .then(|| {
+                RuntimeHostError::request(
+                    RuntimeErrorCode::BackendOperationFailed,
+                    HostLocation::CloseExecutionSession,
+                    RuntimeErrorCode::BackendOperationFailed,
+                )
+            })
     }
 }
 
@@ -544,6 +572,16 @@ impl RuntimeHost {
                 after_ms,
             )?
             .map(|_| ()))
+    }
+
+    /// The next close of the session a member's stop used fails after the stop (once), as a
+    /// paired session's close can; the fake device keeps nothing open there to fail.
+    pub(crate) fn fail_next_member_close_for_test(&self) -> RuntimeHostResult<()> {
+        let location = crate::codes::test_spellings::TestLocation::FailNextMemberCloseForTest;
+        self.shared_ref(location)?
+            .member_close_failure_for_test
+            .store(true, Ordering::Release);
+        Ok(())
     }
 
     /// How many times the switch's entry was reached since the host started.

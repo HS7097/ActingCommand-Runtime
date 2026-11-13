@@ -570,6 +570,59 @@ fn mapp2a_a_stop_acts_on_the_other_members_package_under_the_holders_key_and_for
     switching.close();
 }
 
+/// F4 with a failed close: B's run holds the device's key, A's application is force-stopped
+/// under it, and the close of the session the stop used then fails (`backend_operation_failed`,
+/// injected after the stop, as a paired session's close can fail; the fake device keeps nothing
+/// open there). The stop fails the step `stop` with the close's code and A's package, and A's
+/// `task.page` and `application.foreground` are gone all the same; B's are untouched and B's
+/// token still validates.
+#[test]
+fn mapp2a_a_stop_whose_session_close_fails_still_forgets_the_stopped_members_page() {
+    let switching = Switching::start();
+    let context = switching.grant_b();
+    let token = context.lease_token().clone();
+    for alias in [A, B] {
+        switching.record_fact(alias, TASK_PAGE, "neutral/home");
+        switching.record_fact(alias, APPLICATION_FOREGROUND_FACT_KEY, APP_A);
+    }
+    switching
+        .host
+        .fail_next_member_close_for_test()
+        .expect("the next member close fails");
+
+    let failed = switching
+        .host
+        .stop_member_application_for_test(&token, policy_connection(), A)
+        .expect("no Runtime failure")
+        .expect_err("the failed close fails the stop");
+    assert_switch_failed(
+        &failed,
+        B,
+        "stop",
+        RuntimeErrorCode::BackendOperationFailed.as_str(),
+        APP_A,
+    );
+    assert_eq!(
+        switching.actions(A),
+        [ApplicationLifecycleAction::Stop],
+        "the force-stop reached A"
+    );
+    assert!(!switching.has_fact(A, TASK_PAGE), "A's page is forgotten");
+    assert!(!switching.has_fact(A, APPLICATION_FOREGROUND_FACT_KEY));
+    assert!(switching.has_fact(B, TASK_PAGE));
+    assert!(switching.has_fact(B, APPLICATION_FOREGROUND_FACT_KEY));
+    assert!(
+        switching
+            .host
+            .key_remaining_ms_for_test(&token, policy_connection())
+            .expect("the key")
+            .is_some(),
+        "B's token still validates"
+    );
+    assert!(switching.host.fatal_error().expect("health").is_none());
+    switching.close();
+}
+
 /// F1: a key of another device (C's, alone on its device) and a member outside the holder's
 /// group (C, under B's key) are refused before any device step: `application_switch_failed` at
 /// step `stop` caused by `instance_mismatch`, no command reaches a device and nothing is

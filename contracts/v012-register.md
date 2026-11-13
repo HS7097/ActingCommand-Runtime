@@ -17674,8 +17674,9 @@ MAPP-2's tests:
 - at most one member's application is alive after any sequence of these on the fake device.
 
 **Later slices**, named and not written here (device-group.md, "Later slices"): the order within
-one device (with the switch's time as a cost), the normalized weight (board #437 comment
-6799803829), the device-level actions by device, the console and the command line, and clones.
+one device (written by the slice ORD-1; the time a switch takes counts in no order and not in a
+run's own duration), the normalized weight (board #437 comment 6799803829), the device-level
+actions by device, the console and the command line, and clones.
 
 **What changes live.** This slice changes no build. MAPP-1a shipped in 0.12.56 with every group
 of several refused at load; MAPP-1b, MAPP-2 and the order within one device reach a root together
@@ -19311,8 +19312,8 @@ hand the host the member → device key map and the group's name as the assembly
 | Part | Built | Where |
 |---|---|---|
 | F1: another member's stop under the device's key | yes | `crates/runtime-host/src/host/switch.rs`, `HostShared::stop_member_application`: the key's holder a member of a group of several and the member to stop another member of it, the key validated as the device's (`validate_write`), else refused before any device step (`instance_mismatch`, or the scheduler's refusal); a host-minted `ApplicationLifecycle { stop }` request for that member under the switch's causation id (`command.received`, `command.validated`), then `HostShared::control_member_application` (`host/input.rs`), the existing application command on that member's registration, package and links (`scheduler.admitted`, `application.intent`, `application.completed` or `application.failed`, all under the stopped member's instance with the key's lease); the session the stop used closed under the key (`close_member_resources_result`, `host/resource_close.rs`); a failure written as the rung's stop writes it, a fatal failure of that member's own application backend fencing that member (#411 A46) |
-| F2: a startup run on a borrowed key that hands the key back | yes | `host/startup_package.rs`, `HostShared::run_startup_package_on_borrowed_key` and `borrowed_key_admits`; `host/contained_task.rs`, `run_prepared_package_on_borrowed_key`, `ContainedRunControl::borrows_key`: the run's end neither renews the key (`enter_run_end_phase`) nor ends it (the success path's release, and `cleanup_composite_failure_with_run_links` in `host/resource_close.rs`, which settles an unconfirmed close only); the key's token unchanged and valid afterwards, on success and on failure, checked again at the end |
-| F4: the stopped member's page forgotten | yes | `host/runtime_facts.rs`, `HostShared::forget_stopped_application_facts`: `application.foreground` and `task.page` invalidated with `device_closed` when the stop succeeded |
+| F2: a startup run on a borrowed key that hands the key back | yes | `host/startup_package.rs`, `HostShared::run_startup_package_on_borrowed_key` and `borrowed_key_admits`; `host/contained_task.rs`, `run_prepared_package_on_borrowed_key`, `ContainedRunControl::borrows_key`: the run's end neither renews the key (`enter_run_end_phase`) nor ends it (the success path's release, and `cleanup_composite_failure_with_run_links` in `host/resource_close.rs`, which settles an unconfirmed close only; its read of the run table tells only such a run apart, and a read that fails counts as not borrowed, so every other run's failed end takes its path unchanged, its release included); the key's token unchanged and valid afterwards, on success and on failure, checked again at the end |
+| F4: the stopped member's page forgotten | yes | `host/runtime_facts.rs`, `HostShared::forget_stopped_application_facts`: `application.foreground` and `task.page` invalidated with `device_closed` once the force-stop succeeded, before the close of the session it used and whatever that close does (a failed close still fails the step `stop`) |
 | the one entry | yes | `HostShared::switch_application` (`host/switch.rs`): the key validated, one foreground read through the member's registration (`observe_foreground_application`; an ADB failure handled as the gate's), the member's own package in front leaving everything alone; else the key's time checked, the member in front stopped, or every other member with no member's package in front, then the member's startup package on the key, all under one causation id. Reached only through the public `RuntimeHost::switch_application`, which nothing in the Runtime calls |
 | which member is in front | yes | the `application_id` each registration assigns, from memory: `ExecutionBackendProvider::assigned_application_id` (default `None`; `crates/execution-kernel/src/provider.rs`), `ExecutionKernel::assigned_application_id`, the device registry's real entry (`crates/runtime-host/src/provider.rs`). No other device query |
 
@@ -19334,7 +19335,7 @@ interface revision is added or moved.
    scheduler takes a key only as the whole token it holds, expiry included (`validate_active_lease`,
    `crates/scheduler/src/lib.rs`), so a renewal (the startup package's TTL renewal of
    `run_package_on_key`, `host/startup_package.rs`) mints a token the run that holds the key no
-   longer has. Instead, before any device step of the switch, the key's remaining time must cover
+   longer has. Instead, before any stop of the switch, the key's remaining time must cover
    the startup run's lease time (its response deadline and the heartbeat reserve) and the time the
    run asks to keep (`after_ms`: its own lease time), else the step `startup_package` fails with
    `contained_task_deadline_unavailable` and nothing is stopped; the startup run's deadline is the
@@ -19362,10 +19363,20 @@ interface revision is added or moved.
    own instance), the ladder's stop, `prepare_application_resources_result` and
    `retire_instance_resources` (now naming the instance, the token's own for every existing
    caller), `nemu_close_check` (the same), `prepare_startup_package` (its causation id now minted
-   before `prepare_startup_package_with`), `host_package_failure` (over `host_package_failure_error`)
-   and a run's success path (its answer built before its release). The fake device of the host's
+   before `prepare_startup_package_with`), `host_package_failure` (over `host_package_failure_error`),
+   a run's success path (its answer built before its release) and
+   `cleanup_composite_failure_with_run_links` for every run that borrows no key (the row F2 above:
+   its added read of the run table writes nothing and holds no lock past itself, and a poisoned
+   table reads as "not borrowed", so the release follows as before). The fake device of the host's
    tests answers each instance's own `application_id` when a test names one, `neutral.application`
    otherwise, and records the application commands it took.
+7. *Two refusals come back as themselves*, not as `application_switch_failed`: a member to run, a
+   key's holder or a member to stop that the registry does not hold (`instance_mismatch`), and a
+   member to run or a member to stop whose registration assigns no application
+   (`application_effect_requires_assigned_application`). That code's required `alias` or
+   `application_id` would name nothing there, so the contract's "When the switch fails" says so
+   rather than the code filling a value; neither is reachable while the load refuses every group
+   of several.
 
 **Not built (MAPP-2b and later).** The caller: the switch in `run_scheduled_contained_task` between
 `contained_task.rs:8079` and `:8080`, in the direct run, an `ApplicationLifecycle` `launch` or
@@ -19380,9 +19391,12 @@ switch and the run. The order within one device (ORD-1) is the coordinator's to 
 `mapp2a_a_key_of_another_device_and_a_member_outside_the_group_are_refused_before_any_device_step`,
 `mapp2a_a_startup_run_on_a_borrowed_key_hands_the_same_key_back_and_the_queued_claim_waits`,
 `mapp2a_the_entry_stops_the_member_in_front_or_every_other_member_and_then_runs_the_startup_package`,
-`mapp2a_a_failure_at_each_step_names_its_step_and_its_cause` and
-`mapp2a_a_lone_instances_request_path_never_reaches_the_switch`. The MAPP-1 gates (policy, host,
-actingd) are unchanged; no test changes.
+`mapp2a_a_failure_at_each_step_names_its_step_and_its_cause`,
+`mapp2a_a_lone_instances_request_path_never_reaches_the_switch` and
+`mapp2a_a_stop_whose_session_close_fails_still_forgets_the_stopped_members_page` (the close's
+failure injected after the stop through a test-only switch of the host,
+`RuntimeHost::fail_next_member_close_for_test`, since the fake device keeps nothing open there to
+fail). The MAPP-1 gates (policy, host, actingd) are unchanged; no test changes.
 
 **At deploy.** Nothing: the switch has no caller, and the load refuses every group of several. The
 catalog gains one code and one vocabulary.

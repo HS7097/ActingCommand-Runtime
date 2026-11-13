@@ -171,11 +171,11 @@ impl HostShared {
     ) -> RequestFailure {
         // Workflow #437 MAPP-2a: a run on a borrowed key ends without its key's end: an
         // unconfirmed close is settled as for any failed run, and the key stays, still valid,
-        // with the run that holds it and gets it back.
-        let borrowed = match self.run_borrows_key(request.request_id()) {
-            Ok(borrowed) => borrowed,
-            Err(error) => return failure.replace_with_poison(error),
-        };
+        // with the run that holds it and gets it back. The read tells only that run apart: a
+        // read that fails (a poisoned run table) counts as "not borrowed", so every other run's
+        // failed end takes its path unchanged, its release included, and the poison is
+        // reported where that path reads the run table (the ladder's trigger, the lapsed close).
+        let borrowed = matches!(self.run_borrows_key(request.request_id()), Ok(true));
         let failure = match self.settle_failure_resources(&token, failure) {
             Ok(failure) => failure,
             Err(failure) => return failure,
