@@ -14270,6 +14270,111 @@ command is there after it, unchanged.
 instance pauses only, leaving a global pause 0.12.53 set: lift it with `actingctl resume
 --state-root <s>`.
 
+**Fix #452** (0.12.59; board #452; coordinator work order `rd-1113/brief-452-inst5-appid.md`, on
+main `98924e28`). [install-cli.md](install-cli.md), "Instances, the first slice" ("The application
+id") and "The conversion's checks and inventory" ("The installation's entries beside the
+Runtime's"), and the row `instance add` of [lab-operations.json](lab-operations.json) are the
+contract.
+
+*The defect.* `instance add` appended to `instances` an entry of five members, `{alias,
+instance_id, instance_index, touch_backend, capture_backend}`, with no `application_id`
+(`install::instance_add::compose`). actingd's configuration assembly requires a non-blank
+`application_id` of every entry bound by discovery (`apps/actingd/src/config.rs`,
+`deferred_backend`, and the device registration it builds, `application_identity_missing`), so
+the live build's check-config refused every candidate the command composed
+(`config_refused_by_target`), the candidate kept beside the live file as a part. Nothing was
+damaged, and production never used the command (it adds instances by hand, "At deploy" above).
+
+*The fix.* The row takes one optional parameter, `application_id` (`--application-id <id>`, read
+through its constant, `rescue_reads::READ_HERE`, as the others are), checked by the assembly's own
+rule and no stricter one (`install::instance_add::application_id_form`: not blank, which actingd's
+assembly checks, at most `MAX_INSTANCE_ALIAS_BYTES` (256) bytes and no control character, which
+the device registration it builds checks, `invalid_application_identity`); otherwise
+`actingctl_usage_invalid` `unusable` (`wrong_type` for another type) naming `--application-id`.
+Without it the id is the one the game's root under `standard_packs.root` declares for the server
+(`<game>\applications.json`, `servers.<server>.application_id`), read by a reader of its own beside
+`bound()` (`install::instance_add::declared_application_id`): the host's reader of that member
+(`crates/runtime-host`, `host::idle`, the idle action's) is private to the host, which this crate
+does not depend on, and the contract crate has none; it reads as the host's does (a leading
+byte-order mark skipped) and takes the id only in the form above. Neither given nor declared (no
+file, one that does not read or is no JSON, no member of the server, no `application_id` there, or
+one of another form): `instance_invalid` before anything is written, with `game`, `server`, the
+file's `path` and the read's failure as the cause when there is one (`foreign_os_error`,
+`foreign_data_error`). Given and declared and different: the given one is written, and no refusal
+compares them; the Runtime later meets such an instance only in the idle action, whose `close_app`
+(and `auto` when it takes that tier) refuses before its stop request with
+`invalid_application_identity` (`alias`, the declared `application_id`) when the instance's
+configured application is not the declared one, recorded for that instance alone, the application
+left running and no wake owed (`host::idle`, `idle_close_app`). The entry is now `{alias,
+instance_id, application_id, instance_index, touch_backend, capture_backend}`; the journal's input
+`instance_add` and the answer's `added` gain `application_id` and `application_id_from` (`given`
+or `declared`), additive members.
+
+*Why the gate missed it.* The INST-5 gate's check-config is the fake host's (`fixture.rs`: it
+answers done unless a test names the build in `refuse_check_config`); nothing in it assembles the
+candidate, so a document the real check-config refuses passed.
+
+*Interfaces.* None raised: `application_id` is an existing member of an entry (`actingd-config`
+unchanged), the journal stays `actingcommand.install-operation.v1` with two more members of an
+existing input, and the operation table gains one optional parameter on the row (its schema
+unchanged). No code, key, location or vocabulary is new: `install_command_refused` takes `game`,
+`server` and `path` already. No other row of the table changes.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| INST5-10 | the row parameter `application_id` of `instance add` (option, string, optional) | operation table parameter | #452 | `rescue_reads::READ_HERE`, `install::instance_add::Asked::of` | without it the id the game's root declares for the server |
+| INST5-11 | the entry member `application_id` written by `instance add`; `application_id` and `application_id_from` of the journal input `instance_add` and of the answer's `added` | configuration member (existing); installer journal and answer members | #452 | `install::instance_add::compose`, `Added::value` | `application_id_from` is `given` or `declared` |
+
+*Tests* (apps gate row "#452 INST-5 application id"), in `gate_421_inst5`:
+`inst5_452_a_given_application_id_is_written_over_the_declared_one`,
+`inst5_452_without_the_option_the_declared_id_is_written`,
+`inst5_452_without_a_declared_id_nothing_is_written`,
+`inst5_452_a_malformed_application_id_is_refused_by_the_assembly_rule` and
+`inst5_452_compose_yields_the_fixtures_candidate`; in actingd,
+`config::gate_452_inst5::inst5_452_the_real_assembly_takes_the_composed_candidate`. The last two
+are the real judge (the coordinator's ruling on the work order's point 6, option C: no test reaches
+both the composer in `crates/lab-rescue` and the assembly in `apps/actingd`, a program with no
+library target, without a dependency between the crates, so one checked-in fixture links them):
+`crates/lab-rescue/tests/fixtures/inst5-application-id.json` holds the live configuration, the game
+root's `bundle.json` and `applications.json`, the parameters asked and the candidate document.
+`compose` on its inputs yields exactly that candidate, every member in its order (compared as
+text), but the minted `instance_id` (the member the fixture's `minted` names), which is compared by
+its form (`instance_` and 32 lowercase hex digits, the id `added` records, none the live file
+holds) and then replaced by the fixture's; actingd's own `load` and assembly, on a temporary root
+that holds the state root and the standard-pack root with the game root, take that candidate, and
+refuse it with `application_identity_missing` once the added entry's `application_id` is removed,
+as `instance add` composed it before this fix. actingd reads the fixture by its path relative to the
+workspace, as the MCP entry's tests read the rescue module's sample. The gates that hold the
+operation table to the code cover the new parameter through the row and its constant, unchanged:
+`gate_434_lab5b1b::rescue_read_here_rows_read_what_they_declare` (the row's constant, both ways),
+`gate_434_lab5g2a::mcp_tools_from_op_table` (the MCP tool's input from the row) and
+`gate_434_cli_help` (the help built from the row). One change to the existing
+INST-5 gate: its fake game root (`installed`) also holds `applications.json` declaring an id for
+its server, as a game root a bundle places does, since without `--application-id` the command now
+takes the declared id and refuses without one; no assertion of an existing test changed (none
+pinned the entry's five members as a whole).
+
+*What is not built* (the work order's point 7; the coordinator's ruling on board #452: contract text
+only, since no list of a root's own entries exists on main to register names in: the conversion's
+inventory, R-15e, is not built, and `install adopt` lists no root entry). Directly under a
+single-location root the graphical installer writes entries that belong to the installation without
+being the Runtime's own: the files `acui.toml` (the console's settings of that root),
+`install-wizard.log` (the graphical installer's log) and `install-wizard.config.json` (the complete
+configuration it hands to `config replace`), and the directory `licenses` (the third-party licence
+texts it places); the inventory, when it is built, lists none of them as `foreign`
+([install-cli.md](install-cli.md), "The conversion's checks and inventory"). `vision` is not one of
+them: it is the root-relative default of the configuration's vision root, governed by the
+configuration and not by that statement. No interface revision or plan schema moves: nothing reads
+the statement until R-15e builds the inventory.
+
+*At deploy.* Nothing to do: the command was unusable before (check-config refused every
+candidate), and production keeps adding instances by hand.
+
+*Rollback* (to 0.12.58). Nothing persisted changes shape: a configuration whose entry gained
+`application_id` stays valid, and an installer of 0.12.58 reads a journal whose input has the two
+new members (its `inputs` are free JSON); its `instance add` writes the five-member entry again,
+which check-config refuses.
+
 ### 1.301 Slice ISO-START-1 (0.12.52): one pair's refused settlement fact no longer stops the start (#419; Alice's requirement on board #419 of 10-24: one emulator's fault must not bring down the whole Runtime; the debt the coordinator logged on 11-11, #421 6774483473 and #428 6770731970: isolate only that pair; the coordinator's ruling on the three cases, not Alice's words: coordinator work order `rd-1111/brief-iso-start-1.md`)
 
 [runtime-fact-store.md](runtime-fact-store.md) ("Settlement facts" and "Typed codes") and the

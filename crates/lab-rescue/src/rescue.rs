@@ -1462,8 +1462,10 @@ fn commit(
 }
 
 /// `instance add <alias> --game <g> --server <s> --mumu-index <n> --touch-backend <b>
-/// --capture-backend <b>` (Workflow #421 INST-5, first slice): an emulator instance added to the
-/// root's configuration, both places of it (`crate::install::instance_add`), committed by
+/// --capture-backend <b> [--application-id <id>]` (Workflow #421 INST-5, first slice; the
+/// application id since Workflow #452, without the option the one the game's root declares for the
+/// server): an emulator instance added to the root's configuration, both places of it
+/// (`crate::install::instance_add`), committed by
 /// [`commit`] with the Runtime restarted under a hold; the new instance is paused with its own
 /// reason after the start. Every refusal before the candidate is written leaves the root as it
 /// was; a Runtime must run.
