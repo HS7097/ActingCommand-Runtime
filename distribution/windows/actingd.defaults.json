@@ -438,7 +438,8 @@
         "host.contained_settlement",
         "host.idle_state",
         "host.agent_wake",
-        "host.capped_episodes"
+        "host.capped_episodes",
+        "host.start_pause_applied"
       ],
       "reobserve_prefixes": [
         "device.",

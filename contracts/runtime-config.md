@@ -1775,6 +1775,36 @@ switch cooldown is MAPP-2's, not built yet):
   nothing climbs by the profile unless an entry names it ([device-group.md](device-group.md), "A
   group of one is today").
 
+## An entry that starts paused (Workflow #453 S2, since 0.12.60)
+
+`instance.<instance id>.start_paused`, in the file the `instances[]` entry's optional boolean
+member `start_paused` (`actingd-config` revision 31, [component-interfaces.md](component-interfaces.md);
+[v012-register.md](v012-register.md) §1.357). Absent is `false`. `true` asks the Runtime to hold
+the instance with the instance pause `instance.added` at the first start that sees the entry, once
+([scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start"): the start records the
+entry's instance id in the tagged runtime fact `host.start_pause_applied`
+([runtime-fact-store.md](runtime-fact-store.md)), and no later start holds it again, so the member
+may stay in the file after a person resumed the instance.
+
+- **The key** is a row of the key table (`instance::ROWS`, `START_PAUSED`): boolean, no default
+  (no row for an entry that does not name it), `NotSettable::ReadAtAssembly`, console tier
+  `hidden`. The manifest and check-config report it as every instance key, only for an entry that
+  names it, so a configuration without the member renders the rows, and `config.parameters`
+  records the facts, it rendered and recorded before. An instruction is refused
+  (`config_key_not_settable`): it takes effect at the next start only, through the file.
+- **A non-boolean** is refused as the entry's other members are: the entry does not decode
+  (`config_decode_failed`), at a start and in check-config alike.
+- **The installer** writes it on an instance it adds while the Runtime is stopped (S3, not built
+  by this slice); nothing in this repository writes it yet.
+- **The tag list.** `host.start_pause_applied` is in the default of
+  `ledger_observer.tag.workbench_patterns`, so a start loads it. A configuration that names its own
+  list and leaves the key out would hold an entry that declares `start_paused` at every start:
+  check-config notes it, only for a configuration with such an entry, with the warning
+  `ledger_tag_key_unclassified` (`fact_key` `host.start_pause_applied`), the ledger's code for a
+  workbench key that no tag list classifies and that does not survive a restart.
+- **Older Runtimes** refuse a file that names it (the entry denies unknown members): remove the
+  member before going back below 0.12.60.
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |

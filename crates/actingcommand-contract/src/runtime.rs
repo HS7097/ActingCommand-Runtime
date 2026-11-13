@@ -2272,6 +2272,13 @@ pub fn validate_scheduling_pause_reason(value: &str) -> RuntimeContractResult<()
     Ok(())
 }
 
+/// Workflow #453 (`contracts/scheduling-pause.md`, "Pauses held at a first start"): the reason name
+/// of the pause that holds a new instance until a person has looked at it. The installer's pause of
+/// an added instance on a running Runtime (INST-5) and the Runtime's own pause of an entry that
+/// declares `start_paused` at the first start that sees it (S2) both use it: one meaning for the
+/// person, "a new instance waits for you".
+pub const INSTANCE_ADDED_PAUSE_REASON: &str = "instance.added";
+
 /// The reason of a scheduling pause (`pause_reason`, Workflow #378 A-9): a validated name, never
 /// a free string. It is built only through [`SchedulingPauseReason::new`] or by decoding, and
 /// both apply [`validate_scheduling_pause_reason`].

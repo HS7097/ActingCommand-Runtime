@@ -246,6 +246,9 @@ mod gate_mapp2a;
 // Workflow #437 MAPP-2b (0.12.60; register §1.353): the switch's callers, the run's clock that
 // leaves the switch out, the member's lease, a failed switch and the member's switch cooldown.
 mod gate_mapp2b;
+// Workflow #453 S2 (0.12.60; register §1.357): an entry that declares `start_paused` is held by the
+// first start that sees it with `instance.added`, recorded after its pause, and never again.
+mod gate_453_s2;
 // Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).
 mod gate_372k5;
 // Workflow #373 NAV-3a: page-graph prerequisite packages and the standard-pack registry.

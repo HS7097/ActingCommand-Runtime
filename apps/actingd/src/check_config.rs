@@ -814,6 +814,26 @@ fn summarize(
             .iter()
             .map(|alias| Outcome::new(ActingdCode::DeviceBindingUnused).alias(alias)),
     );
+    // Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start"): with an
+    // entry that declares `start_paused`, a `ledger_observer.tag.workbench_patterns` in effect that
+    // leaves out `host.start_pause_applied` would hold that entry at every start. Read only for
+    // such a configuration: one without the member is reported as before.
+    if !checked.host.start_paused().is_empty() {
+        let workbench_patterns =
+            actingcommand_runtime_config::EffectiveConfig::from_manifest(&checked.manifest)
+                .and_then(|effective| effective.ledger_observer())
+                .map_err(|failure| {
+                    registered(
+                        failure.failure_code().code(),
+                        ActingdLocation::ConfigAssemble,
+                    )
+                })?
+                .tag_workbench_patterns;
+        notes.extend(actingcommand_runtime_host::start_pause_tag_note(
+            true,
+            &workbench_patterns,
+        ));
+    }
     let bind_address = checked.host.bind_address();
     // The new tunables (Workflow #318, cfg2) echoed from the manifest, so this report and
     // `actingctl status --config` cannot disagree; since Workflow #385 P-c rows of the

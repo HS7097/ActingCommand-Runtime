@@ -647,26 +647,37 @@ impl SchedulingPauseTable {
         if self.instances.contains_key(instance_alias) {
             return Ok(false);
         }
+        let pause_reason =
+            SchedulingPauseReason::new(pause_reason.as_str()).map_err(|_| start_hold_invalid())?;
+        self.hold_named_instance_at_start(instance_alias, pause_reason, since_unix_ms, origin)
+    }
+
+    /// Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start"):
+    /// [`Self::hold_instance_at_start`] with a pause reason name rather than a code (the first
+    /// start's pause of an entry that declares `start_paused` is `instance.added`). Returns
+    /// whether it set one; a pause the instance holds already stays as it is.
+    pub(super) fn hold_named_instance_at_start(
+        &mut self,
+        instance_alias: &str,
+        pause_reason: SchedulingPauseReason,
+        since_unix_ms: u64,
+        origin: PauseOrigin,
+    ) -> RuntimeHostResult<bool> {
+        if self.instances.contains_key(instance_alias) {
+            return Ok(false);
+        }
         let revision = next_scheduling_pause_revision(
             self.instance_revisions
                 .entry(instance_alias.to_owned())
                 .or_default(),
         )?;
-        let invalid = || {
-            RuntimeHostError::fatal(
-                HostCode::SchedulingPauseStateInvalid,
-                HostLocation::HoldStartInstancePause,
-                RuntimeErrorCode::RuntimeHalted,
-            )
-        };
         let state = InstancePauseState {
             revision,
-            pause_reason: SchedulingPauseReason::new(pause_reason.as_str())
-                .map_err(|_| invalid())?,
+            pause_reason,
             since_unix_ms,
             stage: InstancePauseStage::Released,
         };
-        state.validate().map_err(|_| invalid())?;
+        state.validate().map_err(|_| start_hold_invalid())?;
         self.set_instance(instance_alias, state, origin);
         Ok(true)
     }
@@ -814,6 +825,15 @@ fn next_scheduling_pause_revision(revision: &mut u64) -> RuntimeHostResult<u64> 
         )
     })?;
     Ok(*revision)
+}
+
+/// A pause a start would hold that is no valid pause state (Workflow #369 E3).
+fn start_hold_invalid() -> RuntimeHostError {
+    RuntimeHostError::fatal(
+        HostCode::SchedulingPauseStateInvalid,
+        HostLocation::HoldStartInstancePause,
+        RuntimeErrorCode::RuntimeHalted,
+    )
 }
 
 fn scheduling_pause_denied(

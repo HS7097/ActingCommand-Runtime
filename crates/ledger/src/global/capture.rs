@@ -42,7 +42,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// `ledger_observer.tag.workbench_patterns`' default (§15).
-pub const DEFAULT_TAG_WORKBENCH_PATTERNS: [&str; 14] = [
+pub const DEFAULT_TAG_WORKBENCH_PATTERNS: [&str; 15] = [
     "task.*.last_duration_ms",
     "task.*.last_outcome",
     "task.*.failure_streak",
@@ -58,7 +58,18 @@ pub const DEFAULT_TAG_WORKBENCH_PATTERNS: [&str; 14] = [
     "host.agent_wake",
     // #428 SCHED-C1d (register §1.299 SC1-11): the capped spending order's episodes.
     "host.capped_episodes",
+    // Workflow #453 S2 (register §1.357): the entries whose first-start pause was applied.
+    "host.start_pause_applied",
 ];
+
+/// Workflow #453 S2: whether `patterns`, a `tag.workbench_patterns` list, tags `key` by the rule
+/// the index applies (each `*` stands for any text), so that a start loads it. check-config notes
+/// a configured list that leaves out a key a start must load.
+pub fn workbench_patterns_tag(patterns: &[String], key: &str) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| super::index::pattern_matches(pattern, key))
+}
 
 /// The preparation work the spill thread takes at once.
 const PREPARE_CHUNK: usize = 64;

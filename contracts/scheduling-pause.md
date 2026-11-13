@@ -352,6 +352,55 @@ in the request receipt, the refused dispatch admissions, the terminals of the ru
 the device close's existing records (an instance outside the multi-Nemu gate) and the
 reconnect's existing close and open records.
 
+## Pauses held at a first start
+
+Workflow #453 S2 (0.12.60; register §1.357; the owner's approval of board #453 on 11-13: an
+instance added while the Runtime is stopped starts paused and stays paused until a person resumes
+it; the coordinator's rulings 3 and 6 on it). An `instances[]` entry may declare `start_paused:
+true` ([runtime-config.md](runtime-config.md), "An entry that starts paused"); the installer writes
+it on an instance it adds while the Runtime is stopped (S3).
+
+- **Who holds it.** The Runtime itself, at every start, as the third kind of start hold beside the
+  hold of an unsettled dispatch and of an instance whose settlement facts the start skipped: after
+  the persisted pauses are restored (an installer-held start: after its transition's pauses are
+  kept) and those holds are taken, before the instance workers and any instance's daemon-start
+  preparation. For each entry that declares it and whose instance id the tagged runtime fact
+  `host.start_pause_applied` ([runtime-fact-store.md](runtime-fact-store.md)) does not name yet,
+  it holds an **instance** pause with the existing reason `instance.added`, at the scope's next
+  revision, stage `released`, set in this owner epoch, unless a pause of the instance's own holds
+  it already (of any reason: that pause stays exactly as it is, and the global pause does not
+  count); then it records the entry's row `{instance_id, applied_at_unix_ms}`. The pause rows
+  (`host.scheduling_pause`) are recorded first, the applied rows second; a refused record fails
+  the start, as the other start holds fail. A start that ends between the two records holds the
+  instance again at the next start (or finds its restored pause and keeps it) and then records
+  the row, so the hold is idempotent. As every released instance pause, it leaves the device as
+  it is: the daemon-start preparation does not prepare it, and neither the configured emulator
+  start at daemon start nor an idle wake starts its emulator (PAUSE-AUTO, "The dispatch gate"
+  above).
+- **Once applied, never again.** A start finds the entry's row and holds nothing; the member may
+  stay in the file. A configuration whose entries do not declare it holds nothing and neither
+  reads nor writes `host.start_pause_applied`.
+- **The reason.** `instance.added` is the reason of the installer's pause of an added instance on
+  a running Runtime too ([install-cli.md](install-cli.md), "Configuration, instances, packs and a
+  fresh root"): one meaning for the
+  person, "a new instance waits for you". No reason word and no stage is added; the reason is
+  `INSTANCE_ADDED_PAUSE_REASON` of the contract crate.
+- **Nobody's hand-back hold.** It is no installer's `--hold` and no rescue operation's
+  `lab-<op>-<ms>`: nothing hands it back by itself. The rescue module keeps and lists it as
+  another party's pause and never lifts it.
+- **Who lifts it, and how.** A person, by a resume of the instance: the console's resume,
+  `actingctl resume --state-root <s> --instance <alias>` (below) or the Lab's `resume <alias>`.
+  Once lifted, the applied row keeps it from coming back.
+- **What the installer's stop needs to know.** `actingctl install stop` (and every form that
+  stops) treats it as another party's pause: the stop refuses `guard_failed` unless
+  `--known-pause <alias>=instance.added` names it, as for the installer's own `instance.added`
+  pause today ([install-cli.md](install-cli.md), "Formal stop, start and the hold (INST-2)");
+  the start restores it as every pause. An `install start` whose Runtime holds the pause for the
+  first time (an instance added while stopped) finds one pause more than its S0, which the
+  post-start check reports as the caveat `post_check_mismatch` ("The post-start checks
+  (INST-2)"), not as a failure. An update's own stop never meets
+  an entry not yet applied: its Runtime was running and applied it before the stop.
+
 ## CLI
 
 ```bash

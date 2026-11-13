@@ -471,7 +471,11 @@ The members of `report`:
     that names `start_emulator`, and nothing for one that does not (default `none`: off). This
     command checks the file alone: a `true` on an instance not bound by discovery is refused here
     as `start_emulator_requires_discovery_binding` (below), the same rule the running Runtime
-    applies to an instruction as `config_value_invalid` (`discovery_binding_required`). Workflow #398 RD-4 adds
+    applies to an instruction as `config_value_invalid` (`discovery_binding_required`). Workflow
+    #453 S2 adds `instance.<instance_id>.start_paused` (boolean, `explicit`, not settable,
+    `actingd-config` 31; [runtime-config.md](runtime-config.md), "An entry that starts paused")
+    for an instance that names `start_paused`, and nothing for one that does not (absent is
+    `false`); a non-boolean does not decode (`config_decode_failed`). Workflow #398 RD-4 adds
     `instance.<instance_id>.recovery_ladder_profile` (string, `explicit`, settable) for an
     instance that names `recovery_ladder_profile`, the ladder profile it climbs by, and nothing
     for one that does not; a name no profile of the `recovery_ladder` section has fails assembly
@@ -568,6 +572,13 @@ What the check noted is not a member of `report`: each is one `note` link of
 - Workflow #398 RD-1b: one `device_binding_unused` (info, value `alias`) per
   alias the private binding file binds that no handset of the configuration has,
   in file order (see "Devices");
+- Workflow #453 S2: one `ledger_tag_key_unclassified` (warning, value
+  `fact_key` `host.start_pause_applied`) when an entry declares `start_paused`
+  `true` and `ledger_observer.tag.workbench_patterns` in effect (the file's own
+  list) leaves that key out, so that no start would load it and every start
+  would hold the entry again ([scheduling-pause.md](scheduling-pause.md),
+  "Pauses held at a first start"); a configuration without the member is not
+  read for it;
 - Workflow #373 NAV-6: the root's problem when the standard-pack root itself
   cannot be listed, then the problem of each broken game root (see "Standard
   packs");

@@ -22049,6 +22049,99 @@ byte over its limit), and `goals_neutral_example_reads_to_typed_entries` and
 `goals_each_type_reads_its_members` (their references made by `GoalReferences::new`, no assertion
 changed).
 
+### 1.357 Slice #453 S2 (0.12.60): an instance entry can declare that it starts paused; `actingd-config` revision 31 (Workflow #453; the owner's approval of board #453 on 11-13: only instances added while the Runtime is stopped start paused, and they stay paused until a person resumes them; the design survey `rd-1113/fresh-root-design.md`, sections 0 and 5 with "(g) A pause from the first start and the pause contract" and the row S2 of 5(d), read on main `98924e28`; the coordinator's rulings 3 and 6 on board #453, not the owner's words; coordinator work order `rd-1114/brief-453-s2-start-paused.md`, read on main `1ffb6c7f`)
+
+1.357 is the next free number after §1.356 on the slice's base; open pull requests may take it
+first, and the train renumbers. The Runtime's half of starting paused: a configuration member and
+the start's hold. The installer's half, the cold `instance add` that writes the member (S3), is not
+in this slice; nothing in this repository writes the member yet.
+
+| Part | Built | Where |
+|---|---|---|
+| the member | yes | `apps/actingd/src/config.rs`, `InstanceConfig::start_paused` (`Option<bool>`, absent `false`); the assembly hands the host the instance ids of the entries that declare `true` (`RuntimeHostConfig::with_start_paused`, `start_paused`) and reports the member in the file layer |
+| the key | yes | `instance.<instance id>.start_paused`, `crates/runtime-config/src/instance.rs`, `START_PAUSED` and its row of `instance::ROWS`: boolean, no default (no row for an entry that does not name it), `NotSettable::ReadAtAssembly`, console tier `hidden`; check-config reports it in the manifest as every instance key |
+| the hold | yes | `crates/runtime-host/src/host/start_pause.rs`, `HostShared::hold_start_paused_instances`, called by the start right after `hold_skipped_settlement_fact_instances` (so after `restore_scheduling_pauses`, an installer-held start's included, and the two existing start holds) and before `spawn_instance_workers` and `prepare_physical_instances_on_start` |
+| the pause | yes | an instance pause with the existing reason `instance.added` (`INSTANCE_ADDED_PAUSE_REASON`, `crates/actingcommand-contract/src/runtime.rs`; no new reason word), through `HostShared::hold_named_instance_pause_at_start` (`host/scheduling_pause.rs`) and `SchedulingPauseTable::hold_named_instance_at_start` (`host/policy_dispatch.rs`), the variant of the existing start hold that takes a pause reason name instead of a code; the code form now converts and calls it |
+| the fact | yes | `host.start_pause_applied`, scope Runtime, a record list of `{instance_id, applied_at_unix_ms}` ([runtime-fact-store.md](runtime-fact-store.md)); joins the default of `ledger_observer.tag.workbench_patterns` (`crates/ledger/src/global/capture.rs`, `DEFAULT_TAG_WORKBENCH_PATTERNS`, `[&str; 15]`; `distribution/windows/actingd.defaults.json`) |
+| the note | yes | check-config (`apps/actingd/src/check_config.rs`, `summarize`; `actingcommand_runtime_host::start_pause_tag_note`; `actingcommand_ledger::workbench_patterns_tag`, the index's own pattern rule): an entry with the member and a list in effect that leaves the key out is the warning `ledger_tag_key_unclassified` with `fact_key` `host.start_pause_applied` |
+
+**The order.** For each entry that declares `true` and whose instance id no row of the fact names
+(the entries in the order of their instance ids), the hold sets the pause unless a pause of the
+instance's own holds it already (any reason; that pause stays exactly as it is, and the global
+pause does not count), recording `host.scheduling_pause` as the existing start holds do; then one
+record of the fact with the rows it found and one new row per such entry. A refused record fails
+the start as the existing start holds fail. A start that ends between the two records holds the
+instance again at the next start, or finds its restored pause and keeps it, and then records the
+row: idempotent. Rows are never removed; once applied, a restart never holds the entry again, and
+the member may stay in the file. A record of the fact of another shape fails the start
+(`invalid_runtime_state_fact`, at `hold_start_instance_pause`), as a malformed
+`host.scheduling_pause` does (`scheduling_pause_fact_invalid`).
+
+**Nothing for a configuration without the member.** The host receives no instance id: the hold
+returns before it reads the fact, so the start neither reads nor writes it and holds nothing; the
+manifest, `config.parameters.instance` and check-config's report carry no new row; check-config
+reads the tag list only for a configuration with the member. Every installation today is one.
+
+**The code.** No code is added. The note reuses `ledger_tag_key_unclassified` (`ledger`, warning:
+a workbench key that no tag list classifies and that does not survive a restart; its handling is
+to add the key to the list), which fits exactly; the malformed fact reuses
+`invalid_runtime_state_fact`; a refused hold reuses the existing start-hold codes. No location is
+added: every failure of the hold is at `hold_start_instance_pause`. The index is not regenerated
+(no fragment under `contracts/outcome-codes/` changed). `runtime-outcomes` stays 1.
+
+**Interfaces.** `actingd-config` rises to 31 (30 is MAPP-2b's): an older Runtime refuses an entry
+that names the member, because the entry denies unknown members (`config_decode_failed`); a file
+that names it nowhere keeps its revision, so the Runtime reads revisions 5 to 30 and declares
+[5, 31] (`distribution/windows/component-interfaces.json`; the architecture test
+`tools/actinglab-architecture/tests/component_interfaces.rs`; [component-interfaces.md](component-interfaces.md),
+row 31). **No `ledger` revision**: a Runtime whose tag list does not hold `host.start_pause_applied`
+does not load it at start (an unlisted workbench key is not tagged,
+[runtime-fact-store.md](runtime-fact-store.md), "Accept-first rule", item 4), and the record is an
+existing `runtime.fact_recorded` of a record list; the precedents are `host.agent_wake` (§1.245
+AGT1A-5) and `host.capped_episodes` (§1.299 C1D-2: "no key, no revision"), whose slices raised no
+`ledger` revision, and the `ledger` rows of [component-interfaces.md](component-interfaces.md) list
+none of them. `runtime-client`, `package`, `install-*`: untouched.
+
+**What the installer needs to know** ([scheduling-pause.md](scheduling-pause.md), "Pauses held at a
+first start"; the survey's 5(e) and (g), checked against [install-cli.md](install-cli.md) on this
+base): the pause is nobody's hand-back hold; `actingctl install stop` treats it as another party's
+pause and needs `--known-pause <alias>=instance.added`, as for INST-5's pause today; an
+`install start` that meets it for the first time reports the extra pause as the caveat
+`post_check_mismatch`; an update's stop never meets an unapplied entry.
+
+**Tests.** `crates/runtime-host/src/tests/gate_453_s2.rs` (gate map `host.toml`, "#453 S2"): the
+first start of an entry with the member pauses it with `instance.added` (revision 1, released),
+leaves the other instance alone, records the pause before the applied row, and the daemon start's
+configured emulator start starts the other instance's emulator and not its own (1); after the
+resume a restart holds nothing and the applied row is unchanged (2); a pause of another reason is
+kept and the row still recorded (3); a start that ends between the two records is completed once
+by the next start, and a third start writes no applied record (4); a configuration without the
+member holds and records nothing at a first start and a restart, and its fact records equal those
+of a host started alike with the member, by scope and key, up to the hold, where the member adds
+exactly the two records (5). `apps/actingd/src/config/gate_453_s2.rs` (gate map `apps.toml`, "#453
+S2"): a boolean taken and reported, only `true` handed to the host, no row without the member, the
+key table's row (1); a non-boolean refused as `start_emulator`'s is (2); check-config's row and
+its note, and no note with the defaults' list or without the member (3). Adapted because the
+requirement moves what they pin: the architecture test of the interface declarations now pins
+`actingd-config` [5, 31]; `ao1_keys_every_ledger_observer_key_has_its_contract_default`
+(`crates/runtime-config/src/ledger_observer_tests.rs`) pins the default list with the new key
+(`[&str; 15]`). Pull request #1700 (S11) adds its own key to the same default list and raises the
+same count: the train keeps both keys and sets the count to both.
+
+**At deploy.** Nothing changes for a configuration without the member: no pause, no record, no
+row (every installation today). The shipped defaults file's `ledger_observer.tag.workbench_patterns`
+gains `host.start_pause_applied`, so `config.parameters.ledger_observer` lists one entry more and
+the defaults file's digest in `config.selection` changes, as for SCHED-C1d; a configuration that
+names its own list should add the key before any entry carries the member (check-config notes it).
+The consoles and installers that read `actingd-config` must accept 31 before the release that
+carries this slice (the UI repository's work); the installer's cold `instance add` (S3) needs a
+live build with this slice.
+
+**Rollback** (below 0.12.60). A build before this slice refuses a configuration that names the
+member (the entry denies unknown members): remove the member first. It never reads
+`host.start_pause_applied`; a held pause stays a pause it restores as any other, and a person
+resumes it as any other.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -22116,6 +22209,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.idle_state` (a record list: the instances the idle action closed or is closing, with their action and wake; since 0.12.25 its writer row names the start anchor, not the owner epoch (#405 N-2), and a woken instance stays in it, `woken`, until its startup package has run (#405 O-2); [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #405 IDLE-1P) | #405 IDLE-1P |
 | `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `host.capped_episodes` (a record list: the writer's start anchor, then per instance and pool with an open or waiting capped episode its episode row, consumer rows and member rows; [runtime-fact-store.md](runtime-fact-store.md); §1.299 SC1-11, C1D-1) | workbench | yes (added to `tag.workbench_patterns` by SCHED-C1d) | #428 SCHED-C1d |
+| `host.start_pause_applied` (a record list: one row `{instance_id, applied_at_unix_ms}` per entry declaring `start_paused` whose first-start pause was applied; [runtime-fact-store.md](runtime-fact-store.md); [scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start"; §1.357) | workbench | yes (added to `tag.workbench_patterns` by #453 S2) | Workflow #453 S2 |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.catalog_warnings` (count and place rows of the active composed generation's compile warnings; §1.290 CW1-2) | workbench | no (`config.` is re-observed) | #428 CW-1 |
 | `config.catalog_provenance` (count and id rows of who wrote the active composed generation's fixed values and valuations; §1.299 SC1-7, C1B-1) | workbench | no (`config.` is re-observed) | #428 SCHED-C1b |

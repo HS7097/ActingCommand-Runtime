@@ -195,6 +195,35 @@ impl HostShared {
         Ok(())
     }
 
+    /// Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start"):
+    /// [`Self::hold_instance_pause_at_start`] with a pause reason name, `instance.added` for an
+    /// entry that declares `start_paused`. Returns whether it held one; a pause the instance holds
+    /// already, of any reason, stays exactly as it is and nothing is recorded for it.
+    pub(super) fn hold_named_instance_pause_at_start(
+        &self,
+        instance_alias: &str,
+        pause_reason: &SchedulingPauseReason,
+    ) -> RuntimeHostResult<bool> {
+        let _persist = lock(
+            &self.scheduling_pause_persist_gate,
+            HostLocation::HoldStartInstancePause,
+        )?;
+        let mut prospective =
+            lock(&self.scheduling_pause, HostLocation::HoldStartInstancePause)?.clone();
+        let since_unix_ms = self.clock.sample()?.unix_ms;
+        if !prospective.hold_named_instance_at_start(
+            instance_alias,
+            pause_reason.clone(),
+            since_unix_ms,
+            PauseOrigin::set_in(self.owner_epoch)?,
+        )? {
+            return Ok(false);
+        }
+        self.record_scheduling_pauses(&prospective)?;
+        *lock(&self.scheduling_pause, HostLocation::HoldStartInstancePause)? = prospective;
+        Ok(true)
+    }
+
     /// A failed instance pause stage: the persisted pauses without the instance, then the gate
     /// lifted; both are attempted and the first failure is returned.
     pub(super) fn lift_failed_instance_pause(&self, instance_alias: &str) -> RuntimeHostResult<()> {
