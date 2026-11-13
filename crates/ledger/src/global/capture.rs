@@ -58,7 +58,7 @@ pub const DEFAULT_TAG_WORKBENCH_PATTERNS: [&str; 15] = [
     "host.agent_wake",
     // #428 SCHED-C1d (register §1.299 SC1-11): the capped spending order's episodes.
     "host.capped_episodes",
-    // Workflow #453 S2 (register §1.357): the entries whose first-start pause was applied.
+    // Workflow #453 S2 (register §1.362): the entries whose first-start pause was applied.
     "host.start_pause_applied",
 ];
 

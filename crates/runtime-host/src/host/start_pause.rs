@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start"; register
-//! §1.357): an `instances[]` entry that declares `start_paused` is held at the first start that sees
+//! §1.362): an `instances[]` entry that declares `start_paused` is held at the first start that sees
 //! it, before any instance is prepared, with an instance pause of the existing reason
 //! `instance.added` (stage `released`, set in this owner epoch). The start then names the entry's
 //! instance id in the tagged runtime fact `host.start_pause_applied` (scope Runtime, a record list

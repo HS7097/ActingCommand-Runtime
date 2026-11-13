@@ -1779,7 +1779,7 @@ switch cooldown is MAPP-2's, not built yet):
 
 `instance.<instance id>.start_paused`, in the file the `instances[]` entry's optional boolean
 member `start_paused` (`actingd-config` revision 31, [component-interfaces.md](component-interfaces.md);
-[v012-register.md](v012-register.md) §1.357). Absent is `false`. `true` asks the Runtime to hold
+[v012-register.md](v012-register.md) §1.362). Absent is `false`. `true` asks the Runtime to hold
 the instance with the instance pause `instance.added` at the first start that sees the entry, once
 ([scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start"): the start records the
 entry's instance id in the tagged runtime fact `host.start_pause_applied`

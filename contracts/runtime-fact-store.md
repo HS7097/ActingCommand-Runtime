@@ -704,7 +704,7 @@ the backend self-check facts (source `device-proxy` or `capture`).
   fact alone is the same warning (`operation` `store_capped_episodes`); neither
   stops the Runtime or an instance. At most 256 rows (writer, episode, consumer
   and member rows together); a larger list is a record the store refuses.
-- `host.start_pause_applied` (Workflow #453 S2, 0.12.60; register §1.357;
+- `host.start_pause_applied` (Workflow #453 S2, 0.12.60; register §1.362;
   [scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start")
   — runtime scope, `record_list`, no lifetime, source `runtime`: the
   configuration entries whose first-start pause was applied, one row per

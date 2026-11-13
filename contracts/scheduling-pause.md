@@ -354,7 +354,7 @@ reconnect's existing close and open records.
 
 ## Pauses held at a first start
 
-Workflow #453 S2 (0.12.60; register §1.357; the owner's approval of board #453 on 11-13: an
+Workflow #453 S2 (0.12.60; register §1.362; the owner's approval of board #453 on 11-13: an
 instance added while the Runtime is stopped starts paused and stays paused until a person resumes
 it; the coordinator's rulings 3 and 6 on it). An `instances[]` entry may declare `start_paused:
 true` ([runtime-config.md](runtime-config.md), "An entry that starts paused"); the installer writes

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S2 (register §1.357; contracts/scheduling-pause.md, "Pauses held at a first
+// Workflow #453 S2 (register §1.362; contracts/scheduling-pause.md, "Pauses held at a first
 // start"; contracts/runtime-fact-store.md, `host.start_pause_applied`): an entry that declares
 // `start_paused` is held by the first start that sees it, with the instance pause `instance.added`,
 // before any instance is prepared, and recorded in the tagged runtime fact

@@ -90,7 +90,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `device_group` and check-config's report member `device_group`; revisions 5 to 28 are still
 ///   read, so [5, 29]. Workflow #437 MAPP-2b (0.12.60, register §1.353) raises it to 30: the
 ///   member `device_group.switch_failure_cooldown_ms` of the `scheduling` section; revisions 5 to
-///   29 are still read, so [5, 30]. Workflow #453 S2 (0.12.60, register §1.357) raises it to 31:
+///   29 are still read, so [5, 30]. Workflow #453 S2 (0.12.60, register §1.362) raises it to 31:
 ///   the member `start_paused` of an instance entry; revisions 5 to 30 are still read, so [5, 31].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).

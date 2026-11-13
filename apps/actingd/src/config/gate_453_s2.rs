@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S2 (register §1.357; contracts/runtime-config.md, "An entry that starts paused";
+// Workflow #453 S2 (register §1.362; contracts/runtime-config.md, "An entry that starts paused";
 // contracts/scheduling-pause.md, "Pauses held at a first start"): an `instances[]` entry's optional
 // boolean `start_paused`. The assembly takes a boolean, reports the row
 // `instance.<id>.start_paused` (explicit, not settable) only for an entry that names it, and hands
