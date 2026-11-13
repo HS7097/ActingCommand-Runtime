@@ -1644,9 +1644,10 @@ actingcommand_contract::outcome_codes! {
         // ---- Workflow #437 MAPP-2a (`contracts/device-group.md`, "The switch before a run"): begin
         /// Error. The switch that brings a member of a device group of several to the front
         /// before its run failed at one of its steps: the foreground read, the stop of another
-        /// member's application or the member's startup package on the run's key (keys `alias`
-        /// the member to run, `application_switch_step`, `failure_code` the step's own code,
-        /// `application_id` the package the step concerned; the step's failure is its cause).
+        /// member's application, the member's startup package on the run's key or (Workflow #437
+        /// MAPP-2d) the run's renewal of its lease after that startup run (keys `alias` the member
+        /// to run, `application_switch_step`, `failure_code` the step's own code, `application_id`
+        /// the package the step concerned; the step's failure is its cause).
         ApplicationSwitchFailed => "application_switch_failed": error / none,
         // ---- Workflow #437 MAPP-2a: end
     }
@@ -1664,11 +1665,13 @@ actingcommand_contract::outcome_vocabulary! {
 
 actingcommand_contract::outcome_vocabulary! {
     /// Workflow #437 MAPP-2a: the step of the switch before a run that failed (vocabulary
-    /// `application_switch_step`; `application_switch_failed` carries it).
+    /// `application_switch_step`; `application_switch_failed` carries it). Workflow #437 MAPP-2d
+    /// adds `lease_renewal`, the run's renewal of its lease after the startup run.
     pub enum ApplicationSwitchStep: "application_switch_step" {
         ForegroundRead => "foreground_read",
         Stop => "stop",
         StartupPackage => "startup_package",
+        LeaseRenewal => "lease_renewal",
     }
 }
 
@@ -2780,6 +2783,10 @@ pub(crate) mod test_spellings {
             SwitchOffForTest => "switch_off_for_test",
             SwitchCooldownForTest => "switch_cooldown_for_test",
             PolicySwitchTimeForTest => "policy_switch_time_for_test",
+            // Workflow #437 MAPP-2d: a test refuses the next renewal after a switch, or fails a
+            // run right after its switch.
+            RefuseNextSwitchRenewalForTest => "refuse_next_switch_renewal_for_test",
+            FailNextRunAfterSwitchForTest => "fail_next_run_after_switch_for_test",
         }
     }
 }

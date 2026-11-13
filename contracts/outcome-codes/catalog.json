@@ -9327,7 +9327,7 @@
       }
     },
     "application_switch_step": {
-      "description": "Which step of the switch before a run failed, the value application_switch_step of application_switch_failed (Workflow #437 MAPP-2a, contracts/device-group.md \"The switch before a run\", since 0.12.59).",
+      "description": "Which step of the switch before a run failed, the value application_switch_step of application_switch_failed (Workflow #437 MAPP-2a, contracts/device-group.md \"The switch before a run\", since 0.12.59; lease_renewal since 0.12.60, MAPP-2d).",
       "review": "pending",
       "source": {
         "file": "crates/runtime-host/src/codes.rs",
@@ -9341,7 +9341,10 @@
           "description": "The stop of another member's application under the run's key failed or was refused (application_id is that member's package): its own failure records are written, and a key that is not the device's, or a member outside the holder's group, is refused before any device step."
         },
         "startup_package": {
-          "description": "The member's startup package on the run's key did not reach its home, or was refused before it ran: no startup package, its admission, its ADB readiness, a key whose remaining time does not cover the startup run and the run that follows, or the key lost during the startup run."
+          "description": "The member's startup package on the run's key did not reach its home, or was refused before it ran: no startup package, its admission, its ADB readiness, a key with too little time left for the startup run (for a run's switch since 0.12.60, no more than the heartbeat reserve; for a caller that states the time it still needs, less than the startup run's lease time and that time), or the key lost during the startup run."
+        },
+        "lease_renewal": {
+          "description": "The run's renewal of its lease after the startup run handed the key back was refused or failed: the lease lost, lapsed or taken over (failure_code the scheduler's refusal). The member's application was started and no task of the run ran (Workflow #437 MAPP-2d, since 0.12.60)."
         }
       }
     }

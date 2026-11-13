@@ -2736,9 +2736,10 @@ impl HostShared {
                             };
                         }
                     };
-                    // Workflow #437 MAPP-2b: a member of a device group of several is granted a
-                    // lease for its switch's startup run and its run, or refused when both cannot
-                    // fit; an instance alone on its device, its run's lease as before.
+                    // Workflow #437 MAPP-2d: every dispatch, a member's of a device group of
+                    // several included, is granted its run's lease (its response deadline and the
+                    // heartbeat reserve); a member's switch runs inside it and its run renews it
+                    // after the switch's startup run (`HostShared::switch_before_run`).
                     let lease_ttl_ms = task_request
                         .map(|task_request| {
                             task_request.validate().map_err(|_| {
@@ -2751,7 +2752,7 @@ impl HostShared {
                                     None,
                                 )
                             })?;
-                            self.dispatch_lease_ttl(resolved.instance_id(), task_request)
+                            self.contained_task_lease_ttl(task_request)
                         })
                         .transpose();
                     let lease_ttl_ms = match lease_ttl_ms {
@@ -2809,10 +2810,8 @@ impl HostShared {
                                 }
                                 #[cfg(test)]
                                 policy_crash_test_barrier("after_budget_commit");
-                                // Workflow #437 MAPP-2b: the lease's length as granted goes on
-                                // with the token, so nothing after the grant sizes it again.
                                 CriticalActionReport::Succeeded {
-                                    value: (token, catalog, admission_record, lease_ttl_ms),
+                                    value: (token, catalog, admission_record),
                                     effect: DefiniteEffectDisposition::Performed,
                                 }
                             }
@@ -2837,7 +2836,7 @@ impl HostShared {
                         }
                     }
                 },
-                |(_, _, admission, _), _| {
+                |(_, _, admission), _| {
                     self.events
                         .draft(
                             EventSeverity::Info,
@@ -2954,23 +2953,11 @@ impl HostShared {
             match result {
                 Ok(receipt) => {
                     let started_at_monotonic_ms = self.monotonic_ms()?;
-                    let (token, catalog, admission, lease_ttl_ms) = receipt.into_value();
-                    let mut clock = PolicyDispatchClock::live(
+                    let (token, catalog, admission) = receipt.into_value();
+                    let clock = PolicyDispatchClock::live(
                         admission.activity.admitted_at_unix_ms,
                         started_at_monotonic_ms,
                     );
-                    // Workflow #437 MAPP-2b: a member's lease holds its switch's startup run and
-                    // its run; the run's own share ends at the key's expiry less the startup run's
-                    // lease time, which the switch's check reads, taken from the lease's length
-                    // as the admission granted it (never sized a second time, so the two cannot
-                    // differ). Nothing for an instance alone on its device.
-                    if let (Some(task_request), Some(lease_ttl_ms)) = (task_request, lease_ttl_ms)
-                        && self.switch_applies(resolved.instance_id())
-                    {
-                        clock.own_time_through_monotonic_ms = Some(
-                            super::switch::own_time_through(&token, lease_ttl_ms, task_request),
-                        );
-                    }
                     if lock(
                         &self.policy_dispatch_clocks,
                         HostLocation::RecordPolicyDispatchStart,

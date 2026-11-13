@@ -18026,11 +18026,11 @@ The coordinator cut MAPP-1 in two on 11-12. "MAPP-1" elsewhere in this section a
   (`device_group_config_invalid`, `several_members_unsupported`), and no release ships the switch
   after every task. MAPP-2's key comes with MAPP-2 and takes the next free revision of
   `actingd-config`.
-- Before the load accepts a group of several, main must also end **the member that cannot fit**
-  (added by MAPP-2b, §1.353, point 8; device-group.md, "The member that cannot fit, as built"):
-  with today's request deadlines every run of a member of a group of several is refused by this
-  bound; the lease across a switch is reworked in a later slice before any group of several is
-  accepted, and a task that cannot fit never becomes a candidate.
+- *History.* MAPP-2b (§1.353, point 8) added here that main must end **the member that cannot
+  fit** before the load accepts a group of several (with the request deadlines a configuration
+  gives, its lease bound refused every run of every member). MAPP-2d (§1.354) ended it: a
+  member's dispatch is granted an instance alone's lease and its run renews it after the switch,
+  so no member is refused for its deadlines (device-group.md, "The key's time").
 - The slice "device-level actions by device" comes before the first real use of a group of
   several.
 
@@ -21314,7 +21314,9 @@ instance alone on its device keeps its path unchanged because the run path's exi
 ED-2 gate among them) pass unchanged and because the slice's only entry is that group-of-several
 check; the gate test `mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it`
 pins that the entry is never taken and that the records are equal (below, "Tests"). The slice
-ships in 0.12.60 (release 0.12.59 is cut without it).
+ships in 0.12.60 (release 0.12.59 is cut without it). MAPP-2d (§1.354) replaced the lease, the
+bound and its refusal, the run's need on the borrowed key (rows "the lease" and "the run's need",
+points 1, 2, 7 and 8) and the known gap; what follows is what MAPP-2b built.
 
 | Part | Built | Where |
 |---|---|---|
@@ -21481,6 +21483,109 @@ repository's work). The catalog's `dispatch_instance_cooldown` gains one optiona
 **Rollback** (below 0.12.60). A file that names `scheduling.device_group` must drop it (the earlier
 section denies unknown members). Nothing is persisted by MAPP-2b: the cooldown and the switch's
 time live in memory only, and the build before it reads every record this one writes.
+
+### 1.354 Slice MAPP-2d (0.12.60): the lease across a switch: the run renews its lease after the switch, and the bound goes (Workflow #437; [device-group.md](device-group.md), "The switch before a run", step 4 and "The key's time"; the coordinator's ruling of 11-14 on board #437 and its ruling of 11-14 on the renewed token after the work order's "verify first" report, not the owner's words; the owner's rulings on board #437 it respects: a running task is never interrupted, the time a switch takes is counted nowhere, an application is launched only through an application launch over ADB; coordinator work order `rd-1114/brief-437-mapp2d.md`, read on main `691c20f5`)
+
+1.354 is the next free number on the slice's base (main `691c20f5`, whose last section is §1.353);
+a pull request merged before it may take it, and the train renumbers. MAPP-2b (§1.353) granted a
+member's dispatch `D_s + D_run + R` and refused a member whose `D_s + D_run` exceeded 1 800 000
+ms; with the request deadlines a configuration gives (1 800 000 ms for every startup package,
+configured procedure and composed pack request, 60 000 ms for a fact refresh) that refused every
+run of every member (its point 8). MAPP-2d replaces that lease: a dispatch's lease is the same for
+every instance, the switch runs inside it, and the run renews its lease after the switch's
+startup run. A build still refuses every group of several at load (`several_members_unsupported`,
+unchanged), so no installation reaches this slice's code.
+
+| Part | Built | Where |
+|---|---|---|
+| the lease | yes | every dispatch, a member's included, is granted its run's lease, `D_run + R` (`contained_task_lease_ttl`), at the policy admission (`host/policy_dispatch.rs`, as before MAPP-2b) and for a direct run's claim (`host/contained_task.rs`); `HostShared::dispatch_lease_ttl`, the bound and its refusal are deleted |
+| the startup run's time | yes | `RunNeed::Renews` (`host/switch.rs`): the startup run's deadline is the earlier of its response deadline and the key's expiry less `R` (`borrowed_key_deadline`); before any stop and again before the startup run, `borrowed_key_admits` (`host/startup_package.rs`) refuses a key with no more than `R` left (`contained_task_deadline_unavailable`, step `startup_package`); `RunNeed::For` keeps MAPP-2a's check for `RuntimeHost::switch_application`; `RunNeed::OwnTime`, `own_time_through`, `policy_run_need` and `PolicyDispatchClock::own_time_through_monotonic_ms` are deleted |
+| the renewal | yes | `HostShared::renew_after_switch` (`host/switch.rs`), from `switch_before_run` after a switch that ran a startup run, inside the switch's timed window: the host's `renew_held_lease` (`host/lease.rs`) to the run's `D_run + R`, under the run's request; a refusal or failure is `application_switch_failed` at step `lease_renewal`, which starts the member's switch cooldown as any failed switch |
+| the token after the switch | yes | `HostShared::run_token` (`host/switch.rs`): the device's lease with the granted token's lease id and holder on the run's connection, else the granted token; for an instance alone its granted token, with no read. The policy run takes it after its switch for every later step (`run_scheduled_contained_task`: the deadline, the request lifecycle, the run's execution and its release); the direct run replaces its local token with it; the release of a policy run's failed settlement resolves it too (`ensure_scheduled_policy_lease_released`, `host/policy_outcome.rs`) |
+| the step word | yes | `ApplicationSwitchStep::LeaseRenewal` (`crates/runtime-host/src/codes.rs`), `lease_renewal` in the catalog's vocabulary `application_switch_step` |
+
+**Verify first** (the work order's section, read before anything was written). (1) A renewal
+replaces the token: `Scheduler::renew_with_ttl` (`crates/scheduler/src/lib.rs`) keeps the lease
+id, the holder, the member and the owner epoch and mints a token with the new expiry, and a token
+compares whole (`LeaseToken`, `crates/actingcommand-contract/src/runtime.rs`), so the granted one
+no longer validates (`validate_active_lease`, `lease_mismatch`; the scheduler's own test, "a
+renewal replaces the token"). The work order had assumed the same token; the coordinator ruled on
+11-14 that the run carries the token the renewal returns, resolved by lease id and holder where
+a policy run's context keeps the granted one. (2) The renewal is bounded by the cap of a grant
+counted from the renewal (`validate_claim_ttl`, `expiry_from_ttl`), so it extends past the
+granted expiry. (3) It reads no queue and refuses nothing because of a queued claim; the host's
+`renew_held_lease` takes the device's queue-order lock, not its admission guard. The scheduler
+crate is not changed.
+
+**The stale token, closed.** A policy run's context keeps the granted token, and the release of a
+failed settlement used it. After a renewal that release would have met no lease with that token:
+the transfer's preparation answers `lease_mismatch`, read as no candidate, and the release as a
+lease already removed, so `lease.released` would be written as not performed while the renewed
+lease stayed held to its expiry and another member's queued claim waited for it. Every place of
+the policy path that uses the token after the switch resolves it (`run_token`); the context is
+not made mutable and no copy of the renewed token is kept. The settlement's other readers of the
+context's token read its lease id and member only, which a renewal keeps; no place needed the
+dispatch clock.
+
+**Where the build completes the contract.**
+
+1. *Too little.* MAPP-2a's startup run on the borrowed key goes through the deadline check of
+   every run (`contained_task_deadline_until`), which refuses a deadline that does not lie after
+   now. With the startup run's deadline the earlier of its response deadline and the key's expiry
+   less `R`, that happens exactly when the key has no more than `R` left: that is "too little",
+   checked before any stop and again before the startup run.
+2. *The run's deadline.* Set from the granted lease before the switch, moved on by the switch's
+   time (MAPP-2b) and computed again from the renewed lease, the earlier kept: the run's grant
+   plus `D_run`, moved on by the switch's time, as an instance alone's is its grant plus `D_run`.
+3. *The renewal's time* is inside the switch's timed window (`switch_before_run`), so it is the
+   switch's time and counts in no run's own time, sample or budget.
+4. *A start outside a run* (an `ApplicationLifecycle` `launch` or `restart`, the ladder's
+   application restart rung) runs no startup package in its switch (`stop_others_before_start`),
+   so nothing is renewed and nothing changes for it.
+5. *The lone-instance comparison* (`comparable`, `time_or_place` in the MAPP-2b gate) needed
+   nothing more: an instance alone renews nothing, so no record is added to its run; the
+   renewal's records (`scheduler.admitted`, `lease.transition_intent`, `lease.renewed`) are a
+   member's, under its run's request and lease, and not run-linked.
+
+**The code.** No code is added. The vocabulary `application_switch_step` gains `lease_renewal`
+(`codes.rs`, `catalog.json`); `application_switch_failed`'s description, common causes and handling
+name the step; `contained_task_deadline_unavailable` keeps its other uses, its common causes lose
+the refusal of a member that cannot fit and say what "too little" is. The index is regenerated
+(`ci/outcome_codes_index.py`). `runtime-outcomes` stays 1.
+
+**Tests.** `crates/runtime-host/src/tests/gate_mapp2b.rs` (gate map `host.toml`, "#437 MAPP-2d"),
+on the MAPP-2b gate's fixture:
+`mapp2d_with_real_deadlines_a_member_switches_and_runs_on_its_renewed_lease`,
+`mapp2d_a_member_is_granted_an_instance_alones_lease_and_renews_nothing_without_a_startup_run`,
+`mapp2d_the_startup_run_takes_what_is_left_and_too_little_fails_the_switch_at_its_step`,
+`mapp2d_a_failed_renewal_fails_the_switch_at_lease_renewal_and_hands_the_device_on`,
+`mapp2d_another_members_claim_stays_queued_through_the_renewal`,
+`mapp2d_a_renewed_lease_is_gone_after_its_run_and_the_next_claim_is_granted_at_once` (the stale
+token: on the policy path, completed and failed right after the switch so that the failed
+settlement releases the key, and on the direct path, the same two, every release of the renewed
+lease is performed, the scheduler holds no lease of it and the next claim is granted at once) and
+`mapp2d_the_member_that_could_not_fit_is_dispatched_and_runs`. Two test-only hooks
+(`#[cfg(test)]`): `RuntimeHost::refuse_next_switch_renewal_for_test` (the next renewal after a
+switch is asked with a token the scheduler does not hold, so it is refused `lease_mismatch`) and
+`RuntimeHost::fail_next_run_after_switch_for_test` (the next member's run fails right after its
+switch, `backend_operation_failed`). Two MAPP-2b tests are retired (`ci/retired-gates.toml`), as
+the requirement removes what they pinned:
+`mapp2b_a_member_dispatch_is_granted_the_startup_and_the_run_and_one_that_cannot_fit_is_refused`
+(the member's lease `D_s + D_run + R`, the time check on it and the bound's refusal) and
+`mapp2b_known_gap_a_member_that_cannot_fit_is_selected_and_refused_every_round` (replaced by
+`mapp2d_the_member_that_could_not_fit_is_dispatched_and_runs`). One is adapted:
+`mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it` asserted the member's
+lease `D_s + D_run + R` with the slice reachable; it now asserts `D_run + R`, as with the slice
+off. Its lone instance's half is unchanged. The other MAPP-2b tests, the run-duration sample,
+`last_duration_ms` and budget test among them, and the MAPP-2a gate are unchanged.
+
+**At deploy.** Nothing reachable until the load accepts a group of several. No configuration key,
+no interface revision; the catalog's `application_switch_step` gains one word. An instance alone
+on its device keeps its lease, records, settlement and budget verdict (the MAPP-2b gate's
+lone-instance test).
+
+**Rollback** (below this slice). Nothing is persisted by MAPP-2d; the build before it reads every
+record this one writes.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

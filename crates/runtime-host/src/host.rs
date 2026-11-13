@@ -2130,6 +2130,10 @@ impl RuntimeHost {
             member_close_failure_for_test: AtomicBool::new(false),
             #[cfg(test)]
             switch_off_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            switch_renewal_refusal_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            run_failure_after_switch_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             device_keys: config.device_keys,
             device_group_names: config.device_group_names,
@@ -6057,6 +6061,13 @@ struct HostShared {
     // Workflow #437 MAPP-2b, test only: nothing of MAPP-2b applies while set, as before the slice.
     #[cfg(test)]
     switch_off_for_test: AtomicBool,
+    // Workflow #437 MAPP-2d, test only: the next renewal after a switch is asked with a token the
+    // scheduler does not hold, so it is refused.
+    #[cfg(test)]
+    switch_renewal_refusal_for_test: AtomicBool,
+    // Workflow #437 MAPP-2d, test only: the next member's run fails right after its switch.
+    #[cfg(test)]
+    run_failure_after_switch_for_test: AtomicBool,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Workflow #437 MAPP-1b (`contracts/device-group.md`, "Derived, never stored"): the member →
@@ -6196,10 +6207,6 @@ struct PolicyDispatchClock {
     /// instance alone on its device never switches). Held only until the settlement subtracts it;
     /// no sample of it is kept.
     switch_ms: u64,
-    /// Workflow #437 MAPP-2b: for a member of a device group of several whose lease its admission
-    /// sized for the switch and the run, the end of the run's own share of that lease (the key's
-    /// expiry less its startup run's lease time); `None` for every other dispatch.
-    own_time_through_monotonic_ms: Option<u64>,
 }
 
 impl PolicyDispatchClock {
@@ -6209,7 +6216,6 @@ impl PolicyDispatchClock {
             started_at_monotonic_ms: Some(started_at_monotonic_ms),
             paced_reduction: None,
             switch_ms: 0,
-            own_time_through_monotonic_ms: None,
         }
     }
 
@@ -6219,7 +6225,6 @@ impl PolicyDispatchClock {
             started_at_monotonic_ms: None,
             paced_reduction: None,
             switch_ms: 0,
-            own_time_through_monotonic_ms: None,
         }
     }
 }
