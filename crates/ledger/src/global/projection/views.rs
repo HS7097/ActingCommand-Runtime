@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::outcome::{LadderClass, catalog_json};
 use actingcommand_contract::{
     EventSeverity, InputPayload, LedgerEventPosition, LedgerFailureResolution, LedgerPageLimit,
     LedgerReadScope, LedgerRecoveryGap, LedgerRecoveryState, LedgerRunRecovery, RecognitionPayload,
     RecognitionVerdict, RunId, RuntimeEventQueryCursor, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest,
+    RuntimeEventQueryPageRequest, parse_ladder_class,
 };
 
 // The existing query bound also caps recovery context. Truncation is an explicit Unknown.
@@ -305,10 +306,15 @@ fn run_recovery<E: LedgerEventRead>(
         // #422 LN-WS: a context the read's budget cut short is limited as one the bound cut.
         let context_limited = cut_short || context.len() > MAX_RECOVERY_CONTEXT_EVENTS;
         let context = &context[..context.len().min(MAX_RECOVERY_CONTEXT_EVENTS)];
+        // A failure of the grouping is a record a failure kind knows, or one of warning severity
+        // or above. #429 RG-STOP (since 0.12.58): a record whose outcome code is of the ladder
+        // class `planned_stop` (a stop on request, a pause) is no failure of the grouping unless
+        // a failure kind knows it, whatever its severity.
         let failures: Vec<_> = context
             .iter()
             .filter(|event| {
-                event.severity() >= EventSeverity::Warning || failure_kind(*event).is_some()
+                failure_kind(*event).is_some()
+                    || (event.severity() >= EventSeverity::Warning && !planned_stop(*event))
             })
             .collect();
         if failures.is_empty() && !context_limited && complete {
@@ -408,6 +414,29 @@ fn success_kind<E: LedgerEventRead>(event: &E) -> Option<RecoveryKind> {
         }
         _ => None,
     }
+}
+
+/// #429 RG-STOP (since 0.12.58): whether `event` carries an outcome whose code is of the ladder
+/// class `planned_stop`. The rule names the class, never a code.
+fn planned_stop<E: LedgerEventRead>(event: &E) -> bool {
+    event
+        .payload()
+        .outcome()
+        .and_then(|outcome| ladder_class(outcome.code().as_str()))
+        == Some(LadderClass::PlannedStop)
+}
+
+/// The ladder class the outcome catalog this build embeds gives the code `spelling`, read as the
+/// recovery ladder's trigger matching reads it (`ladder_class_of` of the configuration crate);
+/// `None` for a code the catalog does not list, whose record stays as its severity makes it.
+fn ladder_class(spelling: &str) -> Option<LadderClass> {
+    catalog_json()
+        .ok()?
+        .get("codes")?
+        .get(spelling)?
+        .get("ladder_class")?
+        .as_str()
+        .and_then(parse_ladder_class)
 }
 
 fn has_recovery_relation<E: LedgerEventRead>(event: &E) -> bool {
