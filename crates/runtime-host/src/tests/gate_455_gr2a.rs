@@ -14,8 +14,13 @@
 //   refused at its version, a replay appends nothing and `expected_version` is compared as T1-R's;
 // - v1 and v2 documents over v1 or v2 records write exactly the rows they wrote before;
 // - a start reloads a v3 record unchanged;
-// - the version a writer reads is the version the gate compares, a withdrawal's `0` included
-//   (the coordinator's ruling of 11-14 on #1702).
+// - the version a writer reads is the version the gate compares, a withdrawal's `0` included,
+//   and a receipt's `version` is not a value to send back (the coordinator's rulings of 11-14 on
+//   #1702);
+// - a request that names no channel applies a v1 or v2 document as any request does, and its v3
+//   document is refused at request level, the Runtime's health untouched;
+// - a v3 record's view decodes through the contract crate's strict types and passes `validate`,
+//   as a console built against the released client decodes it.
 // Every alias, pool and id is the fixture's or neutral.
 
 use super::gate_383_ao4q::ledger_head;
@@ -36,6 +41,9 @@ const START: u64 = POLICY_NOW_UNIX_MS;
 const DAY_MS: u64 = 86_400_000;
 /// The fixture catalog's pool, observed through `resource.primary`; its one task produces it.
 const POOL: &str = "fixture-pool-a";
+/// The second pool of `two_pools`, observed through `resource.secondary`; the fixture task produces
+/// it too.
+const POOL_B: &str = "fixture-pool-b";
 const TASK: &str = "fixture.observe";
 const V1: &str = "actingcommand.resource-targets.v1";
 const V2: &str = "actingcommand.resource-targets.v2";
@@ -104,6 +112,56 @@ fn v1(amount: u64) -> String {
 
 fn entry(name: &str, value: Value) -> Value {
     json!({"name": name, "value": value})
+}
+
+/// The target `neutral.second` on pool B, at least `amount`, with its own step and importance.
+fn second_floor(amount: u64) -> Value {
+    let mut target = floor(amount);
+    target["id"] = json!("neutral.second");
+    target["resource"] = json!(POOL_B);
+    target
+}
+
+/// The fixture catalog with a second pool, so that a document may hold two targets (one per
+/// resource): pool B, a copy of the fixture pool observed through `resource.secondary`, which the
+/// fixture task also produces.
+fn two_pools() -> CatalogSources {
+    let mut sources = policy_sources(1);
+    let mut pools: Value = serde_json::from_slice(&sources.pools.bytes).expect("the pools");
+    let mut second = pools["pools"][0].clone();
+    second["id"] = json!(POOL_B);
+    second["observation"] = json!({"kind": "fact", "fact_key": "resource.secondary"});
+    pools["pools"]
+        .as_array_mut()
+        .expect("the pool list")
+        .push(second);
+    sources.pools.bytes = serde_json::to_vec_pretty(&pools).expect("the pool bytes");
+    let mut tasks: Value = serde_json::from_slice(&sources.tasks.bytes).expect("the tasks");
+    let mut produced = tasks["tasks"][0]["produces"][0].clone();
+    produced["pool_id"] = json!(POOL_B);
+    tasks["tasks"][0]["produces"]
+        .as_array_mut()
+        .expect("the task's production")
+        .push(produced);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("the task bytes");
+    sources
+}
+
+/// The identity of T1-R's v2 document at least `amount` (`gate_455_t1r::document`), from its
+/// canonical text written out by hand, as `gr2a_h3` pins it.
+fn t1r_identity(amount: u64) -> String {
+    let valid_until = START + DAY_MS;
+    identity(&format!(
+        r#"{{"instance":"{ALIAS}","schema_version":"{V2}","targets":[{{"apply":{{"mode":"adjust","weight":"score_stage"}},"condition":{{"amount":{amount},"kind":"at_least"}},"id":"neutral.floor","importance_milli":500,"resource":"{POOL}","scale":10}}],"valid_until_unix_ms":{valid_until}}}"#
+    ))
+}
+
+/// The identity of `v1(amount)`, from its canonical text written out by hand, as `gr2a_h3` pins it.
+fn v1_identity(amount: u64) -> String {
+    let valid_until = START + DAY_MS;
+    identity(&format!(
+        r#"{{"instance":"{ALIAS}","schema_version":"{V1}","targets":[{{"apply":{{"mode":"adjust","weight":"score_stage"}},"condition":{{"amount":{amount},"kind":"at_least"}},"id":"neutral.floor","importance_milli":500,"resource":"{POOL}","rule":"shortfall_linear","scale":10,"tasks":["{TASK}"]}}],"valid_until_unix_ms":{valid_until}}}"#
+    ))
 }
 
 fn text(value: &str) -> ContractFactScalar {
@@ -187,10 +245,16 @@ impl Fixture {
     /// A host on the fixture instance with the fixture catalog active and the Runtime clock at the
     /// fixture's time.
     fn start() -> Self {
+        Self::start_with(&policy_sources(1))
+    }
+
+    /// A host on the fixture instance with `sources` active and the Runtime clock at the
+    /// fixture's time.
+    fn start_with(sources: &CatalogSources) -> Self {
         let root = TempDir::new().expect("tempdir");
         let clock = Arc::new(ManualRuntimeClock::new(START, 0));
         let host = Self::open(&root, &clock);
-        host.activate_policy_catalog(&policy_sources(1))
+        host.activate_policy_catalog(sources)
             .expect("activate the catalog");
         Self {
             root,
@@ -260,6 +324,12 @@ impl Fixture {
             },
         );
         (client.send(&request), self.now.get())
+    }
+
+    /// The Runtime clock `ms` milliseconds on.
+    fn wait(&self, ms: u64) {
+        self.clock.advance(ms);
+        self.now.set(self.now.get() + ms);
     }
 
     /// The instance's `ResourceTargetView`.
@@ -793,6 +863,10 @@ fn gr2a_h4_a_start_reloads_a_v3_record_unchanged() {
 // record of entries alone, which the view answers without `active`, so `0`; an active v2 record;
 // a v3 record with targets. Over the record of entries alone the applied v2 document keeps the
 // entry (it carries none), and the stale version sent after it is that record's own, not `0`.
+// A receipt's `version` is not a value to send back (the coordinator's ruling of 11-14 on #1702):
+// over a withdrawn record and over a record of entries alone, which the view answers without
+// `active`, a write that sends the `version` of the receipt that wrote the record is the conflict
+// naming `0` and appends nothing, and the write with the read's `0` is then applied.
 #[test]
 fn gr2a_h5_the_version_a_writer_reads_is_the_version_the_gate_compares_in_every_state() {
     let valid_until = START + DAY_MS;
@@ -846,6 +920,22 @@ fn gr2a_h5_the_version_a_writer_reads_is_the_version_the_gate_compares_in_every_
             read_as_none,
             "{label}: the version read is {read}"
         );
+        if read_as_none && setup_version > 0 {
+            let head = fixture.head();
+            let (sent_back, _) =
+                fixture.apply(&mut client, send, &v2_document(50), Some(setup_version));
+            assert_eq!(
+                (sent_back.state(), sent_back.outcome().code().as_str()),
+                (RuntimeReceiptState::Denied, CONFLICT),
+                "{label}: the receipt's version sent back: {sent_back:?}"
+            );
+            assert_eq!(
+                sent_back.outcome().value("current_version"),
+                Some(&json!(0)),
+                "{label}: {sent_back:?}"
+            );
+            assert_eq!(fixture.head(), head, "{label}: a conflict appends nothing");
+        }
         let written = applied(
             &fixture
                 .apply(&mut client, send, &v2_document(50), Some(read))
@@ -889,4 +979,254 @@ fn gr2a_h5_the_version_a_writer_reads_is_the_version_the_gate_compares_in_every_
         drop(client);
         fixture.close();
     }
+}
+
+// A request that names no channel (the coordinator's ruling of 11-14 on #1702). The door tags every
+// client request with its connection's channel, so no request of these fixtures arrives without
+// one: the host takes the request from the door on with none
+// (`process_request_without_channel_for_test`, the function that takes the channel). T1-R's v2
+// document over no record and a v1 document over that v2 record are applied as on any request:
+// completed, the identity, lifetime and condition of the receipt and the rows and expiry of the
+// record those `gr2a_h3` pins. A v3 document is refused at request level: Denied
+// `channel_binding_missing` at `apply_resource_targets` over `invalid_request`, the host not halted,
+// no result, no terminal and no document rejection; nothing is appended, the v1 record stays in
+// force, the Runtime's fatal state stays empty and its connections are served.
+#[test]
+fn gr2a_h6_a_request_without_a_channel_applies_v1_and_v2_and_its_v3_document_is_refused() {
+    let fixture = Fixture::start();
+    let client = TestClient::connect(&fixture.host);
+    let connection = ConnectionId::new(901).expect("a connection id");
+    let valid_until = START + DAY_MS;
+    let without_channel = |document: &str| {
+        fixture.wait(1);
+        let request = client.request(RuntimeOperation::ApplyResourceTargets {
+            document_json: document.to_owned(),
+            expected_version: None,
+        });
+        fixture
+            .host
+            .process_request_without_channel_for_test(&request, connection)
+            .expect("a receipt")
+    };
+    let mut v1_target = floor_fields(40);
+    v1_target.push(("rule", text("shortfall_linear")));
+    for (label, document, identity, rows) in [
+        (
+            "v2 over none",
+            super::gate_455_t1r::document(50),
+            t1r_identity(50),
+            vec![header(V2, &t1r_identity(50)), row(&floor_fields(50))],
+        ),
+        (
+            "v1 over v2",
+            v1(40),
+            v1_identity(40),
+            vec![
+                header(V1, &v1_identity(40)),
+                row(&v1_target),
+                row(&[
+                    ("row", text("task")),
+                    ("target", text("neutral.floor")),
+                    ("task", text(TASK)),
+                ]),
+            ],
+        ),
+    ] {
+        let written = applied(&without_channel(&document));
+        assert_eq!(
+            (
+                written.policy_sha256.as_str(),
+                written.valid_until_unix_ms,
+                written.conditions.len()
+            ),
+            (identity.as_str(), Some(valid_until), 1),
+            "{label}"
+        );
+        let stored = fixture.stored();
+        assert_eq!(rows_of(&stored), rows, "{label}");
+        assert_eq!(stored.expires_at_unix_ms, Some(valid_until), "{label}");
+    }
+
+    let head = fixture.head();
+    let events = fixture.policy_events();
+    let in_force = fixture.stored();
+    let refused = without_channel(&v3(
+        vec![lasting(floor(50), valid_until)],
+        Some(vec![entry("route", json!("a"))]),
+    ));
+    assert_eq!(refused.state(), RuntimeReceiptState::Denied, "{refused:?}");
+    let outcome = refused.outcome();
+    assert_eq!(
+        outcome.code().as_str(),
+        "channel_binding_missing",
+        "{refused:?}"
+    );
+    assert_eq!(
+        (
+            outcome.value("operation"),
+            outcome.value("runtime_code"),
+            outcome.value("host_halted")
+        ),
+        (
+            Some(&json!("apply_resource_targets")),
+            Some(&json!("invalid_request")),
+            Some(&json!(false))
+        ),
+        "{refused:?}"
+    );
+    assert!(
+        refused.result().is_none()
+            && refused.terminal().is_none()
+            && refused.resource_targets_rejection().is_none(),
+        "{refused:?}"
+    );
+    assert_eq!(
+        (fixture.head(), fixture.policy_events()),
+        (head, events),
+        "nothing appended"
+    );
+    assert_eq!(fixture.stored(), in_force, "the v1 record stays in force");
+    assert!(
+        fixture
+            .host
+            .fatal_error()
+            .expect("runtime health")
+            .is_none(),
+        "the Runtime's health stays clean"
+    );
+    drop(client);
+    fixture.close();
+}
+
+// What a reader of the previous revision decodes (the coordinator's ruling of 11-14 on #1702): a
+// console built against the released client decodes `ResourceTargetView` with the contract crate's
+// strict types (the view, `active`, its conditions and rows refuse unknown members) and runs
+// `ResourceTargetView::validate`; G-R2a changes none of them. With two pools active, the read's
+// answer for each v3 record below serialises, decodes through `ResourceTargetView` into the answer
+// itself and passes `validate`; the existing members carry the v3 record so:
+// - a v3 record with targets, one with its own lifetime and one without: `active.schema_version`
+//   `actingcommand.resource-targets.v3`, `active.targets` the targets as untyped values in v3
+//   document form, the first with its `valid_until_unix_ms`, the second without one, no
+//   `valid_until_unix_ms` of `active`, `expired` false;
+// - the same record kind once every target's own lifetime has passed: the targets still listed,
+//   `expired` true, no `valid_until_unix_ms` of `active`;
+// - a v3 record of entries alone: no `active`.
+// The entries are not shown in any answer (the entry's name appears nowhere in it).
+#[test]
+fn gr2a_h7_a_v3_records_view_decodes_through_the_contracts_strict_types_and_passes_validate() {
+    let fixture = Fixture::start_with(&two_pools());
+    let mut client = TestClient::connect(&fixture.host);
+    let send: Envelope = TestClient::request;
+    // The read's answer as JSON, after it decoded through the strict types into itself and passed
+    // `validate`.
+    let decoded = |label: &str| -> Value {
+        let view = fixture.view();
+        let wire = serde_json::to_value(&view).expect("the view serialises");
+        let read: ResourceTargetView = serde_json::from_value(wire.clone())
+            .unwrap_or_else(|error| panic!("{label}: the strict types decode it: {error}"));
+        read.validate()
+            .unwrap_or_else(|error| panic!("{label}: the answer passes validate: {error:?}"));
+        assert_eq!(read, view, "{label}");
+        assert!(
+            !wire.to_string().contains("route"),
+            "{label}: entries are not shown: {wire}"
+        );
+        wire
+    };
+
+    let lifetime = START + DAY_MS;
+    let with_targets = applied(
+        &fixture
+            .apply(
+                &mut client,
+                send,
+                &v3(
+                    vec![lasting(floor(50), lifetime), second_floor(20)],
+                    Some(vec![entry("route", json!("a"))]),
+                ),
+                None,
+            )
+            .0,
+    );
+    let label = "a v3 record with targets";
+    let wire = decoded(label);
+    let active = &wire["active"];
+    assert_eq!(
+        (
+            &active["schema_version"],
+            &active["version"],
+            &active["expired"]
+        ),
+        (&json!(V3), &json!(with_targets.version), &json!(false)),
+        "{label}: {wire}"
+    );
+    assert_eq!(
+        active["targets"],
+        json!([lasting(floor(50), lifetime), second_floor(20)]),
+        "{label}"
+    );
+    assert_eq!(
+        (
+            active["targets"][0].get("valid_until_unix_ms"),
+            active["targets"][1].get("valid_until_unix_ms"),
+            active.get("valid_until_unix_ms")
+        ),
+        (Some(&json!(lifetime)), None, None),
+        "{label}: {wire}"
+    );
+
+    let (first_lapse, last_lapse) = (START + 30_000, START + 60_000);
+    applied(
+        &fixture
+            .apply(
+                &mut client,
+                send,
+                &v3(
+                    vec![
+                        lasting(floor(50), last_lapse),
+                        lasting(second_floor(20), first_lapse),
+                    ],
+                    None,
+                ),
+                None,
+            )
+            .0,
+    );
+    fixture.wait(120_000);
+    let label = "a v3 record whose targets are all expired";
+    let wire = decoded(label);
+    let active = &wire["active"];
+    assert_eq!(
+        (&active["schema_version"], &active["expired"]),
+        (&json!(V3), &json!(true)),
+        "{label}: {wire}"
+    );
+    assert_eq!(
+        active["targets"],
+        json!([
+            lasting(floor(50), last_lapse),
+            lasting(second_floor(20), first_lapse)
+        ]),
+        "{label}"
+    );
+    assert!(
+        active.get("valid_until_unix_ms").is_none(),
+        "{label}: {wire}"
+    );
+
+    applied(
+        &fixture
+            .apply(
+                &mut client,
+                send,
+                &v3(Vec::new(), Some(vec![entry("route", json!("b"))])),
+                None,
+            )
+            .0,
+    );
+    let label = "a v3 record of entries alone";
+    let wire = decoded(label);
+    assert!(wire.get("active").is_none(), "{label}: {wire}");
+    drop(client);
+    fixture.close();
 }

@@ -36,8 +36,11 @@ impl HostShared {
     /// otherwise) and publishes it through `publish_facts_under_gate`, which replays an equal
     /// active policy. The rows a v3 record takes from this request name the Runtime's clock at the
     /// request, the channel the request is recorded with and, for a request from the Lab, the
-    /// initiator its connection declared; never anything of the document. A refused document
-    /// records nothing and keeps the active policy. Workflow #455 T1-R: with `expected_version`,
+    /// initiator its connection declared; never anything of the document. Only a v3 document
+    /// needs that channel: on a request that names none it is refused `channel_binding_missing`
+    /// (request-level, nothing appended), and a v1 or v2 document applies as on any request. A
+    /// refused document records nothing and keeps the active policy. Workflow #455 T1-R: with
+    /// `expected_version`,
     /// Phase B, in the same hold, first compares it with the instance's active record's version
     /// (its `fact.published` sequence, `0` without one); another is refused
     /// `fact_observation_version_conflict` with `fact_key` and `current_version` and appends
@@ -110,19 +113,22 @@ impl HostShared {
         };
         // Workflow #455 G-R2a: who sets the rows a v3 record takes from this request, as its
         // receipt names them (the receipt rule of `contracts/lab-two-entries.md` §4.3): the
-        // recorded channel, and the declared initiator only for a request from the Lab.
-        let binding = validated.channel().ok_or_else(record_invalid)?;
+        // recorded channel, and the declared initiator only for a request from the Lab. Only a v3
+        // document's rows name it (the coordinator's ruling of 11-14 on #1702): a request without
+        // a channel (the door tags every client request with one) applies a v1 or v2 document as
+        // any other, and its v3 document is refused `channel_binding_missing` below, nothing
+        // appended and the Runtime's health untouched.
         let initiator = if validated.source() == EventSource::Lab {
             self.connection_channel(connection_id)?
                 .and_then(|bound| bound.initiator)
         } else {
             None
         };
-        let setter = TargetSetter {
+        let setter = validated.channel().map(|binding| TargetSetter {
             set_unix_ms: sample.unix_ms,
             channel: binding.channel,
             initiator,
-        };
+        });
         let scope = FactScope::Instance {
             instance_id: parsed.instance().to_owned(),
         };
@@ -142,7 +148,8 @@ impl HostShared {
                 });
             let composed = checked
                 .compose(stored.as_deref(), setter)
-                .map_err(resource_targets_error)?;
+                .map_err(resource_targets_error)?
+                .ok_or_else(channel_missing)?;
             let record = policy_record(&scope, &composed, sample.unix_ms)?;
             let publication = self.publish_facts_under_gate(
                 FactObservation {
@@ -435,5 +442,18 @@ fn record_invalid() -> RuntimeHostError {
         HostCode::ResourceTargetsRecordInvalid,
         RESOURCE_TARGETS_OPERATION,
         RuntimeErrorCode::RuntimeHalted,
+    )
+}
+
+/// Workflow #455 G-R2a (the coordinator's ruling of 11-14 on #1702): a v3 document's rows name
+/// the channel that set them, and the request names none (the door tags every client request
+/// with its connection's channel). A request-level refusal, Denied `invalid_request` with the host
+/// code `channel_binding_missing` at `apply_resource_targets`: nothing is appended and nothing
+/// latches.
+fn channel_missing() -> RuntimeHostError {
+    RuntimeHostError::request(
+        HostCode::ChannelBindingMissing,
+        RESOURCE_TARGETS_OPERATION,
+        RuntimeErrorCode::InvalidRequest,
     )
 }

@@ -110,7 +110,7 @@ impl HostShared {
         .copied())
     }
 
-    fn process_request_at_door(
+    pub(super) fn process_request_at_door(
         &self,
         request: &RuntimeRequest,
         channel: Option<ChannelBinding>,

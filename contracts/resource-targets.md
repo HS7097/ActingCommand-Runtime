@@ -268,6 +268,13 @@ its own reason, and the v1 refusal above comes before the `expected_version` com
 T1-R's for every version. A record the v3 reader refuses counts as no v3 record: every document
 applies over it as over none.
 
+Only a v3 document's rows name who set them, so only a v3 document needs the request's channel
+(the coordinator's ruling of 11-14 on #1702). The door tags every client request with its
+connection's channel; a request that names none all the same applies a v1 or v2 document as any
+other request does, and its v3 document is refused at request level: Denied `invalid_request`
+with the host code `channel_binding_missing` (operation `apply_resource_targets`), in the receipt
+only, nothing appended and nothing latched.
+
 **Identity and replay.** A v3 record's `policy_sha256` is `sha256:<hex>` of the canonical
 serialization of the document it holds: its targets, each with its own lifetime when it has one,
 and its entries (members left out when absent, `entries` left out when there is none), so a
@@ -284,6 +291,11 @@ also when the record it is applied over is a v3 record: the document's `valid_un
 one condition per target. Its `policy_sha256`, `version` and `event_id` name the record
 written: over a v3 record that is a v3 record, so `policy_sha256` is that record's identity,
 not the v2 document's, the one difference from the receipt before G-R2a. The coordinator's ruling of 11-14 on #1702.
+**`expected_version` is only ever the value a read answered (`active.version`, or `0` without
+`active`); the receipt's `version` is not a value to send back.** After a withdrawal, or a v3
+document that leaves a record of entries alone, the receipt's `version` is the sequence of the
+record written while `ResourceTargetView` answers no `active`, so the next write sends `0`
+(the coordinator's ruling of 11-14 on #1702; the receipt is unchanged).
 
 **#429 R-13.** #429 R-13 had reserved the version name `actingcommand.resource-targets.v3` for a
 target table of its own (`maintain` and `gain` targets, `paused`, a `stale_schema` mark, a
@@ -313,7 +325,11 @@ envelope may send the document, the Lab's `targets set` included
 **`expected_version`** (Workflow #455 T1-R, since 0.12.60; register §1.351). The optional
 member of `ApplyResourceTargets { document_json, expected_version? }`, on the wire since
 `runtime-client` 3, is the version of the instance's policy the writer read: `ResourceTargetView`'s
-`active.version`, `0` when the view has no `active`. The document is checked as without it; then,
+`active.version`, `0` when the view has no `active`. **`expected_version` is only ever the value a
+read answered (`active.version`, or `0` without `active`); the receipt's `version` is not a value
+to send back** (the coordinator's ruling of 11-14 on #1702): after a withdrawal or a record of
+entries alone the receipt names the record's sequence while the read answers `0`, and sending
+that sequence is the conflict below. The document is checked as without it; then,
 in the hold of the fact write gate that writes the record and before the replay below, the
 version the read answers is compared with it, in every state: the sequence of the
 `fact.published` that holds the instance's `session.resource_targets` record when
@@ -356,7 +372,7 @@ holds the policy:
 | Field | Meaning |
 | --- | --- |
 | `instance_alias`, `policy_sha256` | the instance and the policy identity |
-| `version`, `event_id` | the sequence and id of that event (the receipt terminal) |
+| `version`, `event_id` | the sequence and id of that event (the receipt terminal); not an `expected_version` to send back: that is only ever what a read answered (`expected_version` above) |
 | `previous_version` | the sequence of the policy active before, or `null`; equals `version` on a replay |
 | `replayed` | the equal policy was already active and unexpired; nothing was appended |
 | `checked_catalog_hash` | the active catalog the document was checked against |
@@ -907,7 +923,10 @@ between the phases is named by `checked_catalog_hash`.
   record has no lifetime of its own), and `expired` is `true` exactly when every target's own
   lifetime has passed. A v3 record without targets has no `active`. The answer's shape and every
   answer for a v1 or v2 record are unchanged. Entries are not shown by this read: the goal view of
-  G-R2b shows them.
+  G-R2b shows them. A reader of the previous revision (a console built against the released
+  client) decodes a v3 record's view with the same strict types, which G-R2a does not change, and
+  the answer passes their `validate`. It sees an `active.schema_version` it does not know and must
+  not interpret the targets.
 
 The view takes the check phase's locks in its order (`policy_outcome_gate` → `policy` →
 `fact_write_gate`, the projection, then the fact store for the active revision) and releases

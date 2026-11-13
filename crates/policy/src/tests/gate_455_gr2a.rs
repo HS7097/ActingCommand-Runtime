@@ -48,7 +48,8 @@ fn setter(at: u64) -> TargetSetter {
 }
 
 /// The record the formal entry composes for `document` over the stored rows `stored`, the
-/// document checked against `catalog` at `at`, as `ApplyResourceTargets` does.
+/// document checked against `catalog` at `at`, as `ApplyResourceTargets` does with a request that
+/// names its channel.
 fn compose(
     catalog: &CompiledCatalog,
     document: &Value,
@@ -57,7 +58,8 @@ fn compose(
 ) -> Result<ComposedResourceTargets, ResourceTargetsError> {
     let parsed = parse_resource_targets(&serde_json::to_vec(document).expect("document bytes"))?;
     check_resource_targets(&parsed, catalog, &inputs(Vec::new(), Vec::new()), time(at))?
-        .compose(stored, setter(at))
+        .compose(stored, Some(setter(at)))
+        .map(|composed| composed.expect("with a setter every document composes"))
 }
 
 /// Instance A's `session.resource_targets` record of `composed`, observed at `at`, with the

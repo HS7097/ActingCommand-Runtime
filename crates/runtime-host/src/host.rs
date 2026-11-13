@@ -4087,6 +4087,25 @@ impl RuntimeHost {
             .process_request(request, connection_id)
     }
 
+    /// Workflow #455 G-R2a (the coordinator's ruling of 11-14 on #1702): `request` handled from
+    /// the door on with no channel, which no client request has (the door tags each with its
+    /// connection's), so a test can show what a handler does with a request that names none.
+    #[cfg(test)]
+    pub(crate) fn process_request_without_channel_for_test(
+        &self,
+        request: &RuntimeRequest,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<RuntimeReceipt> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::ProcessTestRequest)?
+            .process_request_at_door(
+                request,
+                None,
+                connection_id,
+                None,
+                MaterialReadContext::for_request(request, DEFAULT_RUNTIME_MAX_FRAME_BYTES)?,
+            )
+    }
+
     /// Workflow #369 S5: the outcome of a refused request; ledger revision 3 carries the
     /// refusal's facts as its values (they were the native detail's `key=value` tokens).
     #[cfg(test)]

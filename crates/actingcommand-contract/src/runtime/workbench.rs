@@ -47,13 +47,16 @@ pub struct PackScheduleEditRow {
     pub schedulable: bool,
 }
 
-/// The one change of an `EditResourceTarget` (R-13c): add or replace a target, pause or resume
-/// one, or delete one. The target travels as JSON text, as `ApplyResourceTargets` carries its
-/// document: one `actingcommand.resource-targets.v3` target object (`id`, the kind `maintain`
-/// with `at_least` or `gain` with `amount`, the resource pool, optional `paused` and
-/// `valid_until_unix_ms`; no `tasks`, no `on_met`), parsed and checked by R-13a. The request's
-/// `expected_version` is the view's `active.version`, or `0` when the view has no `active`
-/// (the first target of an instance, or one after the table was withdrawn).
+/// The one change of an `EditResourceTarget` (R-13c), a reserved shape: add or replace a target,
+/// pause or resume one, or delete one. The target was to travel as JSON text, as
+/// `ApplyResourceTargets` carries its document: one target object of the table #429 R-13 had
+/// planned under the name `actingcommand.resource-targets.v3` (`id`, the kind `maintain` with
+/// `at_least` or `gain` with `amount`, the resource pool, optional `paused` and
+/// `valid_until_unix_ms`; no `tasks`, no `on_met`), parsed and checked by R-13a. That table was
+/// never built: Workflow #455 G-R2a (0.12.60) took the name for the goal document, whose targets
+/// are v2 targets with a lifetime of their own, and `EditResourceTarget` stays answered
+/// `not_implemented`, so nothing reads this shape. The request's `expected_version` would be the
+/// view's `active.version`, or `0` when the view has no `active`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResourceTargetEdit {
@@ -751,9 +754,10 @@ mod tests {
     }
 
     // Fix round 2 (register §1.213 R0-10): A.5's `stale_schema` mark at `ResourceTargetView`'s
-    // top level. Filled, it round-trips beside a view with no `active` (a stored v1 or v2 record
-    // reads as no table); absent, the view has no `stale_schema` key; either way the view still
-    // refuses an unknown member.
+    // top level, a reserved shape (R-13 planned it for a stored v1 or v2 record under its own v3
+    // table, which was never built; nothing fills it). Filled, it round-trips beside a view with
+    // no `active`; absent, the view has no `stale_schema` key; either way the view still refuses
+    // an unknown member.
     #[test]
     fn r0_resource_target_view_carries_stale_schema_only_when_filled() {
         let view = |stale_schema: Option<bool>| RuntimeResult::ResourceTargetView {

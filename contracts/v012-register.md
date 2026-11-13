@@ -21515,7 +21515,11 @@ after this one) are later.
   Runtime writes who set a row from the request (its clock at the request, the channel the request
   is recorded with, the initiator its connection declared, as the receipt names them), never from
   the document. At most 1 + 16 + 128 + 96 = 241 rows, inside the 256 of the scheduler's input. A
-  v3 record is stored without expiry.
+  v3 record is stored without expiry. Only a v3 document needs the request's channel (the
+  coordinator's ruling of 11-14 on #1702): a request that names none (the door tags every client
+  request with one) applies a v1 or v2 document as any request does, and its v3 document is
+  refused at request level, Denied `invalid_request` with the existing host code
+  `channel_binding_missing` at `apply_resource_targets`, nothing appended, nothing latched.
 - **`ApplyResourceTargets`**: in the hold of the fact write gate that writes the record, the
   active record is read and the record composed over it (`CheckedResourceTargets::compose`): a v1
   or v2 document over a record that is not v3 exactly as before; a v1 document over a v3 record
@@ -21532,12 +21536,16 @@ after this one) are later.
   with its lifetime; when all have passed, an expired v2 policy.
 - **The read**: `ResourceTargetView.active` for a v3 record names the version, every target in v3
   document form with its own lifetime, no record lifetime, and `expired` exactly when every target
-  has lapsed. Entries are not shown (G-R2b).
+  has lapsed. Entries are not shown (G-R2b). A console built against the released client decodes
+  it with the same strict types and `validate`, which this slice does not change; it sees a
+  `schema_version` it does not know and must not interpret the targets.
 - **The receipt** keeps its shape and rules: a v3 document's never names `valid_until_unix_ms`
   or `conditions` (both left out together; the read answers each target's); a v1 or v2
   document's is the one it answered before, also over a v3 record (the document's lifetime and
   conditions; the identity, version and event name the record written, so over a v3 record
-  `policy_sha256` is the v3 record's, the one difference from before).
+  `policy_sha256` is the v3 record's, the one difference from before). `expected_version` is only
+  ever the value a read answered; the receipt's `version` is not a value to send back (after a
+  withdrawal or a record of entries alone it is the record's sequence while the read answers `0`).
 - **The version compared** (T1-R corrected, the coordinator's rulings of 11-14 on #1702): the
   version `expected_version` meets under the fact write gate is the version the read answers,
   in every state: the record's sequence when `ResourceTargetView` shows `active`, `0` when it
@@ -21550,7 +21558,8 @@ after this one) are later.
   single entries is a later slice's request with its own view.
 - **#429 R-13** had reserved the version name for a target table of its own (`maintain`/`gain`,
   `paused`, `stale_schema`, a per-target edit); this design took the name, and none of that was
-  built: `EditResourceTarget` stays answered `not_implemented`.
+  built: `EditResourceTarget` stays answered `not_implemented`. The contract crate's comments on
+  `stale_schema`, `ResourceTargetKind` and `ResourceTargetEdit` say so (comments only).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -21587,7 +21596,13 @@ the host's `gate_455_gr2a::gr2a_h1_a_v3_record_names_who_set_its_rows_and_later_
 document), `gr2a_h4_a_start_reloads_a_v3_record_unchanged` and
 `gr2a_h5_the_version_a_writer_reads_is_the_version_the_gate_compares_in_every_state` (no record,
 an active v2 record, a withdrawn record, a v3 record of entries alone, a v3 record with
-targets). One existing test pinned what this
+targets; the receipt's `version` sent back after a withdrawal or entries alone is the conflict),
+`gr2a_h6_a_request_without_a_channel_applies_v1_and_v2_and_its_v3_document_is_refused` (through
+the test hook `process_request_without_channel_for_test`, the door's own path with no channel,
+since no client request arrives without one) and
+`gr2a_h7_a_v3_records_view_decodes_through_the_contracts_strict_types_and_passes_validate` (a
+second fixture pool). The policy half's `compose` helper passes its setter as the composition now
+takes it (an option); what it pins is unchanged. One existing test pinned what this
 slice changes and changes with it, keeping its name:
 `gate_p2b::gate_p2b_g12_each_realistic_mistake_of_either_version_is_refused_with_its_reason_at_its_field`
 wrote `actingcommand.resource-targets.v3` as "a version no reader takes" and now writes `.v4`. No

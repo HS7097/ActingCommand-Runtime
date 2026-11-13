@@ -621,24 +621,29 @@ impl CheckedResourceTargets {
     ///   carries the member (an empty list included), else the stored entries of a v3 record kept
     ///   as they are;
     /// - with no target and no entry left, the withdrawal a v2 document with `targets: []` writes.
+    ///
+    /// Only a v3 document's rows name who set them, so only a v3 document reads `setter` (the
+    /// coordinator's ruling of 11-14 on #1702): a v1 or v2 document composes the same with or
+    /// without one, and a v3 document without one composes nothing (`Ok(None)`), which the formal
+    /// entry refuses as a request that names no channel.
     pub fn compose(
         &self,
         stored: Option<&[BTreeMap<String, ContractFactScalar>]>,
-        setter: TargetSetter,
-    ) -> Result<ComposedResourceTargets, ResourceTargetsError> {
+        setter: Option<TargetSetter>,
+    ) -> Result<Option<ComposedResourceTargets>, ResourceTargetsError> {
         let kept = stored.and_then(|rows| stored_entries(rows, &self.instance));
         let (targets, target_setter, entries) = match (&self.document, kept) {
             (CheckedDocument::V1(over_v3), Some(_)) => {
                 return Err(ResourceTargetsError::Rejected(over_v3.clone()));
             }
             (CheckedDocument::V1(_) | CheckedDocument::V2(_), None) => {
-                return Ok(ComposedResourceTargets {
+                return Ok(Some(ComposedResourceTargets {
                     policy_sha256: self.policy_sha256.clone(),
                     rows: self.rows.clone(),
                     expires_at_unix_ms: self.valid_until_unix_ms,
                     valid_until_unix_ms: self.valid_until_unix_ms,
                     conditions: self.conditions.clone(),
-                });
+                }));
             }
             (CheckedDocument::V2(document), Some(kept)) => (
                 document
@@ -649,17 +654,22 @@ impl CheckedResourceTargets {
                 None,
                 kept,
             ),
-            (CheckedDocument::V3(document), kept) => (
-                document.targets.clone(),
-                Some(setter),
-                match &document.entries {
-                    Some(entries) => entries
-                        .iter()
-                        .map(|entry| entry_row(entry, Some(setter)))
-                        .collect::<Result<Vec<_>, _>>()?,
-                    None => kept.unwrap_or_default(),
-                },
-            ),
+            (CheckedDocument::V3(document), kept) => {
+                let Some(setter) = setter else {
+                    return Ok(None);
+                };
+                (
+                    document.targets.clone(),
+                    Some(setter),
+                    match &document.entries {
+                        Some(entries) => entries
+                            .iter()
+                            .map(|entry| entry_row(entry, Some(setter)))
+                            .collect::<Result<Vec<_>, _>>()?,
+                        None => kept.unwrap_or_default(),
+                    },
+                )
+            }
         };
         // The receipt: a v3 document's never names a lifetime or conditions (the read answers each
         // target's); a v2 document's is the one it answers over any other record.
@@ -677,13 +687,13 @@ impl CheckedResourceTargets {
                 encode_rows_v3(document, &policy_sha256, target_setter, entries)
             }
         };
-        Ok(ComposedResourceTargets {
+        Ok(Some(ComposedResourceTargets {
             policy_sha256,
             rows,
             expires_at_unix_ms: None,
             valid_until_unix_ms,
             conditions,
-        })
+        }))
     }
 }
 
