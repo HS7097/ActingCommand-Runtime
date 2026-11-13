@@ -39,7 +39,11 @@ Every file it places has a pin: a file with its pinned size and SHA-256 is
 kept, and the package is fetched only for a file of it that is not, so a
 complete vision root is verified without a fetch. It is the one implementation
 a resource repository's CI calls, at its Tools pin's commit; it writes no
-configuration and loads no model. It places no `DirectML.dll`.
+configuration and loads no model. It places no `DirectML.dll`. The Windows
+installation package, assembled and published outside this repository, carries
+these files and `DirectML.dll`, each with its license files, by the owner's
+decision (Workflow #441, 2026-11-13; the registry's `redistribution_note`s); the
+Runtime package and the Tools package carry none of them.
 
 ## Folder layouts
 
@@ -202,9 +206,11 @@ The same sizes and digests are the `pinned_files` of the components
 `onnxruntime-directml-1.24.4` and `directml-1.15.4` in
 `scripts/windows-tools/windows-tool-sources.v1.json`, which reproduce the files
 from the official NuGet URLs; a logic test holds the two equal. The pin is no
-setting. The Runtime package, the Tools package and the installer do not carry
-these files: whoever places them copies them, and each package's license files
-to `ort\licenses\onnxruntime\` and `ort\licenses\directml\`. For a CPU vision
+setting. The Runtime package and the Tools package do not carry these files; the
+Windows installation package carries them, with each package's license files, by
+the owner's decision (Workflow #441, 2026-11-13; "Vision root" above). Whoever
+places them copies them, and each package's license files to
+`ort\licenses\onnxruntime\` and `ort\licenses\directml\`. For a CPU vision
 root, `Materialize-VisionRoot.ps1` places the two ONNX Runtime files and their
 license files this way, the license files by their own pins
 (`pinned_license_files`; "Vision root" above). The ONNX Runtime

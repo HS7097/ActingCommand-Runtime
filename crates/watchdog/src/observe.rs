@@ -15,9 +15,9 @@ use crate::codes::ActingctlCode;
 use crate::packs::ROOT_CONFIG_FILE;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, OutcomeEnvelope, RawSource};
-use actingcommand_contract::{
-    EventActor, EventSource, InstalledProcess, OWNER_JOURNAL_LIMIT, RUNTIME_INFO_FILE,
-};
+use actingcommand_contract::{InstalledProcess, OWNER_JOURNAL_LIMIT, RUNTIME_INFO_FILE};
+use actingcommand_lab_ops::front;
+use actingcommand_lab_ops::initiator::Initiator;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::Value;
 use std::fs::{self, File};
@@ -569,16 +569,16 @@ pub fn runtime_info(state_root: &Path) -> Option<Value> {
 }
 
 /// Review M1: alive means the owner named by runtime-info answers a health request; an owner
-/// that does not is the client's failure (`RuntimeClientError::outcome`).
-pub fn live_owner(state_root: &Path, timeout: Option<Duration>) -> Result<LiveOwner, Outcome> {
-    let config = RuntimeClientConfig::new(
-        state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    )
-    .with_io_timeout(timeout.unwrap_or(HEALTH_TIMEOUT));
-    let client = RuntimeClient::connect(config).map_err(|error| error.outcome())?;
+/// that does not is the client's failure (`RuntimeClientError::outcome`). Workflow #434
+/// LAB-6S2-B1: the probe sends `Health` and `BindChannel` only, with the CLI's envelope, and
+/// declares `initiator`, the word of the program that probes ([`probe_config`]).
+pub fn live_owner(
+    state_root: &Path,
+    timeout: Option<Duration>,
+    initiator: Option<Initiator>,
+) -> Result<LiveOwner, Outcome> {
+    let client = RuntimeClient::connect(probe_config(state_root, timeout, initiator))
+        .map_err(|error| error.outcome())?;
     let info = client.runtime_info();
     Ok(LiveOwner {
         pid: info.pid(),
@@ -586,6 +586,20 @@ pub fn live_owner(state_root: &Path, timeout: Option<Duration>) -> Result<LiveOw
             .unwrap_or_default(),
         started_at_unix_ms: info.started_at_unix_ms(),
     })
+}
+
+/// Workflow #434 LAB-6S2-B1: the configuration of the probe's connection to the Runtime of
+/// `state_root`, waiting at most `timeout` (the probe's own bound without one). It keeps the
+/// envelope (Cli, Cli) it sent on 0.12.58 and binds as `lab_ops::front::cli_envelope` says: the
+/// Lab channel with `initiator` (`Lab-看门狗` for actingwatch, the word of the Lab program that
+/// reads the watchdog's status), or, without a word, the CLI channel as on 0.12.58 (actingctl's
+/// `watchdog`, `start`, `restart`, `install` and `overview`, until LAB-6S2-B2).
+pub fn probe_config(
+    state_root: &Path,
+    timeout: Option<Duration>,
+    initiator: Option<Initiator>,
+) -> RuntimeClientConfig {
+    front::cli_envelope(state_root, initiator).with_io_timeout(timeout.unwrap_or(HEALTH_TIMEOUT))
 }
 
 /// WD-MT (Workflow #421, INV-1119): where a candidate log's modification time is read. A
