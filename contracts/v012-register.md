@@ -20003,7 +20003,7 @@ session and `read_list` (FL-2 is the host's slice). No outcome code is added.
 **The order of the slices.** FL-0, FL-1a and FL-1b (this section, one pull request), then FL-2 (the
 host's halves on a fake device, host gate rows `field_list_published_like_a_list`,
 `field_list_miss_keeps_record`, `field_list_failed_or_cancelled_run_publishes_nothing`,
-`field_list_full_store_refused`, `field_list_row_read_by_ledger_8`; done in 0.12.60, §1.350, with
+`field_list_full_store_refused`, `field_list_row_read_by_ledger_8`; done in 0.12.60, §1.354, with
 no change to the host), FL-1 in the Runtime release of 0.12.59 and FL-2 in that of 0.12.60, both
 deployed; then FL-3, the resource repository's package (its bundle declares `package`
 [11, 11]). The slice that places the first such package books its *L*, one identity on that
@@ -21483,10 +21483,11 @@ repository's work). The catalog's `dispatch_instance_cooldown` gains one optiona
 section denies unknown members). Nothing is persisted by MAPP-2b: the cooldown and the switch's
 time live in memory only, and the build before it reads every record this one writes.
 
-### 1.350 Slice FL-2 (0.12.60): field lists through the host, proved on a fake device (Workflow #450; the owner approved the feature on 11-13, board #450; the design note `rd-1113/design-list-from-fields.md`, sections 3.2 to 3.5 and the row FL-2 of its section 4, with the coordinator's decisions of its section 7; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-450-fl2.md`, read on main `fa724931`; fix 1, after an independent review, coordinator work order `rd-1114/brief-1692-fix1.md`, main `71a658f1` merged; fix 2, the first CI run's lint and the full store's sequencing, coordinator work order `rd-1114/brief-1692-fix2.md`, main `803fdfa3` (release 0.12.59) merged)
+### 1.354 Slice FL-2 (0.12.60): field lists through the host, proved on a fake device (Workflow #450; the owner approved the feature on 11-13, board #450; the design note `rd-1113/design-list-from-fields.md`, sections 3.2 to 3.5 and the row FL-2 of its section 4, with the coordinator's decisions of its section 7; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-450-fl2.md`, read on main `fa724931`; fix 1, after an independent review, coordinator work order `rd-1114/brief-1692-fix1.md`, main `71a658f1` merged; fix 2, the first CI run's lint and the full store's sequencing, coordinator work order `rd-1114/brief-1692-fix2.md`, main `803fdfa3` (release 0.12.59) merged)
 
 1.348 and 1.349 are the integration train 0.12.59d's (#1688); this slice took the next free
-section after them.
+section after them, and the integration train 0.12.60b renumbered it 1.354, the number after
+main's §1.353 (MAPP-2b).
 
 **What it proves.** FL-1 (§1.343) built field lists up to the execution kernel and said the host
 needs no product change: every trace a field list records (`ListReadingFrame` on its end frame
