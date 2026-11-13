@@ -9,6 +9,243 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.58
+
+本版是 v0.12.57 之后 main 上的 9 个合并，都是单张 PR，没有并车。按单子分：#434 LAB-6 的四片（LAB-6S0 #1661、LAB-6S1a #1662、LAB-6S1b #1667、LAB-6S3 #1668），
+#444 notices 目录的三片（NOTICES-1 #1660、NOTICES-2 #1664、NOTICES-3 #1666），#429 RG-STOP（#1665），#446 的一片（#1663，只动 CI）。先说部署：**生产上跑的是 v0.12.54，
+v0.12.55、v0.12.56、v0.12.57 发布了、都没有部署**；计划是 11-14 先从 v0.12.54 装 v0.12.56（跨过 v0.12.55 的单向一步，见 v0.12.56 一节），下一次从 v0.12.56 装 v0.12.57 再装本版，
+或者直接装本版。从 v0.12.56 直接装本版：**能装，不用任何标志，计划里没有 `ledger_verify`，`defaults_diff` 是空的，装上以后能退回 v0.12.56**；跳过 v0.12.57 不多付什么，
+v0.12.57 的改动（SBUD-1、IDLE-3、新 MCP 服务器的两个 Tools 文件）和本版一起到，部署前照 v0.12.57 一节用本版的 `standard-pack check` 查遍包根。没有新的配置键；接口升了两项，
+`runtime-client` [3, 8] 和 `package` [3, 10]，两项都不是单向的。运行上要知道的是这几处：
+
+- **Runtime 不再因为请求自称的来源（信封）拒它**（#434 LAB-6S1b，登记 §1.287「Slice LAB-6S1b」；`contracts/lab-two-entries.md` §2.4）。
+  - **原来拒的**（v0.12.57 的 `crates/actingcommand-contract/src/runtime.rs` 4773–4974，`RuntimeRequest::validate()` 里十四处按 `(actor, source)` 拒）：关机 `RequestShutdown` 和安装切换
+    `InstallTransition` 只收人 `(User, Ui)` 和操作员 `(Cli, Cli)`；制包事件 `RecordAuthoringEvent`、签名的登记、匹配和撤下，调试事件、Lab 钉、受控 Lab 操作、画面识别、调试包和证据导出只收
+    Lab `(Lab, Lab)`；身份卡只收人和操作员、批准只收人；模拟器控制、实例发现、自检、阶梯演练只收人和操作员；调度的暂停和恢复只收人和操作员；叫醒测试 `AgentWakeTest` 只收人和操作员；
+    按键族发布事实只收代理调度器 `(Agent, Adapter)`，带来源例外的键族（手动优先级偏移、补救选择、包的日程）另收人和操作员；代理调度器的那些请求（规划会话的十种和 `ApplyResourceTargets`）
+    只收代理调度器；玩家占用的取和放收人、操作员和 Lab。
+  - **现在收的**：`validate()` 只查信封在不在客户端那几种之内（不在就 `invalid_client_origin`，这是信封自己的形状规则）和一次发布不混两个键族（`fact_origin_mixed`），别的形状和内容检查都不变
+    （本版 `runtime.rs` 4785–4826）。信封一向只是声明、不是鉴权（`contracts/lab-two-entries.md` §2.1）：从本版起本机任何连得上 Runtime 的程序，不论自称什么，都能发暂停、恢复、关机、
+    控制模拟器这些请求，以前只有自称是人或操作员的才行（actingctl 和今天的 MCP 服务器一直就能发）；`ui` 通道上的限制是下一条。
+  - **Lab 自己的命令现在能用了**：`actinglab` 的命令行和 `serve --stdio` 用 `(Lab, Lab)` 信封（`crates/lab-ops/src/front.rs` 67–71），以前被拒、现在收下的是 `pause`、`resume`、`shutdown`、
+    `discover`、`emu start|stop|restart`、`emu selfcheck`、`drill`、`wake-test`、`facts publish`、`offset`、`remedy set|lift`、`targets set`。Lab 的 MCP 服务器的核心行用 `(Cli, Cli)`（73–77），
+    多通了 `ac_targets_set` 和发布不带来源例外键族的 `ac_facts_publish`（以前都是 `invalid_agent_dispatcher_origin`）。
+  - **仍然被拒的**：Lab 的 `evidence read`。它先声明身份卡，主机自己对身份卡的来源复核照旧只收 `(User, Ui)` 和 `(Cli, Cli)`（`crates/runtime-host/src/host/governance.rs` 396–398，
+    `invalid_governance_origin`）。主机另外两处复核也原样留着：批准只收人、并且这条连接的身份卡被接受过（`governance_authority_required`），安装切换除了 `Query` 都要身份卡被接受过
+    （`install_identity_required`，`host/installation.rs` 705）。`hold`、`unhold` 是预留的行，主机照旧答 `not_implemented`。
+  - **没有程序改了它发的东西**：actingctl、控制台、今天的 MCP 服务器、看门狗绑哪个通道、带什么信封都没变，回答也和以前一样。
+  - **十个码标成 `retired`**（`retired_in` 0.12.58，没有 `replaced_by`：请求现在是被收下，不是换一个码拒）：`invalid_shutdown_origin`、`invalid_install_transition_origin`（0.12.0 定稿的）、
+    `invalid_resource_authoring_origin`、`invalid_signature_origin`、`invalid_runtime_debug_origin`、`invalid_emulator_control_origin`、`invalid_scheduling_pause_origin`、
+    `invalid_agent_wake_test_origin`、`invalid_agent_dispatcher_origin`、`invalid_player_hold_origin`。`invalid_governance_origin` 留着（主机的身份卡复核还发它）。
+- **控制台的入口只收它的清单**（#434 LAB-6S3，登记 §1.287「Slice LAB-6S3」；`contracts/lab-two-entries.md` §2.3 第 5 步、§2.6、§3）。
+  - **规则**：一条连接绑在 `ui` 上（自己 `BindChannel` 绑的，或者没绑、第一条请求带 `source: ui` 的信封被门归到 `ui`，`crates/runtime-host/src/host/requests.rs` 57–85），门只收握手的
+    `Health`、`BindChannel` 和 UI 清单上的 30 种（`crates/actingcommand-contract/src/runtime/interface.rs` 541–582，`ui_allows`）；其中 `ConfigureSettings` 还要每个键的控制台档位是
+    `daily` 或 `advanced`、并且键表里那一行能在运行中改（`crates/runtime-host/src/host/ui_gate.rs` 33–78；`crates/runtime-config/src/ui_tier.rs` 52–100；`contracts/runtime-config.md`
+    1968–1985），按请求里的次序逐个判，清除一个键和设置它同样判，键表里没有的键没有档、直接拒。判断在请求自身的检查之后、任何工作开始之前（`requests.rs` 143–163），被拒的请求不占工作计数。
+  - **`ui` 上从此被拒、以前会被处理的**：清单外的 47 种请求（Lab 的调试和制包、租约、输入、按路径跑包、发布事实、监视设置、整份资源目标、订阅、投影、规划会话、LAB-6S4a 要删的五种
+    （身份卡、批准、安装切换、升级状态的两种）、叫醒测试、装卸包），以及点名这 11 个键以外任何键的设置（实例的 `stuck_recovery`、Lab 的两个选项、模拟器根目录、两个进程优先级、没有档位的键、
+    未知的键）。回答是 Denied `channel_request_refused`（这个码第一次真的发出），值 `channel` 是 `ui`，`operation` 是那种请求的登记位置名（79 种里有 17 种线上的拼写不能当位置，用客户端或契约给它的
+    名字，比如 `runtime_input`、`runtime_status`），设置还带 `config_key`，即第一个被拒的键；整条请求一个键都不生效。**记下的**：会被 G14 抄录的那些（写入，和会留记录的读，如
+    `ObserveContainedPage`、`RecognizeArtifact`、`DebugPackage`、`ExportEvidence`）记一条 `command.rejected`，用命令记录本来就有的 `channel` 成员写 `ui`；纯读只在回执里
+    （`ui_gate.rs` 102–142）。
+  - **装着的控制台 v0.12.16 一样都不发**（在 UI 仓 v0.12.16 的源码上核的：它所有连接都绑 `ui`，`crates/acui-source/src/lib.rs` 574、837–861，`src/workbench.rs` 284–288、682）：它发的
+    17 种是 `Status`、`RuntimeFactSnapshot`、`QueryEvents`、`ReadMaterial`、`ScheduleExplanation`、`StartReport`、`DiscoverInstances`、`ObserveReadonly`、`PauseScheduling`、
+    `ResumeScheduling`、`ConfigureSettings`、`SelfCheckInstance`、`ControlEmulatorInstance`、`ApplicationLifecycle`、`RequestShutdown`、`RecordClientAction`、`StopInstanceRun`，外加握手，
+    都在清单上；它的设置页发的 11 个键是性能预设的四个（`performance.pacing.mode`、`performance.pacing.max_concurrent_runs`、`performance.pacing.heavy_dispatch_limit.normal`、
+    `scheduling.parallel.enabled`）、`scheduling.blackout.host`、`frame_retention_evidence_max_age_days`，和每台实例的 `scheduling.blackout`、`idle.action`、`start_emulator`、
+    `touch_backend`、`capture_backend`（`src/workbench.rs` 493–540、`src/workbench/rules.rs` 444–509、`src/workbench/backends.rs` 438–439），在本版都是 `daily` 或 `advanced` 且能改，
+    主机测试 `lab6s3_the_released_consoles_eleven_keys_are_taken_on_ui` 守着。它不发身份卡，也不订阅。UI main（`02fc7a36`）新加的 `PackScheduleView`、`EditPackSchedule` 也在清单上。
+  - **别的通道照旧**：`lab`、`cli`、`mcp` 和没绑的连接这一版什么都不按通道判（那是 LAB-6S4b）。
+  - **拿 `ui` 做测试的工具要改的**：清单外的请求和档位外的键改绑 `cli`（或 `lab`）再发；只是不绑、拿控制台的信封直接发也会被归到 `ui`，同样要先显式绑 `cli`。
+- **门多认一个发起者**（#434 LAB-6S1a，登记 §1.287「Slice LAB-6S1a」；`contracts/component-interfaces.md` 149）。
+  - **形状**：`BindChannel{channel, via?, initiator?}`，答 `ChannelBound{channel, via?, initiator?}`，这条连接的每张回执在 `channel` 旁边多 `initiator`；三处都是可选、没有就不写。
+    `lab` 绑定可以声明的五个词是 `Lab-CLI`、`Lab-MCP`、`Lab-制包`、`Lab-救急`、`Lab-看门狗`（`runtime/interface.rs` 102–107；`UI` 不写，由 `ui` 通道隐含）。
+  - **以 `invalid_bind_channel` 拒、连接保持未绑定的**：词写在 `ui`、`cli`、`mcp` 上，词和 `via` 一起，写 `UI`，写表外的词（`interface.rs` 191–221；`host/governance.rs` 206–255）。
+  - **不带词的绑定**（`lab`、带 `via` 的 `lab`、`cli`、`mcp`、`ui`、第一条请求做的隐式绑定）回答和回执逐字节和以前一样，主机测试拿写死的 JSON 守着。本版没有任何程序声明词
+    （`RuntimeClientConfig::with_initiator` 只有测试调用；声明是 LAB-6S2）。
+  - **它定下的次序（按代码核过）**：本版之前的 Runtime 解不了带 `initiator` 的 `BindChannel`：v0.12.57 的 `RuntimeOperation` 拒未知成员（v0.12.57 的 `runtime.rs` 3778），解码失败就以
+    `runtime_request_decode_failed` 掐断连接、不给回执（v0.12.57 的 `crates/runtime-host/src/host/requests.rs` 1399–1410）。本版的客户端遇到这种掐断，在同一个属主纪元里重连一次，
+    之后不再发 `BindChannel`、以未绑定的连接继续，每个进程报一次 `client_channel_unsupported`（`crates/runtime-client/src/client.rs` 1021–1069）；旧 Runtime 再按第一条请求的信封给它归通道
+    （v0.12.57 的 `requests.rs` 56–84），照那个 Runtime 自己的规则（包括它的来源门）回答，词哪里都不留。所以声明词的版本（LAB-6S2）应当部署在本版之上；部署在更早的 Runtime 上，或者退回到本版之前，都是上面这种降级：照那个 Runtime 的规则回答，词不留。
+- **经 Lab 的 MCP 服务器部署和回滚**（#434 LAB-6S0，登记 §1.287「Slice LAB-6S0」；`apps/actinglab-mcp/MANUAL.md` 第 9、10 节）。
+  - **变了的**：Windows 上 `ac_deploy`、`ac_rollback` 不再答 `mcp_operation_unsupported`，而是服务：服务器自己给这两行的 `detach` 填 true（`apps/actinglab-mcp/src/tools.rs` 136–141、
+    245–256），救急模块起一个分离的 `actinglab.exe`（服务器旁边的那个；不在就当场拒、带路径，`crates/lab-rescue/src/install/host.rs` 293–317），带 `ACTINGCOMMAND_INITIATOR=Lab-MCP`
+    和只有这一处会设的标记 `ACTINGCOMMAND_DETACHED_RUN=rescue`（`crates/lab-rescue/src/rescue.rs` 784–801）；Lab 进程只在标记在时才认变量里的 `Lab-MCP`（`crates/lab-ops/src/initiator.rs`
+    121–143）。调用立即答 `install_command_done`、`detached: true`、分离进程的 `pid` 和 `log`（`<根>\install\detached-<毫秒>.log`）、`next` 指向 `op status`；回答里没有操作号，用
+    `ac_op_status` 跟。分离运行的流水记 `Lab-MCP`，它对运行中的 Runtime 发的请求照旧走命令行通道。工具清单不变（Windows 上 143 个，现在全部服务）；`mcp_operation_unsupported` 留在码表里，
+    提供的行都不会再发它。
+  - **注册到它的客户端现在能起什么**：经二代入口注册到这个服务器的客户端，它的代理能对那个根发起部署和回滚。「由人决定」是手册第 10 节和服务器说明文字里的规矩（`MANUAL.md` 257–262），
+    服务器不拦，照样服务、只记谁发起。**安装不会注册它**：没有安装步骤写 `mcp-entry\` 或客户端的注册，`mcp config` 只打印片段（`MANUAL.md` 241–246），所以主人改注册之前什么都碰不到。
+  - **生产部署到 LAB-7 之前照旧走 `actingctl install`**（`contracts/install-cli.md` 923–926；手册第 9 节）。
+- **标准包的 notices 目录**（#444 NOTICES-1、NOTICES-2、NOTICES-3，登记 §1.334、§1.335、§1.336；`contracts/package-reference.md`「Notices」）：一个包可以带作者要求随包发出的文字，放在
+  压缩包根上的 `notices/` 里，不列进 `bundle.json`，不进任何包的哈希、目录版本或组合代；安装时整个目录作为一个条目放进游戏根，Runtime 的读者一个都不打开它。规则只写在契约 crate 一处
+  （`crates/actingcommand-contract/src/standard_pack_notices.rs` 44–62 常数，184–381 各条规则），放包、打包、检查都调它：
+
+  | 项 | 规则 | 违反时的 `standard_pack_problem` |
+  |---|---|---|
+  | 目录 | 压缩包根（或游戏根）上的 `notices`，只认全小写 | — |
+  | 深度 | 目录下最多 2 段 | `notice_depth`（`limit_count`、`count`） |
+  | 名字 | 每段 1 到 64 字节，只用 `[A-Za-z0-9._-]`，首字节是字母或数字，不是设备名，不以点结尾；两条路径不能只差大小写，文件不能和另一条路径的目录同名，两个目录名不能只差大小写 | `notice_name` |
+  | 后缀 | 文件名里没有点，或最后一个点后面是 `md`、`txt`、`tsv`、`csv`（不分大小写） | `notice_name` |
+  | 个数 | 最多 64 个文件 | `notice_count`（`limit_count`、`count`） |
+  | 单个大小 | 1 到 2,097,152 字节 | `notice_bytes`（`limit_bytes`、`actual_bytes`） |
+  | 合计 | 最多 8,388,608 字节 | `notice_total_bytes`（`limit_bytes`、`actual_bytes`） |
+  | 文本 | 严格 UTF-8，不许 U+0000–U+0008、U+000B、U+000E–U+001F、U+007F；TAB、LF、FF、CR 和任何行尾都收，开头的字节序标记也收；只判不改 | `notice_not_text` |
+  | 包名 | 带这个目录的包里没有叫 `notices`（任何大小写）的任务包 | `notice_name`（带 `package_id`） |
+  | 声明 | 带这个目录的包声明的 `package` 上限不小于 10 | `notice_undeclared` |
+
+  - **违反的回答**：`standard_pack_root_invalid`，`path` 是那个文件（个数和合计时是目录本身），`json_pointer` 为空，有上限的带上限和实际值；放包时它是 `pack_invalid` 的原因。
+  - **救急模块的 `place`**（`crates/lab-rescue/src/install/place.rs`）：先核 `package` 这条边、再看布局（528–547），所以带了更新版本东西的包是被「版本不够」拒，不是被「不认识的成员」拒；
+    唯一变了的拒绝是同时过不了边、布局也不认的包，从 `pack_invalid` 变成 `interface_edge`。布局多认 `notices/<路径>`（556–563），全部规则在计划阶段、挂暂停之前、写任何东西之前核，每个文件
+    最多读「上限加一个字节」，压缩包谎报大小也拦得住（465–499）。整个目录是一个条目，种类 `notices`，**排在所有条目最前**；状态有 `new`、`replace`、`unchanged`，游戏根里有这个目录而后来的包不带时
+    是 `retire`，挪到一边留着（`notices.old-<毫秒>`），包里正好有叫 `notices` 的任务包时不挪（656–679）。撤销按种类和摘要反做，什么都不删。不带这个目录的包放到没有这个目录的根上，计划、
+    计划号、步骤和流水和以前完全一样。
+  - **Tools**：`actinglab package bundle --notices <目录>` 在创建任何东西之前核遍目录（链接照包加载器的拒法拒，路径不是目录或目录里没有文件照 `--loading` 给错的拒法拒），核过才逐字节放进
+    `<out>/notices/`，不写 `interfaces.json`；不带参数时输出和以前逐字节相同（`apps/actinglab/src/package_build.rs` 37–38、117）。`standard-pack check` 遇到游戏根下的 `notices` 目录照
+    同一套规则核，回答多 `notices {files, bytes}`（不回显文件名和内容）；没有这个目录的根回答逐字节不变（`crates/resource-tooling/src/notices_directory.rs` 101–118，`api.rs` 163–179）。
+    `resource verify` 的 `bundle` 步：仓库根有 `notices/` 时当 `--notices` 传下去，`interfaces.json` 写 `package` [10, 10]，装出来的副本也放这个目录，并要求检查数出来的和压缩包里的一致；
+    没有时每个字节和以前一样（`apps/actinglab/src/resource_verify/bundle.rs` 120–145）。命令行和 Lab 的 MCP 服务器都有：操作表的 `package bundle` 一行多了参数 `notices`。
+  - **`package` [3, 10]，谁声明 10**：Runtime 声明 [3, 10]（`distribution/windows/component-interfaces.json` 9）；只有带这个目录的包在自己的 `interfaces.json` 里声明 [10, 10]，那是打包脚本写的
+    （资源仓的脚本还没学，`resource verify` 的镜像已经会写）；`package bundle` 不写 `interfaces.json`；不带这个目录的包保留原来的修订，压缩包、`SHA256SUMS`、计划和流水都不变。
+  - **本版之前的程序**：本版之前的 `place` 在布局检查就拒带 `notices/` 的压缩包（`pack_invalid`，点名按名字排第一个的 `notices/` 成员；v0.12.57 的 `place.rs` 417–441 在边 443–460 之前），
+    在挂暂停之前，什么都没暂停、没写；游戏根里已经有 `notices\` 时，它照常放不带目录的包、不碰这个目录。本版之前的 Runtime 和 `standard-pack check` 把有 `notices\` 的根当成没有它来读。
+    本版之前的安装工具读得了这份 `pack_place` 流水，但解不了里面种类是 `notices` 的那一条（v0.12.57 的 `place.rs` 101–111 只有三种）：撤销时报错，核对时跳过它。
+  - **总览的放包工具和资源仓的打包脚本还不认这个目录：改好之前不发布带这个目录的包。**
+- **运行恢复分组不再把计划内的停下当失败**（#429 RG-STOP，登记 §1.337；`contracts/global-ledger-query.md` 里 `run_recovery` 那一段）。
+  - **原来显示的**：一次被请求停下的调度运行，账本视图的运行恢复分组把停下自己的三条记录（运行的收尾 `task.failed`、调度驱动的 `runtime.failed`、`policy.execution_recorded` 的 `stopped`
+    结算，都带 `contained_task_cancelled`，这个码的类别是 error）列成「失败、未见恢复」，缺口 `missing_relation`，状态 `unknown`。
+  - **规则**：推分组时，结果码的阶梯分类是 `planned_stop` 的记录不算失败、不列进证据、不引出缺口，除非某个失败种类认得它（`input.failed`、`recognition.failed`、入口恢复失败）
+    （`crates/ledger/src/global/projection/views.rs` 309–319、419–440）。分类从程序自带的码目录里读，规则不点名码。**这一类现在有 18 个码，不止 #1665 当初说的两个（登记册和契约的那句已随本版改准）**：error 的
+    `contained_task_cancelled`、`contained_task_paused`、`blackout_run_stopped`、`capture_pressure_pause_stopped`、`lab_arrival_shutdown`、`recovery_ladder_shutdown_requested`、
+    `recovery_ladder_drain_requested`，warning 的 `contained_task_feature_locked`、`contained_task_entry_busy`、`recovery_ladder_interrupted`、`recovery_ladder_hold_exhausted`、
+    `device_thermal_hold`、`device_battery_low`、`device_in_use`，另有 4 个 info 码本来就不算；挂在一次运行上、带这些码的记录都不再进它的分组。
+  - **照旧的**：这些记录自己的级别不变，在错误视图里照旧是错误行；输入失败、识别失败、入口恢复失败和别的 warning 以上的记录照旧算失败（停下时复位失败的记录、隔离的记录带的是它们自己的码）。
+    只停过或只暂停过的运行就没有分组了。什么都不落盘：Runtime 的读页、actingledger 的 `views` 和离线快照走同一个函数，控制台读到的页跟着 Runtime 变。
+- **LAB-3 的运维规矩到 LAB-7 前照旧：生产照旧用 `actingctl install` 部署**，不用 Lab 救急模块的 `deploy`、`rollback`、`place`、`config replace`、`instance add`，也不经 Lab 的 MCP 服务器；
+  救急模块的 `place` 不用在生产根上（所以生产上不会出现带 `notices` 条目的流水）。
+- **生产上**：自 2026-11-11 起有一台实例在试跑调度，其余实例暂停着；部署本身不改变派单。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过，**升了的正好是 `runtime-client` 和 `package` 两项，别的没动**。
+`component-interfaces.json`（4–10）：`actingd-config` [5, 29]、`install-selection` [1, 1]、`install-control` [0, 1]、`ledger` [3, 8] 没变，`runtime-client` [3, 7] → [3, 8]（8，LAB-6S1a）、
+`package` [3, 9] → [3, 10]（9，NOTICES-2），`runtime-outcomes` [1, 1] 没变；架构测试 `tools/actinglab-architecture/tests/component_interfaces.rs` 的 `V0120`（148–154）跟着钉。
+
+- `contracts/component-interfaces.md`：新加 `runtime-client` 修订 8 一行（149）和 `package` 修订 10 一行（159）；「Planned: Workflow #434」一节（267 起）把 LAB-0 预留、后来被别的片占掉的号改成
+  现在的 8（`runtime-client`：LAB-6S1a 已经打开其中一部分，其余归 LAB-6S3、S4a、S4b）、9（`ledger`，LAB-6S5）、30（`actingd-config`，LAB-6S4b）；9 和 30 都还没生效。`actingd-config` 29、`ledger` 8 的行没动；`install-selection`、`install-control`、
+  `player-hold`、`tools-layout` 不变。两项升级都不是单向的：账本、覆盖行、录制、安装流水没有一样新形状，`ledger` 不动。
+- 配置键：没有新增，也没有去掉。`distribution/windows/actingd.defaults.json` 自 v0.12.56 一字没改；`apps/actingd` 和 `crates/runtime-config` 自 v0.12.57 没改；`contracts/runtime-config.md`
+  只在「Console tiers」一节加了一句 `ui` 通道照档位判（1963–1966）。`config.subsystems` 不变（`apps/actingd/src/config/manifest.rs`、`crates/policy/src/compose.rs` 没改）。
+- 结果码：目录仍是 3924 个码、1751 个位置、31 个分片、642 个键、227 个词表；在用的 3906 → 3896，状态为 `retired` 的 18 → 28（上面那十个），审阅定稿的仍是 172 个
+  （`invalid_install_transition_origin` 是定稿的，现在是定稿且 `retired`）；没有新码、新位置、新键、新分片。词表 `standard_pack_problem` 多 7 个词（`notice_count`、`notice_bytes`、
+  `notice_total_bytes`、`notice_depth`、`notice_name`、`notice_not_text`、`notice_undeclared`，词从 1665 个变成 1672 个），说明也改了。改了的：`channel_request_refused` 多可选值
+  `config_key`，三段文字改写成现在生效的样子；`standard_pack_root_invalid` 多四个可选值（`limit_count`、`count`、`limit_bytes`、`actual_bytes`，都是现成的键），描述补了 notices 的一段；
+  `invalid_bind_channel` 的三段文字加了发起者的拒法；`list_reading_key_reserved` 的描述、`mcp_operation_unsupported` 的常见原因照实改写。在用码里两段文字都写了的从 712 个变成 709 个
+  （三个有文字的码 `retired` 了）。本版的发布文件 `contracts/outcome-codes/released/0.12.58.json` 是那十个 `retired` 的码，没有位置。索引照旧由脚本生成，仍是 32 个文件，重生成没有变化。
+- Tools 包：文件清单 `$toolFiles`（`.github/workflows/windows-remote-build.yml` 670–678）自 v0.12.57 没改，布局仍是 `platform-tools-v3`（771）：七个程序加 `platform-tools/` 下的五个文件。
+  Runtime 包的文件不变。
+- 程序文件：`Cargo.toml`、`Cargo.lock` 没改，没有新的工作区成员和依赖；`.github/` 只改了 `commit-identity-guard.yml`（#1663）；`ci/` 只有 `ci/retired-gates.toml` 多了 LAB-6S1b 退出门表的条目
+  （K6 整行、删掉的两条测试、改名的四条），不稳定表照旧是 FLK-08 和 FLK-10；`ratchet/`、`apps/actingd`、`apps/actingwatch`、`apps/mcp-entry`、`apps/mcp-entry-g2`、`apps/ledger-forensics`
+  没改；`apps/actingctl` 只改了 MCP 工具 `ac_ladder_drill` 的说明（不再列 `invalid_emulator_control_origin`）和测试假件，今天的 MCP 服务器仍是 41 个工具。
+
+升级与退回（部署由当时装着的那一版的安装工具做。安装工具的 `plan.rs`、`update.rs`、`deploy.rs`、`postcheck.rs`、`programs.rs`、`undo.rs`、`release.rs`、`manifest.rs` 自 v0.12.57 没改，
+所以 v0.12.57 一节写「本版」的行号对本版的安装工具都对；本版的安装工具只改了 `place.rs`（上面的 notices）、`host.rs`（分离启动的程序和变量）、`rescue.rs` 和测试夹具。v0.12.56 的安装工具
+就是 v0.12.55 的那份代码，v0.12.54 的也是：`plan.rs` 在 v0.12.54 和 v0.12.56 之间没改，下面写「v0.12.56 的」行号对 v0.12.54 的安装工具也对）：
+
+- **v0.12.56 的安装工具装本版：能装，不用任何标志。** 安装工具的声明是它自己构建里的 `component-interfaces.json`（`host.rs` 23–25）：v0.12.56 的是 `ledger` [3, 8]、`runtime-client` [3, 7]、
+  `package` [3, 9]。计划的边逐条（v0.12.56 的 `plan.rs`）：
+  - `ledger` `previous_max_in_next`（288–294）：8 在 [3, 8] 里，过；`one_way`（295–301）：8 不大于 8，不触发；`ledger_verify` 是 false（915）。
+  - `runtime-outcomes` `next_max_in_installer`（302–314）：过。`install-control` 三方 [0, 1]，过。**`runtime-client` 的 `installer_meets_previous`、`installer_meets_next`（315–331）
+    只看区间有没有交集（`meet`，241–243）**：安装工具的 [3, 7] 和 Rp [3, 7]、R\* [3, 8] 都相交，过。
+  - `package` `bundle_max_in_next`（332–355）：比的是安装登记里每个包的范围，登记里一律没有（`crates/lab-rescue/src/install/adopt.rs` 134 写 `None`，别处不写），所以每个游戏一条
+    `pack_declaration_unknown` 警告，和装 v0.12.56、v0.12.57 时一样，不挡。`speaks` `runtime_equals_tools`（756–763）：两半声明相同，过。
+  - `actingd-config` `installer_knows_keys`（359–376）：本版没有新键，过。`next_check_config`（902–914）：本版的 check-config（`apps/actingd` 自 v0.12.57 没改）收 v0.12.56 的文件，过；SBUD-1
+    拒的包在这里是一条 `pack_admission_suspended` 注记、不算失败（见 v0.12.57 一节）。
+  - **要带的标志：没有**；工具包要是照 v0.12.56 那次还带着 `--accept-ledger-one-way` 也能过，但计划号会跟着变、日志的 `acknowledged` 会记下它，去掉。`defaults_diff`（574–598）是空的
+    `[]`，部署后检查的 `new_keys`（`postcheck.rs` 494–526，`added_keys` 593–601）没有要核的键，过。
+  - **跳过 v0.12.57 有什么不同：没有要多付的。** v0.12.57 的两个 Tools 文件在这次计划里是 `new`（v0.12.56 的 `plan.rs` 815–819，`notice.added` 2），和 v0.12.57 一节写的从 v0.12.56 装 v0.12.57
+    一模一样：部署前不存在、不会挡也不会被挡，没有注册指向它们；下一次部署是本版的安装工具做的，正在跑的 `actinglab-mcp.exe` 改名让开（本版 `plan.rs` 37、41–44、953、966–967）。SBUD-1 的准入
+    检查（`crates/execution-kernel` 自 v0.12.57 没改）随这次部署到：部署前查包、首次启动时怎样、放包的次序都照 v0.12.57 一节；本版的 `standard-pack check` 对没有 `notices` 的根答法和
+    v0.12.57 的相同。IDLE-3 也随这次到，临时设成 `none` 的 `idle.action` 在本版部署以后撤回。唯一不同的是退回的去处：这样装上的，能退回的是 v0.12.56，不是 v0.12.57（见下）。
+- **v0.12.57 的安装工具装本版**（先装了 v0.12.57 的那条路）：能装，不用任何标志。边（本版和 v0.12.57 相同的 `plan.rs`）：`ledger` 两边 [3, 8]，`one_way` 不触发（297–310），`ledger_verify`
+  是 false（924）；`runtime-client` 安装工具 [3, 7] 和 Rp [3, 7]、R\* [3, 8] 都相交（324–340）；`package` 照旧是警告（341–364）；`installer_knows_keys`（369–385）过。`defaults_diff`（583 起）
+  是空的，`new_keys` 没有要核的键。Tools 文件两边清单相同，没有 `new`，正在跑的 `actinglab-mcp.exe` 改名让开、不挡。能退回的是 v0.12.57。
+- **v0.12.54 的安装工具直接装本版：能装，和从 v0.12.54 装 v0.12.56 一样要带 `--accept-ledger-one-way`**（预览、`install update plan`、`install update apply` 三步都带；不带时 `ledger` 的
+  `one_way` 不过，以 `interface_edge` 拒，`plan.rs` 295–301、1030–1041），计划多一步 `ledger_verify`（915）。v0.12.54 声明 `runtime-client` [3, 6]、`package` [3, 8]：`runtime-client` 的
+  [3, 6] 和 Rp [3, 6]、R\* [3, 8] 都相交，过；`package` 照旧是警告。`defaults_diff` 是那三行（`recovery_ladder.profiles.without_emulator_restart.rungs`、`scheduling.task_held.after_ms`、
+  `scheduling.task_held.enabled`；默认值文件自 v0.12.56 没改），部署后检查的 `new_keys` 核这三个键（两个压着键的来源是 `default`；档的那一行进 `unseen`，不算不过）；`installer_knows_keys` 不认识 `scheduling.task_held`，文件里不要提前写它；
+  两个新的 Tools 文件是 `new`。**比经过 v0.12.56 差的地方**：装上并跑过以后同一个状态根上没有退回的路（见下），部署后检查不过时的自动回退也走不了；v0.12.55 到本版四个版本的改动
+  （单向的账本、两个条目一台设备被拒、压着记录、补救表、SBUD-1、IDLE-3、本版这几处）在同一次部署里一起到生产；控制台要先换成 UI v0.12.16。没有让它装不上的东西。
+- **退回（按安装工具的边和回退门核过）**：
+  - **能退回的只有这次部署替换掉的那一版。** 回退门第 2 部分 `ledger_readability` 只对被替换的那一版放行（`update.rs` 400–437，`live_operation` 181–204）。从 v0.12.56 装上本版的，退回
+    v0.12.56 能过，退到 v0.12.57 以 `rollback_gate_failed`（`ledger_readability`，`previous` 是 v0.12.56）拒（那个根上也没有 v0.12.57 的保留构建，除非另外 stage 过）；从 v0.12.57 装上本版的，退回 v0.12.57
+    能过，直接退到 v0.12.56 同样被拒。
+  - 退回 v0.12.56 或 v0.12.57 时边都过：`ledger` 8 在 [3, 8] 里、`one_way` 不触发；`runtime-client` 在线的本版安装工具 [3, 8] 和两边都相交；`package` 是警告；`installer_knows_keys`
+    用的是本版的键表。第 4 部分 `config`：目标的 check-config 读现行的文件（`update.rs` 490–503），本版没加成员，过。部署的自动回退（`deploy.rs` 758–854，这一段 v0.12.56 和本版行号相同，
+    813 不带标志）退向被替换的那一版，同样能过。
+  - **更早的构建对本版写下的东西**：带 `channel` `ui` 的 `command.rejected`：命令记录的 `channel` 成员 U-2 起就有（v0.12.57 的 `crates/actingcommand-contract/src/event/payload.rs`
+    6104–6123），照读。存着 `notices\` 的游戏根：只有本版的救急 `place` 会放出来（生产上不用它），更早的 Runtime 只按名字读游戏根里的文件、只枚举包根下的游戏目录（v0.12.57 的
+    `crates/runtime-host/src/host/standard_pack.rs` 333–346），当它不存在；更早的 `place` 不碰它。带 `notices` 条目的 `pack_place` 流水：更早的安装工具解不了这个种类，撤销不了那次放置，要撤先用
+    本版撤，或者留着那个没人读的目录。**别的都没有**：LAB-6S1a、LAB-6S1b、LAB-6S3、RG-STOP 都不落盘，LAB-6S0 的流水记的 `Lab-MCP` 是更早的构建也认的六个词之一。退回以后，来源门回来
+    （Lab 的 `pause` 那些又被拒），`ui` 通道又只标记、不拒，运行恢复分组回到原样。
+  - **从 v0.12.54 直接装上本版的**：和 v0.12.56、v0.12.57 两节一样，安装工具哪一版都不让退回：退到 v0.12.54 或更早，`ledger` 的边不过（8 ∉ [3, 7]）；退到 v0.12.55、v0.12.56 或 v0.12.57，
+    边都过，但回退门第 2 部分只对被替换的 v0.12.54 放行，以 `rollback_gate_failed` 拒；部署的自动回退（813 不带标志）和起过新 Runtime 的 `install undo` 同样被拒。出了问题剩下的是：配置的问题，
+    改好文件再起；程序的问题，往前修；或者换一个全新的状态根（之前的账本、事实、运行中设的指令、封顶回合和空闲状态都留在旧根上）。
+- 配对：
+  - **v0.12.54、v0.12.56、v0.12.57 写的配置文件**：本版照收，不用改。本版没有新成员、新键，也没有新的配置拒收（`apps/actingd`、`crates/runtime-config` 自 v0.12.57 没改）；v0.12.54 写的文件只有
+    v0.12.56 起就有的那一个例外：两个条目没编成一组、却指向同一台设备，被拒。
+  - **已装的包**：本版没有改准入（`crates/execution-kernel`、`crates/pack-containment`、`crates/policy` 自 v0.12.57 没改；SBUD-1 是 v0.12.57 的）。本版的 `standard-pack check` 对今天的根
+    （都没有 `notices`）答法和 v0.12.57 的逐字节相同，回答里没有 `notices` 这一项。
+  - **控制台 UI**（最新发版 UI v0.12.16 是 UI 的 `6c2e30f2`；UI main 现在是 `02fc7a36`，之后加了按任务包的开关，没有动控制台的声明和 Runtime 钉点）：它声明 `actingd-config` [5, 28]、
+    `ledger` [3, 8]、`runtime-client` [3, 7]、`runtime-outcomes` [1, 1]（`crates/acui-setup/component-interfaces.json`）。和本版配：`ledger` 8 在 [3, 8] 里；`runtime-client` 它的安装器取两边
+    共有的最高修订 7（`crates/acui-setup/src/interfaces.rs` 650 `negotiate`），控制台运行时不比范围；`actingd-config` 三方共有 28；`runtime-outcomes` 相同。它钉的 Runtime crate 在
+    `c0f75c7e`（v0.12.55 的发版提交，`Cargo.toml` 39–44）：本版给 `ui` 连接的 `ChannelBound` 和回执都不带 `initiator`（`ui` 上声明词就被拒，回执的这个成员没有就不写，`runtime.rs` 5718–5722），
+    别的回答没有新成员，所以它照读；十个 `retired` 的码它一个都不点名（v0.12.16 和 main 都搜过）。它发的请求和键对清单和档位的核对见上面 LAB-6S3 一条：一样都不被拒。
+  - **部署工具包的命令行**：它跑的是在线安装工具的 `actingctl install`：`release stage --root --dir --facts --expect-tag --expect-commit`、`guards --root --for stop --hold --known-pause …`、
+    `status --root [--operation]`、`update plan --root --build [--preview]`、`update apply --root --build --plan --stop --hold --known-pause … --start --detach`、`release-hold --root --reason`，
+    和新版 actinglab 的 `--json standard-pack check --root <游戏根>`。回答部署的是在线的 v0.12.56（或 v0.12.57）的安装工具，代码就是上面核过的那份，**没有一条被拒**。和装 v0.12.57 相比
+    答法变了的只有内容：计划里目标的 `speaks` 是 `runtime-client` [3, 8]、`package` [3, 10]，`installer_meets_next` 和 `bundle_max_in_next` 两行的 R\* 方是这两个范围，结果照旧是过和警告；
+    部署以后用新构建的安装工具跑的 `install status` 和 v0.12.57 的同一份代码。`standard-pack check` 对今天的根答法和 v0.12.57 的相同。**工具包要跟着改的**：目标提交；从 v0.12.56 装时三步都
+    去掉 `--accept-ledger-one-way`；预期改成没有 `ledger_verify`、`defaults_diff` 为空、`new_keys` 为空（从 v0.12.56 装时另有两个 `new` 文件）；给热放置工具包写构建记录的那一步，核新包清单的
+    `actingd-config`、`package`、`ledger` 现在是 [5, 29]、**[3, 10]**、[3, 8]，记成 `5,29`、`3,10`、`3,8`（照旧的 `3,9` 会让那一步和后面的重钉都不过）。
+  - **热放置工具包的命令行，本版都照旧收、答法和 v0.12.57 相同**：actinglab 两行，`--json standard-pack check --root <游戏根>` 和 `--json standard-pack compose --root <包根>
+    --instance <别名>=<游戏>/<区服> … --out <新目录>`；actingctl 的 `status`、`status --config`、`pause --instance <别名> --reason <理由> --drain-timeout-ms <毫秒>`、`resume --instance <别名>`、
+    `schedule --instance <别名>`、`overview --root <根> --instance <别名> --sections catalog`（都带 `--state-root`）；actingledger 的 `events --after … --through … --limit …`。actingctl 的命令行
+    代码没改，它绑 `cli`、用 `(Cli, Cli)`，暂停和恢复本来就收，LAB-6S3 不判 `cli`；`apps/ledger-forensics` 没改，RG-STOP 只动视图页的分组，`events` 不受影响；`standard-pack check` 只对有
+    `notices` 的根多一项。**没有一条被拒，也没有一条换了答法的形状。热放置工具包要学的**：重钉时比的构建记录里 `package` 是 `3,10`；等包里开始带 `notices/` 以后，`standard-pack check` 会多
+    `notices {files, bytes}`、会拒违反规则的目录；它自己的放包还不认这个目录（登记 §1.335 的表），学会之前不发带这个目录的包。
+  - **今天的 MCP 服务器（`actingctl mcp-serve`，现在注册着的那个）**：每个工具答法照旧。写目标和补救用的是代理调度器的信封 `(Agent, Adapter)`（`apps/actingctl/src/mcp/operator.rs` 561–564，
+    `remedy.rs` 60–61），这一直是收的；它绑 `mcp`，LAB-6S3 不判。看得到的差别只有：`ac_ladder_drill` 的说明不再列 `invalid_emulator_control_origin`；`ac_outcome_code` 把那十个码显示为
+    `retired`、新的文字和值；读页的运行恢复分组不再列停下的记录（RG-STOP）。
+  - **Lab 的 MCP 服务器（`actinglab-mcp`，没有注册指向它）**：工具清单不变；答法变了的是 `ac_deploy`、`ac_rollback`（服务了，见上），`ac_targets_set` 和发布不带来源例外键族的 `ac_facts_publish`
+    （以前 `invalid_agent_dispatcher_origin`，现在收下），`ac_package_bundle` 多参数 `notices`，`ac_standard_pack_check` 对有目录的根多 `notices`，说明文字改了两句。
+
+运行上的变化：
+
+- 从 v0.12.56 部署：不用标志，没有 `ledger_verify`，`defaults_diff` 为空，能退回 v0.12.56；跳过 v0.12.57 不多付什么，部署前照 v0.12.57 一节用本版的 `standard-pack check` 查遍包根。
+- Runtime 不再按自称的来源拒请求：Lab 的 `pause`、`resume`、`shutdown`、`emu`、`drill`、`facts publish`、`targets set` 这些现在能用，十个来源码 `retired`；`evidence read` 照旧被拒。
+- `ui` 通道只收控制台清单上的 30 种请求和档位里能改的 11 个键，别的以 `channel_request_refused` 拒；装着的控制台 v0.12.16 一样都不发，别的通道照旧。
+- 声明发起者的客户端（LAB-6S2）应当部署在本版之上（更早的 Runtime 会丢掉它的绑定，它退回不绑定、照旧工作）；Lab 的 MCP 服务器能部署和回滚了，但生产到 LAB-7 前照旧用 `actingctl install`。
+- 包可以带 `notices/`，`package` 升到 [3, 10]；放包工具和资源仓的打包脚本学会之前不发布这种包。停下或暂停的运行不再出现在运行恢复分组里。
+
+本版合并的 PR：
+
+- #1660 NOTICES-1（#444，登记 §1.334）：契约 crate 的新模块 `standard_pack_notices`、七个新词、`standard_pack_root_invalid` 的四个可选值、`package-reference.md` 的「Notices」；契约门行
+  `#444 NOTICES-1` 的 4 个测试，没有改现有测试；这一片没有程序调它。
+- #1661 LAB-6S0（#434，登记 §1.287）：标记变量和分离启动的程序，`actinglab-mcp` 服务 `deploy`、`rollback`，手册、说明文字、契约、操作表备注；apps 门行 `#434 LAB-6S0` 的 3 个测试，改造了 4 处
+  原来钉着「这两行被拒」的测试。
+- #1663（#446）：`.github/workflows/commit-identity-guard.yml` 先把 `git log` 读进变量，读不到提交就失败，最后一行打印核了几个提交；只动 CI，没有测试。
+- #1662 LAB-6S1a（#434，登记 §1.287）：`Initiator`、`BindChannel`/`ChannelBound`/回执的 `initiator`、主机的连接表、客户端的 `with_initiator` 和回显检查，`runtime-client` [3, 8]；主机 3 个、
+  客户端 3 个、契约往返 3 个和 lab-ops 词表一致 1 个新测试；改造的现有测试只是钉声明的两处和给结构体补上新成员，断言没变。
+- #1664 NOTICES-2（#444，登记 §1.335）：`place` 先核边、认 `notices/`、条目种类 `notices`，集合规则多一条目录名大小写，`package` [3, 10]；apps 门行 `#444 NOTICES-2` 的 5 个测试，测试夹具多一个
+  安装工具 `package` 范围的字段，改造了 2 个测试（集合规则的新边界、架构钉 [3, 10]）。
+- #1665 RG-STOP（#429，登记 §1.337）：`run_recovery` 的失败判断和两个小函数；账本门行 `#429 RG-STOP` 的 5 个测试，每一页还和内存索引的同一页对照；没有改现有测试。
+- #1666 NOTICES-3（#444，登记 §1.336）：`package bundle --notices`、`standard-pack check` 的 `notices`、`resource verify` 的 `bundle` 步，常数 `NOTICES_PACKAGE_REVISION` 挪进契约 crate，
+  操作表 `package bundle` 多参数；exec 门行 `#444 NOTICES-3` 的 7 个测试（resource-tooling 6 个、actinglab 1 个），2 个现有测试只给结构体补上新成员。
+- #1667 LAB-6S1b（#434，登记 §1.287）：`validate()` 的来源门删掉，十个码 `retired`，操作表 `evidence read` 的 `requests` 列出身份卡，十几份契约改了文字；契约门行和主机门行 `#434 LAB-6S1b`
+  的新测试，架构守卫改成校验函数里读信封的只剩 `valid_client_origin`；`ci/retired-gates.toml` 记下 K6 整行、删掉的 2 条测试和改名的 4 条，几条测试只改了来源那一半，CI 第一轮查出的
+  2 条旧主机测试改成伪造客户端之外的信封。
+- #1668 LAB-6S3（#434，登记 §1.287）：`ui_allows`、主机的 `host::ui_gate`、`CommandPayloadDraft::rejected_on_channel`，`channel_request_refused` 多 `config_key`，结果码守卫给 `ui_gate::kind_location`
+  一条 G5 豁免，操作表 `StopInstanceRun` 的 `console_today` 改成 true；主机门行和契约门行 `#434 LAB-6S3` 共 6 个新测试，6 条旧测试和 #1667 的 1 条改成先绑 `cli`，断言没变。
+
 ## v0.12.57
 
 本版是 v0.12.56 之后 main 上的 19 个合并：17 个 PR 和两趟并车，并车又带进 5 个 PR（#1640 带 #1636、#1638、#1639，#1643 带 #1641、#1642）。按单子分：#434 LAB-5G 的新 MCP 服务器一整组（LAB-5G1b #1636、LAB-5G2a #1639、
