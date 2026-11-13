@@ -1337,8 +1337,10 @@ fn mapp1d_a_paused_members_claim_stays_queued_while_another_members_later_claim_
 /// round before the compared ones takes whatever a first probe of an instance takes once.
 /// - A member of several, where the switch makes a difference: during A's keyless observation on
 ///   the free device B's self-check claim queues, and the observation's guard pumps A's queue when
-///   it lets the device go, which grants B's claim from the queue. The `lease.granted` record of
-///   B's claim names B (the claim's own member) on, and A (the member whose queue was pumped) off.
+///   it lets the device go, which grants B's claim from the queue; the lease sweep's scan is held
+///   meanwhile, so no other thread can grant it (the comment at that step). The `lease.granted`
+///   record of B's claim names B (the claim's own member) on, and A (the member whose queue was
+///   pumped) off.
 /// - An instance alone (C), where it must make none: C's probe, the expiry of C's lease while C's
 ///   claim waits, and the queue's grant of C's startup claim queued during C's observation (a kind
 ///   that takes the pump's performance check) run main's code off and the slice's on, and write
@@ -1347,7 +1349,10 @@ fn mapp1d_a_paused_members_claim_stays_queued_while_another_members_later_claim_
 ///   ([`comparable`]), every difference named in one failure. What must not happen is asserted
 ///   directly too: C's probe takes no lease and keeps C's session (opened by C's first
 ///   observation, closed only by the Host close); C's lapsed lease hands the key to its waiting
-///   claim by a transfer; C's queued claim is granted by the queue's own grant.
+///   claim by a transfer; C's queued claim is granted by the queue's own grant. Neither C part
+///   depends on which thread acts: the expiry of C's lease is the test's sweep tick or the
+///   resident sweep's, one after the other under the scan's gate and the same records either way,
+///   and every pump that can grant C's claim is a pump of C's own queue, which names C.
 ///
 /// The probe's and the expiry's group branches begin from a member of a device group of several,
 /// and C reaches none of them. The slice's refactorings that C runs (`probe_monitor_instance` out
@@ -1478,8 +1483,21 @@ fn mapp1d_the_switch_changes_a_members_grant_record_and_no_record_of_a_lone_inst
         rounds.push((probe, expiry, grant));
 
         // A member of several: B's claim queued during A's observation, granted by the pump of
-        // A's queue when A's observation lets the device go.
+        // A's queue when A's observation lets the device go. Only that pump can grant it, so the
+        // record cannot depend on timing: the test holds the lease sweep's scan
+        // (`hold_lease_expiry_scan_for_test`), so the sweep, the one thread that pumps every
+        // device's queue on its own (`pump_all`, at the end of that scan), waits at the scan's
+        // start until the claim is granted; the resident monitor loop is held; B's claim's own
+        // pump (`request_host_claim`) runs while A's observation holds the device's admission
+        // guard and finds it taken; no lease holds the device, so no lease end hands it on; and
+        // this host has no idle action configured and is driven through no policy cycle. The pump
+        // of A's queue runs on the observing thread when the observation's guard drops, before
+        // its receipt returns, so the claim is granted when `observe_while` returns (a zero wait).
         device.sample_capacity();
+        let scan = device
+            .host
+            .hold_lease_expiry_scan_for_test()
+            .expect("hold the lease sweep's scan");
         let (observed_a, member_claim) =
             device.observe_while(A, || device.claim(B, ClaimKind::SelfCheck));
         assert_eq!(
@@ -1493,9 +1511,10 @@ fn mapp1d_the_switch_changes_a_members_grant_record_and_no_record_of_a_lone_inst
             "B's claim waited for the device: {member_claim:?}"
         );
         let member_token = member_claim
-            .wait_for_grant(GATE_WAIT)
+            .wait_for_grant(Duration::ZERO)
             .expect("the grant slot")
-            .expect("B's claim is granted once A's observation lets the device go");
+            .expect("B's claim granted by the pump of A's queue before observe returned");
+        drop(scan);
         assert_eq!(member_token.instance_id(), device.ids[B]);
         assert_granted_from_the_queue(&device, &member_claim);
         let named = device

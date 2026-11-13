@@ -22152,7 +22152,8 @@ candidate serves and judges each claim by its own member's gate. The comparison
 (`mapp1d_the_switch_changes_a_members_grant_record_and_no_record_of_a_lone_instance`) runs on one
 host, two rounds, on then off: for a member of several the switch shows in a record (the
 `lease.granted` of a member's claim granted by the pump of another member's queue names the claim's
-own member on and the pumping member off); for an instance alone the probe's, the expiry's and the
+own member on and the pumping member off; the lease sweep's scan is held for that step,
+`hold_lease_expiry_scan_for_test`, so no other thread can grant the claim); for an instance alone the probe's, the expiry's and the
 startup claim's grant records are equal record by record by type, severity, the instance the links
 name and whole payload, with what the compared records cannot share normalised (every run of 32 or
 more hexadecimal digits, every member naming an instant, a measurement on the process clock or a
