@@ -22226,14 +22226,14 @@ from an installation root and asserts the daemon line `state_root_claimed` where
 it (fix round 1). The installer's own tests are unchanged; no golden changes; no test leaves the
 gate map.
 
-### 1.357 Slice MAPP-1d (0.12.60): a device group's monitor probe, the hand-over at a lease's expiry, and the queue's gate per member (Workflow #437; [device-group.md](device-group.md), "The monitor's probe in a device group", "Device-level actions", rows 7 and 15, and "One queue, one worker, one lease per device"; [read-session-resource-close.md](read-session-resource-close.md); MAPP-1c's open findings 2, 4 and 5, §1.350, and its independent review; the coordinator's rulings on board #437, not the owner's words; coordinator work order `rd-1114/brief-437-mapp1d.md`, read on main `95525c98`, main `691c20f5` merged; fix round 1 `rd-1114/brief-1701-fix1.md`, main `1ffb6c7f` merged)
+### 1.359 Slice MAPP-1d (0.12.60): a device group's monitor probe, the hand-over at a lease's expiry, and the queue's gate per member (Workflow #437; [device-group.md](device-group.md), "The monitor's probe in a device group", "Device-level actions", rows 7 and 15, and "One queue, one worker, one lease per device"; [read-session-resource-close.md](read-session-resource-close.md); MAPP-1c's open findings 2, 4 and 5, §1.350, and its independent review; the coordinator's rulings on board #437, not the owner's words; coordinator work order `rd-1114/brief-437-mapp1d.md`, read on main `95525c98`, main `691c20f5` merged; fix round 1 `rd-1114/brief-1701-fix1.md`, main `1ffb6c7f` merged)
 
 This slice took 1.354, the next free number on main `691c20f5`; main `1ffb6c7f` (the integration
-train 0.12.60b) holds §1.354 to §1.356, so it is 1.357 since that main was merged in its fix round
-1; parallel pull requests may take it first, and the train renumbers. A build still refuses every
-group of several at load (`several_members_unsupported`, unchanged), so no configuration reaches
-this slice's code: its tests hand the host the member → device key map and the group's name as
-the assembly builds them.
+train 0.12.60b) holds §1.354 to §1.356, and the integration train 0.12.60c gave it 1.359, the
+number after main's §1.356 and the sections of the rows merged before it in that train (#453 S1's
+§1.357, S11's §1.358). A build still refuses every group of several at load
+(`several_members_unsupported`, unchanged), so no configuration reaches this slice's code: its
+tests hand the host the member → device key map and the group's name as the assembly builds them.
 
 | Part | Built | Where |
 |---|---|---|

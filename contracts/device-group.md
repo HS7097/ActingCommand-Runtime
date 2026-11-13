@@ -39,7 +39,7 @@ are settled; each answer stands in the section it belongs to, and §1.323 lists 
 MAPP-1c ([v012-register.md](v012-register.md) §1.350, built in Runtime 0.12.60) closes the two
 cases in which a member's session stayed open after a keyless observation ("The session close of
 a keyless observation"; "Device-level actions", rows 7 and 15) and keys the device's queue-order
-lock by the device. MAPP-1d ([v012-register.md](v012-register.md) §1.357, built in Runtime
+lock by the device. MAPP-1d ([v012-register.md](v012-register.md) §1.359, built in Runtime
 0.12.60) closes the three gaps MAPP-1c's review found and listed as open: the monitor's probe
 ("The monitor's probe in a device group"; row 15), the hand-over at a lapsed run lease's expiry
 (row 7) and the queue's grant judged by one member's gate ("One queue, one worker, one lease per
@@ -844,7 +844,7 @@ group") and for the session a lapsed run lease of a member left open (row 7).
 not make "two members' sessions are not open on one device at once" hold everywhere: a run's lease
 that lapsed in its end phase while another member's claim waited, and the monitor's probe, left a
 member's session open beside another member's lease, and the queue's grant judged the device's
-queue by one member's gate (register §1.350, findings 2, 4 and 5). MAPP-1d (register §1.357)
+queue by one member's gate (register §1.350, findings 2, 4 and 5). MAPP-1d (register §1.359)
 closes the three (row 7, row 15, "One queue, one worker, one lease per device").
 
 **The one lock order** of the paths that touch more than one member (register §1.350, "The lock
@@ -857,7 +857,7 @@ lock is keyed by the device since MAPP-1c, as the queue it orders and the admiss
 was keyed by the member, so a member's pump could grant another member's claim before that claim's
 context was registered. MAPP-1d's paths (the monitor's probe, the lapsed run lease's end and the
 close of its session, the gates of each member read before the queue-order lock) keep this order
-(register §1.357, "The lock order").
+(register §1.359, "The lock order").
 
 ## The monitor's probe in a device group (MAPP-1d, built in Runtime 0.12.60)
 
@@ -1029,7 +1029,7 @@ of a device group of several:
   device's queue-order lock keyed by the device; the load still refuses every group of several, so
   no installation reaches it, and nothing is added to the catalog, the configuration or an
   interface.
-- MAPP-1d is built in Runtime 0.12.60 (register §1.357): the monitor's probe of a member made only
+- MAPP-1d is built in Runtime 0.12.60 (register §1.359): the monitor's probe of a member made only
   on a free device and its session closed before it lets the device go, a lapsed run lease of a
   member handed on only after the member's session is closed, and each claim of a device's queue
   judged by its own member's gate; the load still refuses every group of several, so no
@@ -1063,7 +1063,7 @@ of a device group of several:
   several.
 - **Before the load accepts a group of several**, besides the member that cannot fit (above), the
   slice "order within one device" and the slice "device-level actions by device", these must be
-  on main (found by MAPP-1d and its review, register §1.357; MAPP-1c's open findings 2, 4 and 5,
+  on main (found by MAPP-1d and its review, register §1.359; MAPP-1c's open findings 2, 4 and 5,
   register §1.350, are closed by MAPP-1d):
   - *A member's non-run lease that lapses while its session is open* (board #458): the sweep's
     close under the lapsed lease is refused, the sweep marks that error fatal and the whole Runtime
@@ -1084,7 +1084,7 @@ of a device group of several:
     the gate of the member it was asked for, as the transfers and the queueing did. Each is closed
     as row 7, "The monitor's probe in a device group" and "One queue, one worker, one lease per
     device" now say; the dedicated close lease keeps the asking member's gate, as before (fix round
-    1, register §1.357).
+    1, register §1.359).
 
 ## Codes, value keys and words (MAPP-1 registers the first three codes and two vocabularies, MAPP-1b the fifth code, MAPP-2a the fourth code and the third vocabulary, MAPP-2b one optional value and the key)
 

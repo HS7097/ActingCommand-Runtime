@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #437 MAPP-1d (register §1.357; `contracts/device-group.md`, "The monitor's probe in a
+//! Workflow #437 MAPP-1d (register §1.359; `contracts/device-group.md`, "The monitor's probe in a
 //! device group", "Device-level actions", row 7, and "One queue, one worker, one lease per
 //! device"): the three group gaps MAPP-1c's review found, closed, through the host: the monitor's
 //! probe of a member, the hand-over at a lapsed run lease's expiry, and the queue's grant judged
@@ -1359,7 +1359,7 @@ fn mapp1d_a_paused_members_claim_stays_queued_while_another_members_later_claim_
 /// of `run_monitor_probe`, `end_lease_ordered` out of `cleanup_token_guarded`, the admission
 /// guard handed through `cleanup_token_inner`, `device_held_by_another_member` out of the keyless
 /// observation's refusal) are not under the switch: this test does not claim them (register
-/// §1.357).
+/// §1.359).
 #[test]
 fn mapp1d_the_switch_changes_a_members_grant_record_and_no_record_of_a_lone_instance() {
     let device = Device::start();
