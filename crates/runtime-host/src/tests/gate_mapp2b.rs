@@ -809,8 +809,9 @@ fn startup_scheduled(events: &[PersistedEvent]) -> bool {
 /// Whether a member is named `key`, whose value is a time or a place in the ledger: an instant on
 /// either clock, a measurement on the process clock (the run's timing observations, the package's
 /// load time, the bytes of the records the run wrote, which hold such times), a local day, a
-/// ledger position, revision or record index. Two hosts hold these apart however alike their
-/// runs are.
+/// ledger position, revision or record index, or the evaluation's `seed` (a digest of the fact
+/// snapshot's id, the evaluation's time and the owner epoch). Two hosts hold these apart however
+/// alike their runs are.
 fn time_or_place(key: &str) -> bool {
     key.ends_with("_unix_ms")
         || key.ends_with("_monotonic_ms")
@@ -827,6 +828,7 @@ fn time_or_place(key: &str) -> bool {
                 | "record_index"
                 | "input_ledger_position"
                 | "input_fact_revisions"
+                | "seed"
         )
 }
 
@@ -1663,9 +1665,18 @@ fn mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it()
         switched_off.0.len(),
         "as many records: {reachable:#?} {switched_off:#?}"
     );
-    for (index, (with, without)) in reachable.0.iter().zip(&switched_off.0).enumerate() {
-        assert_eq!(with, without, "record {index} of C's run");
-    }
+    // Every differing record at once: a comparison that stops at the first one hides the rest.
+    let differing: Vec<_> = reachable
+        .0
+        .iter()
+        .zip(&switched_off.0)
+        .enumerate()
+        .filter(|(_, (with, without))| with != without)
+        .collect();
+    assert!(
+        differing.is_empty(),
+        "the records of C's run are the same on both hosts; these differ: {differing:#?}"
+    );
     assert_eq!(
         reachable, switched_off,
         "the same receipt state, own time, sample and last_duration_ms"
