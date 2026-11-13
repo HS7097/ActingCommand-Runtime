@@ -12256,7 +12256,11 @@ each program is served by that Runtime's own rules (fix 1: the connections count
   (`failures_grouped`), `events`, and a console's count of records by severity. No guard, no
   post-start check row, no watchdog attention and no overview warning reads them, and nothing
   stops, refuses or alarms on them.
-- **The deploy kit** runs `actingctl install` of the new build against the old running Runtime.
+- **A deployment run by `actingctl install` of the new build** against the old running Runtime
+  (corrected with the 0.12.59 release: which build's installer runs a deployment is the deployer's
+  choice; a deployment whose every step, the detached run included, is run by the installed
+  build's `actingctl install` declares no word, and its connections add none of the records
+  counted below).
   Every connection the rescue module makes keeps (Cli, Cli) and is a client of its own, one per
   read or write (`SystemRuntime`). `update plan` and its `--preview` connect to nothing (they read
   the owner lock and the processes). `update apply --stop --hold <reason> --start` connects to the
@@ -12282,14 +12286,18 @@ each program is served by that Runtime's own rules (fix 1: the connections count
   is, and `actingctl` writes the one stderr line. So one such deployment adds N + 9 records
   `runtime_protocol_invalid` to the ledger, all written by the old Runtime before it closes, and
   none after the new one starts. No step is refused or fails for the binding.
-- **The automatic rollback** (the composite update's new start did not become ready, or one of its
-  fail-class post-start checks failed): this build's `actingctl` closes the new Runtime, puts the
+- **The automatic rollback of such a deployment** (the composite update's new start did not become
+  ready, or one of its fail-class post-start checks failed): this build's `actingctl` closes the
+  new Runtime, puts the
   previous build back, starts it, and talks to that old Runtime again: the readiness probe, the
   post-start check (`Status`, `RuntimeFactSnapshot`, `StartReport`) and the release (`Status`,
   each `ResumeScheduling`, `ScheduleExplanation`). On 0.12.57 or earlier each of these connections
   is dropped once, adding one such record, and made again unbound; none fails.
 - **The deployer's choice:** deploying 0.12.58 first avoids all of these records, because that
-  Runtime accepts the binding.
+  Runtime accepts the binding. So does running the deployment with the installed build's
+  `actingctl install`, which declares no word; then only programs of the new build that reach a
+  Runtime of 0.12.57 or earlier outside the deployment add them (an MCP server's child that the
+  entry already switched to the new build, or the tools of the new build after a rollback).
 
 **LAB-6S2-B2 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
 
