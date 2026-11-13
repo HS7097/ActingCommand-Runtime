@@ -751,6 +751,12 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         checks: &[Check::G5],
         reason: "standing: the task schema member read_list shares its spelling with the kernel's stage location read_list (Workflow #428 S168-4, register section 1.291 S168C-3); pack-containment, which the kernel depends on, spells the member in this one function",
     },
+    AllowEntry {
+        path: "crates/runtime-host/src/host/ui_gate.rs",
+        item: Some("kind_location"),
+        checks: &[Check::G5],
+        reason: "standing: the UI list's refusal (Workflow #434 LAB-6S3, register section 1.287) names the refused request kind by a location other owners register (the contract, the runtime client, the ledger and this crate), and the runtime client's are out of this crate's reach as types; this one table spells them, and a test holds every spelling registered",
+    },
     // A2d bridges: channels of the execution and recognition group that stay strings until the
     // slice the reason names removes the entry (brief-a2bcd.md).
     bridge(

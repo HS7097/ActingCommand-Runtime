@@ -2769,10 +2769,12 @@ fn typed_client_records_client_actions_and_approval_decisions_through_runtime() 
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host(&root, state, 1_000);
+    // Workflow #434 LAB-6S3: the identity card and the approval are not on the UI list, so the
+    // client binds `cli`, as actingctl does, with the (User, Ui) envelope they need.
     let client = RuntimeClient::connect(
         RuntimeClientConfig::new(
             root.path(),
-            crate::RuntimeChannel::Ui,
+            crate::RuntimeChannel::Cli,
             EventActor::User,
             EventSource::Ui,
         )

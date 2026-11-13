@@ -357,6 +357,8 @@ mod gate_389_u2;
 // Workflow #434 LAB-6S1a: the door also takes `lab` with an initiator; every binding without one
 // answers byte for byte as before.
 mod gate_434_lab6s1a;
+// Workflow #434 LAB-6S3: the UI list on the `ui` channel; every other connection as before.
+mod gate_434_lab6s3;
 // Workflow #429 R-0: the workbench's kinds have their shapes and answer `not_implemented`.
 mod gate_429_r0;
 // Workflow #429 R-0b: the Status member `activity` while each activity runs and after it ends.

@@ -532,6 +532,55 @@ impl RuntimeOperationKind {
     }
 }
 
+/// Workflow #434 LAB-6S3 (`contracts/lab-two-entries.md` §3): the UI list, whether the `ui`
+/// channel takes a request of `kind` beside the handshake (`Health`, `BindChannel`). A static
+/// table: no roles, users or tokens. It equals the operation table's `ui_kinds`
+/// (`contracts/lab-operations.json`), the transitional `RecordClientAction` included. On `ui` a
+/// `ConfigureSettings` also needs every change's key within the console's tiers, which the
+/// Runtime's gate checks (§2.3 step 5); every other kind is refused there.
+pub const fn ui_allows(kind: RuntimeOperationKind) -> bool {
+    use RuntimeOperationKind as Kind;
+    matches!(
+        kind,
+        // Reads the console sends today.
+        Kind::Status
+            | Kind::RuntimeFactSnapshot
+            | Kind::ScheduleExplanation
+            | Kind::StartReport
+            | Kind::QueryEvents
+            | Kind::ReadMaterial
+            | Kind::DiscoverInstances
+            | Kind::ObserveReadonly
+            // So that the operation `status` is whole on this entry.
+            | Kind::MonitorStatus
+            // Reads on the list before the console uses them.
+            | Kind::InstanceFactSnapshot
+            | Kind::PerformanceStatus
+            | Kind::FactRefreshStatus
+            | Kind::RoutineSummary
+            | Kind::ResourceTargetView
+            | Kind::PackScheduleView
+            | Kind::CaptureSequence
+            // Writes the console sends today.
+            | Kind::PauseScheduling
+            | Kind::ResumeScheduling
+            | Kind::ControlEmulatorInstance
+            | Kind::SelfCheckInstance
+            | Kind::RequestShutdown
+            | Kind::ApplicationLifecycle
+            | Kind::ConfigureSettings
+            | Kind::StopInstanceRun
+            | Kind::EditPackSchedule
+            // Writes on the list before they are built.
+            | Kind::RunInstanceTask
+            | Kind::EditResourceTarget
+            | Kind::AcquirePlayerHold
+            | Kind::ReleasePlayerHold
+            // Transitional: the console's button trace, until LAB-7 takes it off the list.
+            | Kind::RecordClientAction
+    )
+}
+
 impl RuntimeOperationKind {
     /// Workflow #378 A4 (model section 7.2, review L1): the success code a completed receipt of
     /// this kind carries, one per kind. A kind that never answers completed has none: its

@@ -44,7 +44,7 @@
     {"kind": "ApplicationLifecycle", "class": "write", "console_today": true},
     {"kind": "RequestShutdown", "class": "write", "console_today": true},
     {"kind": "RunInstanceTask", "class": "write", "console_today": false},
-    {"kind": "StopInstanceRun", "class": "write", "console_today": false},
+    {"kind": "StopInstanceRun", "class": "write", "console_today": true},
     {"kind": "EditPackSchedule", "class": "write", "console_today": false},
     {"kind": "EditResourceTarget", "class": "write", "console_today": false},
     {"kind": "AcquirePlayerHold", "class": "write", "console_today": false},
