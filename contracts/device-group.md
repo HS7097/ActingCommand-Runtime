@@ -2,19 +2,26 @@
 
 Workflow #437 MAPP-C (contracts only; [v012-register.md](v012-register.md) §1.323). **Every rule of
 this file is (MAPP, not built yet)** unless its section names MAPP-1 ([v012-register.md](v012-register.md)
-§1.328, Runtime 0.12.56) or MAPP-1b (§1.330, Runtime 0.12.57): no code, key, code, value key or
-word named here exists until the code slices of §1.323 build it, and every code, value key and
-vocabulary word below is proposed but those MAPP-1 registers: `device_group`,
-`instance.<instance id>.device_group`, `device_group_config_invalid` with the vocabulary
-`device_group_problem`, `device_group_assembled`, `device_group_waiting` with the vocabulary
-`device_group_wait`, and (MAPP-1b) `device_group_action_refused`. The coordinator cut MAPP-1 in
-two: MAPP-1a (§1.328) builds the configuration form and its checks, the refusal of every group of
-several, the member → device key map, the scheduler keyed by device and the evaluator's one pick
-per device; MAPP-1b (§1.330) builds the host's worker, occupancy, admission guard and pause per
-device, the gates of the group, the session rule, the refusals of device-level actions and a chain
-handover's successor before the device's other members. The player hold's own acquire, release
-and second-hold refusal are not built (the player hold itself is not built yet, Workflow #429
-R-7b), and the switch is MAPP-2's. The other contracts point here instead of repeating the rules.
+§1.328, Runtime 0.12.56), MAPP-1b (§1.330, Runtime 0.12.57) or MAPP-2a (§1.342, Runtime 0.12.59):
+no code, key, code, value key or word named here exists until the code slices of §1.323 build it,
+and every code, value key and vocabulary word below is proposed but those MAPP-1 registers:
+`device_group`, `instance.<instance id>.device_group`, `device_group_config_invalid` with the
+vocabulary `device_group_problem`, `device_group_assembled`, `device_group_waiting` with the
+vocabulary `device_group_wait`, (MAPP-1b) `device_group_action_refused`, and (MAPP-2a)
+`application_switch_failed` with the vocabulary `application_switch_step`. The coordinator cut
+MAPP-1 in two: MAPP-1a (§1.328) builds the configuration form and its checks, the refusal of every
+group of several, the member → device key map, the scheduler keyed by device and the evaluator's
+one pick per device; MAPP-1b (§1.330) builds the host's worker, occupancy, admission guard and
+pause per device, the gates of the group, the session rule, the refusals of device-level actions
+and a chain handover's successor before the device's other members. The player hold's own
+acquire, release and second-hold refusal are not built (the player hold itself is not built yet,
+Workflow #429 R-7b). The coordinator cut MAPP-2 in two as well: MAPP-2a (§1.342, built in Runtime
+0.12.59) builds the switch's parts (another member's stop under the device's key, the member's
+startup run on the borrowed key, the stopped member's page forgotten), their one entry and its
+code, with no caller in the Runtime; MAPP-2b (not built yet) calls the switch from the run paths,
+takes its time out of the run's clock, settles a run with its failure, adds the member's switch
+cooldown and its key, and sizes a member's dispatch lease for the switch and the run ("The switch
+before a run"). The other contracts point here instead of repeating the rules.
 
 The owner settled the direction on 2026-11-11 (board #437): one device may hold several applications
 that the scheduler serves in turn; one application is in front at any time; one device has one
@@ -289,9 +296,9 @@ None of this is a defect of slice 1: it is today's ranking applied to one device
 two slices the members of one device may switch application after every task, each switch a kill,
 a start and a return home: correct but slow, and accepted for these two slices. No release runs
 it: the first release that accepts a group of several also carries the slice "order within one
-device", which ranks the members of one device by the normalized weight with the switch's time as
-a cost ("Later slices", "Release"), and until then a group of several is refused at load ("The
-configuration form").
+device" (ORD-1), which writes the order within one device ("Later slices", "Release"), and until
+then a group of several is refused at load ("The configuration form"). The time a switch takes
+counts in no order and not in a run's own duration.
 
 **The reason a member waits: `device_group_waiting`** (registered by MAPP-1; info, ladder class
 `none`, owner `policy`). A candidate of a member that does not get the device because another member has it
@@ -345,12 +352,27 @@ Whatever today's rules run next on one instance runs next on its device:
 Another member's due task queues behind: it waits with `device_group_waiting` until the device is
 free and it wins a round.
 
-## The switch before a run (MAPP, not built yet)
+## The switch before a run (MAPP-2a: its parts and its entry, built with no caller; MAPP-2b: the rest, not built yet)
 
 In a group of several, before a run of a member, the Runtime brings that member's application to
 the front, under the device's lease.
 
-**Where the switch runs.**
+**What is built (MAPP-2a, Runtime 0.12.59).** The steps below, as the parts
+`HostShared::stop_member_application` (step 2, in `crates/runtime-host/src/host/switch.rs` over
+`control_member_application` in `host/input.rs`), `HostShared::run_startup_package_on_borrowed_key`
+(step 3, `host/startup_package.rs` over `run_prepared_package_on_borrowed_key` in
+`host/contained_task.rs`) and `HostShared::forget_stopped_application_facts` (step 2's forgetting,
+`host/runtime_facts.rs`), and their one entry `HostShared::switch_application`, reachable only
+through the public `RuntimeHost::switch_application`, which nothing in the Runtime calls. Every
+part begins from a member of a group of several (`in_group_of_several`), which the load refuses
+(`several_members_unsupported`), so no root reaches them. **What MAPP-2b adds:** the calls from
+the run paths named below, the switch's time taken out of the run's clock and its budget (the time
+a switch takes counts in no order and in no run's own duration; board #437), a run's failed
+settlement with `application_switch_failed`,
+the member's switch cooldown and its key, and a member's dispatch lease sized for the switch and
+the run (step 3).
+
+**Where the switch runs** (MAPP-2b; no caller in MAPP-2a).
 
 - For a policy run: inside `run_scheduled_contained_task`
   (`crates/runtime-host/src/host/contained_task.rs:7812`), after the run's context, identity,
@@ -366,35 +388,73 @@ the front, under the device's lease.
 - Never inside a run. A package's own `application` effect restarts the member's application,
   which is in front already.
 
-**Its steps, on the device's key.**
+**Its steps, on the device's key** (the key of the member's run: its token on its connection).
 
-1. **Read.** One foreground query through the member's registration: the read-only query of the
-   foreground gate ([application-lifecycle.md](application-lifecycle.md), "The foreground gate";
+1. **Read.** The key must still validate as the device's (`validate_write`); a key that does not
+   fails the step `foreground_read` with the scheduler's refusal, before any device step. Then one
+   foreground query through the member's registration: the read-only query of the foreground gate
+   ([application-lifecycle.md](application-lifecycle.md), "The foreground gate";
    `observe_foreground_application`, provider.rs:972-988). When the package in front is the
-   member's own `application_id`, nothing more is done and the run starts. No record is written.
-2. **Stop.** When the package in front is another member's `application_id`, that member's
-   application is force-stopped by a host-minted `ApplicationLifecycle { stop }` request for that
-   member. This is how the ladder's application restart rung stops its application:
-   `command.received`, `command.validated`, `application.intent`, `application.completed`, under
-   that member's links. When the package in front is no member's, or no resumed activity is
-   reported, every other member's application is stopped the same way, one request each, because
-   the Runtime cannot tell which one may still run. What `am force-stop` does to a package that is
-   not running is not verified on the devices.
-3. **Start and home.** The member's startup package runs on the key as a host run, exactly as after
-   an emulator start ([application-lifecycle.md](application-lifecycle.md), "The startup package
-   hook").
+   member's own `application_id`, nothing more is done and the run starts: no stop, no startup run,
+   and no record is written. Which member's package is in front is told by the `application_id`
+   each member's registration assigns, read from memory (`assigned_application_id` of the
+   execution provider): no other device query is made.
+2. **Stop.** Before any stop, the key's remaining time must cover the startup run of step 3 and the
+   run's own (step 3, "The key's time"); otherwise the step `startup_package` fails with
+   `contained_task_deadline_unavailable` and nothing is stopped. When the package in front is
+   another member's `application_id`, that member's application is force-stopped under the
+   device's key; when the package in front is no member's, or no resumed activity is reported,
+   every other member's application is stopped the same way, in id order, one stop each, because
+   the Runtime cannot tell which one may still run. Each stop (`stop_member_application`):
+   - **Under the device's key.** The key's holder must be a member of a group of several and the
+     member to stop another member of the same group, and the key must validate as the device's;
+     a key of another device, and a member outside the holder's group, are refused before any
+     device step (`instance_mismatch`). The application command validates the key as the device's
+     key, not as the stopped member's.
+   - **The stopped member's records.** A host-minted `ApplicationLifecycle { stop }` request for
+     that member, with the switch's causation id C, writes `command.received` and
+     `command.validated`, then the existing application command acts on that member's
+     registration and package: `scheduler.admitted`, `application.intent` and
+     `application.completed`, all under the stopped member's links (its instance, the key's lease,
+     the request and C). This is how the ladder's application restart rung stops its application,
+     on another member. Nothing is recorded under the member to run.
+   - **No session left.** The session the stop used is closed under the key, whatever the stop's
+     result ("Device-level actions", row 7).
+   - **The page forgotten.** Once the force-stop has succeeded, before the session's close and
+     whatever that close then does, the stopped member's `application.foreground` and `task.page`
+     are dropped (`runtime.fact_invalidated`, reason `device_closed`, as an emulator stop drops
+     them), so no chain handover of that member fires on a page it no longer shows. Its other
+     facts stay. Who reads `application.foreground` and why dropping it is right:
+     the foreground gate (it records a new reading when the value changes, so a dropped value makes
+     the next reading recorded), the overview's `foreground` block (`actingctl overview`,
+     `ac_overview`, the Lab: it shows no package rather than one no longer running), and the
+     generic fact listing and the ledger's fact-key filter, which show the drop.
+   What `am force-stop` does to a package that is not running is not verified on the devices.
+3. **Start and home.** The member's startup package runs on the key as a host run, as after an
+   emulator start ([application-lifecycle.md](application-lifecycle.md), "The startup package
+   hook"), on the borrowed key (`run_startup_package_on_borrowed_key`).
    - It writes `runtime.lifecycle_observed` phase `startup_package_scheduled` under the run's
-     request links with a fresh causation id C, as the ladder's rung writes it under the ladder's
-     links. The stops of step 2 carry the same causation id C.
+     request links with the causation id C the stops of step 2 carry.
    - The startup run then runs under C: self-minted request and correlation ids, origin
      `(Agent, Adapter)`, its full `task.*` chain.
    - Its first step is its `application` effect, `restart`: a force-stop and then a `monkey` launch
      of the member's `application_id` (provider.rs:902-929). So the application is started by its
-     package name through the one existing path, and the run succeeds only on the home page its
-     package declares.
-   - The startup run's end hands the key back to the run, never to another claim, as a rung run's
-     release hands it to the ladder's continuation ([emulator-control.md](emulator-control.md),
-     "Rungs").
+     package name through the one existing path, an application launch over ADB, and the run
+     succeeds only on the home page its package declares. Nothing on the launcher is tapped.
+   - **The borrowed key.** The key is never renewed (a renewal mints a new token, and the run
+     checks the one it holds throughout) and never ended: no release, no queued continuation, no
+     new token. When the startup run ends, on success or on failure, the key is the run's again,
+     its token unchanged and valid, and a claim of another member queued on the device stays
+     queued. A key the startup run lost (it no longer validates) fails the step.
+   - **The key's time.** Before any stop of the switch, the key's remaining time must cover
+     the startup run's lease time (its response deadline and the heartbeat reserve) and the run's
+     own (its response deadline and the heartbeat reserve); the startup run's deadline is the
+     earlier of its response deadline and the key's expiry less the run's own lease time. So a
+     startup run that ends by its deadline leaves the run at least its own lease time, and the
+     run's deadline, computed after the switch, is its full response deadline. Today a policy
+     dispatch's lease is sized for its run alone (its response deadline and the reserve), so a key
+     granted today is refused here: MAPP-2b sizes a member's dispatch lease for the startup run
+     and the run.
 4. **Run.** The member's run starts on the same key.
 
 After a switch the earlier application is not running, so at most one member's application is
@@ -406,22 +466,31 @@ own `application_id`. The switch sends no pointer input, so the gate does not ru
 inputs of the startup run meet the gate as every startup run's do.
 
 **When the switch fails.** Each failure fails the member's run only, before any effect of the run,
-with `application_switch_failed`. That code is proposed: error, ladder class `none`, owner
-`runtime-host`, caused by the step's failure record. Its values are `alias` (the member to run),
-`application_switch_step` (a proposed vocabulary: `foreground_read`, `stop`, `startup_package`),
-`failure_code` (the step's own code) and `application_id` (the package the step concerned).
+with `application_switch_failed` (registered by MAPP-2a: error, ladder class `none`, owner
+`runtime-host`, since 0.12.59), whose cause (`caused_by`) is the step's own failure. Its values are
+`alias` (the member to run), `application_switch_step` (a vocabulary registered by MAPP-2a:
+`foreground_read`, `stop`, `startup_package`), `failure_code` (the step's own code) and
+`application_id` (the package the step concerned: the member's own for `foreground_read` and
+`startup_package`, the stopped member's for `stop`). The steps done before the failed one stay
+done. In MAPP-2a the parts return this failure and nothing settles a run with it. Two refusals come
+back as themselves, not as `application_switch_failed`, because that code's required `alias` or
+`application_id` would name nothing: a member to run, a key's holder or a member to stop that the
+registry does not hold (`instance_mismatch`), and a member to run or a member to stop whose
+registration assigns no application (`application_effect_requires_assigned_application`). Each
+comes before any device step of the part that meets it, and neither is reachable while the load
+refuses every group of several.
 
-A policy run is settled as every run refused before its request lifecycle is: a failed settlement
-of the pair, with its lease released (`run_scheduled_policy_task`,
+From MAPP-2b on, a policy run is settled as every run refused before its request lifecycle is: a
+failed settlement of the pair, with its lease released (`run_scheduled_policy_task`,
 `crates/runtime-host/src/host/policy_lanes.rs:547-584`, then `record_scheduled_policy_failure` and
 `complete_scheduled_policy_failure`, `crates/runtime-host/src/host/policy_outcome.rs:1544-1567`). A
 direct run's receipt is failed with the code.
 
 | Step | What its failure is and does |
 |---|---|
-| `foreground_read` | The query's ADB failure is handled as the gate's: the member's `device.connected`, `application.foreground` and `task.page` are invalidated with `adb_unreachable`, and an unconfirmed ADB cleanup fences the member. `failure_code` is `application_foreground_unknown` or `instance_resources_fenced` |
-| `stop` | The stop's own failure records, as the rung's (`command.rejected` + `runtime.failed`). A fatal device error with confirmed resources fences the member whose application was being stopped (#411 A46) |
-| `startup_package` | The startup run's admission refusal (`startup_package_missing`, `startup_package_admission_failed`, `startup_package_adb_not_ready`) or its failed terminal. A home that is not reached is the step's timeout. The stopped member's application stays stopped |
+| `foreground_read` | A key that no longer validates as the device's (the scheduler's refusal), before any device step. The query's ADB failure is handled as the gate's: the member's `device.connected`, `application.foreground` and `task.page` are invalidated with `adb_unreachable`, and an unconfirmed ADB cleanup fences the member. `failure_code` is `application_foreground_unknown` or `instance_resources_fenced` |
+| `stop` | A key of another device or a member outside the holder's group, before any device step (`instance_mismatch`), or a key that no longer validates. The stop's own failure records, as the rung's (`application.failed` and the lifecycle failure). A fatal device error with confirmed resources fences the member whose application was being stopped (#411 A46). The stopped member's page is not forgotten. A failed close of the session the stop used fails the step too: after a force-stop that succeeded, with the close's own code, the page forgotten all the same; after a failed one, as that failure's related cleanup failure |
+| `startup_package` | A key whose remaining time does not cover the startup run and the run after it, before any stop (`contained_task_deadline_unavailable`); no startup package (`startup_package_missing`); the startup run's admission refusal (`startup_package_admission_failed`, `startup_package_adb_not_ready`) or its failed terminal; a key the startup run lost. A home that is not reached is the step's timeout. The stopped member's application stays stopped, and the key stays with the run |
 
 What a failed switch does to each party:
 
@@ -435,8 +504,8 @@ What a failed switch does to each party:
   belongs").
 - **To the member's other due work:** the member's switch cooldown (below).
 
-**The member's switch cooldown.** After a failed switch the member does not compete for the device
-for `scheduling.device_group.switch_failure_cooldown_ms` (proposed key; milliseconds
+**The member's switch cooldown** (MAPP-2b, not built yet). After a failed switch the member does
+not compete for the device for `scheduling.device_group.switch_failure_cooldown_ms` (proposed key; milliseconds
 `1..=3600000`, default `300000`, five minutes). Without it, a member with many due tasks would try
 each of them in turn, each try a kill and a restart of an application, and starve the device's
 other members. It is the scheduling contract's takeover cooldown, kept per member: position 2 of
@@ -464,7 +533,7 @@ state's `cooldown_until_monotonic_ms`.
   `ApplicationLifecycle` request) is not held. A direct run goes through the switch, and its failed
   switch starts the cooldown again.
 - **No ladder.** The failure still starts no recovery ladder (above), and the cooldown is no rung.
-- **The key.** A member of the `scheduling` section (planned: it comes with MAPP-2 and takes the
+- **The key.** A member of the `scheduling` section (planned: it comes with MAPP-2b and takes the
   next free revision of `actingd-config`), settable, default `file`, read at every policy cycle. It has no per-instance or per-group form: a group has
   no configuration of its own beyond its members' `device_group` ("The configuration form"), and
   the section's nearest failure wait, `scheduling.fact_refresh.failure_backoff_ms`, has none
@@ -485,7 +554,7 @@ today ([device-binding.md](device-binding.md), "Backends").
 - **The emulator manager's mutable application commands stay unused**
   ([emulator-control.md](emulator-control.md)).
 
-## Device-level actions (MAPP-1: the refusals at assembly; MAPP-1b: rows 5, 7, 10 and 15; the switch's parts, MAPP-2's, not built yet)
+## Device-level actions (MAPP-1: the refusals at assembly; MAPP-1b: rows 5, 7, 10 and 15; the switch's parts: MAPP-2a, built with no caller; their calls: MAPP-2b, not built yet)
 
 These act on the device, not on one application. The starting point: each such setting is read
 from one place per group; a member that carries a conflicting one is refused at assembly; anything
@@ -496,7 +565,7 @@ lists each action, where it is today, and what slice 1 does in a group of severa
 |---|---|---|---|
 | 1 | Configured start at daemon start (`start_emulator`) | `InstanceConfig::start_emulator`, config.rs:1118-1122; `resolve_emulator_autostart`, `enqueue_emulator_autostart`, `crates/runtime-host/src/host/emulator_autostart.rs:264`, `:350`; [emulator-control.md](emulator-control.md), "Configured start at daemon start" | **Refused**: `start_emulator` `true` (`device_action_unsupported`), and the instruction by `section_check` |
 | 2 | Emulator watch: status read, restart, binding recognition | `crates/runtime-host/src/host/emulator_watch.rs:1-40`; `request_watch_autostart`, `request_watch_recognition`, emulator_autostart.rs:536, :575; "Emulator watch" | The status read stays per member (read-only, under the device's guard). A restart never happens, because it needs `start_emulator` (row 1). A recognition stays per member, on the device's key |
-| 3 | Idle action (`close_app`, `stop_emulator`, `auto`) and its wake | `crates/runtime-host/src/host/idle.rs:1-125` (`idle_close_app` :1401, `idle_stop_emulator` :1573); [runtime-config.md](runtime-config.md), "The `idle` section" | **Refused**: `idle.action` in effect other than `none`. A `close_app` wake runs the member's startup package ahead of the device's pick, and a stop stops every member's device |
+| 3 | Idle action (`close_app`, `stop_emulator`, `auto`) and its wake | `crates/runtime-host/src/host/idle.rs:1-125` (`idle_close_app` :1451, `idle_stop_emulator` :1623); [runtime-config.md](runtime-config.md), "The `idle` section" | **Refused**: `idle.action` in effect other than `none`. A `close_app` wake runs the member's startup package ahead of the device's pick, and a stop stops every member's device |
 | 4 | Ladder rung `emulator_restart` | [emulator-control.md](emulator-control.md), "Rungs" and "Ladder profiles"; `crates/runtime-host/src/host/recovery_ladder.rs` | **Refused**: a profile in effect whose rungs hold it. The rungs `return_home` and `application_restart` stay per member on the device's key; the latter's start goes through the switch |
 | 5 | Operator emulator control (`actingctl emulator`, the console, MCP `ac_emulator`: start, stop, restart) | [emulator-control.md](emulator-control.md), "Operation and origin gate", "The operator's claim and the fence" (`ClaimKind::EmulatorControl`) | **Refused** before any device step with `device_group_action_refused` (registered by MAPP-1b; error, ladder class `none`, owner `runtime-host`; values `alias`, `operation` `control_emulator_instance`), before its intent. It would rebind and refresh only the asking member (`rebind_discovered_endpoint`, [device-binding.md](device-binding.md), "Backends") and leave the other members' endpoints and device facts as they were |
 | 6 | Device binding: the handset's private file, and the discovery binding | `apps/actingd/src/config/device_binding.rs`; provider_startup.rs:105-141; `bound_alias`, `crates/runtime-host/src/host/instance_discovery.rs:171-194` | **Handsets refused** (`handset_member`). Discovery-bound members resolve the same index. The discovery answer and the startup record name one `bound_alias` per index (instance_discovery.rs takes the lowest instance id; provider_startup.rs keeps the last deferred entry). Slice 1 names the group's first member in alias order in both; the console slice decides how the others are shown |
@@ -565,9 +634,10 @@ them, and it comes before the first real use of a group of several.
   names the member (`config_decode_failed`: the entry denies unknown members). A file that names
   it nowhere keeps its revision, so the Runtime reads 5 to 29 and declares [5, 29]. The console
   and the installer, the other two parties, follow. The `scheduling` section's member
-  `device_group.switch_failure_cooldown_ms` comes with MAPP-2 and takes the next free revision of
-  `actingd-config` (0.12.56 ships revision 29 without it); a build before that revision refuses a
-  file that names it (`config_decode_failed`: the section denies unknown members).
+  `device_group.switch_failure_cooldown_ms` comes with MAPP-2b and takes the next free revision of
+  `actingd-config` (0.12.56 ships revision 29 without it, and MAPP-2a moves no revision); a build
+  before that revision refuses a file that names it (`config_decode_failed`: the section denies
+  unknown members).
 - **`ledger` does not move.** Every record that a group of several writes and a group of one never
   writes has an existing shape:
   - reasons with new codes and value words in decisions and their records
@@ -599,16 +669,9 @@ them, and it comes before the first real use of a group of several.
 
 ## Later slices (named, not written here)
 
-- **Order within one device**, designed together with the normalized weight. The members of one
-  device no longer take turns against each other: they rank by the normalized weight, and the time
-  a switch takes counts as a cost (the stops, the start and the home: the mean of that member's
-  last five switches). Slice 1 leaves room: each switch's records share one causation id, which
-  gives its time. It is a slice of its own because a switch's time in the expected duration alone
-  changes nothing across members: `E` today orders only a member's own judged candidates (`B ÷ E`
-  within an instance) and the reservations, and across instances the turns decide first
-  ([scheduling/README.md](scheduling/README.md), "Turns across instances"), so the turns of the
-  members of one device are read per device. Its design is the coordinator's, written when it is
-  made; what in it touches the queue rules Alice set goes to her.
+- **Order within one device.** The order of the members of one device is written by the slice
+  ORD-1; its rules are not written here. The time a switch takes counts in no order and not in a
+  run's own duration (board #437, 2026-11-13).
 - **The normalized weight.** A task's weight divided by the largest weight of its own catalog, 0.5
   for a task without a price, with a per-application preference factor on top, default 1 (board
   #437, comment 6799803829). Slice 1 leaves room: members already rank in one ordered list, by
@@ -635,24 +698,29 @@ them, and it comes before the first real use of a group of several.
 
 - MAPP-1a shipped in Runtime 0.12.56 with every group of several refused at load (corrected by the
   coordinator on 11-12, register §1.330).
+- MAPP-2a is built in Runtime 0.12.59 (register §1.342): the switch's parts, their one entry and
+  the code `application_switch_failed` with the vocabulary `application_switch_step`, with no
+  caller in the Runtime; the load still refuses every group of several, and the catalog gains one
+  code and one vocabulary.
 - The release that first accepts a device group of more than one member carries the host's rows
-  (MAPP-1b), the switch before a run (MAPP-2) and the slice "order within one device" together,
-  so that no released build runs a group of several without the switch. Until then every build
-  refuses such a group at load (`device_group_config_invalid`, `several_members_unsupported`;
-  "The configuration form"), and no release ships the switch after every task.
-- MAPP-2's key `scheduling.device_group.switch_failure_cooldown_ms` comes with MAPP-2 and takes
+  (MAPP-1b), the switch before a run (MAPP-2a and MAPP-2b) and the slice "order within one device"
+  together, so that no released build runs a group of several without the switch. Until then
+  every build refuses such a group at load (`device_group_config_invalid`,
+  `several_members_unsupported`; "The configuration form"), and no release ships the switch after
+  every task.
+- MAPP-2's key `scheduling.device_group.switch_failure_cooldown_ms` comes with MAPP-2b and takes
   the next free revision of `actingd-config`.
 - The slice "device-level actions by device" comes before the first real use of a group of
   several.
 
-## Codes, value keys and words (MAPP-1 registers the first three codes and two vocabularies, MAPP-1b the fifth code; the rest proposed)
+## Codes, value keys and words (MAPP-1 registers the first three codes and two vocabularies, MAPP-1b the fifth code, MAPP-2a the fourth code and the third vocabulary; the rest proposed)
 
 | Code | Owner | Category, ladder class | Values | State |
 |---|---|---|---|---|
 | `device_group_config_invalid` | `actingd` | error, `none` | `aliases`, `config_key`, `device_group_problem` | registered, MAPP-1 |
 | `device_group_assembled` | `actingd` | info, `none` | `aliases`, `device_label`? | registered, MAPP-1 |
 | `device_group_waiting` | `policy` | info, `none` | `instance_id`, `alias`, `device_group_wait`, `task_id`?, `holder_kind`? | registered, MAPP-1 |
-| `application_switch_failed` | `runtime-host` | error, `none` | `alias`, `application_switch_step`, `failure_code`, `application_id` | proposed (MAPP-2) |
+| `application_switch_failed` | `runtime-host` | error, `none` | `alias`, `application_switch_step`, `failure_code`, `application_id` | registered, MAPP-2a (0.12.59) |
 | `device_group_action_refused` | `runtime-host` | error, `none` | `alias`, `operation` | registered, MAPP-1b |
 
 New value keys, each with its vocabulary:
@@ -661,7 +729,7 @@ New value keys, each with its vocabulary:
   `handset_member`, `fixture_member`, `application_shared`, `startup_package_missing`,
   `device_action_unsupported`, `undeclared_shared_device`, `several_members_unsupported`.
 - `device_group_wait` (registered, MAPP-1): `selected`, `held`, `player_hold`, `fenced`.
-- `application_switch_step` (proposed, MAPP-2): `foreground_read`, `stop`, `startup_package`.
+- `application_switch_step` (registered, MAPP-2a): `foreground_read`, `stop`, `startup_package`.
 
 Every other key is an existing key of the one key table
 (`crates/actingcommand-contract/src/outcome/keys.rs`).
@@ -669,7 +737,7 @@ Every other key is an existing key of the one key table
 One existing code takes one more optional value: `dispatch_instance_cooldown` (`runtime-host`,
 info) takes `failure_code`, an existing key, which is `application_switch_failed` for a member's
 switch cooldown and is absent for a takeover cooldown. Its description and causes name both
-cooldowns (MAPP-2).
+cooldowns (MAPP-2b).
 
 One configuration key (proposed): `scheduling.device_group.switch_failure_cooldown_ms`,
 milliseconds `1..=3600000`, default `300000`, settable ("The switch before a run").

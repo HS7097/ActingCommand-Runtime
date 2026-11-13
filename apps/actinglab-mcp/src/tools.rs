@@ -77,8 +77,10 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 }
 
 /// The slices whose planned rows actinglab offers: its words' `BUILT_SLICES`
-/// (`apps/actinglab/src/cli_module/words.rs`), which this server's test holds equal.
-pub(crate) const ACTINGLAB_SLICES: [&str; 5] = ["LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8"];
+/// (`apps/actinglab/src/cli_module/words.rs`), which this server's test holds equal. Workflow
+/// #449 REC-ARCH: its rows `record archive` and `record reopen`, served through a `serve` child.
+pub(crate) const ACTINGLAB_SLICES: [&str; 6] =
+    ["LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8", "REC-ARCH"];
 /// The slice whose planned rows this server offers itself (§9.2): `record draft`, `mcp config`,
 /// `mcp entries` and, since LAB-5G5b, `mcp plan` (Workflow #434 LAB-5G2b, second part: the three
 /// `mcp` rows served with the rescue module's others; Workflow #434 LAB-5G4b: `record draft`

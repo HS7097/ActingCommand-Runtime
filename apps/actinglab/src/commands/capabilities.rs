@@ -111,6 +111,9 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("session record step", ["offline", "device"], "available"),
         command_cap("session record candidates", ["offline"], "available"),
         command_cap("session record amend", ["offline"], "available"),
+        // Workflow #449 REC-ARCH: a recording ended as material only, and reopened later.
+        command_cap("session record archive", ["offline"], "available"),
+        command_cap("session record reopen", ["offline"], "available"),
         command_cap("record", ["offline"], "available"),
         command_cap("record start", ["offline"], "available"),
         command_cap("record status", ["offline"], "available"),
@@ -121,6 +124,9 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("record amend", ["offline"], "available"),
         // Workflow #434 LAB-5G4c: the binding draft of a `record stop` answer; it changes nothing.
         command_cap("record draft", ["offline", "read_only"], "available"),
+        // Workflow #449 REC-ARCH.
+        command_cap("record archive", ["offline"], "available"),
+        command_cap("record reopen", ["offline"], "available"),
         command_cap("capture --record", ["device"], "available"),
         command_cap("session capture --record", ["device"], "available"),
         command_cap("session app --record", ["device"], "available"),

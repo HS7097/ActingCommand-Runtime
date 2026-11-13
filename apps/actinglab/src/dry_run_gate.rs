@@ -10,8 +10,9 @@ use serde_json::{Map, Value, json};
 
 pub(crate) const REFUSAL_CODE: &str = "dry_run_unsupported";
 
-/// `record` / `session record` actions refused under `--dry-run`.
-pub(crate) const RECORD_REFUSED_ACTIONS: &[&str] = &["start", "step", "amend"];
+/// `record` / `session record` actions refused under `--dry-run` (Workflow #449 REC-ARCH: and
+/// `archive` and `reopen`, which have no dry run).
+pub(crate) const RECORD_REFUSED_ACTIONS: &[&str] = &["start", "step", "amend", "archive", "reopen"];
 
 /// Fails with `dry_run_unsupported` (exit 2) when the global `--dry-run` flag is set; otherwise
 /// returns `Ok(())` and the command continues. `extra` (an object) is merged into the details.
@@ -134,6 +135,9 @@ const RECORD_FORMS: &[(&str, Mode)] = &[
     ("mark", DRY_RUN),
     ("step", UNSUPPORTED),
     ("amend", UNSUPPORTED),
+    // Workflow #449 REC-ARCH.
+    ("archive", UNSUPPORTED),
+    ("reopen", UNSUPPORTED),
     ("status", Mode::NoEffect),
     ("candidates", Mode::NoEffect),
     ("build-task", Mode::Refused("resource_production_retired")),
@@ -238,6 +242,11 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("session record start", UNSUPPORTED),
     ("session record step", UNSUPPORTED),
     ("session record amend", UNSUPPORTED),
+    // Workflow #449 REC-ARCH: each writes the recording's files; `record status` reads them.
+    ("record archive", UNSUPPORTED),
+    ("record reopen", UNSUPPORTED),
+    ("session record archive", UNSUPPORTED),
+    ("session record reopen", UNSUPPORTED),
     ("lab signatures register", UNSUPPORTED),
     ("lab signatures match", UNSUPPORTED),
     ("lab signatures retire", UNSUPPORTED),

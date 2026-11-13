@@ -3300,7 +3300,7 @@ impl HostShared {
         )
     }
 
-    fn append_scheduler_admitted_for(
+    pub(super) fn append_scheduler_admitted_for(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         instance_id: InstanceId,

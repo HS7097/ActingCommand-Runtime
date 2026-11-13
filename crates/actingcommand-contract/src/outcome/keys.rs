@@ -182,6 +182,8 @@ outcome_keys! {
     // Workflow #384 D2-S2: a reading mark that gave no reading.
     reading_id: id,
     reading_problem: vocab(reading_problem),
+    // Workflow #450 FL-1b: the fields report's frames a field list's miss names.
+    frame_indices: list(integer),
     // Workflow #384 D2-S3: why a confirmed resource adjustment wrote nothing.
     adjustment_reason: vocab(adjustment_reason),
     // Workflow #384 D2-S4: which limit holds a recognition maintenance package back.
@@ -805,4 +807,7 @@ outcome_keys! {
     // in codes mode. ----
     device_group_problem: vocab(device_group_problem),
     device_group_wait: vocab(device_group_wait),
+    // ---- Workflow #437 MAPP-2a (contracts/device-group.md "The switch before a run"): which step
+    // of the switch before a member's run failed; kept in codes mode. ----
+    application_switch_step: vocab(application_switch_step),
 }

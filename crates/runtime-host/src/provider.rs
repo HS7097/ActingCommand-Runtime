@@ -1469,6 +1469,16 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         }
     }
 
+    /// Workflow #437 MAPP-2a: a real entry's configured `application_id`, from memory (a fixture
+    /// has no assigned application).
+    fn assigned_application_id(&self, instance_alias: &str) -> Option<String> {
+        match self.entries.get(instance_alias)? {
+            RegistryEntry::Real(entry) => Some(entry.application_id.clone()),
+            #[cfg(feature = "fixture-backends")]
+            RegistryEntry::Fixture(_) => None,
+        }
+    }
+
     fn control_application(
         &self,
         witness: &FencedWrite,

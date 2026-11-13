@@ -49,9 +49,11 @@ actingcommand_contract::outcome_vocabulary! {
         /// read the same value.
         NoAgreement => "no_agreement",
         /// Workflow #428 S168-4: a position of a list was readable at least once but holds no
-        /// fixed Known reading of its identity or of a column's feature.
+        /// fixed Known reading of its identity or of a column's feature. Workflow #450 FL-1b: a
+        /// frame of a field list whose key or a column is not resolved at the list's floor.
         ListPositionUnread => "list_position_unread",
-        /// Workflow #428 S168-4: two positions of a list read the same business ID.
+        /// Workflow #428 S168-4: two positions of a list read the same business ID. Workflow #450
+        /// FL-1b: two frames of a field list read the same key.
         ListDuplicateKey => "list_duplicate_key",
         /// Workflow #428 S168-4: a list showed more positions than one fact holds; its scan
         /// stopped there. Since S168-LB1a (0.12.55) the bound is 1024, so at the 1025th.
@@ -59,6 +61,11 @@ actingcommand_contract::outcome_vocabulary! {
         /// Workflow #428 S168-LB1a (since 0.12.55): a list read whole, within the row bound,
         /// whose record is larger than one observation holds (512 KiB); nothing is cut to fit.
         ListBytesExceeded => "list_bytes_exceeded",
+        /// Workflow #450 FL-1b: a field list's first frame did not meet its `start`.
+        ListStartUnseen => "list_start_unseen",
+        /// Workflow #450 FL-1b: a successful run collected frames of a field list and met no
+        /// `end`.
+        ListEndUnseen => "list_end_unseen",
     }
 }
 
@@ -687,6 +694,8 @@ impl PreparedContainedTask {
             let frame = runtime
                 .capture()
                 .map_err(ContainedTaskRunError::operation::<R>)?;
+            // Workflow #450 FL-1b: the frame captured last, until the next capture.
+            self.note_capture(frame.captured_at);
             let scale = self
                 .control
                 .resolution

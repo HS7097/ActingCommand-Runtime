@@ -311,8 +311,11 @@ impl HostShared {
         })
     }
 
+    /// The check of a Nemu input close of `instance_id` under `token`'s key: the token's own
+    /// instance, or (Workflow #437 MAPP-2a) another member of its device group.
     pub(super) fn nemu_close_check(
         &self,
+        instance_id: InstanceId,
         token: &LeaseToken,
         witness: Arc<FencedWrite>,
         connection_id: ConnectionId,
@@ -321,7 +324,7 @@ impl HostShared {
             &self.registered_instances,
             HostLocation::ResolveNemuCloseInstance,
         )?
-        .get(&token.instance_id())
+        .get(&instance_id)
         .map(|instance| instance.instance_alias.clone())
         .ok_or_else(|| {
             RuntimeHostError::fatal(

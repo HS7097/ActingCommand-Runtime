@@ -7,6 +7,8 @@
 //! package `record stop` generates with its self-checks (L4). The ActingLab CLI only parses
 //! arguments and prints these results; nothing here touches the ledger.
 
+// Workflow #449 REC-ARCH: a recording ended as material only, reopened later.
+pub(crate) mod archive;
 pub(crate) mod container;
 pub(crate) mod crosscheck;
 pub(crate) mod follow;
@@ -18,5 +20,6 @@ pub(crate) mod model;
 pub(crate) mod steps;
 pub(crate) mod store;
 
+pub use archive::{record_archive, record_archive_copy, record_reopen};
 pub use lock::RecordingLock;
 pub use model::*;

@@ -165,6 +165,17 @@ impl StartupClaim {
     }
 }
 
+/// Workflow #437 MAPP-2a: a member of a device group of several with no startup package (the
+/// assembly refuses one: `device_group_problem` `startup_package_missing`), whose home the switch
+/// before its run cannot reach.
+fn startup_package_not_configured() -> RuntimeHostError {
+    RuntimeHostError::request(
+        HostCode::StartupPackageMissing,
+        HostLocation::SwitchApplication,
+        RuntimeErrorCode::PackageInvalid,
+    )
+}
+
 /// The host's synthesized connection of startup claims.
 fn startup_claim_connection() -> Result<ConnectionId, RequestFailure> {
     ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
@@ -420,15 +431,153 @@ impl HostShared {
         pending: &PendingStartupPackage,
         failure: RequestFailure,
     ) -> RuntimeHostResult<&'static str> {
+        self.host_package_failure_error(pending, failure)
+            .map(|error| error.code())
+    }
+
+    /// [`Self::host_package_failure`] with the failure the package fails with (Workflow #437
+    /// MAPP-2a: the switch carries it as its step's cause).
+    fn host_package_failure_error(
+        &self,
+        pending: &PendingStartupPackage,
+        failure: RequestFailure,
+    ) -> RuntimeHostResult<RuntimeHostError> {
         self.record_startup_package_failure(pending, &failure.error)?;
         if !failure.poison_runtime && !failure.error.is_fatal() {
-            return Ok(failure.error.code());
+            return Ok(*failure.error);
         }
         let links = EventLinksDraft::default().with_causation_id(pending.causation_id);
         match self.contain_failure(*failure.error, Some(pending.instance_id), links)? {
             Contained::Latched(error) => Err(error),
-            Contained::Fenced(error) | Contained::Failed(error) => Ok(error.code()),
+            Contained::Fenced(error) | Contained::Failed(error) => Ok(error),
         }
+    }
+
+    /// Workflow #437 MAPP-2a (`contracts/device-group.md`, "The switch before a run", step 3):
+    /// the startup package of `token`'s member, a member of a device group of several, run on
+    /// `token`'s key, which the member's own run holds and gets back. Before anything, the key is
+    /// validated and its remaining time must cover the startup run's lease time (its response
+    /// deadline and the heartbeat reserve) and `after_ms`, the time the member's run needs on the
+    /// key afterwards; otherwise nothing is recorded and the refusal is returned. Then the
+    /// scheduling intent is recorded under `links` (the member's run's request links) with
+    /// `causation_id`, and the package runs as an ordinary host run under it
+    /// ([`Self::run_prepared_package_on_borrowed_key`]): the key is never renewed and never
+    /// ended, and a queued claim on the device stays queued. A failure of the startup run is
+    /// recorded as any startup package's (`runtime.failed` under the member and the causation
+    /// id) and returned; a Runtime-level one is the error. Afterwards the key must still
+    /// validate: a key the startup run lost is the run's failure.
+    pub(super) fn run_startup_package_on_borrowed_key(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        links: EventLinksDraft,
+        control_request_id: RequestId,
+        causation_id: actingcommand_contract::IssuedCausationId,
+        after_ms: u64,
+    ) -> RuntimeHostResult<Result<OperationSuccess, RuntimeHostError>> {
+        let member = token.instance_id();
+        if !self.in_group_of_several(member) {
+            return Ok(Err(super::switch::member_mismatch()));
+        }
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::ReadInstanceRegistry,
+        )?
+        .get(&member)
+        .cloned()
+        .ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::ActiveLeaseInstanceMissing,
+                HostLocation::ReadInstanceRegistry,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        if let Err(refusal) = self.borrowed_key_admits(token, connection_id, after_ms)? {
+            return Ok(Err(refusal));
+        }
+        let pending = match self.prepare_startup_package_with(
+            &resolved,
+            links,
+            control_request_id,
+            causation_id,
+        ) {
+            Ok(Some(pending)) => pending,
+            Ok(None) => return Ok(Err(startup_package_not_configured())),
+            Err(failure) => return Err(*failure.error),
+        };
+        let run = match self.prepare_package_run(&pending, token.holder_id()) {
+            Ok(run) => run,
+            Err(failure) => return self.host_package_failure_error(&pending, failure).map(Err),
+        };
+        let executed = self.run_prepared_package_on_borrowed_key(
+            run,
+            super::contained_task::HeldPackageLease {
+                token: token.clone(),
+                connection_id,
+            },
+            after_ms,
+        );
+        let success = match executed {
+            Ok(success) => success,
+            Err(failure) => return self.host_package_failure_error(&pending, failure).map(Err),
+        };
+        let now = self.monotonic_ms()?;
+        if let Err(error) = lock(&self.scheduler, HostLocation::ValidateRuntimeLease)?
+            .validate_write(token, connection_id, now)
+        {
+            return Ok(Err(RuntimeHostError::scheduler(
+                HostLocation::SwitchApplication,
+                &error,
+            )
+            .naming_lease(token.lease_id())));
+        }
+        Ok(Ok(success))
+    }
+
+    /// Workflow #437 MAPP-2a: whether `token` is still the device's key on `connection_id` and
+    /// its remaining time covers the member's startup run (its response deadline and the
+    /// heartbeat reserve) and `after_ms`. `Ok(Err(refusal))` otherwise: the scheduler's own
+    /// refusal of the key, `startup_package_missing` for a member with no startup package, or
+    /// `contained_task_deadline_unavailable` for a key whose time does not cover both. An
+    /// instance alone on its device is refused first (`instance_mismatch`).
+    pub(super) fn borrowed_key_admits(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        after_ms: u64,
+    ) -> RuntimeHostResult<Result<(), RuntimeHostError>> {
+        if !self.in_group_of_several(token.instance_id()) {
+            return Ok(Err(super::switch::member_mismatch()));
+        }
+        let now = self.monotonic_ms()?;
+        if let Err(error) = lock(&self.scheduler, HostLocation::ValidateRuntimeLease)?
+            .validate_write(token, connection_id, now)
+        {
+            return Ok(Err(RuntimeHostError::scheduler(
+                HostLocation::SwitchApplication,
+                &error,
+            )
+            .naming_lease(token.lease_id())));
+        }
+        let Some(request) = self.startup_packages()?.get(&token.instance_id()).cloned() else {
+            return Ok(Err(startup_package_not_configured()));
+        };
+        let startup_ttl_ms = self
+            .contained_task_lease_ttl(&request)
+            .map_err(|failure| *failure.error)?;
+        let needed_ms = startup_ttl_ms.saturating_add(after_ms);
+        if token.expires_at_monotonic_ms().saturating_sub(now) < needed_ms {
+            return Ok(Err(RuntimeHostError::request(
+                HostCode::ContainedTaskDeadlineUnavailable,
+                HostLocation::SwitchApplication,
+                RuntimeErrorCode::ContainedTaskDeadlineExceeded,
+            )
+            .with_native_detail(format!(
+                "remaining_ms={}; needed_ms={needed_ms}",
+                token.expires_at_monotonic_ms().saturating_sub(now)
+            ))));
+        }
+        Ok(Ok(()))
     }
 
     /// Records the scheduling intent under `links` (a fresh causation id) and returns the
@@ -439,15 +588,33 @@ impl HostShared {
         links: EventLinksDraft,
         control_request_id: RequestId,
     ) -> Result<Option<PendingStartupPackage>, RequestFailure> {
-        let instance_id = resolved.instance_id();
-        let Some(request) = self.startup_packages()?.get(&instance_id) else {
+        if !self
+            .startup_packages()?
+            .contains_key(&resolved.instance_id())
+        {
             return Ok(None);
-        };
+        }
         let causation_id = self
             .events
             .issuer()
             .mint_causation_id()
             .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
+        self.prepare_startup_package_with(resolved, links, control_request_id, causation_id)
+    }
+
+    /// [`Self::prepare_startup_package`] under `causation_id`, which its caller minted (Workflow
+    /// #437 MAPP-2a: the switch's, which its stops carry too).
+    fn prepare_startup_package_with(
+        &self,
+        resolved: &RegisteredInstance,
+        links: EventLinksDraft,
+        control_request_id: RequestId,
+        causation_id: actingcommand_contract::IssuedCausationId,
+    ) -> Result<Option<PendingStartupPackage>, RequestFailure> {
+        let instance_id = resolved.instance_id();
+        let Some(request) = self.startup_packages()?.get(&instance_id) else {
+            return Ok(None);
+        };
         self.append_event(
             EventSeverity::Info,
             EventSource::Runtime,

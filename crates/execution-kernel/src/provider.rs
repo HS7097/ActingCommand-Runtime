@@ -1925,6 +1925,13 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         None
     }
 
+    /// Workflow #437 MAPP-2a: the application (package name) the provider's registration assigns
+    /// the instance, the `assigned` of [`Self::observe_foreground_application`]. Reads memory
+    /// only: no device is queried. Providers without an assigned application keep this `None`.
+    fn assigned_application_id(&self, _instance_alias: &str) -> Option<String> {
+        None
+    }
+
     /// Re-runs the provider's instance discovery on demand and reports what it finds. Binds,
     /// rebinds and registers nothing and opens no device session. Providers without an
     /// instance-discovery surface keep this typed refusal.

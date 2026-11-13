@@ -351,6 +351,10 @@ actinglab --json --instance <alias> record mark --optional --settle-ms <ms>     
 actinglab --json --instance <alias> record status
 actinglab --json --instance <alias> record stop --dry-run     # 全部检查都跑、什么都不写；按 lab.warnings 补标
 actinglab --json --instance <alias> record stop --lab-dir <包目录>     # 写出 <package_id>.zip 或 .json（同名的直接替换），并打印 binding_example
+actinglab --json --instance <alias> do --capture --record --swipe x1,y1,x2,y2,ms --package <载体包>     # 没有点击的步上：这一步的滑动
+actinglab --json --instance <alias> record archive [--copy-to <空目录的绝对路径>]     # 只为留素材的录制：在帧旁写 archive-manifest-<n>.json，文件一个不动，会话结束（archived）；不需要标记
+actinglab --json --instance <alias> record archive --record-id <id>     # 被 record start --force 丢下的录制：按它自己的步骤表写清单；会话头（属于另一个录制）不动
+actinglab --json --instance <alias> record reopen [--record-id <id>]     # 已归档的录制重新成为活动录制，之后可以标记、record stop
 actingctl resume --state-root <state-root> --instance <alias>
 
 # 离线账本维护（不装配提供者、IPC 与设备）

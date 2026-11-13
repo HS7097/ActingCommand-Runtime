@@ -147,6 +147,12 @@ pub(super) struct FakeState {
     // #402 HS-5: while set, the instance's paired session and its application as `paired`
     // answers them (`FakePairedDevice`); the fake's own backends serve a paired session it opens.
     paired: std::sync::Mutex<Option<Arc<dyn FakePairedDevice>>>,
+    // Workflow #437 MAPP-2a: the application (package) the instance is assigned, when set; unset,
+    // `neutral.application` as before. The foreground query reports it as `assigned` and, with no
+    // foreground script, in front.
+    application_id: std::sync::Mutex<Option<String>>,
+    // Workflow #437 MAPP-2a: every application command that reached the instance, in order.
+    application_actions: std::sync::Mutex<Vec<ApplicationLifecycleAction>>,
 }
 
 /// #402 HS-5 (design `rd-1031/backend-switch/model-hs5.md` §5.2): the paired Nemu session of a
@@ -187,6 +193,16 @@ type PixelScript = Arc<dyn Fn(usize, usize) -> Vec<(usize, [u8; 3])> + Send + Sy
 type ForegroundScript = Arc<dyn Fn(usize, usize) -> Option<String> + Send + Sync>;
 
 impl FakeState {
+    /// Workflow #437 MAPP-2a: the application the instance is assigned (`application_id`, else
+    /// `neutral.application`).
+    fn assigned_application(&self) -> String {
+        self.application_id
+            .lock()
+            .expect("fake application id")
+            .clone()
+            .unwrap_or_else(|| "neutral.application".to_owned())
+    }
+
     /// The frame and display extent of `physical_task_geometry` (Workflow #392 DA-A); after an
     /// input, the extent `physical_task_extent_after_input` gives, when set (Workflow #392 DA-2a).
     fn physical_task_extent(&self) -> (u32, u32) {
@@ -1583,14 +1599,27 @@ impl ExecutionBackendProvider for FakeProvider {
                 entry.state.application_count.load(Ordering::Acquire),
             ))
         });
+        // Workflow #437 MAPP-2a: the instance's own assigned application (`neutral.application`
+        // unless a test names another).
+        let assigned = self.entries.get(instance_alias).map_or_else(
+            || "neutral.application".to_owned(),
+            |entry| entry.state.assigned_application(),
+        );
         let foreground = match scripted {
             Some(foreground) => foreground,
-            None => (!android_down).then(|| "neutral.application".to_owned()),
+            None => (!android_down).then(|| assigned.clone()),
         };
         Ok(crate::ForegroundApplicationObservation {
             foreground,
-            assigned: "neutral.application".to_owned(),
+            assigned,
         })
+    }
+
+    // Workflow #437 MAPP-2a: the instance's assigned application, from memory.
+    fn assigned_application_id(&self, instance_alias: &str) -> Option<String> {
+        self.entries
+            .get(instance_alias)
+            .map(|entry| entry.state.assigned_application())
     }
 
     /// Workflow #369 review C-2: Stop and Start of a fake bound with `bind_fake_emulator`; any
@@ -1742,6 +1771,12 @@ impl ExecutionBackendProvider for FakeProvider {
             .get(instance_alias)
             .expect("resolved fake application instance");
         entry.state.application_count.fetch_add(1, Ordering::AcqRel);
+        entry
+            .state
+            .application_actions
+            .lock()
+            .expect("fake application actions")
+            .push(action);
         if let Some(error) = entry
             .state
             .application_error
