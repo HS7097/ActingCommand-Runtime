@@ -382,6 +382,9 @@
     "task_held": {
       "enabled": true,
       "after_ms": 1800000
+    },
+    "device_group": {
+      "switch_failure_cooldown_ms": 300000
     }
   },
   "ledger_observer": {

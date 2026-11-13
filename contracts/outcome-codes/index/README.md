@@ -41,8 +41,8 @@ here.
 | Active codes | Codes |
 |---|---:|
 | `common_causes` and `handling` both written | 718 |
-| one of the two written, the other `TBD` or empty | 3 |
-| neither written (`TBD` or empty) | 3184 |
+| one of the two written, the other `TBD` or empty | 4 |
+| neither written (`TBD` or empty) | 3183 |
 | `settled` | 170 |
 | `pending` | 3735 |
 | all active codes | 3905 |
