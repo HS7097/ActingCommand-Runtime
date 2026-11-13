@@ -19,7 +19,12 @@
 //!   `ac_lab_observe`. Workflow #434 LAB-5G4b (adapted, its work order point 1: every other offered
 //!   row is served through a `serve` child since): the refused tools are `ac_deploy` and
 //!   `ac_rollback`, the rows still refused, on Windows, where they are offered; elsewhere no
-//!   offered row is refused.
+//!   offered row is refused. Workflow #434 LAB-6S0 (adapted: `deploy` and `rollback` are served
+//!   since, and no offered row is refused): on Windows `ac_deploy` and `ac_rollback` read their
+//!   arguments as every served tool does and refuse them before anything runs, `ac_deploy`
+//!   without its `target` (`arguments_invalid`, `required`) and `ac_rollback` with a member it
+//!   does not declare (`unknown`), never `mcp_operation_unsupported`; so does `ac_deploy` when
+//!   `--list` leaves it out.
 //! - `mcp_loop_initialize_list_batch_and_cancel`: `initialize` negotiates as today's server and
 //!   carries the instructions; `tools/list` answers `--list-tools`' list, in either era; under
 //!   2025-03-26 a batch is one array of its answers, under a later version -32600, an empty one
@@ -225,12 +230,24 @@ fn refusal(answer: &Value, structured: bool) -> Value {
     line["outcome"].clone()
 }
 
-/// The refusal of this build, which serves no call, for the tool `tool`.
+/// Workflow #434 LAB-6S0: the refusal of the arguments of a call this build serves,
+/// `arguments_invalid` naming `argument` and its `problem`: never `mcp_operation_unsupported`.
 #[track_caller]
-fn assert_unsupported(outcome: &Value, tool: &str) {
-    assert_eq!(outcome["code"], UNSUPPORTED, "{outcome}");
-    assert_eq!(outcome["category"], "error", "{outcome}");
-    assert_eq!(outcome["values"]["mcp_tool"], tool, "{outcome}");
+fn assert_arguments_refused(outcome: &Value, argument: &str, problem: &str) {
+    assert_ne!(outcome["code"], UNSUPPORTED, "{outcome}");
+    assert_eq!(
+        (
+            &outcome["code"],
+            &outcome["values"]["argument"],
+            &outcome["values"]["argument_problem"],
+        ),
+        (
+            &json!("arguments_invalid"),
+            &json!(argument),
+            &json!(problem),
+        ),
+        "{outcome}"
+    );
 }
 
 /// Workflow #434 LAB-5G4b: the refusal of `ac_app_launch` without its `instance`, before anything
@@ -328,12 +345,14 @@ fn mcp_tier_refused() {
 fn mcp_calls_refused_unsupported_and_an_unknown_tool() {
     let mut server = Server::spawn(&[]);
     server.initialize(1, "2025-11-25");
-    // Workflow #434 LAB-5G4b (adapted): the rows still refused, offered on Windows only.
+    // Workflow #434 LAB-5G4b (adapted): the rows still refused, offered on Windows only. Workflow
+    // #434 LAB-6S0 (adapted): served since, so their arguments are read and refused first; no
+    // detached run starts.
     if cfg!(windows) {
         let refused = server.call_tool(2, "ac_deploy", json!({}));
-        assert_unsupported(&refusal(&refused, true), "ac_deploy");
-        let refused = server.call_tool(3, "ac_rollback", json!({}));
-        assert_unsupported(&refusal(&refused, true), "ac_rollback");
+        assert_arguments_refused(&refusal(&refused, true), "target", "required");
+        let refused = server.call_tool(3, "ac_rollback", json!({"neutral_undeclared": true}));
+        assert_arguments_refused(&refusal(&refused, true), "neutral_undeclared", "unknown");
     }
     for (id, name) in [(4, "ac_observe"), (5, "ac_no_such_tool")] {
         let answer = server.call_tool(id, name, json!({}));
@@ -379,13 +398,14 @@ fn mcp_calls_refused_unsupported_and_an_unknown_tool() {
         "tools/list is --list-tools'"
     );
     // Workflow #434 LAB-5G4b (adapted): a refused row's tool --list leaves out, on Windows.
+    // Workflow #434 LAB-6S0 (adapted): a served one, its arguments read as a listed one's.
     if cfg!(windows) {
         assert!(
             !tool_names(&core).contains(&"ac_deploy".to_owned()),
             "--list core leaves the rescue tools out: {core}"
         );
         let refused = server.call_tool(3, "ac_deploy", json!({}));
-        assert_unsupported(&refusal(&refused, true), "ac_deploy");
+        assert_arguments_refused(&refusal(&refused, true), "target", "required");
     }
 }
 

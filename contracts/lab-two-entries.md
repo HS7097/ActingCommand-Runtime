@@ -205,9 +205,20 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 - `actinglab.exe` (the CLI, and `serve` without `--front`): `Lab-CLI`, unless the environment
   variable `ACTINGCOMMAND_INITIATOR` names `Lab-制包` or `Lab-救急`. The UI sets it for every Lab
   process it starts: `Lab-制包` for its workbench's `serve`, `Lab-救急` for every other one.
-- Any other value of the variable, `UI`, `Lab-MCP` and `Lab-看门狗` included, is
-  `actingctl_usage_invalid` with `variable` `ACTINGCOMMAND_INITIATOR` (the code moves to actinglab
-  with LAB-7, section 12), and nothing is sent or written.
+- Any other value of the variable, `UI`, `Lab-看门狗` and `Lab-MCP` without the marker below
+  included, is `actingctl_usage_invalid` with `variable` `ACTINGCOMMAND_INITIATOR` (the code moves
+  to actinglab with LAB-7, section 12), and nothing is sent or written.
+- **The detached run's marker** (Workflow #434 LAB-6S0, 0.12.58; the coordinator's ruling of
+  2026-11-13 on board #434, not the owner's words). `actinglab.exe` takes `Lab-MCP` from the
+  variable only beside the marker `ACTINGCOMMAND_DETACHED_RUN` set to `rescue`, compared byte for
+  byte (`lab_ops::initiator`, `Initiator::of_lab_process_marked`). The rescue module's detached
+  start (`--detach`, section 5) is the one place that sets it: for an operation whose initiator is
+  `Lab-MCP` it sets the word and the marker for the `actinglab.exe` it starts, so the detached run
+  journals `Lab-MCP`; for `Lab-制包` or `Lab-救急` the word alone, for `Lab-CLI` neither. Nothing
+  else sets it: not the CLI's or `serve`'s own child starts, not the MCP server, whose
+  `serve --front mcp` children keep `ACTINGCOMMAND_INITIATOR` removed. The marker alone, beside
+  another word, or with another value changes nothing. `serve --front mcp` refuses the variable
+  set to anything, as below, whatever the marker says.
 - `actinglab.exe serve --stdio --front mcp` (LAB-5G4a; the option, section 8.2): `Lab-MCP`, the
   word of the MCP server whose child it is. With the option the variable, set to anything, is
   refused before the loop starts (`actingctl_usage_invalid` with `variable`
@@ -276,14 +287,17 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
   the initiator. actingd's `--confirm-resources-released` goes with LAB-7, once UI-L1 no longer
   passes it.
 - **Through MCP**, `deploy`, `rollback` and `convert` always run detached: they replace the
-  programs MCP itself runs, so the tool answers the operation id at once and `op status` follows it.
-  **Not yet** (Workflow #434 LAB-5G2b, second part, 0.12.57; the coordinator's ruling of
-  2026-11-12, not the owner's words): `actinglab-mcp` answers `ac_deploy` and `ac_rollback` with
-  `mcp_operation_unsupported` and starts nothing (`convert` is not offered). The module's detached
-  run is an `actinglab.exe` handed the operation's initiator in `ACTINGCOMMAND_INITIATOR`, which
-  refuses `Lab-MCP` there (section 4.2), so the operation would answer "detached" and never run.
-  How a detached run carries `Lab-MCP` is decided with LAB-6, which carries the initiator in
-  requests.
+  programs MCP itself runs. Since Workflow #434 LAB-6S0 (0.12.58; the coordinator's ruling of
+  2026-11-13 on board #434, not the owner's words) `actinglab-mcp` serves `ac_deploy` and
+  `ac_rollback` on Windows (`convert` is not offered: its source is not built). The front gives
+  the row's `detach` true, and the module starts the `actinglab.exe` beside the server with the
+  row's words, the initiator `Lab-MCP` and the marker of section 4.2, and answers at once:
+  `detached`, the detached run's `pid` and `log`, and `next` naming `op status`, which follows the
+  operation (its id in `unfinished` while it runs, in `last_operations` once it ended, its journal
+  with `op`). The detached run journals `Lab-MCP`; until LAB-6 its requests to a running Runtime
+  go on the CLI channel, as every request of the module does (section 7). Until LAB-7 production
+  deploys through `actingctl install`, not through the rescue module and not through this server
+  ([install-cli.md](install-cli.md), "Operational rule until LAB-7").
 
 ## 6 Guards report, never block
 
@@ -397,8 +411,9 @@ under `g2\` only.
 
 The MCP module's program exists since LAB-5G2a as the server's shell (section 9.3, "The server's
 shell"): it lists its tools and, since LAB-5G2b, serves in its own process the calls of the rows
-the CLI module serves and, since its second part, on Windows those of the rescue module's rows but
-`deploy` and `rollback` (section 9.3, "Calls served in the server's process"), and since LAB-5G4b
+the CLI module serves and, since its second part, on Windows those of the rescue module's rows
+(section 9.3, "Calls served in the server's process"; since LAB-6S0 `deploy` and `rollback` too,
+detached, section 5), and since LAB-5G4b
 every other offered row through `actinglab.exe serve --stdio --front mcp` children (section 9.3,
 "Calls served by `serve` children"); the MCP entry `g2` is slice G5a's.
 
@@ -793,13 +808,13 @@ sentence fails that test.
       server's process. Since the slice's second part (0.12.57), on Windows, where the rescue
       module runs, a rescue row the module serves (`lab_rescue::rescue::serves`; its MCP rows
       `mcp config`, `mcp entries` and `mcp plan` among them) is served by it in the server's
-      process, but a row whose `detach` the front forces (`tools::SUPPLIED`: `deploy` and
-      `rollback`, section 5's "Not yet"). Since LAB-5G4b every other offered row (the three `app`
-      rows and `standard-pack check`, the debugging and authoring rows actinglab's own commands
-      serve, `record draft` among them: actinglab's own command since LAB-5G4c, 0.12.57, MCP's
-      `ac_binding_draft` ported; register §1.287, "Slice LAB-5G4c") is served by a `serve` child
-      ("Calls served by `serve` children", below); only `deploy` and `rollback` answer
-      `mcp_operation_unsupported` as below.
+      process; since LAB-6S0 (0.12.58) so are the rows whose `detach` the front gives true
+      (`tools::SUPPLIED`: `deploy` and `rollback`, section 5). Since LAB-5G4b every other offered
+      row (the three `app` rows and `standard-pack check`, the debugging and authoring rows
+      actinglab's own commands serve, `record draft` among them: actinglab's own command since
+      LAB-5G4c, 0.12.57, MCP's `ac_binding_draft` ported; register §1.287, "Slice LAB-5G4c") is
+      served by a `serve` child ("Calls served by `serve` children", below). Since LAB-6S0 no
+      offered row answers `mcp_operation_unsupported` (below).
     - *A rescue row* (the second part) is checked as a core row is (the refusals below), then
       answered by the module for the root the program runs from with the initiator `Lab-MCP`
       (`lab_rescue::rescue::answer_here`), and its answer is the line actinglab's `--json` and
@@ -838,7 +853,7 @@ sentence fails that test.
       `out`, the front gives its export directory; `material` takes the boolean `export` (true:
       the whole material is written there and the answer names the file; else its text is read)
       and `frame` is always written there; `deploy` and `rollback` take no `detach`, which is
-      always true through MCP (section 5), and are refused for now (section 5's "Not yet").
+      always true through MCP (section 5), and since LAB-6S0 run detached as `Lab-MCP`.
     - *Refused before anything is sent or written,* with the argument as the call names it: as
       `arguments_invalid`, a member the row does not declare and a parameter the front gives
       itself (`unknown`), a member of the wrong type (`wrong_type`; text that is none of its
@@ -915,11 +930,11 @@ sentence fails that test.
     them"; the coordinator's rulings on board #434, 6775192250 points 2, 5 and 20 and 6827665631
     on this slice, not the owner's words).
     - *Which.* A row the server gives neither to `lab_ops::core_ops` nor to the rescue module, and
-      that is not refused for a reason of its own (`deploy` and `rollback`; a rescue row where the
-      module does not run), is served by a child: one rule (`tools::serving`, `Serving::Child`),
-      no list of row names. On Windows 141 of the 143 offered rows are served (49 by `core_ops`
-      and 31 by the rescue module in the server's process, 61 by children) and 2 refused;
-      elsewhere all 110 are served (49 and 61).
+      that is not refused for a reason of its own (a rescue row where the module does not run,
+      which is not offered), is served by a child: one rule (`tools::serving`, `Serving::Child`),
+      no list of row names. On Windows all 143 offered rows are served (49 by `core_ops` and 33 by
+      the rescue module in the server's process, `deploy` and `rollback` among them since
+      LAB-6S0, 61 by children); elsewhere all 110 are served (49 and 61).
     - *The children.* `actinglab.exe` beside the server's own file, started as `actinglab.exe
       serve --stdio --front mcp` (section 8.2) with the environment today's server gives its Lab
       child: `ACTINGCOMMAND_RUNTIME_STATE_ROOT` set to the server's state root when it is known,
@@ -995,11 +1010,12 @@ sentence fails that test.
         it is sent as every line over the budget is (`structuredContent` alone beside a summary
         text, or `output_budget_exceeded` with its job's handle), and so is an answer that does
         not fit even so.
-  - **Not yet:** a call of a row the server does not serve answers `mcp_operation_unsupported`
-    (`mcp_tool`) as the CLI line of a refusal, `{outcome}`, its arguments unread, nothing sent,
-    run or written; a name that is no offered row's tool answers as today's server answers an
-    unknown tool (-32602 `mcp_params_invalid`). `deploy` and `rollback` (until a detached run
-    carries `Lab-MCP`, section 5) come with their slice. The manual is
+  - **A row the server does not serve** answers `mcp_operation_unsupported` (`mcp_tool`) as the
+    CLI line of a refusal, `{outcome}`, its arguments unread, nothing sent, run or written. Since
+    LAB-6S0 (0.12.58) no offered row is one, on any platform: `deploy` and `rollback` are served
+    (section 5), and a rescue row where the module does not run is not offered. A name that is no
+    offered row's tool answers as today's server answers an unknown tool (-32602
+    `mcp_params_invalid`). The manual is
     [apps/actinglab-mcp/MANUAL.md](../apps/actinglab-mcp/MANUAL.md) since LAB-5G7 (0.12.57;
     register §1.287, "Slice LAB-5G7"), which the instructions name. The program is in
     the Tools archive since LAB-5G6 (0.12.57; section 8.1, "Packaging"); nothing starts it until
@@ -1137,7 +1153,8 @@ only add: actingctl stays until LAB-7.
 ## 12 Codes
 
 Two new codes of the owner `actinglab-mcp`: `mcp_operation_unsupported` (`mcp_tool`; LAB-5G2a),
-every call of a row the MCP server does not serve yet, and `mcp_identity_declaration_refused`
+a call of an offered row the MCP server does not serve (since LAB-6S0 no offered row is one; the
+code stays registered with the server's check, section 9.3), and `mcp_identity_declaration_refused`
 (warning; LAB-5G2b), the Runtime refused the identity card declared before a write (section
 9.3). LAB-5G2b adds the word `not_absolute` to the vocabulary `argument_problem` and reuses
 today's codes for the rest. The codes this contract uses:

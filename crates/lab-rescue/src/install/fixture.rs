@@ -14,6 +14,7 @@ use crate::watchdog::decide::LiveOwner;
 use crate::watchdog::start::{StartedProcess, StartedState, Target};
 use actingcommand_contract::SchedulingPauseReason;
 use actingcommand_contract::outcome::Outcome;
+use actingcommand_lab_ops::initiator;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
@@ -702,14 +703,24 @@ impl Host for FakeHost {
         }
     }
 
+    /// The detached start's environment first, as `initiator=<word>` for the initiator's variable
+    /// and (Workflow #434 LAB-6S0) `marker=<value>` for the marker, any other variable as
+    /// `<variable>=<value>`, then the words.
     fn detach_rescue(
         &self,
         arguments: &[String],
-        initiator: Option<&str>,
+        environment: &[(&str, &str)],
         _directory: &Path,
         _log: &Path,
     ) -> Result<u32, Outcome> {
-        let mut line = initiator.map_or_else(Vec::new, |word| vec![format!("initiator={word}")]);
+        let mut line = environment
+            .iter()
+            .map(|&(variable, value)| match variable {
+                initiator::ENVIRONMENT_VARIABLE => format!("initiator={value}"),
+                initiator::DETACHED_RUN_VARIABLE => format!("marker={value}"),
+                other => format!("{other}={value}"),
+            })
+            .collect::<Vec<_>>();
         line.extend(arguments.iter().cloned());
         self.detached.borrow_mut().push(line);
         Ok(9_999)

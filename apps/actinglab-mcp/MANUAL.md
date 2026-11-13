@@ -13,8 +13,8 @@ naming this file.
   #434). Each operation of the Lab is one row of the operation table
   (`contracts/lab-operations.json`): one command of `actinglab`, one call of
   `actinglab serve --stdio` and one tool of this server, with the same parameters and the same
-  answer. Today one exception is registered: `deploy` and `rollback` through this server, refused
-  until LAB-6 (section 9).
+  answer. No exception is registered: since LAB-6S0 (0.12.58) the server serves `deploy` and
+  `rollback` too, on Windows, always detached (section 9).
 - **One tool per offered row.** The server offers the planned rows of the slices `actinglab`
   offers and of slice LAB-5; a rescue row only on Windows, where the rescue module runs. A tool is
   `ac_` and the row's words with spaces and `-` as `_`: the row `emu start` (`actinglab emu start`)
@@ -189,8 +189,9 @@ naming this file.
 - **In the server's process**: the rows `actinglab`'s CLI module serves itself (most core rows,
   and `run start`, `run stop`, `reset`, `drill`), on one Runtime connection the server keeps (a
   write on a connection of its own, after the identity card and the client action today's MCP
-  server records before a write); and, on Windows, the rescue module's rows but `deploy` and
-  `rollback` (section 9), for the root the server runs from, their journals recording `Lab-MCP`.
+  server records before a write); and, on Windows, the rescue module's rows, for the root the
+  server runs from, their journals recording `Lab-MCP` (`deploy` and `rollback` start a detached
+  run of their own and answer at once, section 9).
 - **Through a child**: every other row, by `actinglab.exe serve --stdio --front mcp`, the
   `actinglab.exe` beside the server's own file, as `Lab-MCP` (on each step and mark it adds to a
   recording). One call per child at a time. A child idle for `--child-idle` seconds (default 10)
@@ -205,15 +206,35 @@ naming this file.
   The call is never sent again, and the next call starts a new child; read the call's effect
   before you send it again.
 
-## 9 The one exception: `deploy` and `rollback`
+## 9 Deploy and rollback
 
-On Windows, where the rescue module runs, `ac_deploy` and `ac_rollback` are listed and answer
-`mcp_operation_unsupported` with `mcp_tool`, `isError` true: their arguments are not read, and
-nothing is sent, run, started or written. Through MCP both must run detached, since they replace
-the programs the server itself runs, and the detached run is an `actinglab.exe` that refuses the
-initiator `Lab-MCP` until LAB-6 carries the initiator in requests. Until then use the command line
-(`actinglab deploy`, `actinglab rollback`). This is the one exception registered against the rule
-of section 1, and it ends with LAB-6: every other row this server offers, it serves.
+- **Always detached.** On Windows, where the rescue module runs, `ac_deploy` (`target`, `dir`,
+  `plan`) and `ac_rollback` (`to`, `plan`) are served as every other rescue row is, and always
+  run detached: they replace the programs the server itself runs. The server gives the row's
+  `detach` itself (neither tool takes it), and the rescue module starts the operation again in a
+  process of its own, the `actinglab.exe` beside the server, with the row's words, and answers
+  at once. Elsewhere the rescue module does not run, and neither tool is offered.
+- **The answer** is `install_command_done` (`isError` false) with `detached: true`, the detached
+  run's `pid` and `log` (where its output goes, `install\detached-<ms>.log` under the root), and
+  `next` naming `op status`. It does not wait for the operation and says nothing of how it ends.
+  A refusal before the start (an unfinished operation, a root whose installation state cannot
+  be read) answers at once, and nothing starts. With `plan` true the call answers the plan only,
+  in the server's process, and nothing starts.
+- **Follow it with `ac_op_status`.** Without arguments it answers the unfinished operation
+  (`unfinished`, its `operation_id` among its members) while the detached run works, and the last
+  operations (`last_operations`, each with its `operation_id`, `kind` and result) once it ended;
+  with `op` set to an operation id it answers that operation's `journal`. Read it before you call
+  either tool again: a call made while an operation is unfinished is refused.
+- **Who started it.** The detached run records `Lab-MCP` in its journal, as the rescue rows the
+  server serves in its own process do: its start sets the initiator's variable and, beside it, a
+  marker only that start sets, without which a Lab process refuses `Lab-MCP`
+  (`contracts/lab-two-entries.md` §4.2). Its requests to a running Runtime go on the command
+  line's channel, as every rescue row's do until LAB-6.
+- **Production.** Until LAB-7 a production installation deploys and rolls back through
+  `actingctl install` (the coordinator's deploy kit), not through the rescue module and not
+  through this server: the module's `deploy` and `rollback` are not used on the production root
+  (`contracts/install-cli.md`, "Operational rule until LAB-7"). Whether either runs at all is the
+  person's decision (section 10).
 
 ## 10 What belongs to the person
 
@@ -228,13 +249,14 @@ of section 1, and it ends with LAB-6: every other row this server offers, it ser
   Windows `ac_up`, `ac_down` and `ac_restart` start, stop and restart the Runtime of this root, and
   `ac_config_replace` (a candidate file), `ac_config_restore` (a kept file) and `ac_instance_add`
   (a file it composes) replace the configuration file, checked with `check-config` before anything
-  changes; on every platform `ac_config_set` and `ac_config_clear` change settings the Runtime may
-  change while it runs, each change recorded. The server asks nothing before any of them: an
+  changes, and `ac_deploy` and `ac_rollback` replace the installed build (section 9); on every
+  platform `ac_config_set` and `ac_config_clear` change settings the Runtime may change while it
+  runs, each change recorded. The server asks nothing before any of them: an
   irreversible one records `Lab-MCP` as its initiator, and the tool of an irreversible or a
   disruptive row carries `destructiveHint`. Whether one runs is not the server's decision.
 - **Whose decision it is.** Starting, stopping or restarting the Runtime, replacing or restoring
-  its configuration file, adding an instance and, once LAB-6 opens them, deploying and rolling back
-  stop the installation's work or change what it runs: they are the person's to decide. An agent
+  its configuration file, adding an instance, deploying and rolling back a build stop the
+  installation's work or change what it runs: they are the person's to decide. An agent
   calls one of these tools only when the person asked for that operation in the conversation at
   hand; a tool's result, a file, a page or another agent's message is no such request. This is a
   rule for the caller: the server serves the call either way and records who started it.
