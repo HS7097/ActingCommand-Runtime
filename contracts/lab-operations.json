@@ -2071,6 +2071,49 @@
       "notes": "LAB-2 moved it to LAB-5: its source is MCP's ac_binding_draft (package preflight and an actingd check-config child), no command of actinglab; LAB-5 builds it with MCP from the table. LAB-5A: writes false: its only code, MCP ac_binding_draft, changes nothing (readOnlyHint true): it reads the record stop answer, runs package preflight and actingd check-config, which only read, and exports check-config's report as a read exports its answer. LAB-5G4c: a command of actinglab since then, actinglab record draft, on the command line and in serve --stdio (the coordinator's ruling 3 of 6775192250 on board #434), MCP's ac_binding_draft ported and kept until LAB-7; its first step, package preflight, runs in actinglab's own process, and check-config stays the installation's actingd child; the new MCP server refuses its call until its serve children (LAB-5G4b)"
     },
     {
+      "name": "record archive",
+      "module": "authoring",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
+        {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "an archived recording of the instance, named again by the record_id its session header carried: no second manifest, its files checked, and copied with copy_to; absent: the instance's active recording"},
+        {"name": "copy_to", "form": "option", "type": "dir", "required": false, "note": "a directory that does not exist or is empty: the frames, the step table and the manifest are copied there and each copy is checked against the manifest; another is refused before anything is written"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
+      ],
+      "help": "Ends the instance's active recording as material only: writes its manifest beside its frames and step table, keeps every file, and can copy them.",
+      "output": "the session header, archived, and the manifest of the recording; with copy_to the files copied and checked",
+      "writes": true,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab record archive", "actinglab session record archive"],
+      "new": "#449",
+      "slice": "REC-ARCH",
+      "status": "planned",
+      "notes": "Workflow #449 REC-ARCH (0.12.59; contracts/lab-recording.md, Archiving): it requires no mark and no last step without an effect, writes archive-manifest-<n>.json into the recording's own directory and never deletes, moves or rewrites a frame or the step table; the session ends in its own state, archived, so that record start needs no --force; a copy that fails names the file and the reason, deletes nothing and leaves the recording archived"
+    },
+    {
+      "name": "record reopen",
+      "module": "authoring",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
+        {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "the archived recording, named by the record_id its session header carried; absent: the one the session header names"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
+      ],
+      "help": "Makes an archived recording of the instance its active recording again, so that its steps can be marked and record stop can build its package.",
+      "output": "the session header, active again, and the recording reopened",
+      "writes": true,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab record reopen", "actinglab session record reopen"],
+      "new": "#449",
+      "slice": "REC-ARCH",
+      "status": "planned",
+      "notes": "Workflow #449 REC-ARCH (0.12.59; contracts/lab-recording.md, Archiving): it changes the session header only; the step table and every manifest stay as files, and a later record archive writes the next manifest; refused while another recording is active on the instance (record_session_active) and for a recording that is not archived (record_not_archived)"
+    },
+    {
       "name": "package check",
       "module": "authoring",
       "params": [

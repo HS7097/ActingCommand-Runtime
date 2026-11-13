@@ -731,11 +731,12 @@ sentence fails that test.
   whose next positional is not required (`targets set <inst> [<file>]`) a lone word beside the
   flag is that positional (`targets set <file> --instance <inst>`), and the two spellings are
   refused when the file is given too. A line without `--instance` is read as before; a line
-  with `--via` that begins with `--instance` stays actinglab's own, as before. The 20 rows
+  with `--via` that begins with `--instance` stays actinglab's own, as before. The 22 rows
   actinglab's own
   command serves under the row's own name (`tap`, `swipe`, `long-tap`, `key`, `text`,
-  `touch-probe`, `do`, `ensure`, `wait`, `tap-target`, `navigate`, `observe`, the seven `record`
-  rows and `locate`) take the instance on the command line only as `--instance`, as before (their
+  `touch-probe`, `do`, `ensure`, `wait`, `tap-target`, `navigate`, `observe`, the nine `record`
+  rows that take an instance, `record archive` and `record reopen` among them since Workflow #449
+  REC-ARCH, and `locate`) take the instance on the command line only as `--instance`, as before (their
   note: "on the command line only --instance <x> …"); none gains a positional instance (for `do`,
   `ensure`, `wait` and `text` it would be read as the target, the page or the text). `remedy set`
   and `wake-test` declare `instance` as an option of their own and read `--instance` as that

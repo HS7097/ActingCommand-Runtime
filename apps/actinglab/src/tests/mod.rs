@@ -166,6 +166,10 @@ mod gate_434_lab5b1;
 // module's detached start sets.
 #[path = "gate_434_lab6s0.rs"]
 mod gate_434_lab6s0;
+// Workflow #449 REC-ARCH: `record archive` ends a recording as material only; `record reopen`
+// makes it active again.
+#[path = "gate_449_rec_arch.rs"]
+mod gate_449_rec_arch;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

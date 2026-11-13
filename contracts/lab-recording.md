@@ -7,7 +7,10 @@ an application operation (R24), and the last step only recognizes. This contract
 families (#411 Lab B-9 added the value test) with their mark-time self-test, steps and
 transitions, remediation, application
 steps, optional steps, `--record` on the device commands and the recording lock, and then
-the package `record stop` generates, checks and writes ("Package generation").
+the package `record stop` generates, checks and writes ("Package generation"). Workflow #449
+REC-ARCH: a recording kept only as material is ended with `record archive` and made active again
+with `record reopen` ("Archiving"), and a swipe sent with `--record` is a step ("`--record` on
+device commands").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -23,6 +26,7 @@ Runtime and recorded there as any `do --capture` or `session app` is.
 <state>/record-artifacts/<record_id>/lab/frames/<sha256>.png frames, content-addressed
 <state>/record-artifacts/<record_id>/lab/crops/<sha256>.png  template crops, content-addressed
 <state>/record-artifacts/<record_id>/lab/out/<package_id>.<zip|json>  the package record stop generated
+<state>/record-artifacts/<record_id>/lab/archive-manifest-<n>.json      actingcommand.lab-recording-archive.v1 (Workflow #449)
 ```
 
 `<instance>` and `<record_id>` use the file-stem rule of the `record` command: ASCII
@@ -334,6 +338,10 @@ recording marked again since its package was generated ("Marking after stop"). #
 `click.outcome` is `declared` (no outcome yet), `executed` (Performed) or `indeterminate`
 (the outcome of the last `do --capture --record` is unknown); `attempts` counts the earlier
 outcomes moved aside by `--reopen-step`.
+
+Workflow #449 REC-ARCH: for an archived recording (its session header `archived`) `record.status`
+and `lab.status` are both `archived`: the instance has no active recording. The step table, which
+archiving never rewrites, still says `active`; `lab.status` gives the session's state.
 
 ### record stop
 
@@ -668,8 +676,17 @@ All six device recording forms refuse `--dry-run` before recording locks, Runtim
 frame attachment or recording persistence. The global parser handles the flag at any position.
 
 - `capture --record` takes the frame through the Runtime as `capture` does; `--out` becomes
-  optional. Output adds `record{status:"frame_recorded", record_id, step, step_opened,
-  frame, closed_step}`.
+  optional. Output adds `record{status:"frame_recorded", record_id, record_started_at_unix_ms,
+  step, step_opened, frame, closed_step}`.
+- Workflow #449 REC-ARCH: every action performed with `--record` names in its answer's `record` the
+  recording it entered and the step it became: `record_id`, `record_started_at_unix_ms` (when that
+  recording started, its session header's `started_at_unix_ms`) and `step`, added beside the
+  members each answer had (`capture --record` and `observe --capture --record` above, `do --capture
+  --record`'s `record{status, record_id, record_started_at_unix_ms, step, step_closed, click}`,
+  `session app … --record`'s `record{status, record_id, record_started_at_unix_ms, step,
+  step_opened, step_closed, application}`, also inside the details of their errors). A recording
+  belongs to the instance: nothing is refused because another process started it or added its
+  steps.
 - `observe --capture --record` stores the verified Runtime frame and its reference, and in
   `capture_backend` the backend that captured it, named as `capture --record` names it
   (`adb_screencap`, `droidcast_raw`, `nemu_ipc`, `scrcpy`; Workflow #411 Lab L4).
@@ -706,10 +723,28 @@ frame attachment or recording persistence. The global parser handles the flag at
   its click box over its duration (`rect_center`; #411 Lab L3, as the kernel holds the
   `long_press` click the recording generates); `--swipe` on it is
   `record_click_rect_conflict`. `--tap` and `--tap-rect` on such a step are
-  `record_click_rect_conflict`; `--swipe` on a tap step is `record_click_rect_conflict`, and on
-  a step without a declared click `record_step_click_missing` (declare the drag with `record
-  mark` first). The execution also records `to_point` and `duration_ms`. Without `--record`,
-  `do --capture --swipe` is unchanged.
+  `record_click_rect_conflict`; `--swipe` on a tap step is `record_click_rect_conflict`. The
+  execution also records `to_point` and `duration_ms`. Without `--record`, `do --capture --swipe`
+  is unchanged.
+- **Recorded swipes** (Workflow #449 REC-ARCH; before it, `--swipe` on a step without a declared
+  click was refused `record_step_click_missing` and nothing entered the step table):
+  `do --capture --record --swipe x1,y1,x2,y2,ms` on the open step that declares no effect is that
+  step's effect, as `--tap-rect` declares a tap. The step's click is a drag from a box of one pixel
+  at the first point to a box of one pixel at the second over the duration: `rect` `{x1, y1, 1,
+  1}`, `gesture{kind: "drag", to: {x2, y2, 1, 1}, duration_ms}`, `source: "swipe"`. The input is
+  one swipe between the two points (rule `explicit`), recorded as any execution with its point,
+  `to_point`, `duration_ms`, request ids and the frames before and after; a Performed swipe closes
+  the step as a tap does. Both points lie inside the frame and the duration is 1..=60000 ms, as a
+  declared drag's, else `validation_failed` (exit 2) and nothing is pressed; `--swipe` takes no
+  `--tap`, `--tap-rect` or `--seed` (`validation_failed`). An archive's manifest gives the step the
+  kind `swipe` with its parameters ("Archiving").
+- **`record stop` and recorded swipes.** The standard package's task schema expresses such a swipe
+  as it is: the `drag` click `{"kind": "drag", "from", "to", "duration_ms"}` with the two boxes of
+  one pixel, which the kernel presses as one swipe between their points (a box of one pixel presses
+  its point, [resource-declarations.md](resource-declarations.md), "Touch sampling"). `record stop`
+  generates a swipe step as it generates a declared drag, counts its duration in the task timeout
+  and checks it in its first decision as one; no code is added and the package schema is not
+  extended. A recording without swipe steps generates the same bytes as before.
 - Workflow #406 T4: with `--seed`, a drag's two ends and a long press's point are drawn in their
   boxes as a run draws them, and the rule names the draw, with `sampling`.
 - #411 Lab BD: a brake drag is not pressed by a Lab operation: `do --capture --record` on its
@@ -924,7 +959,8 @@ earlier recording.
 ## Recording lock
 
 Every state-writing command (`record start`, `mark`, `stop` including `--dry-run`,
-`step`, `amend`, and `capture`/`observe`/`do --record`)
+`step`, `amend`, Workflow #449 REC-ARCH's `archive` and `reopen`, and
+`capture`/`observe`/`do --record`)
 takes `<state>/record-<instance>.lock` (`session app … --record` too, from before its
 Runtime request until the result is recorded) with an exclusive operating-system lock without
 waiting, holds it until its output is printed (`do --record` holds it across the device
@@ -940,6 +976,154 @@ not lock.
 - The lock is released with the process handle, so a crashed or killed holder leaves no
   stale lock; there is no unlock command. The lock files are never deleted.
 - v0.9.0 ActingLab does not know the lock; do not mix versions during a recording.
+
+## Archiving (`record archive`, `record reopen`)
+
+Workflow #449 REC-ARCH (0.12.59; the owner approved the feature on board issue #449, the rules
+here are the coordinator's). People also record only to keep material, the frames and where they
+tapped or swiped, while they operate by hand. Such a recording cannot pass `record stop`, which
+builds a package and so requires a mark on every step and a last step without an effect; and while
+it stays active every later `--record` action on the instance, whoever sends it, adds a step to it.
+`record archive` ends exactly such a recording and keeps all of it; `record reopen` makes it active
+again, so that it can be marked and stopped later.
+
+```
+record archive [--record-id <id>] [--copy-to <dir>] [--state-dir <dir>]
+record reopen [--record-id <id>] [--state-dir <dir>]
+```
+
+Both are rows of [lab-operations.json](lab-operations.json) (`record archive`, `record reopen`):
+commands of actinglab (also as `session record archive|reopen`), calls of `serve --stdio` and the
+tools `ac_record_archive` and `ac_record_reopen` of the Lab's MCP server. Neither has a dry run
+(`dry_run_unsupported`, alternative `record status`). Each takes the recording lock, so the
+holder file names `record archive` or `record reopen`; neither records a client action or any
+other trace, as `record stop` records none.
+
+**Naming.** A recording is named by its `record_id`: the id its session header carries
+(`record-<instance>.json`, from `record start --record-id` or generated), which also names its
+directory `record-artifacts/<record_id>/lab/`. Without `--record-id` both commands name the
+recording of the instance's session header.
+
+### record archive
+
+On the instance's active recording (its session header and its step table `active`), whoever
+started it and whoever added its steps:
+
+- It requires nothing of the steps: no mark, any last step, steps of any mix of initiators,
+  dropped or converted steps, and a step table written by an earlier release (the format has not
+  changed since 0.12.47, Workflow #434 LAB-2; no swipe step is needed or assumed).
+- It writes the manifest `archive-manifest-<n>.json` into the recording's directory, beside
+  `recording.json` and `frames/`: `n` is one above the highest manifest there, 1 for the first,
+  and an existing file is never replaced.
+- Then the `record` command sets the session header's `status` to `archived` (and its
+  `updated_at_unix_ms`): the session is ended in a state of its own, distinct from `stopped`. The
+  instance has no active recording, and `record start` needs no `--force`.
+- It never deletes, moves or rewrites a frame or the step table (the step table still says
+  `active`); it asks the Runtime nothing and reads no frame's pixels: it reads the step table and
+  the session header, and hashes files only to check them.
+
+**The manifest** (`actingcommand.lab-recording-archive.v1`) holds only what the step table and the
+session header hold:
+
+```json
+{"schema_version":"actingcommand.lab-recording-archive.v1",
+ "record_id":"…","instance":"…","task_id":"…","application":{"game":null,"server":null},
+ "started_at_unix_ms":0,"archived_at_unix_ms":0,"step_count":2,"written_by":"<commit>",
+ "step_table":{"file":"recording.json","sha256":"…"},
+ "steps":[{"step":1,"kind":"tap",
+   "frames":[{"frame_id":"f0001","role":"primary","file":"frames/<sha256>.png","sha256":"…"}],
+   "before":{"frame_id":"…","sha256":"…"},"after":{"frame_id":"…","sha256":null},
+   "page":"…","package":"…",
+   "tap":{"rect":{"x":8,"y":2,"width":4,"height":4},"point":{"x":10,"y":4}},"swipe":null,
+   "at_unix_ms":0,"request_id":"…"}]}
+```
+
+- The header: `record_id`, `instance`, `task_id` and `started_at_unix_ms` as the session header
+  names them; `application`, the game and server the step table names (the session header names
+  no application; `null` where the step table has none); `archived_at_unix_ms`; `step_count`;
+  `written_by`, the commit of the program that wrote the manifest; `step_table`, the step table's
+  file and its sha256 when the manifest was written, against which a copy is checked.
+- One row per step of the step table, in its order: `step`, the step's serial number; `kind`:
+  `tap` (a click without a gesture), `swipe` (a drag: a recorded swipe or a declared drag), `none`
+  (no input), or the step table's own word for any other effect (`long_press`,
+  `single_touch_drag_with_vertical_brake_v1`, `single_touch_path_drag_v1`, `application`);
+  `frames`, the step's frames and its page transition's, each `frame_id`, `role`, `file`
+  (`frames/` and the file name of its recorded path) and `sha256` as the step table has them;
+  `before` and `after`, the Runtime frames the input's frame summaries name (`frame_id`,
+  `sha256`), `null` without an input; `page`, the page recognised on the frame before the input,
+  and `package`, the carrier package that recognised it, when the step table has them; `tap`
+  `{rect, point}` for a tap and `swipe` `{from_rect, to_rect, from, to, duration_ms}` for a swipe,
+  `null` otherwise; `at_unix_ms`, when the input was executed, or for a step without one when its
+  first frame was recorded; `request_id`, the input's request id (an application step's), `null`
+  without one.
+
+**The copy** (`--copy-to <dir>`):
+
+- The directory must not exist (it is created, with its parents) or must be empty. Anything else
+  is refused `record_archive_target_not_empty` (exit 3, `details{path, reason}`, `not_empty` or
+  `not_a_directory`) before anything is written: no manifest, the session as it was.
+- Once the manifest is written and the session archived, `recording.json`, the manifest and every
+  frame file the manifest lists are copied under the same relative names; then every copy is hashed
+  against the manifest (the manifest's own copy against the manifest as written).
+- A file that cannot be copied is `record_state_io_failed` (exit 5, `details{file, path, target,
+  reason: "copy_failed", copied}`); a copy that cannot be read or does not hold its sha256 is
+  `record_archive_verify_failed` (exit 5, `details{file, path, checked: "copy", reason:
+  "sha256_mismatch" | "unreadable", failures, copied}`). Both name the file and the reason and add
+  `record_id`, `archived: true` and `manifest`: what was copied stays where it is, nothing is
+  deleted, and the recording stays archived.
+
+**Named again.** `record archive --record-id <id>` on an archived recording of the instance (the
+session header names it `archived`, or its directory holds a manifest while its step table is
+`active` and names the instance) writes no second manifest: it reads the latest one
+(`record_state_io_failed` when it does not read as that recording's manifest or names a file
+outside the directory) and hashes every file it lists in the recording's directory
+(`record_archive_verify_failed`, `checked: "recording"`, on a file that does not hold its sha256);
+with `--copy-to` it then copies as above. That is the retry after a failed copy.
+
+**The answer** is `{status: "archived" | "already_archived", record, path, lab}`: `record` the
+session header when it names the recording, `null` otherwise; `lab` `{status, record_id,
+record_started_at_unix_ms, instance, path (the recording's directory), manifest{file, path, sha256,
+steps, written}, copy?{path, files}}`, `written` false for a recording named again.
+
+**Refused, nothing written:** no `--record-id` and no active recording (no session, or a stopped or
+archived one): `record_session_not_active`; a named recording that is neither the instance's active
+one nor archived: `record_not_archived` (exit 3, `details{record_id, state}`, `state` `missing`,
+`stopped`, `unarchived` for a directory without a manifest, such as one `record start --force` left
+behind, or the session header's status); one of another instance: `record_instance_mismatch`; an
+active session whose step table is missing or does not read: `record_lab_unavailable` (`reason`
+`lab_recording_missing`, `lab_recording_unreadable` or `lab_recording_mismatch`).
+
+### record reopen
+
+Makes an archived recording of the instance its active recording again:
+
+- It changes the session's state only. When the session header names the recording, its `status`
+  becomes `active`; otherwise (the header of a later recording, stopped or archived, or none) the
+  command writes a header of the recording in place of it, as `record start` replaces one:
+  `record_id`, `task_id`, `instance` and `started_at_unix_ms` from the step table, `holder` and
+  `lease_id` `null`, no `steps`. The step table needs no change (archiving never rewrote it), and
+  every manifest stays as a file: a later `record archive` writes the next one
+  (`archive-manifest-2.json`, …).
+- Then `record mark` takes marks on its steps and `record stop` builds the package the same
+  recording would have built had it never been archived.
+- Refused, nothing written: while another recording is active on the instance,
+  `record_session_active` (exit 3, `details{instance, active_record_id, record_id}`); on a
+  recording that is not archived, `record_not_archived` (`state` `active` for the instance's active
+  recording, `stopped`, `missing`, `unarchived`); on another instance's, `record_instance_mismatch`.
+- The answer is `{status: "reopened", record, path, lab}`: `record` the session header as written;
+  `lab` `{status, record_id, task_id, instance, record_started_at_unix_ms, path, manifest (the latest
+  manifest's file name), steps, replaced_record_id}`, `replaced_record_id` the recording the
+  replaced header named, `null` when the header named this one or there was none.
+
+### Other commands on an archived recording
+
+| command | on an archived recording (the session header `archived`) |
+|---|---|
+| `record status` | `record.status` and `lab.status` `archived`: no active recording |
+| `record start` | starts the next recording without `--force`, replacing the header as after a stop; the archived recording keeps its directory and can be named by its id |
+| `record mark`, `record step`, `record amend`, the `--record` device commands | `record_session_not_active`, as for every session that is not active |
+| `record stop` | `record_session_not_active`, `details{reason: "recording_archived", record_id}`, nothing read or written: reopen it first |
+| `record candidates` | as before (it reads the session header's own steps) |
 
 ## Package generation (`record stop`)
 
@@ -963,6 +1147,7 @@ the package directory.
 | a stopped Lab recording with a package | nothing is generated; with `--lab-dir` the package is copied there again (steps 1 and 3 of "Writing"); `lab.status: "already_generated"` |
 | a stopped Lab recording marked again since its package was generated (Workflow #390 LAB-2, `amended_at_unix_ms`) | the package is generated, checked and written again ("Marking after stop"); `lab.status: "regenerated"` |
 | the session file was already stopped (for example by v0.9.0) but the Lab recording is active | generated as above; `lab.session_already_stopped: true` |
+| Workflow #449 REC-ARCH: the session is archived (`record archive`, "Archiving") | refused `record_session_not_active` (exit 3, `details{reason: "recording_archived", record_id}`) before anything is read or written; `record reopen` makes it active again |
 
 **`--dry-run`** (also the global `--dry-run`) runs everything: the pre-checks, generation,
 admission, the first decision, the cross-check and the `--lab-dir` checks. It writes nothing,
@@ -1354,7 +1539,7 @@ equal value is accepted.
 | exit | codes |
 |---|---|
 | 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict` |
+| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
-| 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written), the state directory cannot be created |
+| 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written; Workflow #449 REC-ARCH: also a copy file that cannot be written), the state directory cannot be created, `record_archive_verify_failed` (Workflow #449 REC-ARCH) |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |

@@ -926,8 +926,11 @@ fn lab2_do_capture_record_executes_a_declared_drag_as_one_swipe() {
 }
 
 // L-02 "long press is recorded": `do --capture --record` holds a declared long press at its point
-// (a swipe that ends where it began); a swipe is refused on it, and on a tap step; a swipe on a
-// step without a declared click asks for the drag first.
+// (a swipe that ends where it began); a swipe is refused on it, and on a tap step. Workflow #449
+// REC-ARCH (adapted: its item 6 changes what the last part pinned, a refusal
+// `record_step_click_missing`): a swipe on a step without a declared click is that step's swipe, a
+// drag from a box of one pixel at its first point to one at its second, as `--tap-rect` declares a
+// tap.
 #[test]
 fn lab2_do_capture_record_holds_a_long_press_and_swipes_only_a_declared_drag() {
     let swipe = PlanClickRequest {
@@ -976,8 +979,18 @@ fn lab2_do_capture_record_holds_a_long_press_and_swipes_only_a_declared_drag() {
     undeclared
         .mark(undeclared.step("first", &first(), vec![template("ui/button", BUTTON)], None))
         .unwrap_or_else(|error| panic!("step 1: {} {:?}", error.code, error.details));
-    let error = undeclared.plan(swipe).expect_err("no drag is declared");
-    assert_eq!(error.code, "record_step_click_missing", "{}", error.message);
+    let plan = undeclared
+        .plan(swipe)
+        .unwrap_or_else(|error| panic!("plan: {} {:?}", error.code, error.details));
+    assert!(plan.declares_click);
+    assert_eq!(plan.source, "swipe");
+    assert_eq!(plan.rect, rect(64, 14, 1, 1));
+    assert_eq!(plan.point, RecordPoint { x: 64, y: 14 });
+    assert_eq!(plan.to_point, Some(RecordPoint { x: 64, y: 44 }));
+    assert_eq!(
+        serde_json::to_value(plan.gesture).expect("gesture JSON"),
+        json!({"kind": "drag", "to": rect(64, 44, 1, 1), "duration_ms": 300})
+    );
 }
 
 // L-02 "marks after stop, regeneration": a stopped recording takes a mark on step 2; it records

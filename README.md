@@ -355,6 +355,9 @@ actinglab --json --instance <alias> record mark --optional --settle-ms <ms>     
 actinglab --json --instance <alias> record status
 actinglab --json --instance <alias> record stop --dry-run     # runs every check and writes nothing; mark what lab.warnings asks for
 actinglab --json --instance <alias> record stop --lab-dir <pack dir>     # writes <package_id>.zip or .json (replacing one of that name) and prints binding_example
+actinglab --json --instance <alias> do --capture --record --swipe x1,y1,x2,y2,ms --package <carrier package>     # on a step without a click: the step's swipe
+actinglab --json --instance <alias> record archive [--copy-to <empty dir>]     # a recording kept only as material: writes archive-manifest-<n>.json beside its frames, keeps every file, ends the session (archived); no marks needed
+actinglab --json --instance <alias> record reopen [--record-id <id>]     # an archived recording active again, to mark it and record stop it later
 actingctl resume --state-root <state-root> --instance <alias>
 
 # Offline ledger maintenance (assembles no providers, IPC or devices)

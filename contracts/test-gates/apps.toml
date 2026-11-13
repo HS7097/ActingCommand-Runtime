@@ -1812,3 +1812,19 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_451_place_pkg::place_pkg_notices_bundle_declaring_package_alone",
 ]
 incident = ["#451 PLACE-PKG"]
+
+# Workflow #449 REC-ARCH (0.12.59; register §1.287, "Slice REC-ARCH"; brief rd-1113/brief-449-record-archive.md; contracts/lab-recording.md, "Archiving"; contracts/lab-operations.json, the rows record archive and record reopen; board #449): a recording can be ended as material only, reopened later, and a swipe becomes a step. A swipe sent with --record on the open step that declares no effect declares the step's drag between boxes of one pixel at its two points (source swipe) and records its execution; marked, record stop generates the standard drag click of those boxes and duration. Steps a swipe and a tap of two initiators added and a last step without input archive: archive-manifest-1.json's header and rows (kind, frames, the frames before and after, page, package, tap or swipe, time, request id) are the step table's, its step table hash that file's; the step table and every frame keep their bytes; the copy into a directory that does not exist holds them and the manifest byte for byte. A step table in the form 0.12.54 wrote archives. A recorded frame, tap and swipe answer the recording's id, when it started and their step. No session, a stopped one and an unknown id archive nothing (record_session_not_active, record_not_archived state missing). On actinglab's command line: steps without marks whose last has a tap, record stop refuses (record_final_step_has_click) and writes nothing; record archive ends it, its rows the step table's; record status shows record and lab archived; record start starts another without --force; every frame and the step table keep their bytes. The copy into a directory that does not exist and, named again by id, into an empty one (already_archived, no second manifest) hold the recording's files; into a directory holding a file it is refused record_archive_target_not_empty before anything is written and the recording stays active. A stored frame that does not hold its recorded sha256 makes the copy's check fail record_archive_verify_failed naming the file, what was copied stays, the recording is archived; with the frame put back the retry by id copies it. record reopen is refused on the active recording (record_not_archived state active) and while another is active (record_session_active); after it the archived recording is active again and, marked and stopped, builds the files a twin never archived builds (but the provenance's generation time), its manifest staying
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_449_rec_arch::rec_arch_a_swipe_is_a_step_and_record_stop_generates_it_as_a_drag",
+    "actingcommand-lab::lib::gate_449_rec_arch::rec_arch_steps_of_several_callers_archive_and_the_rows_equal_the_step_table",
+    "actingcommand-lab::lib::gate_449_rec_arch::rec_arch_a_step_table_written_by_0_12_54_archives",
+    "actingcommand-lab::lib::gate_449_rec_arch::rec_arch_a_recorded_frame_tap_and_swipe_name_their_recording_and_step",
+    "actingcommand-lab::lib::gate_449_rec_arch::rec_arch_without_an_active_recording_or_with_an_unknown_id_nothing_is_archived",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_449_rec_arch::rec_arch_record_archive_ends_a_recording_that_record_stop_refuses",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_449_rec_arch::rec_arch_the_copy_goes_only_into_a_new_or_an_empty_directory",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_449_rec_arch::rec_arch_a_copy_that_does_not_verify_names_the_file_and_the_retry_by_id_copies",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_449_rec_arch::rec_arch_reopen_builds_the_package_the_recording_would_have_built",
+]
+incident = ["#449 REC-ARCH"]

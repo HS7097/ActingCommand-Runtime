@@ -5,6 +5,7 @@
 //! `record_status` only reads.
 
 use crate::LabOcr;
+use crate::recording::archive::ARCHIVED;
 use crate::recording::container::{
     container_kind, encode, extension, file_name, preflight_lab_dir, replace_in_place,
     write_lab_dir,
@@ -135,9 +136,16 @@ pub fn record_status(state_dir: &Path, instance: &str) -> LabResult<Option<LabSt
                 .iter()
                 .map(|step| step_view(step, &numbers))
                 .collect();
+            // Workflow #449 REC-ARCH: an archived recording's session is ended; its step table,
+            // which archiving never rewrites, still says active.
+            let status = if old.status == ARCHIVED {
+                ARCHIVED.to_string()
+            } else {
+                recording.status.clone()
+            };
             Ok(Some(LabStatus::Recording(Box::new(LabStatusView {
                 record_id: recording.record_id.clone(),
-                status: recording.status.clone(),
+                status,
                 coordinate_space: recording.coordinate_space,
                 defaults: recording.defaults.clone(),
                 open_step: open_step(&recording),
@@ -179,6 +187,18 @@ pub fn record_stop(
     let Some(old) = read_old_record(state_dir, lock.instance())? else {
         return Ok(none);
     };
+    // Workflow #449 REC-ARCH: an archived recording builds no package until `record reopen` makes
+    // it active again; nothing is read or written.
+    if old.status == ARCHIVED {
+        return Err(with_details(
+            not_active(format!(
+                "the recording {} is archived; run `record reopen --record-id {}` first, then mark \
+                 its steps and stop it",
+                old.record_id, old.record_id
+            )),
+            json!({"reason": "recording_archived", "record_id": old.record_id}),
+        ));
+    }
     let recording = match load_lab(state_dir, &old)? {
         LabFile::Ready(recording) => *recording,
         LabFile::Missing | LabFile::Unavailable(_) => return Ok(none),
@@ -1184,6 +1204,7 @@ pub fn record_attach_frame(
     Ok(AttachFrameOutcome {
         status: "frame_recorded".to_string(),
         record_id: session.recording.record_id.clone(),
+        record_started_at_unix_ms: session.recording.record_started_at_unix_ms,
         step: arrival.step,
         step_opened: arrival.opened,
         frame: arrival.frame,
@@ -1217,6 +1238,7 @@ pub fn record_commit_click(
             }
             .to_string(),
             record_id: session.recording.record_id.clone(),
+            record_started_at_unix_ms: session.recording.record_started_at_unix_ms,
             step: plan.step,
             step_closed: performed,
             click,
@@ -1306,6 +1328,7 @@ pub fn record_commit_application(
             }
             .to_string(),
             record_id: session.recording.record_id.clone(),
+            record_started_at_unix_ms: session.recording.record_started_at_unix_ms,
             step: plan.step,
             step_opened: opened,
             step_closed: closed,

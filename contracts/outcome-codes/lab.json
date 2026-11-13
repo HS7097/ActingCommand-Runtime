@@ -95,6 +95,48 @@
       "description": "#411 Lab BD: do --capture --record was asked to execute a Lab recording step whose declared gesture a Lab operation cannot press, a single-touch drag with a vertical brake (single_touch_drag_with_vertical_brake_v1); nothing was captured, pressed or recorded (exit 3).",
       "common_causes": "The open step declares a brake drag; Lab operations press taps, long taps and swipes only, and running one declared operation as the kernel runs it is not available in this version.",
       "handling": "Reach the screen after the gesture by other means (for example a lab run of a package that performs it), then close the step with record mark --close-step or give its next frame offline; the generated package still declares the gesture."
+    },
+    "record_archive_target_not_empty": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.59",
+      "description": "Workflow #449 REC-ARCH: record archive --copy-to names a directory that exists and is not empty, or a path that is no directory; nothing was written and the recording is as it was (exit 3; actinglab details path and reason, not_empty or not_a_directory).",
+      "common_causes": "The copy target is an earlier copy, a directory holding other files, or a file.",
+      "handling": "Give a directory that does not exist yet or is empty; the copy never merges into or overwrites anything."
+    },
+    "record_archive_verify_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.59",
+      "description": "Workflow #449 REC-ARCH: a file an archive's manifest lists does not hold the sha256 the manifest gives, or cannot be read: a copy record archive --copy-to made (checked copy), or a file of the recording's own directory when an archived recording is named again with --record-id (checked recording). Nothing is deleted, what was copied stays, and the recording stays archived (exit 5; actinglab details file, path, checked, reason sha256_mismatch or unreadable, every failure in failures, the files copied in copied; on a copy also record_id, archived and manifest).",
+      "common_causes": "A stored frame or the step table was changed or damaged after it was recorded, or the copy target's disk failed.",
+      "handling": "Read the file it names. Put the recorded file back or copy again into another empty directory with record archive --record-id <id> --copy-to <dir>; no second manifest is written."
+    },
+    "record_not_archived": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.59",
+      "description": "Workflow #449 REC-ARCH: the recording record archive --record-id or record reopen names is not an archived recording of the instance; nothing was written (exit 3; actinglab details record_id and state: missing, active, stopped, unarchived, or the session header's status).",
+      "common_causes": "The id names no recording of the state directory, the instance's active recording (reopen), a stopped recording, or a recording left behind by record start --force that was never archived.",
+      "handling": "Run record status for the instance's recording; archive the active one with record archive, and reopen only one an archive ended."
     }
   },
   "locations": {
