@@ -34,8 +34,9 @@ impl HostShared {
         material: Option<MaterialReadContext>,
     ) -> RuntimeHostResult<RuntimeReceipt> {
         // Workflow #389 U-2 (model section 3.1): the door knows the connection's channel, tags
-        // the request and its receipt with it and hands the request on. Until U-6 it marks and
-        // never refuses, by channel or by Lab option (section 4.2).
+        // the request and its receipt with it and hands the request on. It refuses by channel
+        // only on `ui`, by the UI list (Workflow #434 LAB-6S3, `ui_gate`), and never by Lab
+        // option.
         let channel = self.door_channel(request, connection_id)?;
         let receipt =
             self.process_request_at_door(request, channel, connection_id, timing, material)?;
@@ -139,7 +140,11 @@ impl HostShared {
                 );
             }
         };
-        let _work = if Self::request_is_lifecycle_control(request.operation()) {
+        // Workflow #434 LAB-6S3 (contracts/lab-two-entries.md §2.3 step 5): the gate's decision
+        // on a connection bound to `ui`, before any work begins; every other connection passes.
+        let refusal = super::ui_gate::ui_refusal(request.operation(), validated.channel());
+        let _work = if refusal.is_some() || Self::request_is_lifecycle_control(request.operation())
+        {
             None
         } else {
             match self.begin_request(request.operation(), connection_id)? {
@@ -154,19 +159,25 @@ impl HostShared {
                 }
             }
         };
-        if let Some(timing) = timing.as_deref_mut() {
-            timing.validated_dispatch.begin();
-        }
-        let dispatched = self.process_validated(
-            request,
-            &validated,
-            connection_id,
-            timing.as_deref_mut(),
-            material,
-        );
-        if let Some(timing) = timing {
-            timing.validated_dispatch.finish(dispatched.is_ok());
-        }
+        let dispatched = match refusal {
+            Some(refusal) => Err(self.refuse_on_ui(request, &validated, &refusal)),
+            None => {
+                if let Some(timing) = timing.as_deref_mut() {
+                    timing.validated_dispatch.begin();
+                }
+                let dispatched = self.process_validated(
+                    request,
+                    &validated,
+                    connection_id,
+                    timing.as_deref_mut(),
+                    material,
+                );
+                if let Some(timing) = timing {
+                    timing.validated_dispatch.finish(dispatched.is_ok());
+                }
+                dispatched
+            }
+        };
         match dispatched {
             Ok(success) => success.into_receipt(request),
             Err(mut failure) => {

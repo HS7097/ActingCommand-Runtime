@@ -224,6 +224,19 @@ fn begin_install_drain(host: &RuntimeHost, connection: u64) {
         )
         .expect("governance request")
     };
+    // Workflow #434 LAB-6S3: the connection binds `cli`, as actingctl's does; bound from the
+    // (User, Ui) envelope it would be `ui`, which the UI list refuses an installation transition.
+    let bound = host
+        .process_request_for_test(
+            &governance(RuntimeOperation::BindChannel {
+                channel: actingcommand_contract::RuntimeChannel::Cli,
+                via: None,
+                initiator: None,
+            }),
+            connection,
+        )
+        .expect("binding");
+    assert_eq!(bound.state(), RuntimeReceiptState::Completed, "{bound:?}");
     let declared = host
         .process_request_for_test(
             &governance(RuntimeOperation::DeclareGovernanceIdentity {

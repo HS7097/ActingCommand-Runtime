@@ -1960,7 +1960,10 @@ Workflow #429 R-4 (design `429-A-runtime.md` A.6 rule 8; [v012-register.md](v012
 is `UI_TIERS`, by key-table row, so a per-instance row stands for that member of every instance.
 A key the table does not list is `hidden`, a key the key table does not have included. The
 console reads the tiers through the crate it pins; no wire shape changes. `advanced` holds at
-most eight keys (`MAX_ADVANCED_KEYS`).
+most eight keys (`MAX_ADVANCED_KEYS`). Since Workflow #434 LAB-6S3 (0.12.58) the Runtime holds
+the `ui` channel to the tiers: a `ConfigureSettings` on `ui` that names a key not `daily` or
+`advanced`, or not settable, is refused `channel_request_refused` with that `config_key` and
+changes nothing ([lab-two-entries.md](lab-two-entries.md) §2.3 step 5).
 
 | Key | Tier | Settable | Note |
 |---|---|---|---|

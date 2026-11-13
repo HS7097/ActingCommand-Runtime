@@ -42,6 +42,20 @@ fn reason() -> SchedulingPauseReason {
     SchedulingPauseReason::new(REASON).expect("pause reason")
 }
 
+// Workflow #434 LAB-6S3: binds the connection to `cli`, as actingctl's is. On a connection bound
+// to `ui` the door refuses the governance kinds by the UI list before the host's own check is
+// reached, and a first request with the console's envelope would bind an unbound connection to
+// `ui`. Bound to `cli`, every envelope reaches the host's own check.
+fn bind_cli(client: &mut TestClient) {
+    let bind = client.request(RuntimeOperation::BindChannel {
+        channel: RuntimeChannel::Cli,
+        via: None,
+        initiator: None,
+    });
+    let bound = client.send(&bind);
+    assert_eq!(bound.state(), RuntimeReceiptState::Completed, "{bound:?}");
+}
+
 // The pause and the resume of a (Lab, Lab) connection are taken and recorded as those of a
 // (Cli, Cli) connection: the same receipts, the same held pauses, the same restore after a
 // restart, the same resume.
@@ -178,7 +192,9 @@ fn lab6s1b_a_lab_connections_pause_and_resume_are_taken_and_recorded_as_the_clis
 // The host's own checks of the governance and installation kinds, which `validate()` no longer
 // repeats, still refuse: the card from the Lab, an agent or the console's read envelope; an
 // approval decision from every envelope on a connection without an accepted card; and an install
-// transition's drain from the Lab, whose connection declared no card.
+// transition's drain from the Lab, whose connection declared no card. The card's and the
+// approval's connections are bound to `cli` (Workflow #434 LAB-6S3: on `ui` the door refuses
+// both kinds first, `channel_request_refused`, which that slice's own gate holds).
 #[test]
 fn lab6s1b_the_hosts_own_checks_of_the_governance_and_install_kinds_still_refuse() {
     let root = TempDir::new().expect("tempdir");
@@ -190,6 +206,7 @@ fn lab6s1b_the_hosts_own_checks_of_the_governance_and_install_kinds_still_refuse
         (EventActor::Ui, EventSource::Ui),
     ] {
         let mut client = TestClient::connect(&host);
+        bind_cli(&mut client);
         let card = request_as(
             &client,
             actor,
@@ -222,6 +239,7 @@ fn lab6s1b_the_hosts_own_checks_of_the_governance_and_install_kinds_still_refuse
         (EventActor::User, EventSource::Ui),
     ] {
         let mut client = TestClient::connect(&host);
+        bind_cli(&mut client);
         let decision = ApprovalDecisionRecord::new(
             "approval:fixture-a",
             ApprovalDisposition::Approved,

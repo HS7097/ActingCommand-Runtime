@@ -39,7 +39,7 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 | LAB-6S1a | Runtime | the door also takes `BindChannel{channel: lab, initiator}` (section 2.2); `runtime-client` [3, 8]. Way back: yes |
 | LAB-6S1b | Runtime | the origin gates of `RuntimeRequest::validate()` go (built, 0.12.58: section 2.4); their codes retire. Way back: yes |
 | LAB-6S2 | Runtime | every client of the Runtime repository binds `lab` with its word, `actingctl` included (after LAB-6S1a and LAB-6S1b have been deployed by themselves). Way back: yes |
-| LAB-6S3 | Runtime | the UI list on `ui`. Way back: yes |
+| LAB-6S3 | Runtime | the UI list on `ui` (section 3, `ui_allows`; section 2.3 step 5): a `ui` connection is refused, `channel_request_refused`, every kind off the list and a setting outside the console's tiers; every other connection as before. Way back: yes |
 | LAB-6S4a | Runtime | the five kinds deleted; `install-control` [0, 0]. Way back: yes |
 | LAB-6S4b | Runtime | `cli`, `mcp` and a `lab` without a word refused; `via` off the wire; `runtime-client` [8, 8]; `actingd-config` 30. Way back: yes |
 | LAB-6S5 | Runtime | the initiator in the ledger and in the settings rows; `ledger` 9. Way back: **no** |
@@ -121,6 +121,18 @@ decision (from U-6)", which is not built.
    `channel_request_refused` with `channel` `ui` and `operation`, and for a setting also
    `config_key`, the first key refused.
 
+Step 5 is in force from LAB-6S3 (Workflow #434, 0.12.58; the coordinator's rulings of 2026-11-13
+on board #434, not the owner's words), on a connection bound to `ui` however it came to be bound:
+by its `BindChannel`, or, until LAB-6S4b, by the envelope of its first request (runtime-interface.md,
+"Transition"). The handshake kinds of step 1 are `Health` and `BindChannel`; the identity card,
+which the request table files with them, is no kind of the list, and `ui` refuses it. A
+`ConfigureSettings` is judged key by key in the request's order, a change that clears a key as one
+that sets it; a key the key table does not have has no tier and is refused; "settable" is the key
+row's static property, so a change the Runtime's state then refuses is answered by the checks
+behind the gate with their own codes. Nothing of a refused request is applied. Steps 2 and 3 come
+with LAB-6S4b; until then nothing is refused by channel on an unbound connection or on one bound to
+`lab`, `cli` or `mcp`.
+
 The checks behind the gate do not change, except the origin gates of section 2.4. The Runtime's
 own work (policy dispatch, the recovery ladder, startup packages, emulator autostart, monitor
 capture, pacing, host shutdown handling) is no request and never passes the gate.
@@ -181,6 +193,15 @@ capture, pacing, host shutdown handling) is no request and never passes the gate
 - A refused write is recorded `command.rejected` with its channel and initiator; a refused pure
   read is only in its receipt; a request on an unbound connection is only in its receipt
   (runtime-interface.md, "Records").
+- **What LAB-6S3 records** (0.12.58). A request the gate refuses on `ui` that G14 copies (the
+  request table's `g14_copied`: a write, or a read that writes a record) is recorded
+  `command.rejected` with the channel `ui` and the refusal as its outcome, the record the
+  receipt's terminal; the member `channel` every command record has carries it, so no record's
+  shape and no `ledger` revision changes. A refused pure read is only in its receipt. The
+  initiator joins the record with LAB-6S5. `operation` names the request kind by a registered
+  location: the kind's spelling on the wire where that spelling is one, otherwise the name the
+  runtime client or the contract gives the request (`runtime_input` for `Input`,
+  `runtime_project_interface`, `request_runtime_shutdown`, and so on: the host's `kind_location`).
 - The console shows the code and the operation (Fail Loud, UI-L1) and never sends a refused
   request again as another kind.
 - No new code (section 12).
@@ -189,7 +210,10 @@ capture, pacing, host shutdown handling) is no request and never passes the gate
 
 A static table `ui_allows(kind) -> bool` in the contract crate, beside `interface_class` (LAB-6).
 No roles, users or tokens. It equals the table's `ui_kinds` (section 9), which LAB-6's
-`gate_two_entries` asserts.
+`gate_two_entries` asserts. Since LAB-6S3 (0.12.58) the function exists
+(`actingcommand_contract::ui_allows`, the transitional `RecordClientAction` included) and the gate
+holds `ui` to it (section 2.3 step 5); `lab_ops_ui_allows_is_the_tables_ui_kinds` holds it equal to
+`ui_kinds`.
 
 | Kind | Class | Note |
 |---|---|---|
@@ -1219,7 +1243,8 @@ code stays registered with the server's check, section 9.3), and `mcp_identity_d
 today's codes for the rest. The codes this contract uses:
 
 - `channel_request_refused` (`operation`, `channel`), with `config_key` for a refused setting: an
-  optional value LAB-6 adds to its catalog entry;
+  optional value LAB-6 adds to its catalog entry (added by LAB-6S3, 0.12.58, which first emits the
+  code, on `ui`);
 - `channel_binding_missing`, `channel_binding_exists`, `invalid_bind_channel`;
 - `lab_command_option_disabled` (`operation`, `lab_option`): registered, and not emitted for the
   authoring option, whose key only lists (section 8.3; LAB-5F fix 2): the design's

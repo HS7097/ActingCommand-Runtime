@@ -361,6 +361,8 @@ mod gate_434_lab6s1a;
 // and resume are a CLI connection's, and the host's own checks of the governance and install
 // kinds still refuse.
 mod gate_434_lab6s1b;
+// Workflow #434 LAB-6S3: the UI list on the `ui` channel; every other connection as before.
+mod gate_434_lab6s3;
 // Workflow #429 R-0: the workbench's kinds have their shapes and answer `not_implemented`.
 mod gate_429_r0;
 // Workflow #429 R-0b: the Status member `activity` while each activity runs and after it ends.

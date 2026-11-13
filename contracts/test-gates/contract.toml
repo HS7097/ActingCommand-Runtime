@@ -880,3 +880,11 @@ tests = [
     "actingcommand-contract::lib::runtime::tests::governance_identity_cards_require_a_valid_card",
 ]
 incident = ["#434 LAB-6S1b"]
+
+# Workflow #434 LAB-6S3 (0.12.58; register §1.287, "Slice LAB-6S3"; brief rd-1113/brief-lab6s3.md; contracts/lab-two-entries.md §3): the part of gate_two_entries that holds the UI list to the operation table: the contract crate's static table ui_allows takes exactly the kinds of the table's ui_kinds, the transitional RecordClientAction included, for every kind of RuntimeOperationKind::ALL, and the table names each of them once
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::gate_434_lab6s3::lab_ops_ui_allows_is_the_tables_ui_kinds",
+]
+incident = ["#434 LAB-6S3"]

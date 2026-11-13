@@ -11773,6 +11773,121 @@ back: the Lab's pause, resume and the rest are refused again, nothing persisted 
 **LAB-6S1b rollback** (to the release before it). Two-way: nothing persisted changes shape;
 `runtime-client` stays [3, 8].
 
+#### Slice LAB-6S3 (0.12.58): the UI list on the `ui` channel
+
+Coordinator work order `rd-1113/brief-lab6s3.md`, after the read-only survey
+`rd-1113/lab6-step0-survey.md` (rows A7, A13, A14, A25; B.1, B.6; D, row S3; E, N9); the
+coordinator's rulings of 2026-11-13 on board #434, not the owner's words; based on LAB-6S1a's head
+`63b491b2`. The contracts are [lab-two-entries.md](lab-two-entries.md) (the slice table, §2.3
+step 5, §2.6, §3, §12), [runtime-interface.md](runtime-interface.md) ("The gate", "The gate's
+decision (from U-6)", "Before U-6", "Records", the code's row) and
+[runtime-config.md](runtime-config.md) ("Console tiers").
+
+**The rule.** On a connection bound to `ui`, by its `BindChannel` or by the envelope of its first
+request (the transition rule, until LAB-6S4b), the one gate (`process_request_observed`, after the
+request's own checks and before any work begins) takes `Health`, `BindChannel` and the kinds of the
+UI list (`ui_allows`), and a `ConfigureSettings` only when every change's key has the console tier
+`daily` or `advanced` (`ui_tier`, a per-instance key by its member) and its key-table row is
+settable: key by key in the request's order, a clear judged as a set, a key the key table does not
+have refused. Every other request there is Denied `channel_request_refused` with `channel` `ui`,
+`operation` the kind and, for a setting, `config_key` the first key refused; nothing of it is
+applied. "Settable" is the row's static property: a change the Runtime's state refuses is answered
+behind the gate with its own code, as before. `lab`, `cli`, `mcp` and an unbound connection are
+judged by nothing new (their refusals are LAB-6S4b's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L6S3-1 | `ui_allows(kind) -> bool` (`crates/actingcommand-contract`, beside `interface_class`) | static table of the contract crate | LAB-6S3 | — | the 30 kinds of §3, `RecordClientAction` included; equal to the operation table's `ui_kinds` |
+| L6S3-2 | the gate on `ui` (`runtime-host` `host::ui_gate`: `ui_refusal`, `ui_takes_kind`, `ui_may_set`), called in `requests.rs` between `validate()` and `begin_request` | behaviour | LAB-6S3 | the door | `Health` and `BindChannel` are the handshake kinds; the identity card, which the request table files with them, is off the list and refused on `ui`. A refused request begins no work |
+| L6S3-3 | `channel_request_refused`: first emitted; the optional value `config_key` | outcome catalog | LAB-6S3 | the gate | texts rewritten for what is in force; the index regenerated; no code, key, location or word added |
+| L6S3-4 | the refusal's `operation` (`ui_gate::kind_location`) | behaviour | LAB-6S3 | — | a registered location naming the kind: its wire spelling where that is a location (62 kinds), otherwise the runtime client's or the contract's name of the request (17: `runtime_input`, `runtime_status`, `request_runtime_shutdown`, `read_runtime_material` and the like; `input` cannot be a location, G8). The table spells other owners' locations, the runtime client's out of this crate's reach as types, so the outcome guard's allow list holds it as one standing G5 item entry; a test holds every spelling registered |
+| L6S3-5 | `command.rejected` with `channel` `ui` (`CommandPayloadDraft::rejected_on_channel`) | record writer | LAB-6S3 | the gate | for a refused request whose kind G14 copies (`g14_copied`: the writes and the reads that record); its outcome is the refusal, the receipt's terminal; the member `channel` every command record has since U-2 (register U1, and its rule "a channel only on a command record") carries it, so no shape, no validity rule and no `ledger` revision moves. A refused pure read records nothing |
+| L6S3-6 | `lab-operations.json`: `StopInstanceRun` `console_today` true | table text | LAB-6S3 | — | the survey's N9, second half |
+
+**What a `ui` connection is refused that it was served before.** The 47 kinds off the list (the
+Lab's debugging and authoring operations, leases, input, runs by path, fact publishing, monitor
+settings, resource target documents, subscriptions, the projection, the planning session, the five
+kinds LAB-6S4a deletes, the wake test, pack load and unload): before, the door marked them and their
+handlers answered. And a `ConfigureSettings` naming any key but the eleven the tiers allow (an
+instance's `stuck_recovery`, the Lab options, `mumu_root`, the process priorities, every key of no
+tier): before, taken and, when settable, applied.
+
+**The released console held against it.** The console v0.12.16 sends (survey B.6) `Status`,
+`RuntimeFactSnapshot`, `QueryEvents`, `ReadMaterial`, `ScheduleExplanation`, `StartReport`,
+`DiscoverInstances`, `ObserveReadonly`, `PauseScheduling`, `ResumeScheduling`, `ConfigureSettings`,
+`SelfCheckInstance`, `ControlEmulatorInstance`, `ApplicationLifecycle`, `RequestShutdown`,
+`RecordClientAction`, `StopInstanceRun` and the handshake: all taken; its next release adds
+`PackScheduleView` and `EditPackSchedule`, both on the list. Its settings page sends
+`performance.pacing.mode`, `performance.pacing.max_concurrent_runs`,
+`performance.pacing.heavy_dispatch_limit.normal`, `scheduling.parallel.enabled`,
+`scheduling.blackout.host`, `frame_retention_evidence_max_age_days` and, per instance,
+`scheduling.blackout`, `idle.action`, `start_emulator`, `touch_backend`, `capture_backend`: on this
+base each is `daily` or `advanced` (`UI_TIERS`) and its row `Settable::Yes`
+(`performance/pacing.rs`, `scheduling.rs`, `frame_retention.rs`, `instance.rs`, `idle.rs`); they are
+exactly the keys the tiers allow. So the released console loses nothing. In the console's default
+receipt detail (`codes`, its `Ui` envelope) `config_key`, a token, is left out as every token is; its
+record keeps it.
+
+**`console_today`** (the work order's point 6), checked against the survey's B.6: the 16 kinds
+marked true are kinds v0.12.16 sends; `StopInstanceRun`, which it sends (`stop.rs`), was false and
+is now true; the 13 marked false are kinds it does not send (`PackScheduleView` and
+`EditPackSchedule` come with its next release and stay false).
+
+**Tests.** New: host row "#434 LAB-6S3" (`gate_434_lab6s3`, the `ui` part of the contract's
+`gate_two_entries` and `ui_settings_within_tiers`: for every kind of `RuntimeOperationKind::ALL`
+the `ui` channel takes it exactly when it is a handshake kind or on the list of §3, and every kind
+names a registered location; on a connection bound by `BindChannel` and on one bound by its (User,
+Ui) envelope a write off the list is refused with one `command.rejected` with the channel `ui`, a
+pure read off the list with no record, a read that records like a write, and the receipt is Denied
+with its code, `channel`, `operation` and no `config_key`; for every key of the key table `ui` may
+change it exactly when its tier is `daily` or `advanced` and it is settable; an allowed key then a
+refused one is refused naming the refused one and applies nothing while the same request on `cli`
+completes, a clear of an allowed key completes, an unknown key is refused; the eleven keys, set
+and cleared, are taken and answered as on `cli`; on `lab`, `cli`, `mcp` and an unbound connection an
+off-list kind and a key of no tier are answered as before) and contract row "#434 LAB-6S3"
+(`lab_ops_ui_allows_is_the_tables_ui_kinds`). **Adapted**, each because its connection became `ui`
+from the (User, Ui) envelope of its first request and then sent what the list does not hold (an
+approval, an identity card, an installation transition, a subscription), so it now binds `cli`, as
+actingctl's connections do, and pins what it pinned: the host tests' `TestClient::declare_governance_identity`
+(binds `cli` before the card); `approvals::governance_authority_requires_an_accepted_identity_card_and_is_connection_bound`
+(its two connections); `gate_382_h4`'s `begin_install_drain` and
+`instance_workers::an_install_drain_during_a_climb_ends_the_ladder_and_drains` (the connection
+before the card); `gate_sub_lag_1::a_lagged_subscriber_can_resume_from_its_cursor` (the served
+connection, with the console's envelope kept); the runtime client's
+`typed_client_records_client_actions_and_approval_decisions_through_runtime` (its client binds
+`cli` with the (User, Ui) envelope); and, met when LAB-6S1b came onto this branch, its host test
+`lab6s1b_the_hosts_own_checks_of_the_governance_and_install_kinds_still_refuse` (the connections
+of its cards and its approvals bind `cli` first, for the same reason: a (Ui, Ui) or (User, Ui)
+first request bound them to `ui`, where the door now refuses both kinds before the host's own
+check). No test leaves the gate map.
+
+**Interface.** None raised: no wire shape changes (a refusal is a receipt of the existing shape),
+no record's shape, and the catalog gains an optional value of an existing code.
+
+**At deploy.** A `ui` connection is refused, `channel_request_refused`, a request kind off the UI
+list and a `ConfigureSettings` naming a key outside the console's tiers, which before were served;
+the released console (v0.12.16) sends none of them: its kinds are all on the list and its eleven
+keys are all `daily` or `advanced` and settable. Every other channel (`lab`, `cli`, `mcp`) and an
+unbound connection are answered as before. Nothing else needs to be true first.
+
+**LAB-6S3 rollback** (to the release before it). Two-way: nothing persisted changes shape; the
+earlier build brings the earlier door back (it marks `ui` and refuses nothing by channel) and reads
+the `command.rejected` records with a channel this build wrote (the member exists since U-2).
+
+**Where LAB-6S3 differs from its work order's letter.**
+
+- (a) What is recorded: the work order says a refused write is recorded and a refused read is not.
+  This slice follows §2.6 ("a refused pure read"), runtime-interface.md "Records" ("copied when an
+  accepted one of its kind would be"), the code's catalog text and the request table's
+  `g14_copied`: a read that writes a record (`ObserveContainedPage`, `RecognizeArtifact`,
+  `MatchDiagnosticSignatures`, `DebugPackage`, `ExportEvidence`, `ProjectPolicyForward`) is
+  recorded as a write is, and the retired `RecordApprovalDecision`, which G14 does not copy, is not.
+- (b) The refusal's `operation` for 17 kinds is not the wire spelling (L6S3-4).
+- (c) "For every kind, a request on a `ui` connection is taken exactly when `ui_allows` says so" is
+  held for every kind on the gate's own decision by kind (`ui_takes_kind`, the function the door
+  calls) and on requests for representative kinds: a valid request of each of the 79 kinds is not
+  built.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

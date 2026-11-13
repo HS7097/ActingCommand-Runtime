@@ -7199,6 +7199,8 @@ struct DiagnosticOutcomeDraft {
     artifact_failure: Option<Box<ArtifactFailureDraft>>,
     resource_declaration: Option<Box<crate::ResourceDeclarationRejection>>,
     runtime_state: Option<Box<crate::RuntimeStateFact>>,
+    /// Workflow #434 LAB-6S3 (register U1): the channel of a `command.rejected` the door wrote.
+    channel: Option<crate::ChannelBinding>,
     audit: AuditInput,
 }
 
@@ -8988,6 +8990,7 @@ impl DiagnosticOutcomeDraft {
             artifact_failure: None,
             resource_declaration: None,
             runtime_state: None,
+            channel: None,
             audit,
         }
     }
@@ -9070,8 +9073,8 @@ impl DiagnosticOutcomeDraft {
                 .transpose()?,
             cleanup_detail,
             lifecycle_failure,
-            channel: None,
-            via: None,
+            channel: self.channel.map(|binding| binding.channel),
+            via: self.channel.and_then(|binding| binding.via),
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -9950,6 +9953,23 @@ impl CommandPayloadDraft {
     ) -> Self {
         let mut draft = DiagnosticOutcomeDraft::new(action, diagnostic_code, effect, audit);
         draft.outcome = Some(outcome);
+        Self(CommandDraftKind::Rejected(draft))
+    }
+
+    /// [`Self::rejected_with_outcome`] of a request the door refused, with the channel of its
+    /// connection (Workflow #434 LAB-6S3; `contracts/lab-two-entries.md` §2.6): the member every
+    /// command record has (register U1), which no other `command.rejected` writes.
+    pub fn rejected_on_channel(
+        action: EventAction,
+        effect: EffectDisposition,
+        outcome: Outcome,
+        channel: crate::ChannelBinding,
+        audit: AuditInput,
+    ) -> Self {
+        let mut draft =
+            DiagnosticOutcomeDraft::new(action, DiagnosticCode::CommandRejected, effect, audit);
+        draft.outcome = Some(outcome);
+        draft.channel = Some(channel);
         Self(CommandDraftKind::Rejected(draft))
     }
 }

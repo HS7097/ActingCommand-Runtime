@@ -61,6 +61,11 @@ Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the sa
   the one envelope rule left is `valid_client_origin` (section Outcome codes, "Retired later").
 - Everything behind the gate stays as it is, including the C4 source check and frame
   pinning.
+- Since Workflow #434 LAB-6S3 (0.12.58) the gate refuses on one channel only: on `ui`, the UI
+  list of [lab-two-entries.md](lab-two-entries.md) §3 (`actingcommand_contract::ui_allows`) and,
+  for a `ConfigureSettings`, the console's tiers (its §2.3 step 5; `runtime-host`'s `ui_gate`), at
+  this position, before any work of the request begins. Every other channel, and a connection not
+  bound, passes as before.
 - Not requests, never at the gate, whether or not the Lab is installed: the Runtime's
   own policy dispatch, recovery ladder (emulator restart included), startup packages,
   emulator autostart, monitor capture and recovery, performance pacing, host shutdown
@@ -607,6 +612,10 @@ of five families:
 
 ### The gate's decision (from U-6)
 
+Workflow #434 replaces this decision, which is not built, by
+[lab-two-entries.md](lab-two-entries.md) §2.3; of that one, step 5 (the UI list on `ui`) is in
+force since LAB-6S3 (0.12.58), and the rest comes with later slices of LAB-6.
+
 In order; the first match decides.
 
 1. Handshake (`Health`, `BindChannel`) → take.
@@ -644,7 +653,9 @@ shape too; no other `ConfigureSettings` comes from it.
 From v0.12.0 (U-2) to U-6 the Runtime reads both options and reports them, and every
 receipt carries its channel, but nothing is refused by channel or by option. Absent
 keys mean "not installed", and the installer page that writes them comes only with U-5:
-refusing earlier would cut every machine that uses the Lab today.
+refusing earlier would cut every machine that uses the Lab today. Since Workflow #434
+LAB-6S3 (0.12.58) one channel is refused what its list does not hold: `ui`
+([lab-two-entries.md](lab-two-entries.md) §2.3 step 5); nothing is refused by option.
 
 ### Without the Lab, or with one option
 
@@ -686,6 +697,10 @@ refusing earlier would cut every machine that uses the Lab today.
   is only in its receipt.
 - A request on an unbound connection has not passed the door: its refusal is only in
   the receipt.
+- Since Workflow #434 LAB-6S3 (0.12.58): a request the gate refuses on `ui` that G14
+  copies (`g14_copied`: a write, or a read that writes a record) is recorded
+  `command.rejected` with `channel` `ui` and the refusal (`channel_request_refused`) as its
+  outcome; a refused pure query is only in its receipt.
 - The gate adds no direct ledger write; the exception table keeps only W1 and W2.
 - Who sent a request is found through its request id in its G14 record; effect records
   gain no member.
@@ -1262,7 +1277,7 @@ them.
 |---|---|---|---|---|---|
 | `channel_binding_missing` | error | runtime-host (`channel_`) | an unbound connection sent a request other than the handshake (receipt only) | `operation` | U-6 |
 | `channel_binding_exists` | error | runtime-host (`channel_`) | a second BindChannel on one connection | `channel` | U-2 |
-| `channel_request_refused` | error | runtime-host (`channel_`) | the kind is not taken on this channel: an option kind on a counter, a general instruction on the Lab channel, an external approval anywhere | `operation`, `channel` | U-6 |
+| `channel_request_refused` | error | runtime-host (`channel_`) | the kind is not taken on this channel: an option kind on a counter, a general instruction on the Lab channel, an external approval anywhere; since Workflow #434 LAB-6S3, on `ui` a kind off the UI list or a setting outside the console's tiers | `operation`, `channel`; optional `config_key` (the first key refused) | LAB-6S3 (on `ui`); the rest U-6, as replaced by lab-two-entries.md §2.3 |
 | `lab_module_not_installed` | error | runtime-host (`lab_module_`) | neither option installed; any non-handshake request on the Lab channel | `operation` | U-6 |
 | `lab_module_option_disabled` | error | runtime-host (`lab_module_`) | the Lab is installed but not the kind's option | `operation`, `lab_option` | U-6 |
 | `upgrade_state_entered` | success | runtime-host (`upgrade_state_`) | `enter`: drained, own close accepted | `transition_id` | U-4 |

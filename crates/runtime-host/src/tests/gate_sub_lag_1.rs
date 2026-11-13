@@ -220,9 +220,16 @@ fn a_lagged_subscriber_can_resume_from_its_cursor() {
     let cursor = batch(&first).next_cursor();
     assert!(cursor.after_sequence > 0, "{first:?}");
 
-    // Its next request falls behind. Asked from the console (codes mode), the failure still
-    // names the cursor to subscribe again from: where the subscriber stood, since it was
-    // delivered nothing.
+    // Its next request falls behind. Asked with the console's envelope (codes mode), the failure
+    // still names the cursor to subscribe again from: where the subscriber stood, since it was
+    // delivered nothing. Workflow #434 LAB-6S3: the UI list holds no subscription, so the request
+    // goes on a connection bound `cli`; bound from its envelope it would be `ui` and refused.
+    let bind = console.request(RuntimeOperation::BindChannel {
+        channel: actingcommand_contract::RuntimeChannel::Cli,
+        via: None,
+        initiator: None,
+    });
+    assert_eq!(serve(&host, &bind).state(), RuntimeReceiptState::Completed);
     lag_next_subscription(&host);
     let request = console.governance_request(subscribe(EventQuery::default(), cursor, 16));
     let failed = serve(&host, &request);
