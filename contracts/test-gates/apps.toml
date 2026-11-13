@@ -1812,3 +1812,15 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_451_place_pkg::place_pkg_notices_bundle_declaring_package_alone",
 ]
 incident = ["#451 PLACE-PKG"]
+
+# Workflow #453 S10 (0.12.59; register §1.340; brief rd-1113/brief-453-s10-offline-discovery.md; contracts/emulator-control.md, "Offline instance discovery"): actingd discover on injected reads of the vendor tool (no program spawned): the listing's fixture (two running instances, two stopped, the last two sharing a name) parsed into the host's instance shape, each instance with the alias of the configuration entry whose binding key names it (an index; a name one listed instance carries; none for a name two carry), the configured folder as mumu_root with source config, the version 6.5.7.0, the two reads asked once each and in order of the tool the resolver found in a temporary emulator root, no state root made, and the report line of schema actingcommand.actingd.discover.v1 with discover_completed; --mumu-root on a temporary emulator root without a file: source argument and no bound alias; a root without the vendor tool refused instance_discovery_unavailable caused by candidate_absent (install_source explicit_folder, mumu_root the folder) with nothing read; an info -v all whose bound expires refused instance_discovery_unavailable caused by provider_native_failed (device_category backend_launch, mumu_root the folder). The rescue row emulators on the fake host: it runs the live build's actingd discover --config <the root's configuration> --install-root <root> once and nothing else, writes nothing in the root or its state root, answers a completed discovery install_command_done of install_emulators with actingd's report as report and actingd's outcome as its related link, and a refused one install_command_refused with install_refusal emulator_discovery_failed, actingd's outcome as its caused_by link and no report
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_453_s10::s10_discover_lists_the_instances_with_the_files_bound_aliases",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_453_s10::s10_discover_resolves_the_named_emulator_root",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_453_s10::s10_discover_a_read_past_its_bound_is_unavailable",
+    "actingcommand-lab-rescue::lib::install::gate_453_s10::emulators_answers_the_live_builds_report",
+    "actingcommand-lab-rescue::lib::install::gate_453_s10::emulators_refuses_with_actingds_outcome_as_its_cause",
+]
+incident = ["#453 S10"]

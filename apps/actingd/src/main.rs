@@ -7,6 +7,8 @@
 mod check_config;
 mod codes;
 mod config;
+// Workflow #453 S10: `actingd discover`, this machine's emulator instances without a Runtime.
+mod discover;
 mod ledger_maintenance;
 mod monitor_retry;
 mod owner_unlock;
@@ -70,6 +72,9 @@ mod gate_rl1c_follow;
 // harness of gate_382_a4_cycle).
 #[cfg(test)]
 mod gate_427a;
+// Test-only: Workflow #453 S10, `actingd discover` on injected reads of the vendor tool.
+#[cfg(test)]
+mod gate_453_s10;
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{
@@ -148,6 +153,12 @@ fn main() -> ExitCode {
             suspended::SCHEMA_VERSION,
             ActingdCode::SuspendedReportEncodeFailed,
             installed(running).and_then(|()| suspended::run(arguments)),
+        ),
+        // Workflow #453 S10: read only, judged as check-config judges a configuration.
+        Some("discover") => subcommand_report(
+            discover::SCHEMA_VERSION,
+            SharedCode::SerializationFailed,
+            installed(candidate).and_then(|()| discover::run(arguments)),
         ),
         _ => run_daemon(arguments),
     };
@@ -338,12 +349,14 @@ fn report_detail() -> Detail {
 
 /// Prints a subcommand's one stdout report line (Workflow #378 A6a, model section 7.4), then the
 /// developer line on stderr of an outcome that is a warning, an error or fatal. Returns the
-/// category the process exits by (model section 7.6).
+/// category the process exits by (model section 7.6). Workflow #453 S10: `encode_failed` is any
+/// registered code (`discover`'s is the shared `serialization_failed`).
 fn subcommand_report(
     schema_version: &'static str,
-    encode_failed: ActingdCode,
+    encode_failed: impl Into<Code>,
     result: Result<Reported, ActingdError>,
 ) -> Category {
+    let encode_failed = encode_failed.into();
     let (outcome, developer, line) =
         report_line(schema_version, encode_failed, result, report_detail());
     let mut stdout = std::io::stdout().lock();
@@ -368,7 +381,7 @@ fn subcommand_report(
 /// reported as `encode_failed` instead, with the outcome as its link.
 fn report_line(
     schema_version: &'static str,
-    encode_failed: ActingdCode,
+    encode_failed: impl Into<Code>,
     result: Result<Reported, ActingdError>,
     detail: Detail,
 ) -> (Outcome, Option<String>, String) {

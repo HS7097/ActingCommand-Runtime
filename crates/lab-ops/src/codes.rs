@@ -499,6 +499,9 @@ actingcommand_contract::outcome_locations! {
         // registration snippet of the MCP entry's second generation (its `mcp plan` and `mcp
         // entries` answer as `install_mcp_entry_plan` and `install_mcp_entry_list`).
         McpConfig => "install_mcp_config",
+        // Workflow #453 S10 (since 0.12.59): the rescue module's `emulators`, the live build's
+        // `actingd discover` of the root's configuration, read only.
+        Emulators => "install_emulators",
     }
 }
 
@@ -588,6 +591,10 @@ actingcommand_contract::outcome_vocabulary! {
         // Workflow #434 LAB-5G5b (since 0.12.57): the rescue module's `mcp plan` finds no
         // `actinglab-mcp.exe` in the manifests of the installed build (`commit_sha`, `path`).
         McpServerNotInBuild => "mcp_server_not_in_build",
+        // Workflow #453 S10 (since 0.12.59): the rescue module's `emulators` got no completed
+        // discovery from the live build's `actingd discover` (its outcome, or the child's failure,
+        // is the cause).
+        EmulatorDiscoveryFailed => "emulator_discovery_failed",
     }
 }
 

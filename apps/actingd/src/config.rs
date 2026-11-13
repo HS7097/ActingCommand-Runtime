@@ -2263,6 +2263,57 @@ impl ActingdConfigFile {
             })
             .map(|instance| instance.alias.clone())
     }
+
+    /// Workflow #453 S10: what `actingd discover` reads of the file, each member by the rule
+    /// `assemble` applies to it, without assembling: no other file is read and nothing under the
+    /// state root (the private binding file of a handset included). The configured `mumu_root`
+    /// (`mumu_root_invalid` when it is empty or not absolute), the injected
+    /// `ACTINGCOMMAND_NEMU_FOLDER` (only under `allow_env_overrides`, as `assemble` injects it),
+    /// and the binding key of every entry a start binds by discovery (neither a fixture nor a
+    /// handset; `device_config_invalid` and `instance_binding_key_invalid` as `assemble` refuses),
+    /// in file order.
+    pub(super) fn discovery_inputs(&self) -> Result<DiscoveryInputs, Code> {
+        if self
+            .mumu_root
+            .as_ref()
+            .is_some_and(|root| root.as_os_str().is_empty() || !root.is_absolute())
+        {
+            return Err(ActingdCode::MumuRootInvalid.code());
+        }
+        let (env_overrides, _ignored) =
+            env_overrides(self.allow_env_overrides.unwrap_or(false), |name| {
+                std::env::var_os(name)
+            });
+        let mut bindings = Vec::new();
+        for instance in &self.instances {
+            if instance.fixture_backend.is_some()
+                || device_binding::check_device(instance)
+                    .map_err(|_| ActingdCode::DeviceConfigInvalid.code())?
+                    == DeviceKind::Handset
+            {
+                continue;
+            }
+            if let Some(key) = instance.binding_key()? {
+                bindings.push((instance.alias.clone(), key));
+            }
+        }
+        Ok(DiscoveryInputs {
+            mumu_root: self.mumu_root.clone(),
+            env_nemu_folder: env_overrides.nemu_folder,
+            bindings,
+        })
+    }
+}
+
+/// Workflow #453 S10: what `actingd discover` reads of a configuration file
+/// ([`ActingdConfigFile::discovery_inputs`]).
+pub(super) struct DiscoveryInputs {
+    /// The configured `mumu_root`, absolute.
+    pub(super) mumu_root: Option<PathBuf>,
+    /// The injected `ACTINGCOMMAND_NEMU_FOLDER`; `None` unless `allow_env_overrides`.
+    pub(super) env_nemu_folder: Option<PathBuf>,
+    /// Each discovery-bound entry's alias and binding key, in file order.
+    pub(super) bindings: Vec<(String, InstanceBindingKey)>,
 }
 
 /// The warnings the set but ignored `ACTINGCOMMAND_*` variables produce (Workflow #318 cfg3):

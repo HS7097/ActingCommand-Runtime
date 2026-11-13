@@ -350,6 +350,9 @@ pub(super) struct Programs {
     pub(super) stall: RefCell<Vec<&'static str>>,
     /// Every program run, by that word, with the deadline it was given.
     pub(super) deadlines: RefCell<Vec<(String, u64)>>,
+    /// Workflow #453 S10: the exit code of `actingd discover` and the line it prints (`null`, no
+    /// report, until a test sets one).
+    pub(super) discover: RefCell<(i32, Value)>,
 }
 
 /// The process id of a fake program left running at its deadline.
@@ -383,6 +386,7 @@ impl FakeHost {
                 verify_exit: Cell::new(0),
                 stall: RefCell::new(Vec::new()),
                 deadlines: RefCell::new(Vec::new()),
+                discover: RefCell::new((0, Value::Null)),
             },
             on_step: RefCell::new(None),
             log: RefCell::new(Vec::new()),
@@ -558,6 +562,11 @@ impl Host for FakeHost {
             }
             ("actingcommand-actingd.exe", Some("ledger-maintenance")) => {
                 ran(self.programs.verify_exit.get(), json!({}))
+            }
+            // Workflow #453 S10: the line the test set.
+            ("actingcommand-actingd.exe", Some("discover")) => {
+                let (exit_code, line) = self.programs.discover.borrow().clone();
+                ran(exit_code, line)
             }
             // The bounded head read (S0): no row but the head's.
             ("actingledger.exe", _)

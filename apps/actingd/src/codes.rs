@@ -216,6 +216,9 @@ actingcommand_contract::outcome_codes! {
         /// Workflow #437 MAPP-1: the daemon line of a device group of several at a start
         /// (`aliases`, `device_label`); nothing is recorded in the ledger.
         DeviceGroupAssembled => "device_group_assembled": info / none,
+        /// Success. Workflow #453 S10: `actingd discover` listed this machine's emulator
+        /// instances without a Runtime; the report holds them.
+        DiscoverCompleted => "discover_completed": success / none,
     }
 }
 

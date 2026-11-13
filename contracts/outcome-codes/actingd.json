@@ -2210,7 +2210,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "actingd check-config --install-root named a directory that is not an install root: it does not exist or has no runtime\\BUILD-MANIFEST.json. path is the given root.",
+      "description": "actingd check-config --install-root (and, since 0.12.59, actingd discover --install-root, Workflow #453 S10) named a directory that is not an install root: it does not exist or has no runtime\\BUILD-MANIFEST.json. path is the given root.",
       "common_causes": "A typo in the root, or a root that was never installed.",
       "handling": "Name the root that holds runtime\\BUILD-MANIFEST.json."
     },
@@ -2248,6 +2248,20 @@
       "description": "actingd's daemon line at a start, one per device group of several, written once the provider startup has registered the instances (Workflow #437 MAPP-1, contracts/device-group.md, \"What check-config and the start print\"): aliases are the group's members in alias order and device_label the HOST:PORT its first member is bound to, absent while that endpoint is pending (the emulator is stopped at the start). It goes to the daemon log only; nothing is recorded in the ledger, where each member records its own runtime.instance_bound. A group of one prints nothing, and a build that refuses every group of several at load (before the slice \"order within one device\") never prints it.",
       "common_causes": "A configuration with several instances on one device, on a build that accepts a group of several.",
       "handling": "None."
+    },
+    "discover_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.59",
+      "description": "actingd discover listed this machine's emulator instances without a Runtime (Workflow #453 S10, contracts/emulator-control.md, \"Offline instance discovery\"): it resolved the emulator installation as check-config does and ran only the vendor tool's version and info -v all, writing nothing and touching no state root. report holds mumu_root {path, source}, provider_version and instances in the shape of an answered DiscoverInstances, each with the bound_alias of the configuration entry whose instance_index or instance_name names it (absent without --config). Exit 0.",
+      "common_causes": "A person, an installer or the Lab's rescue row emulators asked which emulator instances this machine has.",
+      "handling": "None; read the report."
     }
   },
   "locations": {

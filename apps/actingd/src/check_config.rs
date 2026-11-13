@@ -394,8 +394,9 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
 
 /// Workflow #421 INST-1: the root `--install-root` names, canonical; one that does not resolve or
 /// holds no `runtime\BUILD-MANIFEST.json` is no install root (`check_config_install_root_invalid`,
-/// `path` the given root, the OS's failure as its link).
-fn install_root_of(given: &Path) -> Result<PathBuf, ActingdError> {
+/// `path` the given root, the OS's failure as its link). Workflow #453 S10: `actingd discover`'s
+/// `--install-root` too.
+pub(super) fn install_root_of(given: &Path) -> Result<PathBuf, ActingdError> {
     let refused = |cause: Option<Outcome>| {
         let outcome = Outcome::new(ActingdCode::CheckConfigInstallRootInvalid).path(given);
         let outcome = match cause {
@@ -999,7 +1000,8 @@ fn mumu_root_report(
 }
 
 /// `ExplicitRoot` is the configured root; the resolver rungs reuse the install source words.
-fn mumu_root_source(source: MumuManagerSource) -> &'static str {
+/// Workflow #453 S10: `actingd discover` reports its installation's source with these words.
+pub(super) fn mumu_root_source(source: MumuManagerSource) -> &'static str {
     match source {
         MumuManagerSource::ExplicitRoot => "config",
         MumuManagerSource::FolderEnvironment => "env",

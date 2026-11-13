@@ -4,7 +4,8 @@
 //! `contracts/install-cli.md`, "Update and rollback", "The rollback gate"): actingd's
 //! `check-config` (the live build in place, a kept build with `--install-root <root>` when it
 //! takes the option), its `ledger-maintenance verify`, and actingledger's bounded head read (S0)
-//! and `events` pages (whether a build's own reader reads the ledger after S0).
+//! and `events` pages (whether a build's own reader reads the ledger after S0). Workflow #453
+//! S10: and the live build's `actingd discover`, which the rescue row `emulators` runs.
 //!
 //! INST-1b-F fix round 1 (review S1 F4): every child runs within its deadline, a key of the
 //! `install` section (`install.child.*`). A child still running then is left running, never
@@ -285,6 +286,72 @@ fn check_config_once(
         && report.get("report").is_none_or(Value::is_null)
         && checked.received.values().is_empty();
     Ok((checked, refused_arguments))
+}
+
+/// Workflow #453 S10: the schema of `actingd discover`'s report.
+const DISCOVER_SCHEMA: &str = "actingcommand.actingd.discover.v1";
+
+/// What `actingd discover` answered with its report: its outcome as received, its `report`
+/// (`null` when it carries none, as a refusal does) and its exit code.
+#[derive(Debug, Clone)]
+pub(crate) struct Discovered {
+    pub(crate) received: Outcome,
+    pub(crate) report: Value,
+    pub(crate) exit_code: Option<i32>,
+}
+
+impl Discovered {
+    /// Whether the discovery completed: exit 0 and a success outcome.
+    pub(crate) fn completed(&self) -> bool {
+        self.exit_code == Some(0)
+            && self.received.category() == actingcommand_contract::outcome::Category::Success
+    }
+}
+
+/// Workflow #453 S10: `<runtime>\actingcommand-actingd.exe discover --config <config>
+/// --install-root <root>`, the live build's read-only listing of this machine's emulator instances,
+/// within `deadline`. Its report line (`actingcommand.actingd.discover.v1`) is the answer; a child
+/// that prints none (a build before the subcommand refuses its words as a start would, on stderr)
+/// is its exit's failure (`foreign_other_error` with the exit code and stderr), and one still
+/// running at `deadline` is [`Failure::TimedOut`].
+pub(crate) fn discover(
+    host: &dyn Host,
+    runtime: &Path,
+    config: &Path,
+    install_root: &Path,
+    deadline: Deadline,
+) -> Result<Discovered, Failure> {
+    let program = runtime.join(DAEMON);
+    let config_word = config.to_string_lossy().into_owned();
+    let root_word = install_root.to_string_lossy().into_owned();
+    let ran = run(
+        host,
+        &program,
+        &[
+            "discover",
+            "--config",
+            config_word.as_str(),
+            "--install-root",
+            root_word.as_str(),
+        ],
+        deadline,
+    )?;
+    let report = serde_json::from_slice::<Value>(files::without_bom(&ran.stdout))
+        .ok()
+        .filter(|report| report["schema_version"] == DISCOVER_SCHEMA);
+    let received = report.as_ref().and_then(|report| {
+        serde_json::from_value::<OutcomeEnvelope>(report["outcome"].clone())
+            .ok()
+            .map(OutcomeEnvelope::into_outcome)
+    });
+    match (report, received) {
+        (Some(report), Some(received)) => Ok(Discovered {
+            received,
+            report: report["report"].clone(),
+            exit_code: ran.exit_code,
+        }),
+        _ => Err(Failure::Failed(exited(&ran))),
+    }
 }
 
 /// `<runtime>\actingcommand-actingd.exe ledger-maintenance verify --config <config>`: `Ok` on

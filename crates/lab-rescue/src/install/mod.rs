@@ -128,6 +128,9 @@ mod gate_451_loadp;
 // the bundle's own rule.
 #[cfg(test)]
 mod gate_451_place_pkg;
+// Test-only: Workflow #453 S10, the rescue row `emulators` on the fake host's actingd.
+#[cfg(test)]
+mod gate_453_s10;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.

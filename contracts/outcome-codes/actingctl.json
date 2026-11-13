@@ -3511,6 +3511,14 @@
       "status": "active",
       "since": "0.12.57",
       "description": "The operation of the Lab's rescue module's mcp config: the registration snippet of the MCP entry's second generation for one client, printed only (Workflow #434 LAB-5G5b; contracts/install-cli.md, The MCP entry)."
+    },
+    "install_emulators": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.59",
+      "description": "The operation of the Lab's rescue module's emulators: the live build's actingd discover of the root's configuration with --install-root, which lists this machine's emulator instances without a Runtime and writes nothing (Workflow #453 S10; contracts/emulator-control.md, Offline instance discovery)."
     }
   }
 }
