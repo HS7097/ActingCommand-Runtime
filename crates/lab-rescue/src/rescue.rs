@@ -49,8 +49,8 @@
 //!   server, `serve --stdio --front mcp` and the detached run. None of the module's requests
 //!   writes a record that carries a channel, and the receipt of each names the channel the map M of
 //!   LAB-6S2-M gives, without the word: `cli`, as on 0.12.58, or `mcp` under `Lab-MCP`, where
-//!   0.12.58 named `cli`. `actingctl install` keeps the CLI channel without a word until
-//!   LAB-6S2-B2.
+//!   0.12.58 named `cli`. `actingctl install` kept the CLI channel without a word until
+//!   LAB-6S2-B2, which binds it to the Lab channel with actingctl's word, `Lab-CLI`.
 //! - **The MCP rows** (Workflow #434 LAB-5G5b; register §1.287, "Slice LAB-5G5b";
 //!   `contracts/install-cli.md`, "The MCP entry"), read only, on the module's own root: `mcp plan`
 //!   (the plan the entry's second generation asks, `entry_protocol` 2,

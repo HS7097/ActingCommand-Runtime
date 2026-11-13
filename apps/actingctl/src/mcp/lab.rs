@@ -768,6 +768,8 @@ impl Program {
     /// This server's actinglab as `lab-ops` runs it (Workflow #434 LAB-1b): talking to this
     /// server's Runtime when it is known. Workflow #389 U-2 (model section 3.2 rule 7): MCP
     /// forwards the work, so the child's connections bind the Lab channel with `via = mcp`.
+    /// Workflow #434 LAB-6S2-B1: the child (`--via mcp`) binds the Lab channel with `Lab-MCP` and
+    /// no `via` instead, which the Runtime records `lab` with `via` `mcp`, as on 0.12.58.
     fn child(&self) -> lab_child::Actinglab<'_> {
         lab_child::Actinglab {
             program: &self.actinglab,

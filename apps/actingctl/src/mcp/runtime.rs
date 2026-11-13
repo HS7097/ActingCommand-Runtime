@@ -20,6 +20,7 @@ use actingcommand_contract::RuntimeErrorCode;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{EventActor, EventSource, InstanceId};
+use actingcommand_lab_ops::initiator::Initiator;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -84,7 +85,8 @@ pub(super) use crate::child::pin_child;
 // Workflow #389 MCP-8: the bounded file read, shared with `actingctl overview`.
 pub(super) use crate::overview::read_bounded;
 
-/// The control connection with (Cli, Cli) origin, as actingctl itself uses.
+/// The control connection with (Cli, Cli) origin, as actingctl itself uses (Workflow #434
+/// LAB-6S2-B2: on the Lab channel with `Lab-MCP`, [`client_config`]).
 pub(super) struct Connected {
     pub(super) client: RuntimeClient,
     pub(super) generation: u64,
@@ -256,9 +258,8 @@ impl RuntimeAccess {
             }
         }
         let state_root = self.locate().state_root.map_err(state_root_unresolved)?;
-        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        let client = RuntimeClient::connect(client_config(
             &state_root,
-            actingcommand_runtime_client::RuntimeChannel::Mcp,
             EventActor::Cli,
             EventSource::Cli,
         ))
@@ -335,13 +336,27 @@ pub(super) fn connect_at(
     let state_root = state_root
         .as_ref()
         .map_err(|outcome| state_root_unresolved(outcome.clone()))?;
-    RuntimeClient::connect(RuntimeClientConfig::new(
+    RuntimeClient::connect(client_config(state_root, actor, source))
+        .map_err(|error| unavailable(&error, state_root))
+}
+
+/// Workflow #434 LAB-6S2-B2 (`contracts/lab-two-entries.md` §2.4, §4.2; register §1.287, "Slice
+/// LAB-6S2-B2"; the coordinator's rulings of 2026-11-13 on board #434, not the owner's words): the
+/// configuration of every connection this server makes to the Runtime of `state_root`, the kept
+/// one ([`RuntimeAccess::connect`]) and each write's ([`connect_at`]): the Lab channel with the
+/// MCP server's word, `Lab-MCP`, and no `via`, where it was the MCP channel, and the envelope
+/// (`actor`, `source`) it sent on 0.12.58: (Cli, Cli), or (Agent, Adapter) for the resource
+/// targets, the remedy choices and the evidence read confirmation. The Runtime records and answers
+/// each request on the MCP channel, as on 0.12.58 (the map M and the receipt rule R of
+/// LAB-6S2-M).
+fn client_config(state_root: &Path, actor: EventActor, source: EventSource) -> RuntimeClientConfig {
+    RuntimeClientConfig::new(
         state_root,
-        actingcommand_runtime_client::RuntimeChannel::Mcp,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         actor,
         source,
-    ))
-    .map_err(|error| unavailable(&error, state_root))
+    )
+    .with_initiator(Initiator::LabMcp.word())
 }
 
 /// A state root that cannot be told (`install_state_root_unresolved`): class usage; the person

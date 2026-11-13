@@ -94,7 +94,11 @@ Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the sa
    with `channel_binding_missing`, in the receipt only, never in the ledger.
 6. Each frontend hard-codes its channel, and its user cannot change it: actingctl `cli`;
    `actingctl mcp-serve` `mcp`; acui `ui`; actinglab `lab`. acsetup reaches the Runtime
-   only through actingctl child processes, so it is `cli`.
+   only through actingctl child processes, so it is `cli`. From Workflow #434 LAB-6S2-B2
+   (Runtime 0.12.59; [lab-two-entries.md](lab-two-entries.md) §4.2) actingctl binds `lab` with
+   `Lab-CLI` and `actingctl mcp-serve` `lab` with `Lab-MCP`, each keeping the envelope it sent on
+   0.12.58; the Runtime records and answers their requests on `cli` and `mcp` as before (rule
+   9), so acsetup's receipts still name `cli`.
 7. `via` exists only on the Lab channel and only a forwarding counter sets it: MCP's
    option tools start actinglab with `--via mcp`; a future UI Lab frontend that forwards
    to actinglab passes `--via ui`. actinglab puts it into `BindChannel{lab, via}`.
@@ -138,8 +142,13 @@ client process send no `BindChannel`. `runtime-info.json` carries no interface
 revision, so the client cannot ask first. This happens only when root Tools are newer
 than the slot's actingd, for example after a slot rollback. In the same way an actingd before
 Workflow #434 LAB-6S1a cannot decode a `BindChannel` that names an initiator (the request
-denies unknown members) and drops the connection: such a client goes on unbound, and no client
-declares a word before a Runtime of LAB-6S1a is deployed.
+denies unknown members) and drops the connection: such a client goes on unbound. No client
+declared a word before a Runtime of LAB-6S1a (0.12.58) was built; since Workflow #434 LAB-6S2-B1
+and LAB-6S2-B2 (0.12.59) the programs of the Runtime repository declare one (but the `lab`
+bindings without a word LAB-6S2-B1 keeps), so a program of that build that meets an actingd
+before LAB-6S1a (`actingctl install` of the new build during a deploy over it, root Tools newer
+than the slot) is dropped once per connection, the actingd recording that connection failure,
+and goes on unbound, bound by its first request's envelope as that actingd binds it.
 
 ### Transition: v0.12.0 to U-6
 

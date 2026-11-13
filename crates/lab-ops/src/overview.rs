@@ -771,7 +771,8 @@ fn benefit_provenance(facts: &RuntimeFactSnapshot) -> Result<Option<Value>, Outc
 /// `actingctl watchdog status` of the install root, read locally (command table §4.10): its
 /// `decision`, `attention`, `starts_24h` and `last_tick`; null without an install root. Workflow
 /// #434 LAB-6S2-B1: its probe of the Runtime declares the word of the program in force
-/// (`crate::front::current`), none for actingctl's.
+/// (`crate::front::current`); since LAB-6S2-B2 `Lab-CLI` for actingctl's and `Lab-MCP` for
+/// today's MCP server's, which says it is the MCP front.
 fn watchdog_block(place: &Place<'_>, envelope: &dyn Fn(&Outcome) -> Value) -> Value {
     match (place.install_root, WATCHDOG_BLOCK.get()) {
         (Some(root), Some(block)) => block(root, crate::front::current().initiator(), envelope),

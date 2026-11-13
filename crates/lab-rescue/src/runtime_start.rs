@@ -66,8 +66,10 @@ const IDLE_POLL: Duration = Duration::from_secs(10);
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 /// Runs `start` or `restart` when the first argument names one; `None` leaves every other
-/// command to the CLI, unchanged. The caller (actingctl) prints the exit.
-pub fn dispatch(arguments: &[OsString]) -> Option<Exit> {
+/// command to the CLI, unchanged. The caller (actingctl) prints the exit. Workflow #434
+/// LAB-6S2-B2: every connection it makes, the readiness probe's included, declares `initiator`,
+/// the caller's word (actingctl's `Lab-CLI`) ([`client_config`]).
+pub fn dispatch(arguments: &[OsString], initiator: Initiator) -> Option<Exit> {
     let mode = match arguments.first()?.to_str()? {
         "start" => Mode::Start,
         "restart" => Mode::Restart,
@@ -80,8 +82,8 @@ pub fn dispatch(arguments: &[OsString]) -> Option<Exit> {
         Ok(parsed) => parsed,
         Err(usage) => return Some(cli_line::failure(&usage, Some(USAGE))),
     };
-    // Workflow #434 LAB-6S2-B1: actingctl's connections declare no word until LAB-6S2-B2.
-    Some(exit_of(run(mode, &parsed, None)))
+    // Workflow #434 LAB-6S2-B2: the caller's word, where LAB-6S2-B1 declared none.
+    Some(exit_of(run(mode, &parsed, Some(initiator))))
 }
 
 /// Workflow #434 LAB-3: `start` or `restart` of the installation at `root`, with `config` (a
@@ -114,7 +116,8 @@ pub(crate) fn run_located(
 /// report and this module's start and restart). It keeps the CLI's envelope (Cli, Cli), which the
 /// module sent on 0.12.58, and binds the Lab channel with `initiator`, the module's word
 /// (`Lab-CLI`, `Lab-制包`, `Lab-救急` or `Lab-MCP`); without a word, `actingctl install`, `start`
-/// and `restart`, the CLI channel as on 0.12.58, until LAB-6S2-B2 (`lab_ops::front::cli_envelope`).
+/// and `restart` until LAB-6S2-B2, the CLI channel as on 0.12.58 (`lab_ops::front::cli_envelope`).
+/// Since LAB-6S2-B2 those declare actingctl's word, `Lab-CLI`.
 pub fn client_config(state_root: &Path, initiator: Option<Initiator>) -> RuntimeClientConfig {
     actingcommand_lab_ops::front::cli_envelope(state_root, initiator)
 }

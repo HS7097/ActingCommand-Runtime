@@ -23,6 +23,13 @@
 //! the Lab's MCP server's binds `lab` with `Lab-MCP` and keeps (Cli, Cli) ([`Front::Mcp`]); the
 //! Runtime records each request with the channel that front had on 0.12.58 (the map M of
 //! LAB-6S2-M). actingctl's front stays on the CLI channel without a word until LAB-6S2-B2.
+//!
+//! Workflow #434 LAB-6S2-B2 (`contracts/lab-two-entries.md` §4.2; register §1.287, "Slice
+//! LAB-6S2-B2"; the coordinator's rulings of 2026-11-13 on board #434, not the owner's words):
+//! actingctl's front binds the Lab channel with `Lab-CLI` and keeps (Cli, Cli)
+//! ([`Front::Actingctl`]), and today's MCP server (`actingctl mcp-serve`) says it is the MCP front
+//! ([`Front::Mcp`]); the Runtime records their requests on the CLI and the MCP channel, as on
+//! 0.12.58.
 
 use crate::initiator::Initiator;
 use actingcommand_contract::{EventActor, EventSource};
@@ -36,7 +43,8 @@ use std::sync::OnceLock;
 /// The program that runs this crate's commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Front {
-    /// `actingctl`: the CLI channel, envelope (Cli, Cli).
+    /// `actingctl`: the CLI channel, envelope (Cli, Cli). Workflow #434 LAB-6S2-B2: on the Lab
+    /// channel with `Lab-CLI`, where it was the CLI channel, which the Runtime still records.
     Actingctl,
     /// `actinglab`'s CLI module (LAB-2): the Lab channel, envelope (Lab, Lab). Workflow #434
     /// LAB-6S2-B1: with the word of the process (§4.2): `Lab-CLI`, the `Lab-制包` or `Lab-救急` of
@@ -44,17 +52,19 @@ pub enum Front {
     Actinglab(Initiator),
     /// Workflow #434 LAB-5G1b: the Lab's MCP server, with the envelope (Cli, Cli), as
     /// `actingctl mcp-serve` sends it (`apps/actingctl/src/mcp/runtime.rs`). Workflow #434
-    /// LAB-6S2-B1: on the Lab channel with `Lab-MCP`, where it was the MCP channel.
+    /// LAB-6S2-B1: on the Lab channel with `Lab-MCP`, where it was the MCP channel. Workflow #434
+    /// LAB-6S2-B2: today's MCP server says it too, so that what reads the program in force (the
+    /// overview's `watchdog` block) declares `Lab-MCP` there.
     Mcp,
 }
 
 impl Front {
-    /// Workflow #434 LAB-6S2-B1: the word a connection of this front declares: none for
-    /// actingctl's (until LAB-6S2-B2), the process's for actinglab's, `Lab-MCP` for the Lab's MCP
-    /// server's.
+    /// Workflow #434 LAB-6S2-B1: the word a connection of this front declares: `Lab-CLI` for
+    /// actingctl's (since LAB-6S2-B2; none before), the process's for actinglab's, `Lab-MCP` for
+    /// the MCP servers'.
     pub const fn initiator(self) -> Option<Initiator> {
         match self {
-            Self::Actingctl => None,
+            Self::Actingctl => Some(Initiator::LabCli),
             Self::Actinglab(initiator) => Some(initiator),
             Self::Mcp => Some(Initiator::LabMcp),
         }
@@ -99,7 +109,9 @@ pub fn config(front: Front, state_root: impl Into<PathBuf>) -> RuntimeClientConf
 /// connection bound on 0.12.58; with `initiator`, one of the five Lab words, on the Lab channel
 /// with it. The Lab's MCP server ([`Front::Mcp`]), the rescue module's own client and the
 /// watchdog's probe connect so with their word; actingctl, whose `install`, `start`, `restart`,
-/// `watchdog` and `overview` run the same code, without one until LAB-6S2-B2.
+/// `watchdog` and `overview` run the same code, without one until LAB-6S2-B2 and with `Lab-CLI`
+/// since (Workflow #434 LAB-6S2-B2): since then no program asks this for a connection without a
+/// word.
 pub fn cli_envelope(
     state_root: impl Into<PathBuf>,
     initiator: Option<Initiator>,

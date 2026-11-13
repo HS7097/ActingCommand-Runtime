@@ -12129,6 +12129,127 @@ Both arise only where programs of this build meet a Runtime of an earlier one.
 
 **LAB-6S2-B1 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
 
+#### Slice LAB-6S2-B2 (0.12.59): `actingctl` and today's MCP server bind `lab` with their word; the envelope stays as on 0.12.58
+
+Coordinator work order `rd-1113/brief-lab6s2b2.md`, after the second survey `rd-1113/lab6s2-mapping.md`
+(its sections 1, 3, 4, 5 and its row S2-B2); the coordinator's rulings of 2026-11-13 on board
+#434, not the owner's words; based on main `7938d10e` (0.12.58, LAB-6S2-M, LAB-6S2-B1 and two
+slices of boards #441 and #452). The contracts are [lab-two-entries.md](lab-two-entries.md) (the
+slice table, §4.2) and [runtime-interface.md](runtime-interface.md) ("Binding" rule 6, "Old
+Runtimes"), which states the channel of today's MCP server; its agent manual is a skill of the
+umbrella repository, not of this one.
+
+**What.** The last two programs of this repository move onto the Lab channel with their word, and
+keep the envelope they sent on 0.12.58; the Runtime records each request with the channel that
+program's binding had then (LAB-6S2-M's map M) and receipts it by rule R:
+
+| Program, connection | Word, and where it is taken | Envelope (as on 0.12.58) |
+|---|---|---|
+| `actingctl`'s own commands (`client_config`: `status`, `request-shutdown`, `install-transition` with its identity card, `config`, `pause`, `resume`, `task-offset`, the emulator, monitor, observation and run commands and the rest) | `Lab-CLI`, actingctl's `WORD` | (Cli, Cli); (Agent, Adapter) for `agent-publish-facts` and `agent-apply-resource-targets` (`Command::origin`, unchanged) |
+| `actingctl`'s commands of the operation layer (`events`, `observe --export`, `runs`, `diagnose`, `overview`, `run evidence`, `remedy`, `evidence confirm-read`, `perf-preset`, `routine-summary`: `Front::Actingctl`, which actingctl never changes) | `Lab-CLI` (`Front::initiator`) | (Cli, Cli) |
+| the code `actingctl` shares with the Lab: `install` (the rescue module's client, `SystemHost::of`), `start` and `restart` (`runtime_start::run`, its readiness probe included), `watchdog` (`dispatch`) and the overview's `watchdog` block | `Lab-CLI`, which actingctl hands to `install::dispatch`, `runtime_start::dispatch` and `watchdog::dispatch` (each a new parameter) and `Front::Actingctl` gives the block | (Cli, Cli); the watchdog's probe sends `Health` and `BindChannel` only |
+| today's MCP server (`actingctl mcp-serve`): the kept connection and each write's (`mcp::runtime::client_config`) | `Lab-MCP` | (Cli, Cli); (Agent, Adapter) for `ac_targets_set`, `ac_remedy_set` and `ac_evidence_confirm_read` |
+| today's MCP server's overview `watchdog` block | `Lab-MCP`: the server says it is `Front::Mcp` at its start (`front::set`), as the Lab's MCP server does | (Cli, Cli), `Health` and `BindChannel` only |
+| today's MCP server's actinglab children (`--via mcp`) | `Lab-MCP` without `via`, since LAB-6S2-B1 (`lab_client_config_via`); the launcher still passes `--via mcp` | (Lab, Lab) |
+
+Since this slice no program of this repository binds `cli` or `mcp`; a `lab` binding without a
+word is left only where LAB-6S2-B1 keeps one (`--via ui`, and actinglab's own commands under a
+variable that names no word). The shared code keeps its word as an `Option` (LAB-6S2-B1's
+parameters); no product caller passes none.
+
+**What stays.** Every envelope; every record and every receipt the Runtime writes for these
+programs. Their requests all carry an envelope other than the Lab's, so M records them on `cli`
+(actingctl) and `mcp` (today's MCP server) without `via`, and R receipts them so, without
+`initiator`: the C4 command records' `channel` and `via`, the package debug records' and the
+`host.config_overrides` rows' `channel` ("经命令行", "经 MCP" on the console's settings page), the
+client records, the identity card (`(Cli, Cli)`, judged by the envelope, so `install-transition`'s
+card and MCP's `actingctl-mcp` card are accepted as before), the evidence read confirmations and
+their frame index rows, the shutdown request's origin: all as on 0.12.58. `actingctl install`'s
+journals still record no initiator (the face of `install-cli` revision 1). No interface revision
+moves, no outcome code is added, and `RuntimeRequest::validate()`, the host, the UI list and the
+contract crate's map are untouched.
+
+**The receipts the released installation helper decodes.** acsetup (UI v0.12.16) runs
+`actingctl install-transition --action-json <a> [--wait 60]` and the cold
+`actingctl request-shutdown --wait 60` and decodes the printed `receipt` strictly into the
+`RuntimeReceipt` of the Runtime commit the console pins (`c0f75c7e`): twelve members
+(`schema_version`, `request_id`, `correlation_id`, `state`, `terminal`, `result`, `outcome`,
+`resource_declaration`, `resource_declaration_event`, `resource_targets_rejection`, `channel`,
+`via`), unknown members refused. On a `lab` binding with `Lab-CLI` both requests carry (Cli, Cli),
+so R answers them with M's binding, `ChannelBinding::new(Cli)`: `channel` `cli`, no `via`, no
+`initiator`, the members 0.12.58's `cli` binding wrote. Nothing else in either receipt reads the
+binding (the shutdown and the install transition read no channel).
+
+**What a person sees.** Nothing, on a Runtime of 0.12.59. The answer to `BindChannel` carries
+`lab` and the word, which only the client reads (it requires the echo).
+
+**Decided in this slice, by the texts** (each the only way to keep 0.12.58's records and receipts):
+- (a) actingctl's word is `Lab-CLI` and today's MCP server's `Lab-MCP` (the slice table; §4.1, "the
+  word names where the request came from": a command line, an MCP client); actingctl reads no
+  variable.
+- (b) `actingctl install` binds with `Lab-CLI` while its journals keep recording no initiator: the
+  journal is the revision-1 face's, unchanged until LAB-7.
+- (c) Today's MCP server says it is `Front::Mcp`, so the one reader of the program in force, the
+  overview's `watchdog` block, declares `Lab-MCP` there; nothing else of that server reads it.
+
+**Tests.** New: apps row "#434 LAB-6S2-B2". On the runtime client's scripted Runtime, each first
+request refused: actingctl's command lines, one per kind they send first (`actingctl`
+`gate_434_lab6s2b2`), the operation layer's `routine-summary`, and on Windows the rescue
+module's client and the watchdog's probe with actingctl's word; the real `mcp-serve`'s kept
+connection and its two write connections (`ac_config_set`, (Cli, Cli); `ac_remedy_set`, (Agent,
+Adapter)); a Runtime that drops the word, the real `actingctl status` going on unbound once with
+its one report (gate `lab6s2b2`). On the test host: one `ConfigureSettings` through the real
+`actingctl` and through the real `mcp-serve`, the client and command records 0.12.58's literals;
+and the two receipts as the real `actingctl` prints them (`install-transition`'s drain and the
+commit of its ticket, `request-shutdown`), each decoded by the helper's receipt type written member
+for member (`--wait`, which only adds a member beside `receipt`, left out: the test host runs in
+the test's own process). **Adapted** (the binding they pinned moved, or a fake answered the old
+binding): `actingctl` `gate::lab5g1b_front_mcp` and `actinglab-mcp` `serve_calls::mcp_write_provenance_as_todays_server`
+(today's server binds `lab` with `Lab-MCP`); the fake Runtimes of `gate::mcp_diagnose_parity`,
+`gate::mcp_ladder_drill_parity`, `gate::mcp_overview_parity`, `gate::mcp_runs_parity`,
+`gate::mcp_run_evidence_parity` and `mcp::tests::gate_411_a42` (shared by `gate_422_idle_ov`,
+`gate_422_qr2` and `gate_422_qr2b`), which answered every `BindChannel` without a word and now
+echo the word declared, as the Runtime does since LAB-6S1a (the client requires the echo); and
+the comments of LAB-6S2-B1's tests of the no-word branch (`lab-rescue`, `watchdog`), whose
+assertions stay. No test leaves the gate map.
+
+**At deploy.** Works on a Runtime of 0.12.59 (LAB-6S2-M in the same build). On an earlier Runtime
+each program is served by that Runtime's own rules:
+- **Runtime 0.12.58** accepts the word and has no map M and no rule R. It serves every request of
+  these programs and refuses none (no origin gate since LAB-6S1b; the identity card is judged by
+  the envelope), records each with the binding as declared, `lab` without `via`, and receipts it
+  with `lab` and the word. So the C4 command records, the package debug records and the settings
+  rows of `actingctl` and of today's MCP server are written with the channel `lab` where 0.12.59
+  writes `cli` and `mcp` (the console's settings page then shows their settings as the Lab's),
+  and every receipt they get carries `initiator`. Among them are the two receipts the installation
+  helper decodes: a helper that ran a 0.12.59 `actingctl` against a 0.12.58 Runtime would refuse
+  them ("Installation control receipt unreadable") and its close or start would stop. The helper
+  never does: it closes a Runtime with its own slot's `actingctl` and starts and releases with the
+  target slot's, the same build as each Runtime.
+- **Runtime 0.12.57 or earlier** cannot decode the word and drops the connection, recording one
+  connection failure (`runtime_protocol_invalid`, at the request's decoding) for each connection.
+  The client reconnects once in the same owner epoch, unbound, and reports
+  `client_channel_unsupported` once per process on stderr; the connection is then bound by its
+  first request's envelope, `cli` for (Cli, Cli) and (Agent, Adapter): `actingctl`'s requests as
+  that Runtime recorded them, today's MCP server's as the command line's, `cli`, where that Runtime
+  recorded `mcp`. Receipts name `cli` without `initiator`.
+- **The deploy kit** runs `actingctl install` of the new build against the old running Runtime.
+  Every connection the rescue module makes keeps (Cli, Cli): before the close the guards' and the
+  hold's reads (`Status`, `RuntimeFactSnapshot`, `ScheduleExplanation`), the hold's
+  `PauseScheduling` of each instance and its status polls, the reread of S0 and the formal close
+  (`RequestShutdown`; the wait after it reads the owner journal and connects to nothing, and so
+  does the check that nothing of the Runtime still runs); after the start, on the new Runtime of
+  0.12.59, the readiness probe (`Health`, `BindChannel`), the post-check (`StartReport`, `Status`,
+  `ScheduleExplanation`) and the release (`ResumeScheduling` of exactly the pause it saw). On an old 0.12.58 every request is taken as
+  0.12.58 takes `cli`'s: the pause and the shutdown record no channel, the reads record nothing,
+  and the receipts, which carry `lab` and `Lab-CLI`, are read through this build's client and
+  printed nowhere. On an old 0.12.57 or earlier each connection is dropped once, recorded as above,
+  and made again unbound, bound `cli` by its envelope: every request is then taken and answered as
+  `actingctl install` of that build's is, and `actingctl` writes the one stderr line. No step is
+  refused or fails for the binding.
+
+**LAB-6S2-B2 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
