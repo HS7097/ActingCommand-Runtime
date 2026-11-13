@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #455 G-R1 (register §1.350; contracts/standard-pack-goals.md, "Who reads it";
+// Workflow #455 G-R1 (register §1.356; contracts/standard-pack-goals.md, "Who reads it";
 // contracts/component-interfaces.md, the `package` row 12; coordinator work order
 // `rd-1114/brief-455-gr1.md`): the rescue module's `place` takes a bundle zip's root file
 // `goals.json` as the last root file and sets it aside, as the other root files the readers open,

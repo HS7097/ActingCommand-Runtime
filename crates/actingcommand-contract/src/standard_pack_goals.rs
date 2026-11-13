@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #455 G-R1 (register §1.350; `contracts/standard-pack-goals.md`): a game root's optional
+//! Workflow #455 G-R1 (register §1.356; `contracts/standard-pack-goals.md`): a game root's optional
 //! goal declaration, `goals.json` (`actingcommand.goals.v1`), beside `bundle.json`: the goal entries
 //! the game offers on one page, in file order, each with its stable name, its type, its block, its
 //! texts and what it governs (a pool of `schedule.json`, rules of `schedule.json` or packages of

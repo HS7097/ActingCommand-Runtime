@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #455 G-R1 (register §1.350; contracts/standard-pack-goals.md): the Tools' side of a
+//! Workflow #455 G-R1 (register §1.356; contracts/standard-pack-goals.md): the Tools' side of a
 //! game root's goal declaration `goals.json`. `actinglab standard-pack check` and `package bundle
 //! --goals` read it after the composition they already run, with the contract crate's reader
 //! (`parse_standard_pack_goals`), and hold an accepted file's references to the game root

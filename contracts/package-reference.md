@@ -973,7 +973,7 @@ data files beside its package directories, one directory per game below the conf
     reader, its startup and run preparation, the policy crate and check-config never read it,
     so the file never changes a run, and a directory that holds only `ui.json` is no game root
     for them. A real standard package's `ui.json` is the resource side's to write.
-- **`goals.json`** (Workflow #455 G-R1, since 0.12.60; `v012-register.md` §1.350;
+- **`goals.json`** (Workflow #455 G-R1, since 0.12.60; `v012-register.md` §1.356;
   [standard-pack-goals.md](standard-pack-goals.md) is the contract). Optional. The goal entries the
   game offers on one page, in file order: each entry's stable name, its type (one of eight), its
   block, its texts and what it governs (a pool or rules of `schedule.json`, or packages of

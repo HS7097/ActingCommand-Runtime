@@ -126,7 +126,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `notices/`, placed by the installer and opened by no reader of the Runtime; a bundle without
 ///   it keeps its revision, so [3, 10]. Workflow #450 FL-1 (0.12.59, register §1.343) raises it to
 ///   11: a task's `field_lists`, OCR fields grouped into one list fact; a pack without it keeps
-///   its revision, so [3, 11]. Workflow #455 G-R1 (0.12.60, register §1.350) raises it to 12: a
+///   its revision, so [3, 11]. Workflow #455 G-R1 (0.12.60, register §1.356) raises it to 12: a
 ///   game root's goal declaration `goals.json`, placed by the installer and opened by no reader of
 ///   the Runtime yet; a bundle without it keeps its revision, so [3, 12].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow

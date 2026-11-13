@@ -21800,10 +21800,12 @@ stderr as the cause.
 **Rollback.** Nothing persisted: code, two table rows, registry members, catalog entries,
 contract sections and test files.
 
-### 1.350 Slice G-R1 (0.12.60): a standard pack's goal declaration `goals.json`, its reader, its check, `package bundle --goals` and the installer's root file; `package` revision 12 (Workflow #455; the final design note `rd-1114/455-goals-design-final.md`, sections 3.1 to 3.3, 3.11 and the rows G-R1 of its sections 4 and 5, read on main `fa724931`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-455-gr1.md`, read on main `fa724931`)
+### 1.356 Slice G-R1 (0.12.60): a standard pack's goal declaration `goals.json`, its reader, its check, `package bundle --goals` and the installer's root file; `package` revision 12 (Workflow #455; the final design note `rd-1114/455-goals-design-final.md`, sections 3.1 to 3.3, 3.11 and the rows G-R1 of its sections 4 and 5, read on main `fa724931`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-455-gr1.md`, read on main `fa724931`)
 
 1.348 was the next free section on main `fa724931`; the integration train 0.12.59d (main
-`71a658f1`, merged into this slice) took 1.348 and 1.349, so this slice is 1.350.
+`71a658f1`, merged into this slice) took 1.348 and 1.349, and the integration train 0.12.60b gave
+this slice 1.356, the number after main's §1.353 (MAPP-2b), FL-2's §1.354 and S8 and S7's §1.355
+of the same train.
 [standard-pack-goals.md](standard-pack-goals.md)
 is the contract; [package-reference.md](package-reference.md) (`package bundle`, `standard-pack
 check`, and "Standard package root": the listing and `goals.json`), [install-cli.md](install-cli.md),

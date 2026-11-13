@@ -1,6 +1,6 @@
 # Standard-pack goal declaration (`goals.json`)
 
-Workflow #455, slice G-R1 (Runtime 0.12.60; [v012-register.md](v012-register.md) §1.350). On board
+Workflow #455, slice G-R1 (Runtime 0.12.60; [v012-register.md](v012-register.md) §1.356). On board
 #455 a person (through the console) or an agent (through the Lab) sets goals for an application.
 The console only renders: a standard pack says which goal entries its game offers. This document
 is that declaration: where it lives, an entry's members, the eight types of version 1, the blocks

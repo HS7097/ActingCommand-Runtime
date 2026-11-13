@@ -110,7 +110,7 @@ mod gate_444_notices3;
 #[cfg(test)]
 mod gate_453_s8;
 
-// Workflow #455 G-R1 (register §1.350): standard-pack check and package bundle --goals of a game
+// Workflow #455 G-R1 (register §1.356): standard-pack check and package bundle --goals of a game
 // root's goal declaration `goals.json`.
 #[cfg(test)]
 mod gate_455_gr1;

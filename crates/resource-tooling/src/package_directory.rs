@@ -361,7 +361,7 @@ fn write_bundle(
                 &|directory: &str| packs_dir.join(directory),
             )?;
         }
-        // Workflow #455 G-R1 (register §1.350): `--goals`, after the composition; a refused file
+        // Workflow #455 G-R1 (register §1.356): `--goals`, after the composition; a refused file
         // refuses the bundle as a refused root file does. The bundle holds no table, so no
         // table reference is judged here.
         if let Some(goals) = root_files.goals() {

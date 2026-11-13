@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #455 G-R1 (register §1.350; contracts/standard-pack-goals.md), the reader of a game
+//! Workflow #455 G-R1 (register §1.356; contracts/standard-pack-goals.md), the reader of a game
 //! root's `goals.json`: the design's neutral example reads to its typed entries in file order;
 //! one entry of each of the eight types reads with every member its type has; and the reader is
 //! strict: an unknown member, an unknown type and a type of a later version are refused, each at

@@ -83,7 +83,7 @@
 //! and NN targets' `model_ref` and `model_sha256`; `required_models`). `package bundle` runs the
 //! same cross-check and answers no models.
 //!
-//! Workflow #455 G-R1 (register §1.350; contracts/standard-pack-goals.md): a game root that holds
+//! Workflow #455 G-R1 (register §1.356; contracts/standard-pack-goals.md): a game root that holds
 //! `goals.json` lists it in `root_files`, and after the composition the file is read and its
 //! references held to the root (`standard_pack_goals`). Each problem of a refused file is one
 //! `standard_pack_root_invalid` warning, in file order, after the other warnings: the root is
@@ -407,7 +407,7 @@ pub fn check_standard_pack_root(
             &|directory: &str| root.join(directory),
         )?;
     }
-    // Workflow #455 G-R1 (register §1.350): the goal declaration, after the composition. Each
+    // Workflow #455 G-R1 (register §1.356): the goal declaration, after the composition. Each
     // problem of a refused file is one `standard_pack_root_invalid` warning, in file order; the
     // root stays as valid as it is without the file.
     if let Some(goals) = &goals {

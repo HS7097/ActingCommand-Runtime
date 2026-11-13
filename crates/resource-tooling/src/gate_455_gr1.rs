@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #455 G-R1 (register §1.350; contracts/standard-pack-goals.md; coordinator work orders
+// Workflow #455 G-R1 (register §1.356; contracts/standard-pack-goals.md; coordinator work orders
 // `rd-1114/brief-455-gr1.md` and `rd-1114/brief-1694-fix1.md`): the Tools read a game root's goal
 // declaration `goals.json` after the composition they already run.
 // - `standard-pack check` reports each of the fourteen refusals at its pointer, one fixture each,

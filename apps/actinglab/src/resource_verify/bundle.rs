@@ -180,7 +180,7 @@ fn lay_out(
             display_layout: root_file("display-layout.json"),
             loading: root_file(LOADING_FILE),
             notices: notices.then(|| inputs.repo.join(STANDARD_PACK_NOTICES_DIRECTORY)),
-            // Workflow #455 G-R1 (register §1.350): this step does not pass `goals.json` and
+            // Workflow #455 G-R1 (register §1.356): this step does not pass `goals.json` and
             // declares no `package` 12; the packer of a bundle that carries it declares [12, 12].
             goals: None,
         },
