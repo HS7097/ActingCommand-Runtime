@@ -963,6 +963,46 @@ data files beside its package directories, one directory per game below the conf
   installed `loading/` directory makes a
   package id `loading` collide with it; the bundle index does not reserve that name in this
   release, so a resource repository must not name a pack `loading`.
+- **Notices** (Workflow #444 NOTICES-1, since 0.12.58; `v012-register.md` §1.334). A bundle zip
+  may carry one directory `notices/` at its root, beside `packs/`, holding the texts a package's
+  author must ship with it; the installer places it in the game root as it is, byte for byte. It
+  is called the notices directory, apart from the person's notice before a change
+  ([install-cli.md](install-cli.md), "Notice block"). It is not listed in `bundle.json` and enters
+  no identity the Runtime computes: no pack's `file_count`, `byte_count`, listing or content hash.
+  Its rules, stated once by the contract crate's module `standard_pack_notices` for every reader:
+
+  | Rule | Value |
+  |---|---|
+  | directory | `notices`, at the root of a bundle zip and of a game root, in exact lower case: a member `Notices/…` is not of it |
+  | depth | at most 2 segments below it, `notices/<name>` or `notices/<directory>/<name>` (`notice_depth`) |
+  | segment | 1 to 64 bytes of `[A-Za-z0-9._-]`, the first a letter or a digit, and a segment `safe_source_path` accepts: no trailing dot, no device name (`CON`, `NUL`, `COM1` and the others, before the first dot, in any case) (`notice_name`) |
+  | a file name's suffix | none (no dot), or after the last dot `md`, `txt`, `tsv` or `csv`, in any ASCII case; any other is refused (`notice_name`). The last suffix decides: `a.tar.md` is accepted, `a.md.html` refused, and a trailing dot (`NOTICE.`) refused; a dot in a directory's name is no suffix |
+  | uniqueness | no two paths equal under ASCII case folding; no file whose path, in any ASCII case, is another path's directory (`notice_name`) |
+  | pack | a bundle that carries the directory lists no pack whose `package_id` is `notices` in any ASCII case (`notice_name`). The bundle index does not reserve the name (`reserved_package_id` is unchanged, so a reader of an earlier `package` revision accepts what it accepted), and a bundle without the directory may still name a pack so |
+  | count | at most 64 files (`notice_count`) |
+  | one file | 1 to 2,097,152 bytes, 2 MiB (`notice_bytes`) |
+  | total | at most 8,388,608 bytes, 8 MiB, the files together (`notice_total_bytes`) |
+  | text | strict UTF-8; a byte-order mark at the start accepted; none of U+0000 to U+0008, U+000B, U+000E to U+001F and U+007F (`notice_not_text`); TAB, LF, FF and CR allowed, so LF, CRLF, CR and mixed line ends are; nothing else refused, so a U+FEFF after the start is an ordinary character; the bytes are judged, never changed |
+  | revision | a bundle that carries the directory declares a `package` maximum of 10 at least (`notice_undeclared`, from NOTICES-2) |
+
+  The bounds are format bounds that every writer and reader share, constants of the module, not
+  configuration keys. A listing of the directory (each file's path with its size: a zip's
+  declared sizes, a directory's lengths on disk) is judged in the byte order of its paths, in this
+  order: the count, each path and its size, the total, the two collisions; so the first rule
+  broken is the same whatever order the listing comes in. A broken rule is
+  `standard_pack_root_invalid` with `standard_pack_problem` its word, `path` the member it names
+  (`notices/<path>`, the directory `notices` for the count and the total, `bundle.json` with
+  `package_id` for a pack), `json_pointer` empty, and where the rule has a bound the bound broken
+  and the value found: `limit_count` and `count` for the count and the depth, `limit_bytes` and
+  `actual_bytes` for a segment's length (1 or 64), a file's size (1 or 2,097,152) and the total.
+  **Readers.** `package bundle` (`--notices`), `actinglab standard-pack check` (a game root that
+  holds the directory) and the installer's `place` will read the directory, each through these
+  rules. The Runtime's root reader, its startup, a run, the policy crate and check-config never
+  read it. **This slice states the rules and nothing reads the directory yet:** the installer's
+  `place` reads it from NOTICES-2, which raises the `package` interface to revision 10, and
+  `package bundle --notices`, `standard-pack check` and `resource verify` from NOTICES-3. Until
+  then no program checks, lays or places the directory, and `place` refuses a zip that carries
+  one at its layout check, as any unknown member (`pack_invalid` naming the member).
 - **One check, three readers.** The contract crate's checks (`parse_standard_pack_pages`,
   `parse_standard_pack_interrupts`, `parse_standard_pack_navigation`, (Workflow #392 DA-4)
   `parse_standard_pack_display_layout`,

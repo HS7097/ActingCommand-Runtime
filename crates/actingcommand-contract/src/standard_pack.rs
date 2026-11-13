@@ -69,7 +69,8 @@ pub const MAX_NAVIGATION_RECORDED_PAGES: usize = 8;
 crate::outcome_vocabulary! {
     /// What is wrong with a standard-pack root file (vocabulary `standard_pack_problem`,
     /// Workflow #373 NAV-6) or, since Workflow #357 DB-1, a table file of the root's `tables/`
-    /// (M-357a v1.1 §6.2), or, since Workflow #407 LOAD-1, a pack's loading copy.
+    /// (M-357a v1.1 §6.2), or, since Workflow #407 LOAD-1, a pack's loading copy, or, since
+    /// Workflow #444 NOTICES-1, a bundle's notices directory ([`crate::standard_pack_notices`]).
     pub enum StandardPackProblem: "standard_pack_problem" {
         /// The file is not JSON of the file's shape and version (for a table: not canonical
         /// JSON either, that is with a floating point number, an unsafe integer or a duplicate
@@ -192,6 +193,26 @@ crate::outcome_vocabulary! {
         /// LOAD-1: a pack's loading copy (`resources/loading.json`, `resources/loading/`) is not
         /// the one `loading.json` makes for it, or the pack carries one with no `loading.json`.
         LoadingPackStale => "loading_pack_stale",
+        /// Workflow #444 NOTICES-1 (since 0.12.58): a bundle's notices directory holds more than
+        /// 64 files.
+        NoticeCount => "notice_count",
+        /// NOTICES-1: a file of the notices directory is empty or larger than 2 MiB.
+        NoticeBytes => "notice_bytes",
+        /// NOTICES-1: the files of the notices directory hold more than 8 MiB together.
+        NoticeTotalBytes => "notice_total_bytes",
+        /// NOTICES-1: a path lies more than two segments below the notices directory.
+        NoticeDepth => "notice_depth",
+        /// NOTICES-1: a path of the notices directory breaks the name rules (a segment's length,
+        /// alphabet or first byte, a device name or a trailing dot, a file name's suffix), two of
+        /// its paths are equal in any ASCII case, a file's path is another path's directory, or
+        /// the bundle that carries it lists a pack named `notices` in any ASCII case.
+        NoticeName => "notice_name",
+        /// NOTICES-1: a file of the notices directory is not strict UTF-8, or holds a control
+        /// character other than TAB, LF, FF and CR.
+        NoticeNotText => "notice_not_text",
+        /// NOTICES-1: a bundle carries the notices directory and declares a `package` maximum
+        /// below 10. Registered with the other six; NOTICES-2 is its first user.
+        NoticeUndeclared => "notice_undeclared",
     }
 }
 
