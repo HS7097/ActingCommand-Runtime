@@ -12213,8 +12213,21 @@ echo the word declared, as the Runtime does since LAB-6S1a (the client requires 
 the comments of LAB-6S2-B1's tests of the no-word branch (`lab-rescue`, `watchdog`), whose
 assertions stay. No test leaves the gate map.
 
+**Fix 1** (work order `rd-1113/brief-1683-fix1.md`, after an independent review that found nothing
+that must change: a Runtime that does not know the binding drops the connection at its second
+frame, before admission, so no write runs twice): this entry's "At deploy", which now counts the
+records such a Runtime writes and names the reads of the post-start check and of the release as
+the code makes them; [runtime-interface.md](runtime-interface.md), "Old Runtimes", which said that
+the later reconnects of the client *process* send no `BindChannel`, where the code decides per
+client (`RuntimeClient`); and one test in the same apps row that goes through actingctl's own
+dispatch: in gate `lab6s2b2`, `lab6s2b2_watchdog_status_through_actingctl_probes_with_lab_cli`
+(Windows) runs the real `actingctl watchdog status --root` on a single-location root whose owner
+lock the test holds, against the scripted Runtime; `main`'s `watchdog` site hands the watchdog
+actingctl's word, so the status's one probe binds `lab` with `Lab-CLI` and no `via`, sends `Health`
+and `BindChannel` with (Cli, Cli), and the report is `watchdog_alive`. No product code changes.
+
 **At deploy.** Works on a Runtime of 0.12.59 (LAB-6S2-M in the same build). On an earlier Runtime
-each program is served by that Runtime's own rules:
+each program is served by that Runtime's own rules (fix 1: the connections counted from the code):
 - **Runtime 0.12.58** accepts the word and has no map M and no rule R. It serves every request of
   these programs and refuses none (no origin gate since LAB-6S1b; the identity card is judged by
   the envelope), records each with the binding as declared, `lab` without `via`, and receipts it
@@ -12226,27 +12239,57 @@ each program is served by that Runtime's own rules:
   them ("Installation control receipt unreadable") and its close or start would stop. The helper
   never does: it closes a Runtime with its own slot's `actingctl` and starts and releases with the
   target slot's, the same build as each Runtime.
-- **Runtime 0.12.57 or earlier** cannot decode the word and drops the connection, recording one
-  connection failure (`runtime_protocol_invalid`, at the request's decoding) for each connection.
-  The client reconnects once in the same owner epoch, unbound, and reports
-  `client_channel_unsupported` once per process on stderr; the connection is then bound by its
-  first request's envelope, `cli` for (Cli, Cli) and (Agent, Adapter): `actingctl`'s requests as
-  that Runtime recorded them, today's MCP server's as the command line's, `cli`, where that Runtime
-  recorded `mcp`. Receipts name `cli` without `initiator`.
+- **Runtime 0.12.57 or earlier** cannot decode the word. It drops the connection at its second
+  frame, the `BindChannel`, before it admits anything, and records one connection failure: a
+  record `runtime_protocol_invalid` of category error in its ledger (at the request's decoding).
+  The client reconnects once in the same owner epoch, unbound, and that client (one
+  `RuntimeClient`, with its clones) sends no `BindChannel` again; every client a program connects
+  anew is dropped once more, so each connection a program makes adds one such record. The process
+  writes one line `client_channel_unsupported` to stderr, a warning, once per process; the exit
+  status is unaffected. The connection is then bound by its first request's envelope, `cli` for
+  (Cli, Cli) and (Agent, Adapter): `actingctl`'s requests as that Runtime recorded them, today's
+  MCP server's as the command line's, `cli`, where that Runtime recorded `mcp`. Receipts name `cli`
+  without `initiator`. Each `actingctl overview` adds 2 records (its connection, and its `watchdog`
+  block's probe, which an overview without an install root does not make), and each tick of this
+  build's watchdog adds 1 while the owner lock is held (its probe of the owner; `actingctl
+  watchdog status` the same). Who sees them: only an unfiltered `diagnose`'s failure groups
+  (`failures_grouped`), `events`, and a console's count of records by severity. No guard, no
+  post-start check row, no watchdog attention and no overview warning reads them, and nothing
+  stops, refuses or alarms on them.
 - **The deploy kit** runs `actingctl install` of the new build against the old running Runtime.
-  Every connection the rescue module makes keeps (Cli, Cli): before the close the guards' and the
-  hold's reads (`Status`, `RuntimeFactSnapshot`, `ScheduleExplanation`), the hold's
-  `PauseScheduling` of each instance and its status polls, the reread of S0 and the formal close
-  (`RequestShutdown`; the wait after it reads the owner journal and connects to nothing, and so
-  does the check that nothing of the Runtime still runs); after the start, on the new Runtime of
-  0.12.59, the readiness probe (`Health`, `BindChannel`), the post-check (`StartReport`, `Status`,
-  `ScheduleExplanation`) and the release (`ResumeScheduling` of exactly the pause it saw). On an old 0.12.58 every request is taken as
-  0.12.58 takes `cli`'s: the pause and the shutdown record no channel, the reads record nothing,
-  and the receipts, which carry `lab` and `Lab-CLI`, are read through this build's client and
-  printed nowhere. On an old 0.12.57 or earlier each connection is dropped once, recorded as above,
-  and made again unbound, bound `cli` by its envelope: every request is then taken and answered as
-  `actingctl install` of that build's is, and `actingctl` writes the one stderr line. No step is
-  refused or fails for the binding.
+  Every connection the rescue module makes keeps (Cli, Cli) and is a client of its own, one per
+  read or write (`SystemRuntime`). `update plan` and its `--preview` connect to nothing (they read
+  the owner lock and the processes). `update apply --stop --hold <reason> --start` connects to the
+  old Runtime N + 9 times, N the number of instances the hold pauses:
+  - 3 for the reads before the hold (`deploy::hold_start`: S0 and the guards): `Status`,
+    `RuntimeFactSnapshot`, `ScheduleExplanation`;
+  - N + 2 for the hold (the pause step, `hold::pause_all`): `Status`, one `PauseScheduling` per
+    instance, all at once, and `Status` again (a pause refused for a queued request adds one
+    connection per status poll while its queue clears and one for its second pause);
+  - 4 for the stop (the close step): the reread of S0 (`Status`, `RuntimeFactSnapshot`) and the
+    close (`Status`, `RequestShutdown`); the wait after it reads the owner journal and connects to
+    nothing, and so does the check that nothing of the Runtime still runs.
+
+  Everything after the new Runtime starts goes to that Runtime of 0.12.59, which accepts the
+  binding: the readiness probe (`Health`, `BindChannel`), the post-start check (`Status`,
+  `RuntimeFactSnapshot`, `StartReport`; `postcheck::evaluate`) and the release (`Status`, the
+  `ResumeScheduling` of exactly each pause it saw, and `ScheduleExplanation` for the hand-back,
+  `deploy::release_hold`). On an old 0.12.58 every request is taken as 0.12.58 takes `cli`'s: the
+  pause and the shutdown record no channel, the reads record nothing, and the receipts, which carry
+  `lab` and `Lab-CLI`, are read through this build's client and printed nowhere. On an old 0.12.57
+  or earlier each of the N + 9 connections is dropped once and made again unbound, bound `cli` by
+  its envelope: every request is then taken and answered as `actingctl install` of that build's
+  is, and `actingctl` writes the one stderr line. So one such deployment adds N + 9 records
+  `runtime_protocol_invalid` to the ledger, all written by the old Runtime before it closes, and
+  none after the new one starts. No step is refused or fails for the binding.
+- **The automatic rollback** (the composite update's new start did not become ready, or one of its
+  fail-class post-start checks failed): this build's `actingctl` closes the new Runtime, puts the
+  previous build back, starts it, and talks to that old Runtime again: the readiness probe, the
+  post-start check (`Status`, `RuntimeFactSnapshot`, `StartReport`) and the release (`Status`,
+  each `ResumeScheduling`, `ScheduleExplanation`). On 0.12.57 or earlier each of these connections
+  is dropped once, adding one such record, and made again unbound; none fails.
+- **The deployer's choice:** deploying 0.12.58 first avoids all of these records, because that
+  Runtime accepts the binding.
 
 **LAB-6S2-B2 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
 

@@ -137,8 +137,10 @@ An actingd older than U-2 fails to decode `BindChannel` and drops the connection
 a receipt (and records one connection failure in its own ledger). The client sends
 `BindChannel` through `send_or_dropped`; when the connection is dropped it reconnects
 once, checks the owner epoch again, goes on unbound and reports one line
-`client_channel_unsupported` (stderr, or the MCP warnings). Later reconnects of that
-client process send no `BindChannel`. `runtime-info.json` carries no interface
+`client_channel_unsupported` (stderr, or the MCP warnings) once per process. Later
+reconnects of that client (one `RuntimeClient`, with its clones and the interactions it
+begins) send no `BindChannel`; another client the same process connects sends it again and
+is dropped once more. `runtime-info.json` carries no interface
 revision, so the client cannot ask first. This happens only when root Tools are newer
 than the slot's actingd, for example after a slot rollback. In the same way an actingd before
 Workflow #434 LAB-6S1a cannot decode a `BindChannel` that names an initiator (the request

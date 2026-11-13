@@ -32,6 +32,12 @@
 //!   Runtime that cannot decode the word (one before LAB-6S1a) drops the binding; actingctl
 //!   reconnects once, goes on unbound, is answered, and writes the runtime client's report
 //!   `client_channel_unsupported` once on stderr.
+//! - `lab6s2b2_watchdog_status_through_actingctl_probes_with_lab_cli` (Windows, scripted Runtime;
+//!   fix 1, brief `rd-1113/brief-1683-fix1.md`): the real `actingctl watchdog status --root` on a
+//!   single-location root whose owner lock the test holds, through `main`'s own dispatch, whose
+//!   `watchdog` site hands the watchdog this program's word: the status's one probe of the owner
+//!   binds `lab` with `Lab-CLI` and no `via`, sends `Health` and `BindChannel` only, with (Cli,
+//!   Cli), and the report is `watchdog_alive`.
 
 use crate::held_runtime::{HELD_SALT, NoInstances};
 use crate::mcp_harness::McpServer;
@@ -493,4 +499,70 @@ fn lab6s2b2_a_runtime_that_drops_the_word_leaves_actingctl_unbound_once() {
         1,
         "{stderr}"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn lab6s2b2_watchdog_status_through_actingctl_probes_with_lab_cli() {
+    // A single-location root (contracts/runtime-watchdog.md, "Layout"):
+    // `runtime\BUILD-MANIFEST.json` and `actingd.config.json`, whose state root is `state`.
+    let temp = TempDir::new().expect("tempdir");
+    let root = temp.path().join("root");
+    let state = temp.path().join("state");
+    for directory in [root.join("runtime"), state.clone()] {
+        std::fs::create_dir_all(directory).expect("create a fixture directory");
+    }
+    std::fs::write(
+        root.join("runtime").join("BUILD-MANIFEST.json"),
+        br#"{"fixture":"lab6s2b2"}"#,
+    )
+    .expect("write the build manifest");
+    let config = serde_json::to_vec(&json!({
+        "schema_version": "actingcommand.actingd.config.v1",
+        "state_root": state,
+        "instances": []
+    }))
+    .expect("the config JSON");
+    std::fs::write(root.join("actingd.config.json"), config).expect("write the config");
+    // The owner lock held as a running Runtime holds it, so the status probes the owner; the
+    // journal's content is not read while the lock is held.
+    let journal = state.join("owner.lock");
+    std::fs::write(&journal, b"{}\n").expect("write the owner journal");
+    let owner = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open(journal)
+        .expect("open the owner journal");
+    owner.lock().expect("hold the owner lock");
+    let runtime = ScriptedRuntime::start(&state, |_| vec![ScriptedConnection::new()]);
+    // The binary's own dispatch: `main` hands `watchdog::dispatch` this program's word.
+    let output = Command::new(env!("CARGO_BIN_EXE_actingctl"))
+        .args(["watchdog", "status", "--root"])
+        .arg(root)
+        .env_remove("ACTINGCOMMAND_DETAIL")
+        .output()
+        .expect("run actingctl watchdog status");
+    // The owner answered the probe.
+    let report = result_line(&output);
+    assert_eq!(
+        report["outcome"]["code"],
+        json!("watchdog_alive"),
+        "{report}"
+    );
+    let record = runtime.finish();
+    drop(owner);
+    assert!(
+        record.unscripted.is_empty(),
+        "a connection beyond the probe"
+    );
+    let [probe] = record.connections.as_slice() else {
+        panic!("{} connections, not one", record.connections.len());
+    };
+    // `Health` and `BindChannel` only, `lab` with `Lab-CLI` and no `via`, (Cli, Cli).
+    assert_eq!(operations(probe), ["health", "bind_channel"]);
+    assert_eq!(
+        declared(&probe.requests[1]),
+        (RuntimeChannel::Lab, None, Some(Initiator::LabCli))
+    );
+    assert_envelope(probe, (EventActor::Cli, EventSource::Cli));
 }
