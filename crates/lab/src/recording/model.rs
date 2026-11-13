@@ -41,6 +41,12 @@ impl OpaqueJson {
             .map(Self)
             .map_err(|error| LabError::usage(format!("failed to encode recording value: {error}")))
     }
+
+    /// Workflow #449 REC-ARCH: the value as recorded, which an archive's manifest copies
+    /// member by member where the step table has it.
+    pub(crate) fn value(&self) -> &serde_json::Value {
+        &self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1185,6 +1191,9 @@ pub struct AttachFrameRequest {
 pub struct AttachFrameOutcome {
     pub status: String,
     pub record_id: String,
+    /// Workflow #449 REC-ARCH: when the recording the frame entered started (its session header's
+    /// `started_at_unix_ms`); with `record_id` and `step` the answer names where the action went.
+    pub record_started_at_unix_ms: u64,
     pub step: u32,
     pub step_opened: bool,
     pub frame: RecordedFrame,
@@ -1258,6 +1267,8 @@ pub struct CommitClickRequest {
 pub struct CommitClickOutcome {
     pub status: String,
     pub record_id: String,
+    /// Workflow #449 REC-ARCH: when the recording the click entered started.
+    pub record_started_at_unix_ms: u64,
     pub step: u32,
     pub step_closed: bool,
     pub click: StepClick,
@@ -1293,8 +1304,117 @@ pub enum CommitApplicationRequest {
 pub struct CommitApplicationOutcome {
     pub status: String,
     pub record_id: String,
+    /// Workflow #449 REC-ARCH: when the recording the operation entered started.
+    pub record_started_at_unix_ms: u64,
     pub step: u32,
     pub step_opened: bool,
     pub step_closed: bool,
     pub application: StepApplication,
+}
+
+/// Workflow #449 REC-ARCH: the schema of the manifest `record archive` writes into the recording's
+/// own directory (`archive-manifest-<n>.json`).
+pub const LAB_RECORDING_ARCHIVE_SCHEMA: &str = "actingcommand.lab-recording-archive.v1";
+
+/// Workflow #449 REC-ARCH: `record archive` options.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RecordArchiveOptions {
+    /// The recording named by its id, the id its session header carries (`--record-id`); `None`
+    /// names the instance's active recording.
+    pub record_id: Option<String>,
+    /// The directory the frames, the step table and the manifest are copied to (`--copy-to`): an
+    /// absolute path (fix 1: an empty, blank or relative one is refused `validation_failed`) of a
+    /// directory that does not exist or is empty.
+    pub copy_to: Option<String>,
+    /// The build that writes the manifest (the commit of the program that runs the command).
+    pub written_by: String,
+}
+
+/// Workflow #449 REC-ARCH: a manifest of a recording, its file in the recording's directory.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ArchiveManifestRef {
+    /// Its file name in the recording's directory.
+    pub file: String,
+    pub path: String,
+    pub sha256: String,
+    /// The number of steps (rows) it lists.
+    pub steps: usize,
+    /// Whether this command wrote it (`false`: an archived recording named again).
+    pub written: bool,
+}
+
+/// Workflow #449 REC-ARCH: the checked copy of an archived recording.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ArchiveCopyOutcome {
+    /// The directory copied to.
+    pub path: String,
+    /// The files copied, relative to it, each checked against the manifest.
+    pub files: Vec<String>,
+}
+
+/// Workflow #449 REC-ARCH, fix 1: the instance's session header when it does not name the recording
+/// `record archive` acted on (one `record start --force` left behind, or an archived one whose
+/// header a later `record start` replaced): it belongs to another recording, and the command
+/// leaves it as it is.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ArchiveSessionHeader {
+    /// The recording the header names; `None` without a header.
+    pub record_id: Option<String>,
+    /// Its status; `None` without a header.
+    pub status: Option<String>,
+    /// Always `false`: the command did not write it.
+    pub changed: bool,
+}
+
+/// Workflow #449 REC-ARCH: what `record archive` did. `ends_session` says that the instance's
+/// active recording was archived now: the `record` command then marks its session header
+/// `archived`, before any copy.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecordArchiveOutcome {
+    /// `archived`, or `already_archived` for an archived recording named again.
+    pub status: String,
+    pub record_id: String,
+    pub record_started_at_unix_ms: u64,
+    pub instance: String,
+    /// The recording's own directory.
+    pub path: String,
+    pub manifest: ArchiveManifestRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copy: Option<ArchiveCopyOutcome>,
+    /// Fix 1: present when the session header does not name the recording, which it leaves as it
+    /// is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_header: Option<ArchiveSessionHeader>,
+    #[serde(skip)]
+    pub ends_session: bool,
+}
+
+/// Workflow #449 REC-ARCH: `record reopen` options.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RecordReopenOptions {
+    /// The archived recording named by its id (`--record-id`); `None` names the one the session
+    /// header names.
+    pub record_id: Option<String>,
+}
+
+/// Workflow #449 REC-ARCH: the archived recording `record reopen` makes active again. The Lab
+/// writes nothing: the `record` command writes the session header, `names_it` saying whether the
+/// header already names the recording (its status alone changes) or a new header replaces it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecordReopenOutcome {
+    /// `reopened`.
+    pub status: String,
+    pub record_id: String,
+    pub task_id: String,
+    pub instance: String,
+    pub record_started_at_unix_ms: u64,
+    /// The recording's own directory.
+    pub path: String,
+    /// The latest manifest of the recording, which stays as a file.
+    pub manifest: String,
+    pub steps: usize,
+    /// The recording the session header named before, when the new header replaces it.
+    pub replaced_record_id: Option<String>,
+    #[serde(skip)]
+    pub names_it: bool,
 }

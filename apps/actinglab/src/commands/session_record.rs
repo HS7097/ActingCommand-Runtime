@@ -13,14 +13,16 @@ use crate::{
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     ApplicationSpec, ClickRetry, ClickSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest,
-    MarkSpec, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock, StepAction,
-    StepActionKind, TemplateScalesSpec, TransitionSpec, record_instance_check, record_mark,
-    record_start, record_start_defaults, record_status, record_stop, record_stop_close,
+    MarkSpec, RecordArchiveOptions, RecordRect, RecordReopenOptions, RecordStartOptions,
+    RecordStopOptions, RecordingLock, StepAction, StepActionKind, TemplateScalesSpec,
+    TransitionSpec, record_archive, record_archive_copy, record_instance_check, record_mark,
+    record_reopen, record_start, record_start_defaults, record_status, record_stop,
+    record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -343,6 +345,36 @@ pub(crate) const RECORD_STATUS_READS: FlagReads = FlagReads {
     positionals: &[],
 };
 
+/// Workflow #449 REC-ARCH: the flags `record archive` reads: the recording named by its id and the
+/// directory it is copied to.
+pub(crate) const RECORD_ARCHIVE_READS: FlagReads = FlagReads {
+    row: "record archive",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &["--record-id", "--copy-to"],
+            switches: &[],
+            refused: &[],
+        },
+    ],
+    positionals: &[],
+};
+
+/// Workflow #449 REC-ARCH: the flags `record reopen` reads: the archived recording named by its
+/// id.
+pub(crate) const RECORD_REOPEN_READS: FlagReads = FlagReads {
+    row: "record reopen",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &["--record-id"],
+            switches: &[],
+            refused: &[],
+        },
+    ],
+    positionals: &[],
+};
+
 /// Workflow #434 LAB-5B3: the flags `record candidates` reads; its step id is also
 /// its first positional.
 pub(crate) const RECORD_CANDIDATES_READS: FlagReads = FlagReads {
@@ -474,6 +506,9 @@ fn record_reads(action: &str) -> Option<&'static FlagReads> {
         "candidates" | "candidate-list" => &RECORD_CANDIDATES_READS,
         "amend" => &RECORD_AMEND_READS,
         "step" => &RECORD_STEP_READS,
+        // Workflow #449 REC-ARCH.
+        "archive" => &RECORD_ARCHIVE_READS,
+        "reopen" => &RECORD_REOPEN_READS,
         _ => return None,
     })
 }
@@ -515,7 +550,8 @@ pub(crate) fn run_session_record(global: &GlobalOptions, args: &[String]) -> Cli
         .first()
         .filter(|action| crate::dry_run_gate::RECORD_REFUSED_ACTIONS.contains(&action.as_str()))
     {
-        let alternative = if action == "start" {
+        // Workflow #449 REC-ARCH: `record status` shows what `archive` and `reopen` would act on.
+        let alternative = if matches!(action.as_str(), "start" | "archive" | "reopen") {
             "record status"
         } else {
             "record candidates"
@@ -536,7 +572,9 @@ fn run_session_record_inner(
     forced_state_dir: Option<&Path>,
 ) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
-        CliError::usage("session record requires start|status|stop|mark|step|candidates|amend")
+        CliError::usage(
+            "session record requires start|status|stop|mark|step|candidates|amend|archive|reopen",
+        )
     })?;
     // Workflow #434 LAB-5B4: before anything is read or written.
     let flags = record_flags(action, &args[1..])?;
@@ -625,6 +663,9 @@ fn run_session_record_inner(
             }))
         }
         "mark" => run_record_mark(global, &flags, held_record_lock(&record_lock)?),
+        // Workflow #449 REC-ARCH: a recording ended as material only, and reopened later.
+        "archive" => run_record_archive(&flags, &record_path, held_record_lock(&record_lock)?),
+        "reopen" => run_record_reopen(&flags, &record_path, held_record_lock(&record_lock)?),
         "step" => {
             let Some(mut record) = read_json_file::<SessionRecordContext>(&record_path)? else {
                 return Err(CliError::safety_blocked(
@@ -2614,7 +2655,10 @@ fn record_action_lock(
     state_dir: &Path,
     instance_id: &str,
 ) -> CliOutcome<Option<RecordingLock>> {
-    if !matches!(action, "start" | "stop" | "mark" | "step" | "amend") {
+    if !matches!(
+        action,
+        "start" | "stop" | "mark" | "step" | "amend" | "archive" | "reopen"
+    ) {
         return Ok(None);
     }
     // Workflow #434 LAB-2: every step and mark the command adds carries the process's initiator
@@ -2914,6 +2958,132 @@ fn run_record_mark(
     let outcome = record_mark(lock, &request, dry_run, crate::offline_ocr::lab_ocr())?;
     serde_json::to_value(outcome)
         .map_err(|error| CliError::usage(format!("failed to encode record mark output: {error}")))
+}
+
+/// Workflow #449 REC-ARCH: `record archive [--record-id <id>] [--copy-to <dir>]`
+/// (`contracts/lab-recording.md`, "Archiving"). The Lab writes the recording's manifest, or reads
+/// the one an archived recording named again has; the session header of the instance's active
+/// recording becomes `archived` before any copy; then the copy, checked against the manifest. A
+/// failed copy answers its failure with `archived: true`, the recording and its manifest in its
+/// details: the recording stays archived and nothing is deleted. Fix 1: a session header that
+/// cannot be read or written once the manifest is there answers its failure with the recording and
+/// its manifest in its details too; a recording the header does not name (one `record start
+/// --force` left behind) leaves the header as it is (`ends_session` false). The copy target must be
+/// an absolute path: the Lab refuses another (`validation_failed`) before anything is written.
+fn run_record_archive(
+    flags: &FlagArgs,
+    record_path: &Path,
+    lock: &RecordingLock,
+) -> CliOutcome<Value> {
+    let options = RecordArchiveOptions {
+        record_id: record_flag_value(flags, "--record-id")?,
+        copy_to: record_flag_value(flags, "--copy-to")?,
+        written_by: env!("ACTINGCOMMAND_RUNTIME_HEAD").to_owned(),
+    };
+    let mut archived = record_archive(lock, &options)?;
+    // Fix 1: the manifest is there, written now or before; a person must learn that from a failure
+    // of the session header as well.
+    let with_manifest = |error: CliError| {
+        with_archive_context(
+            error,
+            &[
+                ("record_id", json!(&archived.record_id)),
+                ("manifest", json!(&archived.manifest)),
+            ],
+        )
+    };
+    let mut record = read_json_file::<SessionRecordContext>(record_path).map_err(with_manifest)?;
+    if archived.ends_session
+        && let Some(record) = record.as_mut()
+    {
+        record.status = "archived".to_string();
+        record.updated_at_unix_ms = current_unix_ms();
+        write_json_file_atomic(record_path, &*record).map_err(with_manifest)?;
+    }
+    if let Some(target) = &options.copy_to {
+        let copy = record_archive_copy(lock, &archived, target).map_err(|error| {
+            with_archive_context(
+                error,
+                &[
+                    ("record_id", json!(&archived.record_id)),
+                    ("archived", json!(true)),
+                    ("manifest", json!(&archived.manifest)),
+                ],
+            )
+        })?;
+        archived.copy = Some(copy);
+    }
+    let status = archived.status.clone();
+    let record = record.filter(|record| record.record_id == archived.record_id);
+    Ok(json!({
+        "status": status,
+        "record": record,
+        "path": record_path.display().to_string(),
+        "lab": archived
+    }))
+}
+
+/// Workflow #449 REC-ARCH: `error` with `context` added to its details, an object (details of
+/// another form are kept under `cause`).
+fn with_archive_context(mut error: CliError, context: &[(&str, Value)]) -> CliError {
+    let mut details = match error.details.take() {
+        Some(Value::Object(details)) => details,
+        given => {
+            let mut details = Map::new();
+            if let Some(cause) = given {
+                details.insert("cause".to_owned(), cause);
+            }
+            details
+        }
+    };
+    for (name, value) in context {
+        details.insert((*name).to_owned(), value.clone());
+    }
+    error.with_details(Value::Object(details))
+}
+
+/// Workflow #449 REC-ARCH: `record reopen [--record-id <id>]`. The Lab finds the archived
+/// recording of the instance; its session header becomes `active` again: the header's status when
+/// it names that recording, otherwise a header of that recording in place of the one there (as
+/// `record start` replaces one, the holder and lease left unset). The step table and every
+/// manifest stay as they are.
+fn run_record_reopen(
+    flags: &FlagArgs,
+    record_path: &Path,
+    lock: &RecordingLock,
+) -> CliOutcome<Value> {
+    let options = RecordReopenOptions {
+        record_id: record_flag_value(flags, "--record-id")?,
+    };
+    let reopened = record_reopen(lock, &options)?;
+    let now = current_unix_ms();
+    let record = match read_json_file::<SessionRecordContext>(record_path)? {
+        Some(mut record) if reopened.names_it => {
+            record.status = "active".to_string();
+            record.updated_at_unix_ms = now;
+            record
+        }
+        _ => SessionRecordContext {
+            schema_version: "session-record-v0".to_string(),
+            record_id: reopened.record_id.clone(),
+            task_id: reopened.task_id.clone(),
+            instance: reopened.instance.clone(),
+            status: "active".to_string(),
+            holder: None,
+            lease_id: None,
+            started_at_unix_ms: reopened.record_started_at_unix_ms,
+            updated_at_unix_ms: now,
+            steps: Vec::new(),
+        },
+    };
+    write_json_file_atomic(record_path, &record)?;
+    let status = reopened.status.clone();
+    Ok(json!({
+        "status": status,
+        "record": record,
+        "path": record_path.display().to_string(),
+        "lab": reopened
+    }))
 }
 
 fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {

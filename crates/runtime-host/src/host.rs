@@ -295,6 +295,10 @@ mod startup_package;
 mod state_control;
 // Workflow #429 R-6: `StopInstanceRun`, a client's direct run stopped and reset by the Runtime.
 mod stop_instance_run;
+// Workflow #437 MAPP-2a: the parts of the switch before a member's run on a device group of
+// several, and their one entry (no caller in the Runtime yet).
+mod switch;
+pub use switch::ApplicationSwitch;
 mod task_diagnostic;
 mod task_timing;
 // Workflow #434 LAB-6S3: the UI list on the `ui` channel, the gate's decision there.
@@ -2093,6 +2097,10 @@ impl RuntimeHost {
             fence_failure_for_test: AtomicBool::new(false),
             #[cfg(test)]
             config_persist_failure_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            switch_entries_for_test: AtomicU64::new(0),
+            #[cfg(test)]
+            member_close_failure_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             device_keys: config.device_keys,
             device_group_names: config.device_group_names,
@@ -5999,6 +6007,13 @@ struct HostShared {
     // refusal that is not the Runtime's fatal (`host_config_overrides_persist_failed`).
     #[cfg(test)]
     config_persist_failure_for_test: AtomicBool,
+    // Workflow #437 MAPP-2a, test only: how many times the switch's entry was reached.
+    #[cfg(test)]
+    switch_entries_for_test: AtomicU64,
+    // Workflow #437 MAPP-2a, test only: the next close of the session a member's stop used fails
+    // after the stop, as a paired session's close can; the fake device keeps nothing open there.
+    #[cfg(test)]
+    member_close_failure_for_test: AtomicBool,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Workflow #437 MAPP-1b (`contracts/device-group.md`, "Derived, never stored"): the member →

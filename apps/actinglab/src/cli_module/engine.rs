@@ -34,7 +34,7 @@ pub(crate) enum Line {
 
 /// The command of every row actinglab's own command serves: the row's name, the command's words
 /// and how the row's command line reaches it.
-pub(crate) const COMMANDS: [(&str, &[&str], Line); 61] = [
+pub(crate) const COMMANDS: [(&str, &[&str], Line); 63] = [
     ("app launch", &["session", "app", "launch"], Line::Declared),
     (
         "app restart",
@@ -99,6 +99,9 @@ pub(crate) const COMMANDS: [(&str, &[&str], Line); 61] = [
     ("record step", &["record", "step"], Line::AsWritten),
     // Workflow #434 LAB-5G4c: its command since that slice, MCP's `ac_binding_draft` ported.
     ("record draft", &["record", "draft"], Line::AsWritten),
+    // Workflow #449 REC-ARCH: a recording ended as material only, and reopened later.
+    ("record archive", &["record", "archive"], Line::AsWritten),
+    ("record reopen", &["record", "reopen"], Line::AsWritten),
     ("package check", &["package", "check"], Line::AsWritten),
     (
         "package preflight",

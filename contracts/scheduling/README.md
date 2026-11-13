@@ -1649,7 +1649,8 @@ member's fence (`fenced`) and another member's holder (`held`), before the devic
 cooldown. The policy admission refuses a dispatch of the member with the same code and values, at
 info. It is the `why` of the member's not-running row while it waits. In a group of one it never
 occurs.
-After a failed switch (`application_switch_failed`, proposed) the member's own candidates wait out
+After a failed switch (`application_switch_failed`, registered by MAPP-2a; no run is settled with
+it before MAPP-2b) the member's own candidates wait out
 its switch cooldown, `scheduling.device_group.switch_failure_cooldown_ms` (proposed, default
 `300000`): each is deferred as during a takeover cooldown, with `dispatch_instance_cooldown`, the
 cooldown's end as `next_eligible_unix_ms` and its wake, and the proposed optional value
@@ -2763,7 +2764,8 @@ finishes and is settled there whatever the switch says afterwards.
 - **Device groups (Workflow #437 MAPP; [device-group.md](../device-group.md)).** MAPP-1 (register
   §1.328) builds the derived map, the scheduler state keyed by the device key and the round's one
   pick per device; MAPP-1b (register §1.330) builds the one worker (`actingd-device-<device_group>`)
-  and the in-flight registration read across the group; the switch is not built yet, and the load
+  and the in-flight registration read across the group; MAPP-2a (register §1.342) builds the
+  switch's parts and their one entry, which nothing calls before MAPP-2b, and the load
   refuses every group of several until the slice "order within one device". Several instances on one device are one device group. The group is derived from the
   configuration at assembly and never stored.
   - A group has one lane: one scheduler state (one lease, one queue, one cooldown), keyed by the

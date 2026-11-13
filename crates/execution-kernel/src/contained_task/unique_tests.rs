@@ -125,6 +125,7 @@ fn task(clock: Option<SearchClock>) -> PreparedContainedTask {
         post_admission_ocr: None,
         resource_readings: None,
         resource_adjustments: None,
+        field_lists: Default::default(),
         stability_termination: None,
         recovery: None,
         defaults: TaskOperationDefaults::default(),

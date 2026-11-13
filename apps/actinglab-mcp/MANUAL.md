@@ -198,6 +198,19 @@ naming this file.
   is ended by closing its input; no child is ever killed. After a call of `ac_lab_observe` or
   `ac_do` with `capture`, the server records the client action today's server records, naming the
   Lab request; its warnings join the line.
+- **Recordings** (Workflow #449 REC-ARCH, 0.12.59; `contracts/lab-recording.md`, "Archiving"). A
+  recording belongs to the instance: while one is active, every call with `record` on that
+  instance, whoever sends it, adds a step to it, and its answer's `record` names the recording it
+  entered (`record_id`, `record_started_at_unix_ms`) and the `step` it became. `ac_do` with
+  `record` and `swipe` on a step without a click records that swipe as the step's. A recording kept
+  only as material is ended with `ac_record_archive`: no marks are needed; it writes
+  `archive-manifest-<n>.json` beside the frames and the step table, keeps every file and ends the
+  session (`archived`), and with `copy_to` (the absolute path of a directory that does not exist
+  or is empty; a relative or empty one is `not_absolute`) copies them and checks every copy. With
+  `record_id` it also archives a recording `record start --force` left behind, from its own step
+  table, and leaves the session header, another recording's, as it is (`lab.session_header`).
+  `ac_record_reopen` makes an archived recording active again, so that `ac_record_mark` and
+  `ac_record_stop` can build its package later.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

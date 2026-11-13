@@ -592,6 +592,7 @@ fn list_reading_miss_publishes_nothing() {
         operation_id: "read_members".to_owned(),
         fact_key: "inventory.list.example_kind_a".to_owned(),
         valid_for_ms: 86_400_000,
+        frame_indices: Vec::new(),
     });
     assert_eq!(
         warning.code().as_str(),

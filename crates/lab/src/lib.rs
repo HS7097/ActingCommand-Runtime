@@ -48,6 +48,9 @@ mod gate_lab_bd;
 // drag and names how the Lab pressed.
 #[cfg(test)]
 mod gate_406_t4;
+// Workflow #449 REC-ARCH: a recording ended as material only; a recorded swipe is a step.
+#[cfg(test)]
+mod gate_449_rec_arch;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

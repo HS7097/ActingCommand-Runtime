@@ -56,11 +56,12 @@ use actingcommand_lab_ops::table::{
 use serde_json::{Map, Value};
 
 /// The slices whose operations this program serves: the core rows LAB-1 and LAB-1b moved into
-/// `lab-ops`, the rows of LAB-2, since Workflow #429 R-6 its row `task stop`, and since Workflow
-/// #429 R-8 its rows `pack-schedule` and `pack-schedule set`. The rescue module's rows are those
-/// `crates/lab-rescue` serves (Workflow #434 LAB-3: [`rescue_served`]); a reserved row comes with
-/// the slice that opens it.
-pub(crate) const BUILT_SLICES: [&str; 5] = ["LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8"];
+/// `lab-ops`, the rows of LAB-2, since Workflow #429 R-6 its row `task stop`, since Workflow #429
+/// R-8 its rows `pack-schedule` and `pack-schedule set`, and since Workflow #449 REC-ARCH its rows
+/// `record archive` and `record reopen`. The rescue module's rows are those `crates/lab-rescue`
+/// serves (Workflow #434 LAB-3: [`rescue_served`]); a reserved row comes with the slice that opens
+/// it.
+pub(crate) const BUILT_SLICES: [&str; 6] = ["LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8", "REC-ARCH"];
 
 /// Workflow #434 LAB-5G4c (register §1.287, "Slice LAB-5G4c"): the planned rows of a slice this
 /// program does not build whose command it has all the same: `record draft`, a row of slice LAB-5

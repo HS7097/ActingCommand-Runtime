@@ -74,6 +74,23 @@ const READ_LIST_REFUSED_MEMBERS: &[&str] = &[
 /// Workflow #428 S168-4: the effects a `read_list` step never declares beside it.
 const READ_LIST_OTHER_EFFECTS: &[&str] = &["click", "application", "select", "wait"];
 
+/// Workflow #450 FL-1b: the members of a `field_lists` entry, every one required.
+const FIELD_LIST_MEMBERS: &[&str] = &[
+    "id",
+    "group",
+    "key_field",
+    "key_column",
+    "columns",
+    "minimum_confidence_milli",
+    "fact_key",
+    "valid_for_ms",
+    "start",
+    "end",
+];
+
+/// Workflow #450 FL-1b: the members a field list's `start` or `end` may declare.
+const FIELD_LIST_CONDITION_MEMBERS: &[&str] = &["page_ids", "required", "forbidden"];
+
 /// Workflow #428 S168-4: the `value` of the feature `name` of a task's candidate layout, when
 /// the layout declares it.
 fn layout_feature_value<'v>(layout: &'v Value, name: &str) -> Option<&'v str> {
@@ -1458,6 +1475,132 @@ impl Declaration<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Workflow #450 FL-1b (`contracts/resource-readings.md`, "Lists from fields",
+    /// "Declaration"): the structure of a task's `field_lists`, entry by entry: an array, each
+    /// entry an object of exactly [`FIELD_LIST_MEMBERS`] (`UnknownField` for another member,
+    /// `MissingField` for a missing one), its names strings, its `columns` an array of
+    /// `{column, field}` strings, `minimum_confidence_milli` and `valid_for_ms` unsigned
+    /// (`InvalidValue` for a floor beyond 16 bits), and `start` and `end` objects of
+    /// [`FIELD_LIST_CONDITION_MEMBERS`], each an array of strings. The rules of the values, of the
+    /// whole task and of the references are [`Self::field_list_rules`]'.
+    fn field_lists(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        for (index, entry) in self.array(value, pointer)?.iter().enumerate() {
+            let pointer = child(pointer, &index.to_string());
+            let object = self.object(entry, &pointer, FIELD_LIST_MEMBERS)?;
+            for member in FIELD_LIST_MEMBERS {
+                self.required(object, &pointer, member)?;
+            }
+            for member in ["id", "group", "key_field", "key_column", "fact_key"] {
+                self.string(&object[member], &child(&pointer, member))?;
+            }
+            let columns_pointer = child(&pointer, "columns");
+            for (column_index, column) in self
+                .array(&object["columns"], &columns_pointer)?
+                .iter()
+                .enumerate()
+            {
+                let column_pointer = child(&columns_pointer, &column_index.to_string());
+                let column = self.object(column, &column_pointer, &["column", "field"])?;
+                for member in ["column", "field"] {
+                    self.string(
+                        self.required(column, &column_pointer, member)?,
+                        &child(&column_pointer, member),
+                    )?;
+                }
+            }
+            for member in ["minimum_confidence_milli", "valid_for_ms"] {
+                self.unsigned(&object[member], &child(&pointer, member))?;
+            }
+            if object["minimum_confidence_milli"]
+                .as_u64()
+                .is_none_or(|value| u16::try_from(value).is_err())
+            {
+                return Err(self.error(
+                    &child(&pointer, "minimum_confidence_milli"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+            for member in ["start", "end"] {
+                let condition_pointer = child(&pointer, member);
+                let condition = self.object(
+                    &object[member],
+                    &condition_pointer,
+                    FIELD_LIST_CONDITION_MEMBERS,
+                )?;
+                for (name, targets) in condition {
+                    self.strings(targets, &child(&condition_pointer, name))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #450 FL-1b: the rule of a task's `field_lists` once each entry's structure passed,
+    /// the contract crate's [`actingcommand_contract::validate_field_lists`]: against the task's
+    /// `post_admission_ocr` (`fields_v1`), its `scheduling_outcome`, the ids of its operations
+    /// and reading marks, and every key its marks and its `read_list` steps write. Each refusal is
+    /// at the pointer the rule names, with its reason. The targets of each `start` and `end`
+    /// belong to the parser's package validation, which knows the derived recognition pack.
+    fn field_list_rules(&self, task: &Map<String, Value>) -> CliOutcome<()> {
+        let Some(value) = task.get("field_lists") else {
+            return Ok(());
+        };
+        let lists: Vec<actingcommand_contract::FieldListDeclaration> =
+            serde_json::from_value(value.clone())
+                .map_err(|_| self.error("/field_lists", ResourceDeclarationReason::InvalidValue))?;
+        let declared = |member: &str| task.get(member).filter(|value| !value.is_null());
+        let fields = declared("post_admission_ocr").and_then(|value| {
+            serde_json::from_value::<actingcommand_contract::OcrFieldsDeclaration>(value.clone())
+                .ok()
+        });
+        let scheduling = declared("scheduling_outcome").and_then(|value| {
+            serde_json::from_value::<actingcommand_contract::SchedulingOutcomeDeclaration>(
+                value.clone(),
+            )
+            .ok()
+        });
+        let entries = |member: &str| {
+            task.get(member)
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+        };
+        let (operations, marks) = (entries("operations"), entries("resource_readings"));
+        let taken_ids = operations
+            .iter()
+            .chain(marks)
+            .filter_map(|entry| entry.get("id").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let written_keys = marks
+            .iter()
+            .flat_map(|mark| {
+                ["fact_key", "capacity_fact_key"]
+                    .into_iter()
+                    .filter_map(move |member| mark.get(member).and_then(Value::as_str))
+            })
+            .chain(operations.iter().filter_map(|operation| {
+                operation
+                    .get(read_list_member())
+                    .and_then(|read| read.get("fact_key"))
+                    .and_then(Value::as_str)
+            }))
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        actingcommand_contract::validate_field_lists(
+            &lists,
+            actingcommand_contract::FieldListTask {
+                game: task.get("game").and_then(Value::as_str).unwrap_or_default(),
+                schema_version: self.schema.unwrap_or_default(),
+                fields: fields.as_ref(),
+                scheduling: scheduling.as_ref(),
+                taken_ids: &taken_ids,
+                written_keys: &written_keys,
+            },
+        )
+        .map_err(|refusal| self.error(&refusal.pointer(), refusal.reason))
     }
 
     fn click(&self, value: &Value, pointer: &str, canonical: bool) -> CliOutcome<()> {
@@ -4579,6 +4722,8 @@ impl Declaration<'_> {
                 "post_admission_ocr",
                 "resource_readings",
                 "resource_adjustments",
+                // Workflow #450 FL-1b (package revision 11).
+                "field_lists",
                 "stability_termination",
                 "recovery",
                 "max_task_retries",
@@ -4656,6 +4801,10 @@ impl Declaration<'_> {
                 ResourceDeclarationReason::UnconsumedField,
             ));
         }
+        // Workflow #450 FL-1b: field lists come with the fields' task schemas.
+        if object.contains_key("field_lists") && self.schema_before(TaskSchema::V0_8) {
+            return Err(self.error("/field_lists", ResourceDeclarationReason::UnconsumedField));
+        }
         if !canonical || object.contains_key("server_scope") {
             self.strings(self.required(object, "", "server_scope")?, "/server_scope")?;
         }
@@ -4689,6 +4838,7 @@ impl Declaration<'_> {
                 "post_admission_ocr" => self.post_ocr(value, &pointer)?,
                 "resource_readings" => self.resource_readings(value, &pointer, object)?,
                 "resource_adjustments" => self.resource_adjustments(value, &pointer, object)?,
+                "field_lists" => self.field_lists(value, &pointer)?,
                 "stability_termination" => self.stability(value, &pointer)?,
                 "recovery" if !value.is_null() => self.recovery(value, &pointer)?,
                 "operations" => {
@@ -4738,6 +4888,8 @@ impl Declaration<'_> {
         self.array(self.required(object, "", "operations")?, "/operations")?;
         // Workflow #428 S168-4: the task-level rules of its list readings and their references.
         self.list_readings(object)?;
+        // Workflow #450 FL-1b: the rule of its field lists, once each entry's structure passed.
+        self.field_list_rules(object)?;
         Ok(())
     }
 
@@ -6806,5 +6958,310 @@ mod tests {
             task,
         )
         .expect("a mark under inventory. outside the prefix is declared");
+    }
+
+    /// Workflow #450 FL-1b: the field list `list_a` of the group `row`, keyed by `name`, its
+    /// column `count` the field `amount`, starting where `mark/previous` does not show and
+    /// ending on `last`.
+    fn field_list() -> Value {
+        serde_json::json!({
+            "id": "list_a", "group": "row", "key_field": "name", "key_column": "id",
+            "columns": [{"column": "count", "field": "amount"}],
+            "minimum_confidence_milli": 900, "fact_key": "inventory.list.example_kind_a",
+            "valid_for_ms": 86_400_000, "start": {"forbidden": ["mark/previous"]},
+            "end": {"page_ids": ["last"]}
+        })
+    }
+
+    /// Workflow #450 FL-1b: a task schema `0.8` source task whose fields (`name`, `amount` and
+    /// the personal `code`, of the group `row`) are read on `item` and `last`, the fields'
+    /// outcome ending on `last`, whose tap `next` leads there, and which declares
+    /// [`field_list`].
+    fn field_list_task() -> Value {
+        let field = |id: &str, privacy: &str, value: Value| {
+            serde_json::json!({"id": id, "group": "row", "target_id": format!("text/{id}"),
+                               "required": false, "privacy": privacy, "trim": "whitespace_v1",
+                               "value": value})
+        };
+        serde_json::json!({
+            "schema_version": "0.8", "task_id": "task", "game": "neutral",
+            "server_scope": ["test"], "coordinate_space": {"width": 8, "height": 1},
+            "target_page": "last",
+            "post_admission_ocr": {
+                "mode": "fields_v1", "page_ids": ["item", "last"],
+                "fields": [
+                    field("name", "public", serde_json::json!({
+                        "type": "dictionary_entry", "dictionary": {"path": "names.json"}})),
+                    field("amount", "public", serde_json::json!({
+                        "type": "unsigned_integer", "min": 0,
+                        "max": 9_007_199_254_740_991_u64})),
+                    field("code", "personal", serde_json::json!({
+                        "type": "unsigned_integer", "min": 0, "max": 99}))
+                ],
+                "limits": {"max_frames": 256, "max_items": 64, "max_string_bytes": 64,
+                           "max_total_bytes": 4096, "max_truth_entries": 8},
+                "outcome_key": "fields_recorded"
+            },
+            "scheduling_outcome": {"mappings": [{"outcome_key": "fields_recorded",
+                                                 "effect": "no_designated_effect",
+                                                 "terminal_pages": ["last"]}]},
+            "operations": [{"id": "next", "from": "item", "to": "last",
+                            "click": {"kind": "point", "x": 1, "y": 0},
+                            "unguarded_trusted_coordinate": true}],
+            "field_lists": [field_list()]
+        })
+    }
+
+    /// The declaration gate of a source tree's `task.json` (`resource validate` and every parse).
+    fn field_list_gate(task: &Value) -> CliOutcome<()> {
+        declaration_file_requests(&[Bundle {
+            task_id: "task".to_owned(),
+            dir: PathBuf::from("resources/operations/task"),
+            data: task.clone(),
+        }])
+        .map(|_| ())
+    }
+
+    /// Workflow #450 FL-1b, the declaration gate's half (admission's half is the execution-kernel
+    /// test of the same name; `contracts/resource-readings.md`, "Lists from fields",
+    /// "Declaration"): the task declares its field list, on the source path and on the sealed
+    /// one, and a task without the member passes as before. Each row of the declaration table is
+    /// refused at its pointer: the member before task schema `0.8` (`UnconsumedField`), its
+    /// structure (an unknown, missing or mistyped member, a floor beyond 16 bits), the rules of
+    /// the task (the count, no fields, no outcome) and each entry's rule (`InvalidValue` at the
+    /// member). The parser's cross-reference refuses a condition's target that is no template or
+    /// colour target of the derived pack, naming its pointer.
+    #[test]
+    fn field_list_gate_and_admission_refusals() {
+        field_list_gate(&field_list_task()).expect("the field list is declared");
+        Declaration {
+            file: Path::new("resources/operations/task/task.json"),
+            schema: Some("0.8"),
+        }
+        .bundle(&field_list_task(), true)
+        .expect("the sealed task declares it");
+        let mut without = field_list_task();
+        without.as_object_mut().expect("task").remove("field_lists");
+        field_list_gate(&without).expect("a task without the member passes as before");
+
+        let task = |patch: &dyn Fn(&mut Value)| {
+            let mut task = field_list_task();
+            patch(&mut task);
+            task
+        };
+        let list = |patch: &dyn Fn(&mut Value)| {
+            let mut task = field_list_task();
+            patch(&mut task["field_lists"][0]);
+            task
+        };
+        let cases = [
+            // Task schemas before 0.8.
+            (
+                task(&|task| task["schema_version"] = serde_json::json!("0.7")),
+                "/field_lists",
+                "unconsumed_field",
+            ),
+            (
+                task(&|task| {
+                    task["schema_version"] = serde_json::json!("0.6");
+                    task.as_object_mut()
+                        .expect("task")
+                        .remove("post_admission_ocr");
+                }),
+                "/field_lists",
+                "unconsumed_field",
+            ),
+            // The structure.
+            (
+                task(&|task| task["field_lists"] = serde_json::json!({})),
+                "/field_lists",
+                "invalid_type",
+            ),
+            (
+                list(&|list| list["policy"] = serde_json::json!({})),
+                "/field_lists/0/policy",
+                "unknown_field",
+            ),
+            (
+                list(&|list| {
+                    list.as_object_mut().expect("list").remove("end");
+                }),
+                "/field_lists/0/end",
+                "missing_field",
+            ),
+            (
+                list(&|list| list["id"] = serde_json::json!(5)),
+                "/field_lists/0/id",
+                "invalid_type",
+            ),
+            (
+                list(&|list| list["columns"] = serde_json::json!({})),
+                "/field_lists/0/columns",
+                "invalid_type",
+            ),
+            (
+                list(&|list| list["columns"][0] = serde_json::json!({"column": "count"})),
+                "/field_lists/0/columns/0/field",
+                "missing_field",
+            ),
+            (
+                list(&|list| list["minimum_confidence_milli"] = serde_json::json!("high")),
+                "/field_lists/0/minimum_confidence_milli",
+                "invalid_type",
+            ),
+            (
+                list(&|list| list["minimum_confidence_milli"] = serde_json::json!(70_000)),
+                "/field_lists/0/minimum_confidence_milli",
+                "invalid_value",
+            ),
+            (
+                list(&|list| list["valid_for_ms"] = serde_json::json!(-1)),
+                "/field_lists/0/valid_for_ms",
+                "invalid_type",
+            ),
+            (
+                list(&|list| list["start"] = serde_json::json!({"pages": ["item"]})),
+                "/field_lists/0/start/pages",
+                "unknown_field",
+            ),
+            (
+                list(&|list| list["start"] = serde_json::json!({"forbidden": "mark/previous"})),
+                "/field_lists/0/start/forbidden",
+                "invalid_type",
+            ),
+            (
+                list(&|list| list["end"] = serde_json::json!({"page_ids": [5]})),
+                "/field_lists/0/end/page_ids/0",
+                "invalid_type",
+            ),
+            // The rules of the task.
+            (
+                task(&|task| task["field_lists"] = serde_json::json!([])),
+                "/field_lists",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["field_lists"] = serde_json::json!([field_list(), field_list()]);
+                }),
+                "/field_lists",
+                "invalid_value",
+            ),
+            (
+                task(&|task| {
+                    task["schema_version"] = serde_json::json!("0.9");
+                    task.as_object_mut()
+                        .expect("task")
+                        .remove("post_admission_ocr");
+                }),
+                "/post_admission_ocr",
+                "missing_field",
+            ),
+            (
+                task(&|task| {
+                    task.as_object_mut()
+                        .expect("task")
+                        .remove("scheduling_outcome");
+                }),
+                "/scheduling_outcome",
+                "missing_field",
+            ),
+            // Each entry's rule.
+            (
+                list(&|list| list["id"] = serde_json::json!("next")),
+                "/field_lists/0/id",
+                "invalid_value",
+            ),
+            (
+                list(&|list| list["group"] = serde_json::json!("missing")),
+                "/field_lists/0/group",
+                "invalid_value",
+            ),
+            (
+                list(&|list| list["key_field"] = serde_json::json!("amount")),
+                "/field_lists/0/key_field",
+                "invalid_value",
+            ),
+            (
+                list(&|list| list["key_column"] = serde_json::json!("Id")),
+                "/field_lists/0/key_column",
+                "invalid_value",
+            ),
+            (
+                list(&|list| list["columns"][0]["field"] = serde_json::json!("code")),
+                "/field_lists/0/columns/0/field",
+                "invalid_value",
+            ),
+            (
+                list(&|list| list["minimum_confidence_milli"] = serde_json::json!(0)),
+                "/field_lists/0/minimum_confidence_milli",
+                "invalid_value",
+            ),
+            (
+                list(&|list| list["fact_key"] = serde_json::json!("inventory.example_list")),
+                "/field_lists/0/fact_key",
+                "invalid_value",
+            ),
+            (
+                list(&|list| list["valid_for_ms"] = serde_json::json!(0)),
+                "/field_lists/0/valid_for_ms",
+                "invalid_value",
+            ),
+            (
+                list(&|list| list["start"] = serde_json::json!({})),
+                "/field_lists/0/start",
+                "invalid_value",
+            ),
+            (
+                list(&|list| list["end"] = serde_json::json!({"page_ids": ["item"]})),
+                "/field_lists/0/end/page_ids/0",
+                "invalid_value",
+            ),
+        ];
+        for (task, pointer, reason) in cases {
+            assert_eq!(
+                refusal_at(field_list_gate(&task)),
+                (pointer.to_owned(), reason.to_owned()),
+                "{task}"
+            );
+        }
+
+        // The cross-reference: a condition's targets are template or colour targets of the pack.
+        let pack = serde_json::json!({"targets": [
+            {"id": "mark/previous", "type": "color"},
+            {"id": "mark/final", "type": "template"},
+            {"id": "text/name", "type": "ocr"}
+        ]});
+        let bundles = |task: Value| {
+            vec![Bundle {
+                task_id: "task".to_owned(),
+                dir: PathBuf::from("resources/operations/task"),
+                data: task,
+            }]
+        };
+        let mut both = field_list_task();
+        both["field_lists"][0]["end"] = serde_json::json!(
+            {"page_ids": ["last"], "required": ["mark/final"], "forbidden": ["mark/previous"]});
+        super::super::validate_field_list_targets(&pack, &bundles(both))
+            .expect("template and colour targets");
+        for (condition, value, pointer) in [
+            (
+                "start",
+                serde_json::json!({"required": ["text/name"]}),
+                "/field_lists/0/start/required/0",
+            ),
+            (
+                "end",
+                serde_json::json!({"page_ids": ["last"], "forbidden": ["mark/absent"]}),
+                "/field_lists/0/end/forbidden/0",
+            ),
+        ] {
+            let mut task = field_list_task();
+            task["field_lists"][0][condition] = value;
+            let error = super::super::validate_field_list_targets(&pack, &bundles(task))
+                .expect_err("the target is refused");
+            assert_eq!(error.code, "package_invalid", "{}", error.message);
+            assert!(error.message.contains(pointer), "{}", error.message);
+        }
     }
 }

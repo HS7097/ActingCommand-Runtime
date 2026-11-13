@@ -17906,8 +17906,9 @@ MAPP-2's tests:
 - at most one member's application is alive after any sequence of these on the fake device.
 
 **Later slices**, named and not written here (device-group.md, "Later slices"): the order within
-one device (with the switch's time as a cost), the normalized weight (board #437 comment
-6799803829), the device-level actions by device, the console and the command line, and clones.
+one device (written by the slice ORD-1; the time a switch takes counts in no order and not in a
+run's own duration), the normalized weight (board #437 comment 6799803829), the device-level
+actions by device, the console and the command line, and clones.
 
 **What changes live.** This slice changes no build. MAPP-1a shipped in 0.12.56 with every group
 of several refused at load; MAPP-1b, MAPP-2 and the order within one device reach a root together
@@ -19640,6 +19641,372 @@ with the members `commit` (the live build), `checks` and `failed` (`no_seeding`)
 add`, the journal's input naming the added alias) and
 `postcheck_454_config_replace_passed_check_keeps_its_record` (checks that pass: the step `done`
 with the same three members, `failed` empty, no row failed). No existing test changes.
+
+### 1.342 Slice MAPP-2a (0.12.59): the parts of the application switch: another member's stop under the device's key, a startup run on a borrowed key, the stopped member's page forgotten (Workflow #437; the contract of §1.323 and [device-group.md](device-group.md), "The switch before a run"; the design survey `rd-1113/mapp-order-design.md`, its findings F1, F2 and F4 and its row "MAPP-2a"; the coordinator's rulings of 11-13 on board #437, not the owner's words; coordinator work order `rd-1113/brief-437-mapp2a.md`, read on main `98924e28`)
+
+1.342 is the next free number after §1.341. The coordinator cut MAPP-2 (§1.323, "The code slices")
+in two: MAPP-2a builds the switch's parts and their one entry with no caller in the Runtime;
+MAPP-2b calls the switch from the run paths. A build still refuses every group of several at load
+(`several_members_unsupported`, unchanged), so no configuration reaches this slice's code: its tests
+hand the host the member → device key map and the group's name as the assembly builds them.
+
+| Part | Built | Where |
+|---|---|---|
+| F1: another member's stop under the device's key | yes | `crates/runtime-host/src/host/switch.rs`, `HostShared::stop_member_application`: the key's holder a member of a group of several and the member to stop another member of it, the key validated as the device's (`validate_write`), else refused before any device step (`instance_mismatch`, or the scheduler's refusal); a host-minted `ApplicationLifecycle { stop }` request for that member under the switch's causation id (`command.received`, `command.validated`), then `HostShared::control_member_application` (`host/input.rs`), the existing application command on that member's registration, package and links (`scheduler.admitted`, `application.intent`, `application.completed` or `application.failed`, all under the stopped member's instance with the key's lease); the session the stop used closed under the key (`close_member_resources_result`, `host/resource_close.rs`); a failure written as the rung's stop writes it, a fatal failure of that member's own application backend fencing that member (#411 A46) |
+| F2: a startup run on a borrowed key that hands the key back | yes | `host/startup_package.rs`, `HostShared::run_startup_package_on_borrowed_key` and `borrowed_key_admits`; `host/contained_task.rs`, `run_prepared_package_on_borrowed_key`, `ContainedRunControl::borrows_key`: the run's end neither renews the key (`enter_run_end_phase`) nor ends it (the success path's release, and `cleanup_composite_failure_with_run_links` in `host/resource_close.rs`, which settles an unconfirmed close only; its read of the run table tells only such a run apart, and a read that fails counts as not borrowed, so every other run's failed end takes its path unchanged, its release included); the key's token unchanged and valid afterwards, on success and on failure, checked again at the end |
+| F4: the stopped member's page forgotten | yes | `host/runtime_facts.rs`, `HostShared::forget_stopped_application_facts`: `application.foreground` and `task.page` invalidated with `device_closed` once the force-stop succeeded, before the close of the session it used and whatever that close does (a failed close still fails the step `stop`) |
+| the one entry | yes | `HostShared::switch_application` (`host/switch.rs`): the key validated, one foreground read through the member's registration (`observe_foreground_application`; an ADB failure handled as the gate's), the member's own package in front leaving everything alone; else the key's time checked, the member in front stopped, or every other member with no member's package in front, then the member's startup package on the key, all under one causation id. Reached only through the public `RuntimeHost::switch_application`, which nothing in the Runtime calls |
+| which member is in front | yes | the `application_id` each registration assigns, from memory: `ExecutionBackendProvider::assigned_application_id` (default `None`; `crates/execution-kernel/src/provider.rs`), `ExecutionKernel::assigned_application_id`, the device registry's real entry (`crates/runtime-host/src/provider.rs`). No other device query |
+
+**The code.** `application_switch_failed` (`runtime-host`, error, ladder class `none`, `since`
+0.12.59; values `alias` the member to run, `application_switch_step`, `failure_code` the step's own
+code and `application_id` the package the step concerned, required; the step's failure its
+`caused_by` link; description, common causes and handling written) and the vocabulary
+`application_switch_step` (`foreground_read`, `stop`, `startup_package`; `ApplicationSwitchStep`,
+`crates/runtime-host/src/codes.rs`), the value key `application_switch_step` in the one key table
+(`crates/actingcommand-contract/src/outcome/keys.rs`) and the catalog, and the location
+`switch_application`. The index is regenerated (`ci/outcome_codes_index.py`). The parts return
+this failure; nothing settles a run with it yet. `runtime-outcomes` stays 1; no configuration key,
+record type, payload member, phase word, fact key, tag, closed ledger vocabulary, wire shape or
+interface revision is added or moved.
+
+**Where the build completes the contract.**
+
+1. *The key's time* (the survey's "not verified"). The borrowed key is never renewed: the
+   scheduler takes a key only as the whole token it holds, expiry included (`validate_active_lease`,
+   `crates/scheduler/src/lib.rs`), so a renewal (the startup package's TTL renewal of
+   `run_package_on_key`, `host/startup_package.rs`) mints a token the run that holds the key no
+   longer has. Instead, before any stop of the switch, the key's remaining time must cover
+   the startup run's lease time (its response deadline and the heartbeat reserve) and the time the
+   run asks to keep (`after_ms`: its own lease time), else the step `startup_package` fails with
+   `contained_task_deadline_unavailable` and nothing is stopped; the startup run's deadline is the
+   earlier of its response deadline and the key's expiry less `after_ms`. So a startup run that ends
+   by its deadline leaves the run at least its own lease time. A policy dispatch's lease is sized
+   today for its run alone (`contained_task_lease_ttl`, `host/policy_dispatch.rs`), so a key granted
+   today is refused: MAPP-2b sizes a member's dispatch lease for the startup run and the run (the
+   scheduler takes at most `ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS` plus the reserve).
+2. *Who reads `application.foreground`* (the survey's "not verified"): the foreground gate, which
+   reads its stored value only to record a reading that changed (`record_foreground_application`,
+   `host/foreground_gate.rs`): after the drop the next reading is recorded; the overview's
+   `foreground` block (`crates/lab-ops/src/overview.rs`, `actingctl overview`, `ac_overview`, the
+   Lab), which shows no package rather than one no longer running; and the readers of every fact or
+   record (the fact listing, the ledger's `--fact-key` filter), which show the drop. The policy
+   reads none of it. Dropping is right for each: the stopped application shows no foreground.
+3. *The session.* The stop opens a session for the stopped member (the kernel's application
+   command runs in one); it is closed under the key before the stop returns, whatever its result,
+   so no two members' sessions stay open ([device-group.md](device-group.md), "Device-level
+   actions", row 7).
+4. *Front is the member's own package.* Nothing more is done: no stop and no startup run (the
+   contract's step 1), and nothing is recorded.
+5. *A key that no longer validates* fails the step `foreground_read` before the read; a key the
+   startup run lost fails the step `startup_package`.
+6. *Not changed in behaviour:* `application_control` (now `control_application_of` with the key's
+   own instance), the ladder's stop, `prepare_application_resources_result` and
+   `retire_instance_resources` (now naming the instance, the token's own for every existing
+   caller), `nemu_close_check` (the same), `prepare_startup_package` (its causation id now minted
+   before `prepare_startup_package_with`), `host_package_failure` (over `host_package_failure_error`),
+   a run's success path (its answer built before its release) and
+   `cleanup_composite_failure_with_run_links` for every run that borrows no key (the row F2 above:
+   its added read of the run table writes nothing and holds no lock past itself, and a poisoned
+   table reads as "not borrowed", so the release follows as before). The fake device of the host's
+   tests answers each instance's own `application_id` when a test names one, `neutral.application`
+   otherwise, and records the application commands it took.
+7. *Two refusals come back as themselves*, not as `application_switch_failed`: a member to run, a
+   key's holder or a member to stop that the registry does not hold (`instance_mismatch`), and a
+   member to run or a member to stop whose registration assigns no application
+   (`application_effect_requires_assigned_application`). That code's required `alias` or
+   `application_id` would name nothing there, so the contract's "When the switch fails" says so
+   rather than the code filling a value; neither is reachable while the load refuses every group
+   of several.
+
+**Not built (MAPP-2b and later).** The caller: the switch in `run_scheduled_contained_task` between
+`contained_task.rs:8079` and `:8080`, in the direct run, an `ApplicationLifecycle` `launch` or
+`restart`, the ladder's application restart rung and a hold's release; the clock (the switch's time
+out of the dispatch clock, the run-duration sample and the budget); the failed settlement with
+`application_switch_failed`; the member's switch cooldown and its key
+`scheduling.device_group.switch_failure_cooldown_ms`; a member's dispatch lease sized for the
+switch and the run. The order within one device (ORD-1) is the coordinator's to brief.
+
+**Tests.** `crates/runtime-host/src/tests/gate_mapp2a.rs` (gate map `host.toml`, "#437 MAPP-2a"):
+`mapp2a_a_stop_acts_on_the_other_members_package_under_the_holders_key_and_forgets_its_page`,
+`mapp2a_a_key_of_another_device_and_a_member_outside_the_group_are_refused_before_any_device_step`,
+`mapp2a_a_startup_run_on_a_borrowed_key_hands_the_same_key_back_and_the_queued_claim_waits`,
+`mapp2a_the_entry_stops_the_member_in_front_or_every_other_member_and_then_runs_the_startup_package`,
+`mapp2a_a_failure_at_each_step_names_its_step_and_its_cause`,
+`mapp2a_a_lone_instances_request_path_never_reaches_the_switch` and
+`mapp2a_a_stop_whose_session_close_fails_still_forgets_the_stopped_members_page` (the close's
+failure injected after the stop through a test-only switch of the host,
+`RuntimeHost::fail_next_member_close_for_test`, since the fake device keeps nothing open there to
+fail). The MAPP-1 gates (policy, host, actingd) are unchanged; no test changes.
+
+**At deploy.** Nothing: the switch has no caller, and the load refuses every group of several. The
+catalog gains one code and one vocabulary.
+
+**Rollback** (below 0.12.59). Nothing is persisted by MAPP-2a; the build before it reads every
+record this one writes.
+
+### 1.343 Slice FL-1 (0.12.59): field lists, the declaration, the list builder, the gate and the kernel; `package` revision 11 (Workflow #450; the owner approved the feature on 11-13, board #450; the design note `rd-1113/design-list-from-fields.md`, design (a), read on main `abee78ed`, with the coordinator's decisions of its section 7 and the work order's rulings, not the owner's words; coordinator work order `rd-1113/brief-450-fl1.md`, read on main `98924e28`)
+
+1.342 was the next free section on main `10f538ea`, merged into this slice (1.340 and 1.341 were
+taken first); the integration train 0.12.59b renumbered it 1.343, after §1.342 (MAPP-2a). The
+design note's slices FL-0 (the contract text), FL-1a (the declaration
+and the pure list builder) and FL-1b (the gate, admission, the collector's bookkeeping, the
+end-frame traces, the run kinds, the catalog and the `package` raise) are one pull request, because
+FL-1a alone would be code no caller reaches. [resource-readings.md](resource-readings.md), "Lists
+from fields", is the contract; [ocr-fields.md](ocr-fields.md), [instance-fact-store.md](instance-fact-store.md),
+"List reading facts" and the capacity table, [selection-policy.md](selection-policy.md), "List
+readings and field lists", and the `package` row 11 of
+[component-interfaces.md](component-interfaces.md) change the sentences that said a list reading
+was the one producer of a record list.
+
+**What it builds.** A task schema `0.8` or `0.9` task that declares `post_admission_ocr`
+(`fields_v1`) and `scheduling_outcome` may declare one `field_lists` entry: a group of its fields,
+keyed by a dictionary field, its columns other fields of the group, with the list's own confidence
+floor, key, lifetime, `start` and `end`. The rule of the declaration is one function of the contract
+crate (`validate_field_lists` in `taskflow.rs`, beside `MAX_LIST_READINGS`), shared by the
+declaration gate (`Declaration::field_lists` for the structure, `Declaration::field_list_rules` for
+the rule, `crates/pack-containment/src/source/declarations.rs`; the parser's cross-reference of the
+conditions' targets, `validate_field_list_targets`, `source/mod.rs`) and admission
+(`prepare_field_lists`, `crates/execution-kernel/src/contained_task/field_list.rs`, after the
+fields are prepared). On each collected frame the fields collector keeps the key's and the
+columns' readings with their confidences; the list judges `start` on its first frame and `end` on
+each; on its end frame it is built (`field_list_of`) and recorded as a `read_list` step's list is
+(`ListReadingFrame` when whole, then `ListReading`); a frame of the group after that fails the run;
+at a successful end a list that met no end records `list_end_unseen`. Every repeat fails the list
+(the coordinator's decision 2 of section 7: the core never folds, sums or picks one).
+
+**Two facts of the code on `98924e28` the design note did not name, and how they are met without
+moving the host.** (1) The host takes `ListReadingMiss` as a two-member value it also builds itself
+(`list_bytes_exceeded`), so the frames a field list's miss names ride in memory on the list's
+`ListReadingDeclaration` (`frame_indices`, empty for a `read_list` step and a whole list), and
+`ListReadingMiss::outcome` adds them as the optional value `frame_indices`. (2) The host binds a
+miss to the frame it captured last and stops on a mismatch (`resource_reading_poison`,
+`contained_task_resource_reading_frame_mismatch`), and the kernel's success paths do not carry
+that frame. For `list_end_unseen` the kernel therefore notes the device capture time of every frame
+a run captures (the entry frame, every sample and observation frame, every agreement frame), only
+for a task that declares a field list, and binds the miss to the latest. A declared operation's one
+step (#412 Lab B-3), a bound recovery entry and `recognize_only` read no list.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| FL-1 | a task's `field_lists` (`FieldListDeclaration`, `FieldListColumn`, `FieldListCondition`) and its rule `validate_field_lists` | package member | FL-1 | the resource repository (FL-3) | `package` 11; refused before it at the declaration gate (`UnknownField` at `/field_lists`) |
+| FL-2 | `reading_problem` + `list_start_unseen`, `list_end_unseen` | outcome vocabulary words | FL-1 | the kernel | catalog only; `runtime-outcomes` stays 1 |
+| FL-3 | the key `frame_indices` (`list<integer>`), optional on `contained_task_resource_reading_unresolved` | outcome value key | FL-1 | the kernel | the code's review is pending, so it may gain an optional value (§1.291 S168C-3) |
+| FL-4 | `ListReadingDeclaration.frame_indices` | in-memory trace member (not persisted) | FL-1 | the kernel | the host's `ListReading` arms read it through `ListReadingMiss::outcome` unchanged |
+| FL-5 | `inventory.list.<name>` written by a field list | `fact.published` of the existing `record_list` (no new shape) | FL-1 (kernel), FL-2 (host's tests) | the host | `ledger` stays 8: a miss is an existing warning row whose outcome gains words and an optional value a reader relays unchanged |
+| FL-6 | `package` [3, 10] → [3, 11] | interface revision | FL-1 | the resource repository's packer (FL-3) | component-interfaces.md row 11 |
+
+**The raise, as NOTICES-2 made it (§1.335).** `package` [3, 10] → [3, 11]:
+`distribution/windows/component-interfaces.json`, the architecture pin
+(`tools/actinglab-architecture/tests/component_interfaces.rs`, its `V0120` and its history
+comment), the row 11 of component-interfaces.md, and this section. The design note's revision 10
+was taken by NOTICES-2 in 0.12.58; S168-5b's planned judge takes the next free revision after 11.
+**Every reader of the `package` range, as §1.335 checked them:** `place` (the Lab's rescue module)
+reads its own installer's range, so `place` of 0.12.58 ([3, 10]) refuses a bundle declaring
+[11, 11] with `interface_edge` at `<zip>\interfaces.json`, in the plan, before the hold and any
+write, and this release's takes it; the update's and the rollback's `package` edges compare the
+register's range, unknown for every root (the warning `pack_declaration_unknown`); the Runtime reads
+no `interfaces.json` and no range, and a Runtime before 0.12.59 refuses a package that declares the
+member at its declaration gate, on the source path and on the sealed task admission runs the gate
+on; `resource verify`'s `bundle` step writes [3, 3], or [10, 10] for a notices bundle, and does not
+look at `field_lists`, so the packer of FL-3 declares [11, 11] itself. None of them refuses a bundle
+or a root that is accepted today. A pack without the member keeps its revision.
+
+**What programs of an earlier release do** with a package that declares `field_lists`: the Runtime
+(admission, `package check`, the source parse) refuses it `resource_declaration_invalid`,
+`UnknownField` at `/field_lists`; the rescue module's `place` refuses its bundle `interface_edge`.
+Neither ignores the member.
+
+**Not moved.** `ledger` (FL-5); `runtime-client` (the list travels in `InstanceFactSnapshot`, and
+the fields report and its projection do not change); `actingd-config` (no key: the bounds are the
+format's); `runtime-outcomes` (catalog only: two words, one key, the code's description; the index
+regenerated, unchanged); `runtime-host` product code, the fact store, the selection policy, the scan
+session and `read_list` (FL-2 is the host's slice). No outcome code is added.
+
+**The order of the slices.** FL-0, FL-1a and FL-1b (this section, one pull request), then FL-2 (the
+host's halves on a fake device, host gate rows `field_list_published_like_a_list`,
+`field_list_miss_keeps_record`, `field_list_failed_or_cancelled_run_publishes_nothing`,
+`field_list_full_store_refused`, `field_list_row_read_by_ledger_8`), both in the Runtime release of
+0.12.59, deployed; then FL-3, the resource repository's package (its bundle declares `package`
+[11, 11]). The slice that places the first such package books its *L*, one identity on that
+instance, in instance-fact-store.md's capacity table.
+
+**At deploy.** The Runtime declares `package` [3, 11]; nothing changes for a package without the
+member, and no released package declares it before FL-3. Rollback to 0.12.58 stays open while no
+root is placed from a bundle that uses it; after that, 0.12.58 refuses that package at admission.
+
+**After an independent review (11-13, the coordinator's rulings, in this pull request).**
+- *Which frames are list frames.* A list frame is a frame a step's field observation captures; the
+  frame the kernel captures again before an input when an action gap is configured
+  (`ObservationBeforeInput`, ACT-2) is not one, so the field lists are out of the collector for that
+  one capture and back after it, and the fields report takes the frame as before. Before this, every
+  item but the last reached the list twice under any gap and the list always failed
+  `list_duplicate_key`; now which frames a list is made of does not depend on the gap's
+  configuration. This is no fold by key and value: the core still never folds.
+- *No new work for a package without the member.* The start of a run's capture record returns at
+  once when no list is admitted (no lock), and the fields collector keeps the confidences only while
+  the run reads a field list (no insert). What remains on such a package's run path is a test of an
+  empty list or of an absent relay at each capture, at each collected frame and at the run's
+  successful end: no lock, no allocation, no insert.
+- *One frame per item.* The contract ("Lists from fields", "When the list is whole", item 5) warns
+  package authors that an observation window, a wait step that holds a field page or a confirmation's
+  wait page that is a field page collects one item on several frames inside one step, and that a
+  stability termination ends a run only after steps whose frames did not change.
+- *The revision a bundle declares.* `resource verify`'s `bundle` step keeps writing [3, 3], or
+  [10, 10] for a notices bundle, as it wrote neither 8 nor 9: a bundle whose packs use a field list
+  declares `package` [11, 11] itself (the resource repository's packer, FL-3).
+
+Tests. Contract gate row "#450 FL-1": `field_list_declaration_rules`
+(`crates/actingcommand-contract/src/taskflow/gate_450_fl1.rs`: the declaration reads back as
+written and refuses an unknown member; schemas 0.8 and 0.9, a list without columns, a string column,
+pages with and without the game prefix are declared; each rule of the task and of an entry is
+refused at its pointer with its reason, and admission's detail is `<id>:<member>`). Exec gate row
+"#450 FL-1": the kernel's `field_list_rows_whole`, `field_list_repeats`,
+`field_list_unresolved_rows`, `field_list_start_end` (the builder over frames made in the test),
+`field_list_run_records_traces`, `field_list_run_end_and_start_unseen`,
+`field_list_frame_after_end_fails_run`,
+`field_list_under_an_action_gap` (a scripted device and a fixture provider; the last, after the
+review: with an action gap three items give a whole list of three rows, the fields report holds its
+five frames as a package without the member gets them, and the list's frame trace lands on the last
+frame), `field_list_gate_and_admission_refusals`,
+`field_list_absent_package_runs_as_before` and
+`field_list_refused_under_an_older_schema_or_as_a_layer`
+(`crates/execution-kernel/src/contained_task/gate_450_fl1.rs`), and the declaration gate's
+`field_list_gate_and_admission_refusals` (`crates/pack-containment/src/source/declarations.rs`).
+Adapted for the build only, no assertion changed: the test literals of `TaskProgram`
+(`value_test_tests.rs`, `unique_tests.rs`, `text_locate_tests.rs` three times, one in
+`contained_task.rs`) gain `field_lists: Default::default()`, and the `ListReadingDeclaration` of
+`gate_428_s168_4.rs`'s `list_reading_miss_publishes_nothing` gains an empty `frame_indices`. The
+architecture pin `the_runtime_declares_each_v0120_interface_revision_once` holds `package` [3, 11].
+
+### 1.344 Slice REC-ARCH (0.12.59): a recording can be ended as material only, reopened later, and a swipe becomes a step (Workflow #449; the owner approved the feature on 2026-11-13; the rules are the coordinator's, not the owner's words; coordinator work orders `rd-1113/brief-449-record-archive.md`, read on main `98924e28`, `rd-1113/brief-1675-fix1.md` and `rd-1113/brief-1675-fix2.md`)
+
+1.342 was the next free number on main `10f538ea`; until fix 2 the entry stood in §1.287 after
+slice LAB-5G4c's, which added `record draft`. The integration train 0.12.59b renumbered it 1.344,
+after §1.342 (MAPP-2a) and §1.343 (FL-1).
+
+Coordinator work order `rd-1113/brief-449-record-archive.md`, on main `98924e28`; board issue
+#449 (the owner approved the feature on 2026-11-13; the rules below are the coordinator's, not the
+owner's words). The contract is [lab-recording.md](lab-recording.md), "Archiving" and "`--record`
+on device commands"; the rows are `record archive` and `record reopen` of
+[lab-operations.json](lab-operations.json).
+
+**What it is.** Two operations of the authoring module, commands of actinglab (also as `session
+record archive|reopen`), calls of `serve --stdio` and tools of the Lab's MCP server
+(`ac_record_archive`, `ac_record_reopen`, through a `serve` child): `record archive` ends the
+instance's active recording whatever its steps, writing a manifest of its step table beside its
+frames and keeping every file, optionally copying them; `record reopen` makes an archived recording
+the active one again. A swipe sent with `--record` on a step without a declared effect becomes that
+step's effect, and every answer of a `--record` action names the recording and the step it entered.
+
+**Why.** People also record only to keep material, the frames and where they tapped, while they
+operate by hand. `record stop` exists to build a package of linear steps, so it refuses such a
+recording (`record_step_without_recognition`, `record_final_step_has_click`); the session stayed
+active, the instance could start another recording only with `record start --force` (which
+abandons the old directory), and a recording left active collects every later `--record` action
+on the instance, whoever sends it (one grew from 51 to 91 steps on a production root). A swipe sent
+with `--record` was not entered in the step table.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RA-1 | `record archive [--record-id <id>] [--copy-to <dir>]` | behaviour, operation table row | REC-ARCH | — | the instance's active recording (or an archived one named by its id; fix 1: or one `record start --force` left behind, RA-11); requires nothing of the steps; refuses with no active recording (`record_session_not_active`), an id that names no archived recording of the instance (`record_not_archived`, `state`), another instance's (`record_instance_mismatch`), a step table missing or unreadable (`record_lab_unavailable`); global `--dry-run` refused `dry_run_unsupported` (alternative `record status`) |
+| RA-2 | `archive-manifest-<n>.json`, schema `actingcommand.lab-recording-archive.v1` | a file of the Lab recording's directory (no ledger shape) | REC-ARCH | `record archive` | header `record_id`, `instance`, `task_id` and `started_at_unix_ms` (the session header's, read from the step table, which carries the same four: fix 1), `application{game, server}` (the step table's: the session header names no application), `archived_at_unix_ms`, `step_count`, `written_by` (actinglab's commit), `step_table{file, sha256}`; one row per step `{step, kind, frames[{frame_id, role, file, sha256}], before, after, page, package, tap, swipe, at_unix_ms, request_id}`, `kind` `tap`, `swipe`, `none` or the step table's word for another effect; `n` one above the highest there, never a file replaced; written only from the step table and the session header, no Runtime request, no frame's pixels read |
+| RA-3 | the session header's `status` `archived` | the `record` command file's word (no ledger shape) | REC-ARCH | `record archive` | written by actinglab after the manifest, before any copy; the step table is not rewritten (it still says `active`); `record status` shows `record.status` and `lab.status` `archived`; `record start` needs no `--force`; `record mark`, `record step`, `record amend` and the `--record` device commands answer `record_session_not_active` as for any session not active; `record stop` answers `record_session_not_active` with `details{reason: "recording_archived", record_id}` before anything is read or written |
+| RA-4 | `--copy-to <dir>` | behaviour | REC-ARCH | — | fix 1: an absolute path, else (empty, white space only, relative) `validation_failed` with `details{path, reason}` (`empty`, `not_absolute`) before the session is read or anything is written, on the command line and in `serve --stdio` (the Lab's MCP server refuses it itself, `arguments_invalid` `not_absolute`, as every path parameter); a directory that does not exist (created) or is empty, else `record_archive_target_not_empty` before anything is written; `recording.json`, the manifest and every frame file copied, then each copy hashed against the manifest; a file not copied `record_state_io_failed`, a copy that does not verify `record_archive_verify_failed`, both naming the file and the reason with `record_id`, `archived: true` and `manifest`; nothing deleted, the recording stays archived |
+| RA-5 | an archived recording named again (`--record-id`) | behaviour | REC-ARCH | — | no second manifest: the latest one read and every file it lists hashed in the recording's directory (`record_archive_verify_failed`, `checked: "recording"`), then the copy; the retry after a failed copy; `status: "already_archived"`, `manifest.written: false` |
+| RA-6 | `record reopen [--record-id <id>]` | behaviour, operation table row | REC-ARCH | — | the session header only: its `status` `active` when it names the recording, else a header of the recording in place of the one there (as `record start` replaces one: `holder` and `lease_id` null, no `steps`); refused while another recording is active (`record_session_active`, reused) and on a recording that is not archived (`record_not_archived`); every manifest stays, a later archive writes the next one; then `record mark` and `record stop` build the package the recording would have built had it never been archived |
+| RA-7 | a recorded swipe | behaviour, Lab file members unchanged | REC-ARCH | `do --capture --record --swipe` | on the open step that declares no effect: the step's click a drag from `{x1, y1, 1, 1}` to `{x2, y2, 1, 1}` over the duration, `source: "swipe"`, executed as one swipe (rule `explicit`) and recorded as any execution; points inside the frame and 1..=60000 ms, else `validation_failed`; `--tap`, `--tap-rect`, `--seed` with it `validation_failed`. Before: `record_step_click_missing`. `record stop` generates it as the standard `drag` click of the task schema as it is (a box of one pixel presses its point): no refusal and no code added; a recording without swipe steps generates the same bytes |
+| RA-8 | `record_started_at_unix_ms` in the `record` member of `capture --record`, `observe --capture --record`, `do --capture --record` and `session app … --record` | answer member, additive | REC-ARCH | — | with `record_id` and `step`, which they had, the answer names the recording it entered and the step it became; nothing is refused because another process started the recording |
+| RA-9 | `record_archive_target_not_empty`, `record_archive_verify_failed`, `record_not_archived` | new codes of the owner `lab` (error, `none`, pending, since 0.12.59) | REC-ARCH | the Lab | registered beside the recording's other registered codes (`crates/lab/src/codes.rs`, `contracts/outcome-codes/lab.json`); the index regenerated and current. Reused: `record_session_not_active` (no active recording; an archived one stopped), `record_session_active` (another recording active, as `record start` uses it), `record_instance_mismatch`, `record_lab_unavailable`, `record_state_io_failed` |
+| RA-10 | the rows offered | contract table, behaviour | REC-ARCH | — | slice `REC-ARCH` in actinglab's `BUILT_SLICES` and the new MCP server's `ACTINGLAB_SLICES` (held equal by its test), as R-6 and R-8 offered theirs; both rows in `own_flags::READ_LIST_ROWS` with their read lists (`RECORD_ARCHIVE_READS`, `RECORD_REOPEN_READS`), `engine::COMMANDS` (`record archive`, `record reopen`, `AsWritten`), `capabilities` and the dry-run declaration (`dry_run_unsupported`, also `session record archive|reopen`); `help`, completion and `serve --stdio` read the table |
+| RA-11 | a recording `record start --force` left behind (fix 1) | behaviour, answer member additive | REC-ARCH | `record archive --record-id` | its directory and step table (`active`) intact, the session header another recording's: `record archive --record-id <id>` writes its manifest from that step table and copies with `--copy-to` as any recording; it writes no session header (the header belongs to the other recording): `record` `null`, `lab.session_header{record_id, status, changed: false}` (also for an archived recording whose header a later `record start` replaced); once it has a manifest, named again as any archived one, and `record reopen --record-id` makes it active under RA-6 (refused while another is active). Nothing guessed: the replaced header's `holder`, `lease_id` and `record step` entries are not restored, and `record stop` reads none of them. Before: `record_not_archived`, `state: "unarchived"` |
+| RA-12 | a session header that fails after the manifest (fix 1) | behaviour, error details additive | REC-ARCH | — | when actinglab cannot read or write the session header once the manifest is there, its failure adds `record_id` and `manifest{file, path, sha256, steps, written}` to its details, so that the manifest's path is known; before, the failure named the header only |
+
+**Traces.** `record stop` leaves no client-action record and no other trace when it ends a session
+(the new MCP server records a client action after `observe` and `do` with `capture` only, and
+actinglab records none for `record`): `record archive` and `record reopen` leave none either.
+Each takes the recording lock, whose holder file names the command, as every state-writing record
+command does.
+
+**Tests.** New, the gate "#449 REC-ARCH" of `contracts/test-gates/apps.toml`.
+`crates/lab/src/gate_449_rec_arch.rs` (temporary roots, 16x9 frames, no Runtime):
+`rec_arch_a_swipe_is_a_step_and_record_stop_generates_it_as_a_drag`,
+`rec_arch_steps_of_several_callers_archive_and_the_rows_equal_the_step_table`,
+`rec_arch_a_step_table_written_by_0_12_54_archives`,
+`rec_arch_a_recorded_frame_tap_and_swipe_name_their_recording_and_step`,
+`rec_arch_without_an_active_recording_or_with_an_unknown_id_nothing_is_archived`;
+`apps/actinglab/src/tests/gate_449_rec_arch.rs` (actinglab's command line, the steps recorded
+through the Lab's recording API as the `--record` commands record them):
+`rec_arch_record_archive_ends_a_recording_that_record_stop_refuses`,
+`rec_arch_the_copy_goes_only_into_a_new_or_an_empty_directory`,
+`rec_arch_a_copy_that_does_not_verify_names_the_file_and_the_retry_by_id_copies` (the copy's
+check fails through the module's tests' seam, a stored file of the temporary root edited; no
+production branch for the test), `rec_arch_reopen_builds_the_package_the_recording_would_have_built`
+(the built files of a twin never archived compared but the provenance's `generated_at_unix_ms`,
+the step table's last write time). The three gates that hold the operation table to the code
+cover the rows without a change of theirs: `gate_434_lab5b2::every_debugging_and_authoring_row_has_one_kind`,
+`gate_434_lab5b3::lenient_rows_match_their_reads` and the MCP server's
+`gate_434_lab5g2a::mcp_tools_from_op_table`. **Adapted**, where the requirement moves what they
+pin: `gate_390_lab2::lab2_do_capture_record_holds_a_long_press_and_swipes_only_a_declared_drag`,
+whose last part pinned the refusal of a swipe on a step without a declared click
+(`record_step_click_missing`), now the swipe step it declares (item 6); and
+`gate_434_lab5b4::every_own_command_refuses_a_flag_it_does_not_read`, whose list of the
+register's read-list commands pins `READ_LIST_ROWS`: 29 commands become 31, the two rows by their
+words. No other existing test changes. Fix 1 (work order `rd-1113/brief-1675-fix1.md`, after the
+independent review) adds three to the same gate, in `apps/actinglab/src/tests/gate_449_rec_arch.rs`:
+`rec_arch_a_copy_target_that_is_no_absolute_path_is_refused` (`--copy-to` empty, of white space
+only and relative, on the command line and through `serve --stdio`: each `validation_failed` with
+its reason and path, the session directory as it was but the recording lock's own files, nothing at
+the target or in the current directory, the recording still active),
+`rec_arch_an_archived_recording_refuses_stop_and_reopens_by_its_header` (`record stop` on an
+archived recording `record_session_not_active`, `reason: "recording_archived"`, its id, nothing
+written; `record reopen` without an id reopens the recording the header names, the header kept but
+for its status; an archive after the reopen writes `archive-manifest-2.json`, the first unchanged)
+and `rec_arch_a_recording_record_start_force_left_behind_is_archived_by_its_id` (RA-11: archived by
+id and copied, the manifest's header and rows from its step table, `record` `null` and
+`lab.session_header` the other recording's, `record status` as before; named again no second
+manifest; reopen refused while the other is active, then a header of it in place of the other's;
+its step table keeps its bytes). RA-12 has no test: no seam of the module's tests makes the header
+fail after the manifest without a production branch for the test. No existing test changes.
+
+Fix 2 (work order `rd-1113/brief-1675-fix2.md`, after the pull request's CI): no test is added
+and none asserts anything else. In `crates/lab/src/gate_449_rec_arch.rs` the step table of
+`rec_arch_a_step_table_written_by_0_12_54_archives` is built from its parts, each its own `json!`
+(the one literal exceeded the macro's recursion limit, and the crate's tests did not build), and
+the bench's helpers that record a tap and a swipe through `record_plan_click` and
+`record_commit_click` are `commit_tap` and `commit_swipe`: the guard
+`lab_input_face_is_semantic_input_executor` reads every method call named like a `LabInputPort`
+write as one, and the tests call no input port.
+
+**Interface.** None raised, following the precedent of slice LAB-5G4c (a row offered, "Interface.
+None raised") and §9.4 of [lab-two-entries.md](lab-two-entries.md) ("the schema string changes only
+when a member's meaning changes"): nothing on the wire, in the ledger or in a file a released peer
+reads changes; the table's schema string stays; the manifest is a new Lab file no other program
+reads; the answer members are additive.
+
+**Where REC-ARCH differs from its work order's letter.**
+
+- (a) The manifest header also carries `task_id` (the session header's) and `step_table{file,
+  sha256}` (the step table file's hash, against which a copy is checked), and `application` is the
+  step table's game and server, since the session header names no application.
+- (b) A row's `kind` names the step table's word for effects other than a tap, a swipe or none
+  (`long_press`, the two segmented drags, `application`), so that a recording with them still
+  archives whole; `tap` and `swipe` are filled for those two kinds only.
+- (c) Superseded by fix 1 (RA-11, the coordinator's ruling on the independent review): a recording
+  left behind by `record start --force` is archived by its id from its own step table, its session
+  header left as it is. Before fix 1 it was refused (`record_not_archived`, `state:
+  "unarchived"`).
+
+**At deploy.** `record archive` and `record reopen` exist once the Tools of this release are in
+place: on actinglab's command line, in `serve --stdio` and, through its `serve` children, in the
+Lab's MCP server (`ac_record_archive`, `ac_record_reopen`). Today's MCP server (`actingctl
+mcp-serve`) does not gain them. A recording left active by an earlier release (its step table is in
+the 0.12.47 format this release reads) can be archived by the new command line, and so (fix 1) can
+one `record start --force` left behind, by its id. Nothing is migrated.
+
+**Rollback** (to the release before it). An archived session header (`status: "archived"`) reads
+as a session that is not active: the earlier `record start` starts the next one without `--force`,
+and the manifests stay as files nothing reads.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
