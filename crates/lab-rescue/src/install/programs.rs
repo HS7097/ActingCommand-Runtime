@@ -167,6 +167,10 @@ pub(crate) struct Checked {
     pub(crate) received: Outcome,
     /// Whether the run that answered was given `--install-root` (review S1 F1).
     pub(crate) install_root: bool,
+    /// Workflow #453 S6 fix 2: its `report` as printed beside the outcome (`null` without one).
+    /// No envelope bound applies to it, so its members are whole where the outcome's notes may be
+    /// cut (`causes_total`).
+    pub(crate) report: Value,
 }
 
 impl Checked {
@@ -280,6 +284,7 @@ fn check_config_once(
         },
         received,
         install_root: install_root.is_some(),
+        report: report["report"].clone(),
     };
     let refused_arguments = !checked.passed()
         && report.get("report").is_none_or(Value::is_null)

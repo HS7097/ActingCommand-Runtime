@@ -19827,7 +19827,8 @@ naming another game and the game: the row fails, check-config's answer `check_co
 `post_check_failed`, `count` 1, `next` exactly `undo <operation>`),
 `s6_fix1_no_bound_instance_says_the_composition_was_not_previewed` (the one instance bound to
 another game: `bound` `[]`, the row passes with `composition` `not_previewed`; `next`
-`composition_at_start` `up`), `s6_fix1_a_bound_instance_and_no_note_passes_check_config` (`bound`
+`composition_at_start` `up`, since fix 2 `composition_at_start_once_bound` `up`),
+`s6_fix1_a_bound_instance_and_no_note_passes_check_config` (`bound`
 the game's instance alone, the row passes with exactly `answer`, `bound`, `game_notes`,
 `install_root`, `packs`), `s6_fix1_a_check_config_that_does_not_answer_fails_its_row` (the child
 left running: the row fails with `check_config_unanswered`, its `pid` and `config_key`;
@@ -19847,6 +19848,70 @@ and `s6_fix1_a_passed_check_keeps_its_record` (hot and cold: the step `done` wit
 members, `failed` empty, the evidence the answer's `place` step's `checks`). One existing test of
 this slice is adapted: `s6_cold_place_places_the_items_and_keeps_the_replaced_ones` pinned the
 cold inputs without `bound`, which the ruling on point 1 adds (the list `[]` there).
+
+**S6 fix 2** (coordinator work order `rd-1113/brief-1680-fix2.md`, after the review of fix 1;
+the coordinator's rulings, not the owner's words). Three points, each read against the code
+first.
+
+1. *A cut answer hid the game's note.* check-config's outcome passes through the envelope's
+   bound (`crates/actingcommand-contract/src/outcome.rs`: at most 32 links, breadth first, within
+   32 KiB, a cut setting `causes_total`; `apps/actingd/src/main.rs` writes the outcome through
+   it), and check-config joins the composition's problems last
+   (`apps/actingd/src/check_config.rs`), so they are cut first and the row saw no note of the
+   game. Its `report` beside the outcome is written whole, and holds every problem of a game the
+   notes give but one: `standard_packs.games` (each game root's `problem`, each table's
+   `problem` and `expired_columns`) and `standard_pack_schedule.problems` (the composition's
+   problems, each in full). The one it does not hold is a `tables/` check-config could not list
+   (`StandardPackGameReport::tables_problem`, not serialized; the entry's `tables` is then
+   empty). Now the installer keeps that report (`programs::Checked::report`) and the row judges
+   the game from it (`place::GameReport`), beside the outcome's notes as in fix 1; an outcome
+   that says it was cut adds `notes` `cut` and `causes_total`, and fails the row with
+   `game_tables` `not_judged` when the game's entry lists no table, the only case in which a cut
+   could hide a problem of the game the report does not carry. A cut outcome whose report lists
+   a table of the game is judged from the report alone and may pass.
+2. *Two kinds of note the row missed.* (a) A refusal of the composition as a whole names no game
+   (`preview_standard_pack_schedule`, the issue without `game_id`): any such problem of the report
+   fails the row for every placement, in `composition_refused`. (b) A collision across the games
+   in use (`crates/policy/src/compose.rs`, `id_conflicts` and the package collision) is
+   `rule_id_conflict` recorded on the game whose name sorts later; its note names that game and
+   not the other one (the other is in the composer's developer text only), and a file's own
+   repeated id gives the same token, so the note cannot tell whether the placed bundle caused
+   it: every `rule_id_conflict` of the report on another game fails the row, in `collisions`
+   with `collision_cause` `not_told`; one on the placed game fails it as a problem naming the
+   game (`composition_problems`).
+3. *A hint that was not true.* With `bound` empty the done answer's `next` named
+   `composition_at_start`, but a start composes only the games of the configured instances. Now
+   it names `composition_at_start_once_bound` (`up`) then (`rescue::place_cold`, from
+   `place::configured_bound`, the journal's source of `bound`), and `composition_at_start` with an
+   instance bound; the contract says the composition is first judged at the first start after an
+   instance is bound to the game.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S6-10 | the row `check_config` judged from check-config's report: `fail` with `game_root`, `composition_problems`, `composition_refused`, `collisions` and `collision_cause` `not_told`; `notes` `cut` with `causes_total` on a cut outcome, `fail` with `game_tables` `not_judged` when the game's entry lists no table | installer behaviour, row values | #453 S6 fix 2 | `install::place::check_step` | each member only when it holds something |
+| S6-11 | the cold done answer's `next` `composition_at_start_once_bound` (`up`) with `bound` empty | answer member | #453 S6 fix 2 | `rescue::place_cold` | S6-7 with an instance bound |
+
+Tests (apps gate row "#453 S6 fix 2", the same file; the fixture's check-config can now also give
+a `causes_total`, `Programs::check_config_causes_total`, and report members,
+`Programs::check_config_report`, none by default): `s6_fix2_a_cut_answer_is_judged_from_the_report`
+(an outcome cut, `causes_total` 40, the one note left naming another game; the report's entry
+of the game lists a table with an expired column and `standard_pack_schedule.problems` names the
+game: the row fails with `game_root` exactly that entry, exactly that problem in
+`composition_problems`, `game_notes` empty, `notes` `cut`, `causes_total` 40, no `game_tables`;
+`next` exactly `undo <operation>`),
+`s6_fix2_a_cut_answer_that_lists_no_table_fails_as_not_judged` (the same cut outcome, the entry
+listing no table, no problem: the row fails with `game_tables` `not_judged`, `notes` `cut`,
+nothing else of the game), `s6_fix2_a_composition_refused_as_a_whole_fails_every_placement` (the
+one instance bound to another game, a problem naming no game: the row fails with it in
+`composition_refused` beside `composition` `not_previewed` and `bound` `[]`),
+`s6_fix2_a_collision_recorded_on_another_game_fails_as_not_told` (instances bound to the game
+and to another whose name sorts later; a `schedule_invalid` and a `rule_id_conflict` of that
+other game: the row fails with the `rule_id_conflict` alone in `collisions`, `collision_cause`
+`not_told`) and `s6_fix2_the_hint_names_the_start_that_composes_the_game` (two roots, no note:
+`next` exactly `composition_at_start_once_bound` `up` with `bound` empty and
+`composition_at_start` `up` with the game's instance bound). One existing test of this slice is
+adapted: `s6_fix1_no_bound_instance_says_the_composition_was_not_previewed` pinned `next`
+`composition_at_start` with `bound` empty, which the ruling on point 3 changes.
 
 **At deploy.** Nothing to do: production places packs with the coordinator's own kit, not with
 this row. **Rollback** to a build before 0.12.59: its installer reads a journal with `bound` (its

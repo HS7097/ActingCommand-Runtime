@@ -38,7 +38,8 @@
 //   operation ends `post_check_failed` with `undo` as its next step;
 // - `s6_fix1_no_bound_instance_says_the_composition_was_not_previewed`: no instance the
 //   configuration binds to the game: the input `bound` empty, the row says `composition`
-//   `not_previewed`, and the answer's `next` names the start;
+//   `not_previewed`, and the answer's `next` names the start (fix 2: the first start once an
+//   instance is bound, `composition_at_start_once_bound`);
 // - `s6_fix1_a_bound_instance_and_no_note_passes_check_config`: an instance bound to the game and
 //   no note: the row passes without that member;
 // - `s6_fix1_a_check_config_that_does_not_answer_fails_its_row`: check-config still running at
@@ -52,6 +53,23 @@
 // - `s6_fix1_a_failed_check_closes_its_step_with_what_it_read` and
 //   `s6_fix1_a_passed_check_keeps_its_record`: as Workflow #454 closes the post-start checks, with
 //   a Runtime and without one.
+// S6 fix 2 (coordinator work order `rd-1113/brief-1680-fix2.md`, after the review of fix 1); the
+// fixture's check-config can also give a `causes_total` and members of its report:
+// - `s6_fix2_a_cut_answer_is_judged_from_the_report`: an outcome cut (`causes_total`), the game's
+//   notes cut away, an expired column in the report's entry of the game and its problem in the
+//   report's `standard_pack_schedule.problems`: the row fails with the entry in `game_root`, the
+//   problem in `composition_problems`, `notes` `cut`;
+// - `s6_fix2_a_cut_answer_that_lists_no_table_fails_as_not_judged`: an outcome cut and a report
+//   whose entry of the game lists no table: the row fails with `game_tables` `not_judged`;
+// - `s6_fix2_a_composition_refused_as_a_whole_fails_every_placement`: a problem of the
+//   composition naming no game fails the row with no instance bound to the game, in
+//   `composition_refused`;
+// - `s6_fix2_a_collision_recorded_on_another_game_fails_as_not_told`: a `rule_id_conflict`
+//   recorded on the other game fails the row, in `collisions` with `collision_cause` `not_told`,
+//   that game's own problem failing nothing;
+// - `s6_fix2_the_hint_names_the_start_that_composes_the_game`: `next` is
+//   `composition_at_start_once_bound` with no instance bound to the game, `composition_at_start`
+//   with one.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
 // sleep; every root is a temporary folder with neutral files (a schedule here is placeholder
 // bytes: `place` reads no rule of it, and the fixture's root carries no `standard-pack check`).
@@ -1124,8 +1142,9 @@ fn s6_fix1_a_note_naming_the_placed_game_fails_check_config() {
 // S6 fix 1, point 1: no Runtime runs, and the configuration binds its one instance to another
 // game. The input `bound` is empty; the row `check_config` passes with check-config's answer,
 // no note of the game, `bound` `[]` and `composition` `not_previewed` (check-config did not
-// preview the game's composition); the answer's `next` names the start, where the composition is
-// judged (`composition_at_start`, the module's `up`).
+// preview the game's composition); the answer's `next` names the start that will judge the
+// composition, which (fix 2, point 3) with no instance bound is the first start after one is
+// bound (`composition_at_start_once_bound`, the module's `up`).
 #[test]
 fn s6_fix1_no_bound_instance_says_the_composition_was_not_previewed() {
     let temp = TempDir::new().expect("tempdir");
@@ -1141,7 +1160,7 @@ fn s6_fix1_no_bound_instance_says_the_composition_was_not_previewed() {
     assert_eq!(top_code(&placed), "install_command_done", "{placed}");
     assert_eq!(
         placed["next"],
-        json!({"composition_at_start": ["up"]}),
+        json!({"composition_at_start_once_bound": ["up"]}),
         "{placed}"
     );
     let (_, journal) = new_journal(&root, &before);
@@ -1554,4 +1573,311 @@ fn s6_fix1_a_passed_check_keeps_its_record() {
             "{placed}"
         );
     }
+}
+
+/// Fix 2: a problem of the composition in the record form check-config's report lists it in
+/// `standard_pack_schedule.problems` (`standard_pack_root_invalid` with its `standard_pack_problem`
+/// `problem`): of the `schedule.json` of `game`, or, without a game, of the composition as a whole
+/// (the standard-pack root its `path`).
+fn composition_problem(game: Option<&str>, problem: &str) -> Value {
+    let mut values = json!({
+        "operation": "standard_pack_read",
+        "path": "neutral-packs",
+        "standard_pack_problem": problem,
+        "json_pointer": "",
+    });
+    if let Some(game) = game {
+        values["game"] = json!(game);
+        values["path"] = json!(format!("neutral-packs/{game}/schedule.json"));
+        values["json_pointer"] = json!("/rules/0/id");
+    }
+    json!({"code": "standard_pack_root_invalid", "category": "error", "values": values})
+}
+
+/// Fix 2: `record` as check-config joins it to its `check_config_passed`, a wire link `note`.
+fn as_note(record: &Value) -> Value {
+    let mut note = record.clone();
+    note["relation"] = json!("note");
+    note
+}
+
+/// Fix 2: check-config's report member `standard_pack_schedule` of a refused composition: its
+/// `problems`, nothing composed.
+fn schedule_report(problems: &[Value]) -> Value {
+    json!({
+        "composer_mode": true,
+        "games": [],
+        "rules": 0,
+        "pools": 0,
+        "profiles": 0,
+        "events": 0,
+        "unclassified": 0,
+        "problems": problems,
+        "left_out": [],
+    })
+}
+
+/// Fix 2: the report of the table [`TABLE`] of [`GAME`] in check-config's
+/// `standard_packs.games[].tables`, with `expired` as its `expired_columns` when not empty.
+fn table_report(expired: &[&str]) -> Value {
+    let mut table = json!({
+        "table_id": TABLE,
+        "path": format!("neutral-packs/{GAME}/tables/{TABLE}.json"),
+        "row_count": 1,
+    });
+    if !expired.is_empty() {
+        table["expired_columns"] = json!(expired);
+    }
+    table
+}
+
+/// Fix 2: check-config's report member `standard_packs` with the sound root of [`GAME`] alone,
+/// listing `tables`.
+fn packs_report(tables: &[Value]) -> Value {
+    json!({
+        "root": "neutral-packs",
+        "root_problem": null,
+        "games": [{
+            "game": GAME,
+            "bundle_version": 4,
+            "pack_count": 1,
+            "root_files": ["bundle.json"],
+            "problem": null,
+            "tables": tables,
+        }],
+    })
+}
+
+/// Fix 2: a placement of a bundle of [`GAME`] on the root `name`, prepared on `host` with the
+/// configuration binding `instances`, while no Runtime runs: its refusal, which must be
+/// `post_check_failed` with the one failed row `check_config`, that row, and the operation id.
+fn failed_check_config(
+    temp: &Path,
+    host: &FakeHost,
+    name: &str,
+    instances: &[(&str, &str)],
+) -> (Value, Value, String) {
+    let (root, _) = prepared(temp, name, host);
+    bind_in_configuration(&root, instances);
+    let zip = temp.join(format!("neutral-{name}.zip"));
+    write_bundle(&zip, br#"{"neutral": 2}"#, Some(SCHEDULE));
+    let before = journals(&root);
+    let (refused, exit) = place(host, &root, &zip);
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(top_code(&refused), "install_command_refused", "{refused}");
+    assert_eq!(
+        top_value(&refused, "install_refusal"),
+        "post_check_failed",
+        "{refused}"
+    );
+    assert_eq!(
+        refused["checks"]["failed"],
+        json!(["check_config"]),
+        "{refused}"
+    );
+    let (operation_id, journal) = new_journal(&root, &before);
+    let checked = check_row(&journal, "check_config");
+    assert_eq!(checked["result"], "fail", "{checked}");
+    assert_eq!(
+        checked["values"]["answer"]["outcome"]["code"], "check_config_passed",
+        "{checked}"
+    );
+    (refused, checked, operation_id)
+}
+
+// S6 fix 2, point 1: no Runtime runs, the configuration binds an instance to the game, and the
+// live build's check-config passes with an outcome its envelope cut: `causes_total` 40, the one
+// note left naming another game, the game's notes cut away. Its report, which nothing cuts, lists
+// the game's root with its table, one of whose columns has expired, and, in
+// `standard_pack_schedule.problems`, the problem of the game's `schedule.json`. The row
+// `check_config` fails from the report: `game_root` is exactly the game's entry,
+// `composition_problems` exactly that problem, `game_notes` is empty (the notes are cut), `notes`
+// `cut` with `causes_total` 40, and no `game_tables` (the table listed rules out the one problem
+// of the game the report does not carry). The operation ends `post_check_failed` with `undo` as
+// its next step.
+#[test]
+fn s6_fix2_a_cut_answer_is_judged_from_the_report() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let packs = packs_report(&[table_report(&["score_milli"])]);
+    let problem = composition_problem(Some(GAME), "schedule_invalid");
+    host.programs
+        .check_config_notes
+        .borrow_mut()
+        .push(note_naming(OTHER_GAME));
+    host.programs.check_config_causes_total.set(Some(40));
+    host.programs.check_config_report.borrow_mut().extend([
+        ("standard_packs", packs.clone()),
+        (
+            "standard_pack_schedule",
+            schedule_report(std::slice::from_ref(&problem)),
+        ),
+    ]);
+
+    let (refused, checked, operation_id) =
+        failed_check_config(temp.path(), &host, "cut", &[("neutral.a", GAME)]);
+    let values = &checked["values"];
+    assert_eq!(values["game_root"], packs["games"][0], "{checked}");
+    assert_eq!(
+        values["composition_problems"],
+        json!([problem]),
+        "{checked}"
+    );
+    assert_eq!(values["game_notes"], json!([]), "{checked}");
+    assert_eq!(values["notes"], "cut", "{checked}");
+    assert_eq!(values["causes_total"], json!(40), "{checked}");
+    assert!(values.get("game_tables").is_none(), "{checked}");
+    assert_eq!(
+        refused["next"],
+        json!({"undo": ["undo", operation_id]}),
+        "{refused}"
+    );
+}
+
+// S6 fix 2, point 1: as above, but the report lists the game's root with no table and no problem
+// of the composition. A `tables/` check-config cannot list is the one note of the game its report
+// does not carry (the game's entry then lists no table), so on a cut answer it is not ruled out:
+// the row `check_config` fails with `notes` `cut`, `causes_total` 40 and `game_tables`
+// `not_judged`, and nothing of the game besides (`game_notes` empty, no `game_root`, no
+// `composition_problems`).
+#[test]
+fn s6_fix2_a_cut_answer_that_lists_no_table_fails_as_not_judged() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    host.programs
+        .check_config_notes
+        .borrow_mut()
+        .push(note_naming(OTHER_GAME));
+    host.programs.check_config_causes_total.set(Some(40));
+    host.programs.check_config_report.borrow_mut().extend([
+        ("standard_packs", packs_report(&[])),
+        ("standard_pack_schedule", schedule_report(&[])),
+    ]);
+
+    let (_, checked, _) =
+        failed_check_config(temp.path(), &host, "cut-untabled", &[("neutral.a", GAME)]);
+    let values = &checked["values"];
+    assert_eq!(values["notes"], "cut", "{checked}");
+    assert_eq!(values["causes_total"], json!(40), "{checked}");
+    assert_eq!(values["game_tables"], "not_judged", "{checked}");
+    assert_eq!(values["game_notes"], json!([]), "{checked}");
+    assert!(values.get("game_root").is_none(), "{checked}");
+    assert!(values.get("composition_problems").is_none(), "{checked}");
+}
+
+// S6 fix 2, point 2 (a): no Runtime runs and the configuration's one instance binds another game
+// (`bound` empty: the placed game is not composed at all); check-config passes, its report (and its
+// note, uncut) saying the composition is refused as a whole: a problem naming no game. The row
+// `check_config` fails for this placement too, with that problem in `composition_refused` beside
+// `composition` `not_previewed`, and no note of the game.
+#[test]
+fn s6_fix2_a_composition_refused_as_a_whole_fails_every_placement() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let refused_whole = composition_problem(None, "schedule_invalid");
+    host.programs
+        .check_config_notes
+        .borrow_mut()
+        .push(as_note(&refused_whole));
+    host.programs.check_config_report.borrow_mut().extend([
+        ("standard_packs", packs_report(&[table_report(&[])])),
+        (
+            "standard_pack_schedule",
+            schedule_report(std::slice::from_ref(&refused_whole)),
+        ),
+    ]);
+
+    let (_, checked, _) = failed_check_config(
+        temp.path(),
+        &host,
+        "refused-whole",
+        &[("neutral.c", OTHER_GAME)],
+    );
+    let values = &checked["values"];
+    assert_eq!(values["bound"], json!([]), "{checked}");
+    assert_eq!(values["composition"], "not_previewed", "{checked}");
+    assert_eq!(
+        values["composition_refused"],
+        json!([refused_whole]),
+        "{checked}"
+    );
+    assert_eq!(values["game_notes"], json!([]), "{checked}");
+    assert!(values.get("composition_problems").is_none(), "{checked}");
+    assert!(values.get("collisions").is_none(), "{checked}");
+    assert!(values.get("notes").is_none(), "{checked}");
+}
+
+// S6 fix 2, point 2 (b): no Runtime runs and the configuration binds an instance to the game and
+// one to another game, whose name sorts later; check-config passes, its report (and its notes,
+// uncut) naming only that other game: a `schedule_invalid` of its file and a `rule_id_conflict`,
+// the collision across the games the composer records on the later game. The note names the game
+// it is recorded on and not the other one, so it cannot tell whether the placed bundle caused it:
+// the row `check_config` fails with the collision alone in `collisions` and `collision_cause`
+// `not_told`, the other game's own problem failing nothing, and no note of the game.
+#[test]
+fn s6_fix2_a_collision_recorded_on_another_game_fails_as_not_told() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    // `neutral-other` sorts after `neutral-game`: the composer records the collision on it.
+    let own = composition_problem(Some(OTHER_GAME), "schedule_invalid");
+    let collision = composition_problem(Some(OTHER_GAME), "rule_id_conflict");
+    host.programs
+        .check_config_notes
+        .borrow_mut()
+        .extend([as_note(&own), as_note(&collision)]);
+    host.programs.check_config_report.borrow_mut().extend([
+        ("standard_packs", packs_report(&[table_report(&[])])),
+        (
+            "standard_pack_schedule",
+            schedule_report(&[own, collision.clone()]),
+        ),
+    ]);
+
+    let (_, checked, _) = failed_check_config(
+        temp.path(),
+        &host,
+        "collided",
+        &[("neutral.a", GAME), ("neutral.c", OTHER_GAME)],
+    );
+    let values = &checked["values"];
+    assert_eq!(values["bound"], json!(["neutral.a"]), "{checked}");
+    assert_eq!(values["collisions"], json!([collision]), "{checked}");
+    assert_eq!(values["collision_cause"], "not_told", "{checked}");
+    assert_eq!(values["game_notes"], json!([]), "{checked}");
+    assert!(values.get("composition_problems").is_none(), "{checked}");
+    assert!(values.get("composition_refused").is_none(), "{checked}");
+}
+
+// S6 fix 2, point 3: no Runtime runs and check-config passes with no note, on two roots. On the one
+// whose only instance binds another game (`bound` empty) no start composes the placed game until an
+// instance is bound to it: the answer's `next` is exactly `composition_at_start_once_bound` (the
+// module's `up`). On the one that binds an instance to the game it is exactly
+// `composition_at_start` (`up`), as before.
+#[test]
+fn s6_fix2_the_hint_names_the_start_that_composes_the_game() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (unbound_root, _) = prepared(temp.path(), "hint-unbound", &host);
+    let (bound_root, _) = prepared(temp.path(), "hint-bound", &host);
+    bind_in_configuration(&unbound_root, &[("neutral.c", OTHER_GAME)]);
+    bind_in_configuration(&bound_root, &[("neutral.a", GAME)]);
+    let zip = temp.path().join("neutral-hint.zip");
+    write_bundle(&zip, CONTROL, Some(SCHEDULE));
+
+    let (unbound, exit) = place(&host, &unbound_root, &zip);
+    assert_eq!(exit, 0, "{unbound}");
+    assert_eq!(top_code(&unbound), "install_command_done", "{unbound}");
+    assert_eq!(
+        unbound["next"],
+        json!({"composition_at_start_once_bound": ["up"]}),
+        "{unbound}"
+    );
+    let (bound, exit) = place(&host, &bound_root, &zip);
+    assert_eq!(exit, 0, "{bound}");
+    assert_eq!(top_code(&bound), "install_command_done", "{bound}");
+    assert_eq!(
+        bound["next"],
+        json!({"composition_at_start": ["up"]}),
+        "{bound}"
+    );
 }

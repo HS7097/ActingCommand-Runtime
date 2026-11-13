@@ -49,7 +49,9 @@
 //!   the plan again and `standard-pack check` as above, the live build's check-config of the live
 //!   configuration (`check_config`: its result, and, fix 1, its notes that name the bundle's game;
 //!   with no instance the configuration binds to the game, the input `bound` empty, it says that
-//!   the game's composition was not previewed), and the composition `not_evaluated` (no Runtime to
+//!   the game's composition was not previewed; fix 2, the game judged from check-config's report,
+//!   which the outcome's bounds do not cut, a composition refused as a whole and a collision
+//!   across games failing it too), and the composition `not_evaluated` (no Runtime to
 //!   ask); a failed check ends the command `post_check_failed` with the items placed and `next`
 //!   naming `undo`, no hold kept. Its `undo` and its `resume` apply the stopped rule again under
 //!   the writer lock (`super::undo`, `super::update::resume`).
@@ -1112,8 +1114,9 @@ pub(crate) fn open_cold<'h>(
 /// Workflow #453 S6 fix 1: the instances the configuration `config` binds to `game`, in its
 /// order: the `instance_id` of each row of `policy.facts.instances` whose `game_id` is the game.
 /// Those rows are the games in use that check-config previews the composition for and the
-/// Runtime's scheduler workbench reads; none without a `policy`.
-fn configured_bound(config: &Value, game: &str) -> Vec<String> {
+/// Runtime's scheduler workbench reads; none without a `policy`. Fix 2: the cold done answer's
+/// `next` reads it too (`crate::rescue`).
+pub(crate) fn configured_bound(config: &Value, game: &str) -> Vec<String> {
     config
         .pointer("/policy/facts/instances")
         .and_then(Value::as_array)
@@ -1522,6 +1525,12 @@ fn composition_row(
 /// placed `game` (its value `game`), those notes in `game_notes`; and with no instance bound to
 /// the game (`bound` empty) check-config did not preview its composition, which the row says as
 /// `composition` `not_previewed` beside check-config's result for the rest of the configuration.
+/// Fix 2: the outcome keeps at most [`actingcommand_contract::outcome::CAUSES_MAX_LINKS`] links
+/// within its byte bound and check-config joins the composition's problems last, so they are cut
+/// first; the row judges the game from the report, which nothing cuts ([`GameReport`]). An outcome
+/// whose links were cut (`causes_total`) says so (`notes` `cut`, `causes_total`), and fails the
+/// row when the report cannot rule out the one note of the game it does not carry (`game_tables`
+/// `not_judged`).
 fn check_config_row(
     host: &dyn Host,
     paths: &Paths,
@@ -1547,7 +1556,14 @@ fn check_config_row(
                 .filter(|note| note.value("game").and_then(Value::as_str) == Some(game))
                 .map(crate::cli_line::warning)
                 .collect::<Vec<_>>();
-            let passed = checked.passed() && game_notes.is_empty();
+            // Fix 2: the game as the report, whole, says it; and an outcome whose links were cut
+            // may lack the one note of the game the report does not carry, which only an entry
+            // that lists a table rules out.
+            let whole = GameReport::of(&checked.report, game);
+            let cut = checked.received.causes_total();
+            let tables_not_judged = cut.is_some() && !whole.tables_listed;
+            let passed =
+                checked.passed() && game_notes.is_empty() && whole.passes() && !tables_not_judged;
             let mut values = json!({
                 "install_root": checked.install_root,
                 "answer": crate::cli_line::warning(&checked.received),
@@ -1558,6 +1574,14 @@ fn check_config_row(
             if bound.is_empty() {
                 values["composition"] = json!("not_previewed");
             }
+            whole.record(&mut values);
+            if let Some(total) = cut {
+                values["notes"] = json!("cut");
+                values["causes_total"] = json!(total);
+            }
+            if tables_not_judged {
+                values["game_tables"] = json!("not_judged");
+            }
             row("check_config", if passed { "pass" } else { "fail" }, values)
         }
         Err(failure) => row(
@@ -1567,6 +1591,109 @@ fn check_config_row(
                 &failure.onto(super::refusal(command, InstallRefusal::CheckConfigUnanswered))
             )}),
         ),
+    }
+}
+
+/// Workflow #453 S6 fix 2: the problem a collision across the games in use records (two composed
+/// rules, pools, profiles or events with one id, or two games' rules naming one package), on the
+/// game whose name sorts later; a file's own repeated id records the same token.
+const COLLISION: StandardPackProblem = StandardPackProblem::RuleIdConflict;
+
+/// Workflow #453 S6 fix 2: what check-config's report says of the placed game. The report is
+/// printed beside the outcome and no bound of the outcome applies to it
+/// ([`programs::Checked::report`]), so its members are whole: the game's entry of
+/// `standard_packs.games` (every game root below `standard_packs.root`, read whatever binds it)
+/// and the composition's problems (`standard_pack_schedule.problems`, the games of
+/// `policy.facts.instances` only).
+struct GameReport {
+    /// The game's entry when it records a problem: its root's `problem`, or a table's `problem`
+    /// or `expired_columns` (each a note of check-config naming the game).
+    root: Option<Value>,
+    /// Whether the entry lists a table, so that check-config listed the game's `tables/`: a
+    /// `tables/` it cannot list is the one problem of the game the report does not carry (a note
+    /// only, the entry's `tables` then empty).
+    tables_listed: bool,
+    /// The composition's problems that name the game.
+    named: Vec<Value>,
+    /// The composition's problems that name no game: the composition refused as a whole, which
+    /// fails every placement.
+    refused: Vec<Value>,
+    /// Each [`COLLISION`] the composition records on another game: it names the game it is
+    /// recorded on and not the other one, so whether the placed bundle caused it cannot be told.
+    collisions: Vec<Value>,
+}
+
+impl GameReport {
+    /// What `report` (check-config's `report`, `null` without one) says of `game`.
+    fn of(report: &Value, game: &str) -> Self {
+        let entry = report
+            .pointer("/standard_packs/games")
+            .and_then(Value::as_array)
+            .and_then(|games| games.iter().find(|entry| entry["game"] == game));
+        let tables = entry
+            .and_then(|entry| entry["tables"].as_array())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let troubled = entry.is_some_and(|entry| !entry["problem"].is_null())
+            || tables.iter().any(|table| {
+                !table["problem"].is_null()
+                    || table["expired_columns"]
+                        .as_array()
+                        .is_some_and(|columns| !columns.is_empty())
+            });
+        let mut found = Self {
+            root: entry.filter(|_| troubled).cloned(),
+            tables_listed: !tables.is_empty(),
+            named: Vec::new(),
+            refused: Vec::new(),
+            collisions: Vec::new(),
+        };
+        let problems = report
+            .pointer("/standard_pack_schedule/problems")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for problem in problems {
+            let kind = problem
+                .pointer("/values/standard_pack_problem")
+                .and_then(Value::as_str);
+            match problem.pointer("/values/game").and_then(Value::as_str) {
+                Some(on) if on == game => found.named.push(problem.clone()),
+                None => found.refused.push(problem.clone()),
+                Some(_) if kind == Some(COLLISION.as_str()) => {
+                    found.collisions.push(problem.clone());
+                }
+                Some(_) => {}
+            }
+        }
+        found
+    }
+
+    /// Whether nothing here fails the row.
+    fn passes(&self) -> bool {
+        self.root.is_none()
+            && self.named.is_empty()
+            && self.refused.is_empty()
+            && self.collisions.is_empty()
+    }
+
+    /// Its members in the row's `values`, each only when it holds something: `game_root`,
+    /// `composition_problems`, `composition_refused`, and `collisions` with `collision_cause`
+    /// `not_told`.
+    fn record(self, values: &mut Value) {
+        if let Some(root) = self.root {
+            values["game_root"] = root;
+        }
+        if !self.named.is_empty() {
+            values["composition_problems"] = Value::Array(self.named);
+        }
+        if !self.refused.is_empty() {
+            values["composition_refused"] = Value::Array(self.refused);
+        }
+        if !self.collisions.is_empty() {
+            values["collisions"] = Value::Array(self.collisions);
+            values["collision_cause"] = json!("not_told");
+        }
     }
 }
 

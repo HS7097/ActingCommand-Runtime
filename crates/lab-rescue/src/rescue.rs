@@ -1828,7 +1828,11 @@ fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
 /// aside (`pack_place` is off row 7a″'s pass list), so no Runtime starts on a half-placed game
 /// root. Fix 1: its `next` names the start (`composition_at_start`, the module's `up`): the
 /// composition the placed game root gives is judged only by the Runtime's workbench, never by the
-/// checks of a placement with no Runtime.
+/// checks of a placement with no Runtime. Fix 2: the workbench composes the games of the
+/// configured instances only, so with none the configuration binds to the game
+/// (`place::configured_bound`, the journal's `bound`) the hint is
+/// `composition_at_start_once_bound`: the composition is first judged at the first start after an
+/// instance is bound to the game.
 fn place_cold(
     context: &Context<'_>,
     paths: &Paths,
@@ -1854,9 +1858,16 @@ fn place_cold(
         return Ok(stopped(context, steps, placed));
     }
     steps.push(answer_step(context, "place", &placed));
+    // Fix 2: a start composes only the games of the configured instances, so with none bound to
+    // the game the hint waits for one.
+    let hint = if place::configured_bound(&loaded.config, &placement.game).is_empty() {
+        "composition_at_start_once_bound"
+    } else {
+        "composition_at_start"
+    };
     add_next(
         &mut members,
-        "composition_at_start",
+        hint,
         json!(["install", "start", "--root", paths.plain]),
     );
     let done = install::done(PLACE)
