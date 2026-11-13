@@ -35,18 +35,25 @@ pub struct OwnerUnlockFailure {
     pub journal_appended: bool,
 }
 
+/// `installation_root`: Workflow #453 S11, the installation root the command runs from, if any:
+/// before the owner lock is taken the state root's installation record is checked as a start
+/// checks it, and nothing is minted or claimed.
 pub(crate) fn run(
     root: &Path,
+    installation_root: Option<&Path>,
     salt: &[u8],
     clock: Arc<dyn RuntimeClock>,
     actor: OwnerUnlockActor,
     confirmed: bool,
 ) -> Result<OwnerUnlockReceipt, OwnerUnlockFailure> {
-    let unlocked = unlock_retained_owner(root, confirmed).map_err(|error| OwnerUnlockFailure {
+    let refused = |error| OwnerUnlockFailure {
         error,
         stage: HostLocation::UnlockOwnerFile.location(),
         journal_appended: false,
-    })?;
+    };
+    crate::state_root_installation::check_state_root_installation(installation_root, root)
+        .map_err(refused)?;
+    let unlocked = unlock_retained_owner(root, confirmed).map_err(refused)?;
     // The fact is recorded under the still-held owner lock. No new epoch is acquired, so
     // the confirmed epoch remains the last record and the next start takes it over.
     record(root, salt, clock, actor, &unlocked).map_err(|error| OwnerUnlockFailure {

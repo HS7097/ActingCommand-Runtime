@@ -24,6 +24,7 @@ use crate::policy_host::{
     PolicyExecutionPreparation, PolicyHost, PolicyOutcomeKeySnapshot,
 };
 use crate::proposal::prepare_proposal;
+use crate::state_root_installation;
 use crate::strategy::{StrategicPlanPreparation, build_strategy_proposal};
 use crate::tagged_state::TaggedStart;
 use crate::time::{RuntimeClock, RuntimeClockSample, SystemRuntimeClock, unix_ms_now};
@@ -574,6 +575,10 @@ pub struct GovernancePolicy {
 pub struct RuntimeHostConfig {
     install_held: Option<actingcommand_contract::InstallHeldStartup>,
     state_root: PathBuf,
+    /// Workflow #453 S11 (`contracts/state-root-installation.md`): the installation root the
+    /// Runtime runs from; `None` for a Runtime not started from one, which reads, mints and
+    /// records nothing of the state root's installation.
+    installation_root: Option<PathBuf>,
     device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode,
     bind_address: SocketAddr,
     scheduler: SchedulerConfig,
@@ -705,6 +710,22 @@ pub struct RuntimeHostConfig {
     /// [`RuntimeHostConfig::with_takeover_cooldown_for_test`].
     #[cfg(test)]
     takeover_instances_for_test: Vec<InstanceId>,
+    /// Workflow #453 S11, test only: see
+    /// [`RuntimeHostConfig::with_state_root_record_after_check_for_test`].
+    #[cfg(test)]
+    state_root_record_after_check_for_test: Option<Vec<u8>>,
+    /// Workflow #453 S11 fix round 1, test only: see
+    /// [`RuntimeHostConfig::with_identity_before_placement_for_test`].
+    #[cfg(test)]
+    identity_before_placement_for_test: Option<Vec<u8>>,
+    /// Workflow #453 S11 fix round 1, test only: see
+    /// [`RuntimeHostConfig::with_start_failure_after_claim_for_test`].
+    #[cfg(test)]
+    fail_after_claim_for_test: bool,
+    /// Workflow #453 S11 fix round 2, test only: see
+    /// [`RuntimeHostConfig::with_hard_link_failure_for_test`].
+    #[cfg(test)]
+    hard_link_fails_for_test: bool,
 }
 
 /// Workflow #369 S6c, test only: a scripted connectivity read.
@@ -716,6 +737,7 @@ impl RuntimeHostConfig {
     pub fn new(state_root: impl Into<PathBuf>, secret_fingerprint_salt: impl AsRef<[u8]>) -> Self {
         Self {
             state_root: state_root.into(),
+            installation_root: None,
             install_held: None,
             device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode::default(),
             bind_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -782,7 +804,52 @@ impl RuntimeHostConfig {
             process_memory_for_test: None,
             #[cfg(test)]
             takeover_instances_for_test: Vec::new(),
+            #[cfg(test)]
+            state_root_record_after_check_for_test: None,
+            #[cfg(test)]
+            identity_before_placement_for_test: None,
+            #[cfg(test)]
+            fail_after_claim_for_test: false,
+            #[cfg(test)]
+            hard_link_fails_for_test: false,
         }
+    }
+
+    /// Workflow #453 S11, test only: the start writes `bytes` as the state root's installation
+    /// record right after its check read none, so the claim under the owner lock reads a record
+    /// the check did not (two starts racing).
+    #[cfg(test)]
+    pub(crate) fn with_state_root_record_after_check_for_test(mut self, bytes: Vec<u8>) -> Self {
+        self.state_root_record_after_check_for_test = Some(bytes);
+        self
+    }
+
+    /// Workflow #453 S11 fix round 1, test only: when the claim mints the installation's
+    /// identity, `bytes` are written as the identity file between the mint and its placement, as
+    /// another configuration of the same installation starting for the first time at the same
+    /// moment would place its own.
+    #[cfg(test)]
+    pub(crate) fn with_identity_before_placement_for_test(mut self, bytes: Vec<u8>) -> Self {
+        self.identity_before_placement_for_test = Some(bytes);
+        self
+    }
+
+    /// Workflow #453 S11 fix round 1, test only: the start fails right after its claim, before
+    /// the ledger is opened and so before the fact, as a start that then stops at a ledger
+    /// migration requirement does.
+    #[cfg(test)]
+    pub(crate) fn with_start_failure_after_claim_for_test(mut self) -> Self {
+        self.fail_after_claim_for_test = true;
+        self
+    }
+
+    /// Workflow #453 S11 fix round 2, test only: every hard link of the start's claim fails with
+    /// "unsupported", as on a file system without hard links (FAT32, exFAT), so the identity and
+    /// the record are placed by the fallback, an exclusive create of the file itself.
+    #[cfg(test)]
+    pub(crate) fn with_hard_link_failure_for_test(mut self) -> Self {
+        self.hard_link_fails_for_test = true;
+        self
     }
 
     /// Workflow #437 MAPP-1c, test only: the start gives the devices of `instances` the takeover
@@ -1216,6 +1283,15 @@ impl RuntimeHostConfig {
         self
     }
 
+    /// Workflow #453 S11 (`contracts/state-root-installation.md`): the installation root the
+    /// Runtime runs from. A start checks the state root's installation record before it writes
+    /// anything and claims an unrecorded state root under the owner lock; `unlock-owner` and a
+    /// ledger maintenance pass that takes the owner check and never claim.
+    pub fn with_installation_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.installation_root = Some(root.into());
+        self
+    }
+
     /// #411 A51: where the host hands the first fatal condition it latches, at the moment it
     /// latches, and each background step a ledger read skipped, for the daemon's log.
     pub fn with_daemon_reporter(mut self, reporter: Arc<dyn RuntimeDaemonReporter>) -> Self {
@@ -1242,6 +1318,11 @@ impl RuntimeHostConfig {
 
     pub fn state_root(&self) -> &Path {
         &self.state_root
+    }
+
+    /// Workflow #453 S11: the installation root the Runtime runs from, if any.
+    pub fn installation_root(&self) -> Option<&Path> {
+        self.installation_root.as_deref()
     }
 
     pub const fn bind_address(&self) -> SocketAddr {
@@ -1378,6 +1459,10 @@ impl std::fmt::Debug for RuntimeHostConfig {
         formatter
             .debug_struct("RuntimeHostConfig")
             .field("state_root", &"<redacted>")
+            .field(
+                "installation_root",
+                &self.installation_root.as_ref().map(|_| "<redacted>"),
+            )
             .field("bind_address", &self.bind_address)
             .field("device_diagnostic_mode", &self.device_diagnostic_mode)
             .field("scheduler", &self.scheduler)
@@ -1434,6 +1519,9 @@ pub struct RuntimeHost {
     ledger_opened: Outcome,
     /// P0-LO: `ledger_open_slow` when the open's measured time exceeded its warning line.
     ledger_open_slow: Option<Outcome>,
+    /// Workflow #453 S11: `state_root_claimed` when this start recorded its installation in the
+    /// state root.
+    state_root_claimed: Option<Outcome>,
     /// Workflow #361 B1: one outcome per scheduling pause this start restored or dropped
     /// (Workflow #378 A6a: was one line each).
     scheduling_pause_restore: Vec<Outcome>,
@@ -1477,6 +1565,7 @@ impl RuntimeHost {
         };
         crate::ledger_maintenance::run(
             &config.state_root,
+            config.installation_root.as_deref(),
             &config.secret_fingerprint_salt,
             config.clock,
             request,
@@ -1493,6 +1582,7 @@ impl RuntimeHost {
     ) -> Result<crate::OwnerUnlockReceipt, crate::OwnerUnlockFailure> {
         crate::owner_unlock::run(
             &config.state_root,
+            config.installation_root.as_deref(),
             &config.secret_fingerprint_salt,
             config.clock,
             actor,
@@ -1521,6 +1611,29 @@ impl RuntimeHost {
             config.install_held.clone(),
             config.clock.as_ref(),
         )?;
+        // Workflow #453 S11 (`contracts/state-root-installation.md`): beside the format refusal,
+        // before anything is written (the state root's folder included) and so before the owner
+        // journal, a Runtime started from an installation root reads the state root's
+        // installation record: another installation's record, a record while this installation
+        // has no identity, or a file it cannot read refuses the start with nothing written. A
+        // Runtime not started from one reads nothing here.
+        if let Some(installation_root) = &config.installation_root {
+            state_root_installation::check(
+                installation_root,
+                &config.state_root,
+                HostLocation::CheckStateRootInstallation,
+            )?;
+            #[cfg(test)]
+            if let Some(bytes) = &config.state_root_record_after_check_for_test {
+                fs::write(
+                    config
+                        .state_root
+                        .join(state_root_installation::STATE_ROOT_INSTALLATION_FILE),
+                    bytes,
+                )
+                .expect("the test's record between the two reads");
+            }
+        }
         fs::create_dir_all(&config.state_root).map_err(|_| {
             RuntimeHostError::fatal(
                 SharedCode::StateRootCreateFailed,
@@ -1555,6 +1668,35 @@ impl RuntimeHost {
             journal,
             released_by_exit,
         } = OwnerGuard::acquire(&config.state_root, events.issuer(), started_at_unix_ms)?;
+        // Workflow #453 S11: the claim, under the owner lock. The record is read again: one of
+        // another installation (two starts raced) refuses here, and the owner epoch this start
+        // opened is closed as any failed start's is; an unrecorded state root gets this
+        // installation's record, its identity minted and placed first when it has none, each
+        // read back from the disk. The fact and the daemon line follow once the ledger is open.
+        let state_root_claim = match &config.installation_root {
+            Some(installation_root) => Some(state_root_installation::claim(
+                &state_root_installation::ClaimRequest {
+                    installation_root,
+                    state_root: &config.state_root,
+                    owner_epoch,
+                    at_unix_ms: config.clock.sample()?.unix_ms,
+                    build_commit: config.runtime_commit.as_deref(),
+                    #[cfg(test)]
+                    identity_before_placement: config.identity_before_placement_for_test.as_deref(),
+                    #[cfg(test)]
+                    hard_link_fails: config.hard_link_fails_for_test,
+                },
+            )?),
+            None => None,
+        };
+        #[cfg(test)]
+        if config.fail_after_claim_for_test {
+            return Err(RuntimeHostError::fatal(
+                crate::codes::test_spellings::TestCode::StartFailedAfterClaimForTest,
+                crate::codes::test_spellings::TestLocation::FailStartAfterClaimForTest,
+                RuntimeErrorCode::RuntimeHalted,
+            ));
+        }
         // Workflow #361 B1: the owner before this one, named by a restored pause.
         let previous_owner_epoch = journal.last().map(|record| record.owner_epoch);
         let mut fresh_storage = true;
@@ -2208,6 +2350,10 @@ impl RuntimeHost {
             owner_released_by_exit: released_by_exit,
             ledger_opened,
             ledger_open_slow,
+            state_root_claimed: state_root_claim
+                .as_ref()
+                .filter(|claim| claim.placed)
+                .map(|_| Outcome::new(HostCode::StateRootClaimed).path(&config.state_root)),
             scheduling_pause_restore: Vec::new(),
             emulator_autostart_reports: shared.emulator_autostart_reports(),
             shared: Some(Arc::clone(&shared)),
@@ -2226,6 +2372,27 @@ impl RuntimeHost {
                 .install_capacity_resampler(HostShared::capacity_resampler(&shared))?;
             shared.synchronize_fact_store()?;
             shared.initialize_installation()?;
+            // Workflow #453 S11: the fact follows the record. The claim this start placed is
+            // mirrored once into the ledger as the tagged runtime fact
+            // `host.state_root_installation` (its time and who claimed); a record of this
+            // installation that an earlier start placed is mirrored from the record, once, when
+            // the fact store holds no such fact (that start failed between the record and the
+            // fact). Neither repeats the daemon line.
+            if let Some(claim) = &state_root_claim {
+                let unrecorded = lock(
+                    &shared.runtime_facts,
+                    HostLocation::RecordStateRootInstallation,
+                )?
+                .get(
+                    &RuntimeFactScope::Runtime,
+                    state_root_installation::STATE_ROOT_INSTALLATION_FACT_KEY,
+                )
+                .is_none();
+                if claim.placed || unrecorded {
+                    shared
+                        .record_runtime_fact(state_root_installation::claim_fact_record(claim))?;
+                }
+            }
             if held_startup {
                 publish_runtime_info(&host.info_path, &host.info)?;
             }
@@ -2896,6 +3063,13 @@ impl RuntimeHost {
     /// a daemon line right after `ledger_opened`.
     pub fn ledger_open_slow(&self) -> Option<&Outcome> {
         self.ledger_open_slow.as_ref()
+    }
+
+    /// Workflow #453 S11 (`contracts/state-root-installation.md`): `state_root_claimed` (info,
+    /// `path` the state root) when this start recorded in the state root the installation it
+    /// runs from, which actingd writes as a daemon line; `None` for every other start.
+    pub fn state_root_claimed(&self) -> Option<&Outcome> {
+        self.state_root_claimed.as_ref()
     }
 
     /// Workflow #369 S6c (model-369-queue H-5): enqueues one autostart claim per configured

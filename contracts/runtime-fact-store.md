@@ -153,8 +153,8 @@ The target of [Ledger observer](ledger-observer.md) for this store (LEDG §3.1�
    `.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition` and its `.pauses`,
    `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`,
    `host.contained_settlement` (#411 A65), `host.idle_state` (#405 IDLE-1P), `host.agent_wake`
-   (#432 AGT-1b, [agent-wake.md](agent-wake.md)) and `host.capped_episodes` (#428 SCHED-C1d,
-   0.12.53). Keys under
+   (#432 AGT-1b, [agent-wake.md](agent-wake.md)), `host.capped_episodes` (#428 SCHED-C1d,
+   0.12.53) and `host.state_root_installation` (Workflow #453 S11, 0.12.60). Keys under
    `ledger_observer.tag.reobserve_prefixes` (`device.`, `backend.`, `application.`, `lease.`,
    `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.`) are not
    loaded: this start observes or replays them again, so the takeover invalidation of
@@ -704,6 +704,20 @@ the backend self-check facts (source `device-proxy` or `capture`).
   fact alone is the same warning (`operation` `store_capped_episodes`); neither
   stops the Runtime or an instance. At most 256 rows (writer, episode, consumer
   and member rows together); a larger list is a record the store refuses.
+- `host.state_root_installation` (Workflow #453 S11, 0.12.60;
+  [state-root-installation.md](state-root-installation.md)) — runtime scope,
+  `record_list` of one row, no lifetime, source `runtime`, observed at the claim's
+  time: the claim of the state root by the installation the Runtime runs from,
+  mirrored once from the state root's record `installation.json` for the audit
+  trail: `claimed_at_unix_ms`, `claimed_by_pid`, `claimed_by_owner_epoch` (as the
+  status spells it) and, when the record names the build's commit,
+  `claimed_by_build_commit`; never the installation's number. The fact follows
+  the record: recorded once the ledger is open by the start that placed the
+  record, or, from the record, by a start that finds its installation's record
+  while the store holds no such fact (an earlier start placed the record and
+  failed before the fact); any other start records nothing. A Runtime not
+  started from an installation root never records it. Tagged
+  (`tag.workbench_patterns`), so a start loads it.
 
 `contracts/actingd-check-config.md` lists the subsystems and parameters
 `actingd` reports; `actingctl facts --program` returns both records as part of
