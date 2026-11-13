@@ -10,11 +10,19 @@
 // The history is the ledger crate's synthetic ledger (LN-1) with the fixture's own records after
 // it: one settled run of a dispatch pair (its decision memory and its activity state), one live
 // wake obligation and the monitor registry's import.
+//
+// Workflow #454 fix 1 (register §1.348; brief rd-1113/brief-1685-fix1.md, point 3): on a new root,
+// what the Runtime says of its own start in its program fact `config.start`, start by start (the
+// installer reads it before a stop): only the root's first start says it found no earlier start.
 
 use super::lean_scale::{formal_root, scale_instance_id};
 use super::*;
 use crate::agent_dispatcher::AgentDispatcherState;
 use crate::monitor::MonitorRegistry;
+use actingcommand_contract::{
+    CONFIG_START_FACT_KEY, ConfigParameter, ConfigParameterSource, FactScalar,
+    RuntimeConfigManifest, RuntimeFactScope,
+};
 use actingcommand_ledger::{
     LedgerIndexRole, LedgerMaintenance, SyntheticInstance, SyntheticLedgerSpec,
     write_synthetic_ledger,
@@ -315,4 +323,99 @@ fn ln4_c_the_journal_size_stays_flat_under_10k_synthetic_dispatches() {
         "the journal holds the pair's latest runs"
     );
     assert_eq!(at_1k, at_10k, "the journal size is flat");
+}
+
+// A configuration manifest as actingd hands every start one (`bind_port` alone, `settable` from
+// the key table): a start with it records the configuration facts, `config.start` among them.
+fn configured_manifest() -> RuntimeConfigManifest {
+    let mut parameters = vec![ConfigParameter {
+        key: "bind_port".to_owned(),
+        value: FactScalar::Integer(0),
+        source: ConfigParameterSource::Default,
+        settable: false,
+    }];
+    actingcommand_runtime_config::annotate_settable(&mut parameters)
+        .expect("every key is in the key table");
+    RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    }
+}
+
+fn start_configured_host(root: &TempDir, clock: &Arc<ManualRuntimeClock>) -> RuntimeHost {
+    RuntimeHost::start(
+        config(root)
+            .with_runtime_clock(clock.clone())
+            .with_config_manifest(configured_manifest()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            scale_instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host")
+}
+
+// The host's owner epoch as text, as its status and `config.start` spell it.
+fn epoch_text(host: &RuntimeHost) -> String {
+    match serde_json::to_value(host.runtime_info().owner_epoch()).expect("an owner epoch encodes") {
+        serde_json::Value::String(text) => text,
+        other => panic!("an owner epoch is text: {other}"),
+    }
+}
+
+// The one row of `config.start` as the host's program facts hold it.
+fn config_start(host: &RuntimeHost) -> BTreeMap<String, FactScalar> {
+    let record = host
+        .runtime_fact_snapshot()
+        .expect("the program facts")
+        .records
+        .into_iter()
+        .find(|record| {
+            record.scope == RuntimeFactScope::Runtime && record.key == CONFIG_START_FACT_KEY
+        })
+        .expect("config.start");
+    match record.value {
+        ContractFactValue::RecordList(mut rows) if rows.len() == 1 => rows.remove(0),
+        other => panic!("config.start is one row: {other:?}"),
+    }
+}
+
+// Workflow #454 fix 1, point 3: on a real host whose starts record the configuration facts, a new
+// root's first start says it found no earlier start (`first_start` true) and seeds, writing no
+// marker; its second start does not say it, seeds and writes the marker
+// (`ledger_tagged_state_seeded`); its third start does not say it and loads, writing no marker.
+// Each start's `config.start` names its own owner epoch. (A negation the wrong way round would put
+// `first_start` on every start of a root past its first epoch.)
+#[test]
+fn ln4_f_only_a_new_roots_first_start_says_it_found_no_earlier_start() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let seeded = Some("ledger_tagged_state_seeded".to_owned());
+    let starts = [
+        ("the first start", true, "seed", Vec::new()),
+        ("the second start", false, "seed", vec![seeded.clone()]),
+        ("the third start", false, "load", vec![seeded]),
+    ];
+    for (start, first_start, tagged_state, expected_markers) in starts {
+        let host = start_configured_host(&root, &clock);
+        assert_eq!(
+            config_start(&host),
+            BTreeMap::from([
+                (
+                    "owner_epoch".to_owned(),
+                    FactScalar::String(epoch_text(&host))
+                ),
+                ("first_start".to_owned(), FactScalar::Boolean(first_start)),
+                (
+                    "tagged_state".to_owned(),
+                    FactScalar::String(tagged_state.to_owned())
+                ),
+            ]),
+            "{start}"
+        );
+        assert_eq!(markers(&host), expected_markers, "{start}: the markers");
+        host.close().expect("close the host");
+        clock.advance(1_000);
+    }
 }

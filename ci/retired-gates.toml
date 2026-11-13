@@ -1046,3 +1046,11 @@ test = "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_an_input_wai
 ruling = "Workflow #392 DA-3 (contracts/display-adapter.md section 10; the coordinator's work order of 11-13 on board #392)"
 reason = "The test pinned that the host refuses every input under a pure scale (display_map_unresolved, input_scale_unsupported), which was to hold only until DA-3 (its row said: the input side maps from DA-3). DA-3 maps the input, so the refusal it pinned no longer exists."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_an_input_under_a_pure_scale_leaves_at_its_device_pixel, in the same host.toml row: the same package on the same 1920x1080 device completes, its tap (1, 0) leaving at (2, 0); the refusal that remains for a vertical-brake drag is actingcommand-display-adapter::lib::gate_392_da3::da3_t5_a_vertical_brake_scales_with_the_map_and_waits_for_its_bound."
+
+# exec.toml, the row of Workflow #392 DA-3's rows DA3-T1 to T14 at the pure level, which keeps the renamed test.
+[[retired]]
+fragment = "exec"
+test = "actingcommand-display-adapter::lib::gate_392_da3::da3_t5_a_vertical_brake_scales_with_the_map_and_waits_for_its_bound"
+ruling = "Workflow #392 DA-3b (contracts/display-adapter.md section 10, \"The vertical brake\"; the coordinator's work order of 11-13 on board #392, route E)"
+reason = "Renamed: the test pinned that a vertical-brake drag under a scale is held input_scale_unsupported until the interface's bound on its brake moves. DA-3b sends that drag under a scale as a drag with a pause and a brake and moves no bound, so the refusal it pinned no longer exists; its other assertion, the brake of 100 base pixels at 150 straight above the corner at 3/2, is kept on the drag sent."
+covered_by = "actingcommand-display-adapter::lib::gate_392_da3::da3_t5_a_vertical_brake_scales_with_the_map, in the same exec.toml row; the drag at 3/2, 2, 5/2 and 3 and the brake end outside the frame are actingcommand-display-adapter::lib::gate_392_da3b::da3b_a_vertical_brake_leaves_a_scaled_device_as_a_drag_with_a_pause_and_a_brake and da3b_a_brake_end_outside_the_device_frame_is_refused_not_clamped."
