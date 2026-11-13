@@ -18027,7 +18027,7 @@ The coordinator cut MAPP-1 in two on 11-12. "MAPP-1" elsewhere in this section a
   after every task. MAPP-2's key comes with MAPP-2 and takes the next free revision of
   `actingd-config`.
 - Before the load accepts a group of several, main must also end **the member that cannot fit**
-  (added by MAPP-2b, §1.350, point 8; device-group.md, "The member that cannot fit, as built"):
+  (added by MAPP-2b, §1.353, point 8; device-group.md, "The member that cannot fit, as built"):
   with today's request deadlines every run of a member of a group of several is refused by this
   bound; the lease across a switch is reworked in a later slice before any group of several is
   accepted, and a task that cannot fit never becomes a candidate.
@@ -20932,10 +20932,11 @@ literals of today; the task evidence `linked` at both). The forensic leaf's `inp
 the refusal this slice removes; the host's `gate_392_da3` helpers `device_host` and `run` are
 visible to their sibling modules, no assertion changed.
 
-### 1.350 Slice MAPP-2b (0.12.60): the application switch before a run, its failure and the member's cooldown (Workflow #437; the contract of §1.323 and [device-group.md](device-group.md), "The switch before a run"; the design survey `rd-1113/mapp-order-design.md`, its finding F3, its row "MAPP-2b" and its row for slice 2; the coordinator's rulings of 11-14 on board #437, not the owner's words; coordinator work orders `rd-1113/brief-437-mapp2b.md`, read on main `bd58c9a6`, main `fa724931` merged, `rd-1114/brief-1689-fix1.md`, its fix round after the independent review, with the coordinator's addition of 11-14 on the lease bound, and `rd-1114/brief-1689-fix2.md`, its fix round after the first CI run, main `803fdfa3` merged)
+### 1.353 Slice MAPP-2b (0.12.60): the application switch before a run, its failure and the member's cooldown (Workflow #437; the contract of §1.323 and [device-group.md](device-group.md), "The switch before a run"; the design survey `rd-1113/mapp-order-design.md`, its finding F3, its row "MAPP-2b" and its row for slice 2; the coordinator's rulings of 11-14 on board #437, not the owner's words; coordinator work orders `rd-1113/brief-437-mapp2b.md`, read on main `bd58c9a6`, main `fa724931` merged, `rd-1114/brief-1689-fix1.md`, its fix round after the independent review, with the coordinator's addition of 11-14 on the lease bound, and `rd-1114/brief-1689-fix2.md`, its fix round after the first CI run, main `803fdfa3` merged)
 
-1.350 is the next free number after §1.349: the slice took 1.348 on its first base, and release
-0.12.59, merged before it, took §1.348 (#454) and §1.349 (DA-3b). MAPP-2a (§1.342) built the switch's parts with no
+1.353 is the next free number after §1.352: the slice took 1.348 on its first base and 1.350 on
+its second; release 0.12.59, merged before it, took §1.348 (#454) and §1.349 (DA-3b), and the first
+train of 0.12.60 took §1.350 (MAPP-1c), §1.351 (T1-R) and §1.352 (ORD-1a and ORD-1b). MAPP-2a (§1.342) built the switch's parts with no
 caller; MAPP-2b makes the run paths use them. A build still refuses every group of several at load
 (`several_members_unsupported`, unchanged), so no installation reaches this slice's code: its tests
 hand the host the member → device key map and the group's name as the assembly builds them. Every

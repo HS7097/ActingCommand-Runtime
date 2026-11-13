@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #437 MAPP-2b (register §1.350; `contracts/device-group.md`, "The switch before a
+//! Workflow #437 MAPP-2b (register §1.353; `contracts/device-group.md`, "The switch before a
 //! run"): the switch's callers, the run's clock that leaves the switch out, the member's lease, a
 //! failed switch and the member's switch cooldown, through the host.
 //!

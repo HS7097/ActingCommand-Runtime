@@ -16,7 +16,7 @@
 //! - **The stopped member's page forgotten** (`HostShared::forget_stopped_application_facts`,
 //!   `runtime_facts.rs`): its `application.foreground` and `task.page` are dropped.
 //!
-//! Workflow #437 MAPP-2b (register §1.350): the callers. A policy run (`run_scheduled_contained_task`)
+//! Workflow #437 MAPP-2b (register §1.353): the callers. A policy run (`run_scheduled_contained_task`)
 //! and a direct run (`run_contained_task`) of a member switch after their own checks, timed so
 //! that their own clock leaves the switch out ([`HostShared::switch_before_run`]); an
 //! `ApplicationLifecycle` `launch` or `restart` of a member and the ladder's application restart
