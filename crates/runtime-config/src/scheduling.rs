@@ -54,6 +54,10 @@
 //! `1800000`), each also per instance (`instance.<instance id>.scheduling.task_held.<member>`,
 //! defaulting to the section's), whether a pair held past `after_ms` leaves a held record and
 //! when; read by the host at every evaluated policy cycle, read by no decision.
+//! Workflow #437 MAPP-2b (`contracts/device-group.md`, "The switch before a run"; `actingd-config`
+//! revision 30): `device_group.switch_failure_cooldown_ms` (`1..=3600000`, default `300000`), how
+//! long a member of a device group of several whose switch failed does not compete for its
+//! device; read by the host when a switch fails. No per-instance form.
 //! BX-1 (Workflow #429, register §1.273, since 0.12.39): a blackout entry's parser and shape as a
 //! client surface ([`BlackoutListKey`], [`BlackoutEntry::parse`], [`BlackoutEntry::parse_list`],
 //! [`BlackoutEntry::to_json`], [`BlackoutEntry::list_json`]): the console builds and checks the
@@ -218,6 +222,11 @@ pub const TASK_HELD_ENABLED: &str = "scheduling.task_held.enabled";
 /// Workflow #438 HELD-1: how long a pair is held before its held record, in milliseconds, the one
 /// lower bound (also a per-instance member).
 pub const TASK_HELD_AFTER_MS: &str = "scheduling.task_held.after_ms";
+/// Workflow #437 MAPP-2b (`actingd-config` revision 30; `contracts/device-group.md`, "The switch
+/// before a run"): how long, in milliseconds, a member of a device group of several whose switch
+/// failed does not compete for its device. It names no application and has no per-instance form.
+pub const DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS: &str =
+    "scheduling.device_group.switch_failure_cooldown_ms";
 /// #428 SCHED-C1e (register §1.299 SC1-12; `actingd-config` revision 28;
 /// `contracts/scheduling/README.md`, "Lines for one instance"): the member of an instance's own
 /// pool lines (`instance.<instance id>.scheduling.pool_lines`; in the file the
@@ -366,6 +375,11 @@ pub struct SchedulingFile {
     // denies unknown fields; a file that does not name it keeps its revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     task_held: Option<TaskHeldFile>,
+    // Interface anchor `actingd-config` revision 30 (contracts/component-interfaces.md; Workflow
+    // #437 MAPP-2b): a Runtime before MAPP-2b refuses a file that names it, because the section
+    // denies unknown fields; a file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_group: Option<DeviceGroupFile>,
 }
 
 /// Workflow #405: the `scheduling` member of an `instances[]` entry, which holds that instance's
@@ -522,6 +536,12 @@ file_struct!(
     /// instance's.
     TaskHeldFile { enabled, after_ms }
 );
+file_struct!(
+    /// Workflow #437 MAPP-2b: the switch cooldown of a member of a device group of several.
+    DeviceGroupFile {
+        switch_failure_cooldown_ms
+    }
+);
 
 const fn row(
     name: &'static str,
@@ -591,6 +611,13 @@ const EVALUATION_ESCALATE: KeyRange = KeyRange::Integer {
 pub(crate) const TASK_HELD_AFTER_RANGE: KeyRange = KeyRange::Integer {
     min: 60_000,
     max: 86_400_000,
+};
+/// Workflow #437 MAPP-2b: the switch cooldown of a member, `1..=3600000` ms: never zero, so a
+/// switch that keeps failing never retries at every round, and at most an hour. A range, not a
+/// threshold.
+pub(crate) const SWITCH_FAILURE_COOLDOWN_RANGE: KeyRange = KeyRange::Integer {
+    min: 1,
+    max: 3_600_000,
 };
 
 /// Workflow #438 HELD-1: a key of the held records, read by the host from the release that joins
@@ -845,6 +872,18 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::DurationMs,
         TASK_HELD_AFTER_RANGE,
     ),
+    // Workflow #437 MAPP-2b (`contracts/device-group.md`, "The member's switch cooldown"): read
+    // by the host when a member's switch fails, so an instruction applies to the cooldowns that
+    // start after it; a group of one never reads it.
+    KeyRow {
+        since: "0.12.60",
+        ..row(
+            DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS,
+            ValueType::DurationMs,
+            SWITCH_FAILURE_COOLDOWN_RANGE,
+            "MAPP-2b",
+        )
+    },
 ];
 
 /// A pacing stage a stage key names (the vocabulary `pacing_stage`).
@@ -1066,6 +1105,9 @@ pub struct SchedulingConfig {
     pub no_progress_enabled: bool,
     /// Workflow #438 HELD-1: the section's held-record keys.
     pub task_held: TaskHeldConfig,
+    /// Workflow #437 MAPP-2b: how long a member of a device group of several whose switch failed
+    /// does not compete for its device, in milliseconds (`1..=3600000`).
+    pub switch_failure_cooldown_ms: u64,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -1650,6 +1692,7 @@ impl SchedulingConfig {
                 enabled: reader.boolean(TASK_HELD_ENABLED)?,
                 after_ms: reader.duration(TASK_HELD_AFTER_MS)?,
             },
+            switch_failure_cooldown_ms: reader.duration(DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS)?,
         })
     }
 }

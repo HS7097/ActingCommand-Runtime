@@ -326,6 +326,12 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// cycle starts (its hold, its fence, or its holder), by alias; read after the member's own
     /// control gates and before its queue. An instance it does not name waits as before.
     pub(crate) device_group_holds: &'a BTreeMap<String, DeviceGroupHold>,
+    /// Workflow #437 MAPP-2b (`contracts/device-group.md`, "The member's switch cooldown"): each
+    /// member of a device group of several whose switch cooldown still runs as the cycle starts,
+    /// by alias, with the Unix instant it ends; its candidates are held at position 2 with
+    /// `dispatch_instance_cooldown` and `failure_code` `application_switch_failed`. Empty while no
+    /// switch has failed.
+    pub(crate) switch_cooldowns: &'a BTreeMap<String, u64>,
     /// IDLE-3 (#447, register §1.332): the policy's own dispatches as the cycle's inputs were
     /// read ([`PolicyHost::idle_dispatches_read`]), kept with the cycle's not-run explanation.
     pub(crate) dispatches_read: IdleDispatchRead,
@@ -3384,6 +3390,7 @@ impl PolicyHost {
             task_held,
             device_groups,
             device_group_holds,
+            switch_cooldowns,
             dispatches_read,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
@@ -3456,6 +3463,7 @@ impl PolicyHost {
             &fact_refresh,
             control_gates,
             instance_occupancy,
+            switch_cooldowns,
             device_group_holds,
             blackout_holds,
             time.unix_ms,
@@ -3498,8 +3506,18 @@ impl PolicyHost {
         // asks the closure below (behind the store update task that took the instance, the shared
         // run limits or a chain handover), so none of a waiting instance but a store update task's
         // is left eligible and unselected.
-        let instance_holds =
+        let mut instance_holds =
             crate::application_update::instance_holds(&update_pending, &store_tasks);
+        // Workflow #437 MAPP-2b (`contracts/device-group.md`, "The member's switch cooldown"): a
+        // member in its switch cooldown is held whole at position 2, so every candidate of it the
+        // round settles before asking the closure below (behind another member's winner of the
+        // device, the shared run limits or a chain handover) waits with the cooldown's reason
+        // too; position 2 comes before UPD-1's position 4a, so the cooldown replaces its hold.
+        for (alias, until_unix_ms) in switch_cooldowns {
+            let (reason, gate) =
+                crate::fact_refresh::switch_cooldown_hold(alias, *until_unix_ms).reason_and_gate();
+            instance_holds.hold(alias.clone(), reason, gate, BTreeSet::new());
+        }
         // Workflow #429 R-8 (`scheduling-blackout.md`, "Order of the deferrals", position 5;
         // `instance-fact-store.md`, "Pack schedule facts"): each instance's pack schedule as this
         // evaluation's facts hold it, and the package each catalog task runs as the remedy table
@@ -3568,6 +3586,7 @@ impl PolicyHost {
                 if let Some(hold) = crate::fact_refresh::member_hold(
                     &intent.instance_id,
                     &control_gates(&intent.instance_id),
+                    switch_cooldowns.get(&intent.instance_id).copied(),
                     device_group_holds.get(&intent.instance_id),
                     instance_occupancy(&intent.instance_id),
                 ) {
@@ -3924,6 +3943,7 @@ impl PolicyHost {
         context: &FactRefreshContext<'_>,
         control_gates: &dyn Fn(&str) -> actingcommand_contract::ControlGates,
         instance_occupancy: &dyn Fn(&str) -> Option<InstanceOccupancy>,
+        switch_cooldowns: &BTreeMap<String, u64>,
         device_group_holds: &BTreeMap<String, DeviceGroupHold>,
         blackout_holds: &BTreeMap<String, actingcommand_policy::Blackout>,
         now_unix_ms: u64,
@@ -3932,10 +3952,12 @@ impl PolicyHost {
         let mut readers = Vec::new();
         let mut instance_holds = BTreeMap::new();
         for instance in &facts.instances {
-            // Workflow #437 MAPP-1b: a member another member keeps from its device is held too.
+            // Workflow #437 MAPP-1b: a member another member keeps from its device is held too;
+            // MAPP-2b: and a member in its switch cooldown (position 2, no fact refresh demand).
             if let Some(hold) = crate::fact_refresh::member_hold(
                 &instance.instance_id,
                 &control_gates(&instance.instance_id),
+                switch_cooldowns.get(&instance.instance_id).copied(),
                 device_group_holds.get(&instance.instance_id),
                 instance_occupancy(&instance.instance_id),
             ) {

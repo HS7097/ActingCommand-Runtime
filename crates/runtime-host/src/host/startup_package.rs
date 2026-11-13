@@ -457,7 +457,7 @@ impl HostShared {
     /// the startup package of `token`'s member, a member of a device group of several, run on
     /// `token`'s key, which the member's own run holds and gets back. Before anything, the key is
     /// validated and its remaining time must cover the startup run's lease time (its response
-    /// deadline and the heartbeat reserve) and `after_ms`, the time the member's run needs on the
+    /// deadline and the heartbeat reserve) and `need`, the time the member's run needs on the
     /// key afterwards; otherwise nothing is recorded and the refusal is returned. Then the
     /// scheduling intent is recorded under `links` (the member's run's request links) with
     /// `causation_id`, and the package runs as an ordinary host run under it
@@ -473,7 +473,7 @@ impl HostShared {
         links: EventLinksDraft,
         control_request_id: RequestId,
         causation_id: actingcommand_contract::IssuedCausationId,
-        after_ms: u64,
+        need: super::switch::RunNeed,
     ) -> RuntimeHostResult<Result<OperationSuccess, RuntimeHostError>> {
         let member = token.instance_id();
         if !self.in_group_of_several(member) {
@@ -492,7 +492,7 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeHalted,
             )
         })?;
-        if let Err(refusal) = self.borrowed_key_admits(token, connection_id, after_ms)? {
+        if let Err(refusal) = self.borrowed_key_admits(token, connection_id, need)? {
             return Ok(Err(refusal));
         }
         let pending = match self.prepare_startup_package_with(
@@ -515,7 +515,7 @@ impl HostShared {
                 token: token.clone(),
                 connection_id,
             },
-            after_ms,
+            need,
         );
         let success = match executed {
             Ok(success) => success,
@@ -536,7 +536,7 @@ impl HostShared {
 
     /// Workflow #437 MAPP-2a: whether `token` is still the device's key on `connection_id` and
     /// its remaining time covers the member's startup run (its response deadline and the
-    /// heartbeat reserve) and `after_ms`. `Ok(Err(refusal))` otherwise: the scheduler's own
+    /// heartbeat reserve) and `need`, read now. `Ok(Err(refusal))` otherwise: the scheduler's own
     /// refusal of the key, `startup_package_missing` for a member with no startup package, or
     /// `contained_task_deadline_unavailable` for a key whose time does not cover both. An
     /// instance alone on its device is refused first (`instance_mismatch`).
@@ -544,7 +544,7 @@ impl HostShared {
         &self,
         token: &LeaseToken,
         connection_id: ConnectionId,
-        after_ms: u64,
+        need: super::switch::RunNeed,
     ) -> RuntimeHostResult<Result<(), RuntimeHostError>> {
         if !self.in_group_of_several(token.instance_id()) {
             return Ok(Err(super::switch::member_mismatch()));
@@ -565,7 +565,7 @@ impl HostShared {
         let startup_ttl_ms = self
             .contained_task_lease_ttl(&request)
             .map_err(|failure| *failure.error)?;
-        let needed_ms = startup_ttl_ms.saturating_add(after_ms);
+        let needed_ms = startup_ttl_ms.saturating_add(need.after_ms(now));
         if token.expires_at_monotonic_ms().saturating_sub(now) < needed_ms {
             return Ok(Err(RuntimeHostError::request(
                 HostCode::ContainedTaskDeadlineUnavailable,

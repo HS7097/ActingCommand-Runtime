@@ -1392,6 +1392,9 @@ impl HostShared {
         // from its device (its hold, its fence, its holder), with the pauses and fences above.
         let device_group_holds =
             self.policy_device_group_holds(&scheduling_pause, &fenced_aliases, time.unix_ms)?;
+        // Workflow #437 MAPP-2b: each member whose switch cooldown still runs, with its end; none
+        // while no switch has failed (never for an instance alone on its device).
+        let switch_cooldowns = self.policy_switch_cooldowns(time.unix_ms)?;
         // Workflow #336 L6 (§12.7): a paused pair is judged against the startup configuration;
         // PKG-S3: a due paused pair's packages are measured (at most once per interval).
         let suspension_lift = self.suspension_lift_view(&procedure_manifest)?;
@@ -1482,6 +1485,7 @@ impl HostShared {
                     task_held: &task_held_context,
                     device_groups: &device_groups,
                     device_group_holds: &device_group_holds,
+                    switch_cooldowns: &switch_cooldowns,
                     dispatches_read,
                 },
             )?;
@@ -1560,6 +1564,7 @@ impl HostShared {
                 crate::fact_refresh::member_hold(
                     instance_alias,
                     &control_gates(instance_alias),
+                    switch_cooldowns.get(instance_alias).copied(),
                     device_group_holds.get(instance_alias),
                     occupancy.get(instance_alias).copied(),
                 )
@@ -2731,6 +2736,9 @@ impl HostShared {
                             };
                         }
                     };
+                    // Workflow #437 MAPP-2b: a member of a device group of several is granted a
+                    // lease for its switch's startup run and its run, or refused when both cannot
+                    // fit; an instance alone on its device, its run's lease as before.
                     let lease_ttl_ms = task_request
                         .map(|task_request| {
                             task_request.validate().map_err(|_| {
@@ -2743,7 +2751,7 @@ impl HostShared {
                                     None,
                                 )
                             })?;
-                            self.contained_task_lease_ttl(task_request)
+                            self.dispatch_lease_ttl(resolved.instance_id(), task_request)
                         })
                         .transpose();
                     let lease_ttl_ms = match lease_ttl_ms {
@@ -2801,8 +2809,10 @@ impl HostShared {
                                 }
                                 #[cfg(test)]
                                 policy_crash_test_barrier("after_budget_commit");
+                                // Workflow #437 MAPP-2b: the lease's length as granted goes on
+                                // with the token, so nothing after the grant sizes it again.
                                 CriticalActionReport::Succeeded {
-                                    value: (token, catalog, admission_record),
+                                    value: (token, catalog, admission_record, lease_ttl_ms),
                                     effect: DefiniteEffectDisposition::Performed,
                                 }
                             }
@@ -2827,7 +2837,7 @@ impl HostShared {
                         }
                     }
                 },
-                |(_, _, admission), _| {
+                |(_, _, admission, _), _| {
                     self.events
                         .draft(
                             EventSeverity::Info,
@@ -2944,11 +2954,23 @@ impl HostShared {
             match result {
                 Ok(receipt) => {
                     let started_at_monotonic_ms = self.monotonic_ms()?;
-                    let (token, catalog, admission) = receipt.into_value();
-                    let clock = PolicyDispatchClock::live(
+                    let (token, catalog, admission, lease_ttl_ms) = receipt.into_value();
+                    let mut clock = PolicyDispatchClock::live(
                         admission.activity.admitted_at_unix_ms,
                         started_at_monotonic_ms,
                     );
+                    // Workflow #437 MAPP-2b: a member's lease holds its switch's startup run and
+                    // its run; the run's own share ends at the key's expiry less the startup run's
+                    // lease time, which the switch's check reads, taken from the lease's length
+                    // as the admission granted it (never sized a second time, so the two cannot
+                    // differ). Nothing for an instance alone on its device.
+                    if let (Some(task_request), Some(lease_ttl_ms)) = (task_request, lease_ttl_ms)
+                        && self.switch_applies(resolved.instance_id())
+                    {
+                        clock.own_time_through_monotonic_ms = Some(
+                            super::switch::own_time_through(&token, lease_ttl_ms, task_request),
+                        );
+                    }
                     if lock(
                         &self.policy_dispatch_clocks,
                         HostLocation::RecordPolicyDispatchStart,
