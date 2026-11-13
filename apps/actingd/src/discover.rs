@@ -52,7 +52,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
 }
 
 /// `actingd discover` with the reads `reads`: the vendor tool's two and the process listing (a
-/// test injects its own). `discover_completed` with the report (`report`); a refusal is the
+/// test injects its own). `actingd_discover_completed` with the report (`report`); a refusal is the
 /// configuration's (check-config's codes and stages), `invalid_arguments` for a command line it
 /// does not take, or the discovery's: `mumu_manager_version_unsupported` for a version the policy
 /// floor refuses or cannot read, `instance_discovery_unavailable` for anything else (no

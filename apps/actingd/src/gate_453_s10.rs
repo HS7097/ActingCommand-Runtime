@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S10 (register §1.342; contracts/emulator-control.md, "Offline instance discovery";
-// coordinator work orders rd-1113/brief-453-s10-offline-discovery.md and, fix 1,
-// rd-1113/brief-1681-fix1.md): `actingd discover` on its reads injected (`MumuManagerReads`: the
-// vendor tool's two and the process listing), so no program is spawned:
+// Workflow #453 S10 (register §1.345; contracts/emulator-control.md, "Offline instance discovery";
+// coordinator work orders rd-1113/brief-453-s10-offline-discovery.md and, fix 1 and fix 2,
+// rd-1113/brief-1681-fix1.md and rd-1113/brief-1681-fix2.md): `actingd discover` on its reads
+// injected (`MumuManagerReads`: the vendor tool's two and the process listing), so no program is
+// spawned:
 // - `s10_discover_lists_the_instances_with_the_files_bound_aliases`: the listing's fixture parsed
 //   into the host's instance shape, each instance with the alias of the configuration entry whose
 //   binding key names it (an index; a name only one listed instance carries; none for a name two
@@ -17,7 +18,10 @@
 //   `instance_discovery_unavailable` caused by `provider_native_failed` (`backend_launch`);
 // - `s10_fix1_discover_a_process_listing_past_its_bound_is_unavailable` (fix 1): with no folder
 //   named, a process listing whose bound expires is `instance_discovery_unavailable` caused by
-//   `provider_native_failed`, the listing asked once and the vendor tool never.
+//   `provider_native_failed`, the listing asked once and the vendor tool never;
+// - `s10_fix2_several_entries_on_one_instance_the_smallest_instance_id_gives_the_alias` (fix 2):
+//   two entries bind one instance, the one with the larger instance id carrying the smaller alias
+//   and standing first in the file; the alias is the other's, the smallest instance id's.
 // Every root is a temporary folder with neutral names; the tool's files are empty and never run.
 
 use super::*;
@@ -186,7 +190,10 @@ fn s10_discover_lists_the_instances_with_the_files_bound_aliases() {
     assert!(developer.is_none(), "{developer:?}");
     let line: Value = serde_json::from_str(&line).expect("one JSON line");
     assert_eq!(line["schema_version"], discover::SCHEMA_VERSION, "{line}");
-    assert_eq!(line["outcome"]["code"], "discover_completed", "{line}");
+    assert_eq!(
+        line["outcome"]["code"], "actingd_discover_completed",
+        "{line}"
+    );
     let report = &line["report"];
     assert_eq!(
         report["mumu_root"],
@@ -372,5 +379,70 @@ fn s10_fix1_discover_a_process_listing_past_its_bound_is_unavailable() {
         reads.asked.is_empty(),
         "the vendor tool is never run: {:?}",
         reads.asked
+    );
+}
+
+/// Fix 2 (the review of fix 1): of several entries on one instance, the entry with the smallest
+/// `instance_id` gives the alias, as the Runtime's answer takes it. The entry with the larger id
+/// carries the smaller alias and stands first in the file, so neither the least alias nor the
+/// file's order gives this answer.
+#[test]
+fn s10_fix2_several_entries_on_one_instance_the_smallest_instance_id_gives_the_alias() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let root = emulator_root(temp.path(), "emulator", true);
+    let issuer = actingcommand_contract::IdentifierIssuer::new().expect("issuer");
+    let first = *issuer.mint_instance_id().expect("instance id").transport();
+    let second = *issuer.mint_instance_id().expect("instance id").transport();
+    let (smaller, larger) = (first.min(second), first.max(second));
+    assert!(smaller < larger, "two distinct instance ids");
+    let mut larger_id = entry(
+        "neutral.alpha",
+        "neutral.application.alpha",
+        json!({"instance_index": 0}),
+    );
+    larger_id["instance_id"] = json!(larger);
+    let mut smaller_id = entry(
+        "neutral.zeta",
+        "neutral.application.zeta",
+        json!({"instance_index": 0}),
+    );
+    smaller_id["instance_id"] = json!(smaller);
+    let config = temp.path().join("actingd.config.json");
+    fs::write(
+        &config,
+        serde_json::to_vec(&json!({
+            "schema_version": "actingcommand.actingd.config.v1",
+            "state_root": temp.path().join("state"),
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "mumu_root": root,
+            "instances": [larger_id, smaller_id]
+        }))
+        .expect("the configuration JSON"),
+    )
+    .expect("write the configuration");
+    let mut reads = FixtureReads::new(Some(json!({
+        "0": {"index": "0", "name": "neutral-a", "is_process_started": false,
+            "is_android_started": false}
+    })));
+
+    let reported = discover::run_with(
+        &arguments(&[
+            "discover",
+            "--config",
+            config.to_str().expect("a UTF-8 path"),
+        ]),
+        &mut reads,
+    )
+    .unwrap_or_else(|error| panic!("discover answers: {}", error.outcome()));
+
+    assert!(reported.outcome.is(ActingdCode::DiscoverCompleted));
+    let report = reported.data.get("report").expect("the report");
+    assert_eq!(
+        report["instances"],
+        json!([{"instance_index": 0, "instance_name": "neutral-a", "running": false,
+            "bound_alias": "neutral.zeta"}]),
+        "the entry with the smallest instance id, not the least alias nor the first in the \
+         file: {report}"
     );
 }

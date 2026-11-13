@@ -6,6 +6,7 @@ column means. 153 codes.
 
 | Code | Category | Ladder class | Since | Status | Review | Text | Description |
 |---|---|---|---|---|---|---|---|
+| `actingd_discover_completed` | success | none | 0.12.59 | active | pending | written | actingd discover listed this machine's emulator instances without a Runtime (Workflow #453 S10, contracts/emulator-control.md, "Offline instance discovery"): it… |
 | `actingd_fallback_log_failed` | warning | none | 0.12.0 | active | settled | written | A start refusal could not be appended to the fallback log %LOCALAPPDATA%\ActingCommand\logs: path names the folder or file, variable is set when LOCALAPPDATA is… |
 | `adb_install_mismatch` | fatal | none | 0.12.0 | active | settled | written | actingd refused the install root's adb (Workflow #337): a distributed platform-tools binary under \<install root>\tools\platform-tools differs from the SHA-256… |
 | `adb_install_missing` | fatal | none | 0.12.0 | active | settled | written | actingd refused the install root's adb (Workflow #337): a distributed platform-tools binary under \<install root>\tools\platform-tools is missing or cannot be… |
@@ -45,7 +46,6 @@ column means. 153 codes.
 | `device_group_assembled` | info | none | 0.12.56 | active | pending | written | actingd's daemon line at a start, one per device group of several, written once the provider startup has registered the instances (Workflow #437 MAPP-1,… |
 | `device_group_config_invalid` | error | none | 0.12.56 | active | pending | written | The instances[] entries that share one device break a rule of device groups (Workflow #437 MAPP-1, contracts/device-group.md, "The configuration form"). |
 | `device_path_invalid` | error | none | 0.12.0 | active | settled | written | A device_paths entry (nemu_folder, nemu_ipc_dll, droidcast_apk, minitouch_path or maatouch_path) is empty, not absolute, or names no existing file or folder. |
-| `discover_completed` | success | none | 0.12.59 | active | pending | written | actingd discover listed this machine's emulator instances without a Runtime (Workflow #453 S10, contracts/emulator-control.md, "Offline instance discovery"): it… |
 | `emulator_capability_admission_refused` | error | none | 0.12.0 | active | settled | written | Provider startup refused the emulator capability profile built from MuMuManager discovery: the inventory or status read the Runtime needs is not available. |
 | `env_override_ignored` | warning | none | 0.12.0 | active | settled | written | An ACTINGCOMMAND_* environment variable (variable names it) is set but not read, because allow_env_overrides is off. |
 | `fixture_backend_invalid` | error | none | 0.12.0 | active | settled | written | A fixture instance's fixture_backend breaks its rules: the alias is invalid, it lists no frame or too many, or max_inputs is above its bound. |

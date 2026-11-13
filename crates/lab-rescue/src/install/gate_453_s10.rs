@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S10 (register §1.342; contracts/emulator-control.md, "Offline instance discovery";
+// Workflow #453 S10 (register §1.345; contracts/emulator-control.md, "Offline instance discovery";
 // coordinator work orders rd-1113/brief-453-s10-offline-discovery.md and, fix 1,
 // rd-1113/brief-1681-fix1.md): the rescue row `emulators` runs the live build's `actingd discover
 // --config <the root's configuration> --install-root <root>`, once, and nothing else, and writes
@@ -101,7 +101,7 @@ fn emulators_answers_the_live_builds_report() {
         json!({
             "schema_version": "actingcommand.actingd.discover.v1",
             "outcome": {"schema_version": "actingcommand.outcome.v1",
-                "code": "discover_completed", "category": "success", "values": {}},
+                "code": "actingd_discover_completed", "category": "success", "values": {}},
             "report": report,
         }),
     );
@@ -122,7 +122,7 @@ fn emulators_answers_the_live_builds_report() {
         .expect("the outcome's links");
     assert_eq!(causes.len(), 1, "{line}");
     assert_eq!(causes[0]["relation"], "related", "{line}");
-    assert_eq!(causes[0]["code"], "discover_completed", "{line}");
+    assert_eq!(causes[0]["code"], "actingd_discover_completed", "{line}");
     assert_ran_discover_once(&host, &root);
     assert_eq!(tree(&root), root_before, "nothing written in the root");
     assert_eq!(tree(&state_root), state_before, "the state root untouched");

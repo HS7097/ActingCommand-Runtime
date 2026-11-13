@@ -20008,9 +20008,10 @@ one `record start --force` left behind, by its id. Nothing is migrated.
 as a session that is not active: the earlier `record start` starts the next one without `--force`,
 and the manifests stay as files nothing reads.
 
-### 1.342 Slice S10 (0.12.59): `actingd discover` and the rescue row `emulators` list this machine's emulator instances while no Runtime runs (Workflow #453, thing 4 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0 and §4, read on main `98924e28`; the coordinator's rulings of 11-13 in the work order, not the owner's words; coordinator work order `rd-1113/brief-453-s10-offline-discovery.md`, read on main `98924e28`, main `7938d10e` merged; fix 1, after an independent review, coordinator work order `rd-1113/brief-1681-fix1.md`, main `10f538ea` merged)
+### 1.345 Slice S10 (0.12.59): `actingd discover` and the rescue row `emulators` list this machine's emulator instances while no Runtime runs (Workflow #453, thing 4 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0 and §4, read on main `98924e28`; the coordinator's rulings of 11-13 in the work order, not the owner's words; coordinator work order `rd-1113/brief-453-s10-offline-discovery.md`, read on main `98924e28`, main `7938d10e` merged; fix 1, after an independent review, coordinator work order `rd-1113/brief-1681-fix1.md`, main `10f538ea` merged; fix 2, the outcome guard's G8 and the review of fix 1, coordinator work order `rd-1113/brief-1681-fix2.md`, main `bd58c9a6` merged)
 
-1.342 is the next free number on main `10f538ea` (#441 took 1.340, #454 1.341). The contract is
+1.345 is the next free number on main `bd58c9a6` (#441 took 1.340, #454 1.341, #437 MAPP-2a 1.342,
+#450 FL-1 1.343, #449 REC-ARCH 1.344). The contract is
 [emulator-control.md](emulator-control.md), "Offline instance discovery": its subject is the
 instance discovery that section's "Instance discovery query" gives for a running Runtime (the same
 two vendor reads, the same instance shape, the same refusal codes), while
@@ -20035,7 +20036,7 @@ discovery.
 | S10-5 | the row `emulators` (module `rescue`, slice S10, planned; no parameter; read only, offline; `source` `actingd discover`, `new` #453 S10) | operation table row added | S10 | the Lab's command line, `serve --stdio`, the Lab's MCP server | `rescue::SERVED` holds it (34 rows) and `rescue_reads::READ_HERE` its empty list (17 rows); the live build's `actingd discover --config <the root's selected configuration> --install-root <root>` within `programs::DISCOVER_TIMEOUT_MS` (fix 1: 60 s, the child's three bounds of 10 s and as much again; it was `install.child.check_config_timeout_ms`, 900 s by default, with the child left running), at which the child is ended through `Host::run_program_ending`; `install_command_done` (operation `install_emulators`, actingd's outcome its `related` link) with `report`, else `install_command_refused`, `install_refusal` `emulator_discovery_failed`, actingd's outcome or the child's failure its `caused_by` link, or for a child ended at the bound `timeout_ms` 60000 and no cause |
 | S10-7 | `actingd discover` clears the inheritable flag of its own stdout and stderr (`standard_handles::apply`, `apps/actingd/src/main.rs`) | behaviour (fix 1) | S10 | S10-1 | before it does anything, as the daemon does (WD-MT): no descendant of the vendor tool or PowerShell keeps the row's pipe open; a failure is `host_stdio_inheritance_failed` as a developer line on stderr and the discovery goes on |
 | S10-8 | `Host::run_program_ending` and `NotFinished` (`crates/lab-rescue/src/install/host.rs`) | behaviour (fix 1) | S10 | S10-5 | the host's run of a child that is ended at its deadline, killed, reaped and no longer read, through the shared helper's existing `child::run_captured_ending` (RL-1c fix 1); only `programs::discover` uses it, every other child keeps the stall rule through `run_program` |
-| S10-6 | `discover_completed` (actingd, success, no value); the location `install_emulators` (owner `actingctl`); `install_refusal` `emulator_discovery_failed` (all `since` 0.12.59, pending) | outcome catalog | S10 | S10-1, S10-5 | `ActingdCode::DiscoverCompleted`, `InstallLocation::Emulators`, `InstallRefusal::EmulatorDiscoveryFailed`; reused: `instance_discovery_unavailable` and `mumu_manager_version_unsupported` (the Runtime's discovery surface's classification, `DiscoverySpec::discover`), the device failure outcome provider startup records (`config::device_failure_outcome`) as their cause, `invalid_arguments` and `serialization_failed` (the contract's shared codes), check-config's load and assembly codes and `check_config_install_root_invalid` (its description now names `discover` too); fix 1: `install_command_refused` takes the optional key `timeout_ms` (the row's bound of an ended discovery), `host_stdio_inheritance_failed`'s description names `discover`, and the vocabulary `mumu_root_source`'s `person` is reused; no code or word added; the index is regenerated |
+| S10-6 | `actingd_discover_completed` (actingd, success, no value; fix 2: it was `discover_completed`, whose prefix `discover_` the catalog's `domains` give to other components, so the outcome guard's G8 refused it; `actingd_` is actingd's alone); the location `install_emulators` (owner `actingctl`); `install_refusal` `emulator_discovery_failed` (all `since` 0.12.59, pending) | outcome catalog | S10 | S10-1, S10-5 | `ActingdCode::DiscoverCompleted`, `InstallLocation::Emulators`, `InstallRefusal::EmulatorDiscoveryFailed`; reused: `instance_discovery_unavailable` and `mumu_manager_version_unsupported` (the Runtime's discovery surface's classification, `DiscoverySpec::discover`), the device failure outcome provider startup records (`config::device_failure_outcome`) as their cause, `invalid_arguments` and `serialization_failed` (the contract's shared codes), check-config's load and assembly codes and `check_config_install_root_invalid` (its description now names `discover` too); fix 1: `install_command_refused` takes the optional key `timeout_ms` (the row's bound of an ended discovery), `host_stdio_inheritance_failed`'s description names `discover`, and the vocabulary `mumu_root_source`'s `person` is reused; no code or word added; fix 2: the code renamed (never released, so no retired entry) and one sentence added to `host_stdio_inheritance_failed`'s `handling` for `discover`; the index is regenerated |
 
 **Why one new code and one new token.** No success code meant "an offline discovery answered":
 `instances_discovered` is actingctl's, the answer of a running Runtime's discovery, and actingd's
@@ -20078,6 +20079,23 @@ hint) and that an explicit host and port is matched online only. The subcommand'
 beyond these, its codes and the refusal word, check-config, a start and every other rescue row are
 unchanged.
 
+**Fix 2 (the outcome guard in CI and the review of fix 1; the coordinator's rulings, not the
+owner's words).** The guard's G8 refused `discover_completed`: the longest prefix of the catalog's
+`domains` it starts with, `discover_`, belongs to contract, device, execution-kernel,
+runtime-client and runtime-host, not to actingd. The code is now `actingd_discover_completed`,
+whose longest prefix `actingd_` only actingd owns (as `actingd_fallback_log_failed`); the guard
+and the prefix table are unchanged, and the Rust variant stays `ActingdCode::DiscoverCompleted`.
+The code was never released, so it is renamed outright, with no retired entry. Checked against the
+guard's other rules: the code's registry and fragment agree (G1: owner, category, ladder class);
+the location `install_emulators` takes `install_`, which actingctl owns (G8), and is registered in
+actingctl's registry (G1); the refusal word `emulator_discovery_failed` is in the vocabulary
+`install_refusal` and in its enum (G7); the optional key `timeout_ms` of `install_command_refused`
+is in the key table and the code is pending, released in no file (G9, G10). Two small points of the
+review of fix 1: a test pins that of several entries on one instance the smallest instance id
+gives the alias, where the entry with the larger id has the smaller alias; and
+`host_stdio_inheritance_failed`'s `handling` says what a caller of `discover` meets when the
+handles could not be cleared.
+
 **At deploy.** Nothing to do: a new read-only command and a new read-only row; nothing persisted,
 no key, no revision. Beside a running Runtime the command is a second reader of the same vendor
 tool, whose behaviour under two `info` calls at once has not been verified (the survey's §4(e)).
@@ -20105,8 +20123,12 @@ file: the folder as given, `source` `person`, no alias; a folder without the too
 `backend_launch` and `mumu_root`, each read asked once) and, fix 1,
 `s10_fix1_discover_a_process_listing_past_its_bound_is_unavailable` (no folder named, a process
 listing past its bound: `instance_discovery_unavailable` caused by `provider_native_failed` with no
-`mumu_root`, the listing asked once, the vendor tool never). In `crates/lab-rescue`
-(`install::gate_453_s10`, the fake host): `emulators_answers_the_live_builds_report`,
+`mumu_root`, the listing asked once, the vendor tool never) and, fix 2,
+`s10_fix2_several_entries_on_one_instance_the_smallest_instance_id_gives_the_alias` (two entries
+bind index 0; the one with the larger instance id has the alias `neutral.alpha` and stands first
+in the file, the other `neutral.zeta`: the instance's `bound_alias` is `neutral.zeta`). In
+`crates/lab-rescue` (`install::gate_453_s10`, the fake host):
+`emulators_answers_the_live_builds_report`,
 `emulators_refuses_with_actingds_outcome_as_its_cause` (the one child line, the answers above, the
 root and its state root byte for byte as before) and, fix 1,
 `emulators_fix1_a_discovery_that_never_ends_is_ended_at_its_bound` (an actingd that never exits:
@@ -20119,7 +20141,9 @@ constant) and `mcp_served_and_refused_partition` (actinglab-mcp, the row served 
 module on Windows). Adapted by fix 1 (the requirement deliberately changes what they pin, nothing
 else in them): the first two tests of `apps/actingd` pinned the canonical folder and `source`
 `argument` and now pin the folder as written and `person`; their fixture of the reads answers the
-new third read. No other existing test changes.
+new third read. Adapted by fix 2 (the code's rename, nothing else in them): the first test of
+`apps/actingd` and the first of `crates/lab-rescue` name `actingd_discover_completed` where they
+named `discover_completed`. No other existing test changes.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

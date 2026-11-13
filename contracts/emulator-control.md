@@ -1622,8 +1622,8 @@ the IO margin.
 The same listing while no Runtime runs: before a root exists (an installer runs the release's own
 actingd), on a fresh root, or with the Runtime stopped. It is the Runtime's discovery without the
 Runtime, so it lives beside the query above: the same vendor reads, the same instance shape, the
-same refusal codes. Board #453, slice S10 and its fix 1; register §1.342. The online query and the
-core row `discover` are unchanged.
+same refusal codes. Board #453, slice S10 and its fixes 1 and 2; register §1.345. The online query
+and the core row `discover` are unchanged.
 
 ```
 actingcommand-actingd discover [--config <file> [--install-root <root>]] [--mumu-root <dir>]
@@ -1668,9 +1668,10 @@ actingcommand-actingd discover [--config <file> [--install-root <root>]] [--mumu
   report from. Nothing else: no other subcommand of the vendor tool (no `control`, no `launch`, no
   `api`), no adb, no emulator started, stopped or changed.
 - **The answer**, one line, schema `actingcommand.actingd.discover.v1`:
-  `{schema_version, outcome, report}`, the outcome `discover_completed` (exit 0) and `report`
-  `{mumu_root: {path, source}, provider_version, instances}`. `path` is the installation folder
-  as check-config reports it: a folder `--mumu-root` or the file's `mumu_root` names, as written;
+  `{schema_version, outcome, report}`, the outcome `actingd_discover_completed` (exit 0; the
+  prefix `actingd_`, which only actingd owns, since `discover_` is other components', fix 2) and
+  `report` `{mumu_root: {path, source}, provider_version, instances}`. `path` is the installation
+  folder as check-config reports it: a folder `--mumu-root` or the file's `mumu_root` names, as written;
   one the environment rung or the resolver found, canonical. `source` is `person` (`--mumu-root`,
   the word of the vocabulary `mumu_root_source` for a folder a person gave), `config` (the file's
   `mumu_root`), `env`, `running_process`, `registry_uninstall` or `vendor_enumeration`.
