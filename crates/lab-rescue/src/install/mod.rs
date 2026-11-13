@@ -120,6 +120,10 @@ mod gate_434_lab6s0;
 // directory.
 #[cfg(test)]
 mod gate_444_notices2;
+// Test-only: Workflow #451 LOAD-P, the rescue module's `place` of a bundle's loading templates
+// directory.
+#[cfg(test)]
+mod gate_451_loadp;
 // Test-only: Workflow #451 PLACE-PKG, the rescue module's `place` reads a bundle's declaration by
 // the bundle's own rule.
 #[cfg(test)]

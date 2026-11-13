@@ -910,14 +910,28 @@ the rescue face:
   file, a malformed value under any name of `speaks` included, or a declared maximum
   outside the running installer's `package` range, is `interface_edge` with the path of the file
   and the game), then plans with the contract crate's readers (the layout: the root files,
-  `packs/<listed id>/…`, `tables/<listed id>.json` and, from `package` 10, the notices directory
-  `notices/` under the rules of [package-reference.md](package-reference.md), "Notices"), holds
+  `packs/<listed id>/…`, `tables/<listed id>.json`, from `package` 10 the notices directory
+  `notices/` under the rules of [package-reference.md](package-reference.md), "Notices", and,
+  from 0.12.59 (Workflow #451 LOAD-P), the loading templates directory `loading/<file>`, exactly
+  the templates the zip's own `loading.json` declares, read with `parse_standard_pack_loading`:
+  a `loading/` member the file does not declare, a deeper path and any `loading/` member of a zip
+  without `loading.json` are refused `pack_invalid` naming the member, a declared template the zip
+  lacks `pack_invalid` caused by `standard_pack_root_invalid` `loading_template_invalid` (`path`
+  the missing member below the zip, the pointer of the target that reads it), a problem of the
+  file itself as a root file's, and a pack named `loading` in any ASCII case beside the directory
+  `loading_pack_name` (`path` `<zip>\bundle.json`, `package_id`), all before the hold; an installer
+  before it refuses such a zip at its layout check, naming the first `loading/` member, before
+  anything is paused or written), holds
   the instances bound to the bundle's game (the game comes from the bundle), waits until they are
   idle, places each item `.part` → `.old-<ms>` → in place (step `pack_item`), checks the bundle
   again and runs `<root>\tools\actinglab.exe standard-pack check` on the placed game root,
   releases and reads the schedule; the notices directory is one item (kind `notices`, Workflow
   #444 NOTICES-2), placed first and, when the zip no longer carries it, set aside as a root file
-  is; `alive [--wait]`
+  is; the loading templates directory is one item (kind `loading`, `<game root>\loading`, Workflow
+  #451 LOAD-P), placed after the packs and before the root files, so the templates are in place
+  before the `loading.json` that declares them, and, when the zip no longer carries it, set aside
+  as `loading.old-<ms>` as `loading.json` is (not when a pack of the bundle is named `loading`);
+  `alive [--wait]`
   is the watchdog's status of the root; `instance add <alias> …` (Workflow #421 INST-5, first
   slice; "Configuration, instances, packs and a fresh root", "Instances, the first slice") composes
   the candidate and commits it as `config replace` does, with the new instance paused after the

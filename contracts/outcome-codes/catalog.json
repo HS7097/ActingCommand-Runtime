@@ -6606,7 +6606,7 @@
           "description": "max_ms of loading.json or of a pack's loading copy is outside 1 to 1800000 (Workflow #407 LOAD-1, since 0.12.37)."
         },
         "loading_template_invalid": {
-          "description": "A template loading.json declares is missing, cannot be read, is no PNG or is of one colour throughout (Workflow #407 LOAD-1, since 0.12.37); LOAD-2: or so is a template a pack's loading copy reads, when the pack loader compiles it."
+          "description": "A template loading.json declares is missing, cannot be read, is no PNG or is of one colour throughout (Workflow #407 LOAD-1, since 0.12.37); LOAD-2: or so is a template a pack's loading copy reads, when the pack loader compiles it; Workflow #451 LOAD-P (since 0.12.59): or a bundle zip's loading.json declares a template the zip does not carry below loading/, refused by the installer's place with path the missing member."
         },
         "loading_coordinate_mismatch": {
           "description": "A pack that takes loading pages declares another coordinate_space than loading.json (Workflow #407 LOAD-1, since 0.12.37); LOAD-2: or than its loading copy, when the pack loader compiles it."
@@ -6640,6 +6640,9 @@
         },
         "notice_undeclared": {
           "description": "A bundle carries the notices directory and declares a package interface maximum below 10 (Workflow #444 NOTICES-1, since 0.12.58; first checked by NOTICES-2)."
+        },
+        "loading_pack_name": {
+          "description": "A bundle zip that carries the loading templates directory loading/ lists a pack named loading in any ASCII case (package_id); placed, the two would share one folder of the game root. Refused by the installer's place at bundle.json (Workflow #451 LOAD-P, since 0.12.59)."
         }
       }
     },

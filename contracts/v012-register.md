@@ -18972,6 +18972,140 @@ listed and `unknown`, and `gate_pkg_s2` an entry recovery) and
 `rg_stop_t5_a_paused_runs_records_are_not_listed` (a terminal and a `runtime.failed` of
 `contained_task_paused`: errors, not listed, no group). No existing test changes.
 
+### 1.338 Slice LOAD-P (0.12.59): the installer's `place` takes the loading templates directory (Workflow #451; a latent gap, no released bundle carries the directory; the coordinator's rulings of 11-13 on board #451, not the owner's words; coordinator work order `rd-1113/brief-451-loadp.md`, read on main `a83e482b`)
+
+1.338 is the coordinator's number. [install-cli.md](install-cli.md), "The Lab's rescue module"
+(`place`), [package-reference.md](package-reference.md), "Standard package root" (`loading.json`),
+and the notes of the row `place` of `lab-operations.json` are the contract. Added: one value of
+the `pack_item` intent's and the plan document's `kind` (`loading`) and one word of the vocabulary
+`standard_pack_problem` (`loading_pack_name`, with its catalog entry; the outcome code index was
+regenerated and holds codes only, so it does not change). No outcome code, value key,
+configuration key, step kind, intent member, interface revision, wire shape or record is added.
+**A bundle without the directory on a root without it plans, journals and places exactly as
+before.**
+
+**What was latent.** `package bundle --loading` lays the root file `loading.json` and, beside it,
+the directory `loading/` with the templates the file declares
+(`crates/resource-tooling/src/package_directory.rs`; [package-reference.md](package-reference.md),
+"Loading pages"), and `resource verify` zips both. `place` knew `loading.json` as a root file but
+no member `loading/…`: its layout check refused such a zip `pack_invalid` naming the first
+`loading/` member, so the bundle of a resource repository that starts carrying loading templates
+could not be placed. No released bundle carries the directory, so nothing has failed yet.
+
+**What `place` does with the directory** (crate `lab-rescue`, `src/install/place.rs`, `plan` and
+`check_loading`):
+
+- **The layout** takes the members `loading/<path>` (exact lower case: a member `Loading/…` stays
+  unknown, `pack_invalid` naming it) and holds them, right after the notices directory's rules and
+  before the root files are read, to the zip's own `loading.json`, read with the contract crate's
+  `parse_standard_pack_loading` for the bundle's game. A declared template is a target's
+  `template`, `loading/<file>.png`, relative to the directory of the file that declares it, which
+  in the zip is the zip's root: the member of a template is the template path itself. In this
+  order, all in the plan, before the hold and before any write:
+  - a zip that carries no `loading.json`: its first `loading/` member in name order is refused
+    `pack_invalid` naming it (`<zip>\loading/<path>`), as a member no layout knows is named;
+  - the file itself refused by the reader: `pack_invalid` caused by `standard_pack_root_invalid`
+    with its first issue (`path` `<zip>\loading.json`, the issue's word and pointer), as a root
+    file's problem is refused (`package bundle --loading` checks the file first, so a zip it wrote
+    never has one);
+  - a `loading/` member that is not a declared template, a deeper path among them (a template
+    path never holds a second `/`): `pack_invalid` naming the first such member, as above;
+  - a template the file declares and the zip lacks: `pack_invalid` caused by
+    `standard_pack_root_invalid` with `game`, `standard_pack_problem` `loading_template_invalid`
+    (the word `standard-pack check` answers for a template that is missing or unreadable), the
+    pointer that check gives, that of the first target in the file's order that reads the template
+    (`/<family>/<index>/template`), and `path` the missing member below the zip
+    (`<zip>\loading\<file>.png`, where the check names `loading.json`). A valid file declares one
+    template at least (every page's `required` holds a template target), so a zip that carries
+    `loading.json` without the directory is refused here; `package bundle` never writes one;
+  - a bundle that carries the directory and lists a pack named `loading` in any ASCII case:
+    `pack_invalid` caused by `standard_pack_root_invalid` `loading_pack_name`, `path`
+    `<zip>\bundle.json`, `json_pointer` empty, `package_id` the pack's. No existing word said it
+    (`notice_name` is the notices directory's), so the word is added. Placed, the two would share
+    `<game root>\loading`; the contract already told a repository not to name a pack so.
+
+  `place` reads the declaration and the names only: what a template shows (a PNG of more than one
+  colour) stays `standard-pack check`'s, which `post_check` runs on the placed game root. The
+  refusal of a root file's problem is now built by one helper, `root_refusal`, for the root files
+  and `loading.json` alike; the outcome it builds for the root files is the one built before.
+- **The bound.** The contract crate states no bound for a template file
+  (`standard_pack_loading.rs` bounds a template's stem, 64 bytes, not its size), so a template is
+  read as a pack's file is, whole (`Archive::read_of`), when it is digested and when its part is
+  written.
+- **The item.** One folder item of kind `loading` (`ItemKind::Loading`), `item` `loading`, `dst`
+  `<game root>\loading`, its members `<file>` → `loading/<file>`, digested as a pack's folder is
+  (the listing digest of each file's SHA-256), placed **after the packs and before the root
+  files**, so the templates are in place before the `loading.json` that declares them. States
+  `new`, `replace`, `unchanged`, and `retire` when the game root holds `loading\` and the zip
+  carries none: set aside as `loading.old-<ms>` and kept, as `loading.json` itself is set aside when
+  a zip no longer carries it (the directory's `retire` comes before the file's); not when a pack of
+  the bundle is named `loading` in any ASCII case (that folder is the pack's). Its step is one more
+  `pack_item`, its part `loading.new-<ms>.part` in the game root, where the leftover check already
+  looks; no new step kind and no new intent member.
+- **`post_check`** covers the item through its rerun (its listing digest, or its absence after
+  `retire`); `standard-pack check` reads the placed `loading.json` with its templates as it has
+  since LOAD-1. **`undo`** reverses the item by kind and digest: the placed directory set aside as
+  `loading.rolledback-<ms2>` and the kept one renamed back; a retired one renamed back. Nothing is
+  deleted.
+- **A bundle without the directory** and without `loading.json` on a root without the directory
+  reads neither and gets no item: the same canonical plan document and plan id, the same steps and
+  the same journal.
+
+**No revision moves.** The bundle format has carried the directory since LOAD-1 (0.12.37); this
+slice lets the installer place what the builder already writes. `package` stays [3, 10];
+`reserved_package_id` and `BundleIndex` are unchanged, so a reader of any `package` revision
+accepts the bundles it accepted; the notices rules and their constants do not move.
+
+**What programs of an earlier release do:**
+
+| Program | A zip that carries `loading/` | A game root that holds `loading/` |
+|---|---|---|
+| rescue `place` before 0.12.59 | `pack_invalid` naming the first `loading/` member in name order (its layout check, after its `package` edge), before the hold: nothing paused, nothing written | a bundle without the directory is placed and `loading\` is left as it is (its `loading.json` set aside) |
+| an earlier installer's `undo` of a `pack_place` journal with a `loading` item | — | cannot read the kind ([install-cli.md](install-cli.md), "Journals across versions"); undo with this build first |
+| `standard-pack check` | reads no zip | reads `loading/` beside `loading.json`, as since LOAD-1 |
+| the Runtime (actingd), check-config, the composer | read no zip | never read it |
+
+`actingctl install` has no pack placement of its own (`actingctl install pack plan|place`, INST-4,
+is not built), so it never opens such a zip.
+
+**At deploy.** Nothing changes for a bundle without the directory. A bundle that carries it is
+placed only by this release's `place`; an installer of an earlier release refuses it at its layout
+check, naming the member, before anything is paused or written. No interface revision moves.
+**Rollback** to a build before 0.12.59: an earlier installer cannot undo a `pack_place` that placed
+or retired the directory; the Runtime of any release reads a root that holds `loading\` as before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LP-1 | `place`'s layout: `loading/<file>` held to the zip's own `loading.json` | installer behaviour | LOAD-P | — | in the plan, before the hold and any write; members named as unknown ones, a missing template `loading_template_invalid` |
+| LP-2 | the `pack_item` intent's and the plan document's `kind` + `loading` | journal value (no new member) | LOAD-P | LOAD-P | after the packs, before the root files; `retire` when a later bundle carries none; an installer before 0.12.59 cannot read it |
+| LP-3 | `standard_pack_problem` + `loading_pack_name` | vocabulary word | LOAD-P | LOAD-P | catalog entry; the catalog's description of `loading_template_invalid` names `place` |
+
+Tests (apps gate row "#451 LOAD-P", `crates/lab-rescue/src/install/gate_451_loadp.rs`, on the fake
+host with placeholder names and placeholder template bytes, built as `gate_444_notices2.rs` builds
+its bundles; the fake installer declares `package` [3, 10], every bundle [3, 5]; a `loading.json`
+declaring `loading/first.png` and `loading/second.png` at `/anchors/0` and `/anchors/1`):
+`loading_templates_are_placed_after_the_packs_and_read_back_unchanged` (planned with the item
+`loading` `new` after the pack and before `bundle.json` and `loading.json`, at `<game
+root>\loading`; placed, its step the third of five `pack_item` steps, the files on disk the zip's
+bytes; planned again with every item `unchanged`; `undo` sets the placed directory aside as
+`loading.rolledback-<ms>`), `loading_templates_replace_unchanged_retire_and_undo` (a changed
+template: `replace`, the only step, the replaced directory kept as `.old-<ms>`; the same templates
+while the pack changes: `unchanged`, no step touches the directory; a bundle without `loading.json`
+and the directory: both `retire`, the directory first, shown by the plan, kept as `loading.old-<ms>`
+and `loading.json.old-<ms>`; each `undo` puts back what was there),
+`loading_absent_bundle_plans_as_before` (a bundle without the directory on a root without it: the
+journalled plan document is exactly the earlier one, the plan id the earlier formula over it, the
+same six steps, and every `pack_item` intent with only the earlier members and no kind `loading`;
+as for NOTICES-2, the plan id main gave before the slice cannot be known here without a build, so
+the test holds the document and the formula) and `loading_refusals_come_before_the_hold` (a member
+the file does not declare, a deeper path and the directory without `loading.json`, each
+`pack_invalid` at the member with no cause; a declared template the zip lacks,
+`loading_template_invalid` at `<zip>\loading\second.png` and `/anchors/1/template`; a pack
+`loading` and a pack `Loading` beside the directory, `loading_pack_name` at `<zip>\bundle.json`
+with the `package_id`; no pause, no journal, nothing in the game root). The refusal of a
+`loading.json` the reader refuses has no test of its own: the work order names none. No existing
+test changes.
+
 ### 1.339 Slice PLACE-PKG (0.12.59): the installer's `place` reads a bundle's declaration by the bundle's own rule (Workflow #451; found by reading the code and the declaration a released bundle carries, never met in production; the coordinator's rulings of 11-13 on board #451, not the owner's words; coordinator work order `rd-1113/brief-451-place-pkg.md`, read on main `ef94d950`)
 
 1.339 is the coordinator's number; another slice of this release appends 1.338.

@@ -10,19 +10,23 @@
 //!   (`interfaces.json`, its maximum within the running installer's `package` range; Workflow
 //!   #444 NOTICES-2: checked before the layout, so a bundle of a later revision is refused through
 //!   `package`; Workflow #451 PLACE-PKG: read by the bundle's own rule, its schema, every value
-//!   under `speaks` a pair and `speaks.package` named), its layout (the root files, `packs/<listed id>/…`,
-//!   `tables/<listed id>.json` and the notices directory `notices/…`, held to the contract
-//!   crate's notices rules), the root
-//!   files as every reader checks them ([`read_standard_pack_root`]), each pack's file count and
-//!   size, and per item `new`, `replace`, `unchanged` or, for a reader's root file or the notices
-//!   directory the zip no longer carries, `retire`. The notices directory is one item of kind
-//!   `notices`, placed first. The plan id is `plan-` and the first 16 hex digits of the SHA-256
-//!   of the canonical plan document.
+//!   under `speaks` a pair and `speaks.package` named), its layout (the root files,
+//!   `packs/<listed id>/…`, `tables/<listed id>.json`, the notices directory `notices/…`, held to
+//!   the contract crate's notices rules, and, Workflow #451 LOAD-P, the loading templates
+//!   directory `loading/<file>`, exactly the templates the zip's own `loading.json` declares), the
+//!   root files as every reader checks them
+//!   ([`read_standard_pack_root`]), each pack's file count and size, and per item `new`,
+//!   `replace`, `unchanged` or, for a reader's root file, the notices directory or the loading
+//!   templates directory the zip no longer carries, `retire`. The notices directory is one item
+//!   of kind `notices`, placed first; the loading templates directory one item of kind `loading`,
+//!   placed after the packs and before the root files. The plan id is `plan-` and the first 16
+//!   hex digits of the SHA-256 of the canonical plan document.
 //! - **The operation** (`kind` `pack_place`, journalled): the hold of the instances bound to the
 //!   bundle's game (`pause`), then each item that changes (`pack_item`: written to
 //!   `<dst>.new-<ms>.part`, the item in place renamed `<dst>.old-<ms>` and kept, the part renamed
-//!   in, the content checked; a root file or the notices directory the zip no longer carries
-//!   renamed `<dst>.old-<ms>`), the first item waiting until those instances are idle within
+//!   in, the content checked; a root file, the notices directory or the loading templates
+//!   directory the zip no longer carries renamed `<dst>.old-<ms>`), the first item waiting until
+//!   those instances are idle within
 //!   `install.hot.idle_wait_ms` (`instances_not_idle` otherwise; nothing changed yet, so the
 //!   operation's own pauses are
 //!   handed back at once, LAB-3 fix 1); then the checks after the placement (`post_check`: the
@@ -48,13 +52,14 @@ use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{
-    BundleIndex, MAX_NOTICE_FILE_BYTES, NOTICES_PACKAGE_REVISION, NoticeBound, NoticeEntry,
-    NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRootBytes,
+    BundleIndex, LOADING_PREFIX, LoadingTarget, MAX_NOTICE_FILE_BYTES, NOTICES_PACKAGE_REVISION,
+    NoticeBound, NoticeEntry, NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
+    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRootBytes, StandardPackRootIssue,
     check_notice_listing, check_notice_pack_ids, check_notice_size, check_notice_text,
-    notice_relative_path, read_standard_pack_root,
+    notice_relative_path, parse_standard_pack_loading, read_standard_pack_root,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -120,6 +125,9 @@ pub(crate) enum ItemKind {
     /// Workflow #444 NOTICES-2: `notices\`, the bundle's notices directory, a folder digested as
     /// a pack's is.
     Notices,
+    /// Workflow #451 LOAD-P: `loading\`, the templates the bundle's `loading.json` declares, a
+    /// folder digested as a pack's is.
+    Loading,
 }
 
 /// What the placement does to an item.
@@ -129,8 +137,8 @@ pub(crate) enum ItemState {
     New,
     Replace,
     Unchanged,
-    /// A reader's root file, or (Workflow #444 NOTICES-2) the notices directory, the zip no
-    /// longer carries: set aside.
+    /// A reader's root file, (Workflow #444 NOTICES-2) the notices directory or (Workflow #451
+    /// LOAD-P) the loading templates directory, the zip no longer carries: set aside.
     Retire,
 }
 
@@ -139,7 +147,7 @@ pub(crate) enum ItemState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Item {
-    /// The table id, the pack id or the root file's name.
+    /// The table id, the pack id, the root file's name or the directory's (`notices`, `loading`).
     pub(crate) item: String,
     pub(crate) kind: ItemKind,
     pub(crate) state: ItemState,
@@ -281,7 +289,9 @@ impl Archive {
     }
 
     /// The bytes of the member `name` of an item of `kind`: a file of the notices directory
-    /// through its bound plus one byte (Workflow #444 NOTICES-2), any other member whole.
+    /// through its bound plus one byte (Workflow #444 NOTICES-2), any other member whole (a
+    /// template of the loading templates directory too, as a pack's file: the contract crate
+    /// states no bound for one, Workflow #451 LOAD-P).
     fn read_of(&mut self, kind: ItemKind, name: &str) -> Result<Vec<u8>, Outcome> {
         if kind == ItemKind::Notices {
             self.read_at_most(name, MAX_NOTICE_FILE_BYTES + 1)
@@ -315,7 +325,7 @@ fn disk_digest(kind: ItemKind, dst: &Path) -> Result<Option<String>, Outcome> {
             .map_err(|error| files::os_failure(path, &error, IoOp::Read))
     };
     match kind {
-        ItemKind::Pack | ItemKind::Notices if dst.is_dir() => {
+        ItemKind::Pack | ItemKind::Notices | ItemKind::Loading if dst.is_dir() => {
             let mut listing = BTreeMap::new();
             for relative in files::list_files(dst)? {
                 let path = files::join_relative(dst, &relative);
@@ -335,7 +345,7 @@ fn zip_digest(
     members: &BTreeMap<String, String>,
 ) -> Result<String, Outcome> {
     match kind {
-        ItemKind::Pack | ItemKind::Notices => {
+        ItemKind::Pack | ItemKind::Notices | ItemKind::Loading => {
             let mut listing = BTreeMap::new();
             for (relative, member) in members {
                 listing.insert(
@@ -418,8 +428,8 @@ fn planned_item(
     })
 }
 
-/// An item the zip no longer carries, set aside: a reader's root file or (Workflow #444
-/// NOTICES-2) the notices directory.
+/// An item the zip no longer carries, set aside: a reader's root file, (Workflow #444
+/// NOTICES-2) the notices directory or (Workflow #451 LOAD-P) the loading templates directory.
 fn retired_item(item: &str, kind: ItemKind, dst: &Path) -> Item {
     Item {
         item: item.to_owned(),
@@ -500,6 +510,100 @@ fn check_notices<'a>(
     Ok(())
 }
 
+/// `pack_invalid` of the bundle `zip` of `game` for a root file's problem `issue`, caused by
+/// `standard_pack_root_invalid` with `path` the file below the zip, its problem and its pointer.
+fn root_refusal(zip: &Path, game: &str, issue: &StandardPackRootIssue) -> Outcome {
+    invalid(zip).caused_by(
+        Outcome::new(SharedCode::StandardPackRootInvalid)
+            .game(game)
+            .path(zip.join(issue.file))
+            .standard_pack_problem(issue.problem)
+            .json_pointer(issue.pointer.clone()),
+    )
+}
+
+/// Workflow #451 LOAD-P: the loading templates directory of the bundle `zip` of `game`, `loading`
+/// (each member's path below the directory and the member), held to the zip's own `loading.json`
+/// (`declaring`, its bytes when the zip carries it) before anything is held or written. Without
+/// the file, every member of the directory is one no layout knows (`pack_invalid` naming the
+/// first). With it, the file is read by the contract crate's reader, a problem refused as a root
+/// file's is; then a member that is not a template the file declares (a deeper path never is) is
+/// one no layout knows; a template the file declares that the zip lacks is
+/// `loading_template_invalid`, as `standard-pack check` answers it (at the pointer of the first
+/// target that reads it), `path` the missing member below the zip; and a bundle that carries the
+/// directory lists no pack of `package_ids` named `loading` in any ASCII case
+/// (`loading_pack_name`, `path` `<zip>\bundle.json`, with `package_id`). Only the declaration and
+/// the names are read: what a template shows is `standard-pack check`'s, which `post_check` runs
+/// on the placed game root.
+fn check_loading<'a>(
+    zip: &Path,
+    game: &str,
+    declaring: Option<&[u8]>,
+    loading: &BTreeMap<String, String>,
+    package_ids: impl IntoIterator<Item = &'a str>,
+) -> Result<(), Outcome> {
+    let Some(bytes) = declaring else {
+        return match loading.values().next() {
+            Some(member) => Err(invalid(&zip.join(member))),
+            None => Ok(()),
+        };
+    };
+    let declaration =
+        parse_standard_pack_loading(bytes, Some(game)).map_err(|issues| match issues.first() {
+            Some(issue) => root_refusal(zip, game, issue),
+            None => invalid(&zip.join(STANDARD_PACK_LOADING_FILE)),
+        })?;
+    let declared = declaration
+        .targets
+        .iter()
+        .filter_map(LoadingTarget::template)
+        .collect::<BTreeSet<_>>();
+    if let Some(member) = loading
+        .values()
+        .find(|member| !declared.contains(member.as_str()))
+    {
+        return Err(invalid(&zip.join(member)));
+    }
+    let carried = loading
+        .values()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let missing = declaration.targets.iter().find_map(|target| {
+        target
+            .template()
+            .filter(|template| !carried.contains(template))
+            .map(|template| (target, template))
+    });
+    if let Some((target, template)) = missing {
+        return Err(invalid(zip).caused_by(
+            Outcome::new(SharedCode::StandardPackRootInvalid)
+                .game(game)
+                .path(files::join_relative(zip, template))
+                .standard_pack_problem(StandardPackProblem::LoadingTemplateInvalid)
+                .json_pointer(
+                    declaration
+                        .target_pointer(target.id(), "template")
+                        .unwrap_or_default(),
+                ),
+        ));
+    }
+    if !loading.is_empty()
+        && let Some(package_id) = package_ids
+            .into_iter()
+            .find(|id| id.eq_ignore_ascii_case(STANDARD_PACK_LOADING_DIRECTORY))
+    {
+        return Err(invalid(zip).caused_by(
+            Outcome::new(SharedCode::StandardPackRootInvalid)
+                .game(game)
+                .path(zip.join(STANDARD_PACK_BUNDLE_FILE))
+                .standard_pack_problem(StandardPackProblem::LoadingPackName)
+                .json_pointer(String::new())
+                .package_id(package_id),
+        ));
+    }
+    Ok(())
+}
+
 /// The plan of placing the bundle `zip` (see the module's description). `sums` is the
 /// `SHA256SUMS` the zip is checked against, when given.
 pub(crate) fn plan(
@@ -555,14 +659,20 @@ pub(crate) fn plan(
         .map(|pack| pack.package_id.clone())
         .collect::<BTreeSet<_>>();
     let tables = bundle.tables.clone().unwrap_or_default();
-    // The layout: the root files, `packs/<listed id>/…`, `tables/<listed id>.json` and (Workflow
-    // #444 NOTICES-2) the notices directory's files `notices/<path>`, by their path below it.
+    // The layout: the root files, `packs/<listed id>/…`, `tables/<listed id>.json`, (Workflow
+    // #444 NOTICES-2) the notices directory's files `notices/<path>` and (Workflow #451 LOAD-P)
+    // the loading templates directory's `loading/<path>`, each by its path below its directory.
     let mut roots = BTreeSet::new();
     let mut pack_members: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut notice_members: BTreeMap<String, String> = BTreeMap::new();
+    let mut loading_members: BTreeMap<String, String> = BTreeMap::new();
     for name in members.keys() {
         if let Some(path) = notice_relative_path(name) {
             notice_members.insert(path.to_owned(), name.clone());
+            continue;
+        }
+        if let Some(path) = name.strip_prefix(LOADING_PREFIX) {
+            loading_members.insert(path.to_owned(), name.clone());
             continue;
         }
         let parts = name.split('/').collect::<Vec<_>>();
@@ -599,6 +709,20 @@ pub(crate) fn plan(
             bundle.packs.iter().map(|pack| pack.package_id.as_str()),
         )?;
     }
+    // Workflow #451 LOAD-P: the loading templates directory, held to the zip's own
+    // `loading.json`; neither is read when the zip carries neither.
+    let declaring = if roots.contains(STANDARD_PACK_LOADING_FILE) {
+        Some(archive.read(STANDARD_PACK_LOADING_FILE)?)
+    } else {
+        None
+    };
+    check_loading(
+        &zip,
+        &game,
+        declaring.as_deref(),
+        &loading_members,
+        bundle.packs.iter().map(|pack| pack.package_id.as_str()),
+    )?;
     // The root files as every reader checks them.
     let mut root_bytes = BTreeMap::new();
     for file in &roots {
@@ -616,13 +740,7 @@ pub(crate) fn plan(
         },
         &game,
     ) {
-        return Err(invalid(&zip).caused_by(
-            Outcome::new(SharedCode::StandardPackRootInvalid)
-                .game(game.clone())
-                .path(zip.join(issue.file))
-                .standard_pack_problem(issue.problem)
-                .json_pointer(issue.pointer),
-        ));
+        return Err(root_refusal(&zip, &game, &issue));
     }
     // Each pack: its files as `bundle.json` counts them, its `control.json` among them.
     for pack in &bundle.packs {
@@ -703,6 +821,30 @@ pub(crate) fn plan(
             &game_root.join(&pack.package_id),
             pack_members.remove(&pack.package_id).unwrap_or_default(),
         )?);
+    }
+    // Workflow #451 LOAD-P: the loading templates directory after the packs and before the root
+    // files, so that the templates are in place before the `loading.json` that declares them; set
+    // aside, as `loading.json` is, when the game root holds one and the zip carries none (unless a
+    // pack of the bundle takes that folder's name).
+    let loading = game_root.join(STANDARD_PACK_LOADING_DIRECTORY);
+    if !loading_members.is_empty() {
+        items.push(planned_item(
+            &mut archive,
+            STANDARD_PACK_LOADING_DIRECTORY.to_owned(),
+            ItemKind::Loading,
+            &loading,
+            loading_members,
+        )?);
+    } else if loading.exists()
+        && !pack_ids
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case(STANDARD_PACK_LOADING_DIRECTORY))
+    {
+        items.push(retired_item(
+            STANDARD_PACK_LOADING_DIRECTORY,
+            ItemKind::Loading,
+            &loading,
+        ));
     }
     for file in RETIRED_WHEN_ABSENT {
         let dst = game_root.join(file);
@@ -1174,8 +1316,8 @@ pub(crate) fn check_step(
 }
 
 /// `undo` of one `pack_item` step: the placed item set aside as `.rolledback-<ms2>` and the kept
-/// one put back; a root file or the notices directory set aside put back; a part left behind set
-/// aside as `.abandoned-<ms2>`. The paths it set aside.
+/// one put back; a root file, the notices directory or the loading templates directory set aside
+/// put back; a part left behind set aside as `.abandoned-<ms2>`. The paths it set aside.
 pub(crate) fn reverse_item(
     _operation: &Operation<'_>,
     step: &Step,
