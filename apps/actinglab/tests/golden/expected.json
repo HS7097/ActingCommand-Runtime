@@ -4107,6 +4107,7 @@
         "receipt": {
           "channel": "lab",
           "correlation_id": "<CORRELATION_ID>",
+          "initiator": "Lab-CLI",
           "outcome": {
             "category": "success",
             "code": "request_run_contained_task_completed",

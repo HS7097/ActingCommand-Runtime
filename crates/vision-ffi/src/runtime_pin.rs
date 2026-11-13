@@ -4,8 +4,9 @@
 //! `rd-1031/perf-407/design-gpu1.md` §5).
 //!
 //! A DirectML runtime is ONNX Runtime 1.24.4's DirectML build with DirectML 1.15.4, three files
-//! under the vision root's `ort\`. Neither the Runtime package, the Tools package nor the
-//! installer carries them; whoever places them takes them from the two official NuGet packages
+//! under the vision root's `ort\`. The Runtime package and the Tools package do not carry them;
+//! the Windows installation package does, by the owner's decision (Workflow #441, recorded in
+//! the tool registry); whoever places them takes them from the two official NuGet packages
 //! that `scripts/windows-tools/windows-tool-sources.v1.json` pins (`onnxruntime-directml-1.24.4`
 //! and `directml-1.15.4`), and `Materialize-TaskToolCache.ps1 -Component …` reproduces them
 //! from the official URLs. This table is a pin, not a setting: a logic test holds it equal to
