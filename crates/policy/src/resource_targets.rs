@@ -19,7 +19,7 @@ use v3::{CheckedDocument, LapsedTarget};
 pub use v3::{
     ComposedResourceTargets, MAX_RESOURCE_TARGET_ENTRIES, MAX_RESOURCE_TARGET_ENTRY_VALUE_BYTES,
     RESOURCE_TARGETS_SCHEMA_VERSION_V3, ResourceTargetEntry, ResourceTargetSpecV3,
-    ResourceTargetsDocumentV3, TargetSetter, resource_targets_withdrawn,
+    ResourceTargetsDocumentV3, TargetSetter,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1639,6 +1639,38 @@ pub(crate) fn instance_target_policies(
         }
     }
     Ok(policies)
+}
+
+/// Workflow #455 G-R2a (the coordinator's ruling of 11-14 on #1702): whether `ResourceTargetView`
+/// answers no `active` for `instance_id`'s stored record of `rows`, observed at
+/// `observed_at_unix_ms` with the expiry `expires_at_unix_ms`. It is the read's own judgement: the
+/// view answers `active` exactly for a record [`stored_policy_state`] reads as a policy (active or
+/// expired, which `now_unix_ms` only tells apart), none for a record it reads as no policy (a
+/// withdrawal, or a v3 record of entries alone), and refuses a record it cannot read, which is not
+/// judged so here. The fact write gate compares `ApplyResourceTargets.expected_version` with `0`
+/// for a record without `active`, the version the read answers, and with its sequence otherwise.
+pub fn resource_targets_without_active(
+    rows: &[BTreeMap<String, ContractFactScalar>],
+    observed_at_unix_ms: u64,
+    expires_at_unix_ms: Option<u64>,
+    instance_id: &str,
+    now_unix_ms: u64,
+) -> bool {
+    let fact = ObservedFact {
+        scope: ScopeSelector::Instance {
+            instance_id: instance_id.to_owned(),
+        },
+        fact_key: RESOURCE_TARGETS_FACT_KEY.to_owned(),
+        value: FactValue::RecordList(v3::policy_rows(rows)),
+        observed_at_unix_ms,
+        expires_at_unix_ms,
+        confidence_milli: 1_000,
+    };
+    let time = EvaluationTime {
+        unix_ms: now_unix_ms,
+        monotonic_ms: 0,
+    };
+    stored_policy_state(&fact, instance_id, time).is_none()
 }
 
 fn stored_policy_state(

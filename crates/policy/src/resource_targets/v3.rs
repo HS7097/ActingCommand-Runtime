@@ -779,7 +779,7 @@ fn stored_entries(
 }
 
 /// Stored rows as the policy crate's readers take them.
-fn policy_rows(
+pub(super) fn policy_rows(
     stored: &[BTreeMap<String, ContractFactScalar>],
 ) -> Vec<BTreeMap<String, FactScalar>> {
     stored
@@ -799,25 +799,6 @@ fn policy_rows(
                 .collect::<BTreeMap<_, _>>()
         })
         .collect()
-}
-
-/// Workflow #455 G-R2a: whether the stored `rows` of `instance_id`'s record are a withdrawal, a v1
-/// or v2 record its reader reads without a target, which `ResourceTargetView` answers with no
-/// `active` and so with the version `0`: the fact write gate then compares an `expected_version`
-/// with `0`, never with the withdrawal's own sequence. A v3 record (it holds targets or entries)
-/// and a record the readers refuse are no withdrawal.
-pub fn resource_targets_withdrawn(
-    rows: &[BTreeMap<String, ContractFactScalar>],
-    instance_id: &str,
-) -> bool {
-    let rows = policy_rows(rows);
-    if declares_v3_rows(&rows) {
-        return false;
-    }
-    if super::declares_v2_rows(&rows) {
-        return decode_rows_v2(&rows, instance_id).is_ok_and(|decoded| decoded.targets.is_empty());
-    }
-    super::decode_rows(&rows, instance_id).is_ok_and(|decoded| decoded.targets.is_empty())
 }
 
 /// Whether stored rows open with a `policy` header of the v3 version.

@@ -483,10 +483,12 @@ fn gr2a_h1_a_v3_record_names_who_set_its_rows_and_later_documents_keep_its_entri
     target.push(("valid_until_unix_ms", integer(valid_until)));
     let mut expected = vec![header(V3, &third.policy_sha256), row(&target)];
     expected.extend(entry_rows);
+    let stored = fixture.stored();
+    assert_eq!(rows_of(&stored), expected, "a v2 document over a v3 record");
     assert_eq!(
-        rows_of(&fixture.stored()),
-        expected,
-        "a v2 document over a v3 record"
+        Some(stored.resource_bundle_hash.as_str()),
+        third.policy_sha256.strip_prefix("sha256:"),
+        "the receipt's identity names the v3 record written"
     );
 
     let view = fixture.view();
@@ -783,14 +785,14 @@ fn gr2a_h4_a_start_reloads_a_v3_record_unchanged() {
 }
 
 // The version a writer reads is the version the gate compares, in every state (the coordinator's
-// ruling of 11-14 on #1702, which corrects T1-R's comparison for a withdrawal). In each state the
-// view's version is read (`active.version`, `0` without `active`), a v2 document written with it is
-// applied, and a v3 document written with the version read before is
+// rulings of 11-14 on #1702, which correct T1-R's comparison): `active.version` when the view
+// shows `active`, `0` when it shows none. In each state the view's version is read, a v2 document
+// written with it is applied, and a v3 document written with a version read before is
 // `fact_observation_version_conflict` whose `current_version` is what a new read answers, nothing
-// appended. The states: no record and a withdrawn record (a v2 document with `targets: []`), which
-// the view answers without `active`, so `0`; an active v2 record; a v3 record with targets. A v3
-// record of entries alone is not here: the view cannot answer it an `active` within the answer's
-// shape (`ResourceTargetView::validate` refuses an `active` without targets), which is reported.
+// appended. The states: no record, a withdrawn record (a v2 document with `targets: []`) and a v3
+// record of entries alone, which the view answers without `active`, so `0`; an active v2 record;
+// a v3 record with targets. Over the record of entries alone the applied v2 document keeps the
+// entry (it carries none), and the stale version sent after it is that record's own, not `0`.
 #[test]
 fn gr2a_h5_the_version_a_writer_reads_is_the_version_the_gate_compares_in_every_state() {
     let valid_until = START + DAY_MS;
@@ -805,22 +807,38 @@ fn gr2a_h5_the_version_a_writer_reads_is_the_version_the_gate_compares_in_every_
     };
     let withdrawal = json!({"schema_version": V2, "instance": ALIAS, "targets": []}).to_string();
     let v3_document = |amount: u64| v3(vec![lasting(floor(amount), valid_until)], None);
+    let entries_alone = v3(Vec::new(), Some(vec![entry("route", json!("a"))]));
+    // Each state: its label, the documents that make it, whether the view shows no `active`, and
+    // whether it is the record of entries alone.
     let states = [
-        ("no record", Vec::new(), true),
-        ("an active v2 record", vec![v2_document(40)], false),
+        ("no record", Vec::new(), true, false),
+        ("an active v2 record", vec![v2_document(40)], false, false),
         (
             "a withdrawn record",
             vec![v2_document(40), withdrawal],
             true,
+            false,
         ),
-        ("a v3 record with targets", vec![v3_document(40)], false),
+        (
+            "a v3 record of entries alone",
+            vec![entries_alone],
+            true,
+            true,
+        ),
+        (
+            "a v3 record with targets",
+            vec![v3_document(40)],
+            false,
+            false,
+        ),
     ];
-    for (label, setup, read_as_none) in states {
+    for (label, setup, read_as_none, entries_only) in states {
         let fixture = Fixture::start();
         let mut client = TestClient::connect(&fixture.host);
         let send: Envelope = TestClient::request;
+        let mut setup_version = 0;
         for document in &setup {
-            applied(&fixture.apply(&mut client, send, document, None).0);
+            setup_version = applied(&fixture.apply(&mut client, send, document, None).0).version;
         }
         let read = fixture.view().active.map_or(0, |active| active.version);
         assert_eq!(
@@ -833,8 +851,23 @@ fn gr2a_h5_the_version_a_writer_reads_is_the_version_the_gate_compares_in_every_
                 .apply(&mut client, send, &v2_document(50), Some(read))
                 .0,
         );
+        let stale = if entries_only {
+            assert!(
+                setup_version > 0,
+                "{label}: the record has a version of its own"
+            );
+            assert!(
+                rows_of(&fixture.stored())
+                    .iter()
+                    .any(|row| row.get("name") == Some(&text("route"))),
+                "{label}: the entry kept"
+            );
+            setup_version
+        } else {
+            read
+        };
         let head = fixture.head();
-        let (refused, _) = fixture.apply(&mut client, send, &v3_document(60), Some(read));
+        let (refused, _) = fixture.apply(&mut client, send, &v3_document(60), Some(stale));
         let now = fixture.view().active.map_or(0, |active| active.version);
         assert_eq!(now, written.version, "{label}");
         assert_eq!(

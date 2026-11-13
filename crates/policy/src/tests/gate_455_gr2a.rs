@@ -853,6 +853,11 @@ fn gr2a_t8_a_v2_documents_receipt_over_a_v3_record_is_the_one_it_answers_over_no
             Some(&text(V3)),
             "{label}: a v3 record"
         );
+        assert_eq!(
+            over_v3.rows[0].get("policy_sha256"),
+            Some(&text(&over_v3.policy_sha256)),
+            "{label}: the receipt's identity names the v3 record written"
+        );
         assert!(
             over_v3
                 .rows

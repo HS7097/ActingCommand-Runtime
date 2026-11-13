@@ -281,8 +281,9 @@ document never names a lifetime or conditions: `valid_until_unix_ms` is absent a
 empty, both together, whatever its targets carry (`ResourceTargetView` answers each target's own
 lifetime and condition). The receipt of a v1 or v2 document is the one it answers before G-R2a,
 also when the record it is applied over is a v3 record: the document's `valid_until_unix_ms` and
-one condition per target (`policy_sha256`, `version` and `event_id` name the record written,
-which over a v3 record is a v3 record). The coordinator's ruling of 11-14 on #1702.
+one condition per target. Its `policy_sha256`, `version` and `event_id` name the record
+written: over a v3 record that is a v3 record, so `policy_sha256` is that record's identity,
+not the v2 document's, the one difference from the receipt before G-R2a. The coordinator's ruling of 11-14 on #1702.
 
 **#429 R-13.** #429 R-13 had reserved the version name `actingcommand.resource-targets.v3` for a
 target table of its own (`maintain` and `gain` targets, `paused`, a `stale_schema` mark, a
@@ -314,9 +315,12 @@ member of `ApplyResourceTargets { document_json, expected_version? }`, on the wi
 `runtime-client` 3, is the version of the instance's policy the writer read: `ResourceTargetView`'s
 `active.version`, `0` when the view has no `active`. The document is checked as without it; then,
 in the hold of the fact write gate that writes the record and before the replay below, the
-version of the instance's `session.resource_targets` record (the sequence of the `fact.published`
-that holds it, expired or not, `0` without one and for a withdrawal, which the view answers
-without `active`) is compared with it. Another value is Denied
+version the read answers is compared with it, in every state: the sequence of the
+`fact.published` that holds the instance's `session.resource_targets` record when
+`ResourceTargetView` shows it as `active` (expired or not), and `0` when it shows no `active`
+(no record, a withdrawal, a v3 record of entries alone). The gate takes that judgement from the
+read's own reading of the record (`resource_targets_without_active`, the evaluator's
+`stored_policy_state`, through which the view reads it). Another value is Denied
 `fact_observation_version_conflict` with `fact_key` `session.resource_targets` and
 `current_version` (kept in codes mode), and nothing is appended; the equal value applies, or
 answers an equal active policy's replay, exactly as a request without the member. Without the
@@ -325,7 +329,11 @@ takes the kind from the same release ([lab-two-entries.md](lab-two-entries.md) �
 (0.12.60, register §1.351) until Workflow #455 G-R2a (register §1.354) a withdrawal compared
 with its own sequence, which no read answers, so a writer that sent the view's `0` after a
 withdrawal met a conflict it could not resolve; since G-R2a the version a writer reads is the
-version compared in every state the view answers. Before 0.12.60 a request that named the member was refused `not_implemented`.
+version compared in every state the view answers. What this gives up: while the record holds
+entries and no target, two writers of whole documents that both read `0` are not told apart by
+this check, and the later one wins (its document replaces the targets and, only if it carries
+`entries`, the entries). The versioned edit of single entries is a later slice's request,
+which reads the record's own version through its own view. Before 0.12.60 a request that named the member was refused `not_implemented`.
 
 A refused document answers Denied + `InvalidRequest` with host code `resource_targets_rejected`
 (operation `apply_resource_targets`), no terminal, and the additive receipt field

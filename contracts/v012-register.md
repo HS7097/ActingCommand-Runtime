@@ -21174,8 +21174,9 @@ second's. Every other kind `ui` refused stays refused.
   fact write gate that writes the record (Phase B), after the store is synchronized and before the
   replay, the version of the instance's active `session.resource_targets` record (the sequence of
   the `fact.published` that holds it, expired or not; `0` without one; corrected by G-R2a,
-  §1.354: `0` for a withdrawal too, which the view answers without `active`, where this slice
-  compared the withdrawal's own sequence) is compared with
+  §1.354: the version the view answers in every state, `0` whenever it shows no `active`, a
+  withdrawal and a v3 record of entries alone included, where this slice compared a
+  withdrawal's own sequence) is compared with
   `expected_version`. Another value is Denied `fact_observation_version_conflict` (`fact_key`
   `session.resource_targets`, `current_version`, `operation` `apply_resource_targets`; the
   `current_version` kept in codes mode), nothing appended; the equal value goes on as without the
@@ -21535,15 +21536,18 @@ after this one) are later.
 - **The receipt** keeps its shape and rules: a v3 document's never names `valid_until_unix_ms`
   or `conditions` (both left out together; the read answers each target's); a v1 or v2
   document's is the one it answered before, also over a v3 record (the document's lifetime and
-  conditions; the identity, version and event name the record written).
-- **The version compared** (T1-R corrected, the coordinator's ruling of 11-14 on #1702): the
-  version `expected_version` meets under the fact write gate is `0` for a withdrawal too (a v1 or
-  v2 record without a target, `actingcommand_policy::resource_targets_withdrawn`), the version the
-  view answers for it (no `active`); until this slice the withdrawal's own sequence was compared,
-  which no read answers. Not built here: the ruling also asked that a v3 record of entries alone
-  be answered an `active` with an empty target list; `ResourceTargetView::validate` refuses an
-  `active` without targets (in the contract crate, which every client also runs), so that state
-  is reported to the coordinator and its comparison is unchanged (its sequence).
+  conditions; the identity, version and event name the record written, so over a v3 record
+  `policy_sha256` is the v3 record's, the one difference from before).
+- **The version compared** (T1-R corrected, the coordinator's rulings of 11-14 on #1702): the
+  version `expected_version` meets under the fact write gate is the version the read answers,
+  in every state: the record's sequence when `ResourceTargetView` shows `active`, `0` when it
+  shows none (no record, a withdrawal, a v3 record of entries alone, which the read does not
+  answer as `active`: the answer's shape stays). The gate takes the judgement from the read's own
+  reading (`actingcommand_policy::resource_targets_without_active`, the evaluator's
+  `stored_policy_state`). Until this slice a withdrawal's own sequence was compared, which no read
+  answers. Given up: while the record holds entries and no target, two writers of whole
+  documents that both read `0` are not told apart, and the later one wins; the versioned edit of
+  single entries is a later slice's request with its own view.
 - **#429 R-13** had reserved the version name for a target table of its own (`maintain`/`gain`,
   `paused`, `stale_schema`, a per-target edit); this design took the name, and none of that was
   built: `EditResourceTarget` stays answered `not_implemented`.
@@ -21552,7 +21556,7 @@ after this one) are later.
 |---|---|---|---|---|---|
 | GR2A-1 | `actingcommand.resource-targets.v3`: the document and its reader | document (the `ApplyResourceTargets` text) | G-R2a | agents (a document file through `targets set`), later G-R2b | no wire shape: the request carries the document as text |
 | GR2A-2 | `session.resource_targets` record list: the v3 header, `target` rows with `valid_until_unix_ms`, `set_unix_ms`, `channel`, `initiator`, and `entry` rows | fact content (`ledger` unchanged, as v2 was) | G-R2a | the host | 241 rows at most; no event type, payload or key added |
-| GR2A-3 | the version `ApplyResourceTargets.expected_version` meets for a withdrawal: `0` | behaviour of T1-R's check (`runtime-client` unchanged) | G-R2a | the host | the view's version in that state; §1.351 corrected with a history line |
+| GR2A-3 | the version `ApplyResourceTargets.expected_version` meets: the read's, `0` without `active` (a withdrawal, a v3 record of entries alone) | behaviour of T1-R's check (`runtime-client` unchanged) | G-R2a | the host | the read's own judgement; §1.351 corrected with a history line |
 
 **Interface.** No revision moves in this slice: `runtime-client` stays [3, 8], `ledger`,
 `actingd-config` and `package` do not move. The record is fact content, the targets untyped values
@@ -21582,7 +21586,8 @@ the host's `gate_455_gr2a::gr2a_h1_a_v3_record_names_who_set_its_rows_and_later_
 `gr2a_h3_v1_and_v2_documents_over_v1_or_v2_records_write_the_rows_they_wrote_before` (T1-R's v2
 document), `gr2a_h4_a_start_reloads_a_v3_record_unchanged` and
 `gr2a_h5_the_version_a_writer_reads_is_the_version_the_gate_compares_in_every_state` (no record,
-an active v2 record, a withdrawn record, a v3 record with targets). One existing test pinned what this
+an active v2 record, a withdrawn record, a v3 record of entries alone, a v3 record with
+targets). One existing test pinned what this
 slice changes and changes with it, keeping its name:
 `gate_p2b::gate_p2b_g12_each_realistic_mistake_of_either_version_is_refused_with_its_reason_at_its_field`
 wrote `actingcommand.resource-targets.v3` as "a version no reader takes" and now writes `.v4`. No
