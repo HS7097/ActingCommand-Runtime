@@ -163,7 +163,7 @@ mod tests {
     // Workflow #437 ORD-1 (0.12.60; register §1.352): a task's longest wait in its device's
     // queue.
     mod gate_ord1;
-    // Workflow #455 G-R2a (0.12.60; register §1.357): the goal document's value store, a v3
+    // Workflow #455 G-R2a (0.12.60; register §1.361): the goal document's value store, a v3
     // record whose targets weigh as a v2 record's.
     mod gate_455_gr2a;
 }

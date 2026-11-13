@@ -188,7 +188,7 @@ scheduling.
 
 ## Document `actingcommand.resource-targets.v3`
 
-Workflow #455 G-R2a (0.12.60; register §1.357; the design `rd-1114/455-goals-design-final.md`
+Workflow #455 G-R2a (0.12.60; register §1.361; the design `rd-1114/455-goals-design-final.md`
 §3.4): the goal document's value store. The console and the Lab will read and write an
 application's goals in one document; this version holds them in the record that already
 exists, `session.resource_targets`, with no new fact key and no new file. Nothing reads the
@@ -342,7 +342,7 @@ read's own reading of the record (`resource_targets_without_active`, the evaluat
 answers an equal active policy's replay, exactly as a request without the member. Without the
 member nothing is compared and the last writer wins, as before. The `ui` channel, the console's,
 takes the kind from the same release ([lab-two-entries.md](lab-two-entries.md) §3). History: from T1-R
-(0.12.60, register §1.351) until Workflow #455 G-R2a (register §1.357) a withdrawal compared
+(0.12.60, register §1.351) until Workflow #455 G-R2a (register §1.361) a withdrawal compared
 with its own sequence, which no read answers, so a writer that sent the view's `0` after a
 withdrawal met a conflict it could not resolve; since G-R2a the version a writer reads is the
 version compared in every state the view answers. What this gives up: while the record holds

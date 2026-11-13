@@ -21175,7 +21175,7 @@ second's. Every other kind `ui` refused stays refused.
   fact write gate that writes the record (Phase B), after the store is synchronized and before the
   replay, the version of the instance's active `session.resource_targets` record (the sequence of
   the `fact.published` that holds it, expired or not; `0` without one; corrected by G-R2a,
-  §1.357: the version the view answers in every state, `0` whenever it shows no `active`, a
+  §1.361: the version the view answers in every state, `0` whenever it shows no `active`, a
   withdrawal and a v3 record of entries alone included, where this slice compared a
   withdrawal's own sequence) is compared with
   `expected_version`. Another value is Denied `fact_observation_version_conflict` (`fact_key`
@@ -22510,7 +22510,7 @@ lone-instance test).
 **Rollback** (below this slice). Nothing is persisted by MAPP-2d; the build before it reads every
 record this one writes.
 
-### 1.357 Slice G-R2a (0.12.60): the goal document's value store, resource targets v3 (Workflow #455, step 2; the owner asked that a person in the console and an agent through the Lab set an application's goals in one document, board #455; the design `rd-1114/455-goals-design-final.md` §0, §1, §3.4, §3.12, §4 and §5 rows G-R2a, §6.1 and §6.2, read on main `fa724931`; the coordinator's rulings on board #455, not the owner's words; coordinator work order `rd-1114/brief-455-gr2a-v3-store.md`, read on main `95525c98`)
+### 1.361 Slice G-R2a (0.12.60): the goal document's value store, resource targets v3 (Workflow #455, step 2; the owner asked that a person in the console and an agent through the Lab set an application's goals in one document, board #455; the design `rd-1114/455-goals-design-final.md` §0, §1, §3.4, §3.12, §4 and §5 rows G-R2a, §6.1 and §6.2, read on main `fa724931`; the coordinator's rulings on board #455, not the owner's words; coordinator work order `rd-1114/brief-455-gr2a-v3-store.md`, read on main `95525c98`)
 
 [resource-targets.md](resource-targets.md) ("Document `actingcommand.resource-targets.v3`",
 "Storage", "Resource weights (v2)", "Read-only view") is the contract;
@@ -22519,7 +22519,9 @@ bounds, the replay) and [runtime-interface.md](runtime-interface.md) (the rows o
 `EditResourceTarget`, `active.rows?` and `stale_schema?`) follow it. The base this slice was read
 on (`95525c98`) ended at §1.352; main then took §1.353 (MAPP-2b) and, in the integration train
 0.12.60b, §1.354 (FL-2), §1.355 (S8 and S7) and §1.356 (G-R1). The fix round of 11-14 merged main
-`1ffb6c7f` and took 1.357, the next free number; an integration train may renumber it.
+`1ffb6c7f`; the integration train 0.12.60c gave this section 1.361, the number after main's §1.356
+and the sections of the rows merged before it in that train (#453 S1's §1.357, S11's §1.358,
+MAPP-1d's §1.359, MAPP-2d's §1.360).
 
 **What.** A third document version, `actingcommand.resource-targets.v3`, holds an application's
 goals in the record that exists, the instance fact `session.resource_targets`: no new fact key,
