@@ -94,9 +94,16 @@ canonical; a root that does not resolve is `vision_root_unavailable`, one inside
 a program slot `vision_root_in_program_slot`, at stage `config_vision`, the
 start's own refusals), takes the manifest of the section's `execution_provider`,
 and answers `vision_check_completed` with `report` `{provider, vision_root,
-files, folders, models}`. Each `--model` (any number; Workflow #453 S7 fix 1)
-names a model folder whose identity it computes besides the manifest's: the
-rescue row `vision check` names the models the installed packs need.
+files, folders, models}`. Each `--model` (Workflow #453 S7 fix 1) names a model
+folder whose identity it computes besides the manifest's: the rescue row `vision
+check` names the models the installed packs need. Fix 2: each `--model` must be
+a model folder's name by the loader's own rule ("Invalid folders" below: not
+blank, at most 255 bytes, not `.` or `..`, no path separator, colon or control
+character; `invalid_model_folder_name`, the function listing applies), and the
+check takes at most 64 of them (each model the packs of a root need, once: far
+more than a root's packs name today, and 64 of the longest names fit about half
+of a Windows command line). A name that breaks the rule, or a 65th `--model`, is
+`invalid_arguments` before the configuration or the vision root is read.
 
 - `files`: each manifest file with its `state`, compared first by its size and
   then by its SHA-256 read in 64 KiB chunks: `ok`, `missing`, `sha256_mismatch`
@@ -108,14 +115,20 @@ rescue row `vision check` names the models the installed packs need.
 - `folders`: `models\` listed as a start lists it ("Invalid folders" below; none
   when it does not exist), each model folder `{model_ref, family, layout?,
   asked, identity?}`. `asked` is true for a folder the manifest or a `--model`
-  names, and only such a folder is read: its `identity` is computed from its
-  files' bytes (`null`, with the OS failure as `cause` when a file cannot be
-  read, or with `over_bound` `{path, size, bound, bound_bytes}` for a file over a
-  bound, which is not read). Every other model folder is `asked` false, listed by
-  name with no `identity`, and nothing of it is read. Each folder that breaks the
-  rule is `{model_ref, invalid}` with the reason;
-- `models`: each manifest model with `present` (a folder of its name is listed),
-  that folder's `identity` and `identity_matches`.
+  names, and only such a folder's model files are hashed: its `identity` is
+  computed from their bytes (`null`, with the OS failure as `cause` when a file
+  cannot be read, or with `over_bound` `{path, size, bound, bound_bytes}` for a
+  file over a bound, which is not read). Every other model folder is `asked`
+  false, listed by name with no `identity`, and none of its model files is read.
+  Listing itself reads, of every folder asked or not, what a start's listing
+  reads (fix 2): its entries' metadata and its `model.json` when it holds one (at
+  most 64 KiB; a larger one makes the folder invalid, unread). Each folder that
+  breaks the rule is `{model_ref, invalid}` with the reason. Each name the
+  manifest or a `--model` asks about that no folder of `models\` has (fix 2) is
+  listed too, `{model_ref, asked: true, absent: true}`, in name order with the
+  others, also when `models\` does not exist;
+- `models`: each manifest model with `present` (a folder of its name is listed;
+  an `absent` entry is none), that folder's `identity` and `identity_matches`.
 
 **Bounds** (fix 1; of what the check reads, not tunables). A file of an asked
 folder is hashed only when it holds at most 256 MiB (else `bound` `file`,
@@ -125,9 +138,14 @@ manifest's files included (a folder's file larger than what is left is `bound`
 pins, about 175 MB for `directml` and 156 MB for `cpu` with this build's
 registry; a build whose manifest's files hold more than 512 MiB is refused as a
 defect of the build, `serialization_failed`. Each file is read at most once, and
-at most to the length it had when it was opened. The rescue row's bound for this
-child, 160 s, is 512 MiB at 4 MiB/s and 32 s for the process
-([install-cli.md](install-cli.md), "The Lab's rescue module").
+at most to the length it had when it was opened. **What is counted** (fix 2): the
+512 MiB counts the bytes hashed, the manifest's files and the asked folders'
+model files, and nothing else. Listing `models\` is not counted: it reads the
+folders' entries and their metadata and each folder's `model.json` (at most
+64 KiB each, as a start reads it), of every folder, asked or not, however many
+there are. The rescue row's bound for this child, 160 s, is 512 MiB at 4 MiB/s
+and 32 s for the process and its listing ([install-cli.md](install-cli.md), "The
+Lab's rescue module").
 
 Whether the root is complete is the report's to say; the code is a success
 either way. The configuration file is loaded as `check-config` loads it (a file
@@ -150,9 +168,10 @@ reads "check failed" as "the Runtime would not start":
   the check is stricter than a start on purpose, because an installation set
   carries exactly the pinned files. The license files it holds a root to are read
   by no start either.
-- A missing or empty `models\` answers an empty `folders` list in the check, and
-  refuses a start (`vision_root_unavailable` for a missing one,
-  `vision_models_empty` for an empty one).
+- A missing or empty `models\` answers a `folders` list with no folder of it
+  (only the names asked about, each `absent`, fix 2) in the check, and refuses a
+  start (`vision_root_unavailable` for a missing one, `vision_models_empty` for an
+  empty one).
 
 **What it never does.** It writes nothing (not the vision root, not a state
 root, not a journal), takes no owner lock, opens no ledger, binds no socket,

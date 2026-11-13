@@ -31,6 +31,17 @@
 //   named classifier folder's identity and another folder listed `asked` false with none; a file
 //   over the file bound, and one over what the total bound leaves after the manifest's files,
 //   each named in `over_bound` and not read, the manifest's folder still identified.
+// Fix 2 (review; coordinator work order rd-1114/brief-1693-fix2.md):
+// - `s7_check_reads_a_file_exactly_at_each_bound_and_none_one_byte_past_it`: a folder's file of
+//   exactly the file bound is hashed, one byte more is `over_bound` `file`; one of exactly what the
+//   total bound leaves is hashed, one byte more `over_bound` `total`; manifest files whose pins
+//   hold exactly the total are read, one byte less of total refuses the build
+//   (`serialization_failed`);
+// - `s7_check_takes_64_model_names_and_refuses_a_65th_or_a_bad_name_before_reading`: 64 `--model`
+//   names (one of the longest, 255 bytes) are answered, each that no folder has as `asked` and
+//   `absent`; a 65th, a name of 256 bytes, and `..`, `.`, a blank name, a name with `/`, `\`, `:`
+//   or a control character are `invalid_arguments` with no stage, on a configuration that does
+//   not exist (so nothing was read).
 
 use super::vision_report::{Bounds, Manifest, PinTable};
 use super::*;
@@ -255,6 +266,14 @@ fn check_line_with(config: &Path, more: &[&str], bounds: Bounds) -> Value {
     assert_eq!(line["schema_version"], "actingcommand.actingd.vision.v1");
     assert_eq!(line["outcome"]["code"], "vision_check_completed", "{line}");
     line
+}
+
+/// `--model <name>` for each of `names`, in their order.
+fn model_words(names: &[String]) -> Vec<&str> {
+    names
+        .iter()
+        .flat_map(|name| ["--model", name.as_str()])
+        .collect()
 }
 
 /// The places of a manifest's files, in its order.
@@ -767,4 +786,185 @@ fn s7_check_hashes_only_the_folders_it_is_asked_about_within_its_bounds() {
         identity,
         "the manifest's files, read once within the total, give the model's identity: {line}"
     );
+}
+
+#[test]
+fn s7_check_reads_a_file_exactly_at_each_bound_and_none_one_byte_past_it() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let root = temp.path().join("vision");
+    for place in CPU_PLACES {
+        write(&root, place, &content(place));
+    }
+    // A classifier folder of one file of 100 bytes, which the check is asked about.
+    let classifier = vec![b'c'; 100];
+    write(&root, "models/neutral.classifier/model.onnx", &classifier);
+    let config = config(
+        temp.path(),
+        &json!({"execution_provider": "cpu", "root": root}),
+    );
+    let canonical = fs::canonicalize(&root).expect("the canonical root");
+    let classifier_path = at(&canonical, "models/neutral.classifier/model.onnx")
+        .to_string_lossy()
+        .into_owned();
+    let pinned = CPU_PLACES.into_iter().map(length_of).sum::<u64>();
+    let identity = model_identity(&content(DICTIONARY));
+    let asked = ["--model", "neutral.classifier"];
+    let within = |file_bytes: u64, total_bytes: u64| {
+        let line = check_line_with(
+            &config,
+            &asked,
+            Bounds {
+                file_bytes,
+                total_bytes,
+            },
+        );
+        assert_eq!(
+            line["report"]["models"][0]["identity"], identity,
+            "the manifest's model identified within ({file_bytes}, {total_bytes}): {line}"
+        );
+        line["report"]["folders"]
+            .as_array()
+            .expect("the folders")
+            .iter()
+            .find(|folder| folder["model_ref"] == "neutral.classifier")
+            .cloned()
+            .unwrap_or_else(|| panic!("the classifier folder: {line}"))
+    };
+    let hashed = json!({"model_ref": "neutral.classifier", "family": "onnx-classify",
+                        "asked": true, "identity": sha256_hex(&classifier)});
+    let over = |bound: &str, bound_bytes: u64| {
+        json!({"model_ref": "neutral.classifier", "family": "onnx-classify", "asked": true,
+               "identity": null, "over_bound": {"path": classifier_path, "size": 100,
+               "bound": bound, "bound_bytes": bound_bytes}})
+    };
+    let total = vision_report::BOUNDS.total_bytes;
+    let file = vision_report::BOUNDS.file_bytes;
+
+    // The file bound: a file of exactly it is hashed; one byte more is over it and not read.
+    assert_eq!(within(100, total), hashed, "exactly the file bound");
+    assert_eq!(within(99, total), over("file", 99), "one byte past it");
+
+    // The total bound: a file of exactly what it leaves after the manifest's files is hashed; one
+    // byte more is over it and not read.
+    assert_eq!(within(file, pinned + 100), hashed, "exactly what is left");
+    assert_eq!(
+        within(file, pinned + 99),
+        over("total", pinned + 99),
+        "one byte past it"
+    );
+
+    // The manifest's files against the total bound: pins of exactly it are read (and leave
+    // nothing for the folder's file); one byte less of total is a defect of the build.
+    assert_eq!(
+        within(file, pinned),
+        over("total", pinned),
+        "the manifest's files fill the total exactly"
+    );
+    let refused = vision_report::run_with(
+        &arguments(&[
+            "vision",
+            "check",
+            "--config",
+            config.to_str().expect("a UTF-8 path"),
+            "--model",
+            "neutral.classifier",
+        ]),
+        table(),
+        Bounds {
+            file_bytes: file,
+            total_bytes: pinned - 1,
+        },
+    )
+    .expect_err("pins one byte past the total are refused");
+    assert_eq!(
+        refused.outcome().code().as_str(),
+        "serialization_failed",
+        "{}",
+        refused.outcome()
+    );
+}
+
+#[test]
+fn s7_check_takes_64_model_names_and_refuses_a_65th_or_a_bad_name_before_reading() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let root = temp.path().join("vision");
+    for place in CPU_PLACES {
+        write(&root, place, &content(place));
+    }
+    let config = config(
+        temp.path(),
+        &json!({"execution_provider": "cpu", "root": root}),
+    );
+    // 64 names, the last of the longest a model folder may have (255 bytes); no folder has any.
+    let mut names = (0..63)
+        .map(|index| format!("neutral.absent.{index:02}"))
+        .collect::<Vec<_>>();
+    names.push(format!("neutral.{}", "n".repeat(247)));
+    assert_eq!(names[63].len(), 255, "setup");
+
+    let line = check_line_with(&config, &model_words(&names), vision_report::BOUNDS);
+
+    // In name order: the 63 `neutral.absent.…`, the long `neutral.nn…`, then `neutral.ocr`.
+    let mut expected = names
+        .iter()
+        .map(|name| json!({"model_ref": name, "asked": true, "absent": true}))
+        .collect::<Vec<_>>();
+    let identity = model_identity(&content(DICTIONARY));
+    let model_folder = json!({"model_ref": MODEL, "family": "ppocr-ctc", "layout": "flat",
+                              "asked": true, "identity": identity});
+    expected.push(model_folder);
+    assert_eq!(
+        line["report"]["folders"],
+        Value::Array(expected),
+        "each name asked about that no folder has is listed asked and absent, in name order: \
+         {line}"
+    );
+    assert_eq!(
+        line["report"]["models"][0]["present"], true,
+        "the manifest's model, whose folder is there, present: {line}"
+    );
+
+    // Refused before anything is read: the configuration named does not exist, so a check that
+    // read it would refuse it at stage config_load.
+    let missing = temp.path().join("missing.config.json");
+    let refused = |names: &[String]| {
+        let mut words = vec![
+            "vision",
+            "check",
+            "--config",
+            missing.to_str().expect("a UTF-8 path"),
+        ];
+        words.extend(model_words(names));
+        let error = vision_report::run_with(&arguments(&words), table(), vision_report::BOUNDS)
+            .expect_err("refused");
+        error.outcome()
+    };
+    let mut surplus = names.clone();
+    surplus.push("neutral.absent.64".to_owned());
+    let too_long = format!("neutral.{}", "n".repeat(248));
+    assert_eq!(too_long.len(), 256, "setup");
+    for (why, asked) in [
+        ("a 65th name", surplus),
+        ("a name of 256 bytes", vec![too_long]),
+        ("..", vec!["..".to_owned()]),
+        (".", vec![".".to_owned()]),
+        ("a blank name", vec![" ".to_owned()]),
+        ("a slash", vec!["neutral/ocr".to_owned()]),
+        ("a backslash", vec!["neutral\\ocr".to_owned()]),
+        ("a colon", vec!["C:".to_owned()]),
+        ("a control character", vec!["neutral\u{7}ocr".to_owned()]),
+    ] {
+        let outcome = refused(asked.as_slice());
+        assert_eq!(
+            outcome.code().as_str(),
+            "invalid_arguments",
+            "{why}: {outcome}"
+        );
+        assert!(
+            outcome.value("stage").is_none(),
+            "{why}: refused before the configuration is read: {outcome}"
+        );
+    }
+    assert!(!missing.exists(), "nothing made");
+    assert!(!temp.path().join("state").exists(), "no state root made");
 }

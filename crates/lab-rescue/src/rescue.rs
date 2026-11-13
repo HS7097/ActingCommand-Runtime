@@ -86,7 +86,7 @@ use crate::install::{self, Answer, Face, config_swap, instance_add, place};
 use crate::rescue_reads;
 use crate::runtime_start::{self, Mode};
 use actingcommand_contract::SchedulingPauseReason;
-use actingcommand_contract::codes::{ContractCode, SharedCode};
+use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{
     Category, CauseRelation, IoOp, Outcome, OutcomeEnvelope, RawSource,
 };
@@ -2094,6 +2094,9 @@ fn emulators(context: &Context<'_>) -> Exit {
 const PROVIDER: &str = "provider";
 /// Workflow #453 S7: the configuration key that names the standard-pack root.
 const STANDARD_PACKS_ROOT: &str = "standard_packs.root";
+/// Workflow #453 S7 fix 2: the key of an outcome's stage, which actingd's `vision check` names
+/// only where it loads, assembles and resolves the vision configuration.
+const STAGE: &str = "stage";
 
 /// Workflow #453 S7: `refusal` with a vision row's child failure: its outcome as the `caused_by`
 /// link, or, for a child ended at its bound, `timeout_ms` `bound_ms` and no cause.
@@ -2193,21 +2196,22 @@ fn vision_manifest(context: &Context<'_>, params: Params<'_>) -> Exit {
 /// `programs::VISION_CHECK_ROW_LIMIT_MS` (900 s) in all ([`child_bound`]); nothing is written.
 /// The models the game roots' packs need (each check's `models`) are joined, each once with every
 /// game and its packages that name it, and answered with whether a folder of its name is listed
-/// (`present`) and whether its identity is the one they name (`identity_matches`). The answer
-/// holds actingd's report as `report`, `standard_packs {root, games, skipped}` and
-/// `required_models`. It is `install_command_done` (operation `install_vision_check`, actingd's
-/// outcome its `related` link) when every manifest file is `ok` and every model of the manifest
-/// and of the packs matches; else `install_caveat_noted` with `install_caveat`
+/// (`present`; fix 2: not one actingd names `absent`) and whether its identity is the one they
+/// name (`identity_matches`). The answer holds actingd's report as `report`, `standard_packs
+/// {root, games, skipped}` and `required_models`. It is `install_command_done` (operation
+/// `install_vision_check`, actingd's outcome its `related` link) when every manifest file is `ok`
+/// and every model of the manifest and of the packs matches; else `install_caveat_noted` with `install_caveat`
 /// `vision_incomplete` and `count` the files and the models, each pair of `model_ref` and
 /// `model_sha256` once, that do not. Refusals: the configuration's (`config_unreadable`,
 /// `install_section_invalid`); `config_unreadable` for a `standard_packs.root` that cannot be
 /// listed (its path, the OS failure) or a game root's `bundle.json` whose kind cannot be read;
 /// `pack_invalid` (`game`, `path`) for a game root whose check gives no models, which names the
-/// root (its outcome or the child's failure as the cause, or `timeout_ms`); fix 1:
-/// `vision_root_unresolved` only for actingd's refusal of the configuration or of the vision root
-/// it names, `vision_report_unanswered` for every other failure of actingd (its outcome or the
-/// child's failure as the cause, or `timeout_ms`). `timeout_ms` is the bound that ran out: the
-/// child's own, or the row's limit.
+/// root (its outcome or the child's failure as the cause, or `timeout_ms`); fix 2 (review):
+/// `vision_root_unresolved` only for a refusal of actingd at a stage, which it names only where it
+/// loads the configuration, assembles its `vision` section and resolves the vision root,
+/// `vision_report_unanswered` for every other failure of actingd (its outcome or the child's
+/// failure as the cause, or `timeout_ms`). `timeout_ms` is the bound that ran out: the child's
+/// own, or the row's limit.
 fn vision_check(context: &Context<'_>) -> Exit {
     const CHECK: InstallLocation = InstallLocation::VisionCheck;
     let unanswered = || install::refusal(CHECK, InstallRefusal::VisionReportUnanswered);
@@ -2262,11 +2266,16 @@ fn vision_check(context: &Context<'_>) -> Exit {
         )
         .map_err(|failure| unanswered_refusal(unanswered(), failure, bound.timeout_ms))?;
         if !checked.completed() {
-            // actingd's refusal of the configuration or of the vision root it names; its
-            // command line and its own registry say nothing of a root.
+            // Fix 2 (review): decided by where actingd refused, not by what the refusal is not.
+            // actingd's `vision check` names a stage for a refusal only in the stages where it
+            // loads the configuration, assembles its `vision` section and resolves the vision
+            // root (its own locations `config_load`, `config_assemble` and `config_vision`, which
+            // this crate cannot spell: the outcome guard's G5); such a refusal, and only such, is
+            // a root not resolved. Every other answer names no stage (actingd's installation
+            // check or slot lock, `--install-root`, its command line, its registry, an encoding
+            // failure, a success with another exit) and says nothing of a root.
             let resolving = checked.received.category() != Category::Success
-                && !checked.received.is(SharedCode::InvalidArguments)
-                && !checked.received.is(SharedCode::SerializationFailed);
+                && checked.received.value(STAGE).is_some();
             let refusal = if resolving {
                 InstallRefusal::VisionRootUnresolved
             } else {
@@ -2298,9 +2307,10 @@ fn vision_check(context: &Context<'_>) -> Exit {
         let required_models = required
             .into_iter()
             .map(|((model_ref, model_sha256), named_by)| {
-                let folder = folders
-                    .iter()
-                    .find(|folder| folder["model_ref"] == model_ref.as_str());
+                // Fix 2: a folder actingd was asked about and names `absent` is none.
+                let folder = folders.iter().find(|folder| {
+                    folder["model_ref"] == model_ref.as_str() && folder["absent"] != true
+                });
                 let identity = folder.and_then(|folder| folder["identity"].as_str());
                 json!({
                     "model_ref": model_ref,

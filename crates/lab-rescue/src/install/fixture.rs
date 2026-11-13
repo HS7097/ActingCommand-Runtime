@@ -690,7 +690,8 @@ impl Host for FakeHost {
     /// deadline, kept in `ended`, and left among no processes (unlike [`Self::run_program`]'s, which
     /// is left running with `STALLED_PID`). Any other program answers as `run_program` does.
     /// Workflow #453 S7 fix 1: the fake clock moves by `run_ms` for a program that exits, by the
-    /// deadline for one that never does.
+    /// deadline for one that never does. Fix 2: a program that would take longer than its
+    /// deadline (`run_ms` past it) is ended there too, as one that never exits.
     fn run_program_ending(
         &self,
         program: &Path,
@@ -701,13 +702,13 @@ impl Host for FakeHost {
             .first()
             .map(|word| word.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if !self
+        let stalled = self
             .programs
             .stall
             .borrow()
             .iter()
-            .any(|stalled| *stalled == doing)
-        {
+            .any(|word| *word == doing);
+        if !stalled && self.programs.run_ms.get() <= timeout_ms {
             self.clock
                 .set(self.clock.get() + self.programs.run_ms.get());
             return self.run_program(program, arguments, timeout_ms).map_err(

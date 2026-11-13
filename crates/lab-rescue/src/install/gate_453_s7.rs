@@ -29,6 +29,21 @@
 //   (`vision_report_unanswered`) has `timeout_ms` the row's limit, 900 000;
 // - `vision_check_names_a_game_root_it_skips_and_why` (Windows): a game root that is a junction
 //   is not checked and is named in `skipped` as `link`.
+// Fix 2 (review; coordinator work order rd-1114/brief-1693-fix2.md):
+// - `vision_check_a_refusal_where_actingd_loads_the_configuration_is_a_root_not_resolved`:
+//   actingd's refusal at stage `config_load` is `vision_root_unresolved`, its outcome the cause;
+// - `vision_check_a_refusal_before_the_configuration_names_no_root`: actingd's own installation
+//   check's refusal (`install_executable_unavailable`, no stage) is `vision_report_unanswered`;
+// - `vision_check_refuses_when_the_rows_limit_runs_out_during_a_game_roots_check`: four game
+//   roots whose checks take 290 s each; the fourth is ended at what the row's limit left, and the
+//   refusal is `pack_invalid` naming it with `timeout_ms` 900 000; actingd is not started;
+// - `vision_check_starts_nothing_when_no_time_is_left`: three game roots whose checks take
+//   299 999 ms each use the row's limit up; the fourth is not started, and the refusal is
+//   `pack_invalid` naming it with `timeout_ms` 900 000; actingd is not started.
+// `vision_check_refuses_with_actingds_outcome_as_its_cause` gives actingd's refusal its stage
+// `config_vision`, as actingd names it (fix 2: the stage decides), and
+// `vision_check_joins_the_required_models_of_two_game_roots` actingd's `absent` entry for the
+// classifier it was asked about (fix 2: actingd names it; it is not present).
 // The machine is the fake host of `fixture.rs`: its actingd and its Tools' Lab program print the
 // lines the test sets; no program is spawned (but `mklink` to make the junction) and no file of a
 // vision root exists.
@@ -86,6 +101,14 @@ fn vision_line(code: &str, category: &str, report: Option<Value>) -> Value {
     if let Some(report) = report {
         line["report"] = report;
     }
+    line
+}
+
+/// The line `actingd vision check` prints when it refuses with `code` and `values` (fix 2: a
+/// stage among them where it names one).
+fn vision_refusal(code: &str, values: Value) -> Value {
+    let mut line = vision_line(code, "error", None);
+    line["outcome"]["values"] = values;
     line
 }
 
@@ -379,9 +402,13 @@ fn vision_check_refuses_with_actingds_outcome_as_its_cause() {
         root,
         state_root,
     } = prepared();
+    // Fix 2: at the stage actingd names for it, where it resolves the vision root.
     host.programs.vision.borrow_mut().insert(
         "check".to_owned(),
-        (1, vision_line("vision_root_unavailable", "error", None)),
+        (
+            1,
+            vision_refusal("vision_root_unavailable", json!({"stage": "config_vision"})),
+        ),
     );
     let root_before = tree(&root);
     let state_before = tree(&state_root);
@@ -407,6 +434,98 @@ fn vision_check_refuses_with_actingds_outcome_as_its_cause() {
         line.get("report").is_none(),
         "a refusal carries no report: {line}"
     );
+    assert_eq!(*host.log.borrow(), [check_command(&root, &[])]);
+    assert_eq!(tree(&root), root_before, "nothing written in the root");
+    assert_eq!(tree(&state_root), state_before, "the state root untouched");
+}
+
+#[test]
+fn vision_check_a_refusal_where_actingd_loads_the_configuration_is_a_root_not_resolved() {
+    let Prepared {
+        _temp,
+        host,
+        root,
+        state_root,
+    } = prepared();
+    // A configuration file actingd cannot decode, refused where it loads it.
+    host.programs.vision.borrow_mut().insert(
+        "check".to_owned(),
+        (
+            1,
+            vision_refusal("config_decode_failed", json!({"stage": "config_load"})),
+        ),
+    );
+    let root_before = tree(&root);
+    let state_before = tree(&state_root);
+
+    let (line, exit) = row_line(&host, &root, "vision check", &Map::new());
+
+    assert_eq!(exit, 1, "{line}");
+    assert_eq!(line["outcome"]["code"], "install_command_refused", "{line}");
+    assert_eq!(
+        line["outcome"]["values"]["operation"], "install_vision_check",
+        "{line}"
+    );
+    assert_eq!(
+        line["outcome"]["values"]["install_refusal"], "vision_root_unresolved",
+        "a refusal at a stage where actingd loads, assembles or resolves the vision \
+         configuration: {line}"
+    );
+    assert_eq!(
+        links(&line),
+        [("caused_by".to_owned(), "config_decode_failed".to_owned())],
+        "{line}"
+    );
+    assert_eq!(
+        line["outcome"]["causes"][0]["values"]["stage"], "config_load",
+        "actingd's outcome as it came: {line}"
+    );
+    assert!(line.get("report").is_none(), "{line}");
+    assert_eq!(*host.log.borrow(), [check_command(&root, &[])]);
+    assert_eq!(tree(&root), root_before, "nothing written in the root");
+    assert_eq!(tree(&state_root), state_before, "the state root untouched");
+}
+
+#[test]
+fn vision_check_a_refusal_before_the_configuration_names_no_root() {
+    let Prepared {
+        _temp,
+        host,
+        root,
+        state_root,
+    } = prepared();
+    // actingd's own installation check refuses before it reads the configuration: no stage.
+    host.programs.vision.borrow_mut().insert(
+        "check".to_owned(),
+        (
+            1,
+            vision_refusal("install_executable_unavailable", json!({})),
+        ),
+    );
+    let root_before = tree(&root);
+    let state_before = tree(&state_root);
+
+    let (line, exit) = row_line(&host, &root, "vision check", &Map::new());
+
+    assert_eq!(exit, 1, "{line}");
+    assert_eq!(line["outcome"]["code"], "install_command_refused", "{line}");
+    assert_eq!(
+        line["outcome"]["values"]["operation"], "install_vision_check",
+        "{line}"
+    );
+    assert_eq!(
+        line["outcome"]["values"]["install_refusal"], "vision_report_unanswered",
+        "a refusal with no stage says nothing of the vision root: {line}"
+    );
+    assert_eq!(
+        links(&line),
+        [(
+            "caused_by".to_owned(),
+            "install_executable_unavailable".to_owned()
+        )],
+        "{line}"
+    );
+    assert!(line.get("report").is_none(), "{line}");
     assert_eq!(*host.log.borrow(), [check_command(&root, &[])]);
     assert_eq!(tree(&root), root_before, "nothing written in the root");
     assert_eq!(tree(&state_root), state_before, "the state root untouched");
@@ -473,9 +592,13 @@ fn vision_check_joins_the_required_models_of_two_game_roots() {
     fs::create_dir_all(packs.join("neutral.loose")).expect("a folder without a bundle");
     fs::write(packs.join("notes.txt"), b"neutral").expect("a plain file");
     configure_packs(&root, &packs);
-    // The OCR model's folder is there with its identity; the classifier's is not.
-    let report = check_report(json!([{"model_ref": OCR.0, "family": "ppocr-ctc",
-                                      "layout": "flat", "asked": true, "identity": OCR.1}]));
+    // The OCR model's folder is there with its identity; the classifier's is not, and actingd,
+    // asked about it, names it absent (fix 2).
+    let report = check_report(json!([
+        {"model_ref": CLASSIFIER.0, "asked": true, "absent": true},
+        {"model_ref": OCR.0, "family": "ppocr-ctc", "layout": "flat", "asked": true,
+         "identity": OCR.1}
+    ]));
     host.programs.vision.borrow_mut().insert(
         "check".to_owned(),
         (
@@ -647,6 +770,172 @@ fn vision_check_refuses_when_the_rows_limit_runs_out() {
         "actingd ended at what the row's limit left, about 30 s: {ended:?}"
     );
     assert_eq!(deadlines.len(), 4, "{deadlines:?}");
+    assert_eq!(tree(&root), root_before, "nothing written in the root");
+    assert_eq!(tree(&state_root), state_before, "the state root untouched");
+    assert_eq!(tree(&packs), packs_before, "nothing written in the packs");
+}
+
+/// Fix 2: four game roots below a standard-pack root of `root`, each of whose checks passes with
+/// no model and takes `run_ms` on the fake clock (one that would take longer than its bound is
+/// ended there); the packs, and the four roots in name order.
+fn four_game_roots(
+    host: &FakeHost,
+    temp: &Path,
+    root: &Path,
+    run_ms: u64,
+) -> (PathBuf, [PathBuf; 4]) {
+    let packs = temp.join("packs");
+    let games = [
+        "neutral.alpha",
+        "neutral.beta",
+        "neutral.delta",
+        "neutral.gamma",
+    ]
+    .map(|game| game_root(&packs, game));
+    configure_packs(root, &packs);
+    for game in &games {
+        host.programs.standard_pack_checks.borrow_mut().insert(
+            game.to_string_lossy().into_owned(),
+            (0, pack_checked(json!([]))),
+        );
+    }
+    host.programs.run_ms.set(run_ms);
+    (packs, games)
+}
+
+/// The refusal of a game root that ran out of the row's limit: `pack_invalid` naming `game` at
+/// `game_root`, `timeout_ms` the row's limit, no cause, no report.
+fn assert_ran_out_at(line: &Value, game: &str, game_root: &Path) {
+    let outcome = &line["outcome"];
+    assert_eq!(outcome["code"], "install_command_refused", "{line}");
+    assert_eq!(
+        outcome["values"]["operation"], "install_vision_check",
+        "{line}"
+    );
+    assert_eq!(
+        outcome["values"]["install_refusal"], "pack_invalid",
+        "{line}"
+    );
+    assert_eq!(outcome["values"]["game"], game, "the root it names: {line}");
+    let named = PathBuf::from(outcome["values"]["path"].as_str().expect("a path"));
+    assert_eq!(
+        named.file_name(),
+        game_root.file_name(),
+        "the path of the root it names: {line}"
+    );
+    assert_eq!(
+        outcome["values"]["timeout_ms"], 900_000,
+        "the row's limit ran out: {line}"
+    );
+    assert!(links(line).is_empty(), "no cause: {line}");
+    assert!(line.get("report").is_none(), "{line}");
+}
+
+#[test]
+fn vision_check_refuses_when_the_rows_limit_runs_out_during_a_game_roots_check() {
+    let Prepared {
+        _temp,
+        host,
+        root,
+        state_root,
+    } = prepared();
+    // Checks of 290 s each: three take 870 s of the row's 900 s (and a millisecond of the fake
+    // clock per reading), the fourth gets what is left, about 30 s, and is ended there.
+    let (packs, games) = four_game_roots(&host, _temp.path(), &root, 290_000);
+    let root_before = tree(&root);
+    let state_before = tree(&state_root);
+    let packs_before = tree(&packs);
+
+    let (line, exit) = row_line(&host, &root, "vision check", &Map::new());
+
+    assert_eq!(exit, 1, "{line}");
+    assert_ran_out_at(&line, "neutral.gamma", &games[3]);
+    let deadlines = host
+        .programs
+        .deadlines
+        .borrow()
+        .iter()
+        .map(|(_, ms)| *ms)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        deadlines[..3],
+        [300_000, 300_000, 300_000],
+        "the first three within their own bound: {deadlines:?}"
+    );
+    assert_eq!(deadlines.len(), 4, "{deadlines:?}");
+    assert!(
+        (29_000..=30_000).contains(&deadlines[3]),
+        "the fourth within what the row's limit left: {deadlines:?}"
+    );
+    assert_eq!(
+        *host.programs.ended.borrow(),
+        [("--json".to_owned(), deadlines[3])],
+        "the fourth check ended there, once"
+    );
+    assert_eq!(
+        *host.log.borrow(),
+        games
+            .iter()
+            .map(|game| format!(
+                "live actinglab.exe --json standard-pack check --root {}",
+                game.to_string_lossy()
+            ))
+            .collect::<Vec<_>>(),
+        "every game root checked in name order, actingd not started"
+    );
+    assert_eq!(tree(&root), root_before, "nothing written in the root");
+    assert_eq!(tree(&state_root), state_before, "the state root untouched");
+    assert_eq!(tree(&packs), packs_before, "nothing written in the packs");
+}
+
+#[test]
+fn vision_check_starts_nothing_when_no_time_is_left() {
+    let Prepared {
+        _temp,
+        host,
+        root,
+        state_root,
+    } = prepared();
+    // Checks of 299 999 ms each, on a fake clock that also moves 1 ms after each reading: the row
+    // reads its start s; the first check's bound at s + 1 (its own 300 000; it ends at
+    // s + 300 001), the second's at s + 300 001 (its own; it ends at s + 600 001), the third's at
+    // s + 600 001, when 299 999 ms of the limit are left, all of which it takes and no more (it
+    // ends at s + 900 001); the fourth's bound, read at s + 900 001, finds nothing left, so it is
+    // not started.
+    let (packs, games) = four_game_roots(&host, _temp.path(), &root, 299_999);
+    let root_before = tree(&root);
+    let state_before = tree(&state_root);
+    let packs_before = tree(&packs);
+
+    let (line, exit) = row_line(&host, &root, "vision check", &Map::new());
+
+    assert_eq!(exit, 1, "{line}");
+    assert_ran_out_at(&line, "neutral.gamma", &games[3]);
+    assert_eq!(
+        host.programs
+            .deadlines
+            .borrow()
+            .iter()
+            .map(|(_, ms)| *ms)
+            .collect::<Vec<_>>(),
+        [300_000, 300_000, 299_999],
+        "three checks, the third within what the limit left; none for the fourth"
+    );
+    assert!(
+        host.programs.ended.borrow().is_empty(),
+        "none ended: each took no longer than its bound"
+    );
+    assert_eq!(
+        *host.log.borrow(),
+        games[..3]
+            .iter()
+            .map(|game| format!(
+                "live actinglab.exe --json standard-pack check --root {}",
+                game.to_string_lossy()
+            ))
+            .collect::<Vec<_>>(),
+        "the fourth game root not started, nor actingd"
+    );
     assert_eq!(tree(&root), root_before, "nothing written in the root");
     assert_eq!(tree(&state_root), state_before, "the state root untouched");
     assert_eq!(tree(&packs), packs_before, "nothing written in the packs");

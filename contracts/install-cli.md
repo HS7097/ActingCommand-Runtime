@@ -1147,7 +1147,8 @@ the rescue face:
   `--model <model_ref>` for each model those checks name, so that actingd computes the identity
   of their folders too. It joins the checks' `models`: `required_models`, each `{model_ref,
   model_sha256, games: [{game, packages}], present, identity_matches}`, by `model_ref` then
-  `model_sha256`, judged against the folders actingd listed. The answer holds actingd's
+  `model_sha256`, judged against the folders actingd listed (fix 2: a name actingd lists
+  `absent` is no folder, so not `present`). The answer holds actingd's
   `report`, `standard_packs {root, games, skipped}` and `required_models`; it is
   `install_command_done` (operation `install_vision_check`) when every manifest file is `ok` and
   every model matches, else `install_caveat_noted` with `install_caveat` `vision_incomplete` and
@@ -1173,10 +1174,15 @@ the rescue face:
   first; a child that would start with nothing of the limit left is not started and refused the
   same way. Refusals: `vision_report_unanswered` (fix 1) when actingd gives no usable report
   (`vision manifest`: every failure of the row, which resolves no root; `vision check`: actingd
-  printed no report, refused its command line or its own registry, printed one without its lists,
-  did not run, or was ended), its outcome or the child's failure as the cause;
-  `vision_root_unresolved` (only `vision check`) when actingd refused the configuration or the
-  vision root it names (its outcome, for example `vision_root_unavailable`, as the cause);
+  printed no report, refused with no stage, which is every refusal but those below (its
+  installation check or slot lock, `--install-root`, its command line, among them more than 64
+  models the packs need or a model name no folder may have, its own registry), printed one
+  without its lists, did not run, or was ended), its outcome or the child's failure as the cause;
+  `vision_root_unresolved` (only `vision check`; fix 2: decided by the stage actingd names, not by
+  what its refusal is not) when actingd refused at a stage, which it names only where it loads the
+  configuration (`config_load`), assembles its `vision` section (`config_assemble`) and resolves
+  the vision root (`config_vision`): its outcome, for example `vision_root_unavailable`, as the
+  cause;
   `config_unreadable` for a `standard_packs.root` that cannot be listed or a `bundle.json` whose
   kind cannot be read; `pack_invalid` (`game`, `path`) for a game root whose check gives no
   models. Nothing is written, downloaded or placed; placing the files is a later slice's.
@@ -2758,7 +2764,8 @@ the fragment registers, names the command.
   `vision_report_unanswered` (fix 1: either row; actingd gave no usable report: its outcome or
   the child's failure as the cause, or `timeout_ms` for a child ended at its bound or at the
   `vision check` row's limit) and `vision_root_unresolved` (only `vision check`: actingd refused
-  the configuration or the vision root it names, its outcome as the cause), and `install_caveat`
+  at a stage where it loads, assembles or resolves the vision configuration, `config_load`,
+  `config_assemble` or `config_vision` (fix 2), its outcome as the cause), and `install_caveat`
   `vision_incomplete` (`count`), which only these rows answer; the existing `config_unreadable`
   and `pack_invalid` (`game`, `path`, `timeout_ms`) for the standard-pack root and a game root's
   check; no code or key is new here (actingd's `vision_manifest_reported` and

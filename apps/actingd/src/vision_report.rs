@@ -26,11 +26,18 @@
 //! stage `config_vision`.
 //!
 //! Fix 1 (review): what the check reads is bounded. A manifest file of another size than its pin
-//! is a mismatch and is not read, and none is read past its pinned size. Only the folders the
-//! manifest or a `--model` names are hashed; every other folder is listed by name, unread. A model
-//! folder file is hashed only within `FILE_BOUND_BYTES` (256 MiB), and the check hashes no more
-//! than `TOTAL_BOUND_BYTES` (512 MiB) in all, the manifest's files included; a file over either
-//! bound is reported as such (`over_bound`) and not read.
+//! is a mismatch and is not read, and none is read past its pinned size. Only the model files of
+//! the folders the manifest or a `--model` names are hashed; every other folder is listed by name
+//! and none of its model files is read. A model folder file is hashed only within
+//! `FILE_BOUND_BYTES` (256 MiB), and the check hashes no more than `TOTAL_BOUND_BYTES` (512 MiB)
+//! in all, the manifest's files included; a file over either bound is reported as such
+//! (`over_bound`) and not read. Fix 2 (review): listing `models\` as a start lists it reads, of
+//! every folder there, asked or not, its entries' metadata and its `model.json` when it holds one
+//! (at most 64 KiB, as a start reads it); those reads hash nothing and are not counted in
+//! `TOTAL_BOUND_BYTES`, which counts the bytes hashed. Each `--model` is a model folder's name by
+//! the loader's own rule (`invalid_model_folder_name`), at most `MAX_ASKED_MODELS` (64) of them,
+//! refused `invalid_arguments` before the configuration is read; a name asked about that no folder
+//! has is listed `asked` and `absent`.
 
 use super::*;
 use actingcommand_contract::codes::ContractCode;
@@ -38,7 +45,7 @@ use actingcommand_contract::outcome::{FileState, RawSource, VocabularyToken};
 use actingcommand_vision_ffi::{
     DIRECTML_RUNTIME_PIN, DirectmlRuntimePin, OcrModelSpec, OnnxExecutionProvider,
     VISION_MODELS_DIRECTORY, VISION_RUNTIME_DIRECTORY, VisionListingCode, VisionModelFamily,
-    list_vision_models, ppocr_model_set_sha256,
+    invalid_model_folder_name, list_vision_models, ppocr_model_set_sha256,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -53,7 +60,7 @@ pub(super) const SCHEMA_VERSION: &str = "actingcommand.actingd.vision.v1";
 /// The developer text of a command line this subcommand does not take.
 const USAGE: &str = "actingd vision takes manifest --provider cpu|directml, or check --config \
      <file> [--install-root <root>] [--model <model_ref>]..., --config and --install-root once, \
-     each option with a value";
+     --model at most 64 times, each a model folder's name, each option with a value";
 /// The providers a manifest is built for; a vision root of `cuda` has none.
 const MANIFEST_PROVIDERS: [OnnxExecutionProvider; 2] =
     [OnnxExecutionProvider::Cpu, OnnxExecutionProvider::Directml];
@@ -70,6 +77,14 @@ const FILE_BOUND_BYTES: u64 = 256 * 1024 * 1024;
 /// 512 MiB; the rescue row's bound of `actingd vision check` is this read at 4 MiB/s. Not a
 /// tunable.
 const TOTAL_BOUND_BYTES: u64 = 512 * 1024 * 1024;
+/// Workflow #453 S7 fix 2 (review): the most `--model` options `vision check` takes; one more is
+/// `invalid_arguments`. The rescue row names each model the packs of every game root of a root
+/// need, once: this build's registry pins one model, a game's packs name an OCR model and a few
+/// classifiers, and the engine holds four loaded at once; 64 is far above that, and 64 names of the
+/// longest a folder may have (255 bytes) with their `--model` are 16 896 characters, about half of
+/// the 32 767 a Windows command line holds, the rest left to the program, `--config` and
+/// `--install-root`. A bound of what the check takes, not a tunable.
+const MAX_ASKED_MODELS: usize = 64;
 
 /// What the check hashes at most: of one model folder file, and in all. A test gives its own.
 #[derive(Clone, Copy)]
@@ -201,6 +216,10 @@ fn invalid() -> ActingdError {
     ActingdError::config(SharedCode::InvalidArguments).with_detail(USAGE.to_owned())
 }
 
+/// `error` at `stage`. Workflow #453 S7 fix 2: `vision` names a stage only here, and only
+/// `config_load`, `config_assemble` and `config_vision`, where it loads, assembles and resolves
+/// the vision configuration; the rescue row `vision check` reads a refusal with a stage as a root
+/// that was not resolved, and one without as no usable report.
 fn staged(mut error: ActingdError, stage: ActingdLocation) -> ActingdError {
     error.stage = Some(stage.location());
     error
@@ -491,7 +510,10 @@ struct CheckLine {
 }
 
 /// The command line after `vision check`: `--config` once, `--install-root` at most once and
-/// (fix 1) `--model` any number of times with a UTF-8 value, each with a non-empty value.
+/// (fix 1) `--model` with a UTF-8 value, each with a non-empty value. Fix 2 (review): each
+/// `--model` a model folder's name by the loader's own rule ([`invalid_model_folder_name`]), at
+/// most [`MAX_ASKED_MODELS`] of them; anything else is `invalid_arguments`, before anything of the
+/// configuration or the vision root is read.
 fn parse_check(arguments: &[OsString]) -> Result<CheckLine, ActingdError> {
     let (pairs, remaining) = arguments.get(2..).unwrap_or_default().as_chunks::<2>();
     if !remaining.is_empty() {
@@ -500,12 +522,17 @@ fn parse_check(arguments: &[OsString]) -> Result<CheckLine, ActingdError> {
     let mut config = None;
     let mut install_root = None;
     let mut models = BTreeSet::new();
+    let mut asked = 0_usize;
     for pair in pairs {
         if pair[1].is_empty() {
             return Err(invalid());
         }
         if pair[0] == "--model" {
-            let model = pair[1].to_str().ok_or_else(invalid)?;
+            asked += 1;
+            let model = pair[1]
+                .to_str()
+                .filter(|model| asked <= MAX_ASKED_MODELS && !invalid_model_folder_name(model))
+                .ok_or_else(invalid)?;
             models.insert(model.to_owned());
             continue;
         }
@@ -728,23 +755,44 @@ fn checked_file(
 
 /// The folders of `<root>\models` as a start lists them, by name: a model folder
 /// `{model_ref, family, layout?, asked, identity?}`, a folder that breaks the folder rule
-/// `{model_ref, invalid}` with its reason. Fix 1 (review): only a model folder `asked` names (the
-/// manifest's models and each `--model`) is read, `asked` true with its `identity` (`null` with
-/// the OS failure as `cause` when a file cannot be read, or with `over_bound` for a file over a
-/// bound, which is not read); every other one is `asked` false, with no identity, and nothing of
-/// it is read. None when `models\` does not exist; one that cannot be listed is the start's
-/// refusal, `vision_root_unavailable` at stage `config_vision`.
+/// `{model_ref, invalid}` with its reason. Fix 1 (review): only the model files of a model folder
+/// `asked` names (the manifest's models and each `--model`) are hashed, `asked` true with its
+/// `identity` (`null` with the OS failure as `cause` when a file cannot be read, or with
+/// `over_bound` for a file over a bound, which is not read); every other one is `asked` false,
+/// with no identity, and none of its model files is read. Fix 2 (review): the listing itself reads
+/// every folder's entries' metadata and its `model.json` (at most 64 KiB), asked or not, as a start
+/// does, and none of that is counted in the bounds of `reader`; each name `asked` names that no
+/// folder has is `{model_ref, asked: true, absent: true}`, in name order with the others. No
+/// folder but those absent ones when `models\` does not exist; one that cannot be listed is the
+/// start's refusal, `vision_root_unavailable` at stage `config_vision`.
 fn model_folders(
     root: &Path,
     asked: &BTreeSet<String>,
     reader: &mut Reader,
 ) -> Result<Vec<Value>, ActingdError> {
+    let mut folders = BTreeMap::new();
     let models_dir = root.join(VISION_MODELS_DIRECTORY);
-    if matches!(fs::symlink_metadata(&models_dir), Err(error) if error.kind() == ErrorKind::NotFound)
+    if !matches!(fs::symlink_metadata(&models_dir), Err(error) if error.kind() == ErrorKind::NotFound)
     {
-        return Ok(Vec::new());
+        listed_folders(&models_dir, asked, reader, &mut folders)?;
     }
-    let listing = list_vision_models(&models_dir).map_err(|error| {
+    for model_ref in asked {
+        folders
+            .entry(model_ref.clone())
+            .or_insert_with(|| json!({"model_ref": model_ref, "asked": true, "absent": true}));
+    }
+    Ok(folders.into_values().collect())
+}
+
+/// The folders `list_vision_models` lists in `models_dir`, each as [`model_folders`] writes it,
+/// into `folders` by name.
+fn listed_folders(
+    models_dir: &Path,
+    asked: &BTreeSet<String>,
+    reader: &mut Reader,
+    folders: &mut BTreeMap<String, Value>,
+) -> Result<(), ActingdError> {
+    let listing = list_vision_models(models_dir).map_err(|error| {
         let code = VisionListingCode::VisionRootUnavailable;
         let outcome = match error.os_cause() {
             Some(cause) => Outcome::new(code).caused_by(cause.clone()),
@@ -755,7 +803,6 @@ fn model_folders(
             ActingdLocation::ConfigVision,
         )
     })?;
-    let mut folders = BTreeMap::new();
     for spec in &listing.ocr {
         let identity = asked
             .contains(&spec.model_ref)
@@ -786,7 +833,7 @@ fn model_folders(
             json!({"model_ref": invalid.name, "invalid": invalid.reason}),
         );
     }
-    Ok(folders.into_values().collect())
+    Ok(())
 }
 
 /// The identity of an OCR folder from the bytes of its files, as the engine computes it; the
@@ -845,13 +892,13 @@ fn folder(
     Ok(entry)
 }
 
-/// One manifest model against the folders: whether a folder of its name is listed (`present`),
-/// that folder's identity (`null` without one, or for an invalid folder or one not read), and
-/// whether it equals the model's (`identity_matches`).
+/// One manifest model against the folders: whether a folder of its name is listed (`present`;
+/// fix 2: an `absent` entry is none), that folder's identity (`null` without one, or for an invalid
+/// folder or one not read), and whether it equals the model's (`identity_matches`).
 fn checked_model(model: &ManifestModel, folders: &[Value]) -> Value {
     let folder = folders
         .iter()
-        .find(|folder| folder["model_ref"] == model.model_ref.as_str());
+        .find(|folder| folder["model_ref"] == model.model_ref.as_str() && folder["absent"] != true);
     let identity = folder.and_then(|folder| folder["identity"].as_str());
     json!({
         "model_ref": model.model_ref,
