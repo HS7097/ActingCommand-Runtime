@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #437 MAPP-2a (register §1.340; `contracts/device-group.md`, "The switch before a
+//! Workflow #437 MAPP-2a (register §1.341; `contracts/device-group.md`, "The switch before a
 //! run"): the parts of the switch before a member's run, through the host, and their one entry.
 //!
 //! Three fixture instances A, B and D are one device group of several (`device.one`) and C is

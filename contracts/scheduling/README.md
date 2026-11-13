@@ -2764,7 +2764,7 @@ finishes and is settled there whatever the switch says afterwards.
 - **Device groups (Workflow #437 MAPP; [device-group.md](../device-group.md)).** MAPP-1 (register
   §1.328) builds the derived map, the scheduler state keyed by the device key and the round's one
   pick per device; MAPP-1b (register §1.330) builds the one worker (`actingd-device-<device_group>`)
-  and the in-flight registration read across the group; MAPP-2a (register §1.340) builds the
+  and the in-flight registration read across the group; MAPP-2a (register §1.341) builds the
   switch's parts and their one entry, which nothing calls before MAPP-2b, and the load
   refuses every group of several until the slice "order within one device". Several instances on one device are one device group. The group is derived from the
   configuration at assembly and never stored.

@@ -2,7 +2,7 @@
 
 Workflow #437 MAPP-C (contracts only; [v012-register.md](v012-register.md) §1.323). **Every rule of
 this file is (MAPP, not built yet)** unless its section names MAPP-1 ([v012-register.md](v012-register.md)
-§1.328, Runtime 0.12.56), MAPP-1b (§1.330, Runtime 0.12.57) or MAPP-2a (§1.340, Runtime 0.12.59):
+§1.328, Runtime 0.12.56), MAPP-1b (§1.330, Runtime 0.12.57) or MAPP-2a (§1.341, Runtime 0.12.59):
 no code, key, code, value key or word named here exists until the code slices of §1.323 build it,
 and every code, value key and vocabulary word below is proposed but those MAPP-1 registers:
 `device_group`, `instance.<instance id>.device_group`, `device_group_config_invalid` with the
@@ -15,7 +15,7 @@ one pick per device; MAPP-1b (§1.330) builds the host's worker, occupancy, admi
 pause per device, the gates of the group, the session rule, the refusals of device-level actions
 and a chain handover's successor before the device's other members. The player hold's own
 acquire, release and second-hold refusal are not built (the player hold itself is not built yet,
-Workflow #429 R-7b). The coordinator cut MAPP-2 in two as well: MAPP-2a (§1.340, built in Runtime
+Workflow #429 R-7b). The coordinator cut MAPP-2 in two as well: MAPP-2a (§1.341, built in Runtime
 0.12.59) builds the switch's parts (another member's stop under the device's key, the member's
 startup run on the borrowed key, the stopped member's page forgotten), their one entry and its
 code, with no caller in the Runtime; MAPP-2b (not built yet) calls the switch from the run paths,
@@ -698,7 +698,7 @@ them, and it comes before the first real use of a group of several.
 
 - MAPP-1a shipped in Runtime 0.12.56 with every group of several refused at load (corrected by the
   coordinator on 11-12, register §1.330).
-- MAPP-2a is built in Runtime 0.12.59 (register §1.340): the switch's parts, their one entry and
+- MAPP-2a is built in Runtime 0.12.59 (register §1.341): the switch's parts, their one entry and
   the code `application_switch_failed` with the vocabulary `application_switch_step`, with no
   caller in the Runtime; the load still refuses every group of several, and the catalog gains one
   code and one vocabulary.
