@@ -38,11 +38,14 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 | LAB-6S0 | Runtime | `deploy` and `rollback` through the Lab's MCP server. Way back: yes |
 | LAB-6S1a | Runtime | the door also takes `BindChannel{channel: lab, initiator}` (section 2.2); `runtime-client` [3, 8]. Way back: yes |
 | LAB-6S1b | Runtime | the origin gates of `RuntimeRequest::validate()` go (built, 0.12.58: section 2.4); their codes retire. Way back: yes |
-| LAB-6S2 | Runtime | every client of the Runtime repository binds `lab` with its word, `actingctl` included (after LAB-6S1a and LAB-6S1b have been deployed by themselves). Way back: yes |
+| LAB-6S2-M | Runtime | the host's half of the move to `lab` (built, 0.12.59): on a `lab` binding that declares a word the Runtime records the channel that program's binding had on 0.12.58, by the word and the request's envelope (section 2.4, the map M), and receipts a request from any client envelope but the Lab's with it, without `initiator` (section 4.3, the receipt rule R); dormant until a program declares a word. Way back: yes |
+| LAB-6S2-B1 | Runtime | the Lab's own programs (`actinglab`, its `serve`, `actinglab-mcp`, the rescue module, `actingwatch`) bind `lab` with their word and keep the envelope they sent on 0.12.58; LAB-6S2-M in the same Runtime build. Way back: yes |
+| LAB-6S2-B2 | Runtime | `actingctl` and today's MCP server (`actingctl mcp-serve`) the same: `lab` with `Lab-CLI` or `Lab-MCP`, the envelope they sent on 0.12.58; after LAB-6S2-M. Way back: yes |
 | LAB-6S3 | Runtime | the UI list on `ui` (section 3, `ui_allows`; section 2.3 step 5): a `ui` connection is refused, `channel_request_refused`, every kind off the list and a setting outside the console's tiers; every other connection as before. Way back: yes |
 | LAB-6S4a | Runtime | the five kinds deleted; `install-control` [0, 0]. Way back: yes |
 | LAB-6S4b | Runtime | `cli`, `mcp` and a `lab` without a word refused; `via` off the wire; `runtime-client` [8, 8]; `actingd-config` 30. Way back: yes |
 | LAB-6S5 | Runtime | the initiator in the ledger and in the settings rows; `ledger` 9. Way back: **no** |
+| LAB-6S2-E | Runtime | the envelope becomes the channel's (section 2.4: `lab` → `(Lab, Lab)`), and the map M and the receipt rule R end; with it the host's evidence-read confirmation and its index take `(Lab, Lab)`, the senders drop the identity card's step, and the kept frames of CLI and MCP reads are decided. What a person then sees change comes with it, each the owner's to accept: the console's ledger page and Lab tab show the requests of `actingctl` and of both MCP servers as the Lab's, its settings page says "via Lab" for the rows they set, the runs they start have the origin `lab`, and the frames they read are kept as Lab frames. LAB-6S4b, which takes `via` off the wire, ends M's `via` cell with it. Way back: settled with the slice |
 | UI-L1 | UI | the console on `runtime-client` 8: Lab children instead of actingctl, refusals shown, no second press (the stop note stays beside the button, section 6); the settings page shows a row's initiator, else its channel (section 4.3); the READMEs' install line names the rescue module's command |
 | LAB-7 | Runtime | `apps/actingctl` deleted; `install-cli` 2 |
 | UI-L2 | UI | after UI-2a: acsetup as the graphical shell of the rescue module; its `status`, `discover`, `shutdown`, `check-config` and `ledger verify` through actinglab, and no `install-transition` |
@@ -142,6 +145,31 @@ capture, pacing, host shutdown handling) is no request and never passes the gate
 - The envelope is a fixed function of the channel, and the runtime client is the one place that
   builds it: `lab` → `(Lab, Lab)`, `ui` → `(User, Ui)`. The Runtime judges a request by its
   channel, never by its envelope.
+- **Until LAB-6S2-E: the envelope of 0.12.58 on `lab` with a word, and the map M** (Workflow #434
+  LAB-6S2-M, Runtime 0.12.59; register §1.287, "Slice LAB-6S2-M"; the coordinator's rulings of
+  2026-11-13 on board #434, not the owner's words). LAB-6S2 is cut into LAB-6S2-M, LAB-6S2-B1,
+  LAB-6S2-B2 and LAB-6S2-E (the slice table): where this contract says LAB-6S2 of the binding, read
+  LAB-6S2-B1 and LAB-6S2-B2; of the envelope, LAB-6S2-E. Until LAB-6S2-E a client that binds `lab`
+  with a word may send the envelope it sent on 0.12.58, and LAB-6S2-B1 and LAB-6S2-B2 move every
+  program of the Runtime repository onto `lab` that way. The Runtime judges such a request by its
+  envelope exactly as on 0.12.58 (nothing in this section changes for it), and wherever it writes
+  the request's channel (the command record's `channel` and `via`, the package debug record's, the
+  `host.config_overrides` row's `channel`) it writes the binding M gives, the one that program's
+  binding had on 0.12.58. M (`ChannelBinding::recorded`, contract crate) applies only to a `lab`
+  binding that declares one of the five Lab words, by the word and the source of the request's
+  envelope:
+
+  | Word \ envelope source | `Lab` | any other client source (`Cli`, `Adapter`, `Ui`) |
+  |---|---|---|
+  | `Lab-MCP` | `lab`, `via` `mcp` | `mcp` |
+  | `Lab-CLI`, `Lab-制包`, `Lab-救急`, `Lab-看门狗` | `lab` | `cli` |
+
+  Every other binding (`lab` without a word, with or without `via`, `cli`, `mcp`, `ui`, and the
+  binding an unbound connection's first request makes) is recorded as it is. M never yields `ui`,
+  so the gate's step 5 (section 2.3) judges the connections bound to `ui` and no other. The
+  connection's own binding does not change: `channel_binding_exists` names `lab`, and the answer to
+  `BindChannel` echoes the word. Its receipts follow the receipt rule R (section 4.3). LAB-6S4b,
+  which takes `via` off the wire, ends M's `via` cell; LAB-6S2-E ends M.
 - LAB-6 deletes the origin gates of `RuntimeRequest::validate()` (emulator control, the
   self-check, the player hold, the agent wake test, the origin exceptions of fact families and the
   rest); the content and shape rules stay. Whoever sent a request is in its G14 record.
@@ -310,6 +338,19 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
   `command.rejected` gain `initiator` beside `channel`, in place of `via`; so does the player
   hold's source (`PlayerHoldSource` and its ledger copy). Effect records gain no member: who sent
   a request is found through its request id in its G14 record, as today (LAB-6).
+  - **The receipt rule R** (Workflow #434 LAB-6S2-M, Runtime 0.12.59, until LAB-6S2-E; register
+    §1.287, "Slice LAB-6S2-M"; the coordinator's rulings of 2026-11-13 on board #434, not the
+    owner's words). On a `lab` binding that declares a word, the receipt of a request whose
+    envelope's source is not `Lab` carries the binding the Runtime records for it (section 2.4,
+    the map M): `channel` `cli`, or `mcp` under `Lab-MCP`, without `via` and without
+    `initiator`. The receipt of a request whose envelope's source is `Lab` is LAB-6S1a's: `channel`
+    `lab` and the word, without `via`. So a program that moves onto `lab` with its word and keeps
+    its 0.12.58 envelope (LAB-6S2-B1, LAB-6S2-B2) reads the receipt of each request it sends with
+    the CLI's or an agent adapter's envelope byte for byte as on 0.12.58: acsetup decodes the
+    receipts that `actingctl`'s `install-transition` and `request-shutdown` print into a receipt
+    type without `initiator` that refuses unknown members. The answer to `BindChannel` is not under
+    R: it carries the binding with its word, whose echo the client requires. Every binding without
+    a word is receipted as before. R ends with LAB-6S2-E.
   - **Settings overrides.** Each `host.config_overrides` row
     ([runtime-config.md](runtime-config.md), "Facts"; register G4 and U2-5) gains `initiator`,
     written beside `channel` by every `ConfigureSettings` (LAB-6). LAB-6 writes `channel` `lab` or

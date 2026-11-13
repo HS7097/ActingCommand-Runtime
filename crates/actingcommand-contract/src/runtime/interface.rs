@@ -13,7 +13,7 @@
 use super::RuntimeOperation;
 use crate::codes::ReceiptCode;
 use crate::outcome::Code;
-use crate::{FactKeyFamily, FactObservation, fact_key_family};
+use crate::{EventSource, FactKeyFamily, FactObservation, fact_key_family};
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -218,6 +218,35 @@ impl ChannelBinding {
             initiator,
         };
         binding.is_valid().then_some(binding)
+    }
+
+    /// Workflow #434 LAB-6S2-M (`contracts/lab-two-entries.md` §2.4, the map M): the binding the
+    /// Runtime records for a request whose envelope's source is `source` on a connection with
+    /// this binding. Until LAB-6S2-E a program that binds `lab` with its word keeps the envelope it
+    /// sent on 0.12.58, and the Runtime records the channel that program's binding had then: on a
+    /// `lab` binding that declares one of the five Lab words, a request from the Lab is `lab`,
+    /// with `via` `mcp` under the word of the Lab's MCP server; a request with any other client
+    /// envelope is `mcp` under that word and `cli` under every other word, without `via`. The
+    /// recorded binding names no initiator. Every other binding (`lab` without a word, with or
+    /// without `via`, `cli`, `mcp`, `ui`, and the one an unbound connection's first request
+    /// makes) is recorded as it is. No binding is recorded as `ui` that is not bound to `ui`.
+    pub const fn recorded(self, source: EventSource) -> Self {
+        let mcp_server = match (self.channel, self.initiator) {
+            (RuntimeChannel::Lab, Some(initiator)) if initiator.is_lab_word() => {
+                matches!(initiator, Initiator::LabMcp)
+            }
+            _ => return self,
+        };
+        match (source, mcp_server) {
+            (EventSource::Lab, true) => Self {
+                channel: RuntimeChannel::Lab,
+                via: Some(ChannelVia::Mcp),
+                initiator: None,
+            },
+            (EventSource::Lab, false) => Self::new(RuntimeChannel::Lab),
+            (_, true) => Self::new(RuntimeChannel::Mcp),
+            (_, false) => Self::new(RuntimeChannel::Cli),
+        }
     }
 }
 

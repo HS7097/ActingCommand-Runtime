@@ -363,6 +363,9 @@ mod gate_434_lab6s1a;
 mod gate_434_lab6s1b;
 // Workflow #434 LAB-6S3: the UI list on the `ui` channel; every other connection as before.
 mod gate_434_lab6s3;
+// Workflow #434 LAB-6S2-M: on `lab` with a word the host records, and answers a request not from
+// the Lab with, the channel that program's binding had on 0.12.58.
+mod gate_434_lab6s2m;
 // Workflow #429 R-0: the workbench's kinds have their shapes and answer `not_implemented`.
 mod gate_429_r0;
 // Workflow #429 R-0b: the Status member `activity` while each activity runs and after it ends.
