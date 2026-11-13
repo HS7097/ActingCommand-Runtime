@@ -2440,7 +2440,7 @@
         {"name": "root", "form": "option", "type": "dir", "required": true, "note": "a game's package root, not the installation's"}
       ],
       "help": "Checks an installed root of standard packs as package bundle checks one, and lists packs whose entry pages are missing.",
-      "output": "as today's command, and the notices directory's file count and bytes when the root holds one",
+      "output": "as today's command, and the notices directory's file count and bytes when the root holds one, and (Workflow #453 S8) models: the models the root's packs need, each {model_ref, model_sha256, packages}",
       "writes": false,
       "irreversible": false,
       "runtime": "offline",

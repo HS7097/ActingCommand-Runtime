@@ -20672,6 +20672,57 @@ dependencies gain `actingcommand-display-adapter`, whose only dependency is the 
 its forbidden closure is unchanged); the helpers of the host's `gate_412_b3_s2` the Lab test
 reuses are visible to their sibling modules, no assertion changed.
 
+### 1.348 Slices #453 S8 and S7 (0.12.60): `standard-pack check` answers the models a game root's packs need; a vision root's manifest and its offline check (Workflow #453, thing 3 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0 and §3 (3(a), 3a, 3b, 3(d), 3(e)), read on main `fa724931`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-453-s7s8-vision-manifest.md`, read on main `fa724931`)
+
+1.348 was the next free number on main `fa724931`; other slices of this release add sections at
+the end of section 1 too, so a train may renumber it. One pull request, two commits: S8 (the
+survey's 3b) and S7 (its 3a). No configuration key, no interface revision, no record, no wire
+shape of the Runtime, no journal and no step kind is added or moved.
+
+**S8. Why.** Nothing answered which models the installed packs need: a pack's OCR and NN targets
+name their model (`model_ref`, `model_sha256`), and a missing or other model showed only at run
+time, at the model's first use.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S8-1 | the member `models` `[{model_ref, model_sha256, packages}]` of `actinglab standard-pack check`'s answer (`StandardPackCheckResponse.models`, `StandardPackModel`, `crates/resource-tooling/src/api.rs`) | added answer member | S8 | `standard-pack check` (the command, the Lab's core row on the command line and in `serve --stdio`, the Lab's MCP server through its serve child) | the union of the models the recognition packs of the game root's packages name in their OCR and NN targets, each model once with every package that names it; in byte order of `model_ref`, then of `model_sha256`, each model's `packages` in byte order of `package_id`; always present, `[]` when no pack names a model; the answer's last member, so every member before it is as before; the exit code means what it meant |
+| S8-2 | `PreparedContainedTask::recognition_models` and `NavigationPackageDescriptor::recognition_models` (`crates/execution-kernel`) | behaviour (read) | S8 | S8-1 | the `(model_ref, model_sha256)` of each OCR and NN target of the package's recognition pack, once each, in byte order; the cross-check reads them from the descriptor of each package it admits (`standard_pack_check.rs`, `required_models`, over the packages `navigation_check` admitted), so no package is admitted twice; a layout's shared OCR read names no other model (the pack's own check holds that it serves an OCR target of its model); `package bundle` runs the same cross-check and answers no models |
+
+**Who reads the answer** (the work order asks for each). `place`'s post-check
+(`crates/lab-rescue/src/install/place.rs`, its row `standard_pack_check`) reads the exit code and,
+when it fails, keeps the line whole as `answer`; the Lab's core row prints the struct's members
+flat beside its outcome (`apps/actinglab/src/standard_pack_cli.rs`, LAB-2b), one member more; the
+Lab's MCP server serves the row through a serve child and passes the answer on
+(`apps/actinglab-mcp/src/tools.rs`; its `additionalProperties: false` is the input schema's);
+`resource verify`'s bundle step reads the typed struct's `root_files`, `pack_count`, `game`,
+`notices` and `warnings` (`apps/actinglab/src/resource_verify/bundle.rs`); S7's row `vision check`
+reads `models`. No reader decodes the answer strictly: none has `deny_unknown_fields` on it or a
+schema without additional members. Of the tests, `gate_cov1` and `gate_sched_c1f1`
+(`crates/resource-tooling`) build the struct by its fields and gain `models: Vec::new()`, nothing
+else; every other test reads single members (resource-tooling's `gate_373_navt`,
+`gate_411_a25`, `gate_428_cfl2`, `gate_444_notices3`; actinglab's `gate_373_navt`,
+`gate_392_da4`, `gate_434_lab2b`, `gate_434_lab5f`, `gate_rv1`), and the goldens of
+`apps/actinglab/tests/golden/consumers.json` hold the check's refusals only, which do not change.
+
+**S8 tests** (exec gate row "#453 S8"; made-up source packs on temporary game roots, no model
+file). In `crates/resource-tooling` (`gate_453_s8.rs`):
+`s8_two_packs_that_share_a_model_list_it_once_with_both_packages_in_order` (two packs name one
+model in an OCR target each, one of them a second model, a third pack none: the second model first
+by its reference, the shared one once with both packages),
+`s8_a_root_without_recognition_targets_answers_no_models` (`models` `[]`, the member present) and
+`s8_the_other_members_are_as_before_on_an_existing_fixture` (on the root of `gate_428_cfl2`,
+bundle.json only, the answer's bytes before `models` are `status`, `root`, `game`, `root_files`,
+`pack_count` and `warnings` in that order, and `models` names the fixture's one model and pack). A
+task source has no NN target (the source compiler has no NN family, and a source holding its own
+recognition pack is refused `source_contains_derived_output`), so no game root can carry one: the
+case "an OCR target and an NN target of different models" is held on a prepared package, in
+`crates/execution-kernel` (`contained_task::gate_453_s8`):
+`s8_a_pack_with_an_ocr_and_an_nn_target_of_different_models_lists_both` (two OCR targets of one
+model and an NN target of another: both, once each, in the package and in the descriptor the
+cross-check reads). Adapted: `gate_cov1` and `gate_sched_c1f1` (the struct's new field, as
+NOTICES-3 added `notices`); `gate_428_cfl2`'s fixture writer and five of its constants are
+visible to `gate_453_s8` (no assertion changed).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

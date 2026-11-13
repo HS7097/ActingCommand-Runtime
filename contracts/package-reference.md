@@ -441,7 +441,13 @@ game, root_files, pack_count, warnings}`, and (Workflow #444 NOTICES-3) `notices
 bytes}` when the root holds `notices/`, whose files it checks by the notices rules ("Notices"
 below; `notices` never joins `root_files`), given only once every package of the registry was
 admitted; `pack_count` is the registry's length, and `warnings` is the report (empty when there
-is nothing to report; its entry-page entries need `pages.json`). A root without any root file is
+is nothing to report; its entry-page entries need `pages.json`). Workflow #453 S8 (since 0.12.60,
+register §1.348): last, always, `models`, the models the root's packs need: the union of the
+models their recognition packs' OCR and NN targets name (`model_ref`, `model_sha256`), read from
+the packages the cross-check admitted, each `{model_ref, model_sha256, packages}`, a model several
+packs name listed once with each of them, in byte order of `model_ref`, then of `model_sha256`,
+each model's `packages` in byte order of `package_id`; `[]` for a root whose packs name none. It
+is an added member: every member before it and the exit code are as before. A root without any root file is
 `standard_pack_root_invalid` `bundle_missing`; a `bundle.json` whose `packs` lists no pack is
 `package_bundle_packs_empty` with `path` `bundle.json` and `json_pointer` `/packs` (Workflow #411
 A40); a package a root file names that cannot be admitted (its directory missing too) is
