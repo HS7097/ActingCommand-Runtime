@@ -18920,8 +18920,9 @@ no failure unless a failure kind knows it: it is not listed and causes no gap. T
 the outcome catalog this build embeds gives the record's code (`planned_stop` and `ladder_class` in
 `views.rs`, over `outcome::catalog_json` and `parse_ladder_class`), read as the recovery ladder's
 trigger matching reads it (`ladder_class_of`); a code the catalog does not list has no class. The
-rule names no code: today the class holds `contained_task_cancelled` and `contained_task_paused`
-(a pause's drain, a player hold's drain).
+rule names no code: today the class holds eighteen codes (the release notes of 0.12.58 list
+them), among them `contained_task_cancelled` and `contained_task_paused` (a pause's drain, a
+player hold's drain); this entry first named these two as if they were the whole class.
 
 **What stays.** A record a failure kind knows (`input.failed`, `recognition.failed`, a failed entry
 recovery) is a failure whatever its code; any other record of severity `warning` or above stays a
@@ -19104,6 +19105,86 @@ the file does not declare, a deeper path and the directory without `loading.json
 with the `package_id`; no pause, no journal, nothing in the game root). The refusal of a
 `loading.json` the reader refuses has no test of its own: the work order names none. No existing
 test changes.
+
+### 1.339 Slice PLACE-PKG (0.12.59): the installer's `place` reads a bundle's declaration by the bundle's own rule (Workflow #451; found by reading the code and the declaration a released bundle carries, never met in production; the coordinator's rulings of 11-13 on board #451, not the owner's words; coordinator work order `rd-1113/brief-451-place-pkg.md`, read on main `ef94d950`)
+
+1.339 is the coordinator's number; another slice of this release appends 1.338.
+[install-cli.md](install-cli.md), "The Lab's rescue module" (`place`), is the contract;
+[component-interfaces.md](component-interfaces.md), "Declaration" ("Resource bundle") and "Parse
+rules", already gives a bundle's shape and makes the six v1 interfaces a Runtime's or UI's rule. No
+outcome code, value key, vocabulary word, configuration key, step kind, intent member, wire shape,
+record or interface revision is added or moved, and no outcome code fragment changes, so the index
+is not regenerated.
+
+**The defect.** `place` (crate `lab-rescue`, `src/install/place.rs`, the `package` edge of the
+plan) read the zip's `interfaces.json` with `manifest::parse_declaration`, the reader of a
+Runtime's or Tools' declaration, which answers nothing unless all six v1 interfaces are named, and
+then refused `interface_edge`. A resource repository's release declares `package` alone:
+`resource verify`'s `bundle` step writes `{schema_version actingcommand.component-interfaces.v1,
+speaks {package [3, 3]}, validated_with {repository, commit}}`, with `package` [10, 10] when the
+bundle carries `notices/` ([resource-verify.md](resource-verify.md), the bullet on the notices
+directory and the `bundle` row of the step table; `apps/actinglab/src/resource_verify/bundle.rs`,
+whose `Speaks` has that one member). So `place` refused every released bundle. Production never
+met it: its bundles are placed by the coordinator's placement kit, and the module's `place` is not
+used on the production root before LAB-7.
+
+**Why the tests missed it.** The gates that place a bundle (`gate_434_lab3.rs`,
+`gate_444_notices2.rs`) build its declaration from the fixture's `speaks()`, all six v1 interfaces
+and `runtime-outcomes`: the shape of a Runtime's declaration, not of a released bundle's.
+
+**The rule.** `manifest::parse_bundle_package` reads a bundle's declaration by the parse rules of
+component-interfaces.md that every v1 reader applies: `schema_version` exactly
+`actingcommand.component-interfaces.v1`; every value under `speaks`, under any name, an array of
+two integers `[min, max]` with `min <= max`, a malformed one making the declaration unreadable (as
+a malformed `package` does); and `package` named. Other names are otherwise neither required nor
+checked, and other members (`validated_with`) are not read. (The coordinator's ruling on the open
+point of this slice, 11-13 on board #451: the work order's sentence that other names under
+`speaks` are not checked was wrong where it contradicts the parse rules.) `place` takes the
+`package` pair it answers, and the rest of the edge is as before: the declared maximum lies within the running installer's `package` range, else
+`interface_edge` with `path` `<zip>\interfaces.json` and `game`; a missing, unreadable or
+malformed file, or one the reader refuses, is the same refusal (component-interfaces.md takes a
+bundle without the file as [1, 1], which lies below every installer's `package` minimum since
+0.12.0, so the answer agrees). The notices check (`notice_undeclared` when a bundle that carries
+`notices/` declares a maximum below 10) reads the same pair. `manifest::parse_declaration` keeps
+its rule for the Runtime's, the Tools' and the UI's declarations (the installer's own range, a
+build's manifests, the release reader). **The other readers, checked:** `place`'s plan is the one
+reader of a bundle's `interfaces.json` in the rescue module; `post_check` reruns the items'
+digests and `undo` reverses the steps by kind and digest, and neither opens the zip's declaration;
+the pack register's `package_range` comes from `state.json` (`null` for every root, `adopt.rs`),
+never from a zip; `actingctl install` has no pack placement of its own.
+
+**At deploy.** Nothing changes for production, which does not place with this module before LAB-7
+(the coordinator's placement kit places its bundles). This release's `place` takes a released
+bundle; an earlier release's refuses it `interface_edge` before anything is paused or written. A
+bundle that declares all six interfaces plans as before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PP-1 | `place`'s `package` edge reads a bundle's `interfaces.json` by the bundle's rule (`manifest::parse_bundle_package`: the schema, every value under `speaks` a pair, `speaks.package` named) | installer behaviour (no shape change) | PLACE-PKG | — | `since` 0.12.59; a bundle that declares `package` alone is read; the refusals and their order as before |
+| PP-2 | [install-cli.md](install-cli.md), the `place` paragraph | contract text | PLACE-PKG | — | the members of the bundle's declaration `place` reads |
+
+Tests (apps gate row "#451 PLACE-PKG", `crates/lab-rescue/src/install/gate_451_place_pkg.rs`, on
+the fake host with placeholder names, the installer declaring `package` [3, 10]):
+`place_pkg_takes_a_bundle_that_declares_package_alone` (the released shape, `package` [3, 3] alone
+beside `validated_with`, LF-terminated: planned with the table, the pack and `bundle.json` `new`;
+placed, the pack and `bundle.json` on disk the zip's bytes, the journalled plan document's
+`package` [3, 3]), `place_pkg_six_interfaces_plan_as_package_alone` (the same bundle declaring all
+six v1 interfaces and `runtime-outcomes` with `package` [3, 3], the earlier gates' shape, planned on
+the same root: the same items with their states, places, digests and members, the same plan
+document but for `zip_sha256`, the same items in the answer of `place --plan`),
+`place_pkg_refusals_come_before_the_hold` (no `interfaces.json`; the schema `…v2`; `speaks` naming
+the fixture's other names and no `package`; `package` `[3]`, `[3, 3, 3]`, `"3"`, `[3, "3"]`,
+`[3, 3.5]` and `[-1, 3]`; `[5, 3]`; a well-formed `package` beside another name whose value is
+`[1, "1"]`; `[11, 11]`, above the range; `[2, 2]`, below it: each `interface_edge` of
+`install_pack_place` with `path` `<zip>\interfaces.json` and `game`, and no pause, no journal,
+nothing in the game root; and a well-formed `package` beside a well-formed name the reader does
+not know, planned with the same items as the released shape) and
+`place_pkg_notices_bundle_declaring_package_alone` (a bundle that carries `notices/NOTICE.md` and
+declares `package` [3, 9] alone: `pack_invalid` caused by `standard_pack_root_invalid`
+`notice_undeclared` at `<zip>\interfaces.json`, before the hold; declaring [10, 10] alone: planned
+with the item `notices` `new` first, placed, the journalled plan document's `package` [10, 10], the
+file on disk the zip's bytes). No existing test changes: the earlier gates' bundles keep their
+six-interface declarations, which the new reader reads by their `package` pair.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
