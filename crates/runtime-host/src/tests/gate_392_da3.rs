@@ -35,7 +35,10 @@ const TERMINAL: [u8; 3] = [0, 0, 255];
 /// A host whose one instance is an emulator's endpoint with frames and display of
 /// `width`x`height` (rotation `r0`); every frame shows the page of its input count in its 3x3
 /// top-left block.
-fn device_host(temp: &TempDir, (width, height): (u32, u32)) -> (RuntimeHost, Arc<FakeState>) {
+pub(super) fn device_host(
+    temp: &TempDir,
+    (width, height): (u32, u32),
+) -> (RuntimeHost, Arc<FakeState>) {
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     *state
@@ -246,7 +249,7 @@ pub(super) fn input_records(
 }
 
 /// Runs `package` (written as `<name>.zip`) on the instance and reads its records back.
-fn run(host: &RuntimeHost, temp: &TempDir, name: &str, package: &[u8]) -> InputRun {
+pub(super) fn run(host: &RuntimeHost, temp: &TempDir, name: &str, package: &[u8]) -> InputRun {
     let path = temp.path().join(format!("{name}.zip"));
     fs::write(&path, package).expect("write run package");
     let task_request = ContainedTaskRequest::new(path.display().to_string()).expect("task request");

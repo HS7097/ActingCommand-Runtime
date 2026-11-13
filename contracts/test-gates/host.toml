@@ -2969,6 +2969,22 @@ tests = [
 ]
 incident = ["#392 DA-3"]
 
+# Workflow #392 DA-3b (work order test 1, the survey's claim; route E): for the same points the kernel and the device layer prepare a vertical-brake drag and a drag with a pause and a brake (drag 200, pause 150, brake 200 ms) as one plan, event for event: the press, 13 moves summing to 200 ms ending at the corner, the hold of 150 ms, 13 moves summing to 200 ms ending at the brake's end, the release; the plans name their own kinds and hold the same points
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da3b::da3b_the_two_drags_are_one_device_plan_for_the_same_points",
+]
+incident = ["#392 DA-3b"]
+
+# Workflow #392 DA-3b (work order tests 3 and 4, route E; contracts/display-adapter.md section 10, "The vertical brake"): a 320x180 package's vertical-brake drag (300, 150) → (20, 150) → (20, 50) on a 640x360 fake device: the effect intent keeps the drag in base pixels with its two boxes and the frame 640x360, the input intent names and the device performs the drag with a pause and a brake (600, 300) → (40, 300) → (40, 100), 200, 150 and 200 ms, with no execution plan record; on a 320x180 device the literals of today (the input intent names the package's drag, the device performs the vertical-brake drag, the input intent records its execution plan); the run completes either way, the first geometry record names the scale 2 (none under the identity), and the task evidence relates the input linked with no source_mismatch
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da3b::da3b_a_vertical_brake_drag_reaches_a_scaled_device_as_a_drag_with_a_pause_and_a_brake",
+]
+incident = ["#392 DA-3b"]
+
 # LN-7c R (#422; ledger-observer.md §11.7; coordinator 10-26): the ledger scrub's finding about the derived frame index `ledger_frame_refs` is non-fatal: the host hands it to the daemon's log once (one line with the code, what, where and `extent=untrusted`), latches nothing, and the Runtime keeps running and closes as usual
 [[gate]]
 coverage = "Y"

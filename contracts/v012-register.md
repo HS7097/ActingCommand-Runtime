@@ -20856,6 +20856,67 @@ one). Adapted: `gate_inst2_deploy::inst2_d_4_each_post_start_check_passes_and_fa
 no assertion changes). The fake Runtime gains the aliases a start no longer registers, a hook at a
 `StartReport` read and the `config.start` members its configuration facts carry by build.
 
+### 1.349 Slice DA-3b (0.12.59): a vertical-brake drag under a scale is sent as a drag with a pause and a brake, with no interface revision (#392 / #401; the design survey `rd-1113/da-remaining-design.md`, its section 6 "Route E" and its slice "DA-3b"; the coordinator's ruling of 11-13 on board #392, route E, not the owner's words; coordinator work order `rd-1113/brief-392-da3b.md`, read on the head `840abaf7` of DA-3's branch, §1.347)
+
+[display-adapter.md](display-adapter.md) section 10, "The vertical brake", is the contract. **No new
+persisted shape, no configuration key, no new code, token or value key, and no interface revision
+moves**: `InputAction::validate` and the device layer accept what they accepted. Under a pure scale
+the input side sends under (DA-3: `den` 1 or 2) other than 1, the host sends a
+`single_touch_drag_with_vertical_brake_v1` step as a `single_touch_drag_with_pause_and_brake_v1`:
+the press and the corner mapped as DA-3 maps points, drag 200 ms, pause 150 ms, and the brake to
+`(x2′, y2′ − round_half_up(100 · s))` over 200 ms (at 2, (300, 150) → (20, 150) → (20, 50) leaves as
+(600, 300) → (40, 300) → (40, 100)). The survey read the device layer as performing both kinds with
+the same events; this slice checked it member by member before building on it: for the same points
+both plans are the press, a segment of the MAA 2.0 curve over 200 ms (`append_maa_2_0_segment`), a
+hold of 150 ms, a segment over 200 ms and the release; the kernel's preparation passes the vertical
+kind's horizontal duration, corner hold and brake duration to the same three places; the slopes are
+checked constants no plan reads; the plans differ only in the name of their kind, which the backends
+use to check the plan and to name a failure. The effect intent keeps the bundle's drag in base
+pixels; the input intent records the drag sent in device pixels and, as for every drag with a pause
+and a brake (§1.58), no execution plan. Under the identity nothing changes: the host maps nothing,
+and `DisplayMap::device_input` keeps the vertical kind under a scale of 1. The descriptions of
+`display_map_unresolved` and of the token `input_scale_unsupported` no longer name the vertical
+brake (the code index was regenerated; its rows did not change). The number 1.343 was provisional for
+parallel slices: it followed DA-3's 1.342 on the branch this slice is based on; the integration
+train 0.12.59d renumbered it 1.349, after §1.347 (DA-3, which the integration train 0.12.59c
+renumbered from 1.342) and §1.348 (#454, the real cause).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DA3b-1 | a run's vertical-brake drag under an admitted scale other than 1, at the run's one input exit (`DisplayMap::device_input`, its helper `vertical_brake_as_paused_drag`) | behaviour (memory only) | DA-3b | — | sent as `single_touch_drag_with_pause_and_brake_v1`: press and corner `round_half_up(v · s)` inside their device boxes, the brake's end `round_half_up(100 · s)` straight above the corner inside the device frame (else `contained_task_input_out_of_bounds`, never clamped; the kernel makes no such drag), drag, pause and brake 200, 150 and 200 ms; under a scale of 1 the vertical kind as before |
+| DA3b-2 | DA3-2's refusal of a vertical-brake drag under a pure scale (`input_scale_unsupported`) | behaviour removed | DA-3 | — | `DisplayMap::admit_input` answers the same for every kind; the token keeps DA3-2's other meaning (a pure scale whose double is not whole) and DA3-6's |
+| DA3b-3 | the records of such a step | record (no new shape) | — | DA-3b | the effect intent keeps the bundle's vertical-brake drag, its two sampling regions and `frame_extent`; the input intent's `input_action` is the drag with a pause and a brake in device pixels, without `execution_plan`; both are `input.swipe` |
+| DA3b-4 | `actingledger task-evidence` (DA3-7) | forensic reading | DA-3 | — | no code change: the product's conversion it calls now converts the vertical-brake drag, so a scaled step relates `linked`; a different input is still `source_mismatch` |
+
+**Readers.** `run evidence` shows the effect intent's kind, the bundle's, in base pixels (a drag
+has no `point` and two boxes, so no `rect`), which is right; the Lab's recording presses no brake
+drag and a Lab declared operation sends nothing on a scaled frame (DA3-6); the diagnosis
+(`failures_grouped`, the task diagnostic stream) and the landing history (single-box presses, in
+base boxes) read no input's kind. The device's replay recording and a touch backend's failure
+diagnostics name the kind sent. None changes.
+
+**At deploy.** Nothing to do: every installation in use runs at the identity, where nothing
+changes. On a scaled device (for example 1920x1080 or 2560x1440 for a 1280x720 package) a
+vertical-brake drag step now runs instead of ending `display_map_unresolved`
+(`input_scale_unsupported`); the brake's effect there is to be confirmed on a real device, which
+the coordinator arranges.
+
+Tests. The adapter's `gate_392_da3b`:
+`da3b_a_vertical_brake_leaves_a_scaled_device_as_a_drag_with_a_pause_and_a_brake` (at 3/2, 2, 5/2
+and 3 the kind, the points and the brake by hand, the three times, accepted by
+`InputAction::validate`; the identity keeps the drag) and
+`da3b_a_brake_end_outside_the_device_frame_is_refused_not_clamped`. The host's `gate_392_da3b`:
+`da3b_the_two_drags_are_one_device_plan_for_the_same_points` (the survey's claim, event for event)
+and `da3b_a_vertical_brake_drag_reaches_a_scaled_device_as_a_drag_with_a_pause_and_a_brake` (at 2
+the fake device performs the converted drag and both records hold what the ruling says; at 1 the
+literals of today; the task evidence `linked` at both). The forensic leaf's `input_pairing::tests`:
+`da3b_a_scaled_vertical_brake_step_pairs_with_the_drag_sent` and
+`da3b_a_mismatched_vertical_brake_step_is_still_reported`. Adapted: DA-3's
+`da3_t5_a_vertical_brake_scales_with_the_map_and_waits_for_its_bound`, renamed
+`da3_t5_a_vertical_brake_scales_with_the_map` (retired entry in `ci/retired-gates.toml`): it pinned
+the refusal this slice removes; the host's `gate_392_da3` helpers `device_host` and `run` are
+visible to their sibling modules, no assertion changed.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
