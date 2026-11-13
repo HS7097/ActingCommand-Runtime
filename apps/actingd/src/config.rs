@@ -2275,7 +2275,7 @@ impl ActingdConfigFile {
     /// `ACTINGCOMMAND_NEMU_FOLDER` (only under `allow_env_overrides`, as `assemble` injects it),
     /// and the binding key of every entry a start binds by discovery (neither a fixture nor a
     /// handset; `device_config_invalid` and `instance_binding_key_invalid` as `assemble` refuses),
-    /// in file order.
+    /// with its alias and instance id, in file order.
     pub(super) fn discovery_inputs(&self) -> Result<DiscoveryInputs, Code> {
         if self
             .mumu_root
@@ -2298,7 +2298,11 @@ impl ActingdConfigFile {
                 continue;
             }
             if let Some(key) = instance.binding_key()? {
-                bindings.push((instance.alias.clone(), key));
+                bindings.push(DiscoveryBinding {
+                    instance_id: instance.instance_id,
+                    alias: instance.alias.clone(),
+                    key,
+                });
             }
         }
         Ok(DiscoveryInputs {
@@ -2316,8 +2320,16 @@ pub(super) struct DiscoveryInputs {
     pub(super) mumu_root: Option<PathBuf>,
     /// The injected `ACTINGCOMMAND_NEMU_FOLDER`; `None` unless `allow_env_overrides`.
     pub(super) env_nemu_folder: Option<PathBuf>,
-    /// Each discovery-bound entry's alias and binding key, in file order.
-    pub(super) bindings: Vec<(String, InstanceBindingKey)>,
+    /// Each discovery-bound entry, in file order.
+    pub(super) bindings: Vec<DiscoveryBinding>,
+}
+
+/// Workflow #453 S10: one entry a start binds by discovery, as `actingd discover` matches it.
+pub(super) struct DiscoveryBinding {
+    /// Its `instance_id`: of several entries naming one instance, the smallest names it (fix 1).
+    pub(super) instance_id: InstanceId,
+    pub(super) alias: String,
+    pub(super) key: InstanceBindingKey,
 }
 
 /// The warnings the set but ignored `ACTINGCOMMAND_*` variables produce (Workflow #318 cfg3):

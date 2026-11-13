@@ -64,8 +64,8 @@ pub use maatouch::*;
 pub use minitouch::*;
 pub use mumu::MumuInstallSource;
 pub use mumu_manager::{
-    DeviceProcessPresence, DiscoveredMumuInstance, EmulatorControlFailure, EmulatorControlOutcome,
-    EmulatorControlResult, InstanceState, MAX_MUMU_INSTANCE_NAME_BYTES,
+    BoundedMumuManagerReads, DeviceProcessPresence, DiscoveredMumuInstance, EmulatorControlFailure,
+    EmulatorControlOutcome, EmulatorControlResult, InstanceState, MAX_MUMU_INSTANCE_NAME_BYTES,
     MUMU_CAPABILITY_PROVIDER_ID, MUMU_MANAGER_COMMAND_TIMEOUT, MUMU_MANAGER_CONTROL_TIMEOUT,
     MUMU_MANAGER_MINIMUM_VERSION, MUMU_MANAGER_PROCESS_LIST_INTERVAL,
     MUMU_MANAGER_PROCESS_LIST_TIMEOUT, MUMU_MANAGER_STATE_WAIT_START, MUMU_MANAGER_STATE_WAIT_STOP,

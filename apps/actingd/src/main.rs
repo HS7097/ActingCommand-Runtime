@@ -154,12 +154,22 @@ fn main() -> ExitCode {
             ActingdCode::SuspendedReportEncodeFailed,
             installed(running).and_then(|()| suspended::run(arguments)),
         ),
-        // Workflow #453 S10: read only, judged as check-config judges a configuration.
-        Some("discover") => subcommand_report(
-            discover::SCHEMA_VERSION,
-            SharedCode::SerializationFailed,
-            installed(candidate).and_then(|()| discover::run(arguments)),
-        ),
+        // Workflow #453 S10: read only, judged as check-config judges a configuration. Fix 1
+        // (review): before it does anything, its own stdout and stderr are made not inheritable,
+        // as the daemon's are (WD-MT), so no descendant of the vendor tool or PowerShell it starts
+        // keeps open the pipe of the rescue row that reads its report. A failure is one warning
+        // line on stderr and the discovery goes on.
+        Some("discover") => {
+            if let Some(warning) = standard_handles::apply(&standard_handles::SystemStandardHandles)
+            {
+                write_stderr(&developer_line(&warning, None));
+            }
+            subcommand_report(
+                discover::SCHEMA_VERSION,
+                SharedCode::SerializationFailed,
+                installed(candidate).and_then(|()| discover::run(arguments)),
+            )
+        }
         _ => run_daemon(arguments),
     };
     ExitCode::from(category.exit_code())

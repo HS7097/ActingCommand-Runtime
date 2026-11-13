@@ -1,23 +1,30 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S10 (register §1.341; contracts/emulator-control.md, "Offline instance discovery";
-// coordinator work order rd-1113/brief-453-s10-offline-discovery.md): `actingd discover` on the
-// vendor tool's two reads injected (`MumuManagerReads`), so no program is spawned:
+// Workflow #453 S10 (register §1.342; contracts/emulator-control.md, "Offline instance discovery";
+// coordinator work orders rd-1113/brief-453-s10-offline-discovery.md and, fix 1,
+// rd-1113/brief-1681-fix1.md): `actingd discover` on its reads injected (`MumuManagerReads`: the
+// vendor tool's two and the process listing), so no program is spawned:
 // - `s10_discover_lists_the_instances_with_the_files_bound_aliases`: the listing's fixture parsed
 //   into the host's instance shape, each instance with the alias of the configuration entry whose
 //   binding key names it (an index; a name only one listed instance carries; none for a name two
-//   carry), the configured folder as `mumu_root` (`source` `config`), the version, and the two
-//   reads asked once each, in order, of the tool the resolver found; the report line;
+//   carry), the configured folder as written as `mumu_root` (`source` `config`), the version, and
+//   the two reads asked once each, in order, of the tool the resolver found; the report line;
 // - `s10_discover_resolves_the_named_emulator_root`: `--mumu-root` on a temporary emulator root,
-//   without a file: `source` `argument`, no bound alias; a root without the vendor tool is
-//   `instance_discovery_unavailable` caused by `candidate_absent`, and nothing is read;
+//   without a file: the folder as given, `source` `person`, no bound alias; a root without the
+//   vendor tool is `instance_discovery_unavailable` caused by `candidate_absent`, and nothing is
+//   read;
 // - `s10_discover_a_read_past_its_bound_is_unavailable`: an `info -v all` whose bound expires is
-//   `instance_discovery_unavailable` caused by `provider_native_failed` (`backend_launch`).
+//   `instance_discovery_unavailable` caused by `provider_native_failed` (`backend_launch`);
+// - `s10_fix1_discover_a_process_listing_past_its_bound_is_unavailable` (fix 1): with no folder
+//   named, a process listing whose bound expires is `instance_discovery_unavailable` caused by
+//   `provider_native_failed`, the listing asked once and the vendor tool never.
 // Every root is a temporary folder with neutral names; the tool's files are empty and never run.
 
 use super::*;
 use actingcommand_device::codes::DeviceStage;
-use actingcommand_device::{DeviceError, DeviceErrorCategory, DeviceResult, MumuManagerReads};
+use actingcommand_device::{
+    DeviceDiscoveryProcess, DeviceError, DeviceErrorCategory, DeviceResult, MumuManagerReads,
+};
 use serde_json::{Value, json};
 use std::fs;
 
@@ -25,12 +32,15 @@ fn arguments(values: &[&str]) -> Vec<std::ffi::OsString> {
     values.iter().map(std::ffi::OsString::from).collect()
 }
 
-/// The vendor tool's two reads, answered from fixtures: `version` 6.5.7.0, and `info -v all` the
-/// listing, or, without one, a read whose bound expires as the real one's does. Each read asked
-/// is kept with the tool it was asked of.
+/// The reads, answered from fixtures: `version` 6.5.7.0, and `info -v all` the listing, or,
+/// without one, a read whose bound expires as the real one's does. Each read of the vendor tool
+/// asked is kept with the tool it was asked of. Fix 1: the process listing always runs past its
+/// bound, as the bounded one fails there (only a discovery that names no folder asks it); `listed`
+/// counts the listings asked.
 struct FixtureReads {
     listing: Option<Value>,
     asked: Vec<(&'static str, PathBuf)>,
+    listed: usize,
 }
 
 impl FixtureReads {
@@ -38,6 +48,7 @@ impl FixtureReads {
         Self {
             listing,
             asked: Vec::new(),
+            listed: 0,
         }
     }
 }
@@ -58,6 +69,15 @@ impl MumuManagerReads for FixtureReads {
                 DeviceStage::MumuManagerTimeout,
             )
         })
+    }
+
+    /// The bounded listing's failure at its bound: the device error its PowerShell run answers,
+    /// untyped (`system_processes_within`).
+    fn processes(&mut self) -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
+        self.listed += 1;
+        Err(DeviceError::fatal(
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command <the listing> timed out after 10s",
+        ))
     }
 }
 
@@ -82,13 +102,9 @@ fn tool_of(root: &Path) -> PathBuf {
         .join("MuMuManager.exe")
 }
 
-fn canonical_text(root: &Path) -> Value {
-    Value::from(
-        fs::canonicalize(root)
-            .expect("the canonical root")
-            .to_string_lossy()
-            .into_owned(),
-    )
+/// A folder as written, the way the report names a folder the file or the person gave (fix 1).
+fn written_text(root: &Path) -> Value {
+    Value::from(root.to_string_lossy().into_owned())
 }
 
 /// `info -v all` as the vendor tool answers it: two running instances and two stopped ones (a
@@ -174,8 +190,8 @@ fn s10_discover_lists_the_instances_with_the_files_bound_aliases() {
     let report = &line["report"];
     assert_eq!(
         report["mumu_root"],
-        json!({"path": canonical_text(&root), "source": "config"}),
-        "{line}"
+        json!({"path": written_text(&root), "source": "config"}),
+        "the configured folder as written, as check-config reports it: {line}"
     );
     assert_eq!(report["provider_version"], "6.5.7.0", "{line}");
     assert_eq!(
@@ -227,8 +243,8 @@ fn s10_discover_resolves_the_named_emulator_root() {
     let report = reported.data.get("report").expect("the report");
     assert_eq!(
         report["mumu_root"],
-        json!({"path": canonical_text(&root), "source": "argument"}),
-        "{report}"
+        json!({"path": written_text(&root), "source": "person"}),
+        "the folder as the person gave it: {report}"
     );
     assert_eq!(
         report["instances"],
@@ -320,5 +336,41 @@ fn s10_discover_a_read_past_its_bound_is_unavailable() {
         reads.asked,
         [("version", tool.clone()), ("info -v all", tool)],
         "the listing is asked once and not again"
+    );
+}
+
+/// Fix 1 (review, the process listing without a bound): with no folder named, the resolver's
+/// process listing is a read of `MumuManagerReads`, bounded in `actingd discover`; one past its
+/// bound is a discovery that could not be made, `instance_discovery_unavailable` of the existing
+/// refusals, caused by the device failure (`provider_native_failed`), and nothing else is run.
+#[test]
+fn s10_fix1_discover_a_process_listing_past_its_bound_is_unavailable() {
+    let mut reads = FixtureReads::new(Some(listing()));
+
+    let refused = discover::run_with(&arguments(&["discover"]), &mut reads)
+        .expect_err("a process listing past its bound is refused");
+
+    let outcome = refused.outcome();
+    assert!(
+        outcome.is(SharedCode::InstanceDiscoveryUnavailable),
+        "{outcome}"
+    );
+    assert_eq!(outcome.category(), Category::Error, "{outcome}");
+    let cause = outcome
+        .causes()
+        .first()
+        .expect("the device failure")
+        .outcome();
+    assert_eq!(cause.code().as_str(), "provider_native_failed", "{outcome}");
+    assert_eq!(
+        cause.value("mumu_root"),
+        None,
+        "no folder was named: {outcome}"
+    );
+    assert_eq!(reads.listed, 1, "the processes are listed once");
+    assert!(
+        reads.asked.is_empty(),
+        "the vendor tool is never run: {:?}",
+        reads.asked
     );
 }

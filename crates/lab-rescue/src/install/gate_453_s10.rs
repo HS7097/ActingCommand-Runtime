@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S10 (register §1.341; contracts/emulator-control.md, "Offline instance discovery";
-// coordinator work order rd-1113/brief-453-s10-offline-discovery.md): the rescue row `emulators`
-// runs the live build's `actingd discover --config <the root's configuration> --install-root
-// <root>`, once, and nothing else, and writes nothing in the root or its state root:
+// Workflow #453 S10 (register §1.342; contracts/emulator-control.md, "Offline instance discovery";
+// coordinator work orders rd-1113/brief-453-s10-offline-discovery.md and, fix 1,
+// rd-1113/brief-1681-fix1.md): the rescue row `emulators` runs the live build's `actingd discover
+// --config <the root's configuration> --install-root <root>`, once, and nothing else, and writes
+// nothing in the root or its state root:
 // - `emulators_answers_the_live_builds_report`: a completed discovery is `install_command_done`
 //   of `install_emulators` with actingd's report as `report` and actingd's outcome as its link;
 // - `emulators_refuses_with_actingds_outcome_as_its_cause`: a refused discovery is
 //   `install_command_refused`, `install_refusal` `emulator_discovery_failed`, with actingd's
-//   outcome as its `caused_by` link and no report.
+//   outcome as its `caused_by` link and no report;
+// - `emulators_fix1_a_discovery_that_never_ends_is_ended_at_its_bound` (fix 1): an actingd that
+//   never exits is ended at the row's bound of 60 s, once, and the row refuses
+//   `emulator_discovery_failed` with `timeout_ms` the bound, no cause and no child left running.
 // The machine is the fake host of `fixture.rs`, its actingd a fake that prints the line the test
 // sets: no program is spawned, no emulator is read; every root is a temporary folder.
 
@@ -167,6 +171,63 @@ fn emulators_refuses_with_actingds_outcome_as_its_cause() {
     assert!(
         line.get("report").is_none(),
         "a refusal carries no report: {line}"
+    );
+    assert_ran_discover_once(&host, &root);
+    assert_eq!(tree(&root), root_before, "nothing written in the root");
+    assert_eq!(tree(&state_root), state_before, "the state root untouched");
+}
+
+/// Fix 1 (review, the row never leaves its child behind): an actingd discover that never exits is
+/// ended at the row's bound, 60 s (the child's own three bounds of 10 s and a margin), not at
+/// `install.child.check_config_timeout_ms`, and the row refuses with a reason that says the
+/// discovery timed out: `emulator_discovery_failed` with `timeout_ms` the bound. Nothing of the
+/// child remains: it was ended there, and the refusal names no process left running (the stall
+/// rule's `pid` and `config_key`).
+#[test]
+fn emulators_fix1_a_discovery_that_never_ends_is_ended_at_its_bound() {
+    let Prepared {
+        _temp,
+        host,
+        root,
+        state_root,
+    } = prepared();
+    host.programs.stall.borrow_mut().push("discover");
+    let root_before = tree(&root);
+    let state_before = tree(&state_root);
+
+    let (line, exit) = emulators_line(&host, &root);
+
+    assert_eq!(exit, 1, "{line}");
+    let outcome = &line["outcome"];
+    assert_eq!(outcome["code"], "install_command_refused", "{line}");
+    assert_eq!(
+        outcome["values"]["operation"], "install_emulators",
+        "{line}"
+    );
+    assert_eq!(
+        outcome["values"]["install_refusal"], "emulator_discovery_failed",
+        "{line}"
+    );
+    assert_eq!(
+        outcome["values"]["timeout_ms"], 60_000,
+        "the discovery timed out at the row's bound: {line}"
+    );
+    assert!(
+        outcome["values"].get("pid").is_none() && outcome["values"].get("config_key").is_none(),
+        "no child is left running to name: {line}"
+    );
+    assert!(
+        outcome["causes"].as_array().is_none_or(Vec::is_empty),
+        "an ended discovery has no cause: {line}"
+    );
+    assert!(
+        line.get("report").is_none(),
+        "a refusal carries no report: {line}"
+    );
+    assert_eq!(
+        *host.programs.ended.borrow(),
+        [("discover".to_owned(), 60_000)],
+        "the child is ended at the bound, once"
     );
     assert_ran_discover_once(&host, &root);
     assert_eq!(tree(&root), root_before, "nothing written in the root");

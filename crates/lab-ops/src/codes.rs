@@ -593,7 +593,7 @@ actingcommand_contract::outcome_vocabulary! {
         McpServerNotInBuild => "mcp_server_not_in_build",
         // Workflow #453 S10 (since 0.12.59): the rescue module's `emulators` got no completed
         // discovery from the live build's `actingd discover` (its outcome, or the child's failure,
-        // is the cause).
+        // is the cause; fix 1: a child ended at the row's bound has `timeout_ms` and no cause).
         EmulatorDiscoveryFailed => "emulator_discovery_failed",
     }
 }

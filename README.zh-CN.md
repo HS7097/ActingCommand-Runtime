@@ -363,7 +363,7 @@ actingcommand-actingd ledger-maintenance restore --config runtime.json --backup 
 # 无副作用的配置检查（与启动相同的加载/装配/校验；不触碰 state_root 下任何内容）
 actingcommand-actingd check-config --config runtime.json
 
-# 不开运行时，列出本机的模拟器实例（只读：只跑厂商工具的版本查询和实例列表，别的都不跑；不碰 state_root、不取锁、不读账本、不写任何文件；带 --config 时每个实例标出绑定它的条目；contracts/emulator-control.md「Offline instance discovery」；Lab 的救急行 `actinglab emulators` 对它所在的根跑这条）
+# 不开运行时，列出本机的模拟器实例（只读：只跑厂商工具的版本查询和实例列表，别的都不跑；不碰 state_root、不取 owner 锁（A/B 安装下只像 check-config 一样持有所在槽位的共享锁）、不读账本、不写任何文件；带 --config 时每个实例标出绑定它的条目；contracts/emulator-control.md「Offline instance discovery」；Lab 的救急行 `actinglab emulators` 对它所在的根跑这条）
 actingcommand-actingd discover [--config runtime.json [--install-root <root>]] [--mumu-root <模拟器文件夹>]
 
 # 只读列出被挂起、已解除、反复失败的定时按步任务，账本最近 48 小时的时钟槽记录及其去向，最近一次启动挂起且尚未解除的任务包，以及补救停下的记录（与启动相同的配置装配；不取 owner 锁只读账本，可与运行中的守护进程并行；contracts/policy-suspension.md）

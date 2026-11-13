@@ -367,7 +367,7 @@ actingcommand-actingd ledger-maintenance restore --config runtime.json --backup 
 # Side-effect-free configuration check (same load/assemble/validate as startup; touches nothing under state_root)
 actingcommand-actingd check-config --config runtime.json
 
-# This machine's emulator instances while no Runtime runs (read only: the vendor tool's version and instance listing, nothing else; no state root, no lock, no ledger, nothing written; with --config each instance names the entry that binds it; contracts/emulator-control.md, "Offline instance discovery"; the Lab's rescue row `actinglab emulators` runs it for its root)
+# This machine's emulator instances while no Runtime runs (read only: the vendor tool's version and instance listing, nothing else; no state root, no owner lock (in an A/B installation only its slot's shared lock, as check-config), no ledger, nothing written; with --config each instance names the entry that binds it; contracts/emulator-control.md, "Offline instance discovery"; the Lab's rescue row `actinglab emulators` runs it for its root)
 actingcommand-actingd discover [--config runtime.json [--install-root <root>]] [--mumu-root <emulator folder>]
 
 # Read-only report of paused, lifted and repeating scheduled linear tasks, the clock-slot records of the last 48 h of the ledger with their fate, the task packs the latest start suspended and has not lifted, and the remedy stops (same configuration assembly; reads the ledger without the owner lock, beside a running daemon; contracts/policy-suspension.md)

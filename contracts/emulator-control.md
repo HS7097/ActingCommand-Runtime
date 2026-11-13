@@ -1622,8 +1622,8 @@ the IO margin.
 The same listing while no Runtime runs: before a root exists (an installer runs the release's own
 actingd), on a fresh root, or with the Runtime stopped. It is the Runtime's discovery without the
 Runtime, so it lives beside the query above: the same vendor reads, the same instance shape, the
-same refusal codes. Board #453, slice S10; register §1.341. The online query and the core row
-`discover` are unchanged.
+same refusal codes. Board #453, slice S10 and its fix 1; register §1.342. The online query and the
+core row `discover` are unchanged.
 
 ```
 actingcommand-actingd discover [--config <file> [--install-root <root>]] [--mumu-root <dir>]
@@ -1632,14 +1632,20 @@ actingcommand-actingd discover [--config <file> [--install-root <root>]] [--mumu
 - **Arguments.** Each option at most once, with a non-empty value; `--install-root` only with
   `--config`; `--mumu-root` an absolute folder. Anything else is `invalid_arguments` (the
   contract's shared code), before anything is read.
-- **Read only.** No state root, no owner lock, no ledger, no socket; nothing is written. Of the
-  configuration file it reads only `mumu_root`, `allow_env_overrides` and the entries' binding
-  keys (`instance_index`, `instance_name`), each by the rule a start applies to it: the file is
-  loaded as check-config loads it (its refusals at stage `config_load`), then `mumu_root_invalid`,
-  `device_config_invalid` and `instance_binding_key_invalid` at stage `config_assemble`. Nothing
-  else of the file is assembled, so no other file is opened (a handset's private binding file in
-  the state root included). `--install-root` is checked by check-config's rule
+- **Read only.** No state root, no owner lock, no ledger, no socket; nothing is written. In an
+  A/B installation it holds its slot's shared lock while it runs, as check-config does
+  (`process_slot_lock`), and no other lock. Of the configuration file it reads only `mumu_root`,
+  `allow_env_overrides` and the entries' binding keys (`instance_index`, `instance_name`), each by
+  the rule a start applies to it: the file is loaded as check-config loads it (its refusals at
+  stage `config_load`), then `mumu_root_invalid`, `device_config_invalid` and
+  `instance_binding_key_invalid` at stage `config_assemble`. Nothing else of the file is
+  assembled, so no other file is opened (a handset's private binding file in the state root
+  included). `--install-root` is checked by check-config's rule
   (`check_config_install_root_invalid`); nothing the command reads depends on it.
+- **A configuration check-config would refuse** still gets its listing: the command reads only
+  the members it needs and judges no other, so a file whose other members a start refuses (a
+  device group's rules or an undeclared shared device, say) is answered, and its `bound_alias` is
+  then only a hint of what a start would bind.
 - **The installation**, as check-config reports it (`mumu_root` in
   [actingd-check-config.md](actingd-check-config.md)), with `--mumu-root` first: `--mumu-root`,
   else the file's `mumu_root`, else `ACTINGCOMMAND_NEMU_FOLDER` only when the file sets
@@ -1651,48 +1657,69 @@ actingcommand-actingd discover [--config <file> [--install-root <root>]] [--mumu
   past its bound is that tool's process stopped, never an emulator. Only when no folder is named
   (no `--mumu-root`, no `mumu_root`, no environment rung) the resolver also lists the running
   processes once, with `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command <the
-  Win32_Process listing>` (`crates/device/src/discovery.rs`), without a bound of its own, as
-  check-config and a start do. Nothing else: no other subcommand of the vendor tool (no `control`,
-  no `launch`, no `api`), no adb, no emulator started, stopped or changed.
+  Win32_Process listing>` (`crates/device/src/discovery.rs`), within
+  `MUMU_MANAGER_PROCESS_LIST_TIMEOUT` (10 s), as a Stop's process check lists: the listing is the
+  third read of `MumuManagerReads`, `BoundedMumuManagerReads` here, and at its bound only the
+  PowerShell process it started is ended and the discovery is refused (below). check-config and a
+  start still list without a bound of their own. Before it starts anything, actingd makes its own
+  stdout and stderr not inheritable, as the daemon does at its start (WD-MT; a failure is the
+  warning `host_stdio_inheritance_failed` as a developer line on stderr, and the discovery goes
+  on), so no descendant of the vendor tool or of PowerShell holds open the pipe a caller reads the
+  report from. Nothing else: no other subcommand of the vendor tool (no `control`, no `launch`, no
+  `api`), no adb, no emulator started, stopped or changed.
 - **The answer**, one line, schema `actingcommand.actingd.discover.v1`:
   `{schema_version, outcome, report}`, the outcome `discover_completed` (exit 0) and `report`
   `{mumu_root: {path, source}, provider_version, instances}`. `path` is the installation folder
-  (canonical); `source` is `argument` (`--mumu-root`), `config` (the file's `mumu_root`), `env`,
-  `running_process`, `registry_uninstall` or `vendor_enumeration`. `instances` has the shape of
-  `RuntimeInstanceDiscovery`'s above (`instance_index`, `instance_name`, `adb_host`, `adb_port`,
-  `running`, `bound_alias`, `android_version`; ordered by index, absent members omitted) and is
-  held to the same rule; no tool path is in it.
+  as check-config reports it: a folder `--mumu-root` or the file's `mumu_root` names, as written;
+  one the environment rung or the resolver found, canonical. `source` is `person` (`--mumu-root`,
+  the word of the vocabulary `mumu_root_source` for a folder a person gave), `config` (the file's
+  `mumu_root`), `env`, `running_process`, `registry_uninstall` or `vendor_enumeration`.
+  `instances` has the shape of `RuntimeInstanceDiscovery`'s above (`instance_index`,
+  `instance_name`, `adb_host`, `adb_port`, `running`, `bound_alias`, `android_version`; ordered by
+  index, absent members omitted) and is held to the same rule; no tool path is in it.
 - **`bound_alias`** is the alias of the file's entry that a start would bind to the instance by
   discovery (an entry that is neither a fixture nor a handset): its `instance_index` is the
   instance's index, or its `instance_name` is the instance's name and no other listed instance
   carries that name (a start refuses such an entry as ambiguous). Of several such entries, the
-  least alias, as a start names the index of a device group. Without `--config` no instance has
-  one. Unlike the Runtime's answer, an entry bound by an explicit HOST:PORT is never matched: it
-  carries no binding key, and no Runtime is asked which port it holds.
+  one with the smallest `instance_id`, as the Runtime's answer above takes it (its registry in
+  instance id order) and as a device group's key is its members' smallest instance id. Only a
+  configuration a start refuses has several: two entries outside one device group on one instance
+  are `undeclared_shared_device`, and every group of several is `several_members_unsupported`
+  until the slice "order within one device" ([device-group.md](device-group.md)). Without
+  `--config` no instance has one. An entry given as an explicit host and port is matched by the
+  online discovery (by its port) and never by this one: it carries no binding key, and no Runtime
+  is asked which port it holds.
 - **Refusals** (exit 1, the report line with the outcome only, the developer line on stderr):
   `mumu_manager_version_unsupported` when the version is below the Runtime's floor or cannot be
   read; `instance_discovery_unavailable` for any other failure of the discovery (no installation,
-  a tool that did not run, exited non-zero, ran past its bound or printed no JSON of the
-  documented shape, and a list the contract refuses). Each has the device failure as its
-  `caused_by` link, as provider startup records it (`config::device_failure_outcome`): the
-  resolution reason with its context, else `provider_native_failed` with `device_category`, with
-  `mumu_root` the folder named when one was, and the device's text as a `foreign_other_error`
-  link; a list the contract refuses has the contract's refusal instead (`invalid_instance_discovery`,
-  or the alias rule's code for an entry's alias the rule refuses). A report that cannot be encoded
-  is `serialization_failed`.
+  a process listing or a tool that did not run, exited non-zero or ran past its bound, a tool that
+  printed no JSON of the documented shape, and a list the contract refuses). A process listing
+  past its bound is a discovery that could not be made: `instance_discovery_unavailable`, caused
+  by `provider_native_failed` with the listing's text as its link and no `mumu_root`. Each has the
+  device failure as its `caused_by` link, as provider startup records it
+  (`config::device_failure_outcome`): the resolution reason with its context, else
+  `provider_native_failed` with `device_category`, with `mumu_root` the folder named when one was,
+  and the device's text as a `foreign_other_error` link; a list the contract refuses has the
+  contract's refusal instead (`invalid_instance_discovery`, or the alias rule's code for an
+  entry's alias the rule refuses). A report that cannot be encoded is `serialization_failed`.
 - **Beside a running Runtime** it is a second reader of the same vendor tool; its behaviour under
   two `info` calls at once has not been verified.
 
 **The rescue row `emulators`** (module `rescue`, offline, writes nothing). It runs the live build's
 `<root>\runtime\actingcommand-actingd.exe discover --config <the root's selected configuration>
---install-root <root>`, within `install.child.check_config_timeout_ms` (the deadline `unlock` gives
-actingd too; a child still running then is left running and named by `pid` and `config_key`).
-A completed discovery is `install_command_done` (operation `install_emulators`, actingd's outcome
+--install-root <root>` within 60 s (`programs::DISCOVER_TIMEOUT_MS`: the child's own three bounds
+of 10 s, the process listing and the two vendor reads, and as much again as a margin; a bound of
+those bounds, not a key). At the bound the child is ended, reaped and no longer read: it is read
+only, so ending it loses nothing, and a child left running would be taken for the root's Runtime
+by an installer's plan (`runtime_running`) and by the watchdog, one more with every retry. It is
+the one child of the module that is ended at its bound; every other keeps the stall rule. A
+completed discovery is `install_command_done` (operation `install_emulators`, actingd's outcome
 its `related` link) with actingd's `report` as the answer's `report`. Anything else is
 `install_command_refused` with `install_refusal` `emulator_discovery_failed` and, as its
 `caused_by` link, actingd's outcome, or the child's failure when it printed no discover report (a
 build before this subcommand refuses the words as a start would: `foreign_other_error` with its
-exit code and stderr). A configuration the module cannot read is its usual `config_unreadable` or
+exit code and stderr); a child ended at the bound has `timeout_ms` the bound (60000) and no cause
+link. A configuration the module cannot read is its usual `config_unreadable` or
 `install_section_invalid`. The row is `actinglab emulators` on the command line, an operation of
 `actinglab serve --stdio`, and a tool of the Lab's MCP server, as every rescue row the module
 serves.

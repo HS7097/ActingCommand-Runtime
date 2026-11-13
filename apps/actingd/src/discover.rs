@@ -12,13 +12,16 @@
 //! `MUMU_MANAGER_COMMAND_TIMEOUT`), and answers the host's instance shape
 //! (`RuntimeDiscoveredInstance`), each instance with the alias of the configuration file's entry
 //! its binding key names, plus the installation it found and how (`mumu_root {path, source}`) and
-//! the provider's version.
+//! the provider's version. Fix 1 (review): the resolver's process listing, made only when no
+//! folder is named, is bounded by `MUMU_MANAGER_PROCESS_LIST_TIMEOUT` here
+//! (`BoundedMumuManagerReads`), and `main` makes actingd's own stdout and stderr not inheritable
+//! before this subcommand starts anything.
 
 use super::*;
 use actingcommand_contract::{RuntimeDiscoveredInstance, RuntimeInstanceDiscovery};
 use actingcommand_device::{
-    DeviceError, DiscoveredMumuInstance, MumuManagerReads, MumuManagerSource, NemuResolutionReason,
-    SystemMumuManagerReads, discover_mumu_installation,
+    BoundedMumuManagerReads, DeviceError, DiscoveredMumuInstance, MumuManagerReads,
+    MumuManagerSource, NemuResolutionReason, discover_mumu_installation,
 };
 use config::InstanceBindingKey;
 use serde_json::json;
@@ -28,8 +31,9 @@ pub(super) const SCHEMA_VERSION: &str = "actingcommand.actingd.discover.v1";
 
 /// `mumu_root.source` of an installation the configuration file's `mumu_root` names.
 const CONFIG_SOURCE: &str = "config";
-/// `mumu_root.source` of an installation `--mumu-root` names.
-const ARGUMENT_SOURCE: &str = "argument";
+/// `mumu_root.source` of an installation `--mumu-root` names: the word of the closed vocabulary
+/// `mumu_root_source` for a folder a person gave (fix 1, review: no word of its own).
+const PERSON_SOURCE: &str = "person";
 /// The developer text of a command line this subcommand does not take.
 const USAGE: &str = "actingd discover takes --config <file>, --install-root <root> only with \
      --config, and --mumu-root <absolute folder>, each at most once with a value";
@@ -42,18 +46,19 @@ struct Options {
     mumu_root: Option<PathBuf>,
 }
 
-/// `actingd discover` on the vendor tool itself.
+/// `actingd discover` on the vendor tool itself, its process listing bounded (fix 1).
 pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, ActingdError> {
-    run_with(&arguments, &mut SystemMumuManagerReads)
+    run_with(&arguments, &mut BoundedMumuManagerReads)
 }
 
-/// `actingd discover` with the vendor tool's two reads `reads` (a test injects its own).
-/// `discover_completed` with the report (`report`); a refusal is the configuration's (check-config's
-/// codes and stages), `invalid_arguments` for a command line it does not take, or the discovery's:
-/// `mumu_manager_version_unsupported` for a version the policy floor refuses or cannot read,
-/// `instance_discovery_unavailable` for anything else (no installation, a tool that did not run,
-/// exited non-zero, ran past its bound, or answered what the contract refuses), with the device
-/// failure's outcome (check-config's `config::device_failure_outcome`) as its cause.
+/// `actingd discover` with the reads `reads`: the vendor tool's two and the process listing (a
+/// test injects its own). `discover_completed` with the report (`report`); a refusal is the
+/// configuration's (check-config's codes and stages), `invalid_arguments` for a command line it
+/// does not take, or the discovery's: `mumu_manager_version_unsupported` for a version the policy
+/// floor refuses or cannot read, `instance_discovery_unavailable` for anything else (no
+/// installation, a process listing or a tool that did not run, exited non-zero or ran past its
+/// bound, or a tool that answered what the contract refuses), with the device failure's outcome
+/// (check-config's `config::device_failure_outcome`) as its cause.
 pub(super) fn run_with(
     arguments: &[std::ffi::OsString],
     reads: &mut dyn MumuManagerReads,
@@ -75,15 +80,27 @@ pub(super) fn run_with(
     } = inputs;
     // `--mumu-root` is the first rung, before the file's `mumu_root`.
     let (explicit, explicit_source) = match options.mumu_root {
-        Some(root) => (Some(root), ARGUMENT_SOURCE),
+        Some(root) => (Some(root), PERSON_SOURCE),
         None => (configured, CONFIG_SOURCE),
     };
     let discovered =
         discover_mumu_installation(explicit.as_deref(), env_nemu_folder.as_deref(), reads)
             .map_err(|error| refused(&error, explicit.as_deref()))?;
-    let source = match discovered.report.source {
-        MumuManagerSource::ExplicitRoot => explicit_source,
-        other => check_config::mumu_root_source(other),
+    // Fix 1 (review): `path` as check-config reports it (`mumu_root_report`): a folder the file or
+    // the person named, as written; one the environment rung or the resolver found, canonical.
+    let (path, source) = match discovered.report.source {
+        MumuManagerSource::ExplicitRoot => (
+            explicit
+                .as_deref()
+                .unwrap_or(discovered.install_root.as_path())
+                .to_string_lossy()
+                .into_owned(),
+            explicit_source,
+        ),
+        other => (
+            discovered.install_root.to_string_lossy().into_owned(),
+            check_config::mumu_root_source(other),
+        ),
     };
     let listed = &discovered.report.instances;
     let instances = listed
@@ -111,7 +128,7 @@ pub(super) fn run_with(
         .map_err(|_| ActingdError::process(SharedCode::SerializationFailed))?;
     let report = json!({
         "mumu_root": {
-            "path": discovered.install_root.to_string_lossy(),
+            "path": path,
             "source": source,
         },
         "provider_version": discovered.report.version.to_string(),
@@ -187,16 +204,20 @@ fn parse(arguments: &[std::ffi::OsString]) -> Result<Options, ActingdError> {
 /// The configuration file's entry bound to `instance` by its binding key, as a start binds it
 /// (`config/provider_startup.rs`): `instance_index` names the index; `instance_name` names the one
 /// listed instance of that exact name, none when several carry it (a start refuses that entry as
-/// ambiguous). Of several entries naming one instance, the first by alias, as a start names the
-/// index of a device group. `None` without a file.
+/// ambiguous). Fix 1 (review): of several entries naming one instance, the one with the smallest
+/// `instance_id`, as the Runtime's answer takes it (`host/instance_discovery.rs`, its registry in
+/// instance id order) and as a device group's key is its members' smallest instance id. Only a
+/// configuration a start refuses has several: two entries outside one device group on one
+/// instance are `undeclared_shared_device`, and every group of several is
+/// `several_members_unsupported` until the slice "order within one device". `None` without a file.
 fn bound_alias(
-    bindings: &[(String, InstanceBindingKey)],
+    bindings: &[config::DiscoveryBinding],
     listed: &[DiscoveredMumuInstance],
     instance: &DiscoveredMumuInstance,
 ) -> Option<String> {
     bindings
         .iter()
-        .filter(|(_, key)| match key {
+        .filter(|binding| match &binding.key {
             InstanceBindingKey::Index(index) => *index == instance.instance_index,
             InstanceBindingKey::Name(name) => {
                 *name == instance.instance_name
@@ -207,9 +228,8 @@ fn bound_alias(
                         == 1
             }
         })
-        .map(|(alias, _)| alias)
-        .min()
-        .cloned()
+        .min_by_key(|binding| binding.instance_id)
+        .map(|binding| binding.alias.clone())
 }
 
 /// A discovery the device layer refused, classified as the Runtime's discovery surface classifies

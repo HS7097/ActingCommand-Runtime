@@ -1978,25 +1978,33 @@ fn ledger_verify(context: &Context<'_>) -> Exit {
 
 /// Workflow #453 S10 (contracts/emulator-control.md, "Offline instance discovery"): `emulators`,
 /// the live build's `actingd discover --config <the root's configuration> --install-root <root>`,
-/// which lists this machine's emulator instances without a Runtime and writes nothing, within
-/// `install.child.check_config_timeout_ms`, the deadline `unlock` gives actingd too. A completed
-/// discovery is `install_command_done` (operation `install_emulators`, actingd's outcome as its
-/// `related` link) with actingd's report as `report`; anything else is `install_command_refused`
-/// with `install_refusal` `emulator_discovery_failed`, actingd's outcome (or the child's failure)
-/// as its cause.
+/// which lists this machine's emulator instances without a Runtime and writes nothing. Fix 1
+/// (review): within `programs::DISCOVER_TIMEOUT_MS` (60 s, the child's own three bounds and a
+/// margin), at which the child is ended, never left running where an installer or the watchdog
+/// would take it for the root's Runtime. A completed discovery is `install_command_done`
+/// (operation `install_emulators`, actingd's outcome as its `related` link) with actingd's report
+/// as `report`; anything else is `install_command_refused` with `install_refusal`
+/// `emulator_discovery_failed`: actingd's outcome (or the child's failure) as its cause, or, for a
+/// child ended at the bound, `timeout_ms` the bound and no cause.
 fn emulators(context: &Context<'_>) -> Exit {
     const EMULATORS: InstallLocation = InstallLocation::Emulators;
     let refused = || install::refusal(EMULATORS, InstallRefusal::EmulatorDiscoveryFailed);
     let run = || -> Result<Exit, Outcome> {
-        let (_, settings) = configuration(context, EMULATORS)?;
+        // The configuration's usual refusals (`config_unreadable`, `install_section_invalid`)
+        // come first; the bound is no key of it.
+        configuration(context, EMULATORS)?;
         let discovered = programs::discover(
             context.host,
             &context.location.root.join(Half::Runtime.dir()),
             &context.location.config,
             &context.location.root,
-            Deadline::check_config(&settings),
         )
-        .map_err(|failure| failure.onto(refused()))?;
+        .map_err(|undiscovered| match undiscovered {
+            programs::Undiscovered::Failed(cause) => {
+                refused().joined(CauseRelation::CausedBy, cause)
+            }
+            programs::Undiscovered::Ended => refused().timeout_ms(programs::DISCOVER_TIMEOUT_MS),
+        })?;
         if !discovered.completed() {
             return Err(refused().joined(CauseRelation::CausedBy, discovered.received));
         }

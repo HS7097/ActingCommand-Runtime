@@ -19641,9 +19641,9 @@ add`, the journal's input naming the added alias) and
 `postcheck_454_config_replace_passed_check_keeps_its_record` (checks that pass: the step `done`
 with the same three members, `failed` empty, no row failed). No existing test changes.
 
-### 1.342 Slice S10 (0.12.59): `actingd discover` and the rescue row `emulators` list this machine's emulator instances while no Runtime runs (Workflow #453, thing 4 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0 and §4, read on main `98924e28`; the coordinator's rulings of 11-13 in the work order, not the owner's words; coordinator work order `rd-1113/brief-453-s10-offline-discovery.md`, read on main `98924e28`, main `7938d10e` merged)
+### 1.342 Slice S10 (0.12.59): `actingd discover` and the rescue row `emulators` list this machine's emulator instances while no Runtime runs (Workflow #453, thing 4 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0 and §4, read on main `98924e28`; the coordinator's rulings of 11-13 in the work order, not the owner's words; coordinator work order `rd-1113/brief-453-s10-offline-discovery.md`, read on main `98924e28`, main `7938d10e` merged; fix 1, after an independent review, coordinator work order `rd-1113/brief-1681-fix1.md`, main `10f538ea` merged)
 
-1.341 is the next number on main `7938d10e` (#441 took 1.340). The contract is
+1.342 is the next free number on main `10f538ea` (#441 took 1.340, #454 1.341). The contract is
 [emulator-control.md](emulator-control.md), "Offline instance discovery": its subject is the
 instance discovery that section's "Instance discovery query" gives for a running Runtime (the same
 two vendor reads, the same instance shape, the same refusal codes), while
@@ -19661,12 +19661,14 @@ discovery.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| S10-1 | `actingd discover [--config <file> [--install-root <root>]] [--mumu-root <dir>]` (`apps/actingd/src/discover.rs`) | new actingd subcommand, read only | S10 | an installer, a person, the row `emulators` | report `actingcommand.actingd.discover.v1` `{schema_version, outcome, report}`; `report` `{mumu_root {path, source}, provider_version, instances}`, `instances` in `RuntimeDiscoveredInstance`'s shape and rule; `source` `argument`, `config`, `env`, `running_process`, `registry_uninstall` or `vendor_enumeration`; each option once with a value, `--install-root` only with `--config`, `--mumu-root` absolute, else `invalid_arguments` |
+| S10-1 | `actingd discover [--config <file> [--install-root <root>]] [--mumu-root <dir>]` (`apps/actingd/src/discover.rs`) | new actingd subcommand, read only | S10 | an installer, a person, the row `emulators` | report `actingcommand.actingd.discover.v1` `{schema_version, outcome, report}`; `report` `{mumu_root {path, source}, provider_version, instances}`, `instances` in `RuntimeDiscoveredInstance`'s shape and rule; `path` as check-config reports it (a folder `--mumu-root` or the file names, as written; one found, canonical: fix 1); `source` `person` (fix 1: the vocabulary's word, no word of its own), `config`, `env`, `running_process`, `registry_uninstall` or `vendor_enumeration`; each option once with a value, `--install-root` only with `--config`, `--mumu-root` absolute, else `invalid_arguments` |
 | S10-2 | `ActingdConfigFile::discovery_inputs` (`apps/actingd/src/config.rs`) | behaviour | S10 | S10-1 | of the file only `mumu_root` (`mumu_root_invalid`), `allow_env_overrides` (the environment rung as `assemble` injects it) and the binding keys of the entries a start binds by discovery (neither a fixture nor a handset; `device_config_invalid`, `instance_binding_key_invalid`), stage `config_assemble`; the file loaded as check-config loads it (stage `config_load`); nothing else is assembled, so no other file is opened, the private binding file of a handset in the state root included; `--install-root` is checked by check-config's `install_root_of` and nothing read depends on it |
-| S10-3 | `bound_alias` of each instance | behaviour | S10 | S10-1 | the entry whose `instance_index` is the index, or whose `instance_name` is the name when one listed instance alone carries it; of several, the least alias; absent without `--config` (the host's shape omits an absent member); an explicit HOST:PORT entry is never matched (no binding key, no Runtime to ask) |
-| S10-4 | `actingcommand_device::discover_mumu_installation` with `MumuManagerReads` (`version`, `instances`) and `SystemMumuManagerReads` (`crates/device/src/mumu_manager.rs`) | behaviour | S10 | S10-1 and the start | the one function that composes the resolver, `version` and `info -v all`; the start's `discover_mumu_instances` is it with the system reads, unchanged in what it runs and answers; `query_version` and `query_instances` read through the same reads; the trait has the two reads only, so nothing else of the vendor tool can be asked through it |
-| S10-5 | the row `emulators` (module `rescue`, slice S10, planned; no parameter; read only, offline; `source` `actingd discover`, `new` #453 S10) | operation table row added | S10 | the Lab's command line, `serve --stdio`, the Lab's MCP server | `rescue::SERVED` holds it (34 rows) and `rescue_reads::READ_HERE` its empty list (17 rows); the live build's `actingd discover --config <the root's selected configuration> --install-root <root>` within `install.child.check_config_timeout_ms` (the deadline `unlock` gives actingd too); `install_command_done` (operation `install_emulators`, actingd's outcome its `related` link) with `report`, else `install_command_refused`, `install_refusal` `emulator_discovery_failed`, actingd's outcome or the child's failure its `caused_by` link |
-| S10-6 | `discover_completed` (actingd, success, no value); the location `install_emulators` (owner `actingctl`); `install_refusal` `emulator_discovery_failed` (all `since` 0.12.59, pending) | outcome catalog | S10 | S10-1, S10-5 | `ActingdCode::DiscoverCompleted`, `InstallLocation::Emulators`, `InstallRefusal::EmulatorDiscoveryFailed`; reused: `instance_discovery_unavailable` and `mumu_manager_version_unsupported` (the Runtime's discovery surface's classification, `DiscoverySpec::discover`), the device failure outcome provider startup records (`config::device_failure_outcome`) as their cause, `invalid_arguments` and `serialization_failed` (the contract's shared codes), check-config's load and assembly codes and `check_config_install_root_invalid` (its description now names `discover` too); the index is regenerated |
+| S10-3 | `bound_alias` of each instance | behaviour | S10 | S10-1 | the entry whose `instance_index` is the index, or whose `instance_name` is the name when one listed instance alone carries it; of several, the one with the smallest `instance_id`, as the Runtime's answer takes it (fix 1; only a configuration a start refuses has several: `undeclared_shared_device`, `several_members_unsupported`); absent without `--config` (the host's shape omits an absent member); an explicit HOST:PORT entry is matched by the online discovery and never by this one (no binding key, no Runtime to ask); for a configuration check-config would refuse the alias is only a hint |
+| S10-4 | `actingcommand_device::discover_mumu_installation` with `MumuManagerReads` (`version`, `instances`, and since fix 1 `processes`, the resolver's process listing), `SystemMumuManagerReads` and (fix 1) `BoundedMumuManagerReads` (`crates/device/src/mumu_manager.rs`) | behaviour | S10 | S10-1 and the start | the one function that composes the resolver, `version` and `info -v all`; the start's `discover_mumu_instances` is it with the system reads, unchanged in what it runs and answers; `query_version` and `query_instances` read through the same reads; the trait has the vendor tool's two reads only, so nothing else of it can be asked through it; `resolve_mumu_manager` (check-config's) lists through the system reads, unbounded as before; `actingd discover` uses the bounded reads, whose listing is `system_processes_within(MUMU_MANAGER_PROCESS_LIST_TIMEOUT)` (10 s; at the bound only its own PowerShell process is ended), a listing past it `instance_discovery_unavailable` caused by `provider_native_failed` |
+| S10-5 | the row `emulators` (module `rescue`, slice S10, planned; no parameter; read only, offline; `source` `actingd discover`, `new` #453 S10) | operation table row added | S10 | the Lab's command line, `serve --stdio`, the Lab's MCP server | `rescue::SERVED` holds it (34 rows) and `rescue_reads::READ_HERE` its empty list (17 rows); the live build's `actingd discover --config <the root's selected configuration> --install-root <root>` within `programs::DISCOVER_TIMEOUT_MS` (fix 1: 60 s, the child's three bounds of 10 s and as much again; it was `install.child.check_config_timeout_ms`, 900 s by default, with the child left running), at which the child is ended through `Host::run_program_ending`; `install_command_done` (operation `install_emulators`, actingd's outcome its `related` link) with `report`, else `install_command_refused`, `install_refusal` `emulator_discovery_failed`, actingd's outcome or the child's failure its `caused_by` link, or for a child ended at the bound `timeout_ms` 60000 and no cause |
+| S10-7 | `actingd discover` clears the inheritable flag of its own stdout and stderr (`standard_handles::apply`, `apps/actingd/src/main.rs`) | behaviour (fix 1) | S10 | S10-1 | before it does anything, as the daemon does (WD-MT): no descendant of the vendor tool or PowerShell keeps the row's pipe open; a failure is `host_stdio_inheritance_failed` as a developer line on stderr and the discovery goes on |
+| S10-8 | `Host::run_program_ending` and `NotFinished` (`crates/lab-rescue/src/install/host.rs`) | behaviour (fix 1) | S10 | S10-5 | the host's run of a child that is ended at its deadline, killed, reaped and no longer read, through the shared helper's existing `child::run_captured_ending` (RL-1c fix 1); only `programs::discover` uses it, every other child keeps the stall rule through `run_program` |
+| S10-6 | `discover_completed` (actingd, success, no value); the location `install_emulators` (owner `actingctl`); `install_refusal` `emulator_discovery_failed` (all `since` 0.12.59, pending) | outcome catalog | S10 | S10-1, S10-5 | `ActingdCode::DiscoverCompleted`, `InstallLocation::Emulators`, `InstallRefusal::EmulatorDiscoveryFailed`; reused: `instance_discovery_unavailable` and `mumu_manager_version_unsupported` (the Runtime's discovery surface's classification, `DiscoverySpec::discover`), the device failure outcome provider startup records (`config::device_failure_outcome`) as their cause, `invalid_arguments` and `serialization_failed` (the contract's shared codes), check-config's load and assembly codes and `check_config_install_root_invalid` (its description now names `discover` too); fix 1: `install_command_refused` takes the optional key `timeout_ms` (the row's bound of an ended discovery), `host_stdio_inheritance_failed`'s description names `discover`, and the vocabulary `mumu_root_source`'s `person` is reused; no code or word added; the index is regenerated |
 
 **Why one new code and one new token.** No success code meant "an offline discovery answered":
 `instances_discovered` is actingctl's, the answer of a running Runtime's discovery, and actingd's
@@ -19680,16 +19682,34 @@ for the encoding failure; the four existing subcommands pass theirs as before).
 **What it can run** (the coordinator's ruling: every program it can spawn, with its arguments). actingd discover: the vendor tool found in the installation,
 `<installation>\nx_main\MuMuManager.exe` or `<installation>\shell\MuMuManager.exe`, with `version`
 and then `info -v all`, each once, each within `MUMU_MANAGER_COMMAND_TIMEOUT` (10 s), through
-`SystemMumuManagerReads` and `run_json` (`crates/device/src/mumu_manager.rs`; a run past its bound
+`BoundedMumuManagerReads` and `run_json` (`crates/device/src/mumu_manager.rs`; a run past its bound
 stops that tool's own process, never an emulator); and, only when no folder is named (no
 `--mumu-root`, no `mumu_root`, no environment rung), the resolver's process listing
 `<SystemRoot>\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass
 -Command <the Win32_Process listing script>` (`crates/device/src/discovery.rs`,
-`system_processes`), once and without a bound of its own, as check-config and a start run it. The
-row `emulators`: `<root>\runtime\actingcommand-actingd.exe discover --config <config>
---install-root <root>` (`crates/lab-rescue/src/install/programs.rs`, `discover`). Nothing starts,
-stops, restarts or controls an emulator; no other subcommand of the vendor tool and no adb is run;
-nothing is written and no state root is touched.
+`system_processes_within`), once and, since fix 1, within `MUMU_MANAGER_PROCESS_LIST_TIMEOUT`
+(10 s), where check-config and a start still list without a bound of their own
+(`system_processes`). Since fix 1 none of these children inherits actingd's own stdout or stderr.
+The row `emulators`: `<root>\runtime\actingcommand-actingd.exe discover --config <config>
+--install-root <root>` (`crates/lab-rescue/src/install/programs.rs`, `discover`), within 60 s and
+ended there. Nothing starts, stops, restarts or controls an emulator; no other subcommand of the
+vendor tool and no adb is run; nothing is written and no state root is touched.
+
+**Fix 1 (the independent review of the pull request; the coordinator's rulings, not the owner's
+words).** Three things had to change: the process listing had no bound (every call on a root whose
+configuration states no `mumu_root`, and the row never passes `--mumu-root`, took that step); the
+vendor tool and PowerShell inherited actingd's stdout and stderr, so a descendant of a tool ended at
+its bound could hold the row's pipe, which the row reads to its end without a bound; and the row
+waited 900 s by default and then left its actingd running, which an installer's plan
+(`runtime_running`) and the watchdog take for the root's Runtime, one more with every retry. Four
+should: the word `argument` was not in the closed vocabulary `mumu_root_source` (now `person`);
+several entries on one instance took the least alias where the Runtime's answer takes the smallest
+instance id; `path` was canonical where check-config reports a named folder as written, and the
+README said no lock where an A/B installation takes the slot's shared lock; and the contract now
+says that a configuration check-config would refuse is still answered (its `bound_alias` then a
+hint) and that an explicit host and port is matched online only. The subcommand's answer shape
+beyond these, its codes and the refusal word, check-config, a start and every other rescue row are
+unchanged.
 
 **At deploy.** Nothing to do: a new read-only command and a new read-only row; nothing persisted,
 no key, no revision. Beside a running Runtime the command is a second reader of the same vendor
@@ -19701,28 +19721,38 @@ with that child's exit and stderr as the cause.
 **Rollback.** Nothing persisted: code, one table row, catalog entries, a contract section and two
 test files.
 
-Tests (apps gate row "#453 S10"; no program is spawned: the vendor tool's reads are injected and
-the rescue module's actingd is the fake host's). In `apps/actingd`
-(`gate_453_s10.rs`, temporary emulator roots whose tool files are empty and never run):
+Tests (apps gate row "#453 S10"; no program is spawned: the reads are injected and the rescue
+module's actingd is the fake host's). In `apps/actingd` (`gate_453_s10.rs`, temporary emulator
+roots whose tool files are empty and never run):
 `s10_discover_lists_the_instances_with_the_files_bound_aliases` (a file binding index 0, the name
 of instance 1 and a name two instances carry: the four instances in the host's shape with
 `neutral.first`, `neutral.second` and no alias on the two that share a name, `mumu_root` the
-canonical folder with `source` `config`, `provider_version` 6.5.7.0, the two reads once each and in
-order of the tool the resolver found, no state root made, the report line's schema and outcome),
-`s10_discover_resolves_the_named_emulator_root` (`--mumu-root` without a file: `source`
-`argument`, no alias; a folder without the tool: `instance_discovery_unavailable` caused by
-`candidate_absent` with `install_source` `explicit_folder` and `mumu_root`, nothing read) and
+configured folder as written with `source` `config`, `provider_version` 6.5.7.0, the two reads
+once each and in order of the tool the resolver found, no state root made, the report line's
+schema and outcome), `s10_discover_resolves_the_named_emulator_root` (`--mumu-root` without a
+file: the folder as given, `source` `person`, no alias; a folder without the tool:
+`instance_discovery_unavailable` caused by `candidate_absent` with `install_source`
+`explicit_folder` and `mumu_root`, nothing read),
 `s10_discover_a_read_past_its_bound_is_unavailable` (`info -v all` past its bound:
 `instance_discovery_unavailable` caused by `provider_native_failed` with `device_category`
-`backend_launch` and `mumu_root`, each read asked once). In `crates/lab-rescue`
-(`install::gate_453_s10`, the fake host): `emulators_answers_the_live_builds_report` and
+`backend_launch` and `mumu_root`, each read asked once) and, fix 1,
+`s10_fix1_discover_a_process_listing_past_its_bound_is_unavailable` (no folder named, a process
+listing past its bound: `instance_discovery_unavailable` caused by `provider_native_failed` with no
+`mumu_root`, the listing asked once, the vendor tool never). In `crates/lab-rescue`
+(`install::gate_453_s10`, the fake host): `emulators_answers_the_live_builds_report`,
 `emulators_refuses_with_actingds_outcome_as_its_cause` (the one child line, the answers above, the
-root and its state root byte for byte as before). The three gates that hold the operation table
-equal to the code cover the row as they come, unchanged: `rescue_read_here_rows_read_what_they_declare`
-(`crates/lab-rescue`, its constant and its declared parameters, none),
-`every_table_driven_row_has_one_list` (actinglab, the row in exactly one constant) and
-`mcp_served_and_refused_partition` (actinglab-mcp, the row served by the rescue module on Windows).
-No existing test changes.
+root and its state root byte for byte as before) and, fix 1,
+`emulators_fix1_a_discovery_that_never_ends_is_ended_at_its_bound` (an actingd that never exits:
+ended once at 60 000 ms, the refusal `emulator_discovery_failed` with `timeout_ms` 60000, no cause,
+no `pid`, no `config_key`, no report, the one child line, nothing written). The three gates that
+hold the operation table equal to the code cover the row as they come, unchanged:
+`rescue_read_here_rows_read_what_they_declare` (`crates/lab-rescue`, its constant and its declared
+parameters, none), `every_table_driven_row_has_one_list` (actinglab, the row in exactly one
+constant) and `mcp_served_and_refused_partition` (actinglab-mcp, the row served by the rescue
+module on Windows). Adapted by fix 1 (the requirement deliberately changes what they pin, nothing
+else in them): the first two tests of `apps/actingd` pinned the canonical folder and `source`
+`argument` and now pin the folder as written and `person`; their fixture of the reads answers the
+new third read. No other existing test changes.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
