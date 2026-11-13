@@ -132,6 +132,9 @@ mod gate_451_place_pkg;
 // keeps the CLI's envelope.
 #[cfg(test)]
 mod gate_434_lab6s2b1;
+// Test-only: Workflow #454, a post-start check that fails closes its step with what it read.
+#[cfg(test)]
+mod gate_454_postcheck;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.

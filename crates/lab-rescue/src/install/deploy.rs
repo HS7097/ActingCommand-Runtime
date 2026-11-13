@@ -646,6 +646,10 @@ fn post_check(
     if composite_update(&journal) {
         return begin_rollback(operation, n, loaded, failed, evidence);
     }
+    // Workflow #454: the step is closed with what it read, the evidence a passed check records,
+    // in the write that ends the operation (before, it stayed `started` with no evidence and its
+    // rows were only in the answer).
+    operation.close_with_end(n, evidence);
     let refusal = super::refusal(command, InstallRefusal::PostCheckFailed).count(failed.len());
     let mut members = hold_kept(&paths, hold_of(&journal).as_ref(), false);
     members.insert("post_check".to_owned(), json!(postcheck::values(&rows)));
