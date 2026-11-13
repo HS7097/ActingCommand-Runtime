@@ -354,6 +354,9 @@ mod gate_389_mcp4;
 mod gate_389_mcp9a;
 // Workflow #389 U-2: the door binds each connection to its channel and marks, never refuses.
 mod gate_389_u2;
+// Workflow #434 LAB-6S1a: the door also takes `lab` with an initiator; every binding without one
+// answers byte for byte as before.
+mod gate_434_lab6s1a;
 // Workflow #429 R-0: the workbench's kinds have their shapes and answer `not_implemented`.
 mod gate_429_r0;
 // Workflow #429 R-0b: the Status member `activity` while each activity runs and after it ends.

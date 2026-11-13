@@ -11326,7 +11326,7 @@ other literal "25 s") and `server_stdio::mcp_loop_initialize_list_batch_and_canc
 run carries `Lab-MCP` (`tools::SUPPLIED`'s `Supplied::True` rows, `tools::runs_detached`). The
 slice that serves them changes the manual's section 9, the instructions' two sentences on them and
 `mcp_manual_exception_is_the_refused_rows`, which fails until the manual's exception is the rows
-the server refuses.
+the server refuses. (Done by "Slice LAB-6S0" below, 0.12.58.)
 
 **Left for the removal of today's server** (a later slice, LAB-7 by the contract's table, after the
 owner has changed the registrations; nothing of it is done here): `apps/actingctl/src/mcp/**` with
@@ -11383,6 +11383,243 @@ registration names the server until the owner applies the snippet of `mcp config
 section 11).
 
 **Rollback** (to the release before it). Nothing persisted: a text constant and a document.
+
+#### Slice LAB-6S0 (0.12.58): `deploy` and `rollback` through the Lab's MCP server; the detached run carries `Lab-MCP`
+
+Coordinator work order `rd-1113/brief-lab6s0.md`, on main `29a65e2d`: the first slice the
+coordinator cut from LAB-6 (board #434, 11-13), its row S0 in the read-only survey
+`rd-1113/lab6-step0-survey.md` (section D, row S0 and D.5; rows A22 and N6). The standard is the
+owner's statement of 2026-11-13 (board #434), in the coordinator's words: the command line and MCP
+are two shells around the Lab, and what the Lab has, both must have. The one exception "Slice
+LAB-5G7" registered, `deploy` and `rollback` through MCP, ends here. The mechanism is the
+coordinator's ruling of 2026-11-13, not the owner's words (the survey's N6 recommends the marker
+variable). Untouched: the door (`BindChannel`, the channels, `via`, the origin gates), the runtime
+client, the ledger's shapes, every interface declaration, `actingctl`'s commands, the CLI's own
+child starts and the MCP server's `serve` children; no operation but these two changes its answer.
+
+**The cause** (the survey's lines, checked on this base). A rescue row that must outlive its
+caller runs detached (`crates/lab-rescue/src/rescue.rs`, `detach`): the module starts the program
+again through the watchdog's manual-run method (WMI, `install::host::detach_with_wmi`) with the
+operation's initiator in `ACTINGCOMMAND_INITIATOR`. A Lab process refuses `Lab-MCP` in that
+variable (`lab_ops::initiator`, `of_lab_process`; L2-7), so that no process can call itself the
+MCP server. A detached run started from the MCP server would answer "detached" and never run, so
+the server refused both rows (`tools::runs_detached`, L5G2b-13), keeping `detach` among the
+members it gives (`tools::SUPPLIED`). **One more, found here:** the detached start ran the running
+program's own file (`std::env::current_exe()`); in the MCP server, which serves the module in its
+own process, that is `actinglab-mcp.exe`, which would have been handed the row's words as its start
+options. The start now runs the `actinglab.exe` beside the running program (L6S0-3).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L6S0-1 | the marker `ACTINGCOMMAND_DETACHED_RUN` (`lab_ops::initiator::DETACHED_RUN_VARIABLE`) set to `rescue` (`DETACHED_RUN_MARK`); `Initiator::of_lab_process_marked`, which `of_this_lab_process` now calls with both variables | behaviour | LAB-6S0 | the rescue module's detached start | contract §4.2: `actinglab.exe` takes `Lab-MCP` from `ACTINGCOMMAND_INITIATOR` only beside the marker, its value compared byte for byte; the marker alone, beside another word or with another value changes nothing (the answer is L2-7's `of_lab_process`, unchanged, the rule without the marker); `serve --stdio --front mcp` refuses the variable set to anything as before (L5G4a), its rule reading no marker. Like the variable, a declaration, not authentication |
+| L6S0-2 | the detached start's environment (`rescue::detached_environment`; `install::Host::detach_rescue` takes the variables to set, `detach_with_wmi` writes `set "<variable>=<value>"&& ` for each) | behaviour | LAB-6S0 | — | `Lab-CLI`: none; `Lab-制包` or `Lab-救急`: the word; `Lab-MCP`: the word and the marker. The one place that sets the marker; the values are constants of the closed list, held to the watchdog's unsafe characters as the words are. The fake host records the word as `initiator=<word>` and the marker as `marker=<value>` before the words. `actingctl install --detach` (`Host::detach`) is unchanged: no variable, the running installer |
+| L6S0-3 | the program a detached run of the rescue module starts (`install::host`, `LAB_PROGRAM`) | behaviour | LAB-6S0 | — | `actinglab.exe` beside the running program's file: in `actinglab.exe` (its CLI, `serve`) the program itself, as before; in `actinglab-mcp.exe` the `actinglab.exe` beside it, the program its `serve` children run (L5G4b). The coordinator's addition: a program that is not there is refused before the start (the file's failure to open, with its path), since the shell the start creates would answer a pid, write "not found" into the log and run nothing, and the caller would be told "detached" of a run that cannot begin |
+| L6S0-4 | `deploy` and `rollback` served by `actinglab-mcp` (`tools::serving`; `tools::runs_detached` removed) | behaviour | LAB-6S0 | — | on Windows the rescue module's 33 rows are served in the server's process, and all 143 offered rows are served (49 by `core_ops`, 33 by the module, 61 by children); elsewhere all 110, as before. The tool list is the same: the two tools were listed and refused, now served. `tools::SUPPLIED` keeps `detach` (`Supplied::True`): neither tool takes it and `calls::prepare` gives it true, so the module answers at once (below); `plan` true answers the plan only, in the server's process. The `dir` of `ac_deploy` now carries the absolute-path sentence of a served row's path parameter (L5G2b-9), and a relative `dir` is refused `not_absolute` |
+| L6S0-5 | the journal's word | behaviour | LAB-6S0 | the detached `actinglab.exe` | `Lab-MCP` on every journal the detached run writes (§4.3). Its requests to a running Runtime stay on the CLI channel with the CLI envelope (`crate::install::runtime`), as every request of the module, until a later LAB-6 slice moves the module to the `lab` channel |
+| L6S0-6 | `mcp_operation_unsupported` | outcome catalog text | LAB-6S0 | — | no offered row emits it on any platform any more (below, "The code"); kept active and registered; its common causes rewritten; no code, key, location or word added; the index is current (no line of it changes) |
+| L6S0-7 | the instructions; the manual's sections 1, 8, 9 and 10; the contract; the table's notes of `deploy` and `rollback` | text | LAB-6S0 | — | below |
+
+**What `ac_deploy` and `ac_rollback` answer now** (on Windows; the module's `detach`,
+`rescue.rs`): at once, `install_command_done` (`operation` `install_deploy` or
+`install_rollback_apply`, `installation_changed` false, the detached run's `pid` and `log`),
+`isError` false, with the members `detached: true`, `log` (`install\detached-<ms>.log` under the
+root, where the run's output goes) and `next` `{status: ["op", "status"]}`. `op status` follows the
+operation: its `unfinished` names it while the run works, `last_operations` once it ended (its
+`operation_id`, `kind`, result), and `op status` with `op` gives its journal. A refusal before the
+start (an unfinished operation, a root whose installation state cannot be read) answers at once and
+starts nothing. The answer does not carry the operation's id: the detached run mints it when it
+opens its journal (open below).
+
+**The code** (`mcp_operation_unsupported`, the work order's point 4). After this slice no offered
+row emits it on any platform: on Windows every offered rescue row is one the module serves (its
+33, the three `mcp` rows of slice LAB-5 among them), and elsewhere no rescue row is offered;
+`convert` is not offered (its source is not built), so a call of `ac_convert` is an unknown tool
+(-32602 `mcp_params_invalid`), not this code. Its two emitters stay as the server's check:
+`calls::Service::line` for an offered row `tools::serving` refuses (an offered rescue row of slice
+LAB-5 the module would not serve) and `server::answer` for a tool name the catalog does not hold
+once `parse_call` admitted the call; neither is reached today. The catalog's way with a code nothing
+can emit any more is to retire it with its registry entry (G1; L2-15's `resource_check_release_retired`,
+whose command was gone); a code that stays registered with a check no input reaches today stays
+active, as `lab_command_option_disabled` does (L5F-5, contract §12). So the entry stays `active`
+and `pending`, its `common_causes` say that no row answers it in this build and what the check is
+for, and its description and handling are unchanged.
+
+**Texts** (the work order's point 5).
+- Contract [lab-two-entries.md](lab-two-entries.md): §4.2 gains "The detached run's marker" and the
+  bullet of refused values names `Lab-MCP` without it; §5 "Through MCP" loses its "Not yet" and says
+  what the server does, the journal's word, the channel until LAB-6 and the production rule; §8.1's
+  sentence on the program, §9.3 "Calls served in the server's process" (*Which*, *The front's own
+  members*), "Calls served by `serve` children" (*Which*: 143 of 143 on Windows) and its "Not yet"
+  (now "A row the server does not serve": none offered is one) and §12's sentence on the code no
+  longer call `deploy` and `rollback` refused or an exception.
+- The manual (`apps/actinglab-mcp/MANUAL.md`): section 1 registers no exception; section 8 names
+  the rescue rows without "but `deploy` and `rollback`"; section 9, "Deploy and rollback" in place of
+  "The one exception", says what the two tools answer, how `ac_op_status` follows the operation,
+  who is recorded, and the production rule: until LAB-7 production deploys and rolls back through
+  `actingctl install`, not through the rescue module and not through this server
+  ([install-cli.md](install-cli.md), "Operational rule until LAB-7"); section 10 lists the two tools
+  among those that change what the installation runs, and its rule of use names deploying and
+  rolling back in the present tense.
+- The instructions (`tools::INSTRUCTIONS`, 3,371 bytes at a call budget of 25 s, 3,388 before):
+  "Only deploy and rollback, which must run detached, answer mcp_operation_unsupported, and nothing
+  is sent, run or written for them." → "On Windows deploy and rollback always run detached, as
+  Lab-MCP: each answers at once with the detached run's pid and log, and ac_op_status follows the
+  operation."; "Starting, stopping or restarting the Runtime and replacing its configuration are the
+  person's to decide: …" → "Starting, stopping or restarting the Runtime, replacing its
+  configuration, deploying and rolling back a build are the person's to decide: …", the rest of the
+  rule unchanged; "This build does not serve deploy and rollback through MCP: use the command line."
+  removed.
+- [lab-operations.json](lab-operations.json): the notes of `deploy` and `rollback` say that the MCP
+  server serves them detached, what the answer is, that the detached run journals `Lab-MCP`, and
+  the production rule.
+
+**Tests.** New: apps row "#434 LAB-6S0". In actinglab's unit tests (`gate_434_lab6s0`; pure
+functions, no environment changed): `lab_mcp_from_the_variable_only_with_the_marker` (without the
+marker every value of the variable gives L2-7's answer, `Lab-MCP` refused; with it `Lab-MCP`; the
+marker alone or beside `Lab-制包`, `Lab-救急`, `Lab-CLI`, `UI`, `Lab-看门狗` changes nothing; a marker
+of another value is none; `serve --stdio --front mcp` refuses the variable set to anything, `Lab-MCP`
+included). In the rescue module's tests on the installer's fake host and a made-up root
+(`install::gate_434_lab6s0`): `detached_start_sets_the_marker_only_for_lab_mcp` (`deploy` and
+`rollback` with `detach` as `Lab-MCP` start their detached run with the word and the marker, as
+`Lab-制包` or `Lab-救急` with the word alone, as `Lab-CLI` with neither) and
+`mcp_deploy_and_rollback_run_detached_as_lab_mcp` (what the server hands the module for each tool,
+the arguments and `detach` true, as `Lab-MCP`, answers at once as above and never
+`mcp_operation_unsupported`; the detached run the fake host recorded takes `Lab-MCP` by the
+initiator rule from the recorded variable and marker, runs the row's words, and every journal it
+writes says `Lab-MCP`; `op status` lists its operation by its id, and with the id gives its journal,
+which says `Lab-MCP`). **Adapted**, as the requirement deliberately changes what they pinned:
+`gate_434_lab5g7::mcp_manual_exception_is_the_refused_rows` (rewritten to what is true now: the
+server refuses no row it offers on any platform; no heading of the manual is on an exception, and
+neither the manual nor the instructions name `mcp_operation_unsupported`; section 9 names the tools
+of the rows the front forces detached and `ac_op_status`);
+`gate_434_lab5g2b::mcp_served_and_refused_partition` (the class "refused: the front forces its run
+detached" is gone; every row the module serves is served, `deploy` and `rollback` among them);
+`server_stdio::mcp_calls_refused_unsupported_and_an_unknown_tool` (on Windows `ac_deploy` without
+`target` and `ac_rollback` with an undeclared member answer `arguments_invalid`, `required` and
+`unknown`, before anything runs, where they answered `mcp_operation_unsupported`; `ac_deploy` too
+where `--list` leaves it out); `serve_calls::mcp_detached_rows_refused_and_nothing_started` (with an
+unfinished operation's `current.json` the module cannot read in the made-up root, each tool answers
+the line the module's code gives for its row with `detach` true, its refusal `state_invalid` before
+the detached start, and the root holds the same files: no test starts a real detached process).
+The tests of LAB-5B1, LAB-5B1b and LAB-5B1c that pin what each row reads and hands over are not
+changed and still hold: no row's constant, command line or receiver changes. No test leaves the
+gate map.
+
+**Interface.** None raised: nothing on the wire, in the ledger, in a journal's shape or in a file a
+released peer reads changes (the journal's `initiator` takes `Lab-MCP`, one of the six words, as the
+server's in-process rescue rows already write it); no code, key, location or vocabulary token is
+added.
+
+**What LAB-6S0 changes live.** Nothing until a client is registered with the MCP entry's second
+generation (manual, section 11): no registration names `actinglab-mcp` today. Afterwards an agent of
+such a client can call `ac_deploy` and `ac_rollback` of that client's root on Windows, which before
+answered `mcp_operation_unsupported`; the manual's and the instructions' rule of use leaves the
+decision to the person, and until LAB-7 production keeps deploying through `actingctl install`.
+
+**Rollback** (to the release before it). Nothing persisted but what a detached `deploy` or
+`rollback` writes as the command line would; its journal carries `Lab-MCP`, one of the six words,
+which the build before reads.
+
+**Where LAB-6S0 differs from its work order's letter.**
+
+- (a) The work order (point 2, citing §5) and the table's note of `detach` say the two tools
+  "answer the operation's id at once". The module's detached answer carries no operation id: the
+  detached run mints it when it opens its journal, after the answer. This slice keeps the module's
+  answer (its command line's too) and says what is true: `detached`, `pid`, `log` and `next` naming
+  `op status`, which names the operation by its id. Giving the id at once needs the caller to mint
+  it for the detached run, a change of the module beyond this slice: left to the coordinator.
+- (b) The program the detached start runs (L6S0-3) is a change the survey did not name; without it
+  the server's detached run would start `actinglab-mcp.exe`.
+- (c) `mcp_operation_unsupported` stays active (above, "The code").
+
+#### Slice LAB-6S1a (0.12.58): the door also takes `BindChannel{channel: lab, initiator}`; `runtime-client` [3, 8]
+
+Coordinator work order `rd-1113/brief-lab6s1a.md`, after the read-only survey
+`rd-1113/lab6-step0-survey.md`; the coordinator's rulings of 2026-11-13 on board #434, not the
+owner's words; on main `29a65e2d`. The contracts are [lab-two-entries.md](lab-two-entries.md)
+(the slice table, §2.2, §4.1, §4.3, §10), [runtime-interface.md](runtime-interface.md)
+("Binding" rule 9, "Old Runtimes", "New request kinds") and
+[component-interfaces.md](component-interfaces.md) (`runtime-client` 8, "Planned: Workflow #434").
+
+**The staging, and why.** The contract described LAB-6 as one step: the door takes `lab` with an
+initiator and `ui`, and refuses `cli` and `mcp`. The survey showed that, done at once, it breaks
+every client of the door on the day of the deploy (actingctl and the kits' installer, the
+watchdog and today's MCP server bind `cli` or `mcp`; the installed console cannot decode a
+receipt with a member it does not know), and production deploys what is merged. So the
+coordinator cut LAB-6 into slices that each leave main deployable: LAB-6S0 (`deploy` and
+`rollback` through the Lab's MCP server), LAB-6S1a (this slice), LAB-6S1b (the origin gates of
+`RuntimeRequest::validate()` go), LAB-6S2 (every client of this repository binds `lab` with its
+word, after LAB-6S1a and LAB-6S1b have been deployed by themselves), LAB-6S3 (the UI list on
+`ui`), LAB-6S4a (the five kinds deleted; `install-control` [0, 0]), LAB-6S4b (`cli`, `mcp` and a
+`lab` without a word refused; `via` off the wire; `runtime-client` [8, 8]; `actingd-config` 30)
+and LAB-6S5 (the initiator in the ledger and the settings rows; `ledger` 9). Each has a way back
+but LAB-6S5. The contract's slice table carries the staging; the numbers LAB-0 planned for LAB-6
+(`runtime-client` 7, `ledger` 8, `actingd-config` 28) were taken by other slices, and are now 8
+(LAB-6S1a), 9 (LAB-6S5) and 30 (LAB-6S4b).
+
+**This slice is additive.** Every connection that binds today binds as today and reads the bytes
+it reads today; the only new thing is a connection that declares a word, and no program of this
+build declares one (that is LAB-6S2).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L6S1a-1 | `Initiator` (`UI`, `Lab-CLI`, `Lab-MCP`, `Lab-制包`, `Lab-救急`, `Lab-看门狗`): `ALL`, `as_str`, `is_lab_word`, `from_word`, `Serialize`, `Deserialize` | closed vocabulary of the contract crate | LAB-6S1a | — | the one place the six strings are written; a word outside them does not decode. `crates/lab-ops`' `initiator::Initiator` keeps its methods and converts (`word`), its `as_str` being the contract's, so the recordings and the installation journal write what they wrote. A rename before the release is one line of `as_str` |
+| L6S1a-2 | `BindChannel{channel, via?, initiator?}`, `initiator` the word as sent (`DeclaredInitiator`, any string) | wire, request | LAB-6S1a | — | taken only with `channel` `lab`, without `via`, and only as one of the five Lab words (`ChannelBinding::requested`, checked by `validate()`); a word on `ui`, `cli` or `mcp`, a word with `via`, `UI` and a word outside the list are `invalid_bind_channel`, and the connection stays unbound. Absent, the request is revision 7's |
+| L6S1a-3 | `ChannelBound{channel, via?, initiator?}` | wire, answer | LAB-6S1a | the host's `bind_channel` | echoes the word of a connection that declared one; absent otherwise, on `ui` included (its `UI` is implied by its channel) |
+| L6S1a-4 | the receipt's `initiator`, beside `channel` (`RuntimeReceipt::initiator`) | wire, answer | LAB-6S1a | the door (`with_channel`) | on every receipt of a connection that declared a word; absent otherwise |
+| L6S1a-5 | the connection table's `ChannelBinding.initiator` | in memory | LAB-6S1a | — | kept with the channel, gone with its connection, reported by no status read; the gate reads no word and refuses nothing by channel or by word; the binding a connection's first request makes has none |
+| L6S1a-6 | `RuntimeClientConfig::with_initiator`; the handshake's echo check | client | LAB-6S1a | — | the one handshake function sends the word and takes the answer only when it echoes channel, `via` and word (another echo is `runtime_result_unexpected`, as another channel is); `connect`, the reconnect in the owner's epoch, the contained-task timeout recovery and the player hold's temporary client carry it as they carry the channel; a word on another channel, with `via`, or `UI` is `runtime_client_config_invalid` at connect. No caller in product code sets it |
+
+**Byte for byte.** A binding without a word (`lab` alone, `lab` with `via`, `cli`, `mcp`, `ui`,
+and the binding a connection's first request makes) is answered and receipted exactly as on the
+base: each new member is optional and left out when absent, and nothing else of the three shapes
+changed. `gate_434_lab6s1a::lab6s1a_a_binding_without_a_word_answers_byte_for_byte_as_before`
+holds it: for each such binding the bytes of its `ChannelBound` receipt and of a later `Health`
+receipt, read off the connection, equal literal JSON written in the test.
+
+**Nothing persisted changes.** No persisted record embeds a receipt or a `ChannelBound` (read on
+the base: the ledger's command records take `channel` and `via` from the binding,
+`ObservationDraft::sanitize`; the `host.config_overrides` rows take its `channel`; the
+recordings and the installation journal take `crates/lab-ops`' type, whose strings do not
+change; the reports that print a receipt, `restart`'s and `request-shutdown --wait`'s, persist
+nothing). No ledger payload, override row, recording or journal gains or loses a member, and
+`ledger` does not move.
+
+**Interface.** `runtime-client` [3, 8] (component-interfaces.md, revision 8): revision 7 plus the
+initiator in `BindChannel`, `ChannelBound` and the receipt; a client of 3 to 7 neither sends nor
+receives it. Read before the code: the installer's edges (`crates/lab-rescue/src/install/plan.rs`,
+`interface_edges` and `meet`: `installer_meets_previous` and `installer_meets_next` intersect
+ranges) pass an update from a [3, 7] build to this one and the rollback from it to that build,
+whichever of the two is the installer; `ledger` is unchanged, so no one-way edge. The console of
+the UI's release v0.12.16 declares [3, 7]: its installer negotiates the highest common revision
+with the Runtime (`crates/acui-setup/src/interfaces.rs`, `negotiate` with `Range::common`; 7
+here), the console compares no range, and its pinned client binds `ui` without a word, which is
+answered byte for byte as before.
+
+**An earlier Runtime and a client that sends a word.** A Runtime before this slice cannot decode a
+`BindChannel` that names `initiator` (`RuntimeOperation` denies unknown members): it drops the
+connection without a receipt (`runtime_request_decode_failed`), and the client then reconnects
+once, goes on unbound and reports `client_channel_unsupported`, as for an actingd before U-2. So no
+client sends a word before this slice is deployed in production; LAB-6S2 waits for it.
+
+**Tests.** New: host row "#434 LAB-6S1a" (`gate_434_lab6s1a` of the host, the first part of the
+contract's `gate_two_entries`: `lab` with each Lab word bound, echoed and on its receipts, a
+second `BindChannel` `channel_binding_exists`; the byte-for-byte test above; every refused word
+`invalid_bind_channel` with the connection left unbound and bound afterwards; and of the runtime
+client: the handshake with a word, an echo that differs, the reconnect and the temporary client
+keeping the word) and contract row "#434 LAB-6S1a" (`BindChannel`, `ChannelBound` and the receipt
+round-trip with and without the member and read revision 7's shape; `crates/lab-ops`' words are
+the contract's, in its order). Adapted, each for the new member only: the declaration's pins
+(`component_interfaces::V0120`, `gate_429_r0b_pairing`'s two `[3, 7]`); the test fakes and tests
+that build or match `BindChannel`, `ChannelBound` or `ChannelBinding` (`initiator: None` or `..`;
+the shared scripted Runtime of `runtime-client`'s `test_support` echoes a declared word). The
+catalog text of `invalid_bind_channel` names the new refusals; no code is added.
+
+**What LAB-6S1a changes live.** Nothing for any client that exists: no program of this build
+declares a word, and every binding answers as before.
+
+**LAB-6S1a rollback** (to the release before it). Two-way: nothing persisted; the earlier build
+declares [3, 7], which every client of this build meets, and no client sent a word.
 
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 

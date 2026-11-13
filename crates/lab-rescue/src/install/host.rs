@@ -136,13 +136,16 @@ pub(crate) trait Host {
     /// `watchdog install` and `watchdog uninstall`.
     fn watchdog(&self, asked: crate::watchdog::Asked, root: &Path) -> crate::watchdog::Answered;
     /// Workflow #434 LAB-3: the rescue module run again with `arguments` (its words without
-    /// `--detach`), detached as [`Self::detach`] runs the installer, and with the initiator word
-    /// `initiator` in `ACTINGCOMMAND_INITIATOR` when it is not the default `Lab-CLI`
-    /// (contracts/lab-two-entries.md §4.2: the detached process records the same word).
+    /// `--detach`), detached as [`Self::detach`] runs the installer, with each variable of
+    /// `environment` set to its value: the initiator word in `ACTINGCOMMAND_INITIATOR` when it is
+    /// not the default `Lab-CLI` (contracts/lab-two-entries.md §4.2: the detached process records
+    /// the same word) and, Workflow #434 LAB-6S0, for `Lab-MCP` the marker beside it
+    /// (`crate::rescue`, `detached_environment`). The program is `actinglab.exe` beside the running
+    /// one's file: the CLI's own, or the one beside the Lab's MCP server.
     fn detach_rescue(
         &self,
         arguments: &[String],
-        initiator: Option<&str>,
+        environment: &[(&str, &str)],
         directory: &Path,
         log: &Path,
     ) -> Result<u32, Outcome>;
@@ -276,7 +279,7 @@ impl Host for SystemHost {
     }
 
     fn detach(&self, arguments: &[String], directory: &Path, log: &Path) -> Result<u32, Outcome> {
-        detach_with_wmi(arguments, None, directory, log)
+        detach_with_wmi(&running_program()?, arguments, &[], directory, log)
     }
 
     fn watchdog(&self, asked: crate::watchdog::Asked, root: &Path) -> crate::watchdog::Answered {
@@ -290,12 +293,33 @@ impl Host for SystemHost {
     fn detach_rescue(
         &self,
         arguments: &[String],
-        initiator: Option<&str>,
+        environment: &[(&str, &str)],
         directory: &Path,
         log: &Path,
     ) -> Result<u32, Outcome> {
-        detach_with_wmi(arguments, initiator, directory, log)
+        let program = running_program()?
+            .with_file_name(format!("{LAB_PROGRAM}{}", std::env::consts::EXE_SUFFIX));
+        // The start itself cannot tell: the shell it creates would answer a pid, write "not found"
+        // into the log and run nothing. So a program that is not there is refused here, before
+        // anything starts, and the caller is never told "detached" of a run that cannot begin.
+        if !program.is_file() {
+            let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+            return Err(super::files::os_failure(&program, &missing, IoOp::Open));
+        }
+        detach_with_wmi(&program, arguments, environment, directory, log)
     }
+}
+
+/// Workflow #434 LAB-6S0: the program a detached run of the rescue module starts, beside the
+/// running program's file. In `actinglab.exe` it is the running program; in the Lab's MCP server,
+/// which serves the module in its own process, it is the `actinglab.exe` beside the server, the
+/// program its `serve` children run.
+const LAB_PROGRAM: &str = "actinglab";
+
+/// The running program's file; one the OS cannot name is the failure to open it.
+fn running_program() -> Result<PathBuf, Outcome> {
+    std::env::current_exe()
+        .map_err(|error| super::files::os_failure(Path::new("actingctl.exe"), &error, IoOp::Open))
 }
 
 /// One counter (`read`: the bytes read so far, `ws`: the working set in bytes) of the
@@ -335,15 +359,18 @@ fn actingd_counter(root: &Path, member: &str) -> Option<u64> {
         .find_map(|row| row[member].as_u64())
 }
 
-/// `--detach`: the running installer again with `arguments`, through WMI `Win32_Process.Create`
-/// (hidden, no handle of the caller), in `directory`, its output appended to `log`. Workflow
-/// #434 LAB-3: a process WMI creates does not take the caller's environment, so the rescue
-/// module's initiator word, when it is not the default, is set for the program by the command
-/// line itself (`set "ACTINGCOMMAND_INITIATOR=<word>"&&`); `initiator` is one of the closed
-/// list's words, never a caller's text.
+/// `--detach`: `program` (the running installer, or for the rescue module `actinglab.exe` beside
+/// it) with `arguments`, through WMI `Win32_Process.Create` (hidden, no handle of the caller), in
+/// `directory`, its output appended to `log`. Workflow #434 LAB-3: a process WMI creates does not
+/// take the caller's environment, so each variable of `environment` (the rescue module's
+/// initiator word, when it is not the default, and since Workflow #434 LAB-6S0 the marker beside
+/// `Lab-MCP`) is set for the program by the command line itself
+/// (`set "ACTINGCOMMAND_INITIATOR=<word>"&& `); each is a constant of the closed list, never a
+/// caller's text, and is held to the same unsafe characters as the words.
 fn detach_with_wmi(
+    program: &Path,
     arguments: &[String],
-    initiator: Option<&str>,
+    environment: &[(&str, &str)],
     directory: &Path,
     log: &Path,
 ) -> Result<u32, Outcome> {
@@ -353,14 +380,16 @@ fn detach_with_wmi(
             $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $env:AC_INSTALL_LINE; CurrentDirectory = $env:AC_INSTALL_DIR; ProcessStartupInformation = $startup }\n\
             [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false\n\
             [Console]::Out.Write((ConvertTo-Json -InputObject ([pscustomobject]@{ return_value = [int]$result.ReturnValue; pid = [uint32]$result.ProcessId }) -Compress))\n";
-    let program = std::env::current_exe().map_err(|error| {
-        super::files::os_failure(Path::new("actingctl.exe"), &error, IoOp::Open)
-    })?;
-    let program = super::files::plain(&program);
+    let program = super::files::plain(program);
     let log_text = super::files::plain(log);
     let words = std::iter::once(program.as_str())
         .chain(arguments.iter().map(String::as_str))
-        .chain(std::iter::once(log_text.as_str()));
+        .chain(std::iter::once(log_text.as_str()))
+        .chain(
+            environment
+                .iter()
+                .flat_map(|&(variable, value)| [variable, value]),
+        );
     for word in words {
         if word.contains(CMD_UNSAFE) {
             return Err(Outcome::new(ActingctlCode::WatchdogWmiPathUnsafe).path(word));
@@ -375,12 +404,10 @@ fn detach_with_wmi(
         .map(|word| format!("\"{word}\""))
         .collect::<Vec<_>>()
         .join(" ");
-    let declared = initiator.map_or_else(String::new, |word| {
-        format!(
-            "set \"{}={word}\"&& ",
-            actingcommand_lab_ops::initiator::ENVIRONMENT_VARIABLE
-        )
-    });
+    let declared = environment
+        .iter()
+        .map(|(variable, value)| format!("set \"{variable}={value}\"&& "))
+        .collect::<String>();
     let line =
         format!("\"{shell}\" /d /s /c \"{declared}\"{program}\" {quoted} 1>>\"{log_text}\" 2>&1\"");
     let line = std::ffi::OsString::from(line);

@@ -90,7 +90,8 @@ pub use schedule_history::*;
 // (`workbench.rs`), declared [2, 3]. Revision 4 (Workflow #429 R-7a, register §1.233, since
 // 0.12.35): the player hold's two request kinds, their results, three status members and three
 // start report members (`player_hold.rs`), declared [2, 4]; R-7b, which first fills a status
-// member, raises `min` to 4.
+// member, raises `min` to 4. Revision 8 (Workflow #434 LAB-6S1a, since 0.12.58): the optional
+// `initiator` of `BindChannel`, `ChannelBound` and the receipt, declared [3, 8].
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
@@ -4074,10 +4075,15 @@ pub enum RuntimeOperation {
     // named below adds the behaviour; until then the host refuses the kind `not_implemented`.
     /// Binds this connection to its channel, once, right after `Health` (section 3.2; U-2).
     /// `via` names the counter that handed a Lab request over, on the Lab channel only.
+    /// Workflow #434 LAB-6S1a (`runtime-client` 8): `initiator` is the word a Lab connection
+    /// declares, one of the five Lab words, on the Lab channel only and never with `via`; absent,
+    /// the request is the one of revision 7.
     BindChannel {
         channel: RuntimeChannel,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         via: Option<ChannelVia>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initiator: Option<DeclaredInitiator>,
     },
     /// The upgrade state (section 3.6, install-control revision 2; U-4): the installer's
     /// instruction family for an upgrade. `target` is the Runtime it is meant for, as in
@@ -4486,14 +4492,14 @@ impl RuntimeOperation {
             }
             // Workflow #389 U-2: `via` exists only on the Lab channel (section 3.2 rule 7), a
             // shape check. No channel judgement here (section 3.1): one binding per connection
-            // is the host's (`channel_binding_exists`).
-            Self::BindChannel { channel, via } => {
-                if (ChannelBinding {
-                    channel: *channel,
-                    via: *via,
-                })
-                .is_valid()
-                {
+            // is the host's (`channel_binding_exists`). Workflow #434 LAB-6S1a: an initiator only
+            // on the Lab channel, without `via`, and only one of the five Lab words.
+            Self::BindChannel {
+                channel,
+                via,
+                initiator,
+            } => {
+                if ChannelBinding::requested(*channel, *via, initiator.as_ref()).is_some() {
                     Ok(())
                 } else {
                     Err(RuntimeContractError::new(
@@ -5774,11 +5780,14 @@ pub enum RuntimeResult {
     },
     // Workflow #389 U-1: the results of the new request kinds; the slices that add their
     // behaviour answer with them.
-    /// `BindChannel`: the connection's channel, as bound (U-2).
+    /// `BindChannel`: the connection's channel, as bound (U-2), and (Workflow #434 LAB-6S1a) the
+    /// initiator the connection declared; absent on every binding without one.
     ChannelBound {
         channel: RuntimeChannel,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         via: Option<ChannelVia>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initiator: Option<Initiator>,
     },
     /// `UpgradeState`: the transition after the step, its ticket included (U-4). An accepted
     /// `enter` answers drained, having accepted its own shutdown; `cancel` answers aborted;
@@ -5865,6 +5874,11 @@ pub struct RuntimeReceipt {
     /// Workflow #389 U-2: the counter that handed the request over to the Lab channel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     via: Option<ChannelVia>,
+    /// Workflow #434 LAB-6S1a (`runtime-client` 8): the initiator the connection declared, beside
+    /// `channel`; absent on a connection that declared none (the `ui` entry's `UI` is implied by
+    /// its channel and never written).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    initiator: Option<Initiator>,
 }
 
 /// The outcome of a receipt whose request did not fail (Workflow #378 A4): the info code of its
@@ -5961,6 +5975,7 @@ impl RuntimeReceipt {
             resource_targets_rejection: None,
             channel: None,
             via: None,
+            initiator: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -6000,6 +6015,7 @@ impl RuntimeReceipt {
             resource_targets_rejection: None,
             channel: None,
             via: None,
+            initiator: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -6027,6 +6043,7 @@ impl RuntimeReceipt {
             resource_targets_rejection: None,
             channel: None,
             via: None,
+            initiator: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -6090,6 +6107,7 @@ impl RuntimeReceipt {
             resource_targets_rejection: None,
             channel: None,
             via: None,
+            initiator: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -6107,11 +6125,13 @@ impl RuntimeReceipt {
     }
 
     /// This receipt tagged with the channel of its connection (Workflow #389 U-2): the door
-    /// marks, it never refuses.
+    /// marks, it never refuses. Workflow #434 LAB-6S1a: with the initiator the connection
+    /// declared, when it declared one.
     #[must_use]
     pub fn with_channel(mut self, channel: Option<ChannelBinding>) -> Self {
         self.channel = channel.map(|binding| binding.channel);
         self.via = channel.and_then(|binding| binding.via);
+        self.initiator = channel.and_then(|binding| binding.initiator);
         self
     }
 
@@ -6123,6 +6143,11 @@ impl RuntimeReceipt {
     /// The counter that handed the request over to the Lab channel (Workflow #389 U-2).
     pub const fn via(&self) -> Option<ChannelVia> {
         self.via
+    }
+
+    /// The initiator the request's connection declared (Workflow #434 LAB-6S1a).
+    pub const fn initiator(&self) -> Option<Initiator> {
+        self.initiator
     }
 
     pub fn with_resource_declaration(
@@ -6953,3 +6978,7 @@ fn valid_client_origin(actor: EventActor, source: EventSource) -> bool {
 #[cfg(test)]
 #[path = "runtime/tests.rs"]
 mod tests;
+
+// Workflow #434 LAB-6S1a: the initiator on `BindChannel`, `ChannelBound` and the receipt.
+#[cfg(test)]
+mod gate_434_lab6s1a;

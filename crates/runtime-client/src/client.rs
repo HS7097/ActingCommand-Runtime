@@ -10,10 +10,10 @@ use actingcommand_contract::{
     ApplicationLifecycleAction, ApprovalDecisionRecord, ArtifactKind, ArtifactProducer,
     ArtifactRedactionState, CaptureSequenceSpec, CatalogProposal, ClientActionRecord,
     ContainedTaskCancellationReason, ContainedTaskCancellationStatus, ContainedTaskRequest,
-    CorrelationId, EffectDisposition, EmulatorInstanceAction, EventActor, EventId, EventPayload,
-    EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId, GovernanceIdentityCard,
-    HolderId, IdentifierIssuer, InputAction, InputFrameReference, InputPayload,
-    IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    CorrelationId, DeclaredInitiator, EffectDisposition, EmulatorInstanceAction, EventActor,
+    EventId, EventPayload, EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId,
+    GovernanceIdentityCard, HolderId, IdentifierIssuer, InputAction, InputFrameReference,
+    InputPayload, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA, OcrFieldPrivacy, OcrFieldReason,
     OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport,
     OriginModule, OwnerEpoch, PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass,
@@ -49,8 +49,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-// Workflow #389 U-2: every frontend names its channel when it builds its configuration.
-pub use actingcommand_contract::{ChannelBinding, ChannelVia, RuntimeChannel};
+// Workflow #389 U-2: every frontend names its channel when it builds its configuration; Workflow
+// #434 LAB-6S1a: a Lab frontend may name its initiator.
+pub use actingcommand_contract::{ChannelBinding, ChannelVia, Initiator, RuntimeChannel};
 
 mod online_observation;
 pub use online_observation::VerifiedPageObservation;
@@ -153,6 +154,8 @@ pub struct RuntimeClientConfig {
     /// without a channel.
     channel: RuntimeChannel,
     via: Option<ChannelVia>,
+    /// Workflow #434 LAB-6S1a: the initiator every connection of a Lab session declares.
+    initiator: Option<Initiator>,
     actor: EventActor,
     source: EventSource,
     io_timeout: Duration,
@@ -176,6 +179,7 @@ impl RuntimeClientConfig {
             state_root: state_root.into(),
             channel,
             via: None,
+            initiator: None,
             actor,
             source,
             io_timeout: DEFAULT_RUNTIME_IO_TIMEOUT,
@@ -194,11 +198,23 @@ impl RuntimeClientConfig {
         self
     }
 
-    /// The binding this session declares (Workflow #389 U-2).
+    /// Workflow #434 LAB-6S1a (`runtime-client` 8): the initiator every connection of this Lab
+    /// session declares in `BindChannel`, one of the five Lab words, and the handshake requires
+    /// the Runtime to echo. A session of another channel, with `via`, or naming `UI` is refused
+    /// at connect (`runtime_client_config_invalid`). A Runtime before LAB-6S1a cannot decode such
+    /// a `BindChannel` and drops the connection: the session then goes on unbound (U-2).
+    pub fn with_initiator(mut self, initiator: Initiator) -> Self {
+        self.initiator = Some(initiator);
+        self
+    }
+
+    /// The binding this session declares (Workflow #389 U-2; its initiator, Workflow #434
+    /// LAB-6S1a).
     pub const fn channel(&self) -> ChannelBinding {
         ChannelBinding {
             channel: self.channel,
             via: self.via,
+            initiator: self.initiator,
         }
     }
 
@@ -271,6 +287,7 @@ impl fmt::Debug for RuntimeClientConfig {
             .field("state_root", &"<redacted>")
             .field("channel", &self.channel)
             .field("via", &self.via)
+            .field("initiator", &self.initiator)
             .field("actor", &self.actor)
             .field("source", &self.source)
             .field("io_timeout", &self.io_timeout)
@@ -991,7 +1008,8 @@ impl RuntimeClient {
     /// The handshake of every new connection (Workflow #389 U-2, model section 3.2 rule 2):
     /// `Health` checks the owner epoch, then `BindChannel` binds the session's channel. `connect`,
     /// `reconnect_in_owner_epoch` and `recover_contained_task_timeout` all call it, so a
-    /// reconnect keeps the channel. Another owner epoch latches `runtime_owner_epoch_changed`.
+    /// reconnect keeps the channel and (Workflow #434 LAB-6S1a) the initiator. Another owner
+    /// epoch latches `runtime_owner_epoch_changed`.
     fn handshake(&self, operation: Location) -> RuntimeClientResult<()> {
         if self.health()? != self.shared.info.owner_epoch() {
             let error = RuntimeClientError::fatal(ClientCode::RuntimeOwnerEpochChanged, operation);
@@ -1005,7 +1023,9 @@ impl RuntimeClient {
     /// reconnects once in the same owner epoch, goes on unbound, reports
     /// `client_channel_unsupported` once per process through the frontend's reporter and sends no
     /// `BindChannel` on its later reconnects (model section 3.2 rule 8). Every other failure, a
-    /// refusal included, is returned.
+    /// refusal included, is returned. Workflow #434 LAB-6S1a: a Lab session's initiator is sent
+    /// with the channel, and an answer that does not echo both is refused as a channel that does
+    /// not match.
     fn bind_channel(&self) -> RuntimeClientResult<()> {
         const OPERATION: Location = ClientLocation::RuntimeBindChannel.location();
         let channel = {
@@ -1020,13 +1040,20 @@ impl RuntimeClient {
             RuntimeOperation::BindChannel {
                 channel: channel.channel,
                 via: channel.via,
+                initiator: channel.initiator.map(DeclaredInitiator::from),
             },
         )? {
             SentOutcome::Answered(result) => match *result {
                 RuntimeResult::ChannelBound {
                     channel: bound,
                     via,
-                } if bound == channel.channel && via == channel.via => Ok(()),
+                    initiator,
+                } if bound == channel.channel
+                    && via == channel.via
+                    && initiator == channel.initiator =>
+                {
+                    Ok(())
+                }
                 _ => Err(self.unexpected_result(OPERATION)),
             },
             SentOutcome::Dropped(error) => {

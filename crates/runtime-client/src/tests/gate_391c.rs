@@ -219,9 +219,10 @@ fn serve_ledger(listener: TcpListener, owner_epoch: OwnerEpoch, events: &[Projec
         let result = match request.operation() {
             RuntimeOperation::Health => RuntimeResult::Health { owner_epoch },
             // Workflow #389 U-2: the handshake's BindChannel.
-            RuntimeOperation::BindChannel { channel, via } => RuntimeResult::ChannelBound {
+            RuntimeOperation::BindChannel { channel, via, .. } => RuntimeResult::ChannelBound {
                 channel: *channel,
                 via: *via,
+                initiator: None,
             },
             RuntimeOperation::QueryEvents {
                 query,

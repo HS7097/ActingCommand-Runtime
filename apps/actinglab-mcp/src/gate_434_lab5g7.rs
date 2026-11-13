@@ -10,12 +10,14 @@
 //!   does not run, a rescue row's too), but `ac_observe`, which both name as no tool and which is
 //!   no row's tool; both name each tool of `tools::NAMED`; the instructions name the manual by its
 //!   path in the repository.
-//! - `mcp_manual_exception_is_the_refused_rows`: the tools the manual's section on the one
-//!   exception names are exactly those of the rows the front forces detached (`tools::SUPPLIED`,
-//!   `tools::runs_detached`), and on Windows exactly the offered rows `tools::serving` refuses;
-//!   elsewhere this server offers no row it refuses.
+//! - `mcp_manual_exception_is_the_refused_rows` (Workflow #434 LAB-6S0, rewritten to what is true
+//!   now: `deploy` and `rollback` are served, so no exception is left): on every platform this
+//!   server refuses no row it offers (`tools::serving`); the manual has no section on an
+//!   exception, and neither it nor the instructions name `mcp_operation_unsupported`; the
+//!   manual's section on `deploy` and `rollback` names the tools of the rows the front forces
+//!   detached (`tools::SUPPLIED`) and `ac_op_status`, which follows them.
 
-use crate::tools::{self, Catalog, NAMED, Serving};
+use crate::tools::{self, Catalog, NAMED, Serving, Supplied};
 use actingcommand_lab_ops::table::{self, OperationModule, OperationStatus, OperationTable};
 use std::collections::BTreeSet;
 
@@ -23,8 +25,16 @@ use std::collections::BTreeSet;
 const MANUAL: &str = include_str!("../MANUAL.md");
 /// The manual's path in the repository, which the instructions name.
 const MANUAL_PATH: &str = "apps/actinglab-mcp/MANUAL.md";
-/// The heading of the manual's section on the one exception.
-const EXCEPTION_HEADING: &str = "## 9 The one exception";
+/// Workflow #434 LAB-6S0: the heading of the manual's section on `deploy` and `rollback`, where
+/// the section on the one exception stood.
+const DETACHED_HEADING: &str = "## 9 Deploy and rollback";
+/// The word no heading of the manual holds since Workflow #434 LAB-6S0.
+const EXCEPTION: &str = "exception";
+/// The code of a call of an offered row this build does not serve, which neither the manual nor
+/// the instructions name since Workflow #434 LAB-6S0.
+const UNSUPPORTED: &str = "mcp_operation_unsupported";
+/// The tool that follows a detached operation.
+const OP_STATUS: &str = "ac_op_status";
 /// The name no tool takes (board #434, the coordinator's ruling 6784514298, point 1).
 const RETIRED: &str = "ac_observe";
 /// What every tool's name begins with.
@@ -137,21 +147,8 @@ fn mcp_manual_names_only_offered_tools() {
 fn mcp_manual_exception_is_the_refused_rows() {
     let table = embedded();
     let catalog = Catalog::of(&table).expect("the table's tools are generated");
-    let named = tool_names_in(section(MANUAL, EXCEPTION_HEADING));
-    let detached = table
-        .operations
-        .iter()
-        .filter(|operation| tools::runs_detached(&operation.name))
-        .map(tools::tool_name)
-        .collect::<BTreeSet<_>>();
-    assert!(
-        !detached.is_empty(),
-        "setup: the front forces rows detached"
-    );
-    assert_eq!(
-        named, detached,
-        "the manual's one exception is the rows the front forces detached"
-    );
+    // The server refuses no row it offers, on Windows, where `deploy` and `rollback` are offered,
+    // as elsewhere.
     let refused = table
         .operations
         .iter()
@@ -161,15 +158,50 @@ fn mcp_manual_exception_is_the_refused_rows() {
         })
         .map(tools::tool_name)
         .collect::<BTreeSet<_>>();
-    if cfg!(windows) {
-        assert_eq!(
-            refused, detached,
-            "on Windows the offered rows this build refuses are those"
-        );
-    } else {
-        assert!(
-            refused.is_empty(),
-            "where the rescue module does not run, no offered row is refused: {refused:?}"
-        );
+    assert!(
+        refused.is_empty(),
+        "this server refuses no row it offers: {refused:?}"
+    );
+    // The manual names none: no section on an exception, and no refusal of an offered row.
+    let headings = MANUAL
+        .lines()
+        .filter(|line| line.starts_with('#'))
+        .collect::<Vec<_>>();
+    assert!(
+        headings.contains(&DETACHED_HEADING),
+        "setup: the manual has its section on deploy and rollback: {headings:?}"
+    );
+    assert!(
+        headings
+            .iter()
+            .all(|heading| !heading.to_ascii_lowercase().contains(EXCEPTION)),
+        "no section of the manual is on an exception: {headings:?}"
+    );
+    for (text, what) in [
+        (MANUAL, "the manual"),
+        (tools::INSTRUCTIONS, "the instructions"),
+    ] {
+        assert!(!text.contains(UNSUPPORTED), "{what} names no {UNSUPPORTED}");
     }
+    // Its section on them names the rows the front forces detached, and the tool that follows
+    // them.
+    let detached = table
+        .operations
+        .iter()
+        .filter(|operation| {
+            tools::SUPPLIED
+                .iter()
+                .any(|(row, _, supplied)| *row == operation.name && *supplied == Supplied::True)
+        })
+        .map(tools::tool_name)
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !detached.is_empty(),
+        "setup: the front forces rows detached"
+    );
+    let named = tool_names_in(section(MANUAL, DETACHED_HEADING));
+    assert!(
+        detached.is_subset(&named) && named.contains(OP_STATUS),
+        "the manual's section names {detached:?} and {OP_STATUS}: {named:?}"
+    );
 }

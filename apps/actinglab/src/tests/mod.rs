@@ -162,6 +162,10 @@ mod gate_434_lab5g4c;
 // in one list; LAB-5C's cases its tests did not cover.
 #[path = "gate_434_lab5b1.rs"]
 mod gate_434_lab5b1;
+// Workflow #434 LAB-6S0: `Lab-MCP` from the initiator's variable only beside the marker the rescue
+// module's detached start sets.
+#[path = "gate_434_lab6s0.rs"]
+mod gate_434_lab6s0;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

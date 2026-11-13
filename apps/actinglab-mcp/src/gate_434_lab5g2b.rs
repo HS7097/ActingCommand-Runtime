@@ -8,16 +8,17 @@
 //! a row that reads none; exports go to a temporary folder.
 //!
 //! - `mcp_served_and_refused_partition`: every offered row is served or refused by the one rule
-//!   (`tools::serving`), stated here from the table, the front's table and the rescue module's
-//!   list (adapted by the slice's second part, whose rule it pins): served are the rows `core_ops`
-//!   serves and, on Windows, the rescue rows the rescue module serves (its `mcp config`, `mcp
-//!   entries` and `mcp plan` among them) but those whose run the front forces detached (`deploy`,
-//!   `rollback`); refused are those two (Workflow #434 LAB-5G4b, adapted: every other row, of no
-//!   module this process serves itself, is served by a `serve` child: the three `app` rows,
-//!   `standard-pack check`, the debugging rows actinglab's own commands serve and every authoring
-//!   row, `record draft` among them; this test starts no child, as each call's arguments are
-//!   refused first). Every row the module serves falls in one of its two classes. A call of a
-//!   refused row answers
+//!   (`tools::serving`), stated here from the table and the rescue module's list (adapted by the
+//!   slice's second part, whose rule it pins): served are the rows `core_ops` serves and, on
+//!   Windows, the rescue rows the rescue module serves (its `mcp config`, `mcp entries` and `mcp
+//!   plan` among them; Workflow #434 LAB-6S0, adapted: `deploy` and `rollback` too, whose run the
+//!   front forces detached and whose detached run carries `Lab-MCP`, where they were refused
+//!   until it did); refused is a rescue row the module does not serve, which is not offered
+//!   (Workflow #434 LAB-5G4b, adapted: every other row, of no module this process serves itself,
+//!   is served by a `serve` child: the three `app` rows, `standard-pack check`, the debugging rows
+//!   actinglab's own commands serve and every authoring row, `record draft` among them; this test
+//!   starts no child, and no detached run, as each call's arguments are refused first). Every row
+//!   the module serves is served. A call of a refused row would answer
 //!   `mcp_operation_unsupported` with its tool, its arguments unread; a call of a served row reads
 //!   its arguments first (an undeclared one is `arguments_invalid`, `unknown`, before the code
 //!   that serves it runs).
@@ -115,11 +116,12 @@ fn text_line(result: &Value) -> Value {
 /// Workflow #434 LAB-5G2b, second part: the classes of the partition, by the rule; the register
 /// states how many rows each holds. Workflow #434 LAB-5G4b (adapted, its work order point 1): the
 /// rows LAB-5G2b refused because actinglab's own commands serve them, the authoring rows among
-/// them, are one class, served by a `serve` child.
+/// them, are one class, served by a `serve` child. Workflow #434 LAB-6S0 (adapted): the class of
+/// the rows refused because the front forces their run detached is gone; they are served by the
+/// rescue module.
 const SERVED_CORE: &str = "served by lab_ops::core_ops";
 const SERVED_RESCUE: &str = "served by the rescue module";
 const SERVED_CHILD: &str = "served by a serve child";
-const REFUSED_DETACHED: &str = "refused: the front forces its run detached";
 const REFUSED_UNSERVED: &str = "refused: a rescue row no code serves";
 
 /// Whether the rescue module serves the rescue row `name`, by its own list, on Windows, where it
@@ -159,21 +161,17 @@ fn mcp_served_and_refused_partition() {
         if !catalog.offers(&tool) {
             continue;
         }
-        // The rule, stated from the table, the front's table and the rescue module's list (work
-        // order points 1 and 2 of the second part; Workflow #434 LAB-5G4b, point 1: a row of no
-        // module this process serves itself goes to a child).
-        let detached = tools::SUPPLIED
-            .iter()
-            .any(|(row, _, supplied)| *row == operation.name && *supplied == Supplied::True);
+        // The rule, stated from the table and the rescue module's list (work order points 1 and 2
+        // of the second part; Workflow #434 LAB-5G4b, point 1: a row of no module this process
+        // serves itself goes to a child; Workflow #434 LAB-6S0: a row whose run the front forces
+        // detached is served as every other row the module serves).
         let (expected, class) = if core_ops::serves(operation) {
             (Serving::Core, SERVED_CORE)
         } else if operation.module == OperationModule::Rescue {
-            if !rescue_module_serves(&operation.name) {
-                (Serving::Refused, REFUSED_UNSERVED)
-            } else if detached {
-                (Serving::Refused, REFUSED_DETACHED)
-            } else {
+            if rescue_module_serves(&operation.name) {
                 (Serving::Rescue, SERVED_RESCUE)
+            } else {
+                (Serving::Refused, REFUSED_UNSERVED)
             }
         } else {
             (Serving::Child, SERVED_CHILD)
@@ -243,24 +241,26 @@ fn mcp_served_and_refused_partition() {
     ] {
         assert!(holds(class, name), "setup: {name} is {class}: {classes:?}");
     }
-    // Every row the rescue module serves is offered, and served unless the front forces its run
-    // detached.
+    // Every row the rescue module serves is offered, and served (Workflow #434 LAB-6S0, adapted:
+    // those whose run the front forces detached too).
     assert_eq!(
-        count(SERVED_RESCUE) + count(REFUSED_DETACHED),
+        count(SERVED_RESCUE),
         rescue_module_rows(),
         "the rescue module's rows: {classes:?}"
     );
     if cfg!(windows) {
-        for name in ["leftovers", "up", "mcp config", "mcp entries", "mcp plan"] {
+        for name in [
+            "leftovers",
+            "up",
+            "mcp config",
+            "mcp entries",
+            "mcp plan",
+            "deploy",
+            "rollback",
+        ] {
             assert!(
                 holds(SERVED_RESCUE, name),
                 "setup: {name} is served on Windows: {classes:?}"
-            );
-        }
-        for name in ["deploy", "rollback"] {
-            assert!(
-                holds(REFUSED_DETACHED, name),
-                "setup: {name} stays refused: {classes:?}"
             );
         }
     }

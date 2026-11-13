@@ -17,8 +17,10 @@
 //!   answers the line `actinglab --json` prints, within today's answer budget, on one kept
 //!   Runtime connection of `lab_ops::front`'s `Front::Mcp` (a write on a connection of its own,
 //!   after today's provenance); on Windows a rescue row the rescue module serves is served here
-//!   by the module, with the initiator `Lab-MCP` (LAB-5G2b's second part), but `deploy` and
-//!   `rollback`, which are refused with `mcp_operation_unsupported` ([`codes`]);
+//!   by the module, with the initiator `Lab-MCP` (LAB-5G2b's second part), and since Workflow
+//!   #434 LAB-6S0 `deploy` and `rollback` too, always detached, their detached run carrying
+//!   `Lab-MCP` (a row this build does not serve would be refused with `mcp_operation_unsupported`,
+//!   [`codes`]; no offered row is one);
 //! - [`children`] (Workflow #434 LAB-5G4b): every other offered row is served through a child
 //!   `actinglab.exe serve --stdio --front mcp`, one request per child at a time; [`after_child`]
 //!   (its second part): the client action after a capture and the Lab overflow rule, as today's
