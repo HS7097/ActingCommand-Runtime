@@ -876,7 +876,7 @@ pub(crate) static ROWS: &[KeyRow] = &[
     // by the host when a member's switch fails, so an instruction applies to the cooldowns that
     // start after it; a group of one never reads it.
     KeyRow {
-        since: "0.12.59",
+        since: "0.12.60",
         ..row(
             DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS,
             ValueType::DurationMs,

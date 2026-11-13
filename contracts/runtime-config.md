@@ -501,7 +501,7 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.no_progress.enabled` (SS-4, since 0.12.34) | boolean | `true` |
 | `scheduling.task_held.enabled` (Workflow #438 HELD-1, since 0.12.56) | boolean | `true` |
 | `scheduling.task_held.after_ms` (Workflow #438 HELD-1, since 0.12.56) | milliseconds `60000..=86400000` | `1800000` |
-| `scheduling.device_group.switch_failure_cooldown_ms` (Workflow #437 MAPP-2b, since 0.12.59) | milliseconds `1..=3600000` | `300000` |
+| `scheduling.device_group.switch_failure_cooldown_ms` (Workflow #437 MAPP-2b, since 0.12.60) | milliseconds `1..=3600000` | `300000` |
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
@@ -602,7 +602,7 @@ evaluated cycle, every run already past it; a higher one withdraws nothing writt
 reported. Off by the file or an instruction, nothing else of the Runtime changes. A Runtime before
 HELD-1 refuses a file that names either member (the section and the entry deny unknown members).
 
-**The switch cooldown of a device group's member (Workflow #437 MAPP-2b, since 0.12.59;
+**The switch cooldown of a device group's member (Workflow #437 MAPP-2b, since 0.12.60;
 `actingd-config` revision 30, [component-interfaces.md](component-interfaces.md);
 [v012-register.md](v012-register.md) §1.348).** `scheduling.device_group.switch_failure_cooldown_ms`
 (milliseconds `1..=3600000`, default `300000`, settable), in the file the `scheduling` section's

@@ -3,7 +3,7 @@
 Workflow #437 MAPP-C (contracts only; [v012-register.md](v012-register.md) §1.323). **Every rule of
 this file is (MAPP, not built yet)** unless its section names MAPP-1 ([v012-register.md](v012-register.md)
 §1.328, Runtime 0.12.56), MAPP-1b (§1.330, Runtime 0.12.57), MAPP-2a (§1.342, Runtime 0.12.59) or
-MAPP-2b (§1.348, Runtime 0.12.59):
+MAPP-2b (§1.348, Runtime 0.12.60):
 no code, key, code, value key or word named here exists until the code slices of §1.323 build it,
 and every code, value key and vocabulary word below is proposed but those MAPP-1 registers:
 `device_group`, `instance.<instance id>.device_group`, `device_group_config_invalid` with the
@@ -21,7 +21,7 @@ acquire, release and second-hold refusal are not built (the player hold itself i
 Workflow #429 R-7b). The coordinator cut MAPP-2 in two as well: MAPP-2a (§1.342, built in Runtime
 0.12.59) builds the switch's parts (another member's stop under the device's key, the member's
 startup run on the borrowed key, the stopped member's page forgotten), their one entry and its
-code, with no caller in the Runtime; MAPP-2b (§1.348, built in Runtime 0.12.59) calls the switch
+code, with no caller in the Runtime; MAPP-2b (§1.348, built in Runtime 0.12.60) calls the switch
 from the run paths, takes its time out of the run's clock, settles a run with its failure, adds
 the member's switch cooldown and its key, and sizes a member's dispatch lease for the switch and
 the run ("The switch before a run"). The load still refuses every group of several, so no root
@@ -185,7 +185,7 @@ There are three exceptions:
 
 - the refusal of undeclared sharing above;
 - the switch cooldown's key `scheduling.device_group.switch_failure_cooldown_ms` ("The switch
-  before a run"). From MAPP-2b (Runtime 0.12.59) on, like every key of the `scheduling` section,
+  before a run"). From MAPP-2b (Runtime 0.12.60) on, like every key of the `scheduling` section,
   it is a row of the manifest and of the program fact `config.parameters.scheduling` on every
   root, with its default ([runtime-config.md](runtime-config.md), "The `scheduling` section").
   Nothing a group of one does reads it;
@@ -356,7 +356,7 @@ Whatever today's rules run next on one instance runs next on its device:
 Another member's due task queues behind: it waits with `device_group_waiting` until the device is
 free and it wins a round.
 
-## The switch before a run (MAPP-2a: its parts and its entry; MAPP-2b: its callers, the run's clock, the lease, the failure's settlement and the cooldown; both built in Runtime 0.12.59)
+## The switch before a run (MAPP-2a: its parts and its entry, built in Runtime 0.12.59; MAPP-2b: its callers, the run's clock, the lease, the failure's settlement and the cooldown, built in Runtime 0.12.60)
 
 In a group of several, before a run of a member, the Runtime brings that member's application to
 the front, under the device's lease.
@@ -367,7 +367,7 @@ the front, under the device's lease.
 (step 3, `host/startup_package.rs` over `run_prepared_package_on_borrowed_key` in
 `host/contained_task.rs`) and `HostShared::forget_stopped_application_facts` (step 2's forgetting,
 `host/runtime_facts.rs`), and their one entry `HostShared::switch_application` (also public as
-`RuntimeHost::switch_application`). **What MAPP-2b builds (Runtime 0.12.59, register §1.348):**
+`RuntimeHost::switch_application`). **What MAPP-2b builds (Runtime 0.12.60, register §1.348):**
 the calls from the run paths named below (`HostShared::switch_before_run` and
 `HostShared::stop_others_before_start`, `host/switch.rs`), the switch's time taken out of the run's
 clock ("The run's clock"), a member's dispatch lease sized for the startup run and the run ("The
@@ -375,8 +375,12 @@ key's time"), a run's failed settlement with `application_switch_failed` ("When 
 fails"), and the member's switch cooldown and its key ("The member's switch cooldown"). Every part
 and every caller begins from a member of a group of several (`HostShared::switch_applies`, over
 `in_group_of_several`), which the load refuses (`several_members_unsupported`), so no root reaches
-them, and an instance alone on its device never meets any of it: its lease, its clock, its records
-and its settlement are what they were.
+them. An instance alone on its device keeps its path unchanged because the run path's existing
+gates (the ED-2 gate among them) pass unchanged and because the slice's only entry is that
+group-of-several check; the MAPP-2b gate test pins that the entry is never taken (no device step
+of the switch, the lease `D_run + R`, a switch time of 0 for the settlement, no cooldown entry)
+and that the run's records are equal, payload by payload with ids and times normalised, to a host
+on which the entry is switched off.
 
 **Where the switch runs** (MAPP-2b).
 
@@ -479,12 +483,44 @@ and its settlement are what they were.
      the step `startup_package` with `contained_task_deadline_unavailable` before any stop. The
      startup run's deadline is the earlier of its response deadline and the key's expiry less
      that time, so it gets its `D_s` and leaves the run its own time.
+   - **Where the read and the stops go.** The time of the front read (step 1) and of the stops
+     (step 2) is not part of `D_s`: the lease is `D_s + D_run + R`, and the run's deadline is cut
+     at the lease's expiry less the reserve, so the run has `D_run` less what the read and the
+     stops took (and less its own checks before the switch, as every run's deadline is counted
+     from its grant). In the worst case the task has less than `D_run` and, when it needs all of
+     it, fails as an ordinary timeout of its deadline; when the time since the grant passes
+     `D_run` before the startup run, the check before the startup run refuses the key and the
+     switch fails at `startup_package` with `contained_task_deadline_unavailable`. Nothing of the
+     run's clock bounds the read and the stops: each ADB command they run ends within the ADB
+     command timeout of the registration that runs it (an entry's `command_timeout_ms`, 12 000 ms
+     by default), and a switch makes one read and at most one stop per other member.
    - **What cannot fit.** The scheduler grants at most the longest response deadline plus the
      reserve (`ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS`, 1 800 000 ms, plus `R`), so a
      member whose `D_s + D_run` exceeds 1 800 000 ms cannot be served: its dispatch is refused at
      the admission, before any lease and any device step, and its direct run before its claim,
      both with `contained_task_deadline_unavailable` (an existing code), the same way every time.
      A lone instance's lease and refusals are as before.
+   - **The member that cannot fit, as built (a known gap).** The evaluator does not know the
+     bound. It selects such a member's task again in every round, as for any due task; when the
+     task wins the device's one pick, the round's admission writes the dispatch's intent and its
+     refusal (`policy.dispatch_rejected`, severity error, `contained_task_deadline_unavailable`),
+     and nothing else happens: no lease, no device step, no switch, no cooldown, no failure of
+     the pair. The device's other members meet `device_group_waiting` (`selected`) in every such
+     round and wait while the refused task keeps winning the pick, so it can starve its device.
+     **With today's request deadlines every run of a member of a group of several is refused by
+     this bound**: every startup package request (`apps/actingd/src/config.rs`,
+     `StartupPackageConfigFile::request`), every configured procedure's request (the same file,
+     the procedure request) and every composed pack request
+     (`crates/runtime-host/src/host/standard_pack_schedule.rs`) carries the longest response
+     deadline, 1 800 000 ms, every member must declare a startup package ("The configuration
+     form"), and a fact refresh's request carries 60 000 ms; so `D_s + D_run` exceeds the bound
+     for every run of every member, the refresh included, and only fixtures with shorter
+     deadlines pass it. The lease across a switch is reworked in a later slice before any group of
+     several is accepted, and such a task must never become a candidate: it is held where tasks
+     are composed, in the slice that orders a device or the one that lets the load accept a group
+     ("Release"). The admission's refusal stays as it is until then; the MAPP-2b gate pins
+     today's behaviour in a test named for that later slice to replace
+     (`mapp2b_known_gap_a_member_that_cannot_fit_is_selected_and_refused_every_round`).
 4. **Run.** The member's run starts on the same key.
 
 **The run's clock** (MAPP-2b). The time a switch takes counts in no order and in no run's own
@@ -501,7 +537,7 @@ included, on the Runtime clock) is taken out of the run's own time:
   1000, the budget time less that segment's reduction), are the run's own. The record's
   `observed_at_unix_ms` stays the instant the run ended. A settlement after a restart measures the
   run from its own request, after the switch, as before. A run with no switch (every instance alone
-  on its device) subtracts 0, so its record, its sample and its verdict are the same bytes.
+  on its device) subtracts 0, so its runtime, its sample and its verdict are what they were.
 - **Nothing else.** No sample of the switch's time is kept, no default switch time and no key for
   it exist, and the quiet-hours horizon is not changed.
 
@@ -562,6 +598,45 @@ failed is as its device left it, and the member's own application is not started
 `startup_package`, every member the switch meant to stop is stopped, and the member's own
 application was not brought to its home (its startup run may have restarted it).
 
+**What a person sees of a failed switch on the policy path** (MAPP-2b; no view changes). The run's
+failure, `application_switch_failed` with its step and its cause, as the run's failure record
+under the run's links, and the pair's failed execution record (`policy.execution_recorded`, its
+failure the same code): both in the ledger and in its Errors view. The member's
+`dispatch_instance_cooldown` with `failure_code` `application_switch_failed` and
+`next_eligible_unix_ms` in the schedule explanation (`ac_schedule`, `actingctl schedule`) for as
+long as the cooldown runs. **No row in the run list**: the run list is built from task records,
+and a policy run whose switch failed has none (it fails before its request lifecycle writes
+`task.requested`); the startup run's own `task.*` records, when step 3 ran, are the startup run's.
+
+**A stop or a shutdown in mid-switch** (MAPP-2b; read in the code, the stop request pinned by the
+MAPP-2b gate). Mid-switch is after the other member's stop and before this member's startup run
+ends.
+
+- **A stop request** (`StopInstanceRun` naming the run, `ac_stop_run`): the run's control is in
+  the run registry from its preparation (a policy run) or its receipt (a direct run), so the stop
+  reaches it and answers at once that the run is still stopping. Nothing of the switch reads it:
+  the stops already made stay made and the startup run (a run of its own, which no stop may end)
+  goes on to its end. The run then stops at its first check, as a run stopped during its
+  preparation does: it ends `contained_task_cancelled`, the Runtime resets the device on the
+  run's key before the key's release (`reset_stopped_run`), and a policy run settles as one
+  `stopped` execution record, its runtime its own time as for any settlement, no failure of the
+  pair, no owed rerun, an interruption in the routine summary. The key is released at the run's
+  end as a stopped run's, and no ladder starts. Left on the device: the other member stopped,
+  this member's application at its home (unless its startup run failed, which fails the switch
+  as above), then the stop's reset. No switch cooldown starts: the switch did not fail.
+- **A shutdown request** (`RequestShutdown`, `actingctl request-shutdown`): the device's key is
+  held, so it is refused at once, `runtime_shutdown_denied` (`runtime_busy`), its
+  `shutdown_request` record naming the decision `busy`, as during any run. The switch and the run
+  go on as if it had not come: key, settlement, device and cooldown are those of the switch
+  without it.
+- **The Runtime's own stop** (its process ending, `RuntimeHost::close`), which is not refused: of
+  the switch's steps only the startup run's ADB readiness probe reads it, and gives up once it is
+  asked. Asked before that probe, it makes the startup run refused (`startup_package_adb_not_ready`),
+  so the switch fails at `startup_package` and ends as any failed switch: the run settled failed,
+  the key released, no ladder, the other member stopped and this member not started, and the
+  cooldown it starts ends with the process. Asked after the probe, the startup run and the run go
+  on to their end.
+
 What a failed switch does to each party:
 
 - **To the task:** one failed settlement of its (task, member) pair, with its streak and retry as
@@ -574,7 +649,7 @@ What a failed switch does to each party:
   belongs").
 - **To the member's other due work:** the member's switch cooldown (below).
 
-**The member's switch cooldown** (MAPP-2b, built in Runtime 0.12.59). After a failed switch the
+**The member's switch cooldown** (MAPP-2b, built in Runtime 0.12.60). After a failed switch the
 member does not compete for the device for `scheduling.device_group.switch_failure_cooldown_ms`
 (milliseconds `1..=3600000`, default `300000`, five minutes). Without it, a member with many due
 tasks would try each of them in turn, each try a kill and a restart of an application, and starve
@@ -610,7 +685,7 @@ position 2 of [scheduling-blackout.md](scheduling-blackout.md), "Order of the de
   switch starts the cooldown again.
 - **No ladder.** The failure still starts no recovery ladder (above), and the cooldown is no rung.
 - **The key.** A member of the `scheduling` section (`device_group.switch_failure_cooldown_ms`,
-  `actingd-config` revision 30, Runtime 0.12.59), settable, default from the defaults file, read
+  `actingd-config` revision 30, Runtime 0.12.60), settable, default from the defaults file, read
   when a switch fails. It names no application and has no per-instance or per-group form: a group
   has no configuration of its own beyond its members' `device_group` ("The configuration form"),
   and the section's nearest failure wait, `scheduling.fact_refresh.failure_backoff_ms`, has none
@@ -713,7 +788,7 @@ them, and it comes before the first real use of a group of several.
   it nowhere keeps its revision, so the Runtime reads 5 to 29 and declares [5, 29]. The console
   and the installer, the other two parties, follow.
 - **`actingd-config` 30** ([component-interfaces.md](component-interfaces.md), row 30; MAPP-2b,
-  Runtime 0.12.59): the `scheduling` section's member `device_group.switch_failure_cooldown_ms`
+  Runtime 0.12.60): the `scheduling` section's member `device_group.switch_failure_cooldown_ms`
   (0.12.56 shipped revision 29 without it, and MAPP-2a moved no revision). A build before it
   refuses a file that names the member (`config_decode_failed`: the section denies unknown
   members); a file that does not name it keeps its revision, so the Runtime reads 5 to 30 and
@@ -783,7 +858,7 @@ them, and it comes before the first real use of a group of several.
   the code `application_switch_failed` with the vocabulary `application_switch_step`, with no
   caller in the Runtime; the load still refuses every group of several, and the catalog gains one
   code and one vocabulary.
-- MAPP-2b is built in Runtime 0.12.59 (register §1.348): the switch's callers, the run's clock that
+- MAPP-2b is built in Runtime 0.12.60 (register §1.348): the switch's callers, the run's clock that
   leaves the switch out, a member's lease sized for the startup run and the run, the failure's
   settlement and the member's switch cooldown with its key, in `actingd-config` revision 30; the
   load still refuses every group of several, so no installation reaches any of it.
@@ -793,6 +868,14 @@ them, and it comes before the first real use of a group of several.
   every build refuses such a group at load (`device_group_config_invalid`,
   `several_members_unsupported`; "The configuration form"), and no release ships the switch after
   every task.
+- **Before the load accepts a group of several, main must also end the member that cannot fit**
+  (MAPP-2b's known gap, "The switch before a run", "The member that cannot fit, as built"): with
+  today's request deadlines every run of a member of a group of several is refused by this bound;
+  the lease across a switch is reworked in a later slice before any group of several is
+  accepted, and a task that cannot fit never becomes a candidate (it is held where tasks are
+  composed, in the slice that orders a device or in the one that lets the load accept a group),
+  which replaces the MAPP-2b gate's test
+  `mapp2b_known_gap_a_member_that_cannot_fit_is_selected_and_refused_every_round`.
 - MAPP-2's key `scheduling.device_group.switch_failure_cooldown_ms` came with MAPP-2b, in
   `actingd-config` revision 30.
 - The slice "device-level actions by device" comes before the first real use of a group of
@@ -819,12 +902,12 @@ New value keys, each with its vocabulary:
 Every other key is an existing key of the one key table
 (`crates/actingcommand-contract/src/outcome/keys.rs`).
 
-One existing code takes one more optional value (registered, MAPP-2b, 0.12.59):
+One existing code takes one more optional value (registered, MAPP-2b, 0.12.60):
 `dispatch_instance_cooldown` (`runtime-host`, info) takes `failure_code`, an existing key, which is
 `application_switch_failed` for a member's switch cooldown and is absent for a takeover cooldown.
 Its description and causes name both cooldowns. No code is added.
 
-One configuration key (registered, MAPP-2b, 0.12.59, `actingd-config` revision 30):
+One configuration key (registered, MAPP-2b, 0.12.60, `actingd-config` revision 30):
 `scheduling.device_group.switch_failure_cooldown_ms`, milliseconds `1..=3600000`, default
 `300000`, settable ("The switch before a run").
 

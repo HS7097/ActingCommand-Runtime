@@ -2809,8 +2809,10 @@ impl HostShared {
                                 }
                                 #[cfg(test)]
                                 policy_crash_test_barrier("after_budget_commit");
+                                // Workflow #437 MAPP-2b: the lease's length as granted goes on
+                                // with the token, so nothing after the grant sizes it again.
                                 CriticalActionReport::Succeeded {
-                                    value: (token, catalog, admission_record),
+                                    value: (token, catalog, admission_record, lease_ttl_ms),
                                     effect: DefiniteEffectDisposition::Performed,
                                 }
                             }
@@ -2835,7 +2837,7 @@ impl HostShared {
                         }
                     }
                 },
-                |(_, _, admission), _| {
+                |(_, _, admission, _), _| {
                     self.events
                         .draft(
                             EventSeverity::Info,
@@ -2952,21 +2954,19 @@ impl HostShared {
             match result {
                 Ok(receipt) => {
                     let started_at_monotonic_ms = self.monotonic_ms()?;
-                    let (token, catalog, admission) = receipt.into_value();
+                    let (token, catalog, admission, lease_ttl_ms) = receipt.into_value();
                     let mut clock = PolicyDispatchClock::live(
                         admission.activity.admitted_at_unix_ms,
                         started_at_monotonic_ms,
                     );
                     // Workflow #437 MAPP-2b: a member's lease holds its switch's startup run and
                     // its run; the run's own share ends at the key's expiry less the startup run's
-                    // lease time, which the switch's check reads. Nothing for an instance alone
-                    // on its device.
-                    if let Some(task_request) = task_request
+                    // lease time, which the switch's check reads, taken from the lease's length
+                    // as the admission granted it (never sized a second time, so the two cannot
+                    // differ). Nothing for an instance alone on its device.
+                    if let (Some(task_request), Some(lease_ttl_ms)) = (task_request, lease_ttl_ms)
                         && self.switch_applies(resolved.instance_id())
                     {
-                        let lease_ttl_ms = self
-                            .dispatch_lease_ttl(resolved.instance_id(), task_request)
-                            .map_err(|failure| *failure.error)?;
                         clock.own_time_through_monotonic_ms = Some(
                             super::switch::own_time_through(&token, lease_ttl_ms, task_request),
                         );

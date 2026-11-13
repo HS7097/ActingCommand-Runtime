@@ -10,23 +10,28 @@
 //! here runs that package as its task too, so a run's own work is one application restart. The
 //! load refuses every group of several (actingd's MAPP-1 gate), so the host is handed the member
 //! → device key map and the group's name as the assembly builds them. A manual Runtime clock
-//! moves only by the kernel's waits and the test's own steps; nothing waits on the wall clock.
-//! Every expected value is the contract's or the coordinator's ruling; every comparison is within
-//! one host. Neutral names only.
+//! moves only by the kernel's waits and the test's own steps; nothing waits on the wall clock but
+//! a test thread's bounded wait for a step another thread takes. Every expected value is the
+//! contract's or the coordinator's ruling; every comparison is within one host but the lone
+//! instance's and the test-only switch's, which compare two hosts started alike by values and by
+//! payloads with every id and time normalised, never by an identity. Neutral names only.
 
 use super::instance_workers::phases;
 use super::*;
 use crate::codes::HostCode;
+use crate::policy_control::PolicyValueRecord;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     APPLICATION_FOREGROUND_FACT_KEY, ConfigParameter, ConfigParameterSource, EventAction,
-    FactScalar, RuntimeConfigManifest, RuntimeFactRecord, RuntimeFactScope, RuntimeLifecyclePhase,
+    FactScalar, InstanceRunStop, PolicyConditionSettlement, RequestId, RuntimeConfigManifest,
+    RuntimeFactRecord, RuntimeFactScope, RuntimeLifecyclePhase,
 };
-use actingcommand_policy::PolicyEvaluation;
+use actingcommand_policy::{PolicyCode, PolicyEvaluation};
 use actingcommand_runtime_config::scheduling::DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS;
 use actingcommand_runtime_config::{DefaultsFile, KeyRange, Settable, find_row};
 use actingcommand_scheduler::{ClaimKind, DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS};
 use serde_json::{Value, json};
+use std::net::SocketAddr;
 
 const A: &str = POLICY_INSTANCE_ALIAS;
 const B: &str = POLICY_INSTANCE_ALIAS_B;
@@ -66,6 +71,13 @@ const QUEUE_TIMEOUT_MS: u64 = DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS;
 const POLICY_CONNECTION: u64 = u64::MAX;
 const TASK_PAGE: &str = "task.page";
 const MINUTE_MS: u64 = 60_000;
+const HOUR_MS: u64 = 3_600_000;
+/// The code a run a `StopInstanceRun` stopped ends with.
+const CANCELLED: &str = "contained_task_cancelled";
+/// The reason of an owed rerun's candidate.
+const RERUN_OWED: &str = "policy_rerun_owed";
+/// How long a test thread waits for a step another thread takes.
+const GATE_WAIT: Duration = Duration::from_secs(60);
 
 // ---- The fixture.
 
@@ -482,6 +494,35 @@ impl Bench {
             Some(Arc::new(move |_: usize, _: usize| front.map(str::to_owned)));
     }
 
+    /// `alias`'s foreground answers `front` from now on, and the fake device counts each query of
+    /// it: its log of foreground reads.
+    fn count_front_reads(&self, alias: &str, front: &'static str) -> Arc<AtomicUsize> {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&reads);
+        *self
+            .state(alias)
+            .foreground_script
+            .lock()
+            .expect("foreground script") = Some(Arc::new(move |_: usize, _: usize| {
+            counted.fetch_add(1, Ordering::AcqRel);
+            Some(front.to_owned())
+        }));
+        reads
+    }
+
+    /// Whether `alias`'s pair of `task_id` is owed a rerun, as the host's decision memory holds
+    /// it.
+    fn owes_rerun(&self, alias: &str, task_id: &str) -> bool {
+        let (held, _, _) = self
+            .host
+            .decision_memory_for_test()
+            .expect("the decision memory");
+        match held.get(&format!("decision_memory/{alias}/{task_id}")) {
+            Some(PolicyValueRecord::Control(record)) => record.condition_reruns.is_some(),
+            other => panic!("the pair's value record: {other:?}"),
+        }
+    }
+
     /// `alias`'s foreground answers `before` until its own application took a command, then its
     /// own application.
     fn front_until_started(&self, alias: &str, before: &'static str, own: &'static str) {
@@ -736,6 +777,125 @@ fn failed_settlement(events: &[PersistedEvent], decision_id: &str) -> Option<Str
         }
         _ => None,
     })
+}
+
+/// The execution records of the dispatch `decision_id`, in ledger order.
+fn executions(events: &[PersistedEvent], decision_id: &str) -> Vec<PolicyExecutionOutcome> {
+    events
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+                if payload.decision_id() == decision_id =>
+            {
+                Some(payload.policy_result().clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether a startup package was scheduled among `events`: the switch's step 3 began.
+fn startup_scheduled(events: &[PersistedEvent]) -> bool {
+    phases(events)
+        .iter()
+        .any(|(_, phase)| matches!(phase, RuntimeLifecyclePhase::StartupPackageScheduled { .. }))
+}
+
+/// Whether a member is named `key`, whose value is a time or a place in the ledger: an instant on
+/// either clock, a measurement on the process clock (the run's timing observations, the package's
+/// load time, the bytes of the records the run wrote, which hold such times), a local day, a
+/// ledger position, revision or record index. Two hosts hold these apart however alike their
+/// runs are.
+fn time_or_place(key: &str) -> bool {
+    key.ends_with("_unix_ms")
+        || key.ends_with("_monotonic_ms")
+        || key.ends_with("_us")
+        || key.ends_with("_at")
+        || matches!(
+            key,
+            "task_timing"
+                | "package_load_ms"
+                | "returned_bytes"
+                | "successful_returned_bytes"
+                | "local_day"
+                | "sequence"
+                | "record_index"
+                | "input_ledger_position"
+                | "input_fact_revisions"
+        )
+}
+
+/// `run` (lowercase hexadecimal digits) as [`without_identities`] writes it: a run of 32 or more
+/// is an identity and is replaced.
+fn push_hex_run(text: &mut String, run: &mut String) {
+    if run.len() >= 32 {
+        text.push_str("<hex>");
+    } else {
+        text.push_str(run);
+    }
+    run.clear();
+}
+
+/// `text` with each run of 32 or more lowercase hexadecimal digits replaced: a minted id (a
+/// request, run, lease, instance or causation id), a decision or snapshot id, a digest.
+fn without_identities(text: &str) -> String {
+    let mut written = String::with_capacity(text.len());
+    let mut run = String::new();
+    for character in text.chars() {
+        if matches!(character, '0'..='9' | 'a'..='f') {
+            run.push(character);
+        } else {
+            push_hex_run(&mut written, &mut run);
+            written.push(character);
+        }
+    }
+    push_hex_run(&mut written, &mut run);
+    written
+}
+
+/// `value` with its ids and times normalised: every member [`time_or_place`] names is replaced
+/// whole, and every string loses its identities ([`without_identities`]). Everything else stays.
+fn normalised(value: &mut Value) {
+    match value {
+        Value::Object(members) => {
+            for (key, member) in members.iter_mut() {
+                if time_or_place(key) {
+                    *member = json!("<normalised>");
+                } else {
+                    normalised(member);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(normalised),
+        Value::String(text) => *text = without_identities(text),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+/// The records of a run as the lone instance's comparison reads them: each one's type, severity
+/// and whole payload, normalised ([`normalised`]).
+fn comparable(events: &[PersistedEvent]) -> Vec<(EventType, EventSeverity, Value)> {
+    events
+        .iter()
+        .map(|event| {
+            let mut payload =
+                serde_json::to_value(event.payload()).expect("a record's payload encodes");
+            normalised(&mut payload);
+            (event.event_type(), event.severity(), payload)
+        })
+        .collect()
+}
+
+/// `StopInstanceRun` of `run` on `alias`, answering at once (`wait_ms` 0), on a new connection.
+fn stop_run(address: SocketAddr, alias: &str, run: RequestId) -> RuntimeReceipt {
+    let mut client = TestClient::connect_address(address);
+    client.set_receipt_read_timeout();
+    let request = client.request(RuntimeOperation::StopInstanceRun {
+        instance_alias: alias.to_owned(),
+        request_id: run,
+        wait_ms: 0,
+    });
+    client.send(&request)
 }
 
 // ---- The tests.
@@ -1341,64 +1501,180 @@ fn mapp2b_a_failed_switch_holds_the_member_for_the_cooldown_while_the_other_memb
     bench.close();
 }
 
-/// The work order's lone instance, compared within one host with and without the slice's branch
-/// reachable: C's dispatch, run and settlement with the slice on, then again with it off
-/// (`switch_off_for_test`), give the same lease, the same records of the run (types and
-/// severities, in order), the same receipt state, the same own time as the execution's runtime
-/// (so the same budget verdict, a success), the same sample and the same `last_duration_ms`; the
-/// switch is never reached.
+/// The work order's lone instance, as the review asked it shown. The lone path is unchanged
+/// because the run path's existing gates (the ED-2 gate among them) pass unchanged and because
+/// the slice's only entry is the group-of-several check (`HostShared::switch_applies`); this test
+/// pins that the entry is never taken and that the records are equal.
+///
+/// - The entry is the only way in: B, a member, with A in front, run on two hosts started alike,
+///   one with the test-only switch off (`switch_off_for_test`, compiled into this crate's test
+///   build only) and one with it on. Off: the fake device logs no foreground read of B, no stop
+///   of A and no startup run (B's task's own restart only), the switch's entry is never reached
+///   and B's lease is `D_run + R`. On: the switch's three steps (one foreground read, A's stop,
+///   B's startup run, then B's task), its entry reached once, the lease `D_s + D_run + R`.
+/// - C, alone on its device, with the slice reachable: the fake device logs no foreground read
+///   of C and no command but C's task's own restart, A, B and D see nothing, no startup package
+///   is scheduled; C's lease is exactly `D_run + R`; its dispatch clock holds a switch time of 0
+///   for the settlement to subtract; no switch cooldown entry exists afterwards and the switch's
+///   entry was never reached.
+/// - C's run on that host and on a second host started alike with the switch off from the start:
+///   the run's records are equal record by record, type, severity and whole payload, with ids and
+///   times normalised ([`comparable`]); the receipt state, the own time, the budget verdict (a
+///   success on its own time), the sample and `last_duration_ms` are equal too. Two hosts, not
+///   one: a second dispatch of the same pair on one host carries the pair's history (its budget
+///   counts and runtime reserved, its expected duration from the first run's sample, its
+///   ranking), so only two hosts started alike leave nothing but ids and times to tell the runs
+///   apart; nothing is compared between them but normalised payloads and values.
 #[test]
-fn mapp2b_a_lone_instance_writes_the_same_with_and_without_the_slice_reachable() {
-    let bench = Bench::standard();
-    let mut readings = Vec::new();
-    for (round, off) in [(0_u64, false), (1, true)] {
+fn mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it() {
+    // B: the test-only switch where it makes a difference, on two hosts started alike (a second
+    // run of B's task on one host would meet the task's runtime budget, which its first run's
+    // sample fills).
+    for off in [true, false] {
+        let bench = Bench::standard();
         bench
             .host
             .switch_off_for_test(off)
             .expect("the slice's branch");
-        let evaluation = bench.evaluate(POLICY_NOW_UNIX_MS + round * 3_600_000);
-        let context = bench.grant(&evaluation, TASK_C);
-        let lease = bench
+        let reads = bench.count_front_reads(B, APP_A);
+        let mark = bench.head();
+        let evaluation = bench.evaluate(POLICY_NOW_UNIX_MS);
+        let context = bench.grant(&evaluation, TASK_B);
+        let lease = bench.remaining(context.lease_token());
+        bench.run_and_settle(&context);
+        let scheduled = startup_scheduled(&bench.events_after(mark));
+        let entries = bench.host.switch_entries_for_test().expect("count");
+        if off {
+            assert_eq!(
+                lease,
+                Some(RUN_DEADLINE_MS + RESERVE_MS),
+                "off: the lease of the run alone"
+            );
+            assert_eq!(reads.load(Ordering::Acquire), 0, "off: no foreground read");
+            assert!(bench.actions(A).is_empty(), "off: A is not stopped");
+            assert_eq!(
+                bench.actions(B),
+                [ApplicationLifecycleAction::Restart],
+                "off: B's task's own restart only, no startup run"
+            );
+            assert!(!scheduled, "off: no startup package is scheduled");
+            assert_eq!(entries, 0, "off: the switch's entry is never reached");
+        } else {
+            assert_eq!(
+                lease,
+                Some(STARTUP_DEADLINE_MS + RUN_DEADLINE_MS + RESERVE_MS),
+                "on: the lease of the startup run and the run"
+            );
+            assert_eq!(reads.load(Ordering::Acquire), 1, "on: the switch's read");
+            assert_eq!(
+                bench.actions(A),
+                [ApplicationLifecycleAction::Stop],
+                "on: A, in front, is stopped"
+            );
+            assert_eq!(
+                bench.actions(B),
+                [
+                    ApplicationLifecycleAction::Restart,
+                    ApplicationLifecycleAction::Restart
+                ],
+                "on: B's startup run, then its task's own restart"
+            );
+            assert!(scheduled, "on: B's startup package is scheduled");
+            assert_eq!(entries, 1, "on: the switch's entry is reached once");
+        }
+        assert!(bench.actions(D).is_empty(), "D was not in front");
+        assert!(bench.host.fatal_error().expect("health").is_none());
+        bench.close();
+    }
+
+    // C: the slice reachable on the first host, switched off from the start on the second.
+    let mut runs = Vec::new();
+    for off in [false, true] {
+        let bench = Bench::standard();
+        bench
             .host
-            .key_remaining_ms_for_test(context.lease_token(), policy_connection())
-            .expect("C's key");
+            .switch_off_for_test(off)
+            .expect("the slice's branch");
+        let reads = bench.count_front_reads(C, APP_C);
+        let mark = bench.head();
+        let evaluation = bench.evaluate(POLICY_NOW_UNIX_MS);
+        let context = bench.grant(&evaluation, TASK_C);
+        let lease = bench.remaining(context.lease_token());
         let receipt = bench.run(&context).expect("C's run succeeds");
-        let state = receipt.state();
+        let switch_ms = bench
+            .host
+            .policy_switch_ms_for_test(context.decision_id())
+            .expect("the dispatch clock");
         let (execution, _) = bench
             .host
             .complete_scheduled_policy_run(&context, &receipt)
             .expect("C's run settles");
         let runtime_ms = match execution.outcome {
             PolicyExecutionOutcome::Succeeded { runtime_ms } => runtime_ms,
-            other => panic!("a success: {other:?}"),
+            other => panic!("a success on its own time: {other:?}"),
         };
-        let records = bench
-            .run_records(&context)
-            .iter()
-            .map(|event| (event.event_type(), event.severity()))
-            .collect::<Vec<_>>();
+        if !off {
+            assert_eq!(reads.load(Ordering::Acquire), 0, "no foreground read of C");
+            assert_eq!(
+                bench.actions(C),
+                [ApplicationLifecycleAction::Restart],
+                "C's task's own restart only: no startup run"
+            );
+            for alias in [A, B, D] {
+                assert!(bench.actions(alias).is_empty(), "no stop of {alias}");
+            }
+            assert!(!startup_scheduled(&bench.events_after(mark)));
+            assert_eq!(
+                lease,
+                Some(RUN_DEADLINE_MS + RESERVE_MS),
+                "C's lease is D_run + R"
+            );
+            assert_eq!(
+                switch_ms,
+                Some(0),
+                "the settlement subtracts a switch time of 0"
+            );
+            assert_eq!(
+                bench
+                    .host
+                    .switch_cooldown_entries_for_test()
+                    .expect("the cooldowns"),
+                0,
+                "no switch cooldown entry"
+            );
+            assert_eq!(bench.host.switch_entries_for_test().expect("count"), 0);
+        }
         let sample = bench.samples(C).first().copied();
+        assert_eq!(sample, Some(runtime_ms), "the sample is the run's own time");
         let last = bench
             .fact(C, &format!("task.{TASK_C}.last_duration_ms"))
             .map(|record| record.value);
-        readings.push((lease, records, state, runtime_ms, sample, last));
+        runs.push((
+            comparable(&bench.run_records(&context)),
+            receipt.state(),
+            runtime_ms,
+            sample,
+            last,
+        ));
+        assert!(bench.host.fatal_error().expect("health").is_none());
+        bench.close();
     }
-    let [on, off] = readings.as_slice() else {
-        panic!("two runs: {readings:#?}");
+    let [reachable, switched_off] = runs.as_slice() else {
+        panic!("two runs: {runs:#?}");
     };
+    assert!(!reachable.0.is_empty(), "the run has records");
     assert_eq!(
-        on, off,
-        "the same with and without the slice's branch reachable"
+        reachable.0.len(),
+        switched_off.0.len(),
+        "as many records: {reachable:#?} {switched_off:#?}"
     );
+    for (index, (with, without)) in reachable.0.iter().zip(&switched_off.0).enumerate() {
+        assert_eq!(with, without, "record {index} of C's run");
+    }
     assert_eq!(
-        on.0,
-        Some(RUN_DEADLINE_MS + RESERVE_MS),
-        "the lease as before"
+        reachable, switched_off,
+        "the same receipt state, own time, sample and last_duration_ms"
     );
-    assert_eq!(on.4, Some(on.3), "the sample is the run's time");
-    assert_eq!(bench.host.switch_entries_for_test().expect("count"), 0);
-    assert!(bench.actions(A).is_empty() && bench.actions(B).is_empty());
-    bench.close();
 }
 
 /// The work order's "no interruption", for the switch's caller: while B's run holds the device's
@@ -1550,5 +1826,403 @@ fn mapp2b_a_direct_run_and_a_launch_of_a_member_stop_the_member_in_front_first()
         1,
         "B's launch reached the switch, C's did not"
     );
+    bench.close();
+}
+
+/// Today's behaviour of a member that can never be admitted, pinned until the slice that holds
+/// such a task where tasks are composed (so it never becomes a candidate) replaces this test
+/// (`contracts/device-group.md`, "What cannot fit", and the list of what must be on main before
+/// the load accepts a group of several). B's startup deadline and its run's deadline cannot both
+/// fit the longest lease. In each of two rounds B's task is selected and wins the device's one
+/// pick, so A's candidate waits `device_group_waiting`; B's admission writes its intent and one
+/// error-level refusal, `contained_task_deadline_unavailable`, before any lease and any device
+/// step, the switch never reached, the same each round.
+#[test]
+fn mapp2b_known_gap_a_member_that_cannot_fit_is_selected_and_refused_every_round() {
+    let bench = Bench::standard();
+    let mut refusals = Vec::new();
+    for round in 0..2_u64 {
+        let evaluation = bench.evaluate(POLICY_NOW_UNIX_MS + round * MINUTE_MS);
+        assert!(
+            dispatches(&evaluation, TASK_B),
+            "round {round}: B's task is selected: {evaluation:#?}"
+        );
+        assert!(
+            !dispatches(&evaluation, TASK_A),
+            "round {round}: A's task is not"
+        );
+        let (reasons, _) = decision_of(&evaluation, TASK_A, A);
+        assert!(
+            reasons.iter().any(|reason| reason.outcome.code().as_str()
+                == PolicyCode::DeviceGroupWaiting.code().as_str()),
+            "round {round}: A waits for the device: {reasons:#?}"
+        );
+        let mark = bench.head();
+        let refused = bench
+            .admit(&evaluation, TASK_B, LONGEST_DEADLINE_MS)
+            .expect_err("B's startup run and run cannot both fit");
+        assert!(!refused.is_fatal(), "{refused:?}");
+        let events = bench.events_after(mark);
+        let intents = events
+            .iter()
+            .filter(|event| event.event_type() == EventType::PolicyDispatchIntent)
+            .count();
+        assert_eq!(intents, 1, "round {round}: B's intent");
+        let rejections = events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::Policy(PolicyPayload::DispatchRejected(payload)) => Some((
+                    event.severity(),
+                    payload.task_id().to_owned(),
+                    payload
+                        .rejection()
+                        .map(|rejection| rejection.outcome.code().as_str().to_owned()),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rejections,
+            vec![(
+                EventSeverity::Error,
+                TASK_B.to_owned(),
+                Some(
+                    HostCode::ContainedTaskDeadlineUnavailable
+                        .as_str()
+                        .to_owned()
+                )
+            )],
+            "round {round}: one error-level refusal"
+        );
+        assert_eq!(
+            bench.host.instance_claims_for_test(B).expect("claims"),
+            (None, Vec::new()),
+            "round {round}: no lease"
+        );
+        for alias in [A, B, D] {
+            assert!(
+                bench.actions(alias).is_empty(),
+                "round {round}: no device step on {alias}"
+            );
+        }
+        assert_eq!(bench.host.switch_entries_for_test().expect("count"), 0);
+        refusals.push((refused.code().to_owned(), rejections));
+    }
+    assert_eq!(refusals[0], refusals[1], "the same refusal every round");
+    assert!(bench.host.fatal_error().expect("health").is_none());
+    bench.close();
+}
+
+/// The work order's "the cooldown also holds a rerun the member is owed": B's switch fails at
+/// `startup_package` and its run is settled by a condition (the test's hook, standing in for a
+/// code `scheduling.rerun.condition_codes` lists), so B's pair is owed a rerun while B's switch
+/// cooldown runs (the key set to 120 s by the file). During the cooldown B's candidate is not
+/// dispatched: it waits `dispatch_instance_cooldown` with `failure_code`
+/// `application_switch_failed`, its wake the cooldown's end, the rerun stays owed, and A's task is
+/// dispatched. After the cooldown B's task is dispatched again as the owed rerun
+/// (`policy_rerun_owed`).
+#[test]
+fn mapp2b_the_switch_cooldown_also_holds_the_rerun_the_member_is_owed() {
+    const COOLDOWN_MS: u64 = 120_000;
+    let bench = Bench::start(Setup {
+        startup_deadline_ms: STARTUP_DEADLINE_MS,
+        cooldown_ms: Some(COOLDOWN_MS),
+    });
+    let t0 = POLICY_NOW_UNIX_MS;
+    let evaluation = bench.evaluate(t0);
+    let context = bench.grant(&evaluation, TASK_B);
+    bench.front(B, Some(APP_A));
+    bench
+        .state(B)
+        .unknown_capture
+        .store(true, Ordering::Release);
+    bench
+        .host
+        .settle_next_policy_run_by_condition_for_test(PolicyConditionSettlement {
+            refunded: true,
+            count: 1,
+            expires_at_unix_ms: t0 + 3 * HOUR_MS,
+        })
+        .expect("the next settlement's condition");
+    let failed = bench.run(&context).expect_err("the switch fails");
+    assert_switch_failed(&failed, B, "startup_package", None);
+    assert!(bench.owes_rerun(B, TASK_B), "B's pair is owed a rerun");
+    assert_eq!(
+        bench
+            .host
+            .switch_cooldown_remaining_ms_for_test(B)
+            .expect("the cooldown"),
+        Some(COOLDOWN_MS)
+    );
+
+    let t1 = t0 + MINUTE_MS;
+    let held = bench.evaluate(t1);
+    assert!(!dispatches(&held, TASK_B), "{:#?}", held.dispatch_intents);
+    let (reasons, wake) = decision_of(&held, TASK_B, B);
+    assert!(
+        switch_cooldown_reason(reasons).is_some(),
+        "B's owed rerun waits for its switch cooldown: {reasons:#?}"
+    );
+    assert_eq!(
+        wake,
+        Some(t1 + COOLDOWN_MS),
+        "its wake is the cooldown's end"
+    );
+    assert!(
+        dispatches(&held, TASK_A),
+        "A's task is dispatched meanwhile"
+    );
+    assert!(bench.owes_rerun(B, TASK_B), "the rerun is still owed");
+
+    bench.clock().advance(COOLDOWN_MS);
+    let again = bench.evaluate(t1 + COOLDOWN_MS + MINUTE_MS);
+    let (_, chain) = intent_of(&again, TASK_B);
+    let codes = chain
+        .reasons
+        .iter()
+        .map(|reason| reason.outcome.code().as_str().to_owned())
+        .collect::<Vec<_>>();
+    assert!(
+        codes.iter().any(|code| code == RERUN_OWED),
+        "B's task is dispatched as the owed rerun: {codes:?}"
+    );
+    assert!(bench.host.fatal_error().expect("health").is_none());
+    bench.close();
+}
+
+/// The work order's "while one member is in its cooldown, a task of the device's other member is
+/// dispatched and runs to its end with its own records": B's switch fails at its foreground read
+/// (nothing stopped) and B's switch cooldown runs. At the next round B is not dispatched and A's
+/// task is; it is granted, runs and settles a success on its own time: the device saw A's task's
+/// own restart and nothing of B or D, the run's records that name an instance name A only (its
+/// request and its terminal among them), its run-duration sample and `last_duration_ms` are its
+/// own time, and B's cooldown still runs.
+#[test]
+fn mapp2b_while_one_member_cools_down_the_other_members_task_runs_to_its_end_with_its_own_records()
+{
+    let bench = Bench::standard();
+    let evaluation = bench.evaluate(POLICY_NOW_UNIX_MS);
+    let context = bench.grant(&evaluation, TASK_B);
+    *bench
+        .state(B)
+        .foreground_error_once
+        .lock()
+        .expect("one-shot foreground error") =
+        Some(DeviceError::transient("fixture foreground query failed"));
+    let failed = bench.run(&context).expect_err("B's switch fails");
+    assert_switch_failed(
+        &failed,
+        B,
+        "foreground_read",
+        Some(HostCode::ApplicationForegroundUnknown.as_str()),
+    );
+
+    let held = bench.evaluate(POLICY_NOW_UNIX_MS + MINUTE_MS);
+    assert!(!dispatches(&held, TASK_B), "{:#?}", held.dispatch_intents);
+    let a = bench.grant(&held, TASK_A);
+    let runtime_ms = bench.run_and_settle(&a);
+    assert_eq!(
+        bench.actions(A),
+        [ApplicationLifecycleAction::Restart],
+        "A's task's own restart, A's own package in front"
+    );
+    assert!(bench.actions(B).is_empty(), "nothing of B");
+    assert!(bench.actions(D).is_empty(), "nothing of D");
+    let records = bench.run_records(&a);
+    for event_type in [EventType::TaskRequested, EventType::TaskCompleted] {
+        let record = records
+            .iter()
+            .find(|event| event.event_type() == event_type)
+            .unwrap_or_else(|| panic!("A's run's {event_type:?}"));
+        assert_eq!(record.links().instance_id(), Some(&bench.id(A)));
+    }
+    let named = records
+        .iter()
+        .filter_map(|event| event.links().instance_id().copied())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        named,
+        BTreeSet::from([bench.id(A)]),
+        "every record of A's run that names an instance names A"
+    );
+    assert_eq!(
+        bench.samples(A),
+        vec![runtime_ms],
+        "A's sample is its own time"
+    );
+    let last = bench
+        .fact(A, &format!("task.{TASK_A}.last_duration_ms"))
+        .expect("A's last duration");
+    assert_eq!(
+        last.value,
+        ContractFactValue::Integer(i64::try_from(runtime_ms).expect("a duration"))
+    );
+    assert!(
+        bench
+            .host
+            .switch_cooldown_remaining_ms_for_test(B)
+            .expect("the cooldown")
+            .is_some(),
+        "B's switch cooldown still runs"
+    );
+    assert!(bench.host.fatal_error().expect("health").is_none());
+    bench.close();
+}
+
+/// The work order's stop request in mid-switch (`contracts/device-group.md`, "A stop or a shutdown
+/// in mid-switch"): B's run switches with A in front, on a thread of its own; once A has been
+/// stopped, the capture of B's startup run waits while a `StopInstanceRun` of B's run is sent,
+/// which answers at once that the run is still stopping. The switch goes on to its end (B's
+/// startup run reaches its home), and B's run then stops at its first check: it ends
+/// `contained_task_cancelled`, the Runtime resets the device once on the run's key before the
+/// key's one release, the run settles as one `stopped` record, A stays stopped, no switch cooldown
+/// starts, no ladder starts and the key is free.
+#[test]
+fn mapp2b_a_stop_request_in_mid_switch_lets_the_switch_end_and_stops_the_run_at_its_first_check() {
+    let bench = Bench::standard();
+    let evaluation = bench.evaluate(POLICY_NOW_UNIX_MS);
+    let context = bench.grant(&evaluation, TASK_B);
+    let decision_id = context.decision_id().to_owned();
+    let lease_id = context.lease_token().lease_id();
+    bench.front_until_started(B, APP_A, APP_B);
+    let a_state = Arc::clone(&bench.parts.states[A]);
+    let (entered_tx, entered) = mpsc::channel::<()>();
+    let (proceed_tx, proceed) = mpsc::channel::<()>();
+    let pause = std::sync::Mutex::new(Some((entered_tx, proceed)));
+    *bench.state(B).pixel_script.lock().expect("pixel script") =
+        Some(Arc::new(move |_: usize, _: usize| {
+            let a_stopped = a_state
+                .application_actions
+                .lock()
+                .expect("A's application commands")
+                .contains(&ApplicationLifecycleAction::Stop);
+            let waiting = if a_stopped {
+                pause.lock().expect("the pause").take()
+            } else {
+                None
+            };
+            if let Some((entered, proceed)) = waiting {
+                let _ = entered.send(());
+                let _ = proceed.recv_timeout(GATE_WAIT);
+            }
+            Vec::<(usize, [u8; 3])>::new()
+        }));
+    let address = bench
+        .host
+        .runtime_info()
+        .socket_addr()
+        .expect("runtime address");
+    let mark = bench.head();
+    let host = &bench.host;
+    let request = bench.request(RUN_DEADLINE_MS);
+    let (run, answer, ended) = thread::scope(|scope| {
+        let runner = scope.spawn(move || host.run_scheduled_contained_task(&context, &request));
+        entered
+            .recv_timeout(GATE_WAIT)
+            .expect("B's startup run captures after A's stop");
+        let events = bench.events_after(mark);
+        let (scheduled, _) = phases(&events)
+            .into_iter()
+            .find(|(_, phase)| {
+                matches!(phase, RuntimeLifecyclePhase::StartupPackageScheduled { .. })
+            })
+            .expect("B's startup package is scheduled under B's run's request");
+        let run = scheduled
+            .links()
+            .request_id()
+            .copied()
+            .expect("B's run's request");
+        let answer = stop_run(address, B, run);
+        proceed_tx.send(()).expect("the startup run goes on");
+        (run, answer, runner.join().expect("B's run's thread"))
+    });
+
+    assert_eq!(answer.state(), RuntimeReceiptState::Completed, "{answer:?}");
+    let Some(RuntimeResult::InstanceRunStopped { stopped }) = answer.result() else {
+        panic!("a stop: {answer:?}");
+    };
+    assert_eq!(
+        *stopped,
+        InstanceRunStop {
+            request_id: run,
+            settled: false,
+            reset: None,
+        },
+        "the stop reached the run, still stopping"
+    );
+    let error = ended.expect_err("the stopped run does not complete");
+    assert_eq!(error.code(), CANCELLED, "{error:?}");
+    assert_eq!(
+        bench.actions(A),
+        [ApplicationLifecycleAction::Stop],
+        "A stays stopped"
+    );
+    assert_eq!(
+        bench.actions(B).first(),
+        Some(&ApplicationLifecycleAction::Restart),
+        "B's startup run went on"
+    );
+    let events = bench.events_after(mark);
+    let causation = events
+        .iter()
+        .find(|event| {
+            event.event_type() == EventType::CommandReceived
+                && event.links().instance_id() == Some(&bench.id(A))
+        })
+        .and_then(|event| event.links().causation_id().copied())
+        .expect("A's stop and its causation");
+    assert!(
+        events.iter().any(|event| {
+            event.event_type() == EventType::TaskCompleted
+                && event.links().causation_id() == Some(&causation)
+        }),
+        "B's startup run reached its home"
+    );
+    let on_key = bench
+        .host
+        .query_persisted_events_for_test(EventQuery {
+            lease_id: Some(lease_id),
+            ..EventQuery::default()
+        })
+        .expect("the key's records");
+    let resets = on_key
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.payload(),
+                EventPayload::Input(InputPayload::Committed(detail))
+                    if detail.action() == EventAction::InputReset
+            )
+        })
+        .map(PersistedEvent::sequence)
+        .collect::<Vec<_>>();
+    let releases = on_key
+        .iter()
+        .filter(|event| event.event_type() == EventType::LeaseReleased)
+        .map(PersistedEvent::sequence)
+        .collect::<Vec<_>>();
+    assert_eq!(resets.len(), 1, "one reset: {resets:?}");
+    assert_eq!(releases.len(), 1, "one release: {releases:?}");
+    assert!(resets[0] < releases[0], "{resets:?} {releases:?}");
+    let settled = executions(&events, &decision_id);
+    let [PolicyExecutionOutcome::Stopped { outcome, .. }] = settled.as_slice() else {
+        panic!("one stopped record: {settled:#?}");
+    };
+    assert_eq!(outcome.code().as_str(), CANCELLED);
+    assert_eq!(
+        bench.host.instance_claims_for_test(B).expect("claims"),
+        (None, Vec::new()),
+        "the key is free"
+    );
+    assert_eq!(
+        bench
+            .host
+            .switch_cooldown_entries_for_test()
+            .expect("the cooldowns"),
+        0,
+        "no switch cooldown: the switch did not fail"
+    );
+    assert!(!ladder_started(&events), "no recovery ladder");
+    assert!(bench.host.fatal_error().expect("health").is_none());
     bench.close();
 }

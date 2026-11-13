@@ -842,8 +842,9 @@ impl RuntimeHost {
     }
 
     /// Workflow #437 MAPP-2b: with `off`, nothing of MAPP-2b applies to any instance from now on
-    /// (`HostShared::switch_applies` answers `false`), as before the slice; a test compares a lone
-    /// instance's run with and without the slice's branch reachable within one host.
+    /// (`HostShared::switch_applies` answers `false`), as before the slice. It exists in this
+    /// crate's test build only (the field and its check in `switch_applies` are `#[cfg(test)]`):
+    /// a member's run with it off shows that the group check is the slice's only entry.
     pub(crate) fn switch_off_for_test(&self, off: bool) -> RuntimeHostResult<()> {
         let location = crate::codes::test_spellings::TestLocation::SwitchOffForTest;
         self.shared_ref(location)?
@@ -869,6 +870,28 @@ impl RuntimeHost {
             .get(&member)
             .filter(|until| **until > now)
             .map(|until| until - now))
+    }
+
+    /// Workflow #437 MAPP-2b: how many members the host keeps a switch cooldown for, ended ones
+    /// included until a policy cycle forgets them.
+    pub(crate) fn switch_cooldown_entries_for_test(&self) -> RuntimeHostResult<usize> {
+        let location = crate::codes::test_spellings::TestLocation::SwitchCooldownForTest;
+        Ok(lock(&self.shared_ref(location)?.switch_cooldowns, location)?.len())
+    }
+
+    /// Workflow #437 MAPP-2b: the switch time the settlement of the dispatch `decision_id` will
+    /// take out of its run's own time, as its dispatch clock holds it now; `None` when the
+    /// dispatch has no clock.
+    pub(crate) fn policy_switch_ms_for_test(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<u64>> {
+        let location = crate::codes::test_spellings::TestLocation::PolicySwitchTimeForTest;
+        Ok(
+            lock(&self.shared_ref(location)?.policy_dispatch_clocks, location)?
+                .get(decision_id)
+                .map(|clock| clock.switch_ms),
+        )
     }
 
     /// How many times the switch's entry was reached since the host started.
