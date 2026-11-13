@@ -2771,6 +2771,9 @@ pub(crate) mod test_spellings {
             SwitchEntriesForTest => "switch_entries_for_test",
             KeyRemainingForTest => "key_remaining_for_test",
             FailNextMemberCloseForTest => "fail_next_member_close_for_test",
+            // Workflow #437 MAPP-2b: a test turns the slice's branch off and reads a cooldown.
+            SwitchOffForTest => "switch_off_for_test",
+            SwitchCooldownForTest => "switch_cooldown_for_test",
         }
     }
 }

@@ -1918,6 +1918,70 @@ impl HostShared {
         Ok(())
     }
 
+    /// Workflow #437 MAPP-2b (`contracts/device-group.md`, "The switch before a run"): the switch
+    /// before the run of the dispatch `decision_id` took `switch_ms`, which its settlement leaves
+    /// out of the run's own time (the dispatch clock's runtime, the run-duration sample, the
+    /// `last_duration_ms` fact and the budget comparison). A dispatch without a clock is fatal, as
+    /// at its settlement.
+    pub(super) fn note_policy_run_switch(
+        &self,
+        decision_id: &str,
+        switch_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let mut clocks = lock(
+            &self.policy_dispatch_clocks,
+            HostLocation::RecordPolicyDispatchStart,
+        )?;
+        let clock = clocks.get_mut(decision_id).ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::PolicyDispatchClockMissing,
+                HostLocation::RecordPolicyDispatchStart,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        clock.switch_ms = clock.switch_ms.saturating_add(switch_ms);
+        Ok(())
+    }
+
+    /// Workflow #437 MAPP-2b: what the run of the dispatch `decision_id` still needs on its key
+    /// after the switch's startup run: its own share of the lease its admission sized for the
+    /// switch and the run; for a lease not sized so, the whole key to its heartbeat reserve (the
+    /// run's own boundary), which no startup run can share. A dispatch without a clock is fatal.
+    pub(super) fn policy_run_need(
+        &self,
+        decision_id: &str,
+        token: &LeaseToken,
+    ) -> RuntimeHostResult<super::switch::RunNeed> {
+        let through = lock(
+            &self.policy_dispatch_clocks,
+            HostLocation::ReadPolicyDispatchStart,
+        )?
+        .get(decision_id)
+        .ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::PolicyDispatchClockMissing,
+                HostLocation::ReadPolicyDispatchStart,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?
+        .own_time_through_monotonic_ms;
+        let through_monotonic_ms = match through {
+            Some(through) => through,
+            None => {
+                let reserve_ms = lock(
+                    &self.scheduler,
+                    HostLocation::ReadContainedTaskDeadlineConfig,
+                )?
+                .config()
+                .maximum_client_heartbeat_interval_ms;
+                token.expires_at_monotonic_ms().saturating_sub(reserve_ms)
+            }
+        };
+        Ok(super::switch::RunNeed::OwnTime {
+            through_monotonic_ms,
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn record_policy_dispatch_outcome(
         &self,
@@ -2010,7 +2074,7 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeHalted,
                 ));
             }
-            let runtime_ms = match clock.started_at_monotonic_ms {
+            let elapsed_ms = match clock.started_at_monotonic_ms {
                 Some(started_at_monotonic_ms) => {
                     sample.monotonic_ms.checked_sub(started_at_monotonic_ms)
                 }
@@ -2024,13 +2088,24 @@ impl HostShared {
                 )
             })?;
             let observed_at_unix_ms =
-                admitted_at_unix_ms.checked_add(runtime_ms).ok_or_else(|| {
+                admitted_at_unix_ms.checked_add(elapsed_ms).ok_or_else(|| {
                     RuntimeHostError::fatal(
                         HostCode::PolicyExecutionTimeOverflow,
                         HostLocation::RecordPolicyDispatchOutcome,
                         RuntimeErrorCode::RuntimeHalted,
                     )
                 })?;
+            // Workflow #437 MAPP-2b (`contracts/device-group.md`, "The switch before a run"): the
+            // run's own time leaves out the switch before it (0 when none ran, as for every
+            // instance alone on its device), so its runtime, its sample, its `last_duration_ms`
+            // and its budget verdict are its own; its observation stays the instant it ended.
+            let runtime_ms = elapsed_ms.checked_sub(clock.switch_ms).ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    HostCode::PolicyDispatchClockRegressed,
+                    HostLocation::RecordPolicyDispatchOutcome,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+            })?;
             // #385 P-k (PERF v1.4.2 §5.3, Tk-10): a run with a factor segment above 1000 is
             // settled on its budget time, its wall time less what its budget clock did not
             // count; its record carries both. Every other run is settled on its wall time.

@@ -315,7 +315,7 @@ hand. The [summary](README.md) says what each column means. 1149 codes.
 | `device_watch_failed` | error | none | 0.12.0 | active | pending | TBD | The device-link watch could not start, read an output of unknown shape, or ended more often within device_link.watch.restart_window_ms than… |
 | `device_watch_restarted` | warning | none | 0.12.0 | active | pending | written | The device-link watch, the Runtime's one adb track-devices process, ended and was started again within its restart budget (#398 R1 RD-2, model-398 section 4.3). |
 | `dispatch_instance_contended` | info | none | 0.11.5 | active | pending | written | A policy admission found the instance's admission guard taken by a keyless observe or probe for its whole short retry (about 100 ms). |
-| `dispatch_instance_cooldown` | info | none | 0.11.5 | active | pending | written | A policy candidate met an instance whose takeover cooldown still runs after a previous owner ended without closing; the candidate is deferred with a wake at… |
+| `dispatch_instance_cooldown` | info | none | 0.11.5 | active | pending | written | A policy candidate met an instance in a cooldown; the candidate is deferred with a wake at next_eligible_unix_ms, the cooldown's end. |
 | `dispatch_instance_held` | info | none | 0.11.5 | active | pending | written | A policy candidate, or its admission, met an instance that a claim holds or that an eligible claim waits for (holder_kind names the holder, or the waiting claim… |
 | `dispatch_paused_global` | info | none | 0.12.0 | active | pending | TBD | An operator's global scheduling pause defers the dispatch. |
 | `dispatch_paused_instance` | info | none | 0.12.0 | active | pending | TBD | An operator's scheduling pause of the instance defers the dispatch. |

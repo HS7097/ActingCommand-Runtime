@@ -1055,6 +1055,18 @@ impl HostShared {
         )
     }
 
+    /// Workflow #437 MAPP-2b (`contracts/device-group.md`, "The member's switch cooldown"):
+    /// `scheduling.device_group.switch_failure_cooldown_ms` in effect, read when a member's switch
+    /// fails, so an instruction applies to the cooldowns that start after it.
+    pub(super) fn switch_failure_cooldown_ms(&self) -> RuntimeHostResult<u64> {
+        Ok(
+            lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+                .scheduling()
+                .map_err(remedy_config_failure)?
+                .switch_failure_cooldown_ms,
+        )
+    }
+
     /// Workflow #386 SR-2b-1: the `scheduling.rerun` values in effect, read at each live
     /// settlement and online reconciliation, which decide a run's `condition` by them.
     pub(super) fn rerun_condition_rule(

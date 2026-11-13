@@ -3380,6 +3380,22 @@ impl HostShared {
             RestartEntry::Stop => true,
             RestartEntry::RunOnly => false,
         };
+        // Workflow #437 MAPP-2b (`contracts/device-group.md`, "The switch before a run", "Where the
+        // switch runs"): on a member of a device group of several the rung first stops the member
+        // in front (every other member with the front unknown) on the ladder's key, before it
+        // stops and starts the member's own application; a failed stop fails the rung with
+        // `application_switch_failed`, and the ladder keeps its key. An instance alone on its
+        // device never comes here.
+        if stops
+            && self.switch_applies(pending.instance_id)
+            && let Err(failure) =
+                self.stop_others_before_start(pending.links.clone(), &key.token, key.connection_id)?
+        {
+            return Ok(RungAttempt::Failed {
+                run_id: None,
+                reason: failure.code(),
+            });
+        }
         if stops && let Err(reason) = self.stop_assigned_application(pending, resolved, key)? {
             return Ok(RungAttempt::Failed {
                 run_id: None,

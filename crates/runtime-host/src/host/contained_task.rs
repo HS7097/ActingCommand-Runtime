@@ -1187,6 +1187,18 @@ impl ContainedRunControl {
         }
     }
 
+    /// Workflow #437 MAPP-2b (`contracts/device-group.md`, "The switch before a run"): the run's
+    /// deadline moved on by `by_ms`, the time the switch before it took, before the run executes,
+    /// so the switch's time is not taken from the run's own. The caller bounds it by the key
+    /// again ([`Self::set_deadline`] keeps the earlier). A run with no deadline yet keeps none.
+    fn postpone_deadline(&self, by_ms: u64) {
+        let current = self.deadline_monotonic_ms.load(Ordering::Acquire);
+        if current != 0 {
+            self.deadline_monotonic_ms
+                .store(current.saturating_add(by_ms), Ordering::Release);
+        }
+    }
+
     fn request_cancel(&self) {
         let _ = self.cancellation_reason.compare_exchange(
             Self::NONE,
@@ -7293,7 +7305,9 @@ impl HostShared {
             .issuer()
             .mint_run_id()
             .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
-        let lease_ttl_ms = self.contained_task_lease_ttl(task_request)?;
+        // Workflow #437 MAPP-2b: a member's claim holds its switch's startup run and its run, or
+        // the run is refused when both cannot fit; an instance alone on its device, as before.
+        let lease_ttl_ms = self.dispatch_lease_ttl(resolved.instance_id(), task_request)?;
         // Workflow #369 W-3: the run waits for its turn in the instance's queue; its deadline
         // stays anchored at receipt, so the wait is taken from it.
         let receipt_deadline_monotonic_ms = active_run.control.deadline();
@@ -7325,6 +7339,64 @@ impl HostShared {
             .control
             .set_deadline(deadline_monotonic_ms)
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #437 MAPP-2b (`contracts/device-group.md`, "The switch before a run"): a direct
+        // run of a member switches as a policy run does, on its claim's key once granted, before
+        // it executes. Its deadline, anchored at its receipt, moves on by the switch's time,
+        // within the key. A failed switch releases the key with no ladder and fails the run's
+        // receipt; the member's switch cooldown has started. An instance alone on its device
+        // never comes here.
+        if self.switch_applies(resolved.instance_id()) {
+            let links = self.events.request_links(
+                request,
+                Some(resolved.instance_id()),
+                Some(token.lease_id()),
+                None,
+            );
+            let need = super::switch::RunNeed::OwnTime {
+                through_monotonic_ms: super::switch::own_time_through(
+                    &token,
+                    lease_ttl_ms,
+                    task_request,
+                ),
+            };
+            let (switch_ms, switched) = match self.switch_before_run(
+                links,
+                original.request_id(),
+                &token,
+                connection_id,
+                need,
+            ) {
+                Ok(done) => done,
+                Err(error) => {
+                    return Err(self.cleanup_composite_failure(
+                        token,
+                        connection_id,
+                        super::switch::switch_runtime_failure(error),
+                    ));
+                }
+            };
+            if let Err(failure) = switched {
+                return Err(self.cleanup_composite_failure(
+                    token,
+                    connection_id,
+                    RequestFailure::request(failure, RuntimeReceiptState::Failed, None),
+                ));
+            }
+            active_run.control.postpone_deadline(switch_ms);
+            let deadline_monotonic_ms = match self.contained_task_deadline_until(
+                receipt_deadline_monotonic_ms.saturating_add(switch_ms),
+                &token,
+            ) {
+                Ok(deadline) => deadline,
+                Err(failure) => {
+                    return Err(self.cleanup_composite_failure(token, connection_id, failure));
+                }
+            };
+            active_run
+                .control
+                .set_deadline(deadline_monotonic_ms)
+                .map_err(RequestFailure::poison_without_terminal)?;
+        }
         // Workflow #429 R-0b (register §1.238): the direct run shows from its grant while it
         // executes, with the client's request and its package; its guard drops however the run
         // returns.
@@ -7422,13 +7494,13 @@ impl HostShared {
     }
 
     /// Workflow #437 MAPP-2a: the deadline of a run on a borrowed key: as
-    /// [`Self::contained_task_deadline`], and no later than the key's expiry less `after_ms`, the
-    /// time the key's holder needs on it after this run; refused when it has passed.
+    /// [`Self::contained_task_deadline`], and no later than the key's expiry less the time the
+    /// key's holder needs on it after this run (`need`, read now); refused when it has passed.
     fn borrowed_key_deadline(
         &self,
         request: &ContainedTaskRequest,
         token: &LeaseToken,
-        after_ms: u64,
+        need: super::switch::RunNeed,
     ) -> Result<u64, RequestFailure> {
         let now = self
             .monotonic_ms()
@@ -7442,7 +7514,9 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeHalted,
                 ))
             })?;
-        let handed_back = token.expires_at_monotonic_ms().saturating_sub(after_ms);
+        let handed_back = token
+            .expires_at_monotonic_ms()
+            .saturating_sub(need.after_ms(now));
         self.contained_task_deadline_until(requested.min(handed_back), token)
     }
 
@@ -7774,13 +7848,13 @@ impl HostShared {
     /// that the key is never renewed (a renewal mints a new token, and the run the key goes back
     /// to checks the one it holds) and never ended: the run's end, a failed one included, leaves
     /// the key with its holder (`ContainedRunControl::borrows_key`). The run's deadline is the
-    /// earlier of its response deadline and the key's expiry less `after_ms`, the time the holder's
+    /// earlier of its response deadline and the key's expiry less `need`, the time the holder's
     /// own run needs on the key afterwards, so a run that ends by its deadline leaves that time.
     pub(super) fn run_prepared_package_on_borrowed_key(
         &self,
         mut run: PreparedPackageRun<'_>,
         held: HeldPackageLease,
-        after_ms: u64,
+        need: super::switch::RunNeed,
     ) -> Result<OperationSuccess, RequestFailure> {
         // Only a member of a device group of several borrows a key so; nothing runs for any
         // other instance, and the key is left as it is.
@@ -7793,7 +7867,7 @@ impl HostShared {
         }
         run.activity_key = super::instance_activity::KeyHold::Borrowed;
         run.active_run.control.note_borrowed_key();
-        self.run_held_package(run, held, Some(after_ms))
+        self.run_held_package(run, held, Some(need))
     }
 
     /// Workflow #437 MAPP-2a: whether the registered run of `request_id` executes on a borrowed
@@ -7806,13 +7880,13 @@ impl HostShared {
         )
     }
 
-    /// [`Self::run_prepared_package`], and with `borrowed_after_ms` its borrowed-key form
+    /// [`Self::run_prepared_package`], and with `borrowed_need` its borrowed-key form
     /// ([`Self::run_prepared_package_on_borrowed_key`]).
     fn run_held_package(
         &self,
         run: PreparedPackageRun<'_>,
         held: HeldPackageLease,
-        borrowed_after_ms: Option<u64>,
+        borrowed_need: Option<super::switch::RunNeed>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let PreparedPackageRun {
             instance_id,
@@ -7850,9 +7924,9 @@ impl HostShared {
                 ),
             ));
         }
-        let deadline = match borrowed_after_ms {
+        let deadline = match borrowed_need {
             None => self.contained_task_deadline(&task_request, &token),
-            Some(after_ms) => self.borrowed_key_deadline(&task_request, &token, after_ms),
+            Some(need) => self.borrowed_key_deadline(&task_request, &token, need),
         };
         let deadline_monotonic_ms = match deadline {
             Ok(deadline) => deadline,
@@ -8170,6 +8244,44 @@ impl HostShared {
                 RuntimeReceiptState::Denied,
                 None,
             ));
+        }
+        // Workflow #437 MAPP-2b (`contracts/device-group.md`, "The switch before a run"): a
+        // member of a device group of several brings its application to the front on the run's
+        // key, after the run's own checks (so a run they refuse stops nothing) and before its
+        // request lifecycle. The switch's time is left out of the run's own: the run's deadline
+        // moves on by it and its settlement subtracts it. A failed switch ends the run here, with
+        // no record of the run and no terminal, so its failed settlement releases the key with no
+        // ladder; the member's switch cooldown has started. An instance alone on its device
+        // never comes here.
+        if self.switch_applies(token.instance_id()) {
+            let need = self
+                .policy_run_need(context.decision_id(), token)
+                .map_err(RequestFailure::poison_without_terminal)?;
+            let links = self.events.request_links(
+                &validated,
+                Some(resolved.instance_id()),
+                Some(token.lease_id()),
+                None,
+            );
+            let (switch_ms, switched) = self
+                .switch_before_run(
+                    links,
+                    task_request_message.request_id(),
+                    token,
+                    connection_id,
+                    need,
+                )
+                .map_err(super::switch::switch_runtime_failure)?;
+            self.note_policy_run_switch(context.decision_id(), switch_ms)
+                .map_err(RequestFailure::poison_without_terminal)?;
+            if let Err(failure) = switched {
+                return Err(RequestFailure::request(
+                    failure,
+                    RuntimeReceiptState::Failed,
+                    None,
+                ));
+            }
+            active_run.control.postpone_deadline(switch_ms);
         }
         let run_links = RuntimeRunLinks::new(context.issued_task_id(), context.issued_run_id());
         self.append_scheduled_request_lifecycle(
