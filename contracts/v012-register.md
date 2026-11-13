@@ -21219,6 +21219,83 @@ contract together take the new row unchanged: lab-ops' `lab_ops_ui_allows_is_the
 and `lab_ops_table_complete` (the `entries` rule), and the host's LAB-6S3 test above. No golden
 changes; no test leaves the gate map.
 
+### 1.352 Slices ORD-1a and ORD-1b (0.12.60): a task's longest wait in its device's queue, and the selection among the members of one device (Workflow #437; the owner's rulings on board #437 as the coordinator recorded them, not the owner's words; the design note `rd-1114/ord1-design.md`, read on main `fa724931`, with the coordinator's four amendments; coordinator work order `rd-1114/brief-437-ord1ab.md`, read on main `fa724931`)
+
+[scheduling/v2/README.md](scheduling/v2/README.md) (ORD-1a) and
+[standard-pack-schedule.md](standard-pack-schedule.md) ("`requires`", "Composition") are the
+contract of ORD-1a. **No ledger shape, no configuration key and no interface revision moves**: the
+member is a catalog and `schedule.json` addition gated by `requires`, as SCHED-C1a's
+`benefit_fixed_value_milli` (§1.299, its slice table: "none: catalog and `schedule.json`
+additions gated by `requires`"); `schedule.json` lies beside `bundle.json` and is no part of what
+`package` covers ([component-interfaces.md](component-interfaces.md)), and the subsystem row is a
+new row value of an existing fact. The number 1.350 was provisional for parallel slices (1.348 and
+1.349 went to #454's fix and DA-3b on main `71a658f1`, merged into this branch); the integration
+train 0.12.60a renumbered it 1.352, after §1.350 (MAPP-1c) and §1.351 (T1-R).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ORD1A-1 | `TaskSpec::max_queue_wait_ms` (`Option<u64>`, V2 only, `60000..=86400000`) | catalog format addition | ORD-1a | a `schedule.json` rule (passed through by the composer); a raw V2 catalog | `crates/policy/src/schema.rs`; read as a written bound (an explicit `null` is `type_mismatch`); absent it serializes as nothing, so a catalog without it keeps its hash; `validate_queue_wait` in `validation.rs`: V1 `unknown_field`, out of range `limit_exceeded`, at the member; `MIN_QUEUE_WAIT_MS`, `MAX_QUEUE_WAIT_MS`; the Runtime's own reading (`_fact_refresh`) declares none |
+| ORD1A-2 | the always-on row `queue_wait` of `config.subsystems`; `QUEUE_WAIT_SUBSYSTEM` | new row value of an existing fact | ORD-1a | actingd | `apps/actingd/src/config/manifest.rs`; the composer refuses a file whose rule writes `max_queue_wait_ms` (any value) without it in `requires`, `schedule_invalid` at the first such rule's member; a Runtime before ORD-1a refuses such a file at `requires` (`schedule_requires_missing`) |
+
+**ORD-1a tests.** New: policy rows "#437 ORD-1a",
+`actingcommand-policy::lib::tests::gate_ord1` tests
+`ord1a_t1_the_compiler_holds_max_queue_wait_ms_to_v2_and_its_range`,
+`ord1a_t2_the_composer_passes_it_through_and_refuses_it_without_requires` and
+`ord1a_t3_without_the_member_every_catalog_hash_is_unchanged`, on fakes, no clock read.
+
+**At deploy (ORD-1a).** Nothing: no catalog writes the member, and no decision reads it in this
+slice; every catalog keeps its hash. `config.subsystems` gains the row `queue_wait`.
+
+**ORD-1b.** [scheduling/README.md](scheduling/README.md), "Order within one device", and
+[device-group.md](device-group.md), "Ranking across members" (which replaces the ranking "as it is
+today" and the normalized weight of its "Later slices"), are the contract, with the coordinator's
+amendments to the design note: the device's chain successor goes first whether or not it fits (by
+the coordinator's ruling of the first fix round, also when another member or none is in front), a
+promoted request does not; the wait's start is an input of the evaluation (none given:
+the wait begins at the evaluation's time), how the Runtime keeps it is the host's slice; no
+"unservable pair" is built; the default is the constant 1 800 000 until the host passes the
+configured one. **No ledger shape, no configuration key, no code and no interface revision
+moves**: the values are optional values of two existing codes (`runtime-outcomes`: catalog
+additions only; `ledger`: the reader only spells codes and value words), and the policy crate's
+inputs are memory only.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ORD1B-1 | `DeviceOrder` (the member in front by alias, each waiting contender's start by task and alias, the default limit; `DEFAULT_MAX_QUEUE_WAIT_MS` 1 800 000) and `DeviceGroups::with_order` | policy input (memory only) | ORD-1b | the Runtime, from the host's slice on | `crates/policy/src/evaluator.rs`; `DeviceGroups::new` keeps its signature and passes none, so the evaluation is MAPP-1's until a host passes them; two members of one device named in front refuse the evaluation (`policy_evaluation_input_invalid`) |
+| ORD1B-2 | the selection among a device's contenders, at its first contender's place in the allocation order: the device's chain successor when it contends, whatever its fit and whoever is in front; else the front's first contender that ends by the binding waiter's deadline (the binding waiter: earliest deadline, then the allocation order); else the binding waiter; a deferred pick gives way and the selection runs again from the same place, so the device's picks meet the shared run limits there, before every later candidate of the allocation order | behaviour (evaluation) | ORD-1b | the policy evaluator | `crates/policy/src/evaluator/device_order.rs`; a step-by-step procedure over the allocation order, no new comparator; a contender excludes the Runtime's whole-instance holds, the members held as the cycle starts and the handover's held candidates, which take their turns as before; only a device the map names for two or more aliases |
+| ORD1B-3 | optional values `required_ms`, `remaining_ms` on `instance_already_selected`, and `required_ms`, `remaining_ms`, `limit_ms` on `device_group_waiting` (`selected`) | outcome catalog additions (policy) | ORD-1b | the policy evaluator | `contracts/outcome-codes/policy.json`; a front contender passed over before a pick that fits, the front's contenders when another member's pick switches the device, every other member's contender; the step 3 of before is the helper `settle_behind_instance`, unchanged without the values |
+
+**Without the host's inputs the rows stay MAPP-1's.** The design note had the existing constructor
+give empty inputs, the front unknown and every wait fresh, and two MAPP-1 tests gain the waiting
+values. The host's MAPP-1b tests (`crates/runtime-host/src/tests/gate_mapp1b.rs`) pin the
+`device_group_waiting` `selected` rows of a device of several with exactly MAPP-1's values, and
+this slice changes no file of the host: so the order applies, and the values appear, only once a
+host passes the inputs (`with_order`); the MAPP-1 and MAPP-1b policy tests are unchanged. The host's
+slice passes them and adapts those rows.
+
+**ORD-1b tests.** New: policy rows "#437 ORD-1b", `gate_ord1` tests `ord1b_t1` to `ord1b_t11`
+(`ord1b_t10_a_chain_successor_goes_first_whether_or_not_it_fits`, amendment 1, with its member in
+front and with none in front against another member's shorter declared limit, and a promoted front
+request that does not go first; `ord1b_t9_a_waiting_members_fact_refresh_takes_the_default`) and
+`ord1b_without_a_device_of_several_a_declared_limit_changes_no_decision`, whose lone instance is
+named in front of nothing and whose first task declares the longer limit, so an evaluation that
+took the lone instance for a device of several would pick its second task; `ord1b_t7` compares
+each row's evaluation byte for byte under the six orders of the instances and with the task
+snapshots reversed. Its sixth row takes row 2's durations: with row 1's, a2 fits against either
+waiter and the tie of the two limits decides nothing visible. In `ord1b_t10`, SHORT ranks above
+LEAD, whose priority the chain step CLOSE ranks with (SS-2's chain inheritance), so that the
+handover moves CLOSE before it. Unchanged and holding:
+`mapp1_without_a_device_of_several_the_evaluation_is_byte_for_byte_the_one_before`.
+
+**For the host's slice of the order.** Once another member's pick has taken the device, a candidate
+of a member that is paused or under a person's hold as the cycle starts is no contender: it is
+settled by the older branch, as a `device_group_waiting` `selected` row with MAPP-1's values only.
+A wait clock must tell such rows from waiting contenders by the presence of `limit_ms` or
+`required_ms`, not by the code.
+
+**At deploy (ORD-1b).** Nothing: no Runtime build passes the order inputs, and every group of
+several is refused at load; a device of one never reads them.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

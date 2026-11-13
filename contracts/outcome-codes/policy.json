@@ -442,6 +442,8 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
+        "required_ms": "optional",
+        "remaining_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -451,7 +453,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Scheduling decision reason: a higher-ranked task already owns the instance in this evaluation round.",
+      "description": "Scheduling decision reason: a higher-ranked task already owns the instance in this evaluation round. Workflow #437 ORD-1b (since 0.12.60, contracts/scheduling/README.md \"Order within one device\"): on a device group of several, a task of the member in front that was passed over because its run would not end before the waiting task's limit carries required_ms, the duration its run needs, and remaining_ms, the time that waiting task has left; a task of the instance that ends in time runs instead.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2561,6 +2563,9 @@
         "device_group_wait": "required",
         "task_id": "optional",
         "holder_kind": "optional",
+        "required_ms": "optional",
+        "remaining_ms": "optional",
+        "limit_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -2570,7 +2575,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.56",
-      "description": "Scheduling decision reason (Workflow #437 MAPP-1, contracts/device-group.md, \"One pick per device per round\"): a candidate of a member of a device group does not run because another member of its device has the device. instance_id is the candidate's alias, alias the member that has the device, and device_group_wait why: selected (that member's candidate, task_id, won the device this round), held (a claim or run of that member holds the device or waits for it first; task_id with a run, holder_kind the claim kind), player_hold (a person holds the device through that member) or fenced (that member is fenced). It takes the place of the code a lone instance's candidate would give (instance_already_selected, dispatch_instance_held, a control gate's code) and has no wake of its own: the other member's settlement, release or lifting wakes the next evaluation. A group of one never gives it.",
+      "description": "Scheduling decision reason (Workflow #437 MAPP-1, contracts/device-group.md, \"One pick per device per round\"): a candidate of a member of a device group does not run because another member of its device has the device. instance_id is the candidate's alias, alias the member that has the device, and device_group_wait why: selected (that member's candidate, task_id, won the device this round), held (a claim or run of that member holds the device or waits for it first; task_id with a run, holder_kind the claim kind), player_hold (a person holds the device through that member) or fenced (that member is fenced). It takes the place of the code a lone instance's candidate would give (instance_already_selected, dispatch_instance_held, a control gate's code) and has no wake of its own: the other member's settlement, release or lifting wakes the next evaluation. A group of one never gives it. Workflow #437 ORD-1b (since 0.12.60, contracts/scheduling/README.md \"Order within one device\"): with selected, under the order within one device, a waiting candidate carries limit_ms, the longest time its task may wait in the queue, and remaining_ms, the time it has left before that limit (0 once past it); a candidate of the member in front, when another member's task switches the device because nothing of the front ends in time, carries required_ms, the duration its run needs, and remaining_ms, the time the waiting task that goes has left.",
       "common_causes": "Several applications on one device, each due at once; a run, a ladder, a person's hold or a fence of another application of the same device.",
       "handling": "None: the candidate runs once the device is free and it wins a round. A member's own holder or gate keeps its own code."
     }

@@ -201,6 +201,9 @@ pub fn fact_refresh_task() -> &'static TaskSpec {
         benefit_realization: None,
         benefit_limited: None,
         benefit_fixed_value_milli: None,
+        // Workflow #437 ORD-1a: the Runtime's own reading declares no longest queue wait; on a
+        // device of several it waits with the order's default.
+        max_queue_wait_ms: None,
     })
 }
 

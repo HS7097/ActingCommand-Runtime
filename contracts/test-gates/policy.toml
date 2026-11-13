@@ -1376,3 +1376,32 @@ tests = [
     "actingcommand-scheduler::lib::tests::gate_mapp1c::mapp1c_in_the_cooldown_only_the_close_aheads_token_passes_and_the_cooldown_end_stays",
 ]
 incident = ["#437 MAPP-1c"]
+
+# Workflow #437 ORD-1a (0.12.60; register §1.352; brief rd-1114/brief-437-ord1ab.md; contracts/scheduling/v2/README.md, contracts/standard-pack-schedule.md "`requires`"): a V2 task's max_queue_wait_ms is unknown_field in V1, type_mismatch for a string, null or a fraction, limit_exceeded outside 60 000..=86 400 000, each at the member, and the bounds compile with the value written (1); a rule's max_queue_wait_ms passes through to its composed task, a file that writes it without queue_wait in requires is schedule_invalid at the first such rule's member, a value the compiler refuses is mapped back to the rule's member, and a Runtime whose manifest does not name queue_wait refuses the file at requires (2); the neutral example catalog keeps its V1 and V2 golden hashes and a catalog without the member serializes none (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ord1::ord1a_t1_the_compiler_holds_max_queue_wait_ms_to_v2_and_its_range",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1a_t2_the_composer_passes_it_through_and_refuses_it_without_requires",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1a_t3_without_the_member_every_catalog_hash_is_unchanged",
+]
+incident = ["#437 ORD-1a"]
+
+# Workflow #437 ORD-1b (0.12.60; register §1.352; brief rd-1114/brief-437-ord1ab.md with the coordinator's amendments; contracts/scheduling/README.md "Order within one device", contracts/device-group.md "Ranking across members"): with the order inputs a device of several stays with the member in front while one of its contenders ends by the binding waiter's deadline, the binding waiter's limit and time left on its device_group_waiting selected, while without them the allocation order's first wins as MAPP-1 built it (1); the front's first contender in its own order that fits goes, one passed over carries required_ms and remaining_ms on instance_already_selected, a later one none (2); nothing of the front fits and the earliest limit goes, the front's contenders carrying required_ms and remaining_ms (3); of several waiting tasks past their limits the most overdue goes, remaining_ms 0 (4); with no member in front the earliest limit goes, at equal limits the allocation order, MAPP-1's pick (5); a switch target its admission defers keeps its deferral and the selection runs again, the admission asked in that order (6); three members with crossed limits and durations select by the design note's six rows, and each evaluation is the same byte for byte under every order of the instances and with the task snapshots reversed (7); a member under a whole-instance hold, a pause or a person's hold has no waiting task (8); a waiting member's fact refresh waits with the order's default, configured or not, and the task that waits for its reading names its gate (9); the device's chain successor goes first whether or not it fits, with its member in front and with none in front against a shorter declared limit, a promoted front request only when it fits (10); a declared limit replaces the default (11); an instance alone on its device, named in front of nothing and its first task declaring the longer limit, keeps its first task and decides the same with and without a declared limit, with no map, a map naming it alone and a device of several beside it (12)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ord1::ord1b_t1_a_front_task_that_fits_goes_before_a_waiting_task",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1b_t2_the_first_front_task_that_fits_in_its_own_order_wins",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1b_t3_nothing_of_the_front_fits_the_earliest_limit_goes",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1b_t4_a_waiting_task_past_its_limit_goes_first",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1b_t5_the_front_unknown_takes_the_earliest_limit_then_the_allocation_order",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1b_t6_a_deferred_switch_target_gives_way_and_the_selection_runs_again",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1b_t7_three_members_crossed_limits_and_durations_select_alike_in_every_input_order",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1b_t8_a_held_member_has_no_waiting_task",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1b_t9_a_waiting_members_fact_refresh_takes_the_default",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1b_t10_a_chain_successor_goes_first_whether_or_not_it_fits",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1b_t11_a_declared_limit_replaces_the_default",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1b_without_a_device_of_several_a_declared_limit_changes_no_decision",
+]
+incident = ["#437 ORD-1b"]
