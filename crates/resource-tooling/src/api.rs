@@ -47,6 +47,11 @@ pub struct StandardPackRootFiles {
     /// anything is written, then laid byte for byte into `<out>/notices/`. Without it nothing of
     /// the output changes.
     pub notices: Option<PathBuf>,
+    /// Workflow #455 G-R1 (`--goals`): the goal entries the game offers, `goals.json`
+    /// (contracts/standard-pack-goals.md): read after the composition and its references held to
+    /// the bundle's root, then laid beside `bundle.json` byte for byte; a refused file refuses the
+    /// bundle. Without it nothing of the output changes.
+    pub goals: Option<PathBuf>,
 }
 
 /// Workflow #407 LOAD-1: `actinglab package loading --root-file <loading.json> --packs-root
@@ -122,8 +127,8 @@ pub struct StandardPackCheckResponse {
     pub status: String,
     pub root: String,
     pub game: String,
-    /// The root files the game root holds; (Workflow #407 LOAD-1) `loading.json` among them, last,
-    /// when it holds one.
+    /// The root files the game root holds; (Workflow #455 G-R1) `goals.json` among them, after
+    /// `display-layout.json`, and (Workflow #407 LOAD-1) `loading.json`, last, when it holds one.
     pub root_files: Vec<&'static str>,
     pub pack_count: usize,
     /// The report "entry page not in the list": one `package_bundle_entry_page_unlisted` per
@@ -136,7 +141,9 @@ pub struct StandardPackCheckResponse {
     /// `package_bundle_remedy_invalid` per remedy finding. With `schedule.json`, the
     /// composition's warnings follow, then (SS-2b) one `standard_pack_benefit_undeclared` per
     /// judged rule that declares no value, then (SS-2c) one `standard_pack_priority_tier_mismatch`
-    /// per rule whose maintenance declaration disagrees with its tier.
+    /// per rule whose maintenance declaration disagrees with its tier. Workflow #455 G-R1: last,
+    /// with `goals.json`, one `standard_pack_root_invalid` per problem of a refused file, in file
+    /// order; the root is checked as without the file.
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
     /// SS-2b (register §1.225): with `schedule.json`, how many of the game's judged rules (their
     /// package is not maintenance-role and, SS-2c, they do not declare themselves maintenance)
@@ -166,6 +173,23 @@ pub struct StandardPackCheckResponse {
     /// Absent otherwise; never a member of `root_files`, and no name or text of a file is echoed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notices: Option<StandardPackNotices>,
+    /// Workflow #453 S8 (register §1.355): the models the game root's packs need, the union of
+    /// the models their recognition packs' OCR and NN targets name, each model once with every
+    /// package that names it; in byte order of `model_ref`, then of `model_sha256`, each model's
+    /// `packages` in byte order of `package_id`. Always present, `[]` for a root whose packs name
+    /// none. The last member, so every member before it is as before.
+    pub models: Vec<StandardPackModel>,
+}
+
+/// Workflow #453 S8: one model a game root's packs need, as `standard-pack check` answers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StandardPackModel {
+    /// The model's folder name below the vision root's `models\`, as the targets name it.
+    pub model_ref: String,
+    /// The model's identity the targets name (`contracts/vision-model-folders.md`, "Identity").
+    pub model_sha256: String,
+    /// Every package of the root whose recognition pack names the model, each once.
+    pub packages: Vec<String>,
 }
 
 /// Workflow #444 NOTICES-3: what `standard-pack check` counted of a game root's notices

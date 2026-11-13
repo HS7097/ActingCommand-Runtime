@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #455 G-R2a gate tests, policy half (0.12.60; register §1.354; coordinator work order
+// Workflow #455 G-R2a gate tests, policy half (0.12.60; register §1.357; coordinator work order
 // `rd-1114/brief-455-gr2a-v3-store.md`; contracts/resource-targets.md, "Document
 // `actingcommand.resource-targets.v3`", "Storage" and "Resource weights (v2)"): the goal
 // document's value store. A v3 record's targets weigh as a v2 record's; a target whose own

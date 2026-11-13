@@ -44,6 +44,8 @@ pub mod runtime_observation;
 pub mod standard_pack;
 // Workflow #392 DA-4: a game root's display declaration `display-layout.json` (model 392 §4.1).
 pub mod standard_pack_display;
+// Workflow #455 G-R1 (since 0.12.60): a game root's goal declaration `goals.json`.
+pub mod standard_pack_goals;
 // Workflow #407 LOAD-1 (since 0.12.37): a game's `loading.json` and a pack's loading copy.
 pub mod standard_pack_loading;
 // Workflow #444 NOTICES-1 (since 0.12.58): the rules of a bundle's notices directory `notices/`.
@@ -89,6 +91,7 @@ pub use runtime_fact::*;
 pub use runtime_observation::*;
 pub use standard_pack::*;
 pub use standard_pack_display::*;
+pub use standard_pack_goals::*;
 pub use standard_pack_loading::*;
 pub use standard_pack_notices::*;
 pub use standard_pack_schedule::*;

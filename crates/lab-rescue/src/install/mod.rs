@@ -124,6 +124,10 @@ mod gate_444_notices2;
 // directory.
 #[cfg(test)]
 mod gate_451_loadp;
+// Test-only: Workflow #455 G-R1, the rescue module's `place` of a bundle's root file `goals.json`
+// and the `package` revision 12 a bundle that carries it declares.
+#[cfg(test)]
+mod gate_455_gr1;
 // Test-only: Workflow #451 PLACE-PKG, the rescue module's `place` reads a bundle's declaration by
 // the bundle's own rule.
 #[cfg(test)]
@@ -139,6 +143,10 @@ mod gate_453_cold_place;
 // Test-only: Workflow #453 S10, the rescue row `emulators` on the fake host's actingd.
 #[cfg(test)]
 mod gate_453_s10;
+// Test-only: Workflow #453 S7, the rescue rows `vision manifest` and `vision check` on the fake
+// host's actingd and Tools.
+#[cfg(test)]
+mod gate_453_s7;
 // Test-only: Workflow #454, a post-start check that fails closes its step with what it read.
 #[cfg(test)]
 mod gate_454_postcheck;
