@@ -20003,8 +20003,9 @@ session and `read_list` (FL-2 is the host's slice). No outcome code is added.
 **The order of the slices.** FL-0, FL-1a and FL-1b (this section, one pull request), then FL-2 (the
 host's halves on a fake device, host gate rows `field_list_published_like_a_list`,
 `field_list_miss_keeps_record`, `field_list_failed_or_cancelled_run_publishes_nothing`,
-`field_list_full_store_refused`, `field_list_row_read_by_ledger_8`), both in the Runtime release of
-0.12.59, deployed; then FL-3, the resource repository's package (its bundle declares `package`
+`field_list_full_store_refused`, `field_list_row_read_by_ledger_8`; done in 0.12.60, §1.350, with
+no change to the host), FL-1 in the Runtime release of 0.12.59 and FL-2 in that of 0.12.60, both
+deployed; then FL-3, the resource repository's package (its bundle declares `package`
 [11, 11]). The slice that places the first such package books its *L*, one identity on that
 instance, in instance-fact-store.md's capacity table.
 
@@ -21481,6 +21482,82 @@ repository's work). The catalog's `dispatch_instance_cooldown` gains one optiona
 **Rollback** (below 0.12.60). A file that names `scheduling.device_group` must drop it (the earlier
 section denies unknown members). Nothing is persisted by MAPP-2b: the cooldown and the switch's
 time live in memory only, and the build before it reads every record this one writes.
+
+### 1.350 Slice FL-2 (0.12.60): field lists through the host, proved on a fake device (Workflow #450; the owner approved the feature on 11-13, board #450; the design note `rd-1113/design-list-from-fields.md`, sections 3.2 to 3.5 and the row FL-2 of its section 4, with the coordinator's decisions of its section 7; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-450-fl2.md`, read on main `fa724931`; fix 1, after an independent review, coordinator work order `rd-1114/brief-1692-fix1.md`, main `71a658f1` merged; fix 2, the first CI run's lint and the full store's sequencing, coordinator work order `rd-1114/brief-1692-fix2.md`, main `803fdfa3` (release 0.12.59) merged)
+
+1.348 and 1.349 are the integration train 0.12.59d's (#1688); this slice took the next free
+section after them.
+
+**What it proves.** FL-1 (§1.343) built field lists up to the execution kernel and said the host
+needs no product change: every trace a field list records (`ListReadingFrame` on its end frame
+when the list is whole, then `ListReading` with the list's declaration and the frames a miss names;
+`list_end_unseen` at a successful end on the frame captured last) is one the host already takes
+from a `read_list` step, in an order it accepts. This slice runs field lists through the real host
+on a fake device. **The claim holds: the host needed no product change.** No product code changed;
+the fact store, the ledger, the selection, the fields report, `runtime-client`, the kernel and the
+contract crate are untouched; no interface revision moves; no outcome code, token, key or value is
+added.
+
+**A record of each producer.** In one host, a `read_list` step and a field list publishing the same
+keys under the same fact key give records equal in every member but five: `source_detector`
+(`list_reading:<entry task>/` and the step's or the list's id), `source_snapshot_id` (the run, the
+frame and that id), `observed_at_unix_ms` and `expires_at_unix_ms` (the end frame's capture time)
+and `resource_bundle_hash` (the producing package). The row order is the `read_list` step's
+(ascending byte order of the key). The row bound of a record list (1024) cannot be reached by a
+field list, whose rows are at most its `max_frames` (at most 256): `list_rows_exceeded` stays the
+builder's test (§1.343, `field_list_rows_whole`), and such a miss would reach the same `ListReading`
+arm of the host the other misses take.
+
+Tests. Host gate row "#450 FL-2" (`crates/runtime-host/src/tests/gate_450_fl2.rs`; a made-up field
+list package over item pages, the S168-4 host gate's `read_list` package, keys only, one fake
+device; every id made up):
+- `field_list_published_like_a_list`: a run over six items read whole publishes one `record_list`
+  record with the record's shape, `source_detector` `list_reading:task/list_a` and
+  `source_snapshot_id` `run:<run>/frame:<end frame>/list_a`, observed when its end frame (the frame
+  it captured last) was captured; member for member the `read_list` step's record of the same keys
+  but the five members above; the key's instance record, and loaded again after a restart.
+- `field_list_miss_keeps_record`: an item out of the dictionary (`list_position_unread`, 1, [1]),
+  a name read under the list's floor (`list_position_unread`, 1, [2]), a repeated key
+  (`list_duplicate_key`, 1, [0, 2]), the start unseen (`list_start_unseen`, 3, [0]), the end
+  unseen (`list_end_unseen`, 2, [1]) and, in a list with a column, an item whose key resolves but
+  whose column is read under its target's own minimum (`list_position_unread`, 1, [1]) each
+  succeed as a `read_list` miss does, publish nothing, keep the key's earlier record byte for byte
+  and write exactly one warning row `contained_task_resource_reading_unresolved` with
+  `reading_problem`, `count` and `frame_indices` (an unread position's values are the `read_list`
+  miss's plus `frame_indices`); each frame a row names is a frame of the run's fields report (the
+  column's frame is the one whose column the report gives `low_confidence`); 65 unresolved items
+  name 64 frames and `frame_indices_total` 65.
+- `field_list_failed_or_cancelled_run_publishes_nothing`: on a field list whose end needs a mark on
+  its last item's page and whose target page follows that page by a step, a run that decided its
+  one-item list whole on its first frame is stopped (`StopInstanceRun`) at that step and ends
+  cancelled by its client while the host holds the whole list (the same run shown the target after
+  the step publishes the list); a run that decided its list and then collects the next item after
+  the list's end fails `contained_task_state_invalid` with `state_problem` `runtime_invariant` and
+  no page named, its fields having collected that item as their third frame (the host keeps no
+  kernel detail of this failure). Neither publishes, the earlier record stays byte for byte, and
+  neither writes a miss row, as a `read_list` run stopped at its step after its list step read the
+  list whole writes none.
+- `field_list_full_store_refused`: the byte bound (lowered for each producer's own key) gives each
+  producer one `list_bytes_exceeded` row with the same values, the field list's naming no frame; on
+  a full store each producer's new key is refused, the run fails
+  `contained_task_resource_reading_rejected` with the native detail
+  `<list id>:fact_store_capacity_exceeded`, nothing is published or evicted, and the two receipts'
+  outcomes carry the same values. Each refused run, a `read_list`'s as a field list's, answers
+  before its lease ends (the refusal returns from its terminal before the release a completed run
+  makes): it still holds the device's key, nothing waiting, until its client's connection closes,
+  and the next run on the device waits for that end in the device's queue.
+- `field_list_row_read_by_ledger_8`: the ledger reader of this build (`ledger` 8, `actingledger`'s
+  task evidence) reads the `list_start_unseen` and `list_end_unseen` rows with `frame_indices` and
+  relays their outcome's values unchanged.
+- `field_list_read_by_the_lists_reader`: a select step's `keyed_fact` reads a field list's list
+  (key and the integer column `count`) as S168-4's `list_reading_read_by_keyed_fact` pins it on a
+  `read_list`'s: a listed key's column, an unlisted key's `absent`, a list too old `fact_stale`.
+
+A package without the member runs through the host as before: the existing list-reading rows
+(S168-4, S168-LB1a) are unchanged and no existing test is adapted.
+
+**At deploy.** Nothing: no bundle declares a field list, and the resource repositories' slice FL-3
+comes after this one is on production.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

@@ -900,8 +900,9 @@ opens an item's detail page, reads its name and its exact quantity as OCR fields
 next) groups those fields into one list: a **field list**. The host writes it as one instance fact
 of value `record_list` under `inventory.list.<name>`, exactly as it writes a list reading's
 ("List readings" above): the same record shape, row bound and order, so a reader of the fact
-cannot tell the producer. **Status:** built by FL-1 (the declaration, the gate and the kernel)
-with the host's halves in FL-2, one Runtime release; `package` revision 11
+cannot tell the producer. **Status:** built by FL-1 (the declaration, the gate and the kernel;
+0.12.59), the host's halves proved on a fake device by FL-2 (0.12.60,
+[v012-register.md](v012-register.md) §1.350) with no change to the host; `package` revision 11
 ([component-interfaces.md](component-interfaces.md)); a Runtime before it refuses a package that
 declares one (`UnknownField` at `/field_lists`). `actinglab resource verify` does not write this
 revision, as it wrote neither 8 nor 9: a bundle whose packs use a field list declares `package`
@@ -1050,7 +1051,8 @@ one end and one key per tab or category; a list maximum reads 1 to 16 lists), no
   `list_reading:<entry task>/<list id>` and `source_snapshot_id`
   `run:<run>/frame:<end frame>/<list id>`, the observation time the end frame's capture time; a
   miss is its warning row at once. "Publication", "Staleness", "Capacity and reserved keys" and
-  "Evidence" above apply unchanged. FL-2 holds the host's halves on a fake device.
+  "Evidence" above apply unchanged. FL-2 (0.12.60, [v012-register.md](v012-register.md) §1.350)
+  proved the host's halves on a fake device; the host needed no change.
 - **Ledger.** No record shape changes and `ledger` stays 8: a list is a `fact.published` of the
   existing `record_list` value; a miss is an existing warning row whose outcome gains two words of
   `reading_problem` and the optional value `frame_indices`, which a reader relays unchanged.
