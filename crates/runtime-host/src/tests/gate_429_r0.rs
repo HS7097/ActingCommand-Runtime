@@ -2,14 +2,15 @@
 
 // Workflow #429 R-0 (register §1.213; contracts/runtime-interface.md, "Workbench request
 // kinds"): the player workbench's request kinds have their wire shapes and no behaviour yet.
-// Each, and an ApplyResourceTargets that names its new version member, is refused
-// `not_implemented` (Denied) naming its operation, as LoadPack is before U-3, and has no effect:
-// nothing is appended to the ledger and no instance's status changes. Workflow #429 R-4 (register
-// §1.239, since 0.12.36) gives `ConfigureSettings.expected_version` its behaviour, so that case
-// left this test (`gate_387_d1b`, `r4_t*`); so does `RoutineSummary` with R-12 (register §1.264,
-// since 0.12.38; `gate_429_r12`), `StopInstanceRun` with R-6 (register §1.302; `gate_429_r6`),
-// and `EditPackSchedule` with R-8 (register §1.308; `gate_429_r8`), which also gives R-0c's
-// `PackScheduleView` its behaviour, so this file's test of that read left with it.
+// Each is refused `not_implemented` (Denied) naming its operation, as LoadPack is before U-3,
+// and has no effect: nothing is appended to the ledger and no instance's status changes.
+// Workflow #429 R-4 (register §1.239, since 0.12.36) gives `ConfigureSettings.expected_version`
+// its behaviour, so that case left this test (`gate_387_d1b`, `r4_t*`); so does `RoutineSummary`
+// with R-12 (register §1.264, since 0.12.38; `gate_429_r12`), `StopInstanceRun` with R-6
+// (register §1.302; `gate_429_r6`), and `EditPackSchedule` with R-8 (register §1.308;
+// `gate_429_r8`), which also gives R-0c's `PackScheduleView` its behaviour, so this file's test of
+// that read left with it; and `ApplyResourceTargets.expected_version` with Workflow #455 T1-R
+// (register §1.351, since 0.12.60; `gate_455_t1r`).
 
 use super::gate_383_ao4q::ledger_head;
 use super::*;
@@ -63,13 +64,6 @@ fn r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effe
                 },
             }),
             "edit_resource_target",
-        ),
-        (
-            client.agent_request(RuntimeOperation::ApplyResourceTargets {
-                document_json: "{}".to_owned(),
-                expected_version: Some(1),
-            }),
-            "apply_resource_targets",
         ),
     ];
     for (request, operation) in cases {

@@ -194,6 +194,19 @@ envelope may send the document, the Lab's `targets set` included
 ([lab-two-entries.md](lab-two-entries.md) §2.4). The request schema is
 `actingcommand.runtime.request.v4`.
 
+**`expected_version`** (Workflow #455 T1-R, since 0.12.60; register §1.351). The optional
+member of `ApplyResourceTargets { document_json, expected_version? }`, on the wire since
+`runtime-client` 3, is the version of the instance's policy the writer read: `ResourceTargetView`'s
+`active.version`, `0` when the view has no `active`. The document is checked as without it; then,
+in the hold of the fact write gate that writes the record and before the replay below, the
+version of the instance's `session.resource_targets` record (the sequence of the `fact.published`
+that holds it, expired or not, `0` without one) is compared with it. Another value is Denied
+`fact_observation_version_conflict` with `fact_key` `session.resource_targets` and
+`current_version` (kept in codes mode), and nothing is appended; the equal value applies, or
+answers an equal active policy's replay, exactly as a request without the member. Without the
+member nothing is compared and the last writer wins, as before. The `ui` channel, the console's,
+takes the kind from the same release ([lab-two-entries.md](lab-two-entries.md) §3). Before 0.12.60 a request that named the member was refused `not_implemented`.
+
 A refused document answers Denied + `InvalidRequest` with host code `resource_targets_rejected`
 (operation `apply_resource_targets`), no terminal, and the additive receipt field
 
