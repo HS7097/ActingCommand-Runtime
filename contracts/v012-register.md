@@ -19300,6 +19300,96 @@ with the item `notices` `new` first, placed, the journalled plan document's `pac
 file on disk the zip's bytes). No existing test changes: the earlier gates' bundles keep their
 six-interface declarations, which the new reader reads by their `package` pair.
 
+### 1.340 Slice MAPP-2a (0.12.59): the parts of the application switch: another member's stop under the device's key, a startup run on a borrowed key, the stopped member's page forgotten (Workflow #437; the contract of §1.323 and [device-group.md](device-group.md), "The switch before a run"; the design survey `rd-1113/mapp-order-design.md`, its findings F1, F2 and F4 and its row "MAPP-2a"; the coordinator's rulings of 11-13 on board #437, not the owner's words; coordinator work order `rd-1113/brief-437-mapp2a.md`, read on main `98924e28`)
+
+1.340 is the next free number after §1.339. The coordinator cut MAPP-2 (§1.323, "The code slices")
+in two: MAPP-2a builds the switch's parts and their one entry with no caller in the Runtime;
+MAPP-2b calls the switch from the run paths. A build still refuses every group of several at load
+(`several_members_unsupported`, unchanged), so no configuration reaches this slice's code: its tests
+hand the host the member → device key map and the group's name as the assembly builds them.
+
+| Part | Built | Where |
+|---|---|---|
+| F1: another member's stop under the device's key | yes | `crates/runtime-host/src/host/switch.rs`, `HostShared::stop_member_application`: the key's holder a member of a group of several and the member to stop another member of it, the key validated as the device's (`validate_write`), else refused before any device step (`instance_mismatch`, or the scheduler's refusal); a host-minted `ApplicationLifecycle { stop }` request for that member under the switch's causation id (`command.received`, `command.validated`), then `HostShared::control_member_application` (`host/input.rs`), the existing application command on that member's registration, package and links (`scheduler.admitted`, `application.intent`, `application.completed` or `application.failed`, all under the stopped member's instance with the key's lease); the session the stop used closed under the key (`close_member_resources_result`, `host/resource_close.rs`); a failure written as the rung's stop writes it, a fatal failure of that member's own application backend fencing that member (#411 A46) |
+| F2: a startup run on a borrowed key that hands the key back | yes | `host/startup_package.rs`, `HostShared::run_startup_package_on_borrowed_key` and `borrowed_key_admits`; `host/contained_task.rs`, `run_prepared_package_on_borrowed_key`, `ContainedRunControl::borrows_key`: the run's end neither renews the key (`enter_run_end_phase`) nor ends it (the success path's release, and `cleanup_composite_failure_with_run_links` in `host/resource_close.rs`, which settles an unconfirmed close only); the key's token unchanged and valid afterwards, on success and on failure, checked again at the end |
+| F4: the stopped member's page forgotten | yes | `host/runtime_facts.rs`, `HostShared::forget_stopped_application_facts`: `application.foreground` and `task.page` invalidated with `device_closed` when the stop succeeded |
+| the one entry | yes | `HostShared::switch_application` (`host/switch.rs`): the key validated, one foreground read through the member's registration (`observe_foreground_application`; an ADB failure handled as the gate's), the member's own package in front leaving everything alone; else the key's time checked, the member in front stopped, or every other member with no member's package in front, then the member's startup package on the key, all under one causation id. Reached only through the public `RuntimeHost::switch_application`, which nothing in the Runtime calls |
+| which member is in front | yes | the `application_id` each registration assigns, from memory: `ExecutionBackendProvider::assigned_application_id` (default `None`; `crates/execution-kernel/src/provider.rs`), `ExecutionKernel::assigned_application_id`, the device registry's real entry (`crates/runtime-host/src/provider.rs`). No other device query |
+
+**The code.** `application_switch_failed` (`runtime-host`, error, ladder class `none`, `since`
+0.12.59; values `alias` the member to run, `application_switch_step`, `failure_code` the step's own
+code and `application_id` the package the step concerned, required; the step's failure its
+`caused_by` link; description, common causes and handling written) and the vocabulary
+`application_switch_step` (`foreground_read`, `stop`, `startup_package`; `ApplicationSwitchStep`,
+`crates/runtime-host/src/codes.rs`), the value key `application_switch_step` in the one key table
+(`crates/actingcommand-contract/src/outcome/keys.rs`) and the catalog, and the location
+`switch_application`. The index is regenerated (`ci/outcome_codes_index.py`). The parts return
+this failure; nothing settles a run with it yet. `runtime-outcomes` stays 1; no configuration key,
+record type, payload member, phase word, fact key, tag, closed ledger vocabulary, wire shape or
+interface revision is added or moved.
+
+**Where the build completes the contract.**
+
+1. *The key's time* (the survey's "not verified"). The borrowed key is never renewed: the
+   scheduler takes a key only as the whole token it holds, expiry included (`validate_active_lease`,
+   `crates/scheduler/src/lib.rs`), so a renewal (the startup package's TTL renewal of
+   `run_package_on_key`, `host/startup_package.rs`) mints a token the run that holds the key no
+   longer has. Instead, before any device step of the switch, the key's remaining time must cover
+   the startup run's lease time (its response deadline and the heartbeat reserve) and the time the
+   run asks to keep (`after_ms`: its own lease time), else the step `startup_package` fails with
+   `contained_task_deadline_unavailable` and nothing is stopped; the startup run's deadline is the
+   earlier of its response deadline and the key's expiry less `after_ms`. So a startup run that ends
+   by its deadline leaves the run at least its own lease time. A policy dispatch's lease is sized
+   today for its run alone (`contained_task_lease_ttl`, `host/policy_dispatch.rs`), so a key granted
+   today is refused: MAPP-2b sizes a member's dispatch lease for the startup run and the run (the
+   scheduler takes at most `ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS` plus the reserve).
+2. *Who reads `application.foreground`* (the survey's "not verified"): the foreground gate, which
+   reads its stored value only to record a reading that changed (`record_foreground_application`,
+   `host/foreground_gate.rs`): after the drop the next reading is recorded; the overview's
+   `foreground` block (`crates/lab-ops/src/overview.rs`, `actingctl overview`, `ac_overview`, the
+   Lab), which shows no package rather than one no longer running; and the readers of every fact or
+   record (the fact listing, the ledger's `--fact-key` filter), which show the drop. The policy
+   reads none of it. Dropping is right for each: the stopped application shows no foreground.
+3. *The session.* The stop opens a session for the stopped member (the kernel's application
+   command runs in one); it is closed under the key before the stop returns, whatever its result,
+   so no two members' sessions stay open ([device-group.md](device-group.md), "Device-level
+   actions", row 7).
+4. *Front is the member's own package.* Nothing more is done: no stop and no startup run (the
+   contract's step 1), and nothing is recorded.
+5. *A key that no longer validates* fails the step `foreground_read` before the read; a key the
+   startup run lost fails the step `startup_package`.
+6. *Not changed in behaviour:* `application_control` (now `control_application_of` with the key's
+   own instance), the ladder's stop, `prepare_application_resources_result` and
+   `retire_instance_resources` (now naming the instance, the token's own for every existing
+   caller), `nemu_close_check` (the same), `prepare_startup_package` (its causation id now minted
+   before `prepare_startup_package_with`), `host_package_failure` (over `host_package_failure_error`)
+   and a run's success path (its answer built before its release). The fake device of the host's
+   tests answers each instance's own `application_id` when a test names one, `neutral.application`
+   otherwise, and records the application commands it took.
+
+**Not built (MAPP-2b and later).** The caller: the switch in `run_scheduled_contained_task` between
+`contained_task.rs:8079` and `:8080`, in the direct run, an `ApplicationLifecycle` `launch` or
+`restart`, the ladder's application restart rung and a hold's release; the clock (the switch's time
+out of the dispatch clock, the run-duration sample and the budget); the failed settlement with
+`application_switch_failed`; the member's switch cooldown and its key
+`scheduling.device_group.switch_failure_cooldown_ms`; a member's dispatch lease sized for the
+switch and the run. The order within one device (ORD-1) is the coordinator's to brief.
+
+**Tests.** `crates/runtime-host/src/tests/gate_mapp2a.rs` (gate map `host.toml`, "#437 MAPP-2a"):
+`mapp2a_a_stop_acts_on_the_other_members_package_under_the_holders_key_and_forgets_its_page`,
+`mapp2a_a_key_of_another_device_and_a_member_outside_the_group_are_refused_before_any_device_step`,
+`mapp2a_a_startup_run_on_a_borrowed_key_hands_the_same_key_back_and_the_queued_claim_waits`,
+`mapp2a_the_entry_stops_the_member_in_front_or_every_other_member_and_then_runs_the_startup_package`,
+`mapp2a_a_failure_at_each_step_names_its_step_and_its_cause` and
+`mapp2a_a_lone_instances_request_path_never_reaches_the_switch`. The MAPP-1 gates (policy, host,
+actingd) are unchanged; no test changes.
+
+**At deploy.** Nothing: the switch has no caller, and the load refuses every group of several. The
+catalog gains one code and one vocabulary.
+
+**Rollback** (below 0.12.59). Nothing is persisted by MAPP-2a; the build before it reads every
+record this one writes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

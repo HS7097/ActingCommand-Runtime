@@ -1161,6 +1161,43 @@ impl HostShared {
         Ok(())
     }
 
+    /// Workflow #437 MAPP-2a (`contracts/device-group.md`, "The switch before a run", step 2):
+    /// the member `instance_id` of a device group of several whose application the switch
+    /// stopped shows no application and no page any more: its `application.foreground` and
+    /// `task.page` are invalidated with `device_closed`, as an emulator stop drops them, so no
+    /// chain handover of the member fires on a page it no longer shows. An absent key is not an
+    /// error. Its other facts stay. An instance alone on its device is refused
+    /// (`instance_mismatch`) and nothing is dropped: only the switch, which a lone instance never
+    /// reaches, drops them so.
+    pub(super) fn forget_stopped_application_facts(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<()> {
+        if !self.in_group_of_several(instance_id) {
+            return Err(RuntimeHostError::request(
+                RuntimeErrorCode::InstanceMismatch,
+                HostLocation::SwitchApplication,
+                RuntimeErrorCode::InstanceMismatch,
+            ));
+        }
+        let scope = RuntimeFactScope::Instance { instance_id };
+        for key in [
+            actingcommand_contract::APPLICATION_FOREGROUND_FACT_KEY,
+            TASK_PAGE_FACT_KEY,
+        ] {
+            match self.invalidate_runtime_fact(
+                &scope,
+                key,
+                RuntimeFactInvalidationReason::DeviceClosed,
+            ) {
+                Ok(_) => {}
+                Err(error) if error.code() == HostCode::RuntimeFactMissing.as_str() => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
     /// Appends `runtime.fact_invalidated` first, then drops the record from
     /// memory. A key the store does not hold is refused before the append
     /// (`runtime_fact_missing`).

@@ -169,10 +169,20 @@ impl HostShared {
         run_links: Option<RuntimeRunLinks>,
         failure: RequestFailure,
     ) -> RequestFailure {
+        // Workflow #437 MAPP-2a: a run on a borrowed key ends without its key's end: an
+        // unconfirmed close is settled as for any failed run, and the key stays, still valid,
+        // with the run that holds it and gets it back.
+        let borrowed = match self.run_borrows_key(request.request_id()) {
+            Ok(borrowed) => borrowed,
+            Err(error) => return failure.replace_with_poison(error),
+        };
         let failure = match self.settle_failure_resources(&token, failure) {
             Ok(failure) => failure,
             Err(failure) => return failure,
         };
+        if borrowed {
+            return failure;
+        }
         let cleanup = match run_links {
             // Workflow #369 H-1 (review M-1): only a policy run's control carries a ladder
             // trigger; every other run-linked end passes `None`.
@@ -586,36 +596,81 @@ impl HostShared {
         connection_id: ConnectionId,
         links: EventLinksDraft,
     ) -> Result<Result<(), ExecutionKernelError>, RequestFailure> {
-        self.retire_instance_resources(token, connection_id, links, ResourceCloseTarget::Session)
+        self.retire_instance_resources(
+            token,
+            token.instance_id(),
+            connection_id,
+            links,
+            ResourceCloseTarget::Session,
+        )
+    }
+
+    /// Workflow #437 MAPP-2a: [`Self::close_instance_resources_result`] of `member`, a member of
+    /// the device group whose key `token` is (another member's): the session the stop of its
+    /// application used is closed under that key, so no two members' sessions stay open. A
+    /// member that is not another member of the token's device group of several is refused
+    /// before anything (`instance_mismatch`).
+    pub(super) fn close_member_resources_result(
+        &self,
+        token: &LeaseToken,
+        member: InstanceId,
+        connection_id: ConnectionId,
+        links: EventLinksDraft,
+    ) -> Result<Result<(), ExecutionKernelError>, RequestFailure> {
+        let holder = token.instance_id();
+        if !self.in_group_of_several(holder)
+            || member == holder
+            || !self.device_members(holder).contains(&member)
+        {
+            return Err(RequestFailure::request(
+                super::switch::member_mismatch(),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        self.retire_instance_resources(
+            token,
+            member,
+            connection_id,
+            links,
+            ResourceCloseTarget::Session,
+        )
     }
 
     /// The caller keeps admission through the following Business step so capture cannot
     /// reopen an independent backend between its fenced close and the application action.
+    /// `instance_id` is the instance whose application the step drives: the token's own, or
+    /// (Workflow #437 MAPP-2a) another member of the token's device group.
     pub(super) fn prepare_application_resources_result(
         &self,
         token: &LeaseToken,
+        instance_id: InstanceId,
         connection_id: ConnectionId,
         links: EventLinksDraft,
         _admission: &MutexGuard<'_, ()>,
     ) -> Result<Result<(), ExecutionKernelError>, RequestFailure> {
         self.retire_instance_resources(
             token,
+            instance_id,
             connection_id,
             links,
             ResourceCloseTarget::ApplicationBackends,
         )
     }
 
+    /// Retires `instance_id`'s resources under `token`'s key: its own instance's, or (Workflow
+    /// #437 MAPP-2a) another member's of its device group.
     fn retire_instance_resources(
         &self,
         token: &LeaseToken,
+        instance_id: InstanceId,
         connection_id: ConnectionId,
         links: EventLinksDraft,
         target: ResourceCloseTarget,
     ) -> Result<Result<(), ExecutionKernelError>, RequestFailure> {
         if let Some(error) = self
             .execution()?
-            .unconfirmed_instance_close_error(token.instance_id())
+            .unconfirmed_instance_close_error(instance_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
                     HostLocation::ReadExecutionCloseResult,
@@ -627,7 +682,7 @@ impl HostShared {
         }
         let has_session = self
             .execution()?
-            .has_owned_resources(token.instance_id())
+            .has_owned_resources(instance_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
                     HostLocation::InspectExecutionSession,
@@ -654,30 +709,30 @@ impl HostShared {
 
         let authority = DeviceCloseAuthority::FencedDeviceWrite(Arc::clone(&witness));
         let input_check = self
-            .nemu_close_check(token, Arc::clone(&witness), connection_id)
+            .nemu_close_check(instance_id, token, Arc::clone(&witness), connection_id)
             .map_err(RequestFailure::poison_without_terminal)?;
         let closed = match target {
             ResourceCloseTarget::Session => self.execution()?.close_instance_with_input_check(
-                token.instance_id(),
+                instance_id,
                 authority,
                 input_check,
             ),
             ResourceCloseTarget::ApplicationBackends => self
                 .execution()?
-                .prepare_application_resources(token.instance_id(), authority, input_check),
+                .prepare_application_resources(instance_id, authority, input_check),
         };
         match closed {
             Ok(outcome) => {
                 self.append_stdio_close_observations(
                     outcome.vendor_stdio(),
-                    Some(token.instance_id()),
+                    Some(instance_id),
                     links.clone(),
                 )
                 .map_err(RequestFailure::poison_without_terminal)?;
                 let owner_disposition = self.record_owner_resource_close()?;
                 self.append_lifecycle_observed(
                     RuntimeLifecyclePhase::ResourceQuiescence {
-                        instance_id: token.instance_id(),
+                        instance_id,
                         resource_count: outcome.resource_count(),
                         quiescence: outcome.quiescence(),
                         owner_disposition,
@@ -714,7 +769,7 @@ impl HostShared {
                     // close step ends as after any failed close once its write authority is
                     // back (a write still in flight keeps the whole-Runtime retention).
                     let settled = self
-                        .settle_unconfirmed_resources(&error, Some(token.instance_id()), links)
+                        .settle_unconfirmed_resources(&error, Some(instance_id), links)
                         .map_err(RequestFailure::poison_without_terminal)?;
                     if let UnconfirmedResources::Fenced(_) = settled {
                         self.finish_destructive_input(Some(witness), connection_id)?;
