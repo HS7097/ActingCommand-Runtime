@@ -164,6 +164,10 @@ mod gate_438_held;
 // crate's (`lab_ops_initiator_words_are_the_contracts`).
 #[cfg(test)]
 mod gate_434_lab6s1a;
+// Test-only: Workflow #434 LAB-6S3, the contract crate's UI list is the table's `ui_kinds`
+// (`lab_ops_ui_allows_is_the_tables_ui_kinds`).
+#[cfg(test)]
+mod gate_434_lab6s3;
 // Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
 #[cfg(test)]
 #[path = "../../../tests/support/standard_pack_schedule.rs"]

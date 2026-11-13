@@ -150,7 +150,7 @@ hand. The [summary](README.md) says what each column means. 1148 codes.
 | `catalog_transition_expectation_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports catalog transition expectation mismatch. |
 | `channel_binding_exists` | error | none | 0.12.0 | active | pending | written | A connection sent BindChannel a second time. |
 | `channel_binding_missing` | error | none | 0.12.0 | active | pending | written | From #389 U-6 on, a connection that has not bound a channel with BindChannel sent a request other than the handshake (Health, BindChannel). |
-| `channel_request_refused` | error | none | 0.12.0 | active | pending | written | From #389 U-6 on, the gate does not take this request kind on this channel: an option-one (authoring) or option-two (debugging) kind on a counter (cli, mcp,… |
+| `channel_request_refused` | error | none | 0.12.0 | active | pending | written | The gate does not take this request on this channel. |
 | `cleanup_transfer_remained_destructive` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports cleanup transfer remained destructive. |
 | `client_action_replay_conflict` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports client action replay conflict. |
 | `client_action_replay_payload_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports client action replay payload mismatch. |

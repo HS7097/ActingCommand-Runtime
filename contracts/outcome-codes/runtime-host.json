@@ -20354,6 +20354,7 @@
       "values": {
         "operation": "required",
         "channel": "required",
+        "config_key": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
@@ -20362,9 +20363,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "From #389 U-6 on, the gate does not take this request kind on this channel: an option-one (authoring) or option-two (debugging) kind on a counter (cli, mcp, ui), a general instruction on the Lab channel, or an external approval on any channel. operation names the request kind and channel the connection's channel. A refused write, and a refused read that would have written a record, is copied by the ledger's request boundary (#383 G14) as command.rejected; a refused pure query is only in the receipt.",
-      "common_causes": "A script sends a Lab operation through actingctl, MCP or the console; actinglab sends a pause, a monitor setting, a fact, a shutdown request or an upgrade-state request; any frontend sends an approval request, while approvals live in the configuration.",
-      "handling": "Send general requests through actingctl, MCP or the console and Lab operations through actinglab; write approvals into the configuration."
+      "description": "The gate does not take this request on this channel. Since Workflow #434 LAB-6S3 (0.12.58) a connection bound to ui is refused every request kind off the UI list (contracts/lab-two-entries.md section 3) and a ConfigureSettings that names a key whose console tier is not daily or advanced or that is not settable; config_key then names the first such key, in the request's order, and nothing of the request is applied. Later slices of LAB-6 refuse with it what their contract sections name (the cli and mcp bindings, with operation bind_channel). operation names the request kind and channel the connection's channel. A refused write, and a refused read that would have written a record, is copied by the ledger's request boundary (#383 G14) as command.rejected with its channel; a refused pure query is only in the receipt.",
+      "common_causes": "The console sends a request its list does not hold, such as a Lab operation or a setting outside its tiers (a console fault, or a console of another release); a script binds ui and sends a Lab operation.",
+      "handling": "Send Lab operations and settings outside the console's tiers through the Lab (actinglab, which binds lab); install the console of the Runtime's release."
     },
     "lab_module_not_installed": {
       "category": "error",

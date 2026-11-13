@@ -242,7 +242,19 @@ fn governance_authority_requires_an_accepted_identity_card_and_is_connection_bou
         .expect("approval decision")
     };
 
+    // Workflow #434 LAB-6S3: both connections bind `cli`, as actingctl's do; bound from the
+    // (User, Ui) envelope of their first request they would be `ui`, which the UI list refuses an
+    // approval and an identity card.
+    let bind_cli = |client: &mut TestClient| {
+        let bind = client.request(RuntimeOperation::BindChannel {
+            channel: actingcommand_contract::RuntimeChannel::Cli,
+            via: None,
+            initiator: None,
+        });
+        assert_eq!(client.send(&bind).state(), RuntimeReceiptState::Completed);
+    };
     let mut client = TestClient::connect(&host);
+    bind_cli(&mut client);
     let unauthenticated = client.governance_request(RuntimeOperation::RecordApprovalDecision {
         decision: approval(ApprovalDisposition::Approved),
     });
@@ -279,6 +291,7 @@ fn governance_authority_requires_an_accepted_identity_card_and_is_connection_bou
     );
 
     let mut other = TestClient::connect(&host);
+    bind_cli(&mut other);
     let forged_revocation = other.governance_request(RuntimeOperation::RecordApprovalDecision {
         decision: approval(ApprovalDisposition::Revoked),
     });

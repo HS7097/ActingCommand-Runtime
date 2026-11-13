@@ -171,6 +171,26 @@ impl TestClient {
         if self.governance_declared {
             return;
         }
+        // Workflow #434 LAB-6S3: the governance requests (an approval, an installation transition)
+        // are not on the UI list, so the connection binds `cli`, as actingctl's does, before a
+        // (User, Ui) request binds it to `ui` from its envelope. A connection an earlier request
+        // bound keeps its channel, which is not `ui`.
+        let bind = self.request(RuntimeOperation::BindChannel {
+            channel: actingcommand_contract::RuntimeChannel::Cli,
+            via: None,
+            initiator: None,
+        });
+        let bound = self.send(&bind);
+        assert!(
+            bound.state() == RuntimeReceiptState::Completed
+                || bound.outcome().code().as_str() == "channel_binding_exists",
+            "{bound:?}"
+        );
+        assert_ne!(
+            bound.channel(),
+            Some(actingcommand_contract::RuntimeChannel::Ui),
+            "{bound:?}"
+        );
         let request = self.governance_request(RuntimeOperation::DeclareGovernanceIdentity {
             card: test_governance_card(),
         });

@@ -297,6 +297,8 @@ mod state_control;
 mod stop_instance_run;
 mod task_diagnostic;
 mod task_timing;
+// Workflow #434 LAB-6S3: the UI list on the `ui` channel, the gate's decision there.
+pub(crate) mod ui_gate;
 
 use crate::recovery_timing::{StartupRecoveryTiming, duration_ms, elapsed_ms, timed};
 use agent_control::reconcile_agent_wakes;
