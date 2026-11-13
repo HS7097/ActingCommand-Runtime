@@ -14,7 +14,8 @@
 //! - the size rule, [`check_notice_size`]: one file's size;
 //! - the set rule, [`check_notice_listing`]: a whole listing of the directory's files, each path
 //!   with its size (the count, each path and size, the total, no two paths equal under ASCII case
-//!   folding, no file whose path is another path's directory);
+//!   folding, no file whose path is another path's directory, no two directories whose names are
+//!   equal under ASCII case folding and not byte for byte);
 //! - the pack rule, [`check_notice_pack_ids`]: a bundle that carries the directory lists no pack
 //!   named like it, in any ASCII case;
 //! - the text rule, [`check_notice_text`]: one file's bytes.
@@ -28,13 +29,13 @@
 //! root; each turns an issue into its own outcome with [`NoticeIssue::member`] and
 //! [`NoticeIssue::package_id`] and states no rule itself.
 //!
-//! No program calls these rules in this slice: NOTICES-2 (the installer's `place`, with the
-//! `package` interface's revision 10) and NOTICES-3 (`package bundle --notices`, `standard-pack
-//! check`, `resource verify`) are their first callers.
+//! The installer's `place` calls them from NOTICES-2 (with the `package` interface's revision
+//! 10; register §1.335), on a zip's member table; NOTICES-3 (`package bundle --notices`,
+//! `standard-pack check`, `resource verify`) is still to come.
 
 use crate::package::safe_source_path;
 use crate::standard_pack::{STANDARD_PACK_BUNDLE_FILE, StandardPackProblem};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The directory's name at the root of a bundle zip and of a game root, in exact lower case: a
 /// member `Notices/…` is not of it.
@@ -248,8 +249,12 @@ pub fn check_notice_size(path: &str, bytes: u64) -> Result<(), NoticeIssue> {
 /// directory, with the bound and the count); each path by [`check_notice_path`] and its size by
 /// [`check_notice_size`]; at most [`MAX_NOTICE_TOTAL_BYTES`] together (`notice_total_bytes`, the
 /// directory, with the bound and the total); no two paths equal under ASCII case folding
-/// (`notice_name` at the later path); and no file whose path, in any ASCII case, is another
-/// path's directory (`notice_name` at that file). An empty listing keeps every rule.
+/// (`notice_name` at the later path); no file whose path, in any ASCII case, is another path's
+/// directory (`notice_name` at that file); and (Workflow #444 NOTICES-2) no two paths whose
+/// directories' names are equal under ASCII case folding and not byte for byte, `A/x.md` beside
+/// `a/y.md` (`notice_name` at the later path), since a file system that folds case would hold
+/// them in one directory, which then no longer lists as the listing does. One directory named
+/// alike by several paths is kept. An empty listing keeps every rule.
 pub fn check_notice_listing(entries: &[NoticeEntry<'_>]) -> Result<(), NoticeIssue> {
     if entries.len() > MAX_NOTICE_FILES {
         return Err(NoticeIssue::new(
@@ -297,6 +302,23 @@ pub fn check_notice_listing(entries: &[NoticeEntry<'_>]) -> Result<(), NoticeIss
         .collect::<BTreeSet<_>>();
     for entry in &sorted {
         if directories.contains(&entry.path.to_ascii_lowercase()) {
+            return Err(NoticeIssue::at_path(
+                StandardPackProblem::NoticeName,
+                entry.path,
+                None,
+            ));
+        }
+    }
+    // Each directory's name, folded, with the spelling of its first path in byte order: a later
+    // path that spells it otherwise is the later of two.
+    let mut spelled = BTreeMap::new();
+    for entry in &sorted {
+        if let Some((directory, _)) = entry.path.split_once('/')
+            && *spelled
+                .entry(directory.to_ascii_lowercase())
+                .or_insert(directory)
+                != directory
+        {
             return Err(NoticeIssue::at_path(
                 StandardPackProblem::NoticeName,
                 entry.path,
@@ -660,6 +682,30 @@ mod tests {
         assert_eq!(
             check_notice_listing(&[entry("texts/NOTICE.md", 1), entry("NOTICE", 1)]),
             Ok(())
+        );
+        // Workflow #444 NOTICES-2: two directories whose names are equal under ASCII case folding
+        // and not byte for byte, refused at the later path in byte order; one directory in one
+        // case twice is kept; a file beside a directory of its name in another case stays the
+        // earlier rule's, refused at the file.
+        for (listing, at) in [
+            (
+                [entry("A/NOTICE.md", 1), entry("a/OTHER.md", 1)],
+                "a/OTHER.md",
+            ),
+            (
+                [entry("texts/OTHER.md", 1), entry("Texts/NOTICE.md", 1)],
+                "texts/OTHER.md",
+            ),
+        ] {
+            assert_eq!(check_notice_listing(&listing), name_refused(at), "{at}");
+        }
+        assert_eq!(
+            check_notice_listing(&[entry("texts/NOTICE.md", 1), entry("texts/OTHER.md", 1)]),
+            Ok(())
+        );
+        assert_eq!(
+            check_notice_listing(&[entry("A", 1), entry("a/NOTICE.md", 1)]),
+            name_refused("A")
         );
 
         // Each path is held to the path rule, and the first path in byte order decides, whatever

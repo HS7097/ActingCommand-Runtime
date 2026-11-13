@@ -6633,7 +6633,7 @@
           "description": "A path lies more than two segments below a bundle's notices directory; limit_count and count carry the bound and the depth (Workflow #444 NOTICES-1, since 0.12.58)."
         },
         "notice_name": {
-          "description": "A path of a bundle's notices directory breaks the name rules: a segment that is not 1 to 64 bytes (limit_bytes and actual_bytes) of [A-Za-z0-9._-] beginning with a letter or a digit, a device name, a trailing dot, a file name suffix other than none, md, txt, tsv or csv; or two of its paths are equal under ASCII case folding, a file's path is another path's directory, or the bundle that carries it lists a pack named notices in any ASCII case (package_id) (Workflow #444 NOTICES-1, since 0.12.58)."
+          "description": "A path of a bundle's notices directory breaks the name rules: a segment that is not 1 to 64 bytes (limit_bytes and actual_bytes) of [A-Za-z0-9._-] beginning with a letter or a digit, a device name, a trailing dot, a file name suffix other than none, md, txt, tsv or csv; or two of its paths are equal under ASCII case folding, a file's path is another path's directory, two of its directories' names are equal under ASCII case folding and not byte for byte (A/x.md beside a/y.md, at the later path; NOTICES-2), or the bundle that carries it lists a pack named notices in any ASCII case (package_id) (Workflow #444 NOTICES-1, since 0.12.58)."
         },
         "notice_not_text": {
           "description": "A file of a bundle's notices directory is not strict UTF-8, or holds a control character other than TAB, LF, FF and CR (Workflow #444 NOTICES-1, since 0.12.58)."

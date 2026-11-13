@@ -320,6 +320,9 @@ pub(super) struct FakeHost {
     pub(super) processes: RefCell<Vec<RunningImage>>,
     /// Workflow #434 LAB-3 fix 1: the process id the host answers as its own (none by default).
     pub(super) own_pid: Cell<Option<u32>>,
+    /// Workflow #444 NOTICES-2: the `package` range the installer declares instead of
+    /// [`speaks`]'s (none by default: [`speaks`]'s).
+    pub(super) installer_package: Cell<Option<[u64; 2]>>,
     pub(super) programs: Programs,
     #[allow(clippy::type_complexity)]
     pub(super) on_step: RefCell<Option<Box<dyn Fn(usize)>>>,
@@ -370,6 +373,7 @@ impl FakeHost {
             stopped: RefCell::new(Vec::new()),
             processes: RefCell::new(Vec::new()),
             own_pid: Cell::new(None),
+            installer_package: Cell::new(None),
             programs: Programs {
                 refuse_check_config: RefCell::new(Vec::new()),
                 refuse_install_root: RefCell::new(Vec::new()),
@@ -442,9 +446,13 @@ impl Host for FakeHost {
     }
 
     fn installer_speaks(&self) -> Option<Speaks> {
+        let mut declared = speaks();
+        if let Some(range) = self.installer_package.get() {
+            declared["package"] = json!(range);
+        }
         parse_declaration(&json!({
             "schema_version": "actingcommand.component-interfaces.v1",
-            "speaks": speaks(),
+            "speaks": declared,
         }))
     }
 

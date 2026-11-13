@@ -112,6 +112,10 @@ mod gate_434_lab5b1b;
 // `config restore`'s `sha`.
 #[cfg(test)]
 mod gate_434_lab5b1c;
+// Test-only: Workflow #444 NOTICES-2, the rescue module's `place` of a bundle's notices
+// directory.
+#[cfg(test)]
+mod gate_444_notices2;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
