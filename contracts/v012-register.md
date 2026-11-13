@@ -12007,8 +12007,10 @@ program of this build declares a word.
 Coordinator work order `rd-1113/brief-lab6s2b1.md`, after the second survey `rd-1113/lab6s2-mapping.md`
 (its row S2-B1); the coordinator's rulings of 2026-11-13 on board #434, not the owner's words;
 based on main `98924e28` (0.12.58, LAB-6S2-M and two slices of board #451). The contracts are
-[lab-two-entries.md](lab-two-entries.md) (the slice table; §2.4, §4.2 and §4.3 unchanged) and
-`apps/actinglab-mcp/MANUAL.md` (§9, the detached run's requests).
+[lab-two-entries.md](lab-two-entries.md) (the slice table; since fix 1 also §4.2's refusal of
+`ACTINGCOMMAND_INITIATOR`, §8.2's `--front mcp` and §9.3's connection of `Front::Mcp` and its
+client action; §2.4 and §4.3 unchanged) and `apps/actinglab-mcp/MANUAL.md` (§9, the detached
+run's requests).
 
 **What.** Every program of the Lab's own family binds `BindChannel{channel: lab, initiator}` with
 its word and no `via`, and sends the envelope it sent on 0.12.58; the Runtime records each request
@@ -12025,17 +12027,24 @@ with the channel that program's binding had then (LAB-6S2-M's map M) and receipt
 `lab_ops::front::cli_envelope(state_root, word)` builds the (Cli, Cli) connections: `lab` with the
 word, or `cli` without one.
 
-**What stays.** Every envelope; every record the Runtime writes for these programs (the map M gives
-each request the channel and `via` its program's binding had on 0.12.58); `actingctl` and today's
-MCP server (`actingctl mcp-serve`) and its children's launcher, which LAB-6S2-B2 moves. The code
+**What stays.** Every envelope; every record the Runtime writes for these programs but the one of
+"What a person sees" (the map M gives each request the channel and `via` its program's binding
+had on 0.12.58); `actingctl` and today's MCP server (`actingctl mcp-serve`) and its children's
+launcher, which LAB-6S2-B2 moves. The code
 `actingctl` shares with the Lab declares no word when `actingctl` runs it: `install`
 (`SystemHost::of(None)`), `start` and `restart` (`runtime_start::dispatch`), `watchdog`
 (`dispatch`) and the overview's `watchdog` block (`Front::Actingctl`), all on `cli` as on 0.12.58.
 No interface revision moves, no outcome code is added, and `RuntimeRequest::validate()`, the host,
 the UI list and the contract crate's map are untouched.
 
-**What a person sees.** No record changes. Two kinds of receipt do (the second survey's V2), and
-one cell of M (its V3), all in lines of these programs that print a receipt:
+**What a person sees.** One record changes, and no released program reaches it: a core row sent
+to `serve --stdio --front mcp`, which runs without `--via mcp`, is recorded `lab` with `via` `mcp`
+where 0.12.58 recorded `lab` without it (decision (c) below; contract §8.2). The Lab's MCP server
+serves the core rows in its own process and sends its `serve --front mcp` children only the other
+rows, and today's MCP server starts its actinglab children with `--via mcp`, whose lines are
+actinglab's own commands; only a person who types the command and sends a core row on its input
+meets the change. Every other record is 0.12.58's. Two kinds of receipt change (the second
+survey's V2), and one cell of M (its V3), all in lines of these programs that print a receipt:
 - the receipt of a request with the Lab's envelope gains `initiator` beside `channel` `lab`:
   `actinglab`'s lines that print one (the core rows' `shutdown` and the refused writes of
   `targets set`, `config set`, `task stop` and `pack-schedule set`; the refusals of `evidence
@@ -12057,14 +12066,16 @@ client reconnects once in the same owner epoch, goes on unbound and reports
 `client_channel_unsupported` once per process (`runtime-client`'s fallback, kept); no plan edge
 and no interface check is added.
 
-**Decided in this slice, by the texts** (each the only way to keep 0.12.58's records):
+**Decided in this slice, by the texts** (each the only way to keep 0.12.58's records, (c) every
+record a released program reaches):
 - (a) `--via ui`, which no word names, binds `lab` with `via` `ui` and no word, as on 0.12.58.
 - (b) An `ACTINGCOMMAND_INITIATOR` that names no word leaves the own commands' connections as on
   0.12.58 (`lab` without a word); every command that checks the variable (an operation of the CLI
   module, a recording) refuses it as before.
 - (c) The core rows under `serve --stdio --front mcp`, which no MCP server sends its child, bind
   with the process's word, `Lab-MCP`, so a request of theirs is recorded `lab` with `via` `mcp`
-  where 0.12.58 recorded `lab` without it; every row an MCP server sends records as on 0.12.58.
+  where 0.12.58 recorded `lab` without it: the one record change ("What a person sees"); every
+  row an MCP server sends records as on 0.12.58.
 - (d) `actingctl install`'s face (`Face::Install`) declares no word (the second survey's row
   S2-B1 gave it `Lab-CLI`): the work order keeps `actingctl` for LAB-6S2-B2.
 
@@ -12084,15 +12095,37 @@ is `Lab-MCP` without `via`), the protocol golden `lab_run_success` (its receipt 
 `Lab-CLI`, one member, edited, not re-recorded), and `watchdog` `gate_wd1`'s call of `Tick::observe`
 (its new word argument, none). No test leaves the gate map.
 
+**Fix 1** (work order `rd-1113/brief-1673-fix1.md`, after an independent review that found the
+code and the tests sound): the sentences the slice had left contrary to the code (contract §4.2,
+§8.2, §9.3 and the slice table; this entry's "What a person sees" and "At deploy"), and three
+tests in the same apps row. On the test host,
+`gate_434_lab6s2b1::lab6s2b1_core_rows_under_serve_front_mcp_record_lab_with_via_mcp`: the core
+rows' front under `serve --stdio --front mcp` (the option read by `serve::front`, the front
+`cli_module::set_front` sets) records `lab.request` and `lab` with `via` `mcp`, the one record
+change. In `actinglab`'s integration test `lab6s2b1_set_front`, the real binary on the scripted
+Runtime, one process for each call of `cli_module::set_front`: a command line of the CLI module
+(`actinglab --json resume`) binds `lab` with `Lab-CLI`, and the core row `resume` on the input of
+`serve --stdio --front mcp` binds `lab` with `Lab-MCP`, both without `via` and with (Lab, Lab).
+The protocol golden's child now runs without `ACTINGCOMMAND_INITIATOR`, so the `Lab-CLI` its
+receipt pins does not depend on the machine. No product code changes.
+
 **At deploy.** Works on a Runtime of 0.12.59 (LAB-6S2-M in the same build). On an earlier Runtime
-each program is served by that Runtime's own rules. One before 0.12.58 drops the binding: the
-program goes on unbound after one reconnect, and its connection is bound by its first request's
-envelope; `actingwatch`'s tick, a process per minute, then writes the line
-`client_channel_unsupported` to its log on each tick. Runtime 0.12.58 takes the word but has no map
-M: it records every request of such a connection with the channel `lab` and receipts it with `lab`
-and the word (the requests of the Lab's MCP server and of the rescue module too, which 0.12.59
-records `mcp` and `cli`). Both
-arise only where programs of this build meet a Runtime of an earlier one.
+each program is served by that Runtime's own rules, as the code has them (fix 1):
+- **Runtime 0.12.58** accepts the word and has no map M. It serves every request of these
+  programs and refuses none, records each with the binding as declared, `lab` without `via`, and
+  receipts it with `lab` and the word (the requests of the Lab's MCP server and of the rescue
+  module too, which 0.12.59 records `mcp`, and `cli` or, under `Lab-MCP`, `mcp`). So the records
+  of the MCP children (`serve --front mcp`, MCP's `--via mcp` child) lose `via` `mcp`, and the
+  Lab's MCP server's settings rows (`host.config_overrides`) and its package debug records are
+  written with the channel `lab` where 0.12.59 writes `mcp`: the console's settings page then
+  shows its settings as the Lab's.
+- **Runtime 0.12.57 or earlier** refuses the unknown member `initiator` of `BindChannel` and drops
+  the connection. The client reconnects once in the same owner epoch, unbound, and reports
+  `client_channel_unsupported` once per process (`actingwatch`'s tick, a process per minute, then
+  writes that line to its log on each tick); the connection is then bound by its first request's
+  envelope, so the Lab's MCP server, (Cli, Cli), is recorded as the command line, `cli`, where
+  that Runtime recorded `mcp`, and the MCP children, (Lab, Lab), as `lab` without `via`.
+Both arise only where programs of this build meet a Runtime of an earlier one.
 
 **LAB-6S2-B1 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
 

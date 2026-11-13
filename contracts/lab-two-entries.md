@@ -39,7 +39,7 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 | LAB-6S1a | Runtime | the door also takes `BindChannel{channel: lab, initiator}` (section 2.2); `runtime-client` [3, 8]. Way back: yes |
 | LAB-6S1b | Runtime | the origin gates of `RuntimeRequest::validate()` go (built, 0.12.58: section 2.4); their codes retire. Way back: yes |
 | LAB-6S2-M | Runtime | the host's half of the move to `lab` (built, 0.12.59): on a `lab` binding that declares a word the Runtime records the channel that program's binding had on 0.12.58, by the word and the request's envelope (section 2.4, the map M), and receipts a request from any client envelope but the Lab's with it, without `initiator` (section 4.3, the receipt rule R); dormant until a program declares a word. Way back: yes |
-| LAB-6S2-B1 | Runtime | the Lab's own programs (`actinglab`, its `serve`, `actinglab-mcp`, the rescue module, `actingwatch`) bind `lab` with their word and keep the envelope they sent on 0.12.58; LAB-6S2-M in the same Runtime build. Built, 0.12.59 (register §1.287, "Slice LAB-6S2-B1"): `actinglab`'s core rows (`Front::Actinglab`, (Lab, Lab)) and its own commands ((Lab, Lab)) with the process's word, `Lab-CLI` or the `Lab-制包` / `Lab-救急` of `ACTINGCOMMAND_INITIATOR`; `serve --stdio` the same, and with `--front mcp` `Lab-MCP`; MCP's `--via mcp` actinglab child `Lab-MCP` without `via` (`--via ui`, which no word names, binds as before); `actinglab-mcp` in its own process (`Front::Mcp`, (Cli, Cli)) `Lab-MCP`; the rescue module's own client ((Cli, Cli)) with the module's word, `Lab-MCP` for `actinglab-mcp`, `serve --front mcp` and the detached run; the watchdog's probe ((Cli, Cli), `Health` and `BindChannel` only) `Lab-看门狗` in `actingwatch`, else the word of the Lab program that reads the watchdog's status or starts the Runtime. `actingctl` (its `install`, `start`, `restart`, `watchdog` and `overview` included, which run the same code without a word) and today's MCP server keep their binding until LAB-6S2-B2. Way back: yes |
+| LAB-6S2-B1 | Runtime | the Lab's own programs (`actinglab`, its `serve`, `actinglab-mcp`, the rescue module, `actingwatch`) bind `lab` with their word and keep the envelope they sent on 0.12.58; LAB-6S2-M in the same Runtime build. Built, 0.12.59 (register §1.287, "Slice LAB-6S2-B1"): `actinglab`'s core rows (`Front::Actinglab`, (Lab, Lab)) and its own commands ((Lab, Lab)) with the process's word, `Lab-CLI` or the `Lab-制包` / `Lab-救急` of `ACTINGCOMMAND_INITIATOR`; `serve --stdio` the same, and with `--front mcp` `Lab-MCP`; MCP's `--via mcp` actinglab child `Lab-MCP` without `via` (`--via ui`, which no word names, binds as before); `actinglab-mcp` in its own process (`Front::Mcp`, (Cli, Cli)) `Lab-MCP`; the rescue module's own client ((Cli, Cli)) with the module's word, `Lab-MCP` for `actinglab-mcp`, `serve --front mcp` and the detached run; the watchdog's probe ((Cli, Cli), `Health` and `BindChannel` only) `Lab-看门狗` in `actingwatch`, else the word of the Lab program that reads the watchdog's status or starts the Runtime. `actingctl install` (the rescue module as `actingctl` calls it) and `actingctl`'s other paths through the code it shares with the Lab (`start`, `restart`, `watchdog` and the overview's `watchdog` block) declare no word in this slice and bind as on 0.12.58, `cli` without a word; LAB-6S2-B2 moves them, with the rest of `actingctl` and today's MCP server, which keep their binding until then. Way back: yes |
 | LAB-6S2-B2 | Runtime | `actingctl` and today's MCP server (`actingctl mcp-serve`) the same: `lab` with `Lab-CLI` or `Lab-MCP`, the envelope they sent on 0.12.58; after LAB-6S2-M. Way back: yes |
 | LAB-6S3 | Runtime | the UI list on `ui` (section 3, `ui_allows`; section 2.3 step 5): a `ui` connection is refused, `channel_request_refused`, every kind off the list and a setting outside the console's tiers; every other connection as before. Way back: yes |
 | LAB-6S4a | Runtime | the five kinds deleted; `install-control` [0, 0]. Way back: yes |
@@ -313,7 +313,15 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
   process it starts: `Lab-制包` for its workbench's `serve`, `Lab-救急` for every other one.
 - Any other value of the variable, `UI`, `Lab-看门狗` and `Lab-MCP` without the marker below
   included, is `actingctl_usage_invalid` with `variable` `ACTINGCOMMAND_INITIATOR` (the code moves
-  to actinglab with LAB-7, section 12), and nothing is sent or written.
+  to actinglab with LAB-7, section 12) wherever the process takes its word: a command line of the
+  CLI module (a core or a rescue row) and `serve --stdio` refuse it before anything is sent or
+  written, and a command that adds a step or a mark to a Lab recording before it writes one.
+  actinglab's own other commands take no word from the variable and do not refuse it: their
+  connections bind the Lab channel without a word, as on 0.12.58, and send (Workflow #434
+  LAB-6S2-B1; register §1.287, "Slice LAB-6S2-B1", decision (b)). `actingctl` does not read the
+  variable: in LAB-6S2-B1 its connections declare no word, `actingctl install` (the rescue module
+  as `actingctl` calls it) and its other paths through the code it shares with the Lab included,
+  and bind as on 0.12.58 until LAB-6S2-B2 (the slice table).
 - **The detached run's marker** (Workflow #434 LAB-6S0, 0.12.58; the coordinator's ruling of
   2026-11-13 on board #434, not the owner's words). `actinglab.exe` takes `Lab-MCP` from the
   variable only beside the marker `ACTINGCOMMAND_DETACHED_RUN` set to `rescue`, compared byte for
@@ -575,12 +583,18 @@ from their core rows.
   `value_missing`), and so is the option with `ACTINGCOMMAND_INITIATOR` set (section 4.2), before
   the loop starts. With it the process's initiator is `Lab-MCP`: on each step and mark
   actinglab's own commands add to a recording (section 4.3) and in a rescue row's journal. The
-  connections actinglab's own commands open bind as MCP's `--via mcp` child's do, the Lab channel
-  with `via` `mcp` and the envelope (Lab, Lab), until LAB-6 replaces `via` with the initiator;
-  the core rows `lab-ops` serves, which that child never serves, connect as without the option.
-  The lines stay `serve`'s (each operation's `--json` line), never the envelope a `--via` line
-  prints; since LAB-5G4b each answer line carries its line inside the envelope below. Without the
-  option nothing changes.
+  connections actinglab's own commands open bind as MCP's `--via mcp` child's do: until
+  LAB-6S2-B1 the Lab channel with `via` `mcp`; since LAB-6S2-B1 (0.12.59; register §1.287,
+  "Slice LAB-6S2-B1") the Lab channel with `Lab-MCP` and no `via`; the envelope (Lab, Lab) either
+  way. The core rows `lab-ops` serves, which that child never serves, connected as without the
+  option until LAB-6S2-B1; since then they too bind the Lab channel with `Lab-MCP` and no `via`,
+  with their envelope (Lab, Lab). The Runtime records every request of either with that envelope
+  as `lab` with `via` `mcp` (section 2.4, the map M): for the own commands as on 0.12.58, for the
+  core rows where 0.12.58 recorded `lab` without `via`, a change no MCP server's call reaches,
+  since none sends a core row to its child. The rescue rows' connections bind the Lab channel with
+  `Lab-MCP` and keep the CLI's envelope (section 4.3). The lines stay `serve`'s (each operation's
+  `--json` line), never the envelope a `--via` line prints; since LAB-5G4b each answer line
+  carries its line inside the envelope below. Without the option nothing changes.
 - **The answer envelope under `--front mcp`** (LAB-5G4b, 0.12.57; register §1.287, "Slice
   LAB-5G4b"; the coordinator's ruling on board #434, 6827665631, not the owner's words). With the
   option
@@ -958,8 +972,10 @@ sentence fails that test.
       members, `outcome`, `warnings`): the text content and, from 2025-06-18 on,
       `structuredContent`; `isError` is true exactly when the command line would exit non-zero
       for that line. There is no `{ok, result}` envelope.
-    - *The Runtime.* One kept connection of `lab_ops::front`'s `Front::Mcp` (the MCP channel with
-      today's envelope, (Cli, Cli)), made again as today's server makes its own (`Health` must
+    - *The Runtime.* One kept connection of `lab_ops::front`'s `Front::Mcp` (today's envelope,
+      (Cli, Cli); until LAB-6S2-B1 on the MCP channel, since LAB-6S2-B1, 0.12.59, on the Lab
+      channel with `Lab-MCP` and no `via`, whose requests the Runtime records on the MCP channel,
+      section 2.4, the map M), made again as today's server makes its own (`Health` must
       answer the owner epoch it was opened on; a latched failure drops it); a Runtime that does
       not answer gives the line the command line gives (`status` reports it offline). A core row
       the table marks as writing to the Runtime goes on a connection of its own after the
@@ -1115,9 +1131,11 @@ sentence fails that test.
         of its own, through the steps of a write's provenance (above): the identity card
         `actingctl-mcp`, then `{surface_id: mcp, control_id: <the tool called>, kind: command,
         instance_alias: <the call's instance as given>, value: <the envelope's req_id as a
-        path-safe string>}`, on the MCP channel from (Cli, Cli). Its warnings, today's three,
-        join the line's after its own: `client_action_without_req_id` when the envelope carries
-        no `req_id` (the action is recorded without a value), the recording's own
+        path-safe string>}`, from (Cli, Cli), on a connection that binds the MCP channel until
+        LAB-6S2-B1 and since LAB-6S2-B1 (0.12.59) the Lab channel with `Lab-MCP` and no `via`,
+        which the Runtime records on the MCP channel (section 2.4, the map M). Its warnings,
+        today's three, join the line's after its own: `client_action_without_req_id` when the
+        envelope carries no `req_id` (the action is recorded without a value), the recording's own
         (`mcp_identity_declaration_refused`), and `client_action_not_recorded` caused by the
         failure (the state root not located, the Runtime's or the client's failure) when it was
         not recorded. The call's answer stands, and the Lab command is never run again. A call no

@@ -26,6 +26,10 @@
 //   - `lab6s2b1_serve_without_the_mcp_front_records_as_on_0_12_58`: `lab.request`, `lab`;
 //   - `lab6s2b1_serve_with_the_mcp_front_and_the_mcp_child_record_as_on_0_12_58`: `lab.request`,
 //     `lab` with `via` `mcp`;
+//   - (fix 1) `lab6s2b1_core_rows_under_serve_front_mcp_record_lab_with_via_mcp`: the core rows'
+//     front under `serve --stdio --front mcp` (the option read by `serve::front`, the front
+//     `cli_module::set_front` sets): `lab.request`, `lab` with `via` `mcp`, the slice's one record
+//     change (0.12.58: `lab` without `via`);
 //   - `lab6s2b1_mcp_server_in_process_records_as_on_0_12_58`: `cli.command` (Cli, actingctl, Cli),
 //     `mcp`;
 //   - `lab6s2b1_watchdog_probe_records_nothing` (Windows): the probe with `Lab-看门狗` is
@@ -414,6 +418,27 @@ fn lab6s2b1_serve_with_the_mcp_front_and_the_mcp_child_record_as_on_0_12_58() {
     // `via` `mcp`.
     let recorded =
         recorded_through(|root| lab_client_config_via(root, Some(serve::Front::Mcp.via())));
+    assert_eq!(recorded, lab_request(Some(ChannelVia::Mcp)));
+}
+
+#[test]
+fn lab6s2b1_core_rows_under_serve_front_mcp_record_lab_with_via_mcp() {
+    // Fix 1, the slice's one record change (register, "What a person sees"): `serve --stdio
+    // --front mcp` as a person types it, without `--via mcp`. The option as `serve::main` reads it
+    // (the variable absent, as the option requires), and the front `cli_module::set_front` then
+    // sets for the core rows: actinglab with the process's word, `Lab-MCP`.
+    let words = ["--stdio", "--front", "mcp"].map(str::to_owned);
+    let serve_front = serve::front(&words, None).expect("--stdio --front mcp");
+    assert_eq!(serve_front, Some(serve::Front::Mcp));
+    let lab = cli_module::process_word(serve_front)
+        .map(Front::Actinglab)
+        .expect("the process has a word");
+    assert_eq!(lab, Front::Actinglab(Initiator::LabMcp));
+    // A core row's request on that front's connection (`Connection::per_call` makes it with
+    // `front::config`): the `ConfigureSettings` the core row `config set` sends
+    // (`lab_ops::configure`). Recorded `lab` with `via` `mcp`, where 0.12.58 recorded `lab`
+    // without it (`lab6s2b1_cli_core_rows_record_as_on_0_12_58`).
+    let recorded = recorded_through(|root| front::config(lab, root));
     assert_eq!(recorded, lab_request(Some(ChannelVia::Mcp)));
 }
 
