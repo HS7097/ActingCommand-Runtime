@@ -21548,10 +21548,12 @@ device; every id made up):
   a full store each producer's new key is refused, the run fails
   `contained_task_resource_reading_rejected` with the native detail
   `<list id>:fact_store_capacity_exceeded`, nothing is published or evicted, and the two receipts'
-  outcomes carry the same values. Each refused run, a `read_list`'s as a field list's, answers
-  before its lease ends (the refusal returns from its terminal before the release a completed run
-  makes): it still holds the device's key, nothing waiting, until its client's connection closes,
-  and the next run on the device waits for that end in the device's queue.
+  outcomes carry the same values. Each refused run, a `read_list`'s as a field list's, gives the
+  device's key back before it answers, as a completed run does, and the next run on the same open
+  connection starts at once (§1.362, defect #457). When this slice merged, the refused run
+  answered before its lease ended (the refusal returned from its terminal before the release a
+  completed run makes) and held the device's key until its client's connection closed; this test
+  pinned that, and §1.362 changed it to the present truth.
 - `field_list_row_read_by_ledger_8`: the ledger reader of this build (`ledger` 8, `actingledger`'s
   task evidence) reads the `list_start_unseen` and `list_end_unseen` rows with `frame_indices` and
   relays their outcome's values unchanged.
@@ -22635,6 +22637,92 @@ slice changes and changes with it, keeping its name:
 `gate_p2b::gate_p2b_g12_each_realistic_mistake_of_either_version_is_refused_with_its_reason_at_its_field`
 wrote `actingcommand.resource-targets.v3` as "a version no reader takes" and now writes `.v4`. No
 golden changes; no test leaves the gate map.
+
+### 1.362 Defect #457 (0.12.60): a direct run whose terminal step fails gives its lease back before it answers (Workflow #457; found by FL-2's gate, §1.354, on CI and confirmed in the code by the coordinator, never seen on an installation; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-457-direct-run-lease.md`, read on main `f19756db`)
+
+1.362 is the next free number on main `f19756db`, whose last section is §1.361; pull requests open
+beside this one may take numbers first, and a train renumbers it.
+
+**The defect.** A direct run (a `RunContainedTask` a person or an agent sends, not the
+scheduler's run) that ran its task and then met a failure in its terminal step answered that
+failure truthfully but kept the device's lease: in `execute_contained_task_with_lease`
+(`host/contained_task.rs`) the terminal step returned its failure with `?`, before the release its
+success path makes. The realistic case is the fact store's refusal of the list or reading the run
+publishes (stage 2 of "Publication" in [resource-readings.md](resource-readings.md): a full
+store, a version conflict, an invalid record); a store update package's refusal, a refused
+settlement projection and a terminal already committed take the same return. While the requesting
+connection stayed open the device stayed taken until the lease expired, and a run queued behind
+it waited out its queue time (`lease_queue_expired`). A run started from a command line lost its
+connection when its process exited, which ended the lease; a long-lived connection (an MCP
+server's) did not. A list over the byte bound is no such failure: it is a miss, and the run
+completes (§1.354).
+
+**The fix.** Each return from the terminal step of `execute_contained_task_with_lease` (its five
+calls of `append_contained_task_terminal`: the cancelled run's, the two failed runs', the capacity
+refusal's and the completed run's) gives a direct run's lease back before the run answers, when
+the failure does not poison, as the success path gives it back: `release_lease` with the run's
+current token (the one the success path releases with there: the end phase's, after a switch the
+renewed one, MAPP-2d) and the run's links. The order is therefore the success path's: under the
+instance's admission guard the queued entries past their time expire and the lease's device use
+ends (`end_lease_device_use` with `Keep`: the session is kept, or closed where it must close);
+then, under the queue-order lock, the key goes to the first eligible waiting claim (a transfer) or
+is released (`lease.released`), and the guard's drop pumps the queue. A run on a borrowed key
+(MAPP-2a) leaves the key with the run that lent it, as its success path does (a direct run never
+borrows one). The answer is the run's failure as before: its code, category, values and terminal.
+A release that fails ends the lease as the success path's failed release does
+(`cleanup_composite_failure_with_run_links`); its failure is recorded where the release records
+it (the scheduler's denial, or the release's failure record) and travels as the run failure's
+`cleanup` link (`RequestFailure::with_cleanup_failure`); a fatal one poisons, as at every lease
+end. Left as they were: a failure that poisons (the request door contains it, as before); a policy
+run (its settlement releases its key, `ensure_scheduled_policy_lease_released`); a host run (a
+startup package, a ladder's rung: the key's holder releases it, `release_host_key`); the success
+path; the lease's length; the queue's order; the switch; the session rule.
+
+**The other settlement paths** (the work order asked for each):
+
+- The scheduler's run takes the same returns, and `complete_scheduled_policy_failure` then
+  releases its lease on the policy lane when the run wrote no `lease.released`
+  (`ensure_scheduled_policy_lease_released`, with the token `run_token` resolves): no key stays
+  held. Not this defect; left.
+- A Lab operation's run (`host/lab_operation.rs`) releases its lease in `finish_lab_operation`
+  before it writes its terminal record, so a failed terminal record holds no key. Its other early
+  returns (the prepared record that could not be stored, an input's evidence that could not be
+  resolved) come before that release and are not a terminal step's; left, and named in the
+  report.
+- A recovery ladder's rung runs on the ladder's key: a rung that returns early leaves the key
+  with the ladder, which releases it once at its end (`run_recovery_ladder`); a startup package's
+  run likewise (`run_startup_claim`). Not this defect; left.
+
+**Contracts.** No contract said when a direct run's lease ends. [resource-readings.md](resource-readings.md)
+("Publication", after stage 2's refusal) now says that a direct run gives its lease back before it
+answers, and that a policy run's settlement releases its lease.
+
+**Interface.** No revision moves; no outcome code, word, configuration key, record or wire shape
+is added. A test-only switch turns the fix off for the tests that compare with the build before
+it (its test spelling exists only in test builds).
+
+Tests (host gate row "#457", in FL-2's gate file `gate_450_fl2.rs`, on its fake device and
+packages; no sleeps):
+`refused_run_gives_the_key_back_on_its_open_connection` (on a full store, the field list's and the
+`read_list` step's refused runs over one client connection that stays open: after each answer the
+device has no holder and nothing waits; the next run on the connection, the same package shown a
+list that is not whole, starts at once, with no `scheduler.queued`, and completes),
+`refused_runs_answer_is_the_answer_before_the_fix` (for each producer, on a host of its own, the
+refused run's answer with ids and times normalised is byte for byte the answer it gives with the
+fix turned off, which leaves the key held as before) and
+`a_completed_direct_run_writes_the_records_it_wrote_before_the_fix` (on two hosts started alike,
+fix off and on, a field list run read whole: the records linked to its run, its terminal and its
+release among them, are the same record by record, ids, times, the stored documents' sizes and
+object keys and the sampling seeds normalised; every differing record is named in one message).
+The borrowed key in the same failure is not reachable through these fixtures: only a member's
+startup run holds a borrowed key, and it is a host run, which this fix leaves as it was (MAPP-2a's
+tests pin its key). Adapted, keeping its name: `gate_450_fl2::field_list_full_store_refused`
+pinned the defect (the refused run still held the key, nothing waiting, until its client
+disconnected); it now sends both refused runs over one open connection and pins the key free
+after each answer and the second run started at once. No golden changes; no test leaves the gate
+map.
+
+**At deploy.** Nothing to do: a device is no longer held after such a failure.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

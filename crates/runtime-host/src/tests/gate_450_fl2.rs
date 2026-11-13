@@ -26,6 +26,12 @@
 // SEL-L4b gate's card reader. The existing list-reading rows (`gate_428_s168_4`,
 // `gate_428_s168_lb1a`) are unchanged: a package without the member runs as before. Every id, key
 // and name is made up; nothing waits on a clock of its own.
+//
+// Workflow #457 (since 0.12.60): FL-2 test 4 found that a direct run the fact store refused at its
+// publication answered with the device's key still held, until its client's connection closed or
+// the lease expired. The run now gives the key back before it answers, as a completed run does;
+// the tests at the end of this file pin that, the answer unchanged and a completed run's records
+// unchanged.
 
 use super::gate_308_l4b::{ALIAS, CardNames, HEIGHT, WIDTH, member, single_frame_select_package};
 use super::*;
@@ -475,25 +481,42 @@ fn run(host: &RuntimeHost, package: &Path) -> ListRun {
     }
 }
 
-// One manual run of `package` on the device, sent on a client connection of its own as actingctl
-// sends one (the S168-4 host gate's `run`), and that client, whose connection closes when the
-// caller drops it. A run the fact store refused at its publication answers before its lease ends:
-// the refusal returns from its terminal before the release a completed run makes. The host ends
-// that lease when the run's client disconnects, and hands the key to a run waiting in the device's
-// queue meanwhile.
-fn run_on_client(host: &RuntimeHost, package: &Path) -> (ListRun, TestClient) {
-    let mut client = TestClient::connect(host);
+// A client connection of its own, as actingctl opens one (the S168-4 host gate's `run`); it stays
+// open until the caller drops it.
+fn client_of(host: &RuntimeHost) -> TestClient {
+    let client = TestClient::connect(host);
     client.set_receipt_read_timeout();
+    client
+}
+
+// One manual run of `package` on the device, sent on `client`'s connection. Workflow #457: a run
+// the fact store refused at its publication gives the device's key back before it answers, as a
+// completed run does, so the connection may stay open and the next run on it starts at once.
+fn run_on(client: &mut TestClient, package: &Path) -> ListRun {
     let (request, correlation_id) = run_request(package);
     let receipt = client.send(&request);
-    (
-        ListRun {
-            receipt,
-            correlation_id,
-            request_id: request.request_id(),
-        },
-        client,
-    )
+    ListRun {
+        receipt,
+        correlation_id,
+        request_id: request.request_id(),
+    }
+}
+
+// Workflow #457: whether the run `correlation_id` waited in the device's queue (a
+// `scheduler.queued` among its records).
+fn waited_in_queue(host: &RuntimeHost, correlation_id: CorrelationId) -> bool {
+    run_records(host, correlation_id)
+        .iter()
+        .any(|event| event.event_type() == EventType::SchedulerQueued)
+}
+
+// Workflow #457: the device has no holder and no claim waits for it.
+fn assert_key_free(host: &RuntimeHost, what: &str) {
+    assert_eq!(
+        host.instance_claims_for_test(ALIAS).expect("claims"),
+        (None, vec![]),
+        "{what}: the device has no holder and nothing waits"
+    );
 }
 
 // One manual run of `package` whose first input carries a stop of the run (`StopInstanceRun`,
@@ -1656,6 +1679,41 @@ fn field_list_failed_or_cancelled_run_publishes_nothing() {
     host.close().expect("close the host");
 }
 
+// The instance's fact store filled with made-up facts until it refuses one at its bound
+// (`fact_store_capacity_exceeded`, not fatal).
+fn fill_store(host: &RuntimeHost) {
+    let now = unix_ms_now().expect("wall clock");
+    for index in 0..300_u32 {
+        let fill = FactRecord {
+            scope: FactScope::Instance {
+                instance_id: ALIAS.to_owned(),
+            },
+            key: format!("session.example.fill_{index:03}"),
+            content: FactContent::Inline {
+                value: ContractFactValue::Integer(1),
+            },
+            observed_at_unix_ms: now,
+            expires_at_unix_ms: None,
+            ttl_policy: None,
+            confidence_milli: 1_000,
+            source_detector: "detector.fixture".to_owned(),
+            source_snapshot_id: format!("snapshot:fl-2-fill-{index:03}"),
+            schema_version: "fact.v1".to_owned(),
+            resource_bundle_hash: "a".repeat(64),
+            invalidate_on: Vec::new(),
+        };
+        match host.publish_fact(fill) {
+            Ok(_) => {}
+            Err(error) if error.code() == "fact_store_capacity_exceeded" => {
+                assert!(!error.is_fatal(), "{error:?}");
+                return;
+            }
+            Err(error) => panic!("fill fact {index}: {error:?}"),
+        }
+    }
+    panic!("the store reached no bound in 300 facts");
+}
+
 // FL-2 test 4, the store's refusals as for a `read_list` step, both producers in one host. The byte
 // bound (lowered for each producer's own key, as S168-LB1a's host test lowers it): after each
 // published its list of six rows, a list over the bound succeeds, publishes nothing, keeps the
@@ -1664,11 +1722,12 @@ fn field_list_failed_or_cancelled_run_publishes_nothing() {
 // store: each producer's list under a new key is refused at its publication, the run fails
 // `contained_task_resource_reading_rejected`, the reason is the failure's native detail
 // `<list id>:fact_store_capacity_exceeded` (as the contract keeps it), nothing is published or
-// evicted, and the two receipts' outcomes carry the same values (no value is added). Each refused
-// run is sent on a client connection of its own and, a `read_list`'s as a field list's, still
-// holds the device's key, nothing waiting, when its answer comes; its client then disconnects,
-// which ends that lease, and the next run waits for that end in the device's queue. The row bound
-// of a record list (1024) cannot be reached by a field list, whose rows are at most its 256 frames.
+// evicted, and the two receipts' outcomes carry the same values (no value is added). Workflow
+// #457: both refused runs are sent on one client connection, which stays open; each, a
+// `read_list`'s as a field list's, gives the device's key back before its answer comes (no holder,
+// nothing waiting), and the next run on that connection starts at once, without waiting in the
+// device's queue. The row bound of a record list (1024) cannot be reached by a field list, whose
+// rows are at most its 256 frames.
 #[test]
 fn field_list_full_store_refused() {
     const FIELD_BYTES_KEY: &str = "inventory.list.example_kind_f";
@@ -1740,46 +1799,17 @@ fn field_list_full_store_refused() {
     );
 
     // A full store.
-    let now = unix_ms_now().expect("wall clock");
-    let mut filled = false;
-    for index in 0..300_u32 {
-        let fill = FactRecord {
-            scope: FactScope::Instance {
-                instance_id: ALIAS.to_owned(),
-            },
-            key: format!("session.example.fill_{index:03}"),
-            content: FactContent::Inline {
-                value: ContractFactValue::Integer(1),
-            },
-            observed_at_unix_ms: now,
-            expires_at_unix_ms: None,
-            ttl_policy: None,
-            confidence_milli: 1_000,
-            source_detector: "detector.fixture".to_owned(),
-            source_snapshot_id: format!("snapshot:fl-2-fill-{index:03}"),
-            schema_version: "fact.v1".to_owned(),
-            resource_bundle_hash: "a".repeat(64),
-            invalidate_on: Vec::new(),
-        };
-        match host.publish_fact(fill) {
-            Ok(_) => {}
-            Err(error) if error.code() == "fact_store_capacity_exceeded" => {
-                assert!(!error.is_fatal(), "{error:?}");
-                filled = true;
-                break;
-            }
-            Err(error) => panic!("fill fact {index}: {error:?}"),
-        }
-    }
-    assert!(filled, "the store reached its bound");
+    fill_store(&host);
     let before = records(&host);
     let mut refusals = Vec::new();
+    // Workflow #457: both refused runs on one client connection, which stays open.
+    let mut client = client_of(&host);
     for (package, screens, key, id) in [
         (&field_new, six_items(), OTHER_KEY, LIST_ID),
         (&read_new, six_cards(), THIRD_KEY, READ_ID),
     ] {
         device.shows(screens);
-        let (refused, client) = run_on_client(&host, package);
+        let refused = run_on(&mut client, package);
         assert_eq!(
             refused.receipt.state(),
             RuntimeReceiptState::Failed,
@@ -1802,15 +1832,16 @@ fn field_list_full_store_refused() {
         assert!(host.fatal_error().expect("runtime health").is_none());
         let outcome = serde_json::to_value(refused.receipt.outcome()).expect("outcome JSON");
         refusals.push(outcome["values"].clone());
-        // The refused run answered before its lease ended: it holds the device's key until its
-        // client disconnects, which hands the key to the next run.
-        assert_eq!(
-            host.instance_claims_for_test(ALIAS).expect("claims"),
-            (Some(ClaimKind::DirectTaskRun), vec![]),
-            "{key}: the refused run holds the device until its client disconnects"
+        // Workflow #457: the refused run gave the device's key back before it answered, as a
+        // completed run does, on a connection that stays open; the run on that connection after it
+        // (the `read_list` step's after the field list's) started at once.
+        assert_key_free(&host, key);
+        assert!(
+            !waited_in_queue(&host, refused.correlation_id),
+            "{key}: the run started at once"
         );
-        drop(client);
     }
+    drop(client);
     assert_eq!(refusals[0], refusals[1], "no value is added");
     assert!(refusals[0].get("frame_indices").is_none());
     host.close().expect("close the host");
@@ -2074,4 +2105,306 @@ fn field_list_read_by_the_lists_reader() {
     assert_eq!(stale["candidates"], json!([]), "{stale}");
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the host");
+}
+
+// ---- Workflow #457: a direct run whose terminal step returns a failure gives its key back.
+
+// One producer of FL-2 test 4's refusals on a full store: its package, which publishes under a new
+// key, the screens on which the store refuses its list, and the screens on which its list is not
+// whole (a miss: the run completes and publishes nothing).
+struct Producer {
+    package: PathBuf,
+    key: &'static str,
+    refused: Vec<Screen>,
+    missed: Vec<Screen>,
+}
+
+// The field list's producer and the `read_list` step's, their packages written into `packages`.
+fn producers(packages: &TempDir) -> [Producer; 2] {
+    const READ_KEY: &str = "inventory.list.example_kind_c";
+    let mut unread = (0..6).map(patch).collect::<Vec<_>>();
+    unread[2] = UNREADABLE;
+    [
+        Producer {
+            package: write_package(
+                packages,
+                "fields-new.zip",
+                fields_package(Fields::list(OTHER_KEY)),
+            ),
+            key: OTHER_KEY,
+            refused: items(&[(0, 5), (1, 5), (2, 5), (3, 5), (4, 5), (5, 5)]),
+            missed: changed(three_items(), 1, |item| item.name = UNLISTED),
+        },
+        Producer {
+            package: write_package(packages, "read-new.zip", read_list_package(READ_KEY)),
+            key: READ_KEY,
+            refused: vec![cards(0..6), Screen::Detail],
+            missed: vec![Screen::Cards(unread), Screen::Detail],
+        },
+    ]
+}
+
+// The run failed as FL-2 test 4 pins a refusal at the publication.
+fn assert_refused(run: &ListRun, key: &str) {
+    assert_eq!(
+        run.receipt.state(),
+        RuntimeReceiptState::Failed,
+        "{key}: {:?}",
+        run.receipt.outcome()
+    );
+    assert_eq!(
+        run.receipt.outcome().code().as_str(),
+        "contained_task_resource_reading_rejected",
+        "{key}: {:?}",
+        run.receipt.outcome()
+    );
+}
+
+// Whether a member holds what two runs of one host, or two hosts started alike, hold apart however
+// alike the runs are (`gate_mapp2b`'s list, with the stored documents' sizes and object keys): a
+// time or a duration, a ledger position, a record index, a sampling seed.
+fn time_or_place(key: &str) -> bool {
+    key.ends_with("_ms")
+        || key.ends_with("_us")
+        || key.ends_with("_at")
+        || key.ends_with("seed")
+        || matches!(
+            key,
+            "task_timing"
+                | "returned_bytes"
+                | "successful_returned_bytes"
+                | "local_day"
+                | "sequence"
+                | "record_index"
+                | "input_ledger_position"
+                | "input_fact_revisions"
+                | "byte_count"
+                | "object_key"
+        )
+}
+
+// `run` (lowercase hexadecimal digits) as `without_identities` writes it: a run of 32 or more is an
+// identity and is replaced.
+fn push_hex_run(text: &mut String, run: &mut String) {
+    if run.len() >= 32 {
+        text.push_str("<hex>");
+    } else {
+        text.push_str(run);
+    }
+    run.clear();
+}
+
+// `text` with each run of 32 or more lowercase hexadecimal digits replaced: a minted id (a request,
+// run, lease, instance, frame or event id), a digest.
+fn without_identities(text: &str) -> String {
+    let mut written = String::with_capacity(text.len());
+    let mut run = String::new();
+    for character in text.chars() {
+        if matches!(character, '0'..='9' | 'a'..='f') {
+            run.push(character);
+        } else {
+            push_hex_run(&mut written, &mut run);
+            written.push(character);
+        }
+    }
+    push_hex_run(&mut written, &mut run);
+    written
+}
+
+// `value` with its ids and times normalised: every member `time_or_place` names is replaced whole,
+// and every string loses its identities (`without_identities`). Everything else stays.
+fn normalised(value: &mut Value) {
+    match value {
+        Value::Object(members) => {
+            for (key, member) in members.iter_mut() {
+                if time_or_place(key) {
+                    *member = json!("<normalised>");
+                } else {
+                    normalised(member);
+                }
+            }
+        }
+        Value::Array(entries) => entries.iter_mut().for_each(normalised),
+        Value::String(text) => *text = without_identities(text),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+// A receipt's JSON text with its ids and times normalised.
+fn normalised_answer(receipt: &RuntimeReceipt) -> String {
+    let mut answer = serde_json::to_value(receipt).expect("receipt JSON");
+    normalised(&mut answer);
+    serde_json::to_string(&answer).expect("receipt text")
+}
+
+// The records of a run, each one's type, severity and whole payload, normalised.
+fn comparable(events: &[PersistedEvent]) -> Vec<(EventType, EventSeverity, Value)> {
+    events
+        .iter()
+        .map(|event| {
+            let mut payload =
+                serde_json::to_value(event.payload()).expect("a record's payload encodes");
+            normalised(&mut payload);
+            (event.event_type(), event.severity(), payload)
+        })
+        .collect()
+}
+
+// Workflow #457 test 1, the defect FL-2 test 4 found: on a full store, a direct run of each
+// producer whose list the store refuses at its publication (the field list's and the `read_list`
+// step's, FL-2 test 4's two refusals) gives the device's key back before it answers. All runs go
+// over one client connection, which stays open. Once a refused run's answer is read the device has
+// no holder and nothing waits; the next run on the connection, of the same package shown a list
+// that is not whole (it publishes nothing), starts at once (no `scheduler.queued` among its
+// records) and completes, and the device is free after it too. Nothing is published.
+#[test]
+fn refused_run_gives_the_key_back_on_its_open_connection() {
+    let root = TempDir::new().expect("tempdir");
+    let device = Device::new();
+    let host = start(&root, &device);
+    fill_store(&host);
+    let mut client = client_of(&host);
+    for Producer {
+        package,
+        key,
+        refused: refused_screens,
+        missed: missed_screens,
+    } in producers(&root)
+    {
+        device.shows(refused_screens);
+        let refused = run_on(&mut client, &package);
+        assert_refused(&refused, key);
+        assert_key_free(&host, key);
+        device.shows(missed_screens);
+        let next = run_on(&mut client, &package);
+        completed(&host, &next.receipt);
+        assert!(ended_on_success(&next.receipt), "{key}: {:?}", next.receipt);
+        assert!(
+            !waited_in_queue(&host, next.correlation_id),
+            "{key}: the next run on the connection started at once"
+        );
+        assert_key_free(&host, key);
+        assert!(publications(&host, key).is_empty(), "{key}");
+    }
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close the host");
+}
+
+// Workflow #457 test 2: the refused run answers what it answered before. For each producer, on a
+// host of its own with a full store and one client connection: the run refused as it is now (the
+// device free once it has answered), then the same run with the fix turned off
+// (`direct_run_terminal_release_off_for_test`), as a build before the fix runs it (its key still
+// held by the run, nothing waiting, when its answer comes). The two answers, their ids and times
+// normalised (`normalised_answer`), are equal byte for byte.
+#[test]
+fn refused_runs_answer_is_the_answer_before_the_fix() {
+    let packages = TempDir::new().expect("tempdir");
+    for Producer {
+        package,
+        key,
+        refused: screens,
+        ..
+    } in producers(&packages)
+    {
+        let root = TempDir::new().expect("tempdir");
+        let device = Device::new();
+        let host = start(&root, &device);
+        fill_store(&host);
+        let mut client = client_of(&host);
+        device.shows(screens.clone());
+        let fixed = run_on(&mut client, &package);
+        assert_refused(&fixed, key);
+        assert_key_free(&host, key);
+        host.direct_run_terminal_release_off_for_test(true)
+            .expect("the fix turned off");
+        device.shows(screens);
+        let before = run_on(&mut client, &package);
+        assert_refused(&before, key);
+        assert_eq!(
+            host.instance_claims_for_test(ALIAS).expect("claims"),
+            (Some(ClaimKind::DirectTaskRun), vec![]),
+            "{key}: as before the fix, the refused run still holds the device"
+        );
+        host.direct_run_terminal_release_off_for_test(false)
+            .expect("the fix turned on again");
+        assert_eq!(
+            normalised_answer(&fixed.receipt),
+            normalised_answer(&before.receipt),
+            "{key}: the answer is the one before the fix"
+        );
+        assert!(host.fatal_error().expect("runtime health").is_none());
+        drop(client);
+        host.close().expect("close the host");
+    }
+}
+
+// Workflow #457 test 3: a direct run that completes writes the records it wrote before the fix. On
+// two hosts started alike, the fix turned off on the first (as a build before it) and on on the
+// second, the same field list run reads three items whole, completes and publishes its list. The
+// records linked to the run, its terminal and its lease's release among them, are the same on both
+// hosts record by record, each one's type, severity and payload compared with ids, times, the
+// stored documents' sizes and object keys and the sampling seeds normalised (`comparable`); every
+// differing record is named at once. Nothing else is compared between the two hosts.
+#[test]
+fn a_completed_direct_run_writes_the_records_it_wrote_before_the_fix() {
+    let packages = TempDir::new().expect("tempdir");
+    let list = write_package(
+        &packages,
+        "fields.zip",
+        fields_package(Fields::list(LIST_KEY)),
+    );
+    let mut runs = Vec::new();
+    for off in [true, false] {
+        let root = TempDir::new().expect("tempdir");
+        let device = Device::new();
+        let host = start(&root, &device);
+        host.direct_run_terminal_release_off_for_test(off)
+            .expect("the fix's switch");
+        device.shows(three_items());
+        let read = run(&host, &list);
+        completed(&host, &read.receipt);
+        assert!(ended_on_success(&read.receipt), "{:?}", read.receipt);
+        let Some(RuntimeResult::ContainedTaskCompleted { run_id, .. }) = read.receipt.result()
+        else {
+            panic!("a completed run: {:?}", read.receipt);
+        };
+        let mut records = host
+            .query_persisted_events_for_test(EventQuery {
+                run_id: Some(*run_id),
+                ..EventQuery::default()
+            })
+            .expect("the run's records");
+        records.sort_by_key(PersistedEvent::sequence);
+        assert!(
+            records
+                .iter()
+                .any(|event| event.event_type() == EventType::LeaseReleased),
+            "the run's release is among its records: {records:#?}"
+        );
+        assert_key_free(&host, "after the completed run");
+        assert!(host.fatal_error().expect("runtime health").is_none());
+        runs.push(comparable(&records));
+        host.close().expect("close the host");
+    }
+    let [before, fixed] = runs.as_slice() else {
+        unreachable!("two runs")
+    };
+    assert_eq!(
+        before.len(),
+        fixed.len(),
+        "as many records: {before:#?} {fixed:#?}"
+    );
+    // Every differing record at once: a comparison that stops at the first one hides the rest.
+    let differing = before
+        .iter()
+        .zip(fixed)
+        .enumerate()
+        .filter(|(_, (was, is))| was != is)
+        .collect::<Vec<_>>();
+    assert!(
+        differing.is_empty(),
+        "the completed run's records are the ones it wrote before the fix; these differ: \
+         {differing:#?}"
+    );
 }

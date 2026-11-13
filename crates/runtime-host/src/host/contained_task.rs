@@ -8915,6 +8915,51 @@ impl HostShared {
         drop(runtime);
         // #411 A64 (ruling C-43): the terminal and the lease end use the renewed token.
         let token = end_token;
+        // Workflow #457: a direct run whose terminal step returns a failure that does not poison
+        // (the fact store refused a list or a reading it would publish, a store update's refusal,
+        // a refused settlement projection, a terminal already committed) gives its lease back
+        // before it answers, as its success path below does: `release_lease` with the run's
+        // current token (`token`, the end phase's) and its run links, so the session's end and the
+        // queue's pump come in the same order. A run on a borrowed key leaves the key with the run
+        // that lent it (Workflow #437 MAPP-2a). The run answers its own failure, unchanged. A
+        // release that fails ends the lease as the success path's failed release does
+        // (`cleanup_composite_failure_with_run_links`), and its failure becomes the run failure's
+        // `cleanup` link (`RequestFailure::with_cleanup_failure`; a fatal one poisons, as at every
+        // lease end). A policy run's or a host run's failure returns as before: its settlement
+        // (`ensure_scheduled_policy_lease_released`) or the key's holder (`release_host_key`) ends
+        // its lease; a failure that poisons is left to the request door, as before.
+        let give_back = |held: LeaseToken, refused: RequestFailure| -> RequestFailure {
+            if scheduled
+                || refused.poison_runtime
+                || refused.error.is_fatal()
+                || control.borrows_key()
+            {
+                return refused;
+            }
+            #[cfg(test)]
+            if self
+                .direct_run_terminal_release_off_for_test
+                .load(Ordering::Acquire)
+            {
+                return refused;
+            }
+            match self.release_lease(
+                request,
+                original.request_id(),
+                &held,
+                connection_id,
+                release_links,
+            ) {
+                Ok(_) => refused,
+                Err(release_failure) => self.cleanup_composite_failure_with_run_links(
+                    request,
+                    held,
+                    connection_id,
+                    run_links,
+                    refused.with_cleanup_failure(*release_failure.error),
+                ),
+            }
+        };
         let outcome = match execution {
             Ok(outcome) => outcome,
             Err(
@@ -8998,7 +9043,9 @@ impl HostShared {
                             resource_readings: None,
                             store_update_alias: None,
                         },
-                    )?;
+                    );
+                    let task_terminal =
+                        task_terminal.map_err(|refused| give_back(token.clone(), refused))?;
                     if let Some(refusal) = &summary_refusal {
                         *failure.error = failure
                             .error
@@ -9142,7 +9189,8 @@ impl HostShared {
                             resource_readings: None,
                             store_update_alias: None,
                         },
-                    )?;
+                    );
+                    let event = event.map_err(|refused| give_back(token.clone(), refused))?;
                     failure.terminal = Some(terminal(&event));
                     if failure.error.lifecycle.capacity.is_none()
                         && task_failure.as_ref().is_none_or(|evidence| {
@@ -9272,7 +9320,8 @@ impl HostShared {
                         resource_readings: None,
                         store_update_alias: None,
                     },
-                )?;
+                );
+                let event = event.map_err(|refused| give_back(token.clone(), refused))?;
                 // Workflow #336 L2d: the page-graph home entry's refusal of a configured
                 // return-home package carries its detail as a linear failure does. Workflow
                 // #371-2: so does a page-graph step whose confirmation failed.
@@ -9404,7 +9453,8 @@ impl HostShared {
                             resource_readings: None,
                             store_update_alias: None,
                         },
-                    )?;
+                    );
+                    let event = event.map_err(|refused| give_back(token.clone(), refused))?;
                     let task_failure = scheduled.then(|| TaskFailureEvidence {
                         outcome: refusal.outcome(),
                         severe: false,
@@ -9468,7 +9518,9 @@ impl HostShared {
                     .declares_store_update()
                     .then(|| instance_alias.to_owned()),
             },
-        )?;
+        );
+        // Workflow #457: a terminal step that failed gives the lease back before the answer.
+        let task_terminal = task_terminal.map_err(|refused| give_back(token.clone(), refused))?;
         let completed = OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&task_terminal)),
@@ -11973,6 +12025,25 @@ impl HostShared {
         request_id: RequestId,
     ) -> RuntimeHostResult<()> {
         lock(&self.contained_runs, HostLocation::ReadActiveContainedRuns)?.remove(&request_id);
+        Ok(())
+    }
+}
+
+/// Workflow #457, test only: the fix turned off and on again.
+#[cfg(test)]
+impl RuntimeHost {
+    /// While `off`, a direct run that returns from its terminal step with a failure keeps its
+    /// lease until its client's connection closes or the lease expires, as before the fix; `false`
+    /// gives it back before the answer again (`HostShared::execute_contained_task_with_lease`).
+    pub(crate) fn direct_run_terminal_release_off_for_test(
+        &self,
+        off: bool,
+    ) -> RuntimeHostResult<()> {
+        let location =
+            crate::codes::test_spellings::TestLocation::DirectRunTerminalReleaseOffForTest;
+        self.shared_ref(location)?
+            .direct_run_terminal_release_off_for_test
+            .store(off, Ordering::Release);
         Ok(())
     }
 }
