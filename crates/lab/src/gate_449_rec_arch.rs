@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #449 REC-ARCH (contracts/lab-recording.md, "Archiving" and "Recorded swipes"; register
-// §1.287, "Slice REC-ARCH"): a recording can be ended as material only, and a swipe sent with
-// `--record` is a step.
+// §1.342): a recording can be ended as material only, and a swipe sent with `--record` is a step.
 // - `rec_arch_a_swipe_is_a_step_and_record_stop_generates_it_as_a_drag`: a swipe on the open step
 //   that declares no effect declares the step's drag between boxes of one pixel at its two points
 //   (`source: "swipe"`) and records its execution; marked, the recording's `record stop` generates

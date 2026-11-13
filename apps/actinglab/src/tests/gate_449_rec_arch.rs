@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #449 REC-ARCH (contracts/lab-recording.md, "Archiving"; register §1.287, "Slice
-// REC-ARCH"): `record archive` ends a recording as material only and `record reopen` makes it
+// Workflow #449 REC-ARCH (contracts/lab-recording.md, "Archiving"; register §1.342):
+// `record archive` ends a recording as material only and `record reopen` makes it
 // active again, on actinglab's command line. The steps are recorded through the Lab's recording
 // API as `observe --capture --record` and `do --capture --record` record them (no Runtime); the
 // session and its header through the command line.
