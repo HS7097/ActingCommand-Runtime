@@ -6,19 +6,29 @@
 //! which the module then commits as `config replace` commits a file (`crate::rescue`).
 //!
 //! - **What is asked** ([`Asked`]): the alias, the game and the server as the configuration names
-//!   them, the emulator's index and the two backends, each required, none with a default.
+//!   them, the emulator's index and the two backends, each required, none with a default; and
+//!   (Workflow #452) the application id, optional, of the form the configuration's assembly takes
+//!   ([`application_id_form`]).
+//! - **The application id** (Workflow #452): the one given, else the one the game's root declares
+//!   for the server (`<standard_packs.root>/<game>/applications.json`,
+//!   `servers.<server>.application_id`, [`declared_application_id`]), the member the host's idle
+//!   action reads; the entry records it and the answer says which (`application_id_from`, `given`
+//!   or `declared`). A given id is written whether or not the root declares another.
 //! - **What is refused before anything is written**, each `instance_invalid`: an alias the
 //!   configuration has (an entry of `instances` or a row of `policy.facts.instances`), with `alias`;
 //!   an emulator index an entry binds (`instance_index`), with `alias`, `instance_index` and the
 //!   entry's alias as `aliases`; a game whose root under `standard_packs.root` holds no
 //!   `bundle.json` the contract crate reads, with `game` and the file's `path` (and the read's
 //!   failure as the cause), or a configuration without `standard_packs.root`, with `game` and the
-//!   key; a server no pack of that bundle names, with `game`, `server` and `path`; a configuration
-//!   without the list `instances` or `policy.facts.instances`, or without a row there to take the
-//!   host and the capabilities from, with the key as `config_key`.
+//!   key; a server no pack of that bundle names, with `game`, `server` and `path`; (Workflow #452)
+//!   no application id given and none the game's root declares for the server (no file, an
+//!   unreadable one, no such member, or none of the form), with `game`, `server`, the file's `path`
+//!   and the read's failure as the cause when there is one; a configuration without the list
+//!   `instances` or `policy.facts.instances`, or without a row there to take the host and the
+//!   capabilities from, with the key as `config_key`.
 //! - **The candidate** ([`compose`]): the live file's document with the entry `{alias,
-//!   instance_id, instance_index, touch_backend, capture_backend}` appended to `instances` and the
-//!   row `{instance_id: <alias>, server_id, game_id, host_id, available: true,
+//!   instance_id, application_id, instance_index, touch_backend, capture_backend}` appended to
+//!   `instances` and the row `{instance_id: <alias>, server_id, game_id, host_id, available: true,
 //!   capability_operation_ids, preferred_task_ids: []}` appended to `policy.facts.instances`, the
 //!   host and the capabilities those of a row of the same game and server, else of the same game,
 //!   else of the first row; every other member as it was, in its order, with the live file's line
@@ -44,8 +54,8 @@ use crate::cli_line;
 use crate::codes::{ArgumentProblem, InstallLocation, InstallRefusal};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    BundleIndex, IdentifierIssuer, STANDARD_PACK_BUNDLE_FILE, SchedulingPauseReason,
-    validate_instance_alias,
+    BundleIndex, IdentifierIssuer, MAX_INSTANCE_ALIAS_BYTES, STANDARD_PACK_BUNDLE_FILE,
+    SchedulingPauseReason, validate_instance_alias,
 };
 use actingcommand_lab_ops::core_reads::Params;
 use serde::Serialize;
@@ -64,6 +74,9 @@ const ROOT_KEY: &str = "standard_packs.root";
 const INSTANCES_KEY: &str = "instances";
 /// The policy section's instance list, which INST-R will derive from the entries.
 const POLICY_INSTANCES_KEY: &str = "policy.facts.instances";
+/// Workflow #452: the root file of a game's standard pack that declares its application per server
+/// (`servers.<server>.application_id`), which the host's idle action reads.
+const APPLICATIONS_FILE: &str = "applications.json";
 /// How many ids are minted at most before the command gives up (each one is new: the issuer's
 /// namespace is the clock, the process and a counter).
 const MINT_ATTEMPTS: usize = 8;
@@ -82,6 +95,29 @@ pub(crate) struct Asked {
     pub(crate) mumu_index: u16,
     pub(crate) touch_backend: String,
     pub(crate) capture_backend: String,
+    /// Workflow #452: the application id the caller gave, if any.
+    pub(crate) application_id: Option<String>,
+}
+
+/// Workflow #452: an application id the configuration's assembly takes for an entry, exactly its
+/// rule and no stricter one: actingd's assembly refuses a blank one
+/// (`application_identity_missing`), and the device registration it builds one longer than
+/// [`MAX_INSTANCE_ALIAS_BYTES`] bytes or with a control character (`invalid_application_identity`,
+/// the registration's own check in `crates/runtime-host`).
+fn application_id_form(text: &str) -> bool {
+    !text.trim().is_empty()
+        && text.len() <= MAX_INSTANCE_ALIAS_BYTES
+        && !text.chars().any(char::is_control)
+}
+
+/// Where the written application id came from (Workflow #452).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ApplicationIdFrom {
+    /// The caller's `--application-id`.
+    Given,
+    /// The game's root: `applications.json`, `servers.<server>.application_id`.
+    Declared,
 }
 
 /// A byte of a game or server word.
@@ -101,7 +137,9 @@ fn identifier(text: &str) -> bool {
 impl Asked {
     /// The row's parameters (Workflow #434 LAB-5B1b: read through its constant): a missing one is
     /// `actingctl_usage_invalid` (`required`), one of another type `wrong_type`, an empty or
-    /// malformed one `unusable`, an index above 65535 `out_of_range`.
+    /// malformed one `unusable`, an index above 65535 `out_of_range`. Workflow #452: the optional
+    /// `application_id` absent is none; given, of another type `wrong_type`, of a form the
+    /// configuration's assembly refuses ([`application_id_form`]) `unusable`.
     pub(crate) fn of(params: Params<'_>) -> Result<Self, Outcome> {
         let text = |name: &str, shown: &str| -> Result<String, Outcome> {
             match params.get(name) {
@@ -147,29 +185,47 @@ impl Asked {
                 })?
             }
         };
+        let touch_backend = text("touch_backend", "--touch-backend")?;
+        let capture_backend = text("capture_backend", "--capture-backend")?;
+        let application_id = match params.get("application_id") {
+            None => None,
+            Some(Value::String(given)) if application_id_form(given) => Some(given.clone()),
+            Some(Value::String(_)) => return Err(super::unusable("--application-id")),
+            Some(_) => {
+                return Err(cli_line::usage_invalid(
+                    Some("--application-id"),
+                    ArgumentProblem::WrongType,
+                ));
+            }
+        };
         Ok(Self {
             alias,
             game,
             server,
             mumu_index,
-            touch_backend: text("touch_backend", "--touch-backend")?,
-            capture_backend: text("capture_backend", "--capture-backend")?,
+            touch_backend,
+            capture_backend,
+            application_id,
         })
     }
 }
 
-/// What the command added: what was asked, the minted id, the alias whose policy row gave the
-/// host and the capabilities, and the reason the instance is paused with ([`PAUSE_REASON`]).
+/// What the command added: what was asked, the minted id, the application id written and where it
+/// came from (Workflow #452), the alias whose policy row gave the host and the capabilities, and
+/// the reason the instance is paused with ([`PAUSE_REASON`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Added {
     pub(crate) asked: Asked,
     pub(crate) instance_id: String,
+    pub(crate) application_id: String,
+    pub(crate) application_id_from: ApplicationIdFrom,
     pub(crate) capabilities_from: String,
     pub(crate) pause_reason: SchedulingPauseReason,
 }
 
 /// Workflow #421 INST-5 fix 1: [`Added`] as a record, its pause reason the name type as the hold's
-/// records keep a reason (`super::hold`).
+/// records keep a reason (`super::hold`). Workflow #452: and the application id with where it came
+/// from, two additive members.
 #[derive(Serialize)]
 struct AddedRecord<'a> {
     alias: &'a str,
@@ -181,6 +237,8 @@ struct AddedRecord<'a> {
     capture_backend: &'a str,
     capabilities_from: &'a str,
     pause_reason: &'a SchedulingPauseReason,
+    application_id: &'a str,
+    application_id_from: ApplicationIdFrom,
 }
 
 impl Added {
@@ -196,6 +254,8 @@ impl Added {
             capture_backend: &self.asked.capture_backend,
             capabilities_from: &self.capabilities_from,
             pause_reason: &self.pause_reason,
+            application_id: &self.application_id,
+            application_id_from: self.application_id_from,
         })
     }
 }
@@ -259,7 +319,16 @@ pub(crate) fn compose(
             .aliases(holders));
     }
     // The game and the server: the installation's packages must bind them.
-    bound(paths, config, asked)?;
+    let game_root = bound(paths, config, asked)?;
+    // Workflow #452: the application id, the one given, else the one the game's root declares for
+    // the server; with neither the command refuses here, before anything is written.
+    let (application_id, application_id_from) = match &asked.application_id {
+        Some(given) => (given.clone(), ApplicationIdFrom::Given),
+        None => (
+            declared_application_id(&game_root, asked)?,
+            ApplicationIdFrom::Declared,
+        ),
+    };
     // The host and the capabilities: those of a row of the same game and server, else of the same
     // game, else of the first row.
     let same = |row: &&Value, server: bool| {
@@ -285,12 +354,15 @@ pub(crate) fn compose(
     let added = Added {
         asked: asked.clone(),
         instance_id,
+        application_id,
+        application_id_from,
         capabilities_from: capabilities_from.to_owned(),
         pause_reason: pause_reason()?,
     };
     let entry = json!({
         "alias": asked.alias,
         "instance_id": added.instance_id,
+        "application_id": added.application_id,
         "instance_index": asked.mumu_index,
         "touch_backend": asked.touch_backend,
         "capture_backend": asked.capture_backend,
@@ -353,11 +425,13 @@ fn packs_root(paths: &Paths, config: &Value) -> Option<PathBuf> {
 }
 
 /// The game is a game root of the configuration's standard-pack root whose `bundle.json` the
-/// contract crate reads (its `game` the directory's), and the server one a pack of it names.
-fn bound(paths: &Paths, config: &Value, asked: &Asked) -> Result<(), Outcome> {
+/// contract crate reads (its `game` the directory's), and the server one a pack of it names; the
+/// game root.
+fn bound(paths: &Paths, config: &Value, asked: &Asked) -> Result<PathBuf, Outcome> {
     let game = || invalid().game(asked.game.clone());
     let root = packs_root(paths, config).ok_or_else(|| game().config_key(ROOT_KEY))?;
-    let bundle = root.join(&asked.game).join(STANDARD_PACK_BUNDLE_FILE);
+    let game_root = root.join(&asked.game);
+    let bundle = game_root.join(STANDARD_PACK_BUNDLE_FILE);
     let unbound = || game().path(&bundle);
     let bytes = files::read_all(&bundle).map_err(|cause| unbound().caused_by(cause))?;
     let index: BundleIndex = serde_json::from_slice(files::without_bom(&bytes))
@@ -371,7 +445,36 @@ fn bound(paths: &Paths, config: &Value, asked: &Asked) -> Result<(), Outcome> {
     if !index.packs.iter().any(|pack| pack.server == asked.server) {
         return Err(unbound().server(asked.server.clone()));
     }
-    Ok(())
+    Ok(game_root)
+}
+
+/// Workflow #452: the application id the game root `game_root` declares for the asked server, read
+/// as the host's idle action reads it (`applications.json`, a leading byte-order mark skipped,
+/// `servers.<server>.application_id`). That reader is the host's own (`crates/runtime-host`,
+/// `host::idle`), which this crate does not depend on, and the contract crate has none: this is
+/// the smallest reader of the same member. No file, an unreadable or non-JSON one, no such member,
+/// or an id not of the form the configuration's assembly takes ([`application_id_form`]) refuses
+/// `instance_invalid` with `game`, `server`, the file's `path` and the read's failure as the cause
+/// when there is one.
+fn declared_application_id(game_root: &Path, asked: &Asked) -> Result<String, Outcome> {
+    let path = game_root.join(APPLICATIONS_FILE);
+    let undeclared = || {
+        invalid()
+            .game(asked.game.clone())
+            .server(asked.server.clone())
+            .path(&path)
+    };
+    let bytes = files::read_all(&path).map_err(|cause| undeclared().caused_by(cause))?;
+    let table: Value = serde_json::from_slice(files::without_bom(&bytes))
+        .map_err(|error| undeclared().caused_by(files::json_failure(&error)))?;
+    table
+        .get("servers")
+        .and_then(|servers| servers.get(asked.server.as_str()))
+        .and_then(|server| server.get("application_id"))
+        .and_then(Value::as_str)
+        .filter(|declared| application_id_form(declared))
+        .map(str::to_owned)
+        .ok_or_else(undeclared)
 }
 
 /// Every instance id the live file names and every one a journal of the root recorded as added.

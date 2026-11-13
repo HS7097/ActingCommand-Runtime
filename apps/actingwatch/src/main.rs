@@ -41,6 +41,7 @@ use actingcommand_lab_ops::cli_line;
 // The registry, for the launcher's own codes (never a literal spelling): actingctl's, in
 // `crates/lab-ops` since Workflow #434 LAB-1.
 use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
+use actingcommand_lab_ops::initiator::Initiator;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
@@ -50,6 +51,10 @@ use std::sync::OnceLock;
 
 /// The exit of every launcher failure: an error (model §7.6).
 const FAILED: i32 = 1;
+/// Workflow #434 LAB-6S2-B1 (`contracts/lab-two-entries.md` §4.1, §4.2): the word every probe of
+/// the Runtime this program makes declares, the tick's and its subcommands' alike. The probe
+/// still sends `Health` and `BindChannel` only, with the CLI's envelope, as on 0.12.58.
+const WORD: Initiator = Initiator::LabWatchdog;
 /// The developer text of a command line actingwatch does not take.
 const USAGE: &str = "usage: actingwatch [status|install|uninstall]";
 /// The developer text of an `ACTINGCOMMAND_DETAIL` the watchdog does not know (actingctl's).
@@ -216,7 +221,8 @@ fn tick_in_process(root: &Path, log: &'static LogLines) -> i32 {
         root.as_os_str().to_owned(),
         OsString::from("--from-task"),
     ];
-    actingcommand_watchdog::dispatch_exit(&arguments, developer).map_or(FAILED, i32::from)
+    actingcommand_watchdog::dispatch_exit(&arguments, developer, Some(WORD))
+        .map_or(FAILED, i32::from)
 }
 
 /// The runtime client's channel fallback report during the task's tick: its developer line,
@@ -279,7 +285,9 @@ fn command(launch: &impl Launch, arguments: &[OsString]) -> ExitCode {
         OsString::from("--root"),
         root.into_os_string(),
     ];
-    ExitCode::from(actingcommand_watchdog::dispatch_exit(&arguments, &stderr_line).unwrap_or(1))
+    ExitCode::from(
+        actingcommand_watchdog::dispatch_exit(&arguments, &stderr_line, Some(WORD)).unwrap_or(1),
+    )
 }
 
 /// Prints an exit `lab-ops` built as `cli_line` printed it before Workflow #434 LAB-2, which

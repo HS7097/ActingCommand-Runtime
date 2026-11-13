@@ -30,9 +30,10 @@
 //! - `mcp_write_provenance_as_todays_server`: today's server (`actingctl mcp-serve`, the program
 //!   the same build puts beside this one) and this one each pause scheduling once on a scripted
 //!   Runtime of their own: both connections carry the same requests, their issued ids and times
-//!   left out (`Health`, `BindChannel` on the MCP channel, the identity card `actingctl-mcp`, the
-//!   client action of `ac_pause` on surface `mcp`, then `PauseScheduling`), each with the envelope
-//!   (Cli, Cli).
+//!   left out (`Health`, `BindChannel`, the identity card `actingctl-mcp`, the client action of
+//!   `ac_pause` on surface `mcp`, then `PauseScheduling`), each with the envelope (Cli, Cli).
+//!   Workflow #434 LAB-6S2-B1 (adapted): but for the binding, which this server declares as `lab`
+//!   with `Lab-MCP` and no `via`, and today's server as the MCP channel until LAB-6S2-B2.
 //!
 //! Workflow #434 LAB-5G3 (register §1.287, "Slice LAB-5G3"), each server with a short call budget
 //! (`--call-budget`), so that no test waits for today's 25 s:
@@ -108,14 +109,14 @@
 
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    AuditInput, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
-    EventPayloadDraft, EventSeverity, EventSource, FactScope, IdentifierIssuer, OriginModule,
-    OwnerEpoch, PackSchedulePackage, PackScheduleScopeVersion, PackScheduleSource,
-    PackScheduleView, ProjectedEvent, ProjectionPayload, RuntimeControlPlaneStatus,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryCursor, RuntimeEventQueryPage,
-    RuntimeInstanceStatus, RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeRequest, RuntimeResult, SanitizationError, SecretField,
-    SecretFingerprinter, Sha256Fingerprint, TerminalEvent,
+    AuditInput, DeclaredInitiator, EventAction, EventActor, EventDraft, EventLinksDraft,
+    EventOrigin, EventPayloadDraft, EventSeverity, EventSource, FactScope, IdentifierIssuer,
+    Initiator, OriginModule, OwnerEpoch, PackSchedulePackage, PackScheduleScopeVersion,
+    PackScheduleSource, PackScheduleView, ProjectedEvent, ProjectionPayload,
+    RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryCursor,
+    RuntimeEventQueryPage, RuntimeInstanceStatus, RuntimeOperation, RuntimePayloadDraft,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, SanitizationError,
+    SecretField, SecretFingerprinter, Sha256Fingerprint, TerminalEvent,
 };
 use actingcommand_lab_ops::cli_line::{self, Exit};
 use actingcommand_lab_ops::code_lookup;
@@ -705,10 +706,21 @@ fn mcp_write_provenance_as_todays_server() {
         .iter()
         .map(sent)
         .collect::<Vec<_>>();
+    // Workflow #434 LAB-6S2-B1 (adapted: the new server's binding moved): every request but the
+    // binding is today's server's, the envelope (Cli, Cli) included; the binding is `lab` with
+    // `Lab-MCP` and no `via`, where today's server binds `mcp` until LAB-6S2-B2.
+    let without_binding = |requests: &[Value]| {
+        requests
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != 1)
+            .map(|(_, request)| request.clone())
+            .collect::<Vec<_>>()
+    };
     assert_eq!(
-        connection.requests.iter().map(sent).collect::<Vec<_>>(),
-        todays_sent,
-        "the new server sends what today's server sends for the same write"
+        without_binding(&connection.requests.iter().map(sent).collect::<Vec<_>>()),
+        without_binding(&todays_sent),
+        "the new server sends what today's server sends for the same write, its binding apart"
     );
     assert_eq!(
         operations(&connection),
@@ -720,11 +732,36 @@ fn mcp_write_provenance_as_todays_server() {
             "pause_scheduling",
         ]
     );
-    let RuntimeOperation::BindChannel { channel, via, .. } = connection.requests[1].operation()
-    else {
-        panic!("the second request is no BindChannel");
+    let bound = |request: &RuntimeRequest| {
+        let RuntimeOperation::BindChannel {
+            channel,
+            via,
+            initiator,
+        } = request.operation()
+        else {
+            panic!("the second request is no BindChannel");
+        };
+        (
+            *channel,
+            *via,
+            initiator.as_ref().and_then(DeclaredInitiator::initiator),
+        )
     };
-    assert_eq!((*channel, *via), (RuntimeChannel::Mcp, None));
+    assert_eq!(
+        bound(&connection.requests[1]),
+        (RuntimeChannel::Lab, None, Some(Initiator::LabMcp))
+    );
+    assert_eq!(
+        bound(&todays_connection.requests[1]),
+        (RuntimeChannel::Mcp, None, None)
+    );
+    for request in connection.requests.iter().map(sent) {
+        assert_eq!(
+            (&request["actor"], &request["source"]),
+            (&json!(EventActor::Cli), &json!(EventSource::Cli)),
+            "{request}"
+        );
+    }
     assert_eq!(
         todays_sent[2]["operation"]["card"]["client"],
         json!("actingctl-mcp"),

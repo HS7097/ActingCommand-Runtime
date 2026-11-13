@@ -15,7 +15,16 @@
 //! Workflow #434 LAB-5G1b: a third front, [`Front::Mcp`], the MCP channel with the envelope
 //! today's MCP server uses, (Cli, Cli): the Lab's MCP server connects so until LAB-6 (the
 //! coordinator's rulings 11 and 12 on board #434, comment 6775192250). No program says it yet.
+//!
+//! Workflow #434 LAB-6S2-B1 (`contracts/lab-two-entries.md` §2.4, §4.2; register §1.287, "Slice
+//! LAB-6S2-B1"; the coordinator's rulings of 2026-11-13 on board #434, not the owner's words): the
+//! Lab's own programs bind the Lab channel with their initiator word and keep the envelope they
+//! sent on 0.12.58. actinglab's front carries the word of its process ([`Front::Actinglab`]), and
+//! the Lab's MCP server's binds `lab` with `Lab-MCP` and keeps (Cli, Cli) ([`Front::Mcp`]); the
+//! Runtime records each request with the channel that front had on 0.12.58 (the map M of
+//! LAB-6S2-M). actingctl's front stays on the CLI channel without a word until LAB-6S2-B2.
 
+use crate::initiator::Initiator;
 use actingcommand_contract::{EventActor, EventSource};
 use actingcommand_runtime_client::{
     RuntimeChannel, RuntimeClient, RuntimeClientConfig, RuntimeClientError,
@@ -29,11 +38,27 @@ use std::sync::OnceLock;
 pub enum Front {
     /// `actingctl`: the CLI channel, envelope (Cli, Cli).
     Actingctl,
-    /// `actinglab`'s CLI module (LAB-2): the Lab channel, envelope (Lab, Lab).
-    Actinglab,
-    /// Workflow #434 LAB-5G1b: the Lab's MCP server: the MCP channel, envelope (Cli, Cli), as
-    /// `actingctl mcp-serve` connects (`apps/actingctl/src/mcp/runtime.rs`).
+    /// `actinglab`'s CLI module (LAB-2): the Lab channel, envelope (Lab, Lab). Workflow #434
+    /// LAB-6S2-B1: with the word of the process (§4.2): `Lab-CLI`, the `Lab-制包` or `Lab-救急` of
+    /// `ACTINGCOMMAND_INITIATOR`, `Lab-MCP` under `serve --stdio --front mcp`.
+    Actinglab(Initiator),
+    /// Workflow #434 LAB-5G1b: the Lab's MCP server, with the envelope (Cli, Cli), as
+    /// `actingctl mcp-serve` sends it (`apps/actingctl/src/mcp/runtime.rs`). Workflow #434
+    /// LAB-6S2-B1: on the Lab channel with `Lab-MCP`, where it was the MCP channel.
     Mcp,
+}
+
+impl Front {
+    /// Workflow #434 LAB-6S2-B1: the word a connection of this front declares: none for
+    /// actingctl's (until LAB-6S2-B2), the process's for actinglab's, `Lab-MCP` for the Lab's MCP
+    /// server's.
+    pub const fn initiator(self) -> Option<Initiator> {
+        match self {
+            Self::Actingctl => None,
+            Self::Actinglab(initiator) => Some(initiator),
+            Self::Mcp => Some(Initiator::LabMcp),
+        }
+    }
 }
 
 static FRONT: OnceLock<Front> = OnceLock::new();
@@ -58,24 +83,41 @@ pub fn client_config(state_root: impl Into<PathBuf>) -> RuntimeClientConfig {
 /// `state_root` ([`client_config`] for the program in force).
 pub fn config(front: Front, state_root: impl Into<PathBuf>) -> RuntimeClientConfig {
     match front {
-        Front::Actingctl => RuntimeClientConfig::new(
+        Front::Actinglab(initiator) => RuntimeClientConfig::new(
+            state_root,
+            RuntimeChannel::Lab,
+            EventActor::Lab,
+            EventSource::Lab,
+        )
+        .with_initiator(initiator.word()),
+        Front::Actingctl | Front::Mcp => cli_envelope(state_root, front.initiator()),
+    }
+}
+
+/// Workflow #434 LAB-6S2-B1: the configuration of a connection that sends the CLI's envelope
+/// (Cli, Cli) to the Runtime of `state_root`: without a word on the CLI channel, as every such
+/// connection bound on 0.12.58; with `initiator`, one of the five Lab words, on the Lab channel
+/// with it. The Lab's MCP server ([`Front::Mcp`]), the rescue module's own client and the
+/// watchdog's probe connect so with their word; actingctl, whose `install`, `start`, `restart`,
+/// `watchdog` and `overview` run the same code, without one until LAB-6S2-B2.
+pub fn cli_envelope(
+    state_root: impl Into<PathBuf>,
+    initiator: Option<Initiator>,
+) -> RuntimeClientConfig {
+    match initiator {
+        None => RuntimeClientConfig::new(
             state_root,
             RuntimeChannel::Cli,
             EventActor::Cli,
             EventSource::Cli,
         ),
-        Front::Actinglab => RuntimeClientConfig::new(
+        Some(initiator) => RuntimeClientConfig::new(
             state_root,
             RuntimeChannel::Lab,
-            EventActor::Lab,
-            EventSource::Lab,
-        ),
-        Front::Mcp => RuntimeClientConfig::new(
-            state_root,
-            RuntimeChannel::Mcp,
             EventActor::Cli,
             EventSource::Cli,
-        ),
+        )
+        .with_initiator(initiator.word()),
     }
 }
 
