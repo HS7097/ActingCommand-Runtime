@@ -7,8 +7,9 @@
 //! - **Which rows are served** (`tools::serving`): a row `lab_ops::core_ops` serves, by
 //!   `core_ops` in this process ([`Service::core`]); and (the slice's second part) on Windows a
 //!   rescue row the rescue module serves, by the module in this process with the initiator
-//!   `Lab-MCP` ([`rescue_line`]), but `deploy` and `rollback`, whose run the front forces
-//!   detached, which answer `mcp_operation_unsupported`, their arguments unread. Workflow #434
+//!   `Lab-MCP` ([`rescue_line`]); Workflow #434 LAB-6S0: `deploy` and `rollback` among them, with
+//!   the `detach` the front gives true, so the module answers at once and its detached run
+//!   carries `Lab-MCP`. Workflow #434
 //!   LAB-5G4b: every other offered row through a `serve` child (`crate::children`), its
 //!   arguments read here first as every served row's, and (its second part) its line answered
 //!   after the client action of a capture and under the Lab overflow rule
@@ -99,9 +100,10 @@ impl Service {
         call_result(&self.line(operation, tool, arguments, era), era)
     }
 
-    /// The line of that call: `mcp_operation_unsupported` for a row this build does not serve;
-    /// else the refusal of its arguments, or the line of the code that serves it (Workflow #434
-    /// LAB-5G4b: for a row a child serves, the line of the child's envelope, [`Self::child`]).
+    /// The line of that call: `mcp_operation_unsupported` for a row this build does not serve
+    /// (since Workflow #434 LAB-6S0 no offered row); else the refusal of its arguments, or the
+    /// line of the code that serves it (Workflow #434 LAB-5G4b: for a row a child serves, the
+    /// line of the child's envelope, [`Self::child`]).
     pub(crate) fn line(
         &self,
         operation: &Operation,

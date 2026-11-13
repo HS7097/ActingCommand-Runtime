@@ -79,7 +79,7 @@ use actingcommand_contract::outcome::{Category, CauseRelation, Outcome, OutcomeE
 use actingcommand_lab_ops::core_reads::{
     Handed, Params, Part, ROOT_FLAG, STATE_ROOT_FLAG, Written,
 };
-use actingcommand_lab_ops::initiator::Initiator;
+use actingcommand_lab_ops::initiator::{self, Initiator};
 use actingcommand_lab_ops::locate::Location;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -748,8 +748,8 @@ fn running(
 }
 
 /// `--detach`: the module's command run again without it through the watchdog's manual-run
-/// method, with the same initiator, its output appended to `install\detached-<ms>.log`; the
-/// answer is at once (`op status` follows the operation).
+/// method, with the same initiator ([`detached_environment`]), its output appended to
+/// `install\detached-<ms>.log`; the answer is at once (`op status` follows the operation).
 fn detach(context: &Context<'_>, operation: InstallLocation, words: Vec<String>) -> Exit {
     let run = || -> Result<Exit, Outcome> {
         let paths = context.paths(operation)?;
@@ -761,11 +761,10 @@ fn detach(context: &Context<'_>, operation: InstallLocation, words: Vec<String>)
             .join(format!("detached-{}.log", context.host.now_unix_ms()));
         let mut arguments = vec!["--json".to_owned()];
         arguments.extend(words);
-        let initiator =
-            (context.initiator != Initiator::LabCli).then_some(context.initiator.as_str());
+        let environment = detached_environment(context.initiator);
         let pid = context
             .host
-            .detach_rescue(&arguments, initiator, &paths.root, &log)?;
+            .detach_rescue(&arguments, &environment, &paths.root, &log)?;
         let mut members = Map::new();
         members.insert("detached".to_owned(), Value::Bool(true));
         members.insert("log".to_owned(), Value::String(files::plain(&log)));
@@ -779,6 +778,25 @@ fn detach(context: &Context<'_>, operation: InstallLocation, words: Vec<String>)
         ))
     };
     run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
+}
+
+/// The variables a detached run of the module is started with, so that it runs as `word`
+/// (contracts/lab-two-entries.md §4.2): none for the default `Lab-CLI`; the word in
+/// `ACTINGCOMMAND_INITIATOR` for any other; and, Workflow #434 LAB-6S0, for `Lab-MCP` beside it
+/// the marker `ACTINGCOMMAND_DETACHED_RUN=rescue`, without which a Lab process refuses `Lab-MCP`
+/// in the variable. This start is the one place that sets the marker.
+fn detached_environment(word: Initiator) -> Vec<(&'static str, &'static str)> {
+    let mut environment = Vec::new();
+    if word != Initiator::LabCli {
+        environment.push((initiator::ENVIRONMENT_VARIABLE, word.as_str()));
+    }
+    if word == Initiator::LabMcp {
+        environment.push((
+            initiator::DETACHED_RUN_VARIABLE,
+            initiator::DETACHED_RUN_MARK,
+        ));
+    }
+    environment
 }
 
 /// The module's words of `name` with `params`, without `--detach`: what a detached run runs.
