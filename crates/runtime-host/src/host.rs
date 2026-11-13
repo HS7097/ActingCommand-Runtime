@@ -6134,7 +6134,9 @@ struct HostShared {
     // Workflow #437 MAPP-1d, test only: nothing of MAPP-1d applies while set (a member's monitor
     // probe is made whoever holds the device and keeps its session; a lapsed run lease of a member
     // hands the device on with the member's session open; every claim of a device's queue is
-    // judged by the gate of the member asked for), as before the slice.
+    // judged by the gate of the member asked for; the queue's grant names the member whose queue
+    // was pumped in its candidate's performance check, ladder judgement and `lease.granted`), as
+    // before the slice.
     #[cfg(test)]
     mapp1d_off_for_test: AtomicBool,
     // Workflow #437 MAPP-1d, test only: while set the resident monitor loop takes no probe, and a

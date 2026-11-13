@@ -130,8 +130,12 @@ The primary capture failure and any actual cleanup cause retain their existing
 typed GlobalLedger representation.
 A dedicated close lease is prepared as every resource-close lease is: an entry waiting in the
 instance's queue that the routine gate lets through refuses it (`prepare_resource_close`:
-`lease_transfer_not_safe`, Workflow #369 §5.1); on a device of a device group of several each
-waiting entry is judged by the routine gate of the member it serves (Workflow #437 MAPP-1d). #411 A52: a capture failure whose dedicated close
+`lease_transfer_not_safe`, Workflow #369 §5.1); on a device of a device group of several every
+waiting entry is judged by the routine gate of the member that asks for the close lease, as for an
+instance alone (Workflow #437 MAPP-1d keeps it so: judged by each entry's own member's gate, a
+claim its member's gate holds would refuse nothing, the close lease would then be refused as a
+queue ahead, `lease_busy`, which is no refusal by the queue, and the capture failure would end the
+Runtime). #411 A52: a capture failure whose dedicated close
 lease is refused so attempts no close and ends only its own work. The refusal is recorded once
 (`runtime.failed` with lifecycle stage `runtime_lifecycle_session_close`, the instance, under the
 failed work's links) and the capture failure is answered as every capture failure is. The host
@@ -152,7 +156,9 @@ the session is closed once the lease has ended (`close_lapsed_run_session_guarde
 member of a device group of several (Workflow #437 MAPP-1d) that end hands the key to no one,
 and the session is closed under the session close ahead, still under the device's admission
 guard, before any waiting claim is granted; an unconfirmed close there keeps its close lease,
-as every dedicated close lease is kept then. Final
+as every dedicated close lease is kept then, for that lease's time to live only: the lease sweep
+then ends it and hands the device to the next waiting member ([device-group.md](device-group.md),
+"Release."). Final
 Kernel shutdown aggregates cached
 unconfirmed causes and retains any session whose close authority was not established;
 it cannot retry that session through a local-only native close. The first native

@@ -867,9 +867,7 @@ impl HostShared {
             instance_id,
             connection_value,
             |request_id, holder_id, connection_id| {
-                // Workflow #437 MAPP-1d: each waiting claim by its own member's gate.
-                let gates = self.device_gates(instance_id)?;
-                let gate = |member: InstanceId| gates.gate_of(member);
+                let gate = self.routine_gate(instance_id)?;
                 lock(&self.scheduler, HostLocation::PrepareResourceCloseLease)?
                     .prepare_dedicated_lease(
                         request_id,

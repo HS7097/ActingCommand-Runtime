@@ -3632,18 +3632,27 @@ impl HostShared {
         // per device"): each entry of the device's queue is judged by the routine gate of the
         // member it serves, so an entry its own member's gate holds stays in its place and the
         // first entry another member's gate lets through is the candidate; the candidate's own
-        // member is the one its other checks and its grant's records name. For an instance alone
-        // on its device every entry is its own, as before.
+        // member is the one its other checks and its grant's records name
+        // (`pump_names_claims_member`). For an instance alone on its device every entry is its
+        // own, as before.
         let gates = self.device_gates(instance_id)?;
         let gate = |member: InstanceId| gates.gate_of(member);
+        let names_claims_member = self.pump_names_claims_member();
         let candidate = {
             let scheduler = lock(&self.scheduler, HostLocation::ReadQueueGrantCandidate)?;
             let now_monotonic_ms = self.monotonic_ms()?;
-            scheduler
-                .grant_candidate(instance_id, gate, now_monotonic_ms)
-                .zip(scheduler.first_eligible_claim(instance_id, gate, now_monotonic_ms))
+            let kind = scheduler.grant_candidate(instance_id, gate, now_monotonic_ms);
+            if names_claims_member {
+                kind.zip(
+                    scheduler
+                        .first_eligible_claim(instance_id, gate, now_monotonic_ms)
+                        .map(|(member, _)| member),
+                )
+            } else {
+                kind.map(|candidate| (candidate, instance_id))
+            }
         };
-        let Some((kind, (member, _))) = candidate else {
+        let Some((kind, member)) = candidate else {
             return Ok(());
         };
         // Review L4: a kind that takes today's admission checks is not granted while the
@@ -3702,9 +3711,14 @@ impl HostShared {
         self.append_scheduler_admitted(&validated, &context.instance, None)
             .map_err(|failure| *failure.error)?;
         let action_id = self.events.action_id()?;
+        let granted_member = if names_claims_member {
+            prepared.token().instance_id()
+        } else {
+            instance_id
+        };
         let links = self.events.request_links(
             &validated,
-            Some(prepared.token().instance_id()),
+            Some(granted_member),
             Some(prepared.token().lease_id()),
             Some(action_id),
         );
@@ -3736,6 +3750,18 @@ impl HostShared {
             return Ok(false);
         };
         self.ladder_claim_awaits_release(request_id, instance_id)
+    }
+
+    /// Workflow #437 MAPP-1d: whether the queue's grant (`pump`) names the member its candidate
+    /// serves (read with it, `first_eligible_claim`) in the candidate's performance check, its
+    /// ladder judgement and its `lease.granted`; always in a product build. A test turns it off
+    /// (`mapp1d_off_for_test`): the member whose queue was pumped is named, as before the slice.
+    fn pump_names_claims_member(&self) -> bool {
+        #[cfg(test)]
+        if self.mapp1d_off_for_test.load(Ordering::Acquire) {
+            return false;
+        }
+        true
     }
 
     /// Workflow #387 D1c (M387 §3.7): whether the ladder claim of `request_id`, whose work is

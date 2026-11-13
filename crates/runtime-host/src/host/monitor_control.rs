@@ -193,7 +193,7 @@ impl HostShared {
         // group"): under the device's guard, a member of a device group of several whose device
         // another member holds makes no probe this round: nothing is captured or recorded and its
         // monitor state is left as it is, so the probe stays due and is taken again at the next
-        // tick, as a probe a blackout passes over.
+        // tick, taking a place of the tick and this guard each time (a blackout's takes neither).
         if self.monitor_probe_waits_for_device(instance.instance_id(), &admission)? {
             return Ok(());
         }

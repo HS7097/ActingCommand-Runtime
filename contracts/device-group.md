@@ -251,14 +251,21 @@ lib.rs:111). The group keys these as follows:
     instance today, because the map key gave it.
   - **Each entry is judged by the gate of the member it serves** (MAPP-1d, built): every grant
     from the device's queue (the queue's own grant, the transfers at a lease's end, the immediate
-    grants and the queueing, the dedicated leases' refusal by a waiting entry) reads the routine
-    gate of each member of the device (`HostShared::device_gates`, `host/device_group.rs`: the
-    pauses, a #403 fence and blackout silence, as `routine_gate` reads them) and hands the
-    scheduler one gate per member (`MemberGates`). An entry its own member's gate holds (a paused
-    or fenced member's routine claim) stays in its place in the queue and does not block the
-    entries of the device's other members behind it: the first entry, in the queue's order
-    (priority, then arrival), that its own member's gate lets through is granted. Nothing is
-    reordered, so once the gate opens the held entry is first again, in its place. The queue's
+    grants and the queueing) reads the routine gate of each member of the device
+    (`HostShared::device_gates`, `host/device_group.rs`: the pauses, a #403 fence and blackout
+    silence, as `routine_gate` reads them) and hands the scheduler one gate per member
+    (`MemberGates`). An entry its own member's gate holds (a paused or fenced member's routine
+    claim) stays in its place in the queue and does not block the entries of the device's other
+    members behind it: the first entry, in the queue's order (priority, then arrival), that its own
+    member's gate lets through is granted. Nothing is reordered, so once the gate opens the held
+    entry is first again, in its place. A dedicated close lease is not such a grant: it is
+    refused, as for an instance alone, by every waiting entry that the routine gate of the member
+    asking for it lets through (`grant_dedicated_instance_lease`;
+    [read-session-resource-close.md](read-session-resource-close.md)), so a claim its own member's
+    gate holds refuses it too and the refusal stays #411 A52's non-fatal one (judged per member,
+    that claim refused nothing, the scheduler refused the close lease as a queue ahead,
+    `lease_busy`, and a member's capture failure on a free device ended the whole Runtime: found by
+    MAPP-1d's review, fixed before its merge). The queue's
     grant then names the member the entry serves: its performance directive and a ladder's
     performance release are read for that member, and its `lease.granted` names that member (the
     grant of a member's entry pumped by another member named the pumping member before). The
@@ -748,7 +755,7 @@ lists each action, where it is today, and what slice 1 does in a group of severa
 | 4 | Ladder rung `emulator_restart` | [emulator-control.md](emulator-control.md), "Rungs" and "Ladder profiles"; `crates/runtime-host/src/host/recovery_ladder.rs` | **Refused**: a profile in effect whose rungs hold it. The rungs `return_home` and `application_restart` stay per member on the device's key; before the latter stops and starts the member's own application, it stops the member in front, or every other member with the front unknown (MAPP-2b, "The switch before a run") |
 | 5 | Operator emulator control (`actingctl emulator`, the console, MCP `ac_emulator`: start, stop, restart) | [emulator-control.md](emulator-control.md), "Operation and origin gate", "The operator's claim and the fence" (`ClaimKind::EmulatorControl`) | **Refused** before any device step with `device_group_action_refused` (registered by MAPP-1b; error, ladder class `none`, owner `runtime-host`; values `alias`, `operation` `control_emulator_instance`), before its intent. It would rebind and refresh only the asking member (`rebind_discovered_endpoint`, [device-binding.md](device-binding.md), "Backends") and leave the other members' endpoints and device facts as they were |
 | 6 | Device binding: the handset's private file, and the discovery binding | `apps/actingd/src/config/device_binding.rs`; provider_startup.rs:105-141; `bound_alias`, `crates/runtime-host/src/host/instance_discovery.rs:171-194` | **Handsets refused** (`handset_member`). Discovery-bound members resolve the same index. The discovery answer and the startup record name one `bound_alias` per index (instance_discovery.rs takes the lowest instance id; provider_startup.rs keeps the last deferred entry). Slice 1 names the group's first member in alias order in both; the console slice decides how the others are shown |
-| 7 | Capture and input sessions (retained session, Nemu pairing, the touch tool on the device) | `keeps_device_session`, the multi-Nemu gate, `crates/runtime-host/src/host/resource_close.rs:105-139` | A member of a group of several keeps no session across lease ends (`keeps_device_session` false): each member opens its own on its turn, so that two members' sessions are not open on one device at once. A member's lease end closes the member's session under that lease, before its release or its transfer (`end_lease_device_use`), when that close is admitted; a keyless observation closes its own before it lets the device go (MAPP-1c, "The session close of a keyless observation"), and so does the monitor's probe (MAPP-1d, "The monitor's probe in a device group"). A run's lease that lapses in its end phase (MAPP-1d): its close under the lapsed lease is refused and fences the member, as before (#411 A64, `fence_lapsed_lease_close`); that end then hands the device to no one (no transfer, whatever claim waits), and before the device's admission guard is let go the member's session is closed under a session close ahead ("The session close of a keyless observation"), which no waiting claim refuses (`HostShared::cleanup_token_guarded`, `close_lapsed_run_session_guarded`, `crates/runtime-host/src/host/lease.rs`, `resource_close.rs`); the claim that waited first is then granted in its place by the queue's own grant (its own member, holder and lease time). A close that cannot be confirmed fences the member (it is fenced already) and keeps its close lease, as every dedicated close lease is kept then, so the device stays held for that member; nothing ends the Runtime. Whether two members' sessions could coexist on one emulator (two Nemu connections, two touch servers) is not verified, and slice 1 never tries |
+| 7 | Capture and input sessions (retained session, Nemu pairing, the touch tool on the device) | `keeps_device_session`, the multi-Nemu gate, `crates/runtime-host/src/host/resource_close.rs:105-139` | A member of a group of several keeps no session across lease ends (`keeps_device_session` false): each member opens its own on its turn, so that two members' sessions are not open on one device at once. A member's lease end closes the member's session under that lease, before its release or its transfer (`end_lease_device_use`), when that close is admitted; a keyless observation closes its own before it lets the device go (MAPP-1c, "The session close of a keyless observation"), and so does the monitor's probe (MAPP-1d, "The monitor's probe in a device group"). A run's lease that lapses in its end phase (MAPP-1d): its close under the lapsed lease is refused and fences the member, as before (#411 A64, `fence_lapsed_lease_close`); that end then hands the device to no one (no transfer, whatever claim waits), and before the device's admission guard is let go the member's session is closed under a session close ahead ("The session close of a keyless observation"), which no waiting claim refuses (`HostShared::cleanup_token_guarded`, `close_lapsed_run_session_guarded`, `crates/runtime-host/src/host/lease.rs`, `resource_close.rs`); the claim that waited first is then granted in its place by the queue's own grant (its own member, holder and lease time). A close that cannot be confirmed fences the member (it is fenced already) and keeps its close lease, as every dedicated close lease is kept then, but only for that lease's time to live: the lease sweep then ends it (the fence keeps the member out of use) and hands the device to the next waiting member, whose session may open while the unconfirmed one is not confirmed closed ("Release."); nothing ends the Runtime. Whether two members' sessions could coexist on one emulator (two Nemu connections, two touch servers) is not verified, and slice 1 never tries |
 | 8 | Backend switch (#402 HS-2) | `crates/runtime-host/src/host/backend_switch.rs`; [runtime-config.md](runtime-config.md), "Switching an instance's backends" | Per member, on the device's key: it closes the member's session and opens the new backends while no other member runs |
 | 9 | Self-check, resume reconnect, connection preparation | [emulator-control.md](emulator-control.md), "Triggers", preparation stages | Per member, on the device's key, with the member's own session, closed at the lease end (row 7) |
 | 10 | Resource fence (#403) and its recheck | [emulator-control.md](emulator-control.md), "Resource fence"; `crates/runtime-host/src/host/resource_fence.rs` | Per member as today (cause, ladder, recheck, lift). Every other member waits (`device_group_waiting` `fenced`) until the fence is lifted |
@@ -869,11 +876,15 @@ of a device group of several:
   session is opened, no request, start, failure or recovery coordination is recorded, no lease is
   taken, and the member's monitor state is left as it is: its run count, its last verdict and its
   last error are not touched, so the round counts toward no failure and replaces no verdict. The
-  probe stays due, and the resident loop takes it again at its next tick (every 25 ms), as it
-  takes a probe a blackout passes over ([scheduling-blackout.md](scheduling-blackout.md),
-  "Complete silence"). The monitor's status shows it as a probe that is due and has not run
-  (`next_due_unix_ms` passed, the run count unchanged); the row has no member that says why a
-  probe waits (`RuntimeMonitorInstanceStatus`, `runtime-client`), and none is added.
+  probe stays due, and it is not passed over as a probe a blackout covers is
+  ([scheduling-blackout.md](scheduling-blackout.md), "Complete silence": that one is set aside
+  before the tick's bound and takes nothing): at every tick of the resident loop (every 25 ms,
+  `MONITOR_POLL_INTERVAL`) the waiting probe takes one of the tick's 16 places
+  (`MAX_MONITOR_PROBES_PER_TICK`) and the device's admission guard (a blocking lock) for its
+  judgement, until the device is free. The monitor's status shows it as a probe that is due and
+  has not run (`next_due_unix_ms` passed, the run count unchanged); the row has no member that
+  says why a probe waits (`RuntimeMonitorInstanceStatus`, `runtime-client`), and none is added
+  (what a person sees: "Later slices", "The console and the command line").
 - **The device free: the probe runs and closes its session.** The probe runs as before, and
   before it lets the guard go the member's session is closed under a session close ahead
   (`close_keyless_session_of_group`, "The session close of a keyless observation"), which neither
@@ -886,9 +897,11 @@ of a device group of several:
 - **Neither former fatal path is reached.** A capture that fails closes under the member's own
   lease or a dedicated close lease on a free device (a lease of another member, which refused
   that close busy and ended the Runtime, cannot hold the device under the guard once the round is
-  made; a dedicated close lease that the member's own waiting claim refuses is recorded once,
-  #411 A52, and the session close ahead closes the session); the recovery coordination (`monitor_recovery_admission`) runs under the same guard and
-  reads no lease of another member (whose token made it fatal). The capture failure of a keyless
+  made; a dedicated close lease that a waiting claim refuses, judged by the probing member's own
+  gate as for an instance alone, so also a claim of another member that member's own gate holds,
+  is recorded once, #411 A52, and the session close ahead closes the session); the recovery
+  coordination (`monitor_recovery_admission`) runs under the same guard and reads no lease of
+  another member (whose token made it fatal). The capture failure of a keyless
   capture during a takeover cooldown is not changed here (its own defect, board #456).
 - **An instance alone on its device** meets none of this: the judgement and the close return
   before any lock, and its probe is exactly as before.
@@ -997,7 +1010,10 @@ of a device group of several:
   - the invalidation fanned out to every member;
   - observation of a device held by another member.
 - **The console and the command line.** How a device with its applications is shown and named, and
-  `Status` with the group (`runtime-client`).
+  `Status` with the group (`runtime-client`). While a member's monitor probe waits for its device
+  ("The monitor's probe in a device group"), a person sees today only that the row's due time has
+  passed and its run count is unchanged, with no reason, so the row has to say that the probe waits
+  for the device.
 - **Clones.** A member's identity becomes its package name with its Android user (or its clone
   index). The start, the force-stop and the foreground query then carry the user (keeping the
   `u<user>` the foreground parse drops today, `crates/device/src/adb.rs`). This waits for a test on
@@ -1046,18 +1062,29 @@ of a device group of several:
 - The slice "device-level actions by device" comes before the first real use of a group of
   several.
 - **Before the load accepts a group of several**, besides the member that cannot fit (above), the
-  slice "order within one device" and the slice "device-level actions by device", nothing more of
-  MAPP-1c's open findings must be on main: MAPP-1d (register §1.354) closed the three it listed
-  here (register §1.350, its findings 2, 4 and 5).
-  - *History (MAPP-1d, 0.12.60).* The list named: a run's lease that lapses in its end phase while
-    a claim of another member waits (the expiry transferred the device to that claim and left the
-    member's session open under it, row 7); the monitor's probe, which was not refused while
-    another member's lease held the device, did not close its session, and could end the whole
-    Runtime by a close lease refused busy or by reading another member's token in its recovery
-    coordination (row 15); and the queue's grant, which judged the device's whole queue by the
-    gate of the member it was asked for, as the transfers, the dedicated leases and the queueing
-    did. Each is closed as row 7, "The monitor's probe in a device group" and "One queue, one
-    worker, one lease per device" now say.
+  slice "order within one device" and the slice "device-level actions by device", these must be
+  on main (found by MAPP-1d and its review, register §1.354; MAPP-1c's open findings 2, 4 and 5,
+  register §1.350, are closed by MAPP-1d):
+  - *A member's non-run lease that lapses while its session is open* (board #458): the sweep's
+    close under the lapsed lease is refused, the sweep marks that error fatal and the whole Runtime
+    stops, for every member of a group of several (and, as the review reads it, already today for
+    instances alone when several of them share the emulator's native capture).
+  - *An unconfirmed close of one member must keep the device from the other members until it is
+    confirmed*: today the close lease holds the device only for its time to live and the device
+    then passes on, so two members' sessions can be open together after an unconfirmed close (row
+    7).
+  - *A pump candidate blocked by its own member's performance directive or ladder wait* (`pump`)
+    blocks the whole device's queue, so one member's performance pause stops the others.
+  - *History (MAPP-1d, 0.12.60).* Before MAPP-1d this list named: a run's lease that lapses in
+    its end phase while a claim of another member waits (the expiry transferred the device to that
+    claim and left the member's session open under it, row 7); the monitor's probe, which was not
+    refused while another member's lease held the device, did not close its session, and could end
+    the whole Runtime by a close lease refused busy or by reading another member's token in its
+    recovery coordination (row 15); and the queue's grant, which judged the device's whole queue by
+    the gate of the member it was asked for, as the transfers and the queueing did. Each is closed
+    as row 7, "The monitor's probe in a device group" and "One queue, one worker, one lease per
+    device" now say; the dedicated close lease keeps the asking member's gate, as before (fix round
+    1, register §1.354).
 
 ## Codes, value keys and words (MAPP-1 registers the first three codes and two vocabularies, MAPP-1b the fifth code, MAPP-2a the fourth code and the third vocabulary, MAPP-2b one optional value and the key)
 

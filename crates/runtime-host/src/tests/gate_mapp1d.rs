@@ -4,7 +4,8 @@
 //! device group", "Device-level actions", row 7, and "One queue, one worker, one lease per
 //! device"): the three group gaps MAPP-1c's review found, closed, through the host: the monitor's
 //! probe of a member, the hand-over at a lapsed run lease's expiry, and the queue's grant judged
-//! by one member's gate.
+//! by one member's gate; and (fix round 1) a member's failed probe capture beside another,
+//! held member's queued claim, which must not end the Runtime.
 //!
 //! Two fixture instances A and B are one device group of several (`device.one`) and C is alone on
 //! its own device. The load refuses every group of several (actingd's MAPP-1 gate), so the host is
@@ -16,16 +17,19 @@
 //! acts. The resident monitor loop is held, and each probe round is run by the test itself, as the
 //! loop runs it; nothing sleeps. Every expected value is the contract's or the coordinator's
 //! ruling; every comparison is within one host, the lone instance's records by payloads with
-//! every id, time and registry place normalised, never by an identity. Neutral names only.
+//! every id, time, registry place and evaluation `seed` normalised, never by an identity. Neutral
+//! names only.
 
+use super::gate_386_sr4a3::{once as blackout_once, silence_manifest};
 use super::gate_403::status_fence;
 use super::instance_workers::{all_events, phases};
 use super::*;
 use crate::host::{ContainedTaskCheckpointPoint, HostClaimForTest};
 use actingcommand_contract::{
     HolderId, InstanceStuckRecovery, ResourceQuiescence, RuntimeLifecyclePhase,
-    RuntimeMonitorState, SchedulingPauseReason, SchedulingPauseScope,
+    RuntimeMonitorState, RuntimePayload, SchedulingPauseReason, SchedulingPauseScope,
 };
+use actingcommand_scheduler::codes::SchedulerCode;
 use actingcommand_scheduler::{ClaimKind, QueuedLease};
 use serde_json::{Value, json};
 
@@ -62,6 +66,13 @@ struct Device {
 
 impl Device {
     fn start() -> Self {
+        Self::start_with_blackout_of(None)
+    }
+
+    /// [`Self::start`], and when `blackout` names a member, a blackout of that member's own list
+    /// (`scheduling-blackout.md`) that covers the Runtime clock's time from the start, for an hour
+    /// and more: its routine gate is silenced, as `routine_gate` reads it.
+    fn start_with_blackout_of(blackout: Option<&'static str>) -> Self {
         let root = TempDir::new().expect("tempdir");
         let ids = BTreeMap::from([(A, instance_id()), (B, instance_id()), (C, instance_id())]);
         let device = ids[A].min(ids[B]);
@@ -98,6 +109,21 @@ impl Device {
                 (A.to_owned(), GROUP.to_owned()),
                 (B.to_owned(), GROUP.to_owned()),
             ]));
+        let config = match blackout {
+            Some(member) => config.with_config_manifest(silence_manifest(
+                json!({}),
+                json!([]),
+                &[(
+                    ids[member],
+                    json!([blackout_once(
+                        "mapp1d.member",
+                        POLICY_NOW_UNIX_MS - 1_000,
+                        POLICY_NOW_UNIX_MS + LAPSE_MS,
+                    )]),
+                )],
+            )),
+            None => config,
+        };
         let entries = states
             .iter()
             .map(|(alias, state)| ((*alias).to_owned(), ids[alias], Arc::clone(state)))
@@ -332,7 +358,7 @@ impl Device {
     /// Every record of `query`, in ledger order, as the lone instance's comparison reads them
     /// ([`comparable`]), but a frame's retention records, which the frame cleaner writes on its
     /// own time.
-    fn comparable_records(&self, query: EventQuery) -> Vec<(EventType, EventSeverity, Value)> {
+    fn comparable_records(&self, query: EventQuery) -> Vec<Compared> {
         let events = self
             .host
             .query_persisted_events_for_test(query)
@@ -494,10 +520,11 @@ fn unconfirmed_close() -> DeviceError {
 }
 
 /// Whether a member is named `key`, whose value is a time or a place: an instant on either clock,
-/// a measurement on the process clock, a local day, a ledger position or a record index, or a
-/// place in the monitor's registry (its revisions and configuration versions, which every change
-/// of the registry moves on). Two rounds on one host hold these apart however alike they are. No
-/// policy evaluation runs in the compared rounds, so no evaluation's `seed` is among them.
+/// a measurement on the process clock, a local day, a ledger position or a record index, a place
+/// in the monitor's registry (its revisions and configuration versions, which every change of the
+/// registry moves on), or an evaluation's `seed` (a digest of the fact snapshot's id, the
+/// evaluation's time and the owner epoch; a member of the dispatch admission's `activity`). Two
+/// rounds on one host hold these apart however alike they are.
 fn time_or_place(key: &str) -> bool {
     key.ends_with("_unix_ms")
         || key.ends_with("_monotonic_ms")
@@ -514,6 +541,7 @@ fn time_or_place(key: &str) -> bool {
                 | "previous_revision"
                 | "configuration_version"
                 | "probe_configuration_version"
+                | "seed"
         )
 }
 
@@ -564,27 +592,40 @@ fn normalised(value: &mut Value) {
     }
 }
 
-/// The records as the lone instance's comparison reads them: each one's type, severity and whole
-/// payload, normalised ([`normalised`]).
-fn comparable(events: &[PersistedEvent]) -> Vec<(EventType, EventSeverity, Value)> {
+/// One record as the lone instance's comparison reads it ([`comparable`]).
+#[derive(Debug, PartialEq)]
+struct Compared {
+    event_type: EventType,
+    severity: EventSeverity,
+    /// The instance the record's links name: for a grant from the queue, the member the queue's
+    /// grant names (`pump`'s attribution). One registered instance of one host, never minted.
+    instance: Option<InstanceId>,
+    /// The whole payload, normalised ([`normalised`]).
+    payload: Value,
+}
+
+/// The records as the lone instance's comparison reads them: each one's type, severity, the
+/// instance its links name and whole payload, normalised ([`normalised`]).
+fn comparable(events: &[PersistedEvent]) -> Vec<Compared> {
     events
         .iter()
         .map(|event| {
             let mut payload =
                 serde_json::to_value(event.payload()).expect("a record's payload encodes");
             normalised(&mut payload);
-            (event.event_type(), event.severity(), payload)
+            Compared {
+                event_type: event.event_type(),
+                severity: event.severity(),
+                instance: event.links().instance_id().copied(),
+                payload,
+            }
         })
         .collect()
 }
 
 /// Every difference between `with` and `without`, named in one list: the record counts, then each
 /// record that differs, with both sides.
-fn differences(
-    part: &str,
-    with: &[(EventType, EventSeverity, Value)],
-    without: &[(EventType, EventSeverity, Value)],
-) -> Vec<String> {
+fn differences(part: &str, with: &[Compared], without: &[Compared]) -> Vec<String> {
     let mut found = Vec::new();
     if with.len() != without.len() {
         found.push(format!(
@@ -860,6 +901,140 @@ fn mapp1d_neither_former_fatal_path_of_a_members_probe_is_reached() {
         vec![(A.to_owned(), true), (A.to_owned(), false)]
     );
     device.close();
+}
+
+/// How B's own routine gate holds its queued claim back, in the test of a member's failed probe
+/// capture beside a held member's queued claim.
+#[derive(Debug, Clone, Copy)]
+enum MemberHold {
+    /// A scheduling pause of B.
+    Paused,
+    /// A #403 resource fence of B, which waits for a person (stuck recovery off).
+    Fenced,
+    /// A blackout of B's own list that covers now.
+    Blackout,
+}
+
+/// Fix round 1 of MAPP-1d (the coordinator's ruling on the review's finding): a dedicated close
+/// lease is refused, as before the slice, by every entry waiting in the device's queue that the
+/// requesting member's own routine gate lets through (`grant_dedicated_instance_lease`, #411 A52).
+/// B is held by its own gate (paused, fenced, inside a blackout of its own list) and its routine
+/// startup claim waits in the device's queue, held; the device is free. A's probe runs on the free
+/// device and its capture fails; the capture failure's dedicated close lease is refused by B's
+/// claim, which A's open gate lets through (`lease_transfer_not_safe`), as for A alone with a
+/// refusing queue: the refusal is recorded once (`runtime.failed`, naming A), no close is attempted
+/// under it, A is not fenced, and the probe fails as a capture failure (`capture_failed` in A's
+/// monitor state); the Runtime's health stays clean. Then, as the slice builds it, the probe's own
+/// session close ahead closes A's session (fenced, confirmed) before the probe lets the device go,
+/// and B's claim still waits in its place. Judged by each member's gate instead, B's held claim
+/// refused nothing, the scheduler refused the close lease as a queue ahead (`lease_busy`), which
+/// is no refusal by the queue, and the Runtime ended.
+#[test]
+fn mapp1d_a_members_failed_probe_capture_beside_a_held_members_claim_keeps_the_runtime_running() {
+    for hold in [MemberHold::Paused, MemberHold::Fenced, MemberHold::Blackout] {
+        let device = Device::start_with_blackout_of(match hold {
+            MemberHold::Blackout => Some(B),
+            MemberHold::Paused | MemberHold::Fenced => None,
+        });
+        match hold {
+            MemberHold::Paused => device.pause(B),
+            MemberHold::Fenced => device
+                .host
+                .fence_instance_for_test(B)
+                .expect("B fenced by its own work's failure"),
+            MemberHold::Blackout => {}
+        }
+        let held = device.claim(B, ClaimKind::StartupPackage);
+        assert!(
+            held.queued.is_some() && held.granted.is_none(),
+            "{hold:?}: B's routine claim waits, held back by B's own gate: {held:?}"
+        );
+        assert_eq!(
+            device
+                .host
+                .instance_claims_for_test(B)
+                .expect("the device's claims"),
+            (None, vec![ClaimKind::StartupPackage]),
+            "{hold:?}: the device is free and B's claim waits"
+        );
+        device.states[A].fail_capture.store(true, Ordering::Release);
+        device.sample_capacity();
+        device.configure_monitor(A, false);
+        let mark = device.head();
+        let probed = device.host.run_due_monitor_probe_for_test(A);
+        assert!(
+            matches!(probed, Ok(true)),
+            "{hold:?}: A's probe ran on the free device and ended without a fatal: {probed:?}"
+        );
+        assert!(
+            device.host.fatal_error().expect("runtime health").is_none(),
+            "{hold:?}: the Runtime keeps running"
+        );
+        assert!(
+            device.states[A].capture_count.load(Ordering::Acquire) > 0,
+            "{hold:?}: A's capture was asked"
+        );
+        let after = device.events_after(mark);
+        let refusals = after
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::Runtime(RuntimePayload::Failed(record))
+                    if record.outcome().code().as_str()
+                        == SchedulerCode::LeaseTransferNotSafe.as_str() =>
+                {
+                    Some(record)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [refusal] = refusals.as_slice() else {
+            panic!(
+                "{hold:?}: one recorded refusal of the close lease by the queue, found {}",
+                refusals.len()
+            );
+        };
+        assert_eq!(
+            refusal
+                .lifecycle_failure()
+                .and_then(|failure| failure.instance_id()),
+            Some(device.ids[A]),
+            "{hold:?}: the refusal names A"
+        );
+        assert!(
+            status_fence(&device.host, A).is_none(),
+            "{hold:?}: no close was attempted under the refused lease, so A is not fenced"
+        );
+        let state = device.monitor_state(A).expect("A's monitor state");
+        assert_eq!(
+            state.last_error(),
+            Some(RuntimeErrorCode::CaptureFailed),
+            "{hold:?}: {state:?}"
+        );
+        let log = device.sessions();
+        assert!(
+            !log.is_empty()
+                && log.iter().all(|(member, _)| member == A)
+                && open_backends(&log, A) == 0,
+            "{hold:?}: A's session, opened by its probe, closed by the probe's session close \
+             ahead, and nothing of B opened: {log:?}"
+        );
+        assert_eq!(
+            device.states[A]
+                .unfenced_capture_close_count
+                .load(Ordering::Acquire),
+            0,
+            "{hold:?}: A's capture closed under a fenced resource-close step"
+        );
+        assert_eq!(
+            device
+                .host
+                .instance_claims_for_test(B)
+                .expect("the device's claims"),
+            (None, vec![ClaimKind::StartupPackage]),
+            "{hold:?}: B's claim still waits in its place, held"
+        );
+        device.close();
+    }
 }
 
 /// What A's direct run's end work did and saw: B's claim, asked at it; the sweep's tick that
@@ -1154,19 +1329,34 @@ fn mapp1d_a_paused_members_claim_stays_queued_while_another_members_later_claim_
     }
 }
 
-/// An instance alone on its device never reaches the slice: C's probe, the expiry of C's lease
-/// while C's claim waits, and the queue's grant of C's claim write the same records with the
-/// test-only switch on and off, on one host. The switch reaches none of the places it changes for
-/// C (each begins from a member of a device group of several, and C's device gates are its one
-/// gate), so what must not happen is asserted directly too: C's probe takes no lease and keeps
-/// C's session (opened by C's first observation, closed only by the Host close); C's lapsed lease
-/// hands the key to its waiting claim by a transfer; C's claim queued during C's observation is
-/// granted by the queue's own grant. A first probe round before the compared ones takes whatever
-/// a first probe of an instance takes once. The two rounds' records (the probe's, the expiry's, the
-/// claim's) are compared record by record, type, severity and whole payload, with every id, time
-/// and registry place normalised ([`comparable`]), and every difference is named in one failure.
+/// The test-only switch against main's code, on one host, two rounds: the switch on, then off.
+/// Off, the queue's grant (`pump`) names the member whose queue was pumped in its candidate's
+/// performance check, its ladder judgement and its `lease.granted`, and every claim of the queue
+/// is judged by that member's gate, as on main; on, it names the member the candidate serves (read
+/// with it, `first_eligible_claim`) and judges each claim by its own member's gate. A first probe
+/// round before the compared ones takes whatever a first probe of an instance takes once.
+/// - A member of several, where the switch makes a difference: during A's keyless observation on
+///   the free device B's self-check claim queues, and the observation's guard pumps A's queue when
+///   it lets the device go, which grants B's claim from the queue. The `lease.granted` record of
+///   B's claim names B (the claim's own member) on, and A (the member whose queue was pumped) off.
+/// - An instance alone (C), where it must make none: C's probe, the expiry of C's lease while C's
+///   claim waits, and the queue's grant of C's startup claim queued during C's observation (a kind
+///   that takes the pump's performance check) run main's code off and the slice's on, and write
+///   the same records: type, severity, the instance the links name and whole payload, record by
+///   record, with every id, time, registry place and evaluation `seed` normalised
+///   ([`comparable`]), every difference named in one failure. What must not happen is asserted
+///   directly too: C's probe takes no lease and keeps C's session (opened by C's first
+///   observation, closed only by the Host close); C's lapsed lease hands the key to its waiting
+///   claim by a transfer; C's queued claim is granted by the queue's own grant.
+///
+/// The probe's and the expiry's group branches begin from a member of a device group of several,
+/// and C reaches none of them. The slice's refactorings that C runs (`probe_monitor_instance` out
+/// of `run_monitor_probe`, `end_lease_ordered` out of `cleanup_token_guarded`, the admission
+/// guard handed through `cleanup_token_inner`, `device_held_by_another_member` out of the keyless
+/// observation's refusal) are not under the switch: this test does not claim them (register
+/// §1.354).
 #[test]
-fn mapp1d_a_lone_instances_probe_expiry_and_queue_grant_write_the_same_records_on_and_off() {
+fn mapp1d_the_switch_changes_a_members_grant_record_and_no_record_of_a_lone_instance() {
     let device = Device::start();
     let c = Arc::clone(&device.states[C]);
     let session = || {
@@ -1184,6 +1374,7 @@ fn mapp1d_a_lone_instances_probe_expiry_and_queue_grant_write_the_same_records_o
     device.clear_monitor(C);
     let connection = device.connection();
     let mut rounds = Vec::new();
+    let mut member_grants = Vec::new();
     for off in [false, true] {
         device
             .host
@@ -1259,9 +1450,15 @@ fn mapp1d_a_lone_instances_probe_expiry_and_queue_grant_write_the_same_records_o
         let expiry = comparable(&expired);
         device.release(&waiting, &handed);
 
-        // C's claim queued during C's observation, granted by the queue's own grant.
+        // C's startup claim queued during C's observation, granted by the queue's own grant.
         device.sample_capacity();
-        let (observed, queued) = device.observe_while(C, || device.claim(C, ClaimKind::SelfCheck));
+        let (observed, queued) =
+            device.observe_while(C, || device.claim(C, ClaimKind::StartupPackage));
+        assert_eq!(
+            queued.queued.as_ref().map(QueuedLease::position),
+            Some(1),
+            "{queued:?}"
+        );
         assert_eq!(
             observed.state(),
             RuntimeReceiptState::Completed,
@@ -1279,11 +1476,46 @@ fn mapp1d_a_lone_instances_probe_expiry_and_queue_grant_write_the_same_records_o
         device.release(&queued, &pumped);
         assert_eq!(session(), (1, 0), "C keeps its session");
         rounds.push((probe, expiry, grant));
+
+        // A member of several: B's claim queued during A's observation, granted by the pump of
+        // A's queue when A's observation lets the device go.
+        device.sample_capacity();
+        let (observed_a, member_claim) =
+            device.observe_while(A, || device.claim(B, ClaimKind::SelfCheck));
+        assert_eq!(
+            observed_a.state(),
+            RuntimeReceiptState::Completed,
+            "{observed_a:?}"
+        );
+        assert_eq!(
+            member_claim.queued.as_ref().map(QueuedLease::position),
+            Some(1),
+            "B's claim waited for the device: {member_claim:?}"
+        );
+        let member_token = member_claim
+            .wait_for_grant(GATE_WAIT)
+            .expect("the grant slot")
+            .expect("B's claim is granted once A's observation lets the device go");
+        assert_eq!(member_token.instance_id(), device.ids[B]);
+        assert_granted_from_the_queue(&device, &member_claim);
+        let named = device
+            .records_of(member_claim.request.request_id())
+            .iter()
+            .find(|event| event.event_type() == EventType::LeaseGranted)
+            .and_then(|event| event.links().instance_id().copied());
+        device.release(&member_claim, &member_token);
+        member_grants.push(named);
     }
     device
         .host
         .mapp1d_off_for_test(false)
         .expect("the slice's branches");
+    assert_eq!(
+        member_grants,
+        vec![Some(device.ids[B]), Some(device.ids[A])],
+        "the lease.granted of B's claim names B, its own member, with the switch on, and A, the \
+         member whose queue was pumped, with it off"
+    );
     let [on, off] = rounds.as_slice() else {
         panic!("two rounds: {rounds:#?}");
     };
@@ -1302,9 +1534,10 @@ fn mapp1d_a_lone_instances_probe_expiry_and_queue_grant_write_the_same_records_o
         found.len(),
         found.join("\n")
     );
+    let log = device.sessions();
     assert!(
-        device.sessions().is_empty(),
-        "the group's device saw nothing"
+        log.iter().all(|(member, _)| member == A) && open_backends(&log, A) == 0,
+        "the group's device saw A's observations only, each session closed: {log:?}"
     );
     device.close();
     assert_eq!(
