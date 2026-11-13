@@ -429,16 +429,28 @@ static CHANNEL_VIA: OnceLock<ChannelVia> = OnceLock::new();
 
 /// The configuration of every Runtime connection actinglab opens (Workflow #389 U-2, model
 /// section 3.2 rules 6 and 7): the Lab channel, with the `--via` of this process when a counter
-/// forwarded the work, and the envelope (Lab, Lab).
+/// forwarded the work, and the envelope (Lab, Lab). Workflow #434 LAB-6S2-B1: with the word of
+/// this process in place of `via` (§4.2; [`lab_client_config_via`]).
 fn lab_client_config(state_root: impl Into<PathBuf>) -> RuntimeClientConfig {
     lab_client_config_via(state_root, CHANNEL_VIA.get().copied())
 }
 
-/// [`lab_client_config`] with a given `via`.
+/// [`lab_client_config`] with a given `via`. Workflow #434 LAB-6S2-B1
+/// (`contracts/lab-two-entries.md` §2.4, §4.2; the coordinator's rulings of 2026-11-13 on board
+/// #434, not the owner's words): the connection binds the Lab channel with the process's word and
+/// keeps the envelope (Lab, Lab):
+/// - `via` `mcp`, which MCP's actinglab child (`--via mcp`) and `serve --stdio --front mcp` give:
+///   `Lab-MCP`, without `via`; the Runtime records its requests `lab` with `via` `mcp`, as on
+///   0.12.58 (the map M of LAB-6S2-M);
+/// - no `via`: the word `ACTINGCOMMAND_INITIATOR` names (`Lab-CLI` without it). A value the
+///   variable may not take declares none: the connection binds as on 0.12.58, and the command
+///   that checks the variable (an operation of the CLI module, a recording) refuses it there;
+/// - `via` `ui`, which no word names: as on 0.12.58, `via` without a word.
 fn lab_client_config_via(
     state_root: impl Into<PathBuf>,
     via: Option<ChannelVia>,
 ) -> RuntimeClientConfig {
+    use actingcommand_lab_ops::initiator::Initiator;
     let config = RuntimeClientConfig::new(
         state_root,
         RuntimeChannel::Lab,
@@ -446,8 +458,12 @@ fn lab_client_config_via(
         actingcommand_contract::EventSource::Lab,
     );
     match via {
-        Some(via) => config.with_via(via),
-        None => config,
+        Some(ChannelVia::Mcp) => config.with_initiator(Initiator::LabMcp.word()),
+        Some(via @ ChannelVia::Ui) => config.with_via(via),
+        None => match Initiator::of_this_lab_process() {
+            Ok(word) => config.with_initiator(word.word()),
+            Err(_) => config,
+        },
     }
 }
 

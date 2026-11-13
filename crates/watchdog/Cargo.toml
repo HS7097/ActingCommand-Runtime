@@ -34,5 +34,7 @@ sha2 = { workspace = true }
 # Workflow #381 A: the held Runtime start of `gate_381a` and `gate_wd1`
 # (`tests/support/held_runtime.rs`), stopped at the runtime-host preparation checkpoints.
 actingcommand-device = { workspace = true }
+# Workflow #434 LAB-6S2-B1: the scripted Runtime of the gate of the probe's binding.
+actingcommand-runtime-client = { workspace = true, features = ["test-support"] }
 actingcommand-runtime-host = { workspace = true, features = ["test-hooks"] }
 tempfile = "3"

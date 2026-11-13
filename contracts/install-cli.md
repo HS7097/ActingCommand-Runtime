@@ -621,6 +621,16 @@ not report `runtime_operation_unsupported`) fails the fail-class checks it feeds
 fail-class check acts (the automatic rollback, or `post_check_failed`); `not_evaluated` never
 does.
 
+The `post_check` step's evidence is `{commit, checks, failed}`: every row, and the ids of the
+fail-class checks that failed. A step whose checks pass, and one that begins an automatic rollback
+(with the member `rollback`), is `done` with it as before. Workflow #454 (0.12.59): a step whose
+failed check ends the command `post_check_failed` (a composite rollback, the rescue module's
+`config replace`, `config restore` and `instance add`) is closed `done` with the same evidence in
+the write that records the operation's result, so the record says which row failed and what it
+read; before, it stayed `started` with no evidence, the rows only in the answer's `post_check` and
+`failed_checks`. A crash before that write leaves the step `started`, and `install resume` runs the
+checks again.
+
 | id | Judged | Fail-class |
 |---|---|---|
 | `ready` | the start reached readiness (`ready_ms`), and the owner it made ready still answers (a Runtime gone or restarted at check time fails) | yes |
@@ -680,24 +690,44 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
   is read or written (done, or the refusal `instance_invalid`).
 - **Instances, the first slice** (Workflow #421 INST-5, since 0.12.52; register §1.300; the
   coordinator's work order of 11-11). Only the Lab's rescue module serves it, as `instance add
-  <alias> --game <g> --server <s> --mumu-index <n> --touch-backend <b> --capture-backend <b>`,
-  every parameter required and none with a default; it adds one emulator instance, bound by its
-  index. Not in this slice: `actingctl install instance add` and `instance remove`, INST-3's
-  candidate commands, a handset, and INST-R (the instance written in one place). It does not wait
-  for INST-3 and INST-R: it composes and commits the candidate itself, in one call.
+  <alias> --game <g> --server <s> --mumu-index <n> --touch-backend <b> --capture-backend <b>
+  [--application-id <id>]`, every parameter but the application id required and none with a
+  default; it adds one emulator instance, bound by its index. Not in this slice: `actingctl
+  install instance add` and `instance remove`, INST-3's candidate commands, a handset, and INST-R
+  (the instance written in one place). It does not wait for INST-3 and INST-R: it composes and
+  commits the candidate itself, in one call.
+  - **The application id** (Workflow #452, since 0.12.59; register §1.300, "Fix #452"). The
+    configuration's assembly requires an `application_id` of every entry bound by discovery
+    (`application_identity_missing`), so the entry carries one: `--application-id <id>` when it
+    is given, else the id the game's root under `standard_packs.root` declares for the server,
+    `<game>\applications.json`, `servers.<server>.application_id` (the member the Runtime's idle
+    action reads; a leading byte-order mark is skipped). A given id is checked by the assembly's
+    own rule and no stricter one: not blank, at most 256 bytes, no control character (otherwise
+    `actingctl_usage_invalid`, `unusable`, `--application-id`; one of another type
+    `wrong_type`). A given id is written whether or not the root declares another; no refusal
+    compares the two. The Runtime later judges an instance by the id its game's root declares
+    only in the idle action: its `close_app` (and `auto` when it takes that tier) checks that
+    the instance's configured application is the declared one and, when they differ, refuses
+    before its stop request with `invalid_application_identity` (`alias`, the declared
+    `application_id`), recorded for that instance alone; the application is left running and no
+    wake is owed.
   - **Refused before anything is written**, each `instance_invalid`: an alias the configuration
     has, an entry of `instances` or a row of `policy.facts.instances` (`alias`); an emulator index
     an entry binds, `instance_index` (`alias`, `instance_index`, the entry's alias as `aliases`); a
     game whose root under `standard_packs.root` holds no `bundle.json` the contract crate reads
     (`game`, `path`, the read's failure as the cause; `config_key` `standard_packs.root` when the
     configuration names no such root), or a server no pack of that bundle names (`game`,
-    `server`, `path`); a configuration without the list `instances` or `policy.facts.instances`,
-    or without a row there to take the host and the capabilities from (`config_key`). A
-    parameter missing or malformed is `actingctl_usage_invalid`. With no Runtime running it
-    refuses `runtime_not_running`: the new instance's pause needs the Runtime that starts with
-    it.
+    `server`, `path`); (Workflow #452) no `--application-id` and no id the game's root declares
+    for the server (no `applications.json`, one that does not read or is no JSON, no member of the
+    server, no `application_id` there, or one the assembly's rule refuses), with `game`, `server`,
+    the file's `path` and the read's failure as the cause when there is one; a configuration
+    without the list `instances` or `policy.facts.instances`, or without a row there to take the
+    host and the capabilities from (`config_key`). A parameter missing or malformed is
+    `actingctl_usage_invalid`. With no Runtime running it refuses `runtime_not_running`: the new
+    instance's pause needs the Runtime that starts with it.
   - **The candidate**: the selected configuration with the entry `{alias, instance_id,
-    instance_index, touch_backend, capture_backend}` appended to `instances` and the row
+    application_id, instance_index, touch_backend, capture_backend}` appended to `instances` and
+    the row
     `{instance_id: <alias>, server_id, game_id, host_id, available: true,
     capability_operation_ids, preferred_task_ids: []}` appended to `policy.facts.instances`, the
     host and the capabilities those of a row of the same game and server, else of the same game,
@@ -714,7 +744,8 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     replaced file kept as
     `actingd.config.json.prev-<ms>` (the candidate is the swap's own part, so nothing else is
     staged), the start and its post-start checks: one journal of kind `config_replace` with the
-    initiator and the input `instance_add` (what was added, its `instance_id`, the pause reason).
+    initiator and the input `instance_add` (what was added, its `instance_id`, the pause reason;
+    since Workflow #452 also `application_id` and `application_id_from`, `given` or `declared`).
   - **The new instance starts paused** (the coordinator's ruling of 11-11, not Alice's words):
     after the start, before `alive` and the release of the hold, it is paused with its own reason
     `instance.added`, a pause reason name ([scheduling-pause.md](scheduling-pause.md):
@@ -752,9 +783,10 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     restore` and every other composite set no global pause.
   - **Its answer**: `install_command_done` (`install_instance_add`, `install_operation_id`,
     `alias`, `game`), the steps `check_config`, `swap`, `pause_added`, `alive` and `release`, the
-    `backup` and `added`. A candidate refused after it was written (by check-config, or a Runtime
-    gone) stays beside the live file, kept as every part: nothing deletes it, and `leftovers` lists
-    it.
+    `backup` and `added` (as the journal's input records it, `application_id` and
+    `application_id_from` included). A candidate refused after it was written (by check-config,
+    or a Runtime gone) stays beside the live file, kept as every part: nothing deletes it, and
+    `leftovers` lists it.
   - **Taking it back**: `config restore <backup>` puts the kept file back by the same path. Its
     post-start checks judge against the configuration and the pauses from before the restore, so
     the instance it removes shows as a `bindings` and a `pauses` failure: it ends
@@ -2335,6 +2367,18 @@ acknowledgeable: the apply carries `--ack-guard root_inventory` (`guard_failed` 
 `inspect_live_modified`, `remove_ab_traces`, `remove_foreign_ui_files`, `check_state_root`; an old
 Startup-folder launcher is the caveat `legacy_autostart` with `stop_legacy_autostart`, and the MCP
 entry g1, which follows the conversion once, the caveat `mcp_entry_generation_stale`.
+
+**The installation's entries beside the Runtime's** (Workflow #452; the coordinator's ruling of
+2026-11-13 on board #452, a requirement on the slice that builds the inventory, R-15e). Directly
+under a single-location root the graphical installer writes entries that belong to the
+installation without being the Runtime's own: the files `acui.toml` (the console's settings of that
+root), `install-wizard.log` (the graphical installer's log) and `install-wizard.config.json` (the
+complete configuration it hands to `config replace`), and the directory `licenses` (the third-party
+licence texts it places). The inventory, when it is built, lists none of them as `foreign`; which
+other class each takes is that slice's to state. `vision` is not one of them: it is the
+root-relative default of the configuration's vision root, governed by the configuration and not by
+this statement. Nothing reads this list yet: no installer command of this build takes an
+inventory.
 
 ### Registered codes and words (Workflow #429 R-15b)
 

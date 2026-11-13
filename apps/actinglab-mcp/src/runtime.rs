@@ -8,8 +8,9 @@
 //! - **The place** ([`place`]): as actinglab finds its own (`apps/actinglab/src/cli_module/place.rs`):
 //!   the root from the program's place, the state root from the selected configuration, or from
 //!   `ACTINGCOMMAND_RUNTIME_STATE_ROOT` when it is set.
-//! - **One kept connection** ([`Runtime::kept`]), `lab_ops::front`'s `Front::Mcp` (the MCP channel
-//!   with today's envelope, (Cli, Cli)), made again as today's server makes its own
+//! - **One kept connection** ([`Runtime::kept`]), `lab_ops::front`'s `Front::Mcp` (today's
+//!   envelope, (Cli, Cli); Workflow #434 LAB-6S2-B1: on the Lab channel with `Lab-MCP`, where it
+//!   was the MCP channel, which the Runtime still records), made again as today's server makes its own
 //!   (`apps/actingctl/src/mcp/runtime.rs`, `connect` and `failure`): before it is used again,
 //!   `Health` must answer the owner epoch it was opened on, else it is dropped and a new one is
 //!   made, the generation counted; one the client latched a failure on is dropped after the call

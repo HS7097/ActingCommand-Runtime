@@ -14,11 +14,12 @@ use crate::watchdog::observe;
 use crate::watchdog::start::{self, StartedProcess, Target, TickSeams};
 use actingcommand_contract::outcome::{Category, IoOp, Outcome};
 use actingcommand_contract::{
-    CONFIG_OVERRIDES_FACT_KEY, CONFIG_PARAMETERS_FACT_PREFIX, EventActor, EventSource, FactScalar,
-    FactValue, OwnerEpoch, RuntimeResult, ScheduleCandidateEligibility, SchedulingPauseExpectation,
-    SchedulingPauseReason, SchedulingPauseScope,
+    CONFIG_OVERRIDES_FACT_KEY, CONFIG_PARAMETERS_FACT_PREFIX, FactScalar, FactValue, OwnerEpoch,
+    RuntimeResult, ScheduleCandidateEligibility, SchedulingPauseExpectation, SchedulingPauseReason,
+    SchedulingPauseScope,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_lab_ops::initiator::Initiator;
+use actingcommand_runtime_client::RuntimeClient;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -197,17 +198,28 @@ pub(crate) trait RuntimeLink {
     fn catalog_hash(&self, state_root: &Path) -> Result<Option<String>, Outcome>;
 }
 
-/// The machine's Runtime.
-pub(crate) struct SystemRuntime;
+/// The machine's Runtime. Workflow #434 LAB-6S2-B1: every connection it makes declares the word
+/// of the program that runs the command (`crate::runtime_start::client_config`): the rescue
+/// module's, or none for `actingctl install`, as on 0.12.58 until LAB-6S2-B2.
+pub(crate) struct SystemRuntime {
+    initiator: Option<Initiator>,
+}
 
-fn connect(state_root: &Path) -> Result<RuntimeClient, Outcome> {
-    RuntimeClient::connect(RuntimeClientConfig::new(
-        state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    ))
-    .map_err(|error| error.outcome())
+impl SystemRuntime {
+    /// The machine's Runtime, reached with the word `initiator`.
+    pub(crate) const fn of(initiator: Option<Initiator>) -> Self {
+        Self { initiator }
+    }
+
+    /// The word its connections declare.
+    pub(crate) const fn initiator(&self) -> Option<Initiator> {
+        self.initiator
+    }
+}
+
+fn connect(state_root: &Path, initiator: Option<Initiator>) -> Result<RuntimeClient, Outcome> {
+    RuntimeClient::connect(crate::runtime_start::client_config(state_root, initiator))
+        .map_err(|error| error.outcome())
 }
 
 /// An owner epoch's text, as runtime-info and the status spell it.
@@ -225,16 +237,18 @@ fn scalar_text(value: Option<&FactScalar>) -> Option<String> {
     }
 }
 
-/// Lifts exactly the pause of `scope` the caller saw: in `owner_epoch` at `revision`.
+/// Lifts exactly the pause of `scope` the caller saw: in `owner_epoch` at `revision`, on a
+/// connection that declares `initiator`.
 fn resume_seen(
     state_root: &Path,
+    initiator: Option<Initiator>,
     scope: SchedulingPauseScope,
     owner_epoch: &str,
     revision: u64,
 ) -> Result<(), Outcome> {
     let owner_epoch = serde_json::from_value::<OwnerEpoch>(Value::String(owner_epoch.to_owned()))
         .map_err(|error| super::files::json_failure(&error))?;
-    let client = connect(state_root)?;
+    let client = connect(state_root, initiator)?;
     client
         .resume_scheduling_expected(
             scope,
@@ -253,7 +267,7 @@ impl RuntimeLink for SystemRuntime {
         if lock != OwnerLock::Locked {
             return Ok(None);
         }
-        let client = connect(state_root)?;
+        let client = connect(state_root, self.initiator)?;
         let status = client.status().map_err(|error| error.outcome())?;
         let info = client.runtime_info();
         Ok(Some(RuntimeSeen {
@@ -282,7 +296,7 @@ impl RuntimeLink for SystemRuntime {
     }
 
     fn catalog_hash(&self, state_root: &Path) -> Result<Option<String>, Outcome> {
-        let client = connect(state_root)?;
+        let client = connect(state_root, self.initiator)?;
         client
             .schedule_explanation(None, false)
             .map(|explanation| explanation.catalog_hash)
@@ -290,7 +304,7 @@ impl RuntimeLink for SystemRuntime {
     }
 
     fn config(&self, state_root: &Path) -> Result<ConfigSeen, Outcome> {
-        let client = connect(state_root)?;
+        let client = connect(state_root, self.initiator)?;
         let snapshot = client
             .runtime_fact_snapshot()
             .map_err(|error| error.outcome())?;
@@ -323,7 +337,7 @@ impl RuntimeLink for SystemRuntime {
     }
 
     fn plan(&self, state_root: &Path) -> Result<PlanSeen, Outcome> {
-        let client = connect(state_root)?;
+        let client = connect(state_root, self.initiator)?;
         let explanation = client
             .schedule_explanation(None, true)
             .map_err(|error| error.outcome())?;
@@ -391,7 +405,7 @@ impl RuntimeLink for SystemRuntime {
         reason: &SchedulingPauseReason,
         drain_timeout_ms: u64,
     ) -> Result<Drained, Outcome> {
-        let client = connect(state_root)?;
+        let client = connect(state_root, self.initiator)?;
         match client
             .pause_scheduling(
                 SchedulingPauseScope::Instance {
@@ -421,6 +435,7 @@ impl RuntimeLink for SystemRuntime {
     ) -> Result<(), Outcome> {
         resume_seen(
             state_root,
+            self.initiator,
             SchedulingPauseScope::Instance {
                 instance_alias: alias.to_owned(),
             },
@@ -435,7 +450,7 @@ impl RuntimeLink for SystemRuntime {
         reason: &SchedulingPauseReason,
         drain_timeout_ms: u64,
     ) -> Result<u64, Outcome> {
-        let client = connect(state_root)?;
+        let client = connect(state_root, self.initiator)?;
         let paused = client
             .pause_scheduling(
                 SchedulingPauseScope::Global,
@@ -460,6 +475,7 @@ impl RuntimeLink for SystemRuntime {
     ) -> Result<(), Outcome> {
         resume_seen(
             state_root,
+            self.initiator,
             SchedulingPauseScope::Global,
             owner_epoch,
             revision,
@@ -467,7 +483,7 @@ impl RuntimeLink for SystemRuntime {
     }
 
     fn shutdown(&self, root: &Path, state_root: &Path, wait_ms: u64) -> Result<Closed, Outcome> {
-        let client = connect(state_root)?;
+        let client = connect(state_root, self.initiator)?;
         let since = client.runtime_info().started_at_unix_ms();
         client.request_shutdown().map_err(|error| error.outcome())?;
         let target = client.runtime_info().shutdown_target();
@@ -497,7 +513,7 @@ impl RuntimeLink for SystemRuntime {
     }
 
     fn start_report(&self, state_root: &Path) -> Result<Option<Value>, Outcome> {
-        let client = connect(state_root)?;
+        let client = connect(state_root, self.initiator)?;
         match client.start_report() {
             Ok(report) => serde_json::to_value(report)
                 .map(Some)
@@ -537,6 +553,6 @@ impl RuntimeLink for SystemRuntime {
     }
 
     fn answering_owner(&self, state_root: &Path) -> Option<LiveOwner> {
-        start::system().answering_owner(state_root)
+        start::system_as(self.initiator).answering_owner(state_root)
     }
 }

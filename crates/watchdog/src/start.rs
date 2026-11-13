@@ -35,6 +35,7 @@ use crate::codes::ActingctlCode;
 use crate::process_probe::pid_alive;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{INSTALL_ROOT_ENV, INSTALL_SELECTION_ENV};
+use actingcommand_lab_ops::initiator::Initiator;
 use serde_json::Value;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
@@ -82,6 +83,12 @@ pub trait TickSeams {
     /// The health probe: the owner that holds the owner lock of `state_root` and answers, if
     /// one does.
     fn answering_owner(&self, state_root: &Path) -> Option<LiveOwner>;
+    /// Workflow #434 LAB-6S2-B1: the word every probe of the tick declares
+    /// (`observe::probe_config`); `None`, the CLI channel without a word as on 0.12.58, unless the
+    /// seams say otherwise.
+    fn initiator(&self) -> Option<Initiator> {
+        None
+    }
 }
 
 /// A started process, as the readiness wait sees it.
@@ -103,12 +110,23 @@ pub enum StartedState {
 /// The machine: the system clocks, the CIM probe, CreateProcess or WMI, and the Runtime client.
 pub struct System {
     origin: Instant,
+    /// Workflow #434 LAB-6S2-B1: the word its health probe declares.
+    initiator: Option<Initiator>,
 }
 
-/// The machine's seams, with the monotonic clock read from here on.
+/// The machine's seams, with the monotonic clock read from here on; its health probe declares
+/// no word, the CLI channel as on 0.12.58 ([`system_as`]).
 pub fn system() -> System {
+    system_as(None)
+}
+
+/// Workflow #434 LAB-6S2-B1: [`system`], its health probe declaring `initiator`: `Lab-看门狗` for
+/// actingwatch's tick, the word of the Lab program that starts the Runtime or reads the
+/// watchdog's status, none for actingctl's (until LAB-6S2-B2).
+pub fn system_as(initiator: Option<Initiator>) -> System {
     System {
         origin: Instant::now(),
+        initiator,
     }
 }
 
@@ -163,10 +181,14 @@ impl TickSeams for System {
     fn answering_owner(&self, state_root: &Path) -> Option<LiveOwner> {
         match observe::owner_journal(state_root) {
             Ok((OwnerLock::Locked, _)) => {
-                observe::live_owner(state_root, Some(HEALTH_TIMEOUT)).ok()
+                observe::live_owner(state_root, Some(HEALTH_TIMEOUT), self.initiator).ok()
             }
             _ => None,
         }
+    }
+
+    fn initiator(&self) -> Option<Initiator> {
+        self.initiator
     }
 }
 
@@ -272,14 +294,22 @@ pub fn start(
 }
 // --- Workflow #389 MCP-10 (end). ---
 
-/// A start on the machine (`actingctl start` and `restart`).
+/// A start on the machine (`actingctl start` and `restart`). Workflow #434 LAB-6S2-B1: its
+/// readiness probe declares `initiator` ([`system_as`]).
 pub fn start_target(
     installation: &Target<'_>,
     log: &Path,
     spawn_at_unix_ms: u64,
     from_task: bool,
+    initiator: Option<Initiator>,
 ) -> Attempt {
-    start_with(&system(), installation, log, spawn_at_unix_ms, from_task)
+    start_with(
+        &system_as(initiator),
+        installation,
+        log,
+        spawn_at_unix_ms,
+        from_task,
+    )
 }
 
 fn start_with(

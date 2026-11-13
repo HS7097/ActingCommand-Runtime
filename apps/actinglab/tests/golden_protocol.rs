@@ -1153,6 +1153,9 @@ impl Fixture {
             .env("ACTINGCOMMAND_ADB_PATH", &self.fake_adb)
             .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", &self.runtime_root)
             .env_remove("ACTINGLAB_REQUIRE_SESSION_DAEMON")
+            // Workflow #434 LAB-6S2-B1 fix 1: the receipt `lab_run_success` pins carries the
+            // process's word, `Lab-CLI` only without the initiator's variable.
+            .env_remove("ACTINGCOMMAND_INITIATOR")
             .output()
             .expect("run actinglab")
     }
