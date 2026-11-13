@@ -2787,6 +2787,9 @@ pub(crate) mod test_spellings {
             // run right after its switch.
             RefuseNextSwitchRenewalForTest => "refuse_next_switch_renewal_for_test",
             FailNextRunAfterSwitchForTest => "fail_next_run_after_switch_for_test",
+            // Workflow #437 MAPP-2d fix round 1: a test makes the release of a policy run's failed
+            // settlement take the granted token.
+            ReleaseFailedPolicyRunWithGrantedTokenForTest => "release_failed_policy_run_with_granted_token_for_test",
         }
     }
 }

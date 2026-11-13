@@ -22051,7 +22051,7 @@ byte over its limit), and `goals_neutral_example_reads_to_typed_entries` and
 `goals_each_type_reads_its_members` (their references made by `GoalReferences::new`, no assertion
 changed).
 
-### 1.357 Slice MAPP-2d (0.12.60): the lease across a switch: the run renews its lease after the switch, and the bound goes (Workflow #437; [device-group.md](device-group.md), "The switch before a run", step 4 and "The key's time"; the coordinator's ruling of 11-14 on board #437 and its ruling of 11-14 on the renewed token after the work order's "verify first" report, not the owner's words; the owner's rulings on board #437 it respects: a running task is never interrupted, the time a switch takes is counted nowhere, an application is launched only through an application launch over ADB; coordinator work order `rd-1114/brief-437-mapp2d.md`, read on main `691c20f5`)
+### 1.357 Slice MAPP-2d (0.12.60): the lease across a switch: the run renews its lease after the switch, and the bound goes (Workflow #437; [device-group.md](device-group.md), "The switch before a run", step 4 and "The key's time"; the coordinator's ruling of 11-14 on board #437 and its ruling of 11-14 on the renewed token after the work order's "verify first" report, not the owner's words; the owner's rulings on board #437 it respects: a running task is never interrupted, the time a switch takes is counted nowhere, an application is launched only through an application launch over ADB; coordinator work order `rd-1114/brief-437-mapp2d.md`, read on main `691c20f5`; fix 1, after an independent review, coordinator work order `rd-1114/brief-1703-fix1.md`, main `1ffb6c7f` merged)
 
 The slice took 1.354, the next free number on its base (main `691c20f5`, whose last section is
 §1.353); main then gave 1.354 to 1.356 to FL-2, S8 and S7, and G-R1 (the integration train
@@ -22147,6 +22147,46 @@ the requirement removes what they pinned:
 lease `D_s + D_run + R` with the slice reachable; it now asserts `D_run + R`, as with the slice
 off. Its lone instance's half is unchanged. The other MAPP-2b tests, the run-duration sample,
 `last_duration_ms` and budget test among them, and the MAPP-2a gate are unchanged.
+
+**Fix round 1** (after the independent review; no behaviour changes).
+
+1. *The stale-token test pins the defect.* In
+   `mapp2d_a_renewed_lease_is_gone_after_its_run_and_the_next_claim_is_granted_at_once` the
+   fixture's clock had not moved between the grant and the renewal, so the renewed token equalled
+   the granted one in all five members and a build that released with the granted token passed.
+   Every switch of the test now takes time (B's first front read moves the Runtime clock on by
+   5 000 ms, `Bench::slow_front`), and both completed runs assert that their admitted key expires
+   at least that much after the granted one (the policy run against its context's token, the
+   direct run against the key its startup run ran on). The test's comment names the assertions a
+   build that releases with the granted token fails (every release performed, no lease left, the
+   next claim granted). A third test-only hook, `RuntimeHost::release_failed_policy_run_with_granted_token_for_test`
+   (`#[cfg(test)]`, read once by `ensure_scheduled_policy_lease_released`), makes the failed
+   settlement's release take the granted token; with it the same failed policy run shows the
+   defect's shape: its one `lease.released` not performed, the renewed lease still holding the
+   device with the other member's claim queued, that claim not granted. Every earlier assertion
+   of the test is kept.
+2. *Texts.* `device-group.md`: a member already in front renews nothing, so its switch's one
+   foreground read comes out of its run's deadline (computed again from the granted lease, the
+   earlier kept), at most one device command's time limit, the consequence of no renewal without
+   a startup run; "too little" means only that the startup run cannot begin: a key with a little
+   more is used, the other members are stopped first, a startup run that then runs out of time
+   fails the switch at its step like any switch failure (the cooldown, no ladder), and the run
+   itself is never squeezed (it starts on a full renewed lease). The catalog
+   (`runtime-host.json`): `application_switch_failed`'s description names `lease_renewal` among
+   the steps whose package is the member's own; `dispatch_instance_cooldown`'s common causes and
+   the location `switch_application` name the renewal among the switch's steps. The index is
+   unchanged (`ci/outcome_codes_index.py --check`: current).
+3. *Records before the lifecycle.* The renewal's three records (`scheduler.admitted`,
+   `lease.transition_intent`, `lease.renewed`) are written under the run's own request before its
+   request lifecycle begins, where MAPP-2b already writes `startup_package_scheduled`; the
+   stop's records are the stopped member's own stop request's and the startup run's its own
+   request's, under the switch's causation id. The client's strict run read (`runtime-client`,
+   `read_contained_run_status`) reads a request by the 17 types of `RUN_STATUS_EVENT_TYPES`, none
+   of these four. `mapp2d_another_members_claim_stays_queued_through_the_renewal` now asserts that
+   before the lifecycle the run's request holds exactly those four records, and reads the closed
+   ledger after its mark with the forensic side's task evidence reader (`actingledger`'s, the one
+   the FL-2 gate reads with): nothing refused, no corrupt tail, and every record of the run's
+   request read in the host's order.
 
 **At deploy.** Nothing reachable until the load accepts a group of several. No configuration key,
 no interface revision; the catalog's `application_switch_step` gains one word. An instance alone

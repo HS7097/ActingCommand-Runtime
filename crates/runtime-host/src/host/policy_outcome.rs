@@ -1654,6 +1654,12 @@ impl HostShared {
             // a release with that token would find no lease and write it as already removed while
             // the lease lived on. An instance alone on its device keeps the granted token.
             let token = self.run_token(context.lease_token(), connection_id)?;
+            // Workflow #437 MAPP-2d fix round 1, test only: the granted token instead, as a build
+            // that released with it would (`release_failed_policy_run_with_granted_token_for_test`).
+            #[cfg(test)]
+            let token = self
+                .take_granted_token_release_for_test(context.lease_token())
+                .unwrap_or(token);
             // Workflow #369 H-1 (review M-1): this release follows a failure before the run's
             // terminal or a poisoned cleanup, so it never hands the key to a ladder.
             self.cleanup_scheduled_failure_with_run_links(

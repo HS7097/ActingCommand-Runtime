@@ -497,12 +497,21 @@ on which the entry is switched off.
      through) refuses it. The switch asks that before any stop and again before the startup run
      (`borrowed_key_admits`); a key with no more than `R` left fails the step `startup_package`
      with `contained_task_deadline_unavailable`, as any failure of the switch does (the run
-     settled failed, the member's switch cooldown), never as a refusal of the member's
-     declaration. A caller that states the time it still needs on the key after the startup run
+     settled failed, the member's switch cooldown, no ladder), never as a refusal of the member's
+     declaration. "Too little" means only that the startup run cannot begin. A key with a little
+     more than `R` left is used: the other members are stopped first, the startup run begins with
+     the deadline that is left, and a startup run that then runs out of time (its deadline, the
+     key's expiry less `R`, comes before its home) fails the switch at `startup_package` like
+     any other failure of that step (the member's switch cooldown, no ladder). The run itself is
+     never squeezed: it starts only after a startup run that reached its home, and then on a full
+     renewed lease, `D_run + R` from the renewal (step 4), however little the startup run had
+     left. A caller that states the time it still needs on the key after the startup run
      (MAPP-2a's form, `RunNeed::For`, the public `RuntimeHost::switch_application`) is asked, as
      MAPP-2a built it, for the startup run's lease time `D_s + R` and that time.
    - **Where the read, the stops and the startup run go.** Their time comes out of the granted
-     lease, not out of the run's: the run renews its own lease after them (step 4). A switch whose
+     lease, not out of the run's: the run renews its own lease after them (step 4). The one
+     exception is a member already in front, whose switch is its read alone and renews nothing
+     (step 4, "When nothing is renewed"). A switch whose
      read, stops and startup run need more than the lease leaves fails at `startup_package`: too
      little left before the startup run, or the startup run ending at its deadline, the key's
      expiry less `R`, before its home. Nothing of the run's clock bounds the read and the stops:
@@ -546,7 +555,14 @@ on which the entry is switched off.
      with the resolved one.
    - **When nothing is renewed.** With the member's own package in front (no startup run) and for
      an instance alone on its device, nothing is renewed and the granted token is the run's
-     throughout (`run_token` returns it; for an instance alone it reads nothing).
+     throughout (`run_token` returns it; for an instance alone it reads nothing). So a member
+     already in front pays for its switch's one foreground read out of its run's own deadline:
+     the deadline, moved on by the switch's time, is computed again from the granted lease and the
+     earlier is kept, which is the granted lease's (the grant plus `D_run`, as an instance
+     alone's), so the read's time comes off the run's `D_run`. That is at most one device
+     command's time limit: the read is one ADB command, which ends within the registration's
+     `command_timeout_ms` (12 000 ms by default). It is the consequence of renewing only after a
+     startup run: no startup run, no renewal.
    - **Its failure.** A renewal that is refused or fails (the lease lost, lapsed, fenced or taken
      over) fails the switch at the step `lease_renewal`, caused by the refusal; a Runtime-level
      failure of its records is the run's Runtime failure. The device is then as the startup run
@@ -565,6 +581,8 @@ and, MAPP-2d, the renewal included, on the Runtime clock) is taken out of the ru
   anchored at its receipt, the same). MAPP-2d: after a renewal the deadline is computed again
   from the renewed lease as it is from a granted one, and the earlier is kept, so a run whose
   switch renewed has its grant's deadline moved on by the switch's time and nothing taken from it.
+  A member already in front renews nothing, so its deadline stays the granted lease's and its
+  switch's one read comes out of it (step 4, "When nothing is renewed").
 - **The dispatch clock.** A policy run's switch time is kept with its dispatch clock until its
   settlement (`PolicyDispatchClock::switch_ms`, in memory), which subtracts it from the elapsed time:
   the execution record's `runtime_ms`, and from it the run-duration sample, the

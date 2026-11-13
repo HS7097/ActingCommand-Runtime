@@ -826,6 +826,20 @@ impl HostShared {
                 )
             })
     }
+
+    /// Workflow #437 MAPP-2d fix round 1: once, when a test asked for it
+    /// ([`RuntimeHost::release_failed_policy_run_with_granted_token_for_test`]), `granted`, the
+    /// token a policy run was granted, for the release of its failed settlement in place of the
+    /// token [`Self::run_token`] resolves, as a build that released with the granted token would;
+    /// `None` otherwise.
+    pub(super) fn take_granted_token_release_for_test(
+        &self,
+        granted: &LeaseToken,
+    ) -> Option<LeaseToken> {
+        self.granted_token_release_for_test
+            .swap(false, Ordering::AcqRel)
+            .then(|| granted.clone())
+    }
 }
 
 /// Workflow #437 MAPP-2a, tests: the switch's parts one by one, and how often its entry was
@@ -925,6 +939,21 @@ impl RuntimeHost {
         let location = crate::codes::test_spellings::TestLocation::FailNextRunAfterSwitchForTest;
         self.shared_ref(location)?
             .run_failure_after_switch_for_test
+            .store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Workflow #437 MAPP-2d fix round 1: the next release of a policy run's failed settlement
+    /// (`HostShared::ensure_scheduled_policy_lease_released`) takes the token the run was granted,
+    /// not the one the scheduler holds (`HostShared::take_granted_token_release_for_test`): what a
+    /// build that released with the granted token would do after a renewal.
+    pub(crate) fn release_failed_policy_run_with_granted_token_for_test(
+        &self,
+    ) -> RuntimeHostResult<()> {
+        let location =
+            crate::codes::test_spellings::TestLocation::ReleaseFailedPolicyRunWithGrantedTokenForTest;
+        self.shared_ref(location)?
+            .granted_token_release_for_test
             .store(true, Ordering::Release);
         Ok(())
     }

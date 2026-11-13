@@ -36,8 +36,12 @@ use crate::policy_control::PolicyValueRecord;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     APPLICATION_FOREGROUND_FACT_KEY, ConfigParameter, ConfigParameterSource, EventAction,
-    FactScalar, InstanceRunStop, PolicyConditionSettlement, RequestId, RuntimeConfigManifest,
-    RuntimeFactRecord, RuntimeFactScope, RuntimeLifecyclePhase,
+    FactScalar, InstanceRunStop, MAX_TASK_DIAGNOSTIC_PAGE_RECORDS, PolicyConditionSettlement,
+    RequestId, RuntimeConfigManifest, RuntimeFactRecord, RuntimeFactScope, RuntimeLifecyclePhase,
+};
+use actingcommand_ledger_forensics::{
+    ForensicEventFilter, ForensicEventsRequest, ForensicOutput, ForensicReport, ForensicRequest,
+    MAX_FORENSIC_EVENTS, TaskEvidenceReport, TaskRecordsRequest,
 };
 use actingcommand_policy::{PolicyCode, PolicyEvaluation};
 use actingcommand_runtime_config::scheduling::DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS;
@@ -1024,6 +1028,33 @@ fn first_sequence(events: &[PersistedEvent], matches: impl Fn(&PersistedEvent) -
         .find(|&event| matches(event))
         .map(PersistedEvent::sequence)
         .expect("the record")
+}
+
+/// Workflow #437 MAPP-2d fix round 1: the ledger under `root` after `after_sequence` as the
+/// forensic side reads a run (`actingledger`'s task evidence, the reader FL-2's gate reads a run's
+/// records with), every task diagnostic stream of the window read with it; a refusal of the whole
+/// read fails here.
+fn task_evidence(root: &Path, after_sequence: u64) -> TaskEvidenceReport {
+    let request = ForensicRequest::task_evidence(
+        root,
+        ForensicEventsRequest::new(
+            ForensicEventFilter::default(),
+            after_sequence,
+            None,
+            MAX_FORENSIC_EVENTS,
+        )
+        .expect("a task evidence window"),
+    )
+    .with_task_records(TaskRecordsRequest {
+        cursor: None,
+        limit: MAX_TASK_DIAGNOSTIC_PAGE_RECORDS,
+        include_private: true,
+    })
+    .expect("a task records page");
+    match actingcommand_ledger_forensics::run(request) {
+        Ok(ForensicOutput::Machine(ForensicReport::TaskEvidence(report))) => *report,
+        other => panic!("the forensic reader reads the window: {other:?}"),
+    }
 }
 
 // ---- The tests.
@@ -2500,6 +2531,14 @@ fn mapp2d_a_failed_renewal_fails_the_switch_at_lease_renewal_and_hands_the_devic
 /// once, under B's run's request and the same lease id, not refused; B's run is requested and
 /// completes; only then is A's claim granted the device. In order: the startup run's completion,
 /// the renewal, B's run's request, its completion, A's grant.
+///
+/// Fix round 1 (the review's open point): the renewal's records are written under B's run's own
+/// request before that request's lifecycle begins, where MAPP-2b already writes the startup
+/// package's `startup_package_scheduled` (the stop's records are A's own stop request's and the
+/// startup run's its own request's, under the switch's causation id). Before the lifecycle that
+/// request holds exactly those four records; the forensic side's reader of a run, the task
+/// evidence FL-2's gate reads with, reads the closed ledger after the mark without refusing
+/// anything and reads every record of that request in the host's order.
 #[test]
 fn mapp2d_another_members_claim_stays_queued_through_the_renewal() {
     let bench = Bench::standard();
@@ -2568,31 +2607,105 @@ fn mapp2d_another_members_claim_stays_queued_through_the_renewal() {
         (Some(ClaimKind::ClientLease), Vec::new())
     );
     assert!(bench.host.fatal_error().expect("health").is_none());
-    bench.close();
+
+    // Fix round 1: the records of B's run's request before its request lifecycle (its first
+    // record linked to its run): MAPP-2b's `startup_package_scheduled`, then the renewal's three.
+    let run_request = *run_requested
+        .links()
+        .request_id()
+        .expect("B's run's request");
+    let of_run_request = |events: &[PersistedEvent]| {
+        events
+            .iter()
+            .filter(|event| event.links().request_id() == Some(&run_request))
+            .map(|event| (event.sequence(), event.event_type()))
+            .collect::<Vec<_>>()
+    };
+    let written = of_run_request(&events);
+    let lifecycle = first_sequence(&events, |event| {
+        event.links().request_id() == Some(&run_request)
+            && event.links().run_id() == Some(&context.run_id())
+    });
+    let before_lifecycle = written
+        .iter()
+        .filter(|(sequence, _)| *sequence < lifecycle)
+        .map(|(_, kind)| *kind)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        before_lifecycle,
+        [
+            EventType::RuntimeLifecycleObserved,
+            EventType::SchedulerAdmitted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseRenewed,
+        ],
+        "before B's run's lifecycle: its startup_package_scheduled, then the renewal"
+    );
+    // The forensic side's reader of a run (the task evidence FL-2's gate reads with) reads the
+    // closed ledger after `mark`: it refuses nothing, and it reads every record of B's run's
+    // request, those before its lifecycle included, in the host's order.
+    let Bench { host, parts } = bench;
+    host.close().expect("close the device group host");
+    let report = task_evidence(parts.root.path(), mark);
+    assert!(
+        report.failures.is_empty(),
+        "the reader refuses nothing: {:?}",
+        report.failures
+    );
+    assert!(report.corrupt_tail.is_none(), "{:?}", report.corrupt_tail);
+    assert_eq!(
+        of_run_request(&report.page.events),
+        written,
+        "the reader reads every record of B's run's request, in the host's order"
+    );
 }
 
 /// The coordinator's ruling on the stale token (11-14): after a run whose lease was renewed, the
 /// device's lease is really gone, whether the run succeeded or failed at a step after its
-/// renewal, on both run paths.
+/// renewal, on both run paths. Fix round 1: every switch here takes time. B's first front read
+/// moves the Runtime clock on by `SWITCH_READ_MS` (5 000 ms, [`Bench::slow_front`]), after the
+/// grant and before the renewal, so the renewal (`D_run + R` from its own instant, as the grant
+/// is from its) replaces the token with one that expires at least that much later.
 ///
-/// - A policy run of B with A in front and A's client claim queued: once completed and settled,
-///   and once failed right after its switch (the test-only hook, `backend_operation_failed`,
+/// - A policy run of B with A in front and A's client claim queued: once completed and settled
+///   (its package admission names a key that expires at least `SWITCH_READ_MS` after the granted
+///   one), and once failed right after its switch (the test-only hook, `backend_operation_failed`,
 ///   before the run's request lifecycle, so its failed settlement releases its key). Each time
 ///   B's lease was renewed, every `lease.released` record of it is performed (none written as not
 ///   performed while the lease lived on), the scheduler holds no lease of B's (the device's lease
 ///   is A's client claim) and A's queued claim is granted at once.
-/// - A direct run of B with A in front: once completed, and once failed right after its switch
-///   (the same hook, its receipt failed with the code). Each time its lease was renewed, its
-///   releases are performed, the scheduler holds no lease at all on the device, and A's claim
-///   asked then is granted at once.
+/// - The defect's shape: the same failed policy run, with its failed settlement's release made to
+///   take the granted token (the test-only hook
+///   `release_failed_policy_run_with_granted_token_for_test`). Its one `lease.released` is written
+///   not performed, B's renewed lease still holds the device with A's claim queued behind it, and
+///   A's claim is not granted.
+/// - A direct run of B with A in front: once completed (its package admission names a key that
+///   expires at least `SWITCH_READ_MS` after the one its startup run ran on, the granted one), and
+///   once failed right after its switch (the same hook, its receipt failed with the code). Each
+///   time its lease was renewed, its releases are performed, the scheduler holds no lease at all
+///   on the device, and A's claim asked then is granted at once.
+///
+/// Why a build that releases with the granted token fails here: once the renewal has replaced it,
+/// the granted token no longer validates (the scheduler compares a token whole, and now the two
+/// differ in their expiry), so a release with it meets `lease_mismatch`, which the lease end reads
+/// as a lease already removed (`cleanup_token_guarded`, `host/lease.rs`): its `lease.released` is
+/// written not performed and the renewed lease lives on to its expiry. The first assertion to fail
+/// is "every release performed" (line 2753 on the policy path, 2909 on the direct path); "no lease
+/// of B's, A's queued claim holds the device" (2759), "A's queued claim is granted" (2764), "no
+/// lease on the device" (2915) and "A's claim is granted at once" (2924) fail after it. The block
+/// "the defect's shape" (lines 2787 to 2849) shows it on the policy path: there these assertions'
+/// opposites hold (2825, 2830, 2838). Without the switch's time the clock did not move between the
+/// grant and the renewal, the two tokens were equal in all five members, and such a build passed.
 #[test]
 fn mapp2d_a_renewed_lease_is_gone_after_its_run_and_the_next_claim_is_granted_at_once() {
+    const SWITCH_READ_MS: u64 = 5_000;
     for fail_after_switch in [false, true] {
         let bench = Bench::standard();
         let evaluation = bench.evaluate(POLICY_NOW_UNIX_MS);
         let context = bench.grant(&evaluation, TASK_B);
         let lease_id = context.lease_token().lease_id();
-        bench.front_until_started(B, APP_A, APP_B);
+        let granted_expiry = context.lease_token().expires_at_monotonic_ms();
+        bench.slow_front(B, APP_B, SWITCH_READ_MS);
         let queued_request = bench.queue_a(76);
         if fail_after_switch {
             bench
@@ -2617,6 +2730,12 @@ fn mapp2d_a_renewed_lease_is_gone_after_its_run_and_the_next_claim_is_granted_at
             );
         } else {
             bench.run_and_settle(&context);
+            let (_, run_key) = admitted(&bench.run_records(&context));
+            assert!(
+                run_key >= granted_expiry + SWITCH_READ_MS,
+                "policy: the renewed token expires later than the granted one: {run_key} < \
+                 {granted_expiry} + {SWITCH_READ_MS}"
+            );
         }
         let events = bench.events_after(mark);
         assert!(
@@ -2665,9 +2784,73 @@ fn mapp2d_a_renewed_lease_is_gone_after_its_run_and_the_next_claim_is_granted_at
         bench.close();
     }
 
+    // The defect's shape: the same failed policy run, its failed settlement's release made to take
+    // the granted token (the test-only hook), as a build that released with it would.
+    let bench = Bench::standard();
+    let evaluation = bench.evaluate(POLICY_NOW_UNIX_MS);
+    let context = bench.grant(&evaluation, TASK_B);
+    let lease_id = context.lease_token().lease_id();
+    bench.slow_front(B, APP_B, SWITCH_READ_MS);
+    let queued_request = bench.queue_a(77);
+    bench
+        .host
+        .fail_next_run_after_switch_for_test()
+        .expect("the run fails after its switch");
+    bench
+        .host
+        .release_failed_policy_run_with_granted_token_for_test()
+        .expect("the release takes the granted token");
+    let mark = bench.head();
+    let failed = bench
+        .run(&context)
+        .expect_err("the run fails after its switch");
+    assert_eq!(
+        failed.code(),
+        RuntimeErrorCode::BackendOperationFailed.as_str(),
+        "{failed:?}"
+    );
+    let events = bench.events_after(mark);
+    assert_eq!(
+        failed_settlement(&events, context.decision_id()).as_deref(),
+        Some(RuntimeErrorCode::BackendOperationFailed.as_str()),
+        "granted token: the run settled failed"
+    );
+    assert!(
+        events.iter().any(|event| {
+            event.event_type() == EventType::LeaseRenewed
+                && event.links().lease_id() == Some(&lease_id)
+        }),
+        "granted token: B's lease was renewed"
+    );
+    assert_eq!(
+        release_effects(&events, lease_id),
+        vec![Some(EffectDisposition::NotPerformed)],
+        "granted token: its one release is written as not performed"
+    );
+    assert_eq!(
+        bench.host.instance_claims_for_test(A).expect("claims"),
+        (
+            Some(ClaimKind::PolicyDispatch),
+            vec![ClaimKind::ClientLease]
+        ),
+        "granted token: B's renewed lease still holds the device, A's claim waits behind it"
+    );
+    assert!(
+        !events.iter().any(|event| {
+            event.links().request_id() == Some(&queued_request)
+                && matches!(
+                    event.event_type(),
+                    EventType::LeaseGranted | EventType::LeaseTransferred
+                )
+        }),
+        "granted token: A's queued claim is not granted"
+    );
+    assert!(bench.host.fatal_error().expect("health").is_none());
+    bench.close();
+
     for fail_after_switch in [false, true] {
         let bench = Bench::standard();
-        bench.front_until_started(B, APP_A, APP_B);
+        bench.slow_front(B, APP_B, SWITCH_READ_MS);
         if fail_after_switch {
             bench
                 .host
@@ -2695,11 +2878,29 @@ fn mapp2d_a_renewed_lease_is_gone_after_its_run_and_the_next_claim_is_granted_at
             assert_eq!(direct.state(), RuntimeReceiptState::Completed, "{direct:?}");
         }
         let events = bench.events_after(mark);
-        let lease_id = events
+        let renewed = events
             .iter()
             .find(|event| event.event_type() == EventType::LeaseRenewed)
-            .and_then(|event| event.links().lease_id().copied())
             .unwrap_or_else(|| panic!("direct, failed {fail_after_switch}: the lease renewed"));
+        let lease_id = renewed
+            .links()
+            .lease_id()
+            .copied()
+            .expect("the renewed lease");
+        if !fail_after_switch {
+            // The startup run ran on the granted key, the run on the renewed one.
+            let (_, granted_key) = admitted(switch_records(&events, bench.id(A)));
+            let (_, run_key) = admitted(
+                events
+                    .iter()
+                    .filter(|event| event.sequence() > renewed.sequence()),
+            );
+            assert!(
+                run_key >= granted_key + SWITCH_READ_MS,
+                "direct: the renewed token expires later than the granted one: {run_key} < \
+                 {granted_key} + {SWITCH_READ_MS}"
+            );
+        }
         let effects = release_effects(&events, lease_id);
         assert!(
             !effects.is_empty(),
