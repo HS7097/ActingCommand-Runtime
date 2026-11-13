@@ -19711,6 +19711,57 @@ Tests (adapted; the requirement deliberately changes what they pin, nothing else
 `scripts/windows-tools/Test-WindowsRemoteBuildTools.ps1` each pinned `task_local_cache_only` for
 the two DirectML components and now pin the new word. No test is added.
 
+### 1.341 Fix #454 (0.12.59): a failed post-start check closes its step with what it read (Workflow #454; a test installation driving release 0.12.58's command line, whose `config replace` ended `post_check_failed` with the operation record's `post_check` step `started` and `evidence: null`; the coordinator's rulings of 11-13 on board #454, not the owner's words; coordinator work order `rd-1113/brief-454-config-replace-ack.md`, read on main `7938d10e`)
+
+1.341 was the next free number on the base `7938d10e`. [install-cli.md](install-cli.md), "The
+post-start checks (INST-2)", is the contract. No outcome code, value key, vocabulary word,
+configuration key, step kind, step state, intent or evidence member, wire shape, record or interface
+revision is added or moved, and no outcome code fragment changes, so the index is not regenerated.
+
+**The defect.** The post-start checks (crate `lab-rescue`, `src/install/deploy.rs`, `post_check`)
+journal their step `started` before they read, and wrote their evidence (`{commit, checks,
+failed}`) only when no fail-class check failed (the step `done`) or when a composite update began
+its automatic rollback. A failed check that ends the command `post_check_failed` (every operation
+that does not roll back by itself: a composite rollback, and the rescue module's `config replace`,
+`config restore` and `instance add`, which journal `config_replace` and commit through one path,
+`rescue::commit`) returned its refusal with the rows in the answer's `post_check` and
+`failed_checks` and wrote nothing into the step: the operation ended with its step `started` and
+`evidence: null`, and `op status` could not say which row failed.
+
+**The fix.** That step is closed `done` with the evidence a passed check records (the same three
+members, `failed` naming the failed fail-class checks), by `Operation::close_with_end`, which writes
+nothing itself: the journal's next write is the one that records the operation's result
+(`deploy::end`, `Operation::finish`), so a crash before it leaves the step `started` and `resume`
+runs the checks again, never ending the operation done over a failed check. A passed check, and one
+that begins an automatic rollback, record as before; no answer changes.
+
+**Not in this fix.** The work order's first point (`config replace`, `config restore` and `instance
+add` taking the known pauses and acknowledged guards of `deploy` and `up`) waits for the
+coordinator's answer: in the rescue module neither `deploy` nor `up` takes `--known-pause` or
+`--ack-guard` (both are refused as unknown arguments: "The Lab's rescue module", "No confirmation
+parameters", pinned by `gate_434_lab3::irreversible_journal_initiator`), every instance pause a
+hold finds is known, and a guard row that does not pass is noted, never refused.
+
+**At deploy.** Nothing to do. From 0.12.59 the record of an operation that ends `post_check_failed`
+says which row failed and what it read; journals written before keep their `started` step.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PC-1 | the `post_check` step of an operation that ends `post_check_failed`: `done` with `{commit, checks, failed}` | journal behaviour (no shape change) | #454 | `deploy::post_check` | `since` 0.12.59; written with the operation's result |
+| PC-2 | [install-cli.md](install-cli.md), "The post-start checks (INST-2)": the step's evidence and when a failed check closes it | contract text | #454 | — | |
+
+Tests (apps gate row "#454 POST-CHECK RECORD", `crates/lab-rescue/src/install/gate_454_postcheck.rs`,
+on the fake host, the new start's report saying its tagged state was seeded again, which fails
+`no_seeding` alone): `postcheck_454_config_replace_failed_check_closes_its_step_with_its_rows` (the
+rescue module's `config replace`: the answer `post_check_failed` with `count` 1 and
+`failed_checks` `no_seeding`; the journal ended with that refusal, its `post_check` step `done`
+with the members `commit` (the live build), `checks` and `failed` (`no_seeding`), exactly the row
+`no_seeding` failed with the tagged state it read, the rows those the answer listed),
+`postcheck_454_instance_add_failed_check_closes_its_step_with_its_rows` (the same for `instance
+add`, the journal's input naming the added alias) and
+`postcheck_454_config_replace_passed_check_keeps_its_record` (checks that pass: the step `done`
+with the same three members, `failed` empty, no row failed). No existing test changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
