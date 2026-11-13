@@ -439,6 +439,7 @@
         "host.idle_state",
         "host.agent_wake",
         "host.capped_episodes",
+        "host.state_root_installation",
         "host.start_pause_applied"
       ],
       "reobserve_prefixes": [

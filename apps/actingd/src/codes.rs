@@ -299,6 +299,9 @@ actingcommand_contract::outcome_locations! {
         ResourcePackage => "config_resource_package",
         /// Workflow #384 D2-S2: checking the recognition maintenance package bindings.
         RecognitionBinding => "config_recognition_binding",
+        /// Workflow #453 S11: reading the state root's record of the installation that claimed
+        /// it, as the start reads it.
+        StateRoot => "config_state_root",
         PolicyState => "policy_state",
         PolicyInitialization => "policy_initialization",
         PolicyBootstrap => "policy_bootstrap",

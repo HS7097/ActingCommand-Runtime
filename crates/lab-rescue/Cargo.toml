@@ -21,6 +21,9 @@ actingcommand-contract = { workspace = true }
 # actingctl's outcome codes, result line, child runner, process probe, shutdown wait, operation
 # table, initiator and default location (Workflow #434 LAB-1, LAB-1b, LAB-2).
 actingcommand-lab-ops = { workspace = true }
+# Workflow #453 S1: a first row of `instance add` takes the composer's one operation
+# (`STANDARD_PACK_OPERATION_ID`) as its capabilities.
+actingcommand-policy = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
 # Workflow #421 INST-1: the `install` section and the key table of the root's configuration.
 actingcommand-runtime-config = { workspace = true }

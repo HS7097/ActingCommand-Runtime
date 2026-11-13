@@ -7404,9 +7404,9 @@ impl HostShared {
             .issuer()
             .mint_run_id()
             .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
-        // Workflow #437 MAPP-2b: a member's claim holds its switch's startup run and its run, or
-        // the run is refused when both cannot fit; an instance alone on its device, as before.
-        let lease_ttl_ms = self.dispatch_lease_ttl(resolved.instance_id(), task_request)?;
+        // Workflow #437 MAPP-2d: every claim, a member's included, holds the run's own lease; a
+        // member's switch runs inside it and the run renews it after the switch's startup run.
+        let lease_ttl_ms = self.contained_task_lease_ttl(task_request)?;
         // Workflow #369 W-3: the run waits for its turn in the instance's queue; its deadline
         // stays anchored at receipt, so the wait is taken from it.
         let receipt_deadline_monotonic_ms = active_run.control.deadline();
@@ -7443,28 +7443,31 @@ impl HostShared {
         // it executes. Its deadline, anchored at its receipt, moves on by the switch's time,
         // within the key. A failed switch releases the key with no ladder and fails the run's
         // receipt; the member's switch cooldown has started. An instance alone on its device
-        // never comes here.
-        if self.switch_applies(resolved.instance_id()) {
+        // never comes here. Workflow #437 MAPP-2d: the switch runs inside the claim's lease, the
+        // run renews it after the switch's startup run, and from the switch on the run's key is
+        // the lease as the scheduler holds it (`HostShared::run_token`): the token the renewal
+        // returned, or the granted one when nothing was renewed.
+        let token = if self.switch_applies(resolved.instance_id()) {
             let links = self.events.request_links(
                 request,
                 Some(resolved.instance_id()),
                 Some(token.lease_id()),
                 None,
             );
-            let need = super::switch::RunNeed::OwnTime {
-                through_monotonic_ms: super::switch::own_time_through(
-                    &token,
-                    lease_ttl_ms,
-                    task_request,
-                ),
+            let switch =
+                self.switch_before_run(links, request, &token, connection_id, lease_ttl_ms);
+            let current = self.run_token(&token, connection_id);
+            let token = match current {
+                Ok(current) => current,
+                Err(error) => {
+                    return Err(self.cleanup_composite_failure(
+                        token,
+                        connection_id,
+                        RequestFailure::poison_without_terminal(error),
+                    ));
+                }
             };
-            let (switch_ms, switched) = match self.switch_before_run(
-                links,
-                original.request_id(),
-                &token,
-                connection_id,
-                need,
-            ) {
+            let (switch_ms, switched) = match switch {
                 Ok(done) => done,
                 Err(error) => {
                     return Err(self.cleanup_composite_failure(
@@ -7481,6 +7484,10 @@ impl HostShared {
                     RequestFailure::request(failure, RuntimeReceiptState::Failed, None),
                 ));
             }
+            #[cfg(test)]
+            if let Some(failure) = self.take_run_failure_after_switch_for_test() {
+                return Err(self.cleanup_composite_failure(token, connection_id, failure));
+            }
             active_run.control.postpone_deadline(switch_ms);
             let deadline_monotonic_ms = match self.contained_task_deadline_until(
                 receipt_deadline_monotonic_ms.saturating_add(switch_ms),
@@ -7495,7 +7502,10 @@ impl HostShared {
                 .control
                 .set_deadline(deadline_monotonic_ms)
                 .map_err(RequestFailure::poison_without_terminal)?;
-        }
+            token
+        } else {
+            token
+        };
         // Workflow #429 R-0b (register §1.238): the direct run shows from its grant while it
         // executes, with the client's request and its package; its guard drops however the run
         // returns.
@@ -7594,7 +7604,9 @@ impl HostShared {
 
     /// Workflow #437 MAPP-2a: the deadline of a run on a borrowed key: as
     /// [`Self::contained_task_deadline`], and no later than the key's expiry less the time the
-    /// key's holder needs on it after this run (`need`, read now); refused when it has passed.
+    /// key's holder needs on it after this run (`need`); refused when it has passed. Workflow #437
+    /// MAPP-2d: a holder that renews after this run needs nothing, so the run takes what is left
+    /// of the key (the earlier of its response deadline and the key's expiry less the reserve).
     fn borrowed_key_deadline(
         &self,
         request: &ContainedTaskRequest,
@@ -7615,7 +7627,7 @@ impl HostShared {
             })?;
         let handed_back = token
             .expires_at_monotonic_ms()
-            .saturating_sub(need.after_ms(now));
+            .saturating_sub(need.after_ms());
         self.contained_task_deadline_until(requested.min(handed_back), token)
     }
 
@@ -7944,11 +7956,13 @@ impl HostShared {
     /// Workflow #437 MAPP-2a (`contracts/device-group.md`, "The switch before a run", step 3): runs
     /// a prepared host package on `held`, a key another run holds and gets back (a member's
     /// startup package in the switch before its run). As [`Self::run_prepared_package`], except
-    /// that the key is never renewed (a renewal mints a new token, and the run the key goes back
-    /// to checks the one it holds) and never ended: the run's end, a failed one included, leaves
+    /// that the key is never renewed (a renewal replaces the token, and the run the key goes back
+    /// to holds the one it lent) and never ended: the run's end, a failed one included, leaves
     /// the key with its holder (`ContainedRunControl::borrows_key`). The run's deadline is the
     /// earlier of its response deadline and the key's expiry less `need`, the time the holder's
     /// own run needs on the key afterwards, so a run that ends by its deadline leaves that time.
+    /// Workflow #437 MAPP-2d: a member's run renews the key itself once this run handed it back,
+    /// so it needs nothing and this run takes what is left of the key.
     pub(super) fn run_prepared_package_on_borrowed_key(
         &self,
         mut run: PreparedPackageRun<'_>,
@@ -8351,25 +8365,22 @@ impl HostShared {
         // moves on by it and its settlement subtracts it. A failed switch ends the run here, with
         // no record of the run and no terminal, so its failed settlement releases the key with no
         // ladder; the member's switch cooldown has started. An instance alone on its device
-        // never comes here.
-        if self.switch_applies(token.instance_id()) {
-            let need = self
-                .policy_run_need(context.decision_id(), token)
-                .map_err(RequestFailure::poison_without_terminal)?;
+        // never comes here. Workflow #437 MAPP-2d: the switch runs inside the dispatch's lease and
+        // the run renews it after the switch's startup run; the context keeps the granted token,
+        // so from the switch on the run's key is the lease as the scheduler holds it
+        // (`HostShared::run_token`): the token the renewal returned, or the granted one when
+        // nothing was renewed. The failed settlement's release resolves it the same way
+        // (`ensure_scheduled_policy_lease_released`).
+        let switched_token = if self.switch_applies(token.instance_id()) {
             let links = self.events.request_links(
                 &validated,
                 Some(resolved.instance_id()),
                 Some(token.lease_id()),
                 None,
             );
+            let lease_ttl_ms = self.contained_task_lease_ttl(task_request)?;
             let (switch_ms, switched) = self
-                .switch_before_run(
-                    links,
-                    task_request_message.request_id(),
-                    token,
-                    connection_id,
-                    need,
-                )
+                .switch_before_run(links, &validated, token, connection_id, lease_ttl_ms)
                 .map_err(super::switch::switch_runtime_failure)?;
             self.note_policy_run_switch(context.decision_id(), switch_ms)
                 .map_err(RequestFailure::poison_without_terminal)?;
@@ -8381,7 +8392,18 @@ impl HostShared {
                 ));
             }
             active_run.control.postpone_deadline(switch_ms);
-        }
+            let current = self
+                .run_token(token, connection_id)
+                .map_err(RequestFailure::poison_without_terminal)?;
+            #[cfg(test)]
+            if let Some(failure) = self.take_run_failure_after_switch_for_test() {
+                return Err(failure);
+            }
+            Some(current)
+        } else {
+            None
+        };
+        let token = switched_token.as_ref().unwrap_or(token);
         let run_links = RuntimeRunLinks::new(context.issued_task_id(), context.issued_run_id());
         self.append_scheduled_request_lifecycle(
             &task_request_message,

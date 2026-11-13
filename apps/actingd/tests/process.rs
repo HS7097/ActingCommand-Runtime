@@ -211,11 +211,28 @@ fn actingd_outlives_disposable_clients_and_accepts_reconnection() {
 /// `runtime_ready`, here after one status read on its own connection as the smoke makes. actingd
 /// then closes and exits 0, with one `runtime_ready` and `runtime_stopped` as its terminal
 /// outcome (Workflow #378 A6a).
+///
+/// Workflow #453 S11 (fix round 1, item 5): the same, once from a folder that is no installation
+/// root and once from one whose `install` folder holds the installer's `state.json`. actingd
+/// prints the daemon line `state_root_claimed` (info, `path` the state root) of the start that
+/// claimed its state root exactly once, before `runtime_ready`, and none for the start from
+/// anywhere else.
 #[test]
 fn an_idle_runtime_accepts_the_first_shutdown_request_right_after_ready() {
+    for installed in [false, true] {
+        an_idle_runtime_accepts_the_first_shutdown_request(installed);
+    }
+}
+
+fn an_idle_runtime_accepts_the_first_shutdown_request(installed: bool) {
     use std::io::BufRead;
 
     let root = TempDir::new().expect("tempdir");
+    if installed {
+        fs::create_dir_all(root.path().join("install")).expect("the install folder");
+        fs::write(root.path().join("install").join("state.json"), b"{}")
+            .expect("the installer's state file");
+    }
     let config_path = root.path().join("actingd.json");
     fs::write(
         &config_path,
@@ -306,6 +323,40 @@ fn an_idle_runtime_accepts_the_first_shutdown_request_right_after_ready() {
         Some("runtime_stopped"),
         "{stderr}"
     );
+    // Workflow #453 S11: the claiming start's daemon line, once and before `runtime_ready`.
+    let claimed = outcomes
+        .iter()
+        .enumerate()
+        .filter(|(_, code)| code.as_str() == "state_root_claimed")
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let ready = outcomes
+        .iter()
+        .position(|code| code.as_str() == "runtime_ready")
+        .expect("runtime_ready");
+    if installed {
+        assert!(
+            matches!(claimed.as_slice(), [index] if *index < ready),
+            "one state_root_claimed before runtime_ready: {stderr}"
+        );
+        let line = stderr_lines
+            .iter()
+            .find(|line| {
+                daemon_outcome_code(line.as_str()).as_deref() == Some("state_root_claimed")
+            })
+            .expect("the claim's outcome line");
+        let envelope: Value = serde_json::from_str(
+            line.strip_prefix("OUTCOME actingd: ")
+                .expect("an outcome line"),
+        )
+        .expect("the claim's envelope");
+        assert_eq!(envelope["category"], json!("info"), "{envelope}");
+        assert!(root.path().join("installation.json").is_file());
+        assert!(root.path().join("install").join("identity.json").is_file());
+    } else {
+        assert!(claimed.is_empty(), "no state_root_claimed: {stderr}");
+        assert!(!root.path().join("installation.json").exists());
+    }
 }
 
 /// Workflow #317 sc3: the legacy physical policy instance's startup preparation cannot connect

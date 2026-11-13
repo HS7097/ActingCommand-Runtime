@@ -78,6 +78,14 @@ or repeated option, a dangling flag or an empty value),
 Every refusal below returns before the command writes anything. Recovery writes
 of the kind step 2 describes are not writes of this command.
 
+0. Workflow #453 S11 (since 0.12.60, [state-root-installation.md](state-root-installation.md)):
+   when the directory of `--config` holds the installer's own `install\state.json`, the command
+   runs from that installation root and first reads the state root's installation record as a
+   start does: another installation's record, or a record while the installation has no identity
+   file, is `state_root_installation_mismatch`; a record or identity file it cannot read is
+   `state_root_installation_record_invalid` (stage `unlock_owner_file`, `journal_appended`
+   `false`). It never mints an identity and never writes a record. From any other directory it
+   reads neither file.
 1. `owner.lock` is opened without being created and locked with the same
    exclusive OS lock the daemon holds while it runs. A missing file is
    `owner_unlock_not_required`; a held lock is `owner_unlock_daemon_active`.

@@ -132,10 +132,11 @@ pub struct ResourceTargetView {
     pub not_targetable: Vec<NotTargetableResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<ActiveResourceTargets>,
-    /// Workflow #429 A.5 (R-0 shape, register §1.213 R0-10, `runtime-client` 3): `true` when the
-    /// instance's stored policy is an `actingcommand.resource-targets.v1` or `v2` record, which
-    /// the v3 reader reads as no table (no `active`) instead of refusing the view. R-13a fills
-    /// it; absent in every answer of 0.12.30.
+    /// Workflow #429 A.5 (R-0 shape, register §1.213 R0-10, `runtime-client` 3): reserved for
+    /// R-13a's stale-schema mark over the target table #429 R-13 had planned under the name
+    /// `actingcommand.resource-targets.v3`. That table was never built: Workflow #455 G-R2a
+    /// (0.12.60) took the name for the goal document, whose reader reads v1 and v2 records as
+    /// before, so nothing is stale and nothing fills this member; absent in every answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale_schema: Option<bool>,
 }
@@ -234,7 +235,10 @@ pub struct ResourceTargetRow {
     pub updated_at_unix_ms: u64,
 }
 
-/// The two kinds of an `actingcommand.resource-targets.v3` target (Workflow #429 A.5).
+/// The two kinds of a target of the table #429 R-13 had planned (Workflow #429 A.5), reserved
+/// for `ResourceTargetRow` and never built. They are not the kinds of an
+/// `actingcommand.resource-targets.v3` target: Workflow #455 G-R2a (0.12.60) took that name for
+/// the goal document, whose targets are v2 targets with a lifetime of their own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceTargetKind {

@@ -29,7 +29,7 @@ const DEVICE: DeviceBounds = DeviceBounds {
 };
 
 // §15 `tag.workbench_patterns`.
-const WORKBENCH_PATTERNS: [&str; 15] = [
+const WORKBENCH_PATTERNS: [&str; 16] = [
     "task.*.last_duration_ms",
     "task.*.last_outcome",
     "task.*.failure_streak",
@@ -44,6 +44,7 @@ const WORKBENCH_PATTERNS: [&str; 15] = [
     "host.idle_state",
     "host.agent_wake",
     "host.capped_episodes",
+    "host.state_root_installation",
     // Workflow #453 S2: the entries whose first-start pause was applied.
     "host.start_pause_applied",
 ];

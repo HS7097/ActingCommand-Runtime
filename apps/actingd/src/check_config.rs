@@ -83,6 +83,13 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         actingcommand_contract::InstallConfigPurpose::CandidateCheck,
     )
     .map_err(|code| staged(ActingdError::config(code), ActingdLocation::ConfigLoad))?;
+    // Workflow #453 S11: the installation root the state root's record is judged for: the root
+    // `--install-root` names, else the directory of `--config`, each only when it holds the
+    // installer's own `install\state.json` (the start's rule); none reads nothing.
+    let installation_root = match &install_root {
+        Some(root) => actingcommand_runtime_host::installation_root_at(root),
+        None => actingcommand_runtime_host::installation_root_of_config(&config_path),
+    };
     let file = match install_root {
         Some(root) => file.with_install_root(root),
         None => file,
@@ -317,6 +324,19 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
             notes.push(note.outcome);
         }
     }
+    // Workflow #453 S11 (`contracts/state-root-installation.md`): the state root's installation
+    // record, read as the start reads it before anything is written; another installation's
+    // record or a file that cannot be read refuses with the start's code. Nothing is minted or
+    // written.
+    let installation = installation_root
+        .and_then(|installation_root| {
+            actingcommand_runtime_host::check_state_root_installation(
+                installation_root.as_deref(),
+                checked.host.state_root(),
+            )
+        })
+        .map_err(|error| staged(state_root_refusal(error), ActingdLocation::StateRoot))?;
+    report["state_root_installation"] = json!(installation.as_str());
     // Workflow #361 C3: the plan startup would make, from the ledger read-only.
     let previewing = std::time::Instant::now();
     let preview = preview_policy_catalog_transition(&CatalogPreviewRequest {

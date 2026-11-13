@@ -1649,11 +1649,22 @@ impl HostShared {
             let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE).map_err(|error| {
                 RuntimeHostError::scheduler(HostLocation::BuildPolicyConnection, &error)
             })?;
+            // Workflow #437 MAPP-2d: the lease as the scheduler holds it now. A member's run whose
+            // switch ran a startup run renewed it, and the renewal replaced the context's token;
+            // a release with that token would find no lease and write it as already removed while
+            // the lease lived on. An instance alone on its device keeps the granted token.
+            let token = self.run_token(context.lease_token(), connection_id)?;
+            // Workflow #437 MAPP-2d fix round 1, test only: the granted token instead, as a build
+            // that released with it would (`release_failed_policy_run_with_granted_token_for_test`).
+            #[cfg(test)]
+            let token = self
+                .take_granted_token_release_for_test(context.lease_token())
+                .unwrap_or(token);
             // Workflow #369 H-1 (review M-1): this release follows a failure before the run's
             // terminal or a poisoned cleanup, so it never hands the key to a ladder.
             self.cleanup_scheduled_failure_with_run_links(
                 &request,
-                context.lease_token(),
+                &token,
                 connection_id,
                 RuntimeRunLinks::new(context.issued_task_id(), context.issued_run_id()),
                 None,
@@ -1941,45 +1952,6 @@ impl HostShared {
         })?;
         clock.switch_ms = clock.switch_ms.saturating_add(switch_ms);
         Ok(())
-    }
-
-    /// Workflow #437 MAPP-2b: what the run of the dispatch `decision_id` still needs on its key
-    /// after the switch's startup run: its own share of the lease its admission sized for the
-    /// switch and the run; for a lease not sized so, the whole key to its heartbeat reserve (the
-    /// run's own boundary), which no startup run can share. A dispatch without a clock is fatal.
-    pub(super) fn policy_run_need(
-        &self,
-        decision_id: &str,
-        token: &LeaseToken,
-    ) -> RuntimeHostResult<super::switch::RunNeed> {
-        let through = lock(
-            &self.policy_dispatch_clocks,
-            HostLocation::ReadPolicyDispatchStart,
-        )?
-        .get(decision_id)
-        .ok_or_else(|| {
-            RuntimeHostError::fatal(
-                HostCode::PolicyDispatchClockMissing,
-                HostLocation::ReadPolicyDispatchStart,
-                RuntimeErrorCode::RuntimeHalted,
-            )
-        })?
-        .own_time_through_monotonic_ms;
-        let through_monotonic_ms = match through {
-            Some(through) => through,
-            None => {
-                let reserve_ms = lock(
-                    &self.scheduler,
-                    HostLocation::ReadContainedTaskDeadlineConfig,
-                )?
-                .config()
-                .maximum_client_heartbeat_interval_ms;
-                token.expires_at_monotonic_ms().saturating_sub(reserve_ms)
-            }
-        };
-        Ok(super::switch::RunNeed::OwnTime {
-            through_monotonic_ms,
-        })
     }
 
     #[cfg(test)]

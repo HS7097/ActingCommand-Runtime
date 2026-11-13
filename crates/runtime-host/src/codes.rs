@@ -909,6 +909,26 @@ actingcommand_contract::outcome_codes! {
         /// store's failure is the `caused_by` link (was the text `artifact_unreadable`).
         SuspendedFrameUnreadable => "suspended_frame_unreadable": warning / none,
         // ---- Workflow #378 A6a: end
+        // ---- Workflow #453 S11 (`contracts/state-root-installation.md`): the state root's record
+        // of the installation that claimed it.
+        /// Fatal (since 0.12.60). The state root's record `installation.json` names another
+        /// installation than the one the writer runs from, or this installation has no identity
+        /// file `install\identity.json` while the state root has a record; the text says which.
+        /// Nothing was written (keys `path` the state root, `at_unix_ms` the record's claim
+        /// time).
+        StateRootInstallationMismatch => "state_root_installation_mismatch": fatal / none,
+        /// Fatal (since 0.12.60). The state root's record, the installation's identity file or
+        /// the installer's state file cannot be read or has another shape; nothing was written
+        /// (keys `path` the file; the read failure is the `caused_by` link).
+        StateRootInstallationRecordInvalid => "state_root_installation_record_invalid": fatal / none,
+        /// Fatal (since 0.12.60). A start's claim could not mint the installation's identity or
+        /// write the state root's record (keys `path` the file; the operating system's failure is
+        /// the `caused_by` link).
+        StateRootClaimFailed => "state_root_claim_failed": fatal / none,
+        /// Info (since 0.12.60). The start recorded in the state root the installation it runs
+        /// from, once; actingd writes it as a daemon line (keys `path` the state root).
+        StateRootClaimed => "state_root_claimed": info / none,
+        // ---- Workflow #453 S11: end
         ObservationEvidenceEncodeFailed => "observation_evidence_encode_failed": error / none,
         ObservationEvidenceLimitExceeded => "observation_evidence_limit_exceeded": error / none,
         ObservationFrameContextMissing => "observation_frame_context_missing": error / none,
@@ -1644,9 +1664,10 @@ actingcommand_contract::outcome_codes! {
         // ---- Workflow #437 MAPP-2a (`contracts/device-group.md`, "The switch before a run"): begin
         /// Error. The switch that brings a member of a device group of several to the front
         /// before its run failed at one of its steps: the foreground read, the stop of another
-        /// member's application or the member's startup package on the run's key (keys `alias`
-        /// the member to run, `application_switch_step`, `failure_code` the step's own code,
-        /// `application_id` the package the step concerned; the step's failure is its cause).
+        /// member's application, the member's startup package on the run's key or (Workflow #437
+        /// MAPP-2d) the run's renewal of its lease after that startup run (keys `alias` the member
+        /// to run, `application_switch_step`, `failure_code` the step's own code, `application_id`
+        /// the package the step concerned; the step's failure is its cause).
         ApplicationSwitchFailed => "application_switch_failed": error / none,
         // ---- Workflow #437 MAPP-2a: end
     }
@@ -1664,11 +1685,13 @@ actingcommand_contract::outcome_vocabulary! {
 
 actingcommand_contract::outcome_vocabulary! {
     /// Workflow #437 MAPP-2a: the step of the switch before a run that failed (vocabulary
-    /// `application_switch_step`; `application_switch_failed` carries it).
+    /// `application_switch_step`; `application_switch_failed` carries it). Workflow #437 MAPP-2d
+    /// adds `lease_renewal`, the run's renewal of its lease after the startup run.
     pub enum ApplicationSwitchStep: "application_switch_step" {
         ForegroundRead => "foreground_read",
         Stop => "stop",
         StartupPackage => "startup_package",
+        LeaseRenewal => "lease_renewal",
     }
 }
 
@@ -1679,6 +1702,10 @@ actingcommand_contract::outcome_locations! {
         AccessPreparedRuntime => "access_prepared_runtime",
         AcknowledgeFactInvalidation => "acknowledge_fact_invalidation",
         AcquireOwnerFile => "acquire_owner_file",
+        // Workflow #453 S11: the read-only check of the state root's installation record, and a
+        // start's claim under the owner lock.
+        CheckStateRootInstallation => "check_state_root_installation",
+        RecordStateRootInstallation => "record_state_root_installation",
         AcquireResourceCloseLease => "acquire_resource_close_lease",
         ActivatePolicyCatalog => "activate_policy_catalog",
         ActivateReleaseSet => "activate_release_set",
@@ -2635,6 +2662,9 @@ pub(crate) mod test_spellings {
             ScheduledPolicyCheckpointMarkerWriteFailed => "scheduled_policy_checkpoint_marker_write_failed": error / none,
             ScheduledPolicyCheckpointTestHookAlreadyInstalled => "scheduled_policy_checkpoint_test_hook_already_installed": error / none,
             SchedulingTerminalAppendInjectedFailure => "scheduling_terminal_append_injected_failure": error / none,
+            // Workflow #453 S11 fix round 1: a start made to fail right after its claim of the
+            // state root, before the ledger is opened.
+            StartFailedAfterClaimForTest => "start_failed_after_claim_for_test": error / none,
             // #411 A65: a start made to fail right after it appended its start event.
             StartFailedAfterStartEventForTest => "start_failed_after_start_event_for_test": error / none,
             TestClaimNotGranted => "test_claim_not_granted": error / none,
@@ -2678,6 +2708,7 @@ pub(crate) mod test_spellings {
             ExpireDueLeasesForTest => "expire_due_leases_for_test",
             ExpireLeaseOnceForTest => "expire_lease_once_for_test",
             FailScheduledHostClaimForTest => "fail_scheduled_host_claim_for_test",
+            FailStartAfterClaimForTest => "fail_start_after_claim_for_test",
             FailStartAfterStartEventForTest => "fail_start_after_start_event_for_test",
             InjectInstanceWorkerPanicForTest => "inject_instance_worker_panic_for_test",
             InjectTestContainedTaskOcrFailurePersistence => "inject_test_contained_task_ocr_failure_persistence",
@@ -2699,6 +2730,12 @@ pub(crate) mod test_spellings {
             InstanceClaimsForTest => "instance_claims_for_test",
             // Workflow #437 MAPP-1c: a test turns the slice's branch off.
             Mapp1cOffForTest => "mapp1c_off_for_test",
+            // Workflow #437 MAPP-1d: a test turns the slice's branches off, holds the resident
+            // monitor loop and runs a due probe itself, and lifts an instance pause.
+            Mapp1dOffForTest => "mapp1d_off_for_test",
+            HoldMonitorLoopForTest => "hold_monitor_loop_for_test",
+            RunDueMonitorProbeForTest => "run_due_monitor_probe_for_test",
+            LiftInstancePauseForTest => "lift_instance_pause_for_test",
             // #411 A51: a test latches a condition in the Runtime's fatal state.
             MarkRuntimeFatalForTest => "mark_runtime_fatal_for_test",
             ObserveShutdownSettleForTest => "observe_shutdown_settle_for_test",
@@ -2780,6 +2817,13 @@ pub(crate) mod test_spellings {
             SwitchOffForTest => "switch_off_for_test",
             SwitchCooldownForTest => "switch_cooldown_for_test",
             PolicySwitchTimeForTest => "policy_switch_time_for_test",
+            // Workflow #437 MAPP-2d: a test refuses the next renewal after a switch, or fails a
+            // run right after its switch.
+            RefuseNextSwitchRenewalForTest => "refuse_next_switch_renewal_for_test",
+            FailNextRunAfterSwitchForTest => "fail_next_run_after_switch_for_test",
+            // Workflow #437 MAPP-2d fix round 1: a test makes the release of a policy run's failed
+            // settlement take the granted token.
+            ReleaseFailedPolicyRunWithGrantedTokenForTest => "release_failed_policy_run_with_granted_token_for_test",
         }
     }
 }

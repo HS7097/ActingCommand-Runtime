@@ -2359,6 +2359,14 @@
       "since": "0.12.0",
       "description": "The stage of a check-config refusal that arose while checking the instances' recognition package bindings (Workflow #384 D2-S2)."
     },
+    "config_state_root": {
+      "owner": "actingd",
+      "layer": "config",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "The stage of a check-config refusal that arose while reading the state root's record of the installation that claimed it, as the start reads it (Workflow #453 S11, contracts/state-root-installation.md): state_root_installation_mismatch or state_root_installation_record_invalid."
+    },
     "policy_state": {
       "owner": "actingd",
       "layer": "config",
