@@ -2463,7 +2463,8 @@ impl HostShared {
             | LeaseReleaseReason::Preempted
             | LeaseReleaseReason::HostShutdown
             | LeaseReleaseReason::InstancePaused
-            | LeaseReleaseReason::ConnectionPrepared => None,
+            | LeaseReleaseReason::ConnectionPrepared
+            | LeaseReleaseReason::SessionClosed => None,
         };
         let gate = self.routine_gate(token.instance_id())?;
         let order_lock = self
@@ -3501,17 +3502,29 @@ impl HostShared {
         }
     }
 
+    /// The queue-order lock of `instance_id`'s device. Workflow #437 MAPP-1c (register, the lock
+    /// walk's finding): keyed by the device key, as the queue it orders is the device's one queue
+    /// (`SeedScheduler`) and the admission guard is the device's (`instance_guard`), so a member's
+    /// claim is never granted by another member's pump before its context is registered under
+    /// this lock; an instance alone on its device keys its own id, as before.
     pub(super) fn queue_order_lock(
         &self,
         instance_id: InstanceId,
     ) -> Result<Arc<Mutex<()>>, RequestFailure> {
+        let device = self.device_key(instance_id);
+        #[cfg(test)]
+        let device = if self.mapp1c_off_for_test.load(Ordering::Acquire) {
+            instance_id
+        } else {
+            device
+        };
         let mut locks = lock(
             &self.queue_order_locks,
             HostLocation::ReadInstanceQueueOrder,
         )?;
         Ok(Arc::clone(
             locks
-                .entry(instance_id)
+                .entry(device)
                 .or_insert_with(|| Arc::new(Mutex::new(()))),
         ))
     }

@@ -229,6 +229,10 @@ mod gate_372k4;
 // Workflow #438 HELD-1 (register §1.322, §1.327): a task held too long leaves one record, and its
 // end one more; the start ends the holds left open; `actingd suspended` lists them.
 mod gate_438_held;
+// Workflow #437 MAPP-1c (0.12.60; register §1.350): a member's keyless session closed before
+// another member's lease begins, whatever waits in the queue and in the takeover cooldown, and
+// the lock walk's pins.
+mod gate_mapp1c;
 // Workflow #437 MAPP-1b (0.12.57; register §1.328, §1.330): the host's half of a device group:
 // one worker per device, the group's occupancy, pause, gates, session rule and refusals.
 mod gate_mapp1b;

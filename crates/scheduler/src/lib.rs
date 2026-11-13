@@ -92,6 +92,11 @@ pub enum LeaseReleaseReason {
     /// The dedicated preparation lease of an instance's connection preparation phase
     /// (Workflow #317 sc3, #191 h2); it names no transfer.
     ConnectionPrepared,
+    /// Workflow #437 MAPP-1c: the close lease of the session a keyless observation of a member
+    /// of a device group of several opened ([`SeedScheduler::prepare_session_close_ahead`]); it
+    /// names no transfer, so the claim that waited for the device is granted afterwards in its
+    /// place in the queue, as it would have been without the close.
+    SessionClosed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -403,6 +408,9 @@ pub struct PreparedLease {
     kind: ClaimKind,
     /// Workflow #369 Q-4: a grant of the queued entry `acquire_request_id` on a free instance.
     from_queue: bool,
+    /// Workflow #437 MAPP-1c: a session close ahead of the device's queue and through its
+    /// takeover cooldown ([`SeedScheduler::prepare_session_close_ahead`]).
+    closes_ahead: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -610,6 +618,9 @@ struct LeaseEntry {
     destructive_step: Option<(std::num::NonZeroU64, FencedWritePurpose)>,
     preempt_requested: bool,
     kind: ClaimKind,
+    /// Workflow #437 MAPP-1c: the close lease of a keyless observation's session of a member of
+    /// a device group of several ([`SeedScheduler::prepare_session_close_ahead`]).
+    closes_ahead: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1200,6 +1211,65 @@ impl SeedScheduler {
         Ok(preparation)
     }
 
+    /// Workflow #437 MAPP-1c (`contracts/device-group.md`, "Device-level actions", rows 7 and
+    /// 15): the resource-close-only lease of `instance_id` (kind `ResourceClose`, the scheduler's
+    /// lease TTL) that closes the session a keyless observation of a member of a device group of
+    /// several opened, before that observation lets the device go. It is prepared only on a free
+    /// device (a holder refuses it, `Busy`, or `LeaseExpired` while a lapsed one is not ended
+    /// yet), whatever waits in the device's queue and while the device's takeover cooldown runs:
+    /// it takes no entry out of the queue, so the entry that waited first is granted after the
+    /// close in its place; it ends no cooldown; it carries no write authority
+    /// ([`Self::validate_write`] refuses it, `ResourceCloseOnly`); and while the cooldown runs it
+    /// hands the device to no one ([`Self::prepare_transfer_gated`]).
+    pub fn prepare_session_close_ahead(
+        &mut self,
+        request_id: RequestId,
+        instance_id: InstanceId,
+        holder_id: HolderId,
+        connection_id: ConnectionId,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<LeasePreparation> {
+        {
+            let device = self.device(instance_id);
+            let state = self.instances.entry(device).or_default();
+            if let Some(lease) = &state.lease {
+                if lease.token.expires_at_monotonic_ms() <= now_monotonic_ms {
+                    return Err(SchedulerError::LeaseExpired);
+                }
+                return Err(SchedulerError::Busy {
+                    holder_id: lease.token.holder_id(),
+                    lease_id: lease.token.lease_id(),
+                    expires_at_monotonic_ms: lease.token.expires_at_monotonic_ms(),
+                });
+            }
+        }
+        let expires_at_monotonic_ms =
+            self.expiry_from_ttl(now_monotonic_ms, self.config.lease_ttl_ms)?;
+        let lease_id = *self
+            .lease_issuer
+            .mint_lease_id()
+            .map_err(|_| SchedulerError::IdentifierIssuance)?
+            .transport();
+        let token = LeaseToken::new(
+            self.owner_epoch,
+            lease_id,
+            instance_id,
+            holder_id,
+            expires_at_monotonic_ms,
+        )
+        .map_err(|_| SchedulerError::InvalidConfig)?;
+        Ok(LeasePreparation::New(PreparedLease {
+            token,
+            connection_id,
+            acquire_request_id: request_id,
+            priority: LeasePriority::Normal,
+            resource_close_only: true,
+            kind: ClaimKind::ResourceClose,
+            from_queue: false,
+            closes_ahead: true,
+        }))
+    }
+
     /// Workflow #437 MAPP-1: on the device of `instance_id`, whose one lease any member's holder
     /// keeps; the token names `instance_id`, the member.
     #[allow(clippy::too_many_arguments)]
@@ -1277,6 +1347,7 @@ impl SeedScheduler {
             resource_close_only: false,
             kind: policy.kind,
             from_queue: false,
+            closes_ahead: false,
         }))
     }
 
@@ -1300,7 +1371,9 @@ impl SeedScheduler {
             .instances
             .get_mut(&device)
             .ok_or(SchedulerError::LeaseMissing)?;
-        if state.cooldown_until_monotonic_ms > now_monotonic_ms {
+        // Workflow #437 MAPP-1c: a session close ahead is granted through the takeover cooldown
+        // (`prepare_session_close_ahead`); every other grant waits it out, as before.
+        if !prepared.closes_ahead && state.cooldown_until_monotonic_ms > now_monotonic_ms {
             return Err(SchedulerError::Cooldown {
                 retry_after_ms: state.cooldown_until_monotonic_ms - now_monotonic_ms,
             });
@@ -1332,6 +1405,7 @@ impl SeedScheduler {
             destructive_step: None,
             preempt_requested: false,
             kind: prepared.kind,
+            closes_ahead: prepared.closes_ahead,
         });
         refresh_preempt_requested(state);
         state.last_release = None;
@@ -1586,6 +1660,7 @@ impl SeedScheduler {
             resource_close_only: false,
             kind: entry.kind,
             from_queue: true,
+            closes_ahead: false,
         }))
     }
 
@@ -2060,6 +2135,12 @@ impl SeedScheduler {
             .instances
             .get(&self.device(token.instance_id()))
             .ok_or(SchedulerError::LeaseMissing)?;
+        // Workflow #437 MAPP-1c: a session close ahead held through the device's takeover
+        // cooldown (`prepare_session_close_ahead`) hands the device to no one while the cooldown
+        // runs; its end only releases it. No other lease exists during a cooldown.
+        if lease.closes_ahead && state.cooldown_until_monotonic_ms > now_monotonic_ms {
+            return Ok(TransferPreparation::NoCandidate);
+        }
         let Some(position) = first_eligible(state, &gate, now_monotonic_ms) else {
             return Ok(TransferPreparation::NoCandidate);
         };
@@ -2307,6 +2388,7 @@ impl SeedScheduler {
             } else {
                 queued.kind
             },
+            closes_ahead: false,
         });
         refresh_preempt_requested(state);
         self.lease_locations.remove(&prepared.from.token.lease_id());
@@ -2540,8 +2622,18 @@ impl SeedScheduler {
         now_monotonic_ms: u64,
     ) -> SchedulerResult<&LeaseEntry> {
         self.validate_epoch(token)?;
+        // Workflow #437 MAPP-1c: the takeover cooldown refuses every token but that of the
+        // device's session close ahead (`prepare_session_close_ahead`), which it admits for its
+        // close only (`validate_write` still refuses it).
+        let closes_ahead = |state: &InstanceState| {
+            state
+                .lease
+                .as_ref()
+                .is_some_and(|lease| lease.closes_ahead && lease.token == *token)
+        };
         if let Some(state) = self.instances.get(&self.device(token.instance_id()))
             && state.cooldown_until_monotonic_ms > now_monotonic_ms
+            && !closes_ahead(state)
         {
             return Err(SchedulerError::Cooldown {
                 retry_after_ms: state.cooldown_until_monotonic_ms - now_monotonic_ms,
@@ -2552,7 +2644,7 @@ impl SeedScheduler {
             .instances
             .get(&device)
             .ok_or(SchedulerError::LeaseMissing)?;
-        if state.cooldown_until_monotonic_ms > now_monotonic_ms {
+        if state.cooldown_until_monotonic_ms > now_monotonic_ms && !closes_ahead(state) {
             return Err(SchedulerError::Cooldown {
                 retry_after_ms: state.cooldown_until_monotonic_ms - now_monotonic_ms,
             });
