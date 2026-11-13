@@ -12,7 +12,8 @@
 //   envelope `{exit_code, line}`, exit 0); without it, `Lab-CLI` and the two words the variable
 //   may name. The
 //   connection configuration under the option equals MCP's `--via mcp` child's (the Lab channel,
-//   `via` `mcp`); without it there is no `via`.
+//   `via` `mcp`; Workflow #434 LAB-6S2-B1, adapted: the Lab channel with `Lab-MCP` and no `via`);
+//   without it there is no `via`.
 // - `serve_refuses_values_that_begin_with_two_dashes`: a string value beginning with `--`, alone
 //   and inside a list, is refused (`actingctl_usage_invalid`, the parameter as `argument`,
 //   `not_recognised`) on a row actinglab's own command serves (`resource validate`) and on a row
@@ -140,7 +141,8 @@ fn serve_front_mcp_records_lab_mcp() {
     );
 
     // The connection: under the option, the configuration of MCP's `--via mcp` child (the Lab
-    // channel and `via` `mcp`; `lab_client_config_via` gives each the envelope (Lab, Lab));
+    // channel and, Workflow #434 LAB-6S2-B1 (adapted: the binding of the option moved), the word
+    // `Lab-MCP` without `via`; `lab_client_config_via` gives each the envelope (Lab, Lab));
     // without it, the Lab channel and no `via`, as on main.
     let temp = TempDir::new().unwrap();
     let Ok(child) = parse_invocation(["--json", "--via", "mcp", "record", "status"], true) else {
@@ -155,8 +157,16 @@ fn serve_front_mcp_records_lab_mcp() {
         lab_client_config_via(temp.path(), child.global.via).channel()
     );
     assert_eq!(
-        (binding(mcp).channel, binding(mcp).via),
-        (RuntimeChannel::Lab, Some(ChannelVia::Mcp))
+        (
+            binding(mcp).channel,
+            binding(mcp).via,
+            binding(mcp).initiator
+        ),
+        (
+            RuntimeChannel::Lab,
+            None,
+            Some(actingcommand_lab_ops::initiator::Initiator::LabMcp.word())
+        )
     );
     assert_eq!(
         (binding(None).channel, binding(None).via),

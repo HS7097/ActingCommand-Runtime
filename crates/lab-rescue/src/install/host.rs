@@ -13,6 +13,7 @@ use super::runtime::{RuntimeLink, SystemRuntime};
 use crate::codes::ActingctlCode;
 use crate::watchdog::observe;
 use actingcommand_contract::outcome::{IoOp, Outcome};
+use actingcommand_lab_ops::initiator::Initiator;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ffi::OsString;
@@ -151,8 +152,21 @@ pub(crate) trait Host {
     ) -> Result<u32, Outcome>;
 }
 
-/// The machine.
-pub(crate) struct SystemHost;
+/// The machine. Workflow #434 LAB-6S2-B1: its Runtime and its watchdog's probe declare the word
+/// of the program that runs the command ([`SystemHost::of`]).
+pub(crate) struct SystemHost {
+    runtime: SystemRuntime,
+}
+
+impl SystemHost {
+    /// The machine, its Runtime reached with `initiator`: the rescue module's word, or none for
+    /// `actingctl install`, which binds the CLI channel as on 0.12.58 until LAB-6S2-B2.
+    pub(crate) const fn of(initiator: Option<Initiator>) -> Self {
+        Self {
+            runtime: SystemRuntime::of(initiator),
+        }
+    }
+}
 
 impl Host for SystemHost {
     fn now_unix_ms(&self) -> u64 {
@@ -241,7 +255,7 @@ impl Host for SystemHost {
     }
 
     fn runtime(&self) -> &dyn RuntimeLink {
-        &SystemRuntime
+        &self.runtime
     }
 
     fn pause_ms(&self, ms: u64) {
@@ -287,6 +301,7 @@ impl Host for SystemHost {
             asked,
             root,
             crate::cli_line::detail().unwrap_or(actingcommand_contract::outcome::Detail::Full),
+            self.runtime.initiator(),
         )
     }
 

@@ -40,7 +40,10 @@
 //!   Lab recording's steps and marks carry it (open point 6, the coordinator's ruling), and
 //!   `Lab-MCP` when MCP's actinglab child (`--via mcp`) adds them, or (Workflow #434 LAB-5G4a) a
 //!   `serve --stdio --front mcp` process, an MCP server's child, whose rescue rows take `Lab-MCP`
-//!   too ([`serve::Front`]).
+//!   too ([`serve::Front`]). Workflow #434 LAB-6S2-B1: every connection of the process binds the
+//!   Lab channel with that word and keeps the envelope it sent on 0.12.58: the core rows' (Lab,
+//!   Lab) ([`set_front`]), actinglab's own commands' (Lab, Lab) (`crate::lab_client_config`), the
+//!   rescue module's (Cli, Cli).
 //! - **The authoring option** (§8.3; Workflow #434 LAB-5F, [`authoring`]): it decides only
 //!   whether the authoring rows are listed by default; they are served everywhere (fix 2).
 //! - **Help** (Workflow #434 CLI-HELP, register §1.313): a line that asks for help, `--help`
@@ -329,9 +332,29 @@ pub(crate) fn recording_initiator(via: Option<ChannelVia>) -> Result<&'static st
         })
 }
 
+/// Workflow #434 LAB-6S2-B1 (§4.2): the word of this process: `Lab-MCP` under `serve --stdio
+/// --front mcp` (`front`), else the one `ACTINGCOMMAND_INITIATOR` names (`Lab-CLI` without it),
+/// whose refusal sends and writes nothing. The rescue module's rows run with it, and the core rows
+/// connect with it ([`set_front`]).
+pub(crate) fn process_word(front: Option<serve::Front>) -> Result<Initiator, Outcome> {
+    match front {
+        Some(serve::Front::Mcp) => Ok(Initiator::LabMcp),
+        None => Initiator::of_this_lab_process(),
+    }
+}
+
+/// Workflow #434 LAB-6S2-B1: says, once, that this process's core rows connect as actinglab with
+/// its word (`lab_ops::front`, `Front::Actinglab`: the Lab channel, the word, the envelope (Lab,
+/// Lab)). A variable that names no word sets nothing: [`admitted`] refuses every line of such a
+/// process before anything connects.
+pub(crate) fn set_front(front: Option<serve::Front>) {
+    if let Ok(word) = process_word(front) {
+        actingcommand_lab_ops::front::set(actingcommand_lab_ops::front::Front::Actinglab(word));
+    }
+}
+
 /// The CLI module: one command line (`serve --stdio` included), printed, and its exit code.
 pub(crate) fn main(arguments: Vec<String>) -> ExitCode {
-    actingcommand_lab_ops::front::set(actingcommand_lab_ops::front::Front::Actinglab);
     // The register's LAB-2 row: `status` reads the overview's `watchdog` block through
     // `crates/watchdog` (LAB-4), as actingctl does; on Windows only, where the watchdog runs.
     #[cfg(windows)]
@@ -340,6 +363,7 @@ pub(crate) fn main(arguments: Vec<String>) -> ExitCode {
     if words.first().map(String::as_str) == Some(SERVE) {
         return serve::main(&words[1..]);
     }
+    set_front(None);
     #[cfg(windows)]
     if !json && let Some(exit) = agent_channel(&words) {
         return exit;
@@ -458,18 +482,14 @@ mod rescue {
     use actingcommand_contract::outcome::Outcome;
     use actingcommand_lab_ops::cli_line::{self, Exit};
     use actingcommand_lab_ops::codes::ActingctlCode;
-    use actingcommand_lab_ops::initiator::Initiator;
     use actingcommand_lab_rescue::agent_channel::Answer;
     use serde_json::{Map, Value};
 
     /// The rescue row `call` names, answered; under `serve --stdio --front mcp` (`front`; Workflow
-    /// #434 LAB-5G4a) with the initiator `Lab-MCP`, else with this process's word (§4.2).
+    /// #434 LAB-5G4a) with the initiator `Lab-MCP`, else with this process's word (§4.2). Workflow
+    /// #434 LAB-6S2-B1: the module's connections declare it too.
     pub(super) fn answer(call: &Call, front: Option<Front>) -> Answer {
-        let initiator = match front {
-            Some(Front::Mcp) => Ok(Initiator::LabMcp),
-            None => Initiator::of_this_lab_process(),
-        };
-        match initiator {
+        match super::process_word(front) {
             Ok(initiator) => {
                 actingcommand_lab_rescue::rescue::answer_here(&call.name, &call.params, initiator)
             }
