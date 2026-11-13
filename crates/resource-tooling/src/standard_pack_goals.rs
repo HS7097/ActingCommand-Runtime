@@ -27,6 +27,7 @@ use actingcommand_contract::{
     read_standard_pack_table,
 };
 use actingcommand_execution_kernel::PreparedContainedTask;
+use actingcommand_policy::BenefitFollower;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -55,7 +56,9 @@ pub(crate) fn read_goals_file(path: &Path) -> LabResult<Option<Vec<u8>>> {
 /// The problems of the goal declaration `goals` (the bytes of `goals.json`) of the game root
 /// `root` of `game`, in file order: the reader's, or, for a file the reader accepts, its
 /// references'. `schedule` is `schedule.json`'s bytes and path when the root holds one (the
-/// composition has accepted it); `pack_directory` is where a registry entry's directory lies;
+/// composition has accepted it), and `followers` the chain followers that composition listed
+/// (`benefit_followers`, G-R1 fix round 2; none without it); `pack_directory` is where a registry
+/// entry's directory lies;
 /// `game_root` is the directory whose `tables/` the references are held to, `None` when the caller
 /// holds no tables. Empty for a file that keeps every rule. A package or a table that cannot be
 /// read is the caller's error, not a problem of the file.
@@ -63,6 +66,7 @@ pub(crate) fn goal_issues(
     game: &str,
     root: &StandardPackRoot,
     schedule: Option<(&[u8], &Path)>,
+    followers: &[BenefitFollower],
     goals: &[u8],
     pack_directory: &dyn Fn(&str) -> PathBuf,
     game_root: Option<&Path>,
@@ -107,13 +111,24 @@ pub(crate) fn goal_issues(
             );
             references.pools.insert(pool.id.clone(), valued);
         }
+        // G-R1 fix round 2: each rule's followers, as the composition lists them: a follower with
+        // the rule it rides with (a follower of a follower rides with the same rule).
+        let mut followers_of = BTreeMap::<&str, Vec<String>>::new();
+        for follower in followers {
+            followers_of
+                .entry(follower.rides_with.as_str())
+                .or_default()
+                .push(follower.task_id.clone());
+        }
         for rule in &schedule.rules {
-            // G-R1 fix round 1: with the package it runs, which a `tier` entry is held to.
+            // G-R1 fix round 1: with the package it runs, which a `tier` entry is held to; fix
+            // round 2: and with the rules that follow it, whose packages it is held to as well.
             references.rules.insert(
                 rule.id.clone(),
                 GoalRule {
                     package_id: rule.package_id.clone(),
                     fixed_value: rule.fixed_value_milli.is_some(),
+                    followers: followers_of.remove(rule.id.as_str()).unwrap_or_default(),
                 },
             );
         }

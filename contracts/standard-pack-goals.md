@@ -265,6 +265,10 @@ fourteen of the file and `goal_undeclared`) are words of the existing vocabulary
      third place. Since G-R1 fix round 1 the check follows a `tier` entry's rules to the packages
      they run, and judges a capability across the whole root: a package that provides a capability
      another package marks irreversible is refused as that package is.
+     Since G-R1 fix round 2 a `tier` entry's rule is also `goal_governs_irreversible` at its own
+     pointer when a rule that follows it (a chain follower the composition lists as riding with it,
+     `benefit_followers`, which runs when it completes), directly or through further followers, runs
+     such a package or one the references were not told of, each follower visited once.
      A `resource` entry can still push such a package indirectly: its pool may be produced by a
      rule of that package, and a goal's shortfall raises the weight of what produces the pool. The
      check does not refuse such an entry (it would forbid goals on ordinary pools); the rule

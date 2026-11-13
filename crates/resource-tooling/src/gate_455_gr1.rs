@@ -19,7 +19,12 @@
 // - fix round 1 (the independent review's two ways around the safety line): a `tier` entry over a
 //   rule whose package provides the irreversible capability, and an entry that governs a package
 //   providing unmarked a capability another package marks irreversible, are each
-//   `goal_governs_irreversible` at their pointer and nothing else, for the check and the bundle.
+//   `goal_governs_irreversible` at their pointer and nothing else, for the check and the bundle;
+// - fix round 2 (`rd-1114/brief-1694-fix2.md`, the differential review's way around the safety
+//   line): a `tier` entry over the head of a chain whose second follower runs the package that
+//   provides the irreversible capability is `goal_governs_irreversible` at the head's pointer and
+//   nothing else, for the check and the bundle, while the same chain with reversible followers
+//   passes both.
 // A made-up game `neutral`, server `test`, 16x9; every package, pool, rule, table and text is a
 // placeholder.
 
@@ -892,5 +897,95 @@ fn gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused() 
         &schedule(),
         &goals(),
         "/entries/4/governs/packages/1",
+    );
+}
+
+/// G-R1 fix round 2: an edge, `dependency_completed` of `task_id` accepting `succeeded` alone,
+/// with `since_own_run: true`, as `gate_cov1` writes one.
+fn edge(task_id: &str) -> Value {
+    json!({
+        "kind": "dependency_completed",
+        "task_id": task_id,
+        "terminal_states": ["succeeded"],
+        "since_own_run": true
+    })
+}
+
+/// G-R1 fix round 2: [`schedule`] with a two-step chain behind the rule of [`COLLECT`], its head,
+/// which writes a fixed value: the rule of [`KEEP`] follows the head (its hourly clock and an edge
+/// to the head, under `all`) and the rule of `second` follows the rule of [`KEEP`] (an edge to it,
+/// under `all`), in place of any rule `second` had. Neither follower writes a value, so the
+/// composition lists both as riding with the head; neither package is held.
+fn schedule_with_chain(second: &str) -> Value {
+    let mut value = schedule();
+    let mut first = rule(KEEP);
+    let clock = first["trigger"].take();
+    first["trigger"] = json!({"kind": "all", "predicates": [clock, edge(COLLECT)]});
+    let mut follower = rule(second);
+    follower["trigger"] = json!({"kind": "all", "predicates": [edge(KEEP)]});
+    let rules = value["rules"].as_array_mut().expect("the rules");
+    rules.retain(|existing| existing["id"] != second);
+    rules.push(first);
+    rules.push(follower);
+    value["held"]
+        .as_array_mut()
+        .expect("the held packages")
+        .retain(|held| held["package_id"] != KEEP && held["package_id"] != second);
+    value
+}
+
+// G-R1 fix round 2 (the differential review's way around the safety line): a rule that follows a
+// rule a `tier` entry governs runs when that rule completes, so scaling the governed rule's value
+// runs it more too. The valid file's `tier` entry governs the rule of `neutral.collect`, the head
+// of a two-step chain. When the second follower runs `neutral.discard`, the package that provides
+// the irreversible capability, the composition lists both followers with the head, and the tier
+// is `goal_governs_irreversible` at the head's pointer `/entries/7/governs/rules/0` and nothing
+// else, for the check (a warning, the root checked) and for `package bundle --goals` (the bundle
+// refused, `--out` not written); the same chain whose second follower runs `neutral.spend`, every
+// follower reversible, passes both.
+#[test]
+fn gr1_a_tier_over_a_chain_head_whose_follower_runs_an_irreversible_package_is_refused() {
+    let (_reversible, reversible_root) = installed_with(packs(), &schedule_with_chain(SPEND));
+    write_json(&reversible_root.join("goals.json"), &goals());
+    let accepted = check(&reversible_root);
+    assert!(
+        root_invalid_warnings(&accepted.warnings).is_empty(),
+        "{:?}",
+        accepted.warnings
+    );
+
+    let (_temp, game_root) = installed_with(packs(), &schedule_with_chain(DISCARD));
+    write_json(&game_root.join("goals.json"), &goals());
+    let refused = check(&game_root);
+    assert_eq!(refused.status, "checked");
+    assert_eq!(
+        serde_json::to_value(&refused.benefit_followers).expect("the followers"),
+        json!([
+            {"task_id": KEEP, "rides_with": COLLECT},
+            {"task_id": DISCARD, "rides_with": COLLECT}
+        ])
+    );
+    assert_eq!(
+        root_invalid_warnings(&refused.warnings),
+        [goal_warning(
+            &game_root,
+            "goal_governs_irreversible",
+            "/entries/7/governs/rules/0"
+        )]
+    );
+
+    let (temp, request) = bundle_inputs_with(packs(), &schedule_with_chain(SPEND));
+    let (_, accepted) = bundle_with_goals(&temp, &request, &goals());
+    accepted.unwrap_or_else(|error| {
+        panic!(
+            "a chain of reversible followers: {}: {}",
+            error.code, error.message
+        )
+    });
+    assert_bundle_refuses_irreversible(
+        packs(),
+        &schedule_with_chain(DISCARD),
+        &goals(),
+        "/entries/7/governs/rules/0",
     );
 }

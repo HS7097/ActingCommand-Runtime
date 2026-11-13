@@ -408,6 +408,8 @@ pub fn check_standard_pack_root(
             &game,
             &checked,
             bytes(STANDARD_PACK_SCHEDULE_FILE).map(|schedule| (schedule, schedule_path.as_path())),
+            // G-R1 fix round 2: the chain followers the composition above listed.
+            &benefit_followers,
             goals,
             &|directory: &str| root.join(directory),
             Some(root.as_path()),

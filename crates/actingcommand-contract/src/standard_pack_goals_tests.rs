@@ -114,10 +114,7 @@ fn goals_neutral_example_reads_to_typed_entries() {
             ("route", GoalType::Choice)
         ]
     );
-    assert_eq!(
-        goals.governed_packages(),
-        BTreeSet::from(["neutral.collect"])
-    );
+    assert_eq!(goals.named_packages(), BTreeSet::from(["neutral.collect"]));
     assert!(goals.tables().is_empty());
     assert_eq!(
         goals.entry("route").map(DeclaredGoal::goal_type),
@@ -328,7 +325,7 @@ fn goals_each_type_reads_its_members() {
     );
     assert_eq!(goals.entries[2].title, text(&[("en", "Points")]));
     assert_eq!(
-        goals.governed_packages(),
+        goals.named_packages(),
         BTreeSet::from(["neutral.collect", "neutral.spend"])
     );
     assert_eq!(goals.tables(), BTreeSet::from(["neutral_members"]));
@@ -345,6 +342,7 @@ fn goals_each_type_reads_its_members() {
         GoalRule {
             package_id: "neutral.spend".to_owned(),
             fixed_value: true,
+            followers: Vec::new(),
         },
     );
     references.tables = Some(BTreeMap::from([(
@@ -524,6 +522,7 @@ fn goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root() {
             GoalRule {
                 package_id: package_id.to_owned(),
                 fixed_value: true,
+                followers: Vec::new(),
             },
         );
     }

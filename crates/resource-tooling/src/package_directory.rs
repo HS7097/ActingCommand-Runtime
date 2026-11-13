@@ -371,6 +371,11 @@ fn write_bundle(
                 root_files
                     .schedule()
                     .map(|schedule| (schedule.bytes.as_slice(), schedule.path.as_path())),
+                // G-R1 fix round 2: the chain followers the composition above listed.
+                schedule_report
+                    .as_ref()
+                    .map(|report| report.benefit_followers.as_slice())
+                    .unwrap_or_default(),
                 &goals.bytes,
                 &|directory: &str| packs_dir.join(directory),
                 None,

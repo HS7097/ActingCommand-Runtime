@@ -21,7 +21,8 @@
 //! (contracts/remedies.md §2.3), whether it marks it itself or not; a `tier` entry is held to the
 //! package each rule it governs runs; and [`GoalReferences`] is made only by
 //! [`GoalReferences::new`], from what every package of the root provides, so no reader can leave
-//! that answer empty by omission.
+//! that answer empty by omission. G-R1 fix round 2 (the differential review): a `tier` entry is
+//! also held to the packages the rules that follow its rules run ([`GoalRule::followers`]).
 //!
 //! The file stores no value: a value is the installation's, set by a person or an agent in a later
 //! slice. The Runtime interprets no text here: titles, help texts, unit texts, option titles,
@@ -242,8 +243,12 @@ impl StandardPackGoals {
         self.entries.iter().find(|entry| entry.name == name)
     }
 
-    /// Every package an entry governs.
-    pub fn governed_packages(&self) -> BTreeSet<&str> {
+    /// The packages the entries name directly in `governs.packages` (the `integer`, `choice`,
+    /// `switch` and `ordered` entries), and nothing else: not the packages a `tier` entry's rules
+    /// run, nor those of the rules that follow them. Judging what an entry reaches is the
+    /// references' job ([`check_standard_pack_goal_references`]), not this list's (G-R1 fix round
+    /// 2, which renamed it from `governed_packages`).
+    pub fn named_packages(&self) -> BTreeSet<&str> {
         self.entries
             .iter()
             .flat_map(|entry| entry.kind.packages())
@@ -429,13 +434,20 @@ pub enum GoalValues {
 
 /// A rule of `schedule.json` as the references hold it (G-R1 fix round 1): the package it runs,
 /// which a `tier` entry that governs the rule is held to, and whether it writes
-/// `fixed_value_milli`.
+/// `fixed_value_milli`; fix round 2: and the rules that follow it, whose packages the tier is held
+/// to as well.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalRule {
     /// The rule's `package_id`.
     pub package_id: String,
     /// The rule writes `fixed_value_milli`.
     pub fixed_value: bool,
+    /// G-R1 fix round 2: the ids of the rules that follow this one, in the composition's order:
+    /// the chain followers the composition lists as riding with it (`benefit_followers`), which run
+    /// when it completes (`dependency_completed`, contracts/scheduling/README.md, "Ties and chain
+    /// heads"), so that scaling its value makes them run more with it. Required, so that no
+    /// reader leaves them out by omission.
+    pub followers: Vec<String>,
 }
 
 /// What the references of a declaration are held to (`check_standard_pack_goal_references`): what
@@ -494,6 +506,29 @@ impl GoalReferences {
     /// package of the root.
     fn irreversible(&self, package_id: &str) -> Option<bool> {
         self.packages.get(package_id).copied()
+    }
+
+    /// G-R1 fix round 2: whether a rule that follows `rule` ([`GoalRule::followers`]), directly
+    /// or through further followers, runs a package that can do something irreversible, or is a
+    /// rule or runs a package the references were not told of (never passed). Each follower is
+    /// visited once, so a cycle of followers ends the walk.
+    fn follower_irreversible(&self, rule: &GoalRule) -> bool {
+        let mut visited = BTreeSet::new();
+        let mut pending = vec![rule];
+        while let Some(current) = pending.pop() {
+            for follower_id in &current.followers {
+                if !visited.insert(follower_id.as_str()) {
+                    continue;
+                }
+                match self.rules.get(follower_id) {
+                    Some(follower) if self.irreversible(&follower.package_id) == Some(false) => {
+                        pending.push(follower);
+                    }
+                    _ => return true,
+                }
+            }
+        }
+        false
     }
 }
 
@@ -562,9 +597,11 @@ pub fn parse_standard_pack_goals(
 /// - `goal_package_unknown`: a governed package, or (fix round 1) the package a governed rule
 ///   runs, is not a package of `bundle.json`;
 /// - `goal_governs_irreversible`: a governed package, or (fix round 1) the package a governed rule
-///   runs, can do something irreversible ([`GoalReferences::new`]);
+///   runs, can do something irreversible ([`GoalReferences::new`]); or (fix round 2, at the
+///   governed rule) a rule that follows it, directly or through further followers, runs such a
+///   package or one the references were not told of;
 /// - `goal_rule_unknown`: a `tier` entry's rule is not a rule of `schedule.json`;
-/// - `goal_tier_without_fixed_value`: that rule, its package passed, writes no
+/// - `goal_tier_without_fixed_value`: that rule, its package and its followers passed, writes no
 ///   `fixed_value_milli`;
 /// - with the root's tables: `goal_table_unknown` (an `ordered` entry's table is no table of the
 ///   root, or a key under its `names` no key of that table), `goal_range_invalid` (the table holds
@@ -578,6 +615,11 @@ pub fn check_standard_pack_goal_references(
     for (index, goal) in goals.entries.iter().enumerate() {
         let pointer = format!("/entries/{index}");
         let governs = at(&pointer, "governs");
+        // G-R1 fix round 2, for whoever adds an entry kind: this match has no wildcard, so a new
+        // kind needs an arm, and that arm must either judge everything the kind can reach (its
+        // packages, its rules and their followers, its pools) against the references, or state
+        // why the kind can reach no package, as a heading and a note reach none. An empty arm
+        // without that reason lets the kind past the safety line.
         match &goal.kind {
             DeclaredGoalKind::Heading | DeclaredGoalKind::Note => {}
             DeclaredGoalKind::Resource { pool, .. } => {
@@ -602,6 +644,12 @@ pub fn check_standard_pack_goal_references(
                     match references.irreversible(&rule.package_id) {
                         None => check.issue(StandardPackProblem::GoalPackageUnknown, at_rule),
                         Some(true) => {
+                            check.issue(StandardPackProblem::GoalGovernsIrreversible, at_rule);
+                        }
+                        // Fix round 2: a rule that follows the governed rule runs when it
+                        // completes, so scaling the governed rule's value runs it more too; the
+                        // governed rule is held to its followers' packages, at its own pointer.
+                        Some(false) if references.follower_irreversible(rule) => {
                             check.issue(StandardPackProblem::GoalGovernsIrreversible, at_rule);
                         }
                         Some(false) if !rule.fixed_value => {
