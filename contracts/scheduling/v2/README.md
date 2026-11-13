@@ -337,6 +337,18 @@ constant capacity, or a hard line referencing the capacity's own fact) compiles 
 `pool_lines_unspendable` at `hard_line`. A pool without the member serializes, hashes and decides
 exactly as before.
 
+Workflow #437 ORD-1a (since 0.12.60; register §1.348; `../README.md`, "Order within one device"),
+V2 only: a task may carry `max_queue_wait_ms`, an integer in `60000..=86400000`: the longest time,
+in milliseconds, a candidate of the task may wait in its device's queue while another application
+of the device is in front. Only the order within a device group of several
+([../../device-group.md](../../device-group.md)) reads it; a task without it takes that order's
+default, and a task of an instance alone on its device decides exactly as without it. A
+`schedule.json` rule writes it as any V2 member and it passes through to the composed task; the
+file then names `queue_wait` in `requires`. Refused, at the member: in a V1 document,
+`unknown_field`; a value that is no unsigned integer (an explicit `null` included)
+`type_mismatch`; one outside the range `limit_exceeded`. A task without the member serializes,
+hashes and decides exactly as before.
+
 SS-2g (since 0.12.34; register §1.232; `../README.md`, "Expected quantities (v2)"): a `consumes`
 entry may declare `expected_amount_milli` instead of `amount`, as a `produces` entry may: an
 integer in `0..=9007199254740991` thousandths of a unit per run, at most a constant capacity ×

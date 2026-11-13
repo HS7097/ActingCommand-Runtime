@@ -17,7 +17,8 @@
 //!    (#386 CF-5) and `reset_exclusions` when a timeline event writes `excludes_fact_prefixes`
 //!    (Workflow #411 P19) and `fact_unknown_probe` when a rule's `fact` predicate writes
 //!    `on_unknown` (SS-5) and `pool_lines` when a pool writes `stop_line` or `hard_line` (SS-2h),
-//!    `pool_trigger_line` when a pool writes `trigger_line` (SCHED-C1c), no timeline event
+//!    `pool_trigger_line` when a pool writes `trigger_line` (SCHED-C1c), `queue_wait` when a rule
+//!    writes `max_queue_wait_ms` (Workflow #437 ORD-1a), no timeline event
 //!    invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
 //!    against the registry, and the registry's packages classified. A refused game is reported
@@ -228,6 +229,11 @@ pub const BENEFIT_FIXED_VALUE_MEMBER: &str = "benefit_fixed_value_milli";
 /// SCHED-C1c (register §1.299): the pool member of the trigger line, which the composer copies as
 /// written, as the two lines, and which requires [`crate::POOL_TRIGGER_LINE_SUBSYSTEM`].
 pub const POOL_TRIGGER_LINE_MEMBER: &str = "trigger_line";
+
+/// Workflow #437 ORD-1a (register §1.348): the V2 task member of a task's longest queue wait,
+/// which a rule writes as any V2 member and the composer passes through, and which requires
+/// [`crate::QUEUE_WAIT_SUBSYSTEM`].
+pub const MAX_QUEUE_WAIT_MEMBER: &str = "max_queue_wait_ms";
 
 /// SS-2b (register §1.225; Alice's ruling 116, 「业务覆盖完整」): how far one game's judged rules
 /// (those whose package is not maintenance-role and that do not declare themselves maintenance,
@@ -1432,6 +1438,28 @@ fn read_game(
             schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
             format!(
                 "a consumption read from a fact needs requires to name {CONSUMPTION_FACT_SUBSYSTEM}"
+            ),
+        ));
+    }
+    // Workflow #437 ORD-1a (register §1.348): likewise a rule that writes `max_queue_wait_ms`,
+    // the first in file order, whatever its value (the compiler checks the value).
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == crate::QUEUE_WAIT_SUBSYSTEM)
+        && let Some(index) = schedule
+            .rules
+            .iter()
+            .position(|rule| rule.body.contains_key(MAX_QUEUE_WAIT_MEMBER))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/rules/{index}/{MAX_QUEUE_WAIT_MEMBER}"),
+            ),
+            format!(
+                "a rule's {MAX_QUEUE_WAIT_MEMBER} needs requires to name {}",
+                crate::QUEUE_WAIT_SUBSYSTEM
             ),
         ));
     }

@@ -13,15 +13,15 @@ use crate::{
     MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK,
     MAX_FACT_MAX_AGE_MS, MAX_FACT_TIME_OFFSET_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES,
     MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_MISSED_GRACE_MS, MAX_POOLS, MAX_PREDICATE_DEPTH,
-    MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE, MAX_REFERENCES_PER_TASK, MAX_TASKS,
-    MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI,
-    MAX_VALUATION_GAP_WEIGHT_MILLI, MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES,
-    MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES,
-    MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS, MIN_UTC_OFFSET_MINUTES, MetricRef,
-    MissedSlotRule, ObservationRef, PoolCapacity, PoolLine, PoolProjection, PoolSpec,
-    PoolValuation, PredicateSpec, ProjectionComparand, ResourceEffectSpec,
-    SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TaskSpec,
-    TimelineDocument, TimelineEvent,
+    MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE, MAX_QUEUE_WAIT_MS, MAX_REFERENCES_PER_TASK,
+    MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES,
+    MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI, MAX_VALUATION_NAME_BYTES,
+    MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER,
+    MIN_DST_OFFSET_MINUTES, MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS, MIN_QUEUE_WAIT_MS,
+    MIN_UTC_OFFSET_MINUTES, MetricRef, MissedSlotRule, ObservationRef, PoolCapacity, PoolLine,
+    PoolProjection, PoolSpec, PoolValuation, PredicateSpec, ProjectionComparand,
+    ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector,
+    TaskSpec, TimelineDocument, TimelineEvent,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -408,6 +408,7 @@ fn validate_tasks(
             descriptor,
             diagnostics,
         );
+        validate_queue_wait(task, &path, map, descriptor, diagnostics);
     }
     validate_continuations(bundle, map, task_ids, descriptor, diagnostics);
     validate_realization_cycles(bundle, map, descriptor, diagnostics);
@@ -603,6 +604,41 @@ fn validate_fixed_value(
             CatalogDiagnosticCode::FixedValueConflict,
             &member,
             "benefit_fixed_value_milli beside benefit_realization: true",
+            descriptor,
+        ));
+    }
+}
+
+/// Workflow #437 ORD-1a (register §1.348; `contracts/scheduling/v2/README.md`): a task's
+/// `max_queue_wait_ms`. It is a V2 member (a V1 document that names it is refused as an unknown
+/// member); its value lies in `MIN_QUEUE_WAIT_MS..=MAX_QUEUE_WAIT_MS` (`limit_exceeded` at the
+/// member). A value that is no unsigned integer, an explicit `null` included, is refused when the
+/// document is read (`type_mismatch`).
+fn validate_queue_wait(
+    task: &TaskSpec,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let Some(limit) = task.max_queue_wait_ms else {
+        return;
+    };
+    let member = format!("{path}/max_queue_wait_ms");
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            member,
+            "max_queue_wait_ms requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if !(MIN_QUEUE_WAIT_MS..=MAX_QUEUE_WAIT_MS).contains(&limit) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            member,
+            format!("max_queue_wait_ms must be within {MIN_QUEUE_WAIT_MS}..={MAX_QUEUE_WAIT_MS}"),
             descriptor,
         ));
     }

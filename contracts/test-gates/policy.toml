@@ -1367,3 +1367,13 @@ tests = [
     "actingcommand-policy::lib::tests::gate_mapp1b::mapp1b_a_chain_successor_goes_before_the_other_members_of_its_device",
 ]
 incident = ["#437 MAPP-1b"]
+
+# Workflow #437 ORD-1a (0.12.60; register §1.348; brief rd-1114/brief-437-ord1ab.md; contracts/scheduling/v2/README.md, contracts/standard-pack-schedule.md "`requires`"): a V2 task's max_queue_wait_ms is unknown_field in V1, type_mismatch for a string, null or a fraction, limit_exceeded outside 60 000..=86 400 000, each at the member, and the bounds compile with the value written (1); a rule's max_queue_wait_ms passes through to its composed task, a file that writes it without queue_wait in requires is schedule_invalid at the first such rule's member, a value the compiler refuses is mapped back to the rule's member, and a Runtime whose manifest does not name queue_wait refuses the file at requires (2); the neutral example catalog keeps its V1 and V2 golden hashes and a catalog without the member serializes none (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ord1::ord1a_t1_the_compiler_holds_max_queue_wait_ms_to_v2_and_its_range",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1a_t2_the_composer_passes_it_through_and_refuses_it_without_requires",
+    "actingcommand-policy::lib::tests::gate_ord1::ord1a_t3_without_the_member_every_catalog_hash_is_unchanged",
+]
+incident = ["#437 ORD-1a"]

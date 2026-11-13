@@ -20672,6 +20672,31 @@ dependencies gain `actingcommand-display-adapter`, whose only dependency is the 
 its forbidden closure is unchanged); the helpers of the host's `gate_412_b3_s2` the Lab test
 reuses are visible to their sibling modules, no assertion changed.
 
+### 1.348 Slices ORD-1a and ORD-1b (0.12.60): a task's longest wait in its device's queue, and the selection among the members of one device (Workflow #437; the owner's rulings on board #437 as the coordinator recorded them, not the owner's words; the design note `rd-1114/ord1-design.md`, read on main `fa724931`, with the coordinator's four amendments; coordinator work order `rd-1114/brief-437-ord1ab.md`, read on main `fa724931`)
+
+[scheduling/v2/README.md](scheduling/v2/README.md) (ORD-1a) and
+[standard-pack-schedule.md](standard-pack-schedule.md) ("`requires`", "Composition") are the
+contract of ORD-1a. **No ledger shape, no configuration key and no interface revision moves**: the
+member is a catalog and `schedule.json` addition gated by `requires`, as SCHED-C1a's
+`benefit_fixed_value_milli` (§1.299, its slice table: "none: catalog and `schedule.json`
+additions gated by `requires`"); `schedule.json` lies beside `bundle.json` and is no part of what
+`package` covers ([component-interfaces.md](component-interfaces.md)), and the subsystem row is a
+new row value of an existing fact. The number 1.348 is provisional for parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ORD1A-1 | `TaskSpec::max_queue_wait_ms` (`Option<u64>`, V2 only, `60000..=86400000`) | catalog format addition | ORD-1a | a `schedule.json` rule (passed through by the composer); a raw V2 catalog | `crates/policy/src/schema.rs`; read as a written bound (an explicit `null` is `type_mismatch`); absent it serializes as nothing, so a catalog without it keeps its hash; `validate_queue_wait` in `validation.rs`: V1 `unknown_field`, out of range `limit_exceeded`, at the member; `MIN_QUEUE_WAIT_MS`, `MAX_QUEUE_WAIT_MS`; the Runtime's own reading (`_fact_refresh`) declares none |
+| ORD1A-2 | the always-on row `queue_wait` of `config.subsystems`; `QUEUE_WAIT_SUBSYSTEM` | new row value of an existing fact | ORD-1a | actingd | `apps/actingd/src/config/manifest.rs`; the composer refuses a file whose rule writes `max_queue_wait_ms` (any value) without it in `requires`, `schedule_invalid` at the first such rule's member; a Runtime before ORD-1a refuses such a file at `requires` (`schedule_requires_missing`) |
+
+**ORD-1a tests.** New: policy rows "#437 ORD-1a",
+`actingcommand-policy::lib::tests::gate_ord1` tests
+`ord1a_t1_the_compiler_holds_max_queue_wait_ms_to_v2_and_its_range`,
+`ord1a_t2_the_composer_passes_it_through_and_refuses_it_without_requires` and
+`ord1a_t3_without_the_member_every_catalog_hash_is_unchanged`, on fakes, no clock read.
+
+**At deploy (ORD-1a).** Nothing: no catalog writes the member, and no decision reads it in this
+slice; every catalog keeps its hash. `config.subsystems` gains the row `queue_wait`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
