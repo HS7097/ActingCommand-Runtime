@@ -805,4 +805,7 @@ outcome_keys! {
     // in codes mode. ----
     device_group_problem: vocab(device_group_problem),
     device_group_wait: vocab(device_group_wait),
+    // ---- Workflow #437 MAPP-2a (contracts/device-group.md "The switch before a run"): which step
+    // of the switch before a member's run failed; kept in codes mode. ----
+    application_switch_step: vocab(application_switch_step),
 }

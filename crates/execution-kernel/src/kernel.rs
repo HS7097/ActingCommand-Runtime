@@ -595,6 +595,12 @@ impl ExecutionKernel {
         self.provider.resolved_nemu_app_index(instance_alias)
     }
 
+    /// Workflow #437 MAPP-2a: the application the provider's registration assigns the instance,
+    /// read on the provider directly, from memory; no device is queried.
+    pub fn assigned_application_id(&self, instance_alias: &str) -> Option<String> {
+        self.provider.assigned_application_id(instance_alias)
+    }
+
     pub fn observe_monitor(
         &self,
         instance_alias: &str,

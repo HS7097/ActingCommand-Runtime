@@ -1641,6 +1641,14 @@ actingcommand_contract::outcome_codes! {
         /// `alias` the member, `operation` the action refused).
         DeviceGroupActionRefused => "device_group_action_refused": error / none,
         // ---- Workflow #437 MAPP-1b: end
+        // ---- Workflow #437 MAPP-2a (`contracts/device-group.md`, "The switch before a run"): begin
+        /// Error. The switch that brings a member of a device group of several to the front
+        /// before its run failed at one of its steps: the foreground read, the stop of another
+        /// member's application or the member's startup package on the run's key (keys `alias`
+        /// the member to run, `application_switch_step`, `failure_code` the step's own code,
+        /// `application_id` the package the step concerned; the step's failure is its cause).
+        ApplicationSwitchFailed => "application_switch_failed": error / none,
+        // ---- Workflow #437 MAPP-2a: end
     }
 }
 
@@ -1651,6 +1659,16 @@ actingcommand_contract::outcome_vocabulary! {
         Running => "running",
         NotRunning => "not_running",
         Unknown => "unknown",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #437 MAPP-2a: the step of the switch before a run that failed (vocabulary
+    /// `application_switch_step`; `application_switch_failed` carries it).
+    pub enum ApplicationSwitchStep: "application_switch_step" {
+        ForegroundRead => "foreground_read",
+        Stop => "stop",
+        StartupPackage => "startup_package",
     }
 }
 
@@ -2573,6 +2591,9 @@ actingcommand_contract::outcome_locations! {
         // backends into the registry before any instance is prepared.
         SwitchInstanceBackends => "switch_instance_backends",
         ApplyRestoredBackends => "apply_restored_backends",
+        // Workflow #437 MAPP-2a: the switch that brings a member of a device group of several to
+        // the front before its run, and its parts.
+        SwitchApplication => "switch_application",
     }
 }
 
@@ -2744,6 +2765,12 @@ pub(crate) mod test_spellings {
             // ISO-START-1 (#419): a test writes and reads the Runtime's fact store.
             ReadRuntimeFactForTest => "read_runtime_fact_for_test",
             RecordRuntimeFactForTest => "record_runtime_fact_for_test",
+            // Workflow #437 MAPP-2a: a test drives the switch's parts and counts its entries.
+            StopMemberApplicationForTest => "stop_member_application_for_test",
+            RunBorrowedStartupForTest => "run_borrowed_startup_for_test",
+            SwitchEntriesForTest => "switch_entries_for_test",
+            KeyRemainingForTest => "key_remaining_for_test",
+            FailNextMemberCloseForTest => "fail_next_member_close_for_test",
         }
     }
 }

@@ -22,6 +22,18 @@ pub(super) enum ApplicationKey {
     Ladder,
 }
 
+/// Workflow #437 MAPP-2a: whose application an application command drives.
+#[derive(Clone, Copy)]
+enum ApplicationOf<'a> {
+    /// The instance the key's token names, on the key `ApplicationKey` says (every command
+    /// before MAPP-2a).
+    KeyHolder(ApplicationKey),
+    /// Another member of the key holder's device group (`contracts/device-group.md`, "The switch
+    /// before a run", step 2): its application, its registration and its links, on the key of
+    /// the holder's run, which stays with that run whatever the command's result.
+    Member(&'a RegisteredInstance),
+}
+
 impl HostShared {
     pub(super) fn input(
         &self,
@@ -554,14 +566,78 @@ impl HostShared {
         run_links: Option<RuntimeRunLinks>,
         key: ApplicationKey,
     ) -> Result<OperationSuccess, RequestFailure> {
-        self.require_physical_instance_id(token.instance_id())?;
+        self.control_application_of(
+            request,
+            token,
+            action,
+            connection_id,
+            run_links,
+            ApplicationOf::KeyHolder(key),
+        )
+    }
+
+    /// Workflow #437 MAPP-2a (`contracts/device-group.md`, "The switch before a run", step 2):
+    /// `action` on the application of `member`, another member of the device group whose key
+    /// `token` is (the key of the run the switch serves). The token is validated as the device's
+    /// key; the command's records (`scheduler.admitted`, `application.*`, a failure's) carry the
+    /// member's links and the member's endpoint, its resources are prepared under the key, and
+    /// a fatal failure of its own application backend fences the member. The key stays with the
+    /// run whatever the result. A member that is not another member of the token's device group
+    /// of several is refused before anything (`instance_mismatch`).
+    pub(super) fn control_member_application(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        token: &LeaseToken,
+        member: &RegisteredInstance,
+        action: ApplicationLifecycleAction,
+        connection_id: ConnectionId,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let holder = token.instance_id();
+        if !self.in_group_of_several(holder)
+            || member.instance_id() == holder
+            || !self.device_members(holder).contains(&member.instance_id())
+        {
+            return Err(RequestFailure::request(
+                super::switch::member_mismatch(),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        self.control_application_of(
+            request,
+            token,
+            action,
+            connection_id,
+            None,
+            ApplicationOf::Member(member),
+        )
+    }
+
+    fn control_application_of(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        token: &LeaseToken,
+        action: ApplicationLifecycleAction,
+        connection_id: ConnectionId,
+        run_links: Option<RuntimeRunLinks>,
+        of: ApplicationOf<'_>,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let (member, key) = match of {
+            ApplicationOf::KeyHolder(key) => (None, Some(key)),
+            ApplicationOf::Member(member) => (Some(member), None),
+        };
+        let target = match member {
+            Some(member) => member.instance_id(),
+            None => token.instance_id(),
+        };
+        self.require_physical_instance_id(target)?;
         let (resolved, transferred) = {
             let instance_guard = self.instance_guard(token.instance_id())?;
             let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
-            let resolved = self.validated_instance(request, token, connection_id)?;
+            let holder = self.validated_instance(request, token, connection_id)?;
             let transferred =
                 self.transfer_preempted_while_guarded(token, connection_id, &admission)?;
-            (resolved, transferred)
+            (member.cloned().unwrap_or(holder), transferred)
         };
         if transferred {
             return Err(self.scheduler_denied_error(
@@ -575,14 +651,19 @@ impl HostShared {
                 ),
             )?);
         }
-        self.append_scheduler_admitted_for_token(request, token, resolved.audit_endpoint())?;
+        self.append_scheduler_admitted_for(
+            request,
+            target,
+            Some(token.lease_id()),
+            resolved.audit_endpoint(),
+        )?;
         let action_id = self
             .events
             .action_id()
             .map_err(RequestFailure::poison_without_terminal)?;
         let mut links = self.events.request_links(
             request,
-            Some(token.instance_id()),
+            Some(target),
             Some(token.lease_id()),
             Some(action_id),
         );
@@ -634,6 +715,7 @@ impl HostShared {
                 // Business admission. Keep capture admission locked across both phases.
                 match self.prepare_application_resources_result(
                     token,
+                    target,
                     connection_id,
                     preparation_links,
                     &admission,
@@ -757,7 +839,7 @@ impl HostShared {
             }) => {
                 let mut failure_links = self.events.request_links(
                     request,
-                    Some(token.instance_id()),
+                    Some(target),
                     Some(token.lease_id()),
                     Some(action_id),
                 );
@@ -766,25 +848,18 @@ impl HostShared {
                 }
                 self.record_required_failure(&error.error, &outcome, failure_links.clone())?;
                 match self
-                    .settle_unconfirmed_resources(
-                        &error.error,
-                        Some(token.instance_id()),
-                        failure_links.clone(),
-                    )
+                    .settle_unconfirmed_resources(&error.error, Some(target), failure_links.clone())
                     .map_err(RequestFailure::poison_without_terminal)?
                 {
                     // #411 A46: a fatal failure of the instance's own application backend whose
                     // resources were confirmed fences the instance too, so the command fails
                     // non-fatally and ends as any backend failure does; it no longer carries the
                     // fatal projection that a ladder rung returned to the instance's worker,
-                    // which marked the whole Runtime fatal.
+                    // which marked the whole Runtime fatal. Workflow #437 MAPP-2a: the instance
+                    // whose application the command drove (a member the switch stopped).
                     UnconfirmedResources::Confirmed => {
                         if let Some(fence) = self
-                            .fence_application_backend_failure(
-                                &error.error,
-                                token.instance_id(),
-                                failure_links,
-                            )
+                            .fence_application_backend_failure(&error.error, target, failure_links)
                             .map_err(RequestFailure::poison_without_terminal)?
                         {
                             fence_action_failure(&mut error, fence);
@@ -824,9 +899,10 @@ impl HostShared {
                 // #411 A47: a ladder's own command leaves the ladder's key with the ladder; before,
                 // this backend-failure lease end released it, and the climb ended at its next
                 // holding check (`recovery_ladder_key_lost`) instead of trying its next rung.
+                // Workflow #437 MAPP-2a: so does a member's stop with the run the switch serves.
                 if release_after
                     && run_links.is_none()
-                    && key == ApplicationKey::Own
+                    && key == Some(ApplicationKey::Own)
                     && let Err(error) =
                         self.cleanup_token(token, connection_id, LeaseReleaseReason::BackendFailure)
                 {

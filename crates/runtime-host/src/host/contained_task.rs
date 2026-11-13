@@ -686,6 +686,10 @@ pub(super) struct ContainedRunControl {
     /// Workflow #429 R-6: how the stop's reset went, set once: by the Runtime's own reset, or
     /// `not_needed` when the run ended without it.
     stop_reset: std::sync::OnceLock<StopReset>,
+    /// Workflow #437 MAPP-2a: set once, before the run executes, when the run executes on a key
+    /// another run holds and hands back (a member's startup package in the switch before its
+    /// run): the run's end neither renews nor ends that key.
+    borrowed_key: std::sync::OnceLock<()>,
 }
 
 /// Workflow #429 R-6 (register §1.302): how the Runtime's own reset after a `StopInstanceRun`
@@ -905,6 +909,7 @@ impl ContainedRunControl {
             lapsed_close: AtomicU8::new(Self::LAPSED_CLOSE_NONE),
             runtime_stop: AtomicU8::new(Self::STOP_NONE),
             stop_reset: std::sync::OnceLock::new(),
+            borrowed_key: std::sync::OnceLock::new(),
         }
     }
 
@@ -1065,6 +1070,17 @@ impl ContainedRunControl {
     /// Workflow #390 EXEC-3: whether the host started the run itself.
     fn is_host_package(&self) -> bool {
         self.host_package.get().is_some()
+    }
+
+    /// Workflow #437 MAPP-2a: marks the run as one on a borrowed key, before it executes.
+    fn note_borrowed_key(&self) {
+        let _ = self.borrowed_key.set(());
+    }
+
+    /// Workflow #437 MAPP-2a: whether the run executes on a borrowed key, which its end neither
+    /// renews nor ends.
+    fn borrows_key(&self) -> bool {
+        self.borrowed_key.get().is_some()
     }
 
     /// Workflow #385 MEM-1: the run's main package load, noted once after its preparation; a
@@ -7405,6 +7421,31 @@ impl HostShared {
         self.contained_task_deadline_until(requested, token)
     }
 
+    /// Workflow #437 MAPP-2a: the deadline of a run on a borrowed key: as
+    /// [`Self::contained_task_deadline`], and no later than the key's expiry less `after_ms`, the
+    /// time the key's holder needs on it after this run; refused when it has passed.
+    fn borrowed_key_deadline(
+        &self,
+        request: &ContainedTaskRequest,
+        token: &LeaseToken,
+        after_ms: u64,
+    ) -> Result<u64, RequestFailure> {
+        let now = self
+            .monotonic_ms()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let requested = now
+            .checked_add(request.response_deadline_ms())
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    HostCode::ContainedTaskDeadlineOverflow,
+                    HostLocation::DeriveContainedTaskDeadline,
+                    RuntimeErrorCode::RuntimeHalted,
+                ))
+            })?;
+        let handed_back = token.expires_at_monotonic_ms().saturating_sub(after_ms);
+        self.contained_task_deadline_until(requested.min(handed_back), token)
+    }
+
     /// The earlier of `requested` and the lease boundary; refused when it has passed. Workflow
     /// #369 W-3: a direct run passes its receipt deadline, so its deadline stays anchored at
     /// receipt however long it waited for its grant.
@@ -7724,6 +7765,55 @@ impl HostShared {
         run: PreparedPackageRun<'_>,
         held: HeldPackageLease,
     ) -> Result<OperationSuccess, RequestFailure> {
+        self.run_held_package(run, held, None)
+    }
+
+    /// Workflow #437 MAPP-2a (`contracts/device-group.md`, "The switch before a run", step 3): runs
+    /// a prepared host package on `held`, a key another run holds and gets back (a member's
+    /// startup package in the switch before its run). As [`Self::run_prepared_package`], except
+    /// that the key is never renewed (a renewal mints a new token, and the run the key goes back
+    /// to checks the one it holds) and never ended: the run's end, a failed one included, leaves
+    /// the key with its holder (`ContainedRunControl::borrows_key`). The run's deadline is the
+    /// earlier of its response deadline and the key's expiry less `after_ms`, the time the holder's
+    /// own run needs on the key afterwards, so a run that ends by its deadline leaves that time.
+    pub(super) fn run_prepared_package_on_borrowed_key(
+        &self,
+        mut run: PreparedPackageRun<'_>,
+        held: HeldPackageLease,
+        after_ms: u64,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        // Only a member of a device group of several borrows a key so; nothing runs for any
+        // other instance, and the key is left as it is.
+        if !self.in_group_of_several(held.token.instance_id()) {
+            return Err(RequestFailure::request(
+                super::switch::member_mismatch(),
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        }
+        run.activity_key = super::instance_activity::KeyHold::Borrowed;
+        run.active_run.control.note_borrowed_key();
+        self.run_held_package(run, held, Some(after_ms))
+    }
+
+    /// Workflow #437 MAPP-2a: whether the registered run of `request_id` executes on a borrowed
+    /// key ([`ContainedRunControl::borrows_key`]); `false` when no run is registered for it.
+    pub(super) fn run_borrows_key(&self, request_id: RequestId) -> RuntimeHostResult<bool> {
+        Ok(
+            lock(&self.contained_runs, HostLocation::ReadActiveContainedRun)?
+                .get(&request_id)
+                .is_some_and(|control| control.borrows_key()),
+        )
+    }
+
+    /// [`Self::run_prepared_package`], and with `borrowed_after_ms` its borrowed-key form
+    /// ([`Self::run_prepared_package_on_borrowed_key`]).
+    fn run_held_package(
+        &self,
+        run: PreparedPackageRun<'_>,
+        held: HeldPackageLease,
+        borrowed_after_ms: Option<u64>,
+    ) -> Result<OperationSuccess, RequestFailure> {
         let PreparedPackageRun {
             instance_id,
             instance_alias,
@@ -7760,7 +7850,11 @@ impl HostShared {
                 ),
             ));
         }
-        let deadline_monotonic_ms = match self.contained_task_deadline(&task_request, &token) {
+        let deadline = match borrowed_after_ms {
+            None => self.contained_task_deadline(&task_request, &token),
+            Some(after_ms) => self.borrowed_key_deadline(&task_request, &token, after_ms),
+        };
+        let deadline_monotonic_ms = match deadline {
             Ok(deadline) => deadline,
             Err(failure) => {
                 return Err(self.cleanup_composite_failure_with_run_links(
@@ -9141,6 +9235,25 @@ impl HostShared {
                     .then(|| instance_alias.to_owned()),
             },
         )?;
+        let completed = OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&task_terminal)),
+            result: RuntimeResult::ContainedTaskCompleted {
+                run_id: *run_id.transport(),
+                task_id: *task_id.transport(),
+                task_request_id: original.request_id(),
+                response_deadline_monotonic_ms: Some(control.deadline()),
+                task_result: outcome.outcome,
+                final_page: outcome.final_page,
+                executed_steps: outcome.executed_steps,
+            },
+            failure_outcome: None,
+        };
+        // Workflow #437 MAPP-2a: a run on a borrowed key leaves the key, still valid, with the
+        // run that holds it.
+        if control.borrows_key() {
+            return Ok(completed);
+        }
         match self.release_lease(
             request,
             original.request_id(),
@@ -9148,20 +9261,7 @@ impl HostShared {
             connection_id,
             release_links,
         ) {
-            Ok(_) => Ok(OperationSuccess {
-                state: RuntimeReceiptState::Completed,
-                terminal: Some(terminal(&task_terminal)),
-                result: RuntimeResult::ContainedTaskCompleted {
-                    run_id: *run_id.transport(),
-                    task_id: *task_id.transport(),
-                    task_request_id: original.request_id(),
-                    response_deadline_monotonic_ms: Some(control.deadline()),
-                    task_result: outcome.outcome,
-                    final_page: outcome.final_page,
-                    executed_steps: outcome.executed_steps,
-                },
-                failure_outcome: None,
-            }),
+            Ok(_) => Ok(completed),
             Err(failure) => Err(self.cleanup_composite_failure_with_run_links(
                 request,
                 token,
@@ -10633,7 +10733,12 @@ impl HostShared {
             }
             held
         };
-        if !held || (!deadline_end && token.expires_at_monotonic_ms() >= grace_end) {
+        // Workflow #437 MAPP-2a: a run on a borrowed key never renews it: a renewal mints a new
+        // token, and the run the key is handed back to checks the one it holds.
+        if !held
+            || control.borrows_key()
+            || (!deadline_end && token.expires_at_monotonic_ms() >= grace_end)
+        {
             return Ok(token.clone());
         }
         match self.renew_held_lease(request, token, connection_id, grace_ms) {
