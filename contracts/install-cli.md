@@ -489,7 +489,9 @@ does not read the journals of kind `stop` or `start` or with `rollback` (review 
   gone) within `install.stop.shutdown_wait_ms`; nothing is killed (a wait that passes refuses
   `runtime_stop_failed`). Just before `request-shutdown` S0's run-time instructions and the
   other parties' pauses are read again and journalled (what another session set or lifted
-  during the drains is what the start restores). The closed start's terminal outcome is read
+  during the drains is what the start restores), and (Workflow #454, 0.12.59) whether that
+  Runtime is in its root's first epoch, from its own `StartReport` (`s0.first_epoch`, "The
+  post-start checks (INST-2)"). The closed start's terminal outcome is read
   from the start logs, each dated by the file's own modification time as the watchdog's F
   (WD-MT, since 0.12.28; `contracts/runtime-watchdog.md`, Observation 4): one that is not a stop
   (its category neither `info` nor `success`, as the
@@ -629,14 +631,31 @@ failed check ends the command `post_check_failed` (a composite rollback, the res
 the write that records the operation's result, so the record says which row failed and what it
 read; before, it stayed `started` with no evidence, the rows only in the answer's `post_check` and
 `failed_checks`. A crash before that write leaves the step `started`, and `install resume` runs the
-checks again.
+checks again. So a `post_check` step in state `done` says only that the checks ran to their end;
+whether they passed is its `failed` member (empty: every fail-class check passed). That is true of
+every `done` step, also where a failed check does not end the command `post_check_failed`: the
+checks of `install start` (a failed one is the caveat `post_check_mismatch`) and those of an
+automatic rollback's own start (the command still ends `deploy_rolled_back`, its hold kept) close
+their step `done` with a `failed` that is not empty, and a step that begins an automatic rollback
+is `done` with its `failed` and `rollback`.
+
+Workflow #454 (0.12.59; register §1.342): S0 also records whether the Runtime the close stops is
+in its root's first epoch. Just before `request-shutdown`, with S0's second read of the pauses and
+instructions, the close reads that Runtime's own `StartReport`; when the report is of S0's owner
+epoch and says `first_start: true` with `tagged_state` `seed` (that start found no earlier start
+record, so it wrote no seeding marker, [ledger-observer.md](ledger-observer.md) §11.5), the
+journal's `s0` records `"first_epoch": true`. The root's next start then seeds by design, and
+`no_seeding` passes it. A read that fails, a build that does not report the member (every build
+before 0.12.59), a later start, and a report of another epoch record nothing, and `no_seeding`
+requires `load` as before. An automatic rollback's checks judge without it (their start follows
+the new build's Runtime, not S0's).
 
 | id | Judged | Fail-class |
 |---|---|---|
 | `ready` | the start reached readiness (`ready_ms`), and the owner it made ready still answers (a Runtime gone or restarted at check time fails) | yes |
 | `open` | the open's phases sum within its deadline and no `ledger_open_slow` (report, else the start log) | no |
-| `no_seeding` | a root that ran before (an S0) loaded its tagged state, not seeded again | yes |
-| `bindings` | every configured instance alias bound | yes |
+| `no_seeding` | a root that ran before (an S0) loaded its tagged state, not seeded again (`{tagged_state}`); with S0's `first_epoch` (Workflow #454) `seed` passes as `load` does (`{tagged_state, first_epoch: true}`); without an S0 it passes (`{tagged_state, earlier_runtime: false}`) | yes |
+| `bindings` | every instance alias of the configuration the start was given bound: the root's file as the checks read it (Workflow #454, 0.12.59: after the swap of `config replace`, `config restore` and `instance add`, the new file; before, the file as the command read it before the swap) | yes |
 | `packs` | every game of the pack register registered, with its pack count | yes |
 | `pauses` | S0's pauses, plus the hold on every instance it took | yes |
 | `instructions` | S0's run-time instructions in effect as S0 recorded them, and none the start did not restore (the report's `instructions_dropped`: dropped or superseded). An instruction kept over a default that changed (`instructions_base_changed`, `config_override_base_changed`) is restored: it is named in the row's `base_changed` and never fails it (#421 S2-IF) | yes |
@@ -753,9 +772,12 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     hold's own pauses, so it stays paused until a person lifts it (the console's resume,
     `actingctl resume --state-root <s> --instance <alias>`, or since LAB-6S1b the Lab's
     `resume <alias>`) when the account is ready. Not
-    registered by the started Runtime, or its pause refused: `post_check_failed` (`alias`,
-    `count` 1), the hold kept, and `next` names `pause_added`, the core pause as actingctl runs
-    it (`actingctl pause --state-root <s> --instance <alias> --reason instance.added`). An
+    registered by the started Runtime: from 0.12.59 (Workflow #454) the post-start check
+    `bindings`, which judges the new file, fails (`post_check_failed`, `failed_checks`
+    `bindings`, the row's `missing` the alias), the hold kept, and the pause is tried as after
+    every stop after the swap (below); its pause refused: `post_check_failed` (`alias`, `count`
+    1), the hold kept, and `next` names `pause_added`, the core pause as actingctl runs it
+    (`actingctl pause --state-root <s> --instance <alias> --reason instance.added`). An
     operation that stops after the swap pauses it the same way while a Runtime answers. A stopped
     Runtime takes no pause of an alias it did not register, so the instance's own pause comes only
     after the new Runtime's readiness; the global pause below holds it until then.
@@ -788,10 +810,12 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     or a Runtime gone) stays beside the live file, kept as every part: nothing deletes it, and
     `leftovers` lists it.
   - **Taking it back**: `config restore <backup>` puts the kept file back by the same path. Its
-    post-start checks judge against the configuration and the pauses from before the restore, so
-    the instance it removes shows as a `bindings` and a `pauses` failure: it ends
-    `post_check_failed` with its hold kept, the previous configuration running, and `release-hold
-    <its reason>` hands the hold back. `instance remove` (a later slice) is the clean way.
+    post-start checks judge the pauses from before the restore, so the instance it removes shows
+    as a `pauses` failure (the hold's pause on it is not restored): it ends `post_check_failed`
+    with its hold kept, the previous configuration running, and `release-hold <its reason>` hands
+    the hold back. `bindings` judges the restored file (Workflow #454, 0.12.59; before, the file
+    from before the restore, and the removed instance failed it too). `instance remove` (a later
+    slice) is the clean way.
 - **Packs** (INST-4). Plan with the contract crate's own readers (`BundleIndex::validate`,
   `read_standard_pack_root`), the package interface edge, the delta per item and the
   Runtime-semantic rules (`pack_binding_broken`, `pack_maintenance_drift`, the caveat
@@ -1225,6 +1249,13 @@ LAB-3 fix 1: the evidence of the module's `pause` step carries `"own_pauses": {"
 `drained` it names the instances the module's release may hand back, matched by reason and alias
 (fix 2: no start step records it any more, and the epoch and revisions are evidence only; "The
 Lab's rescue module").
+
+Workflow #454 (0.12.59; register §1.342): `s0` may carry `"first_epoch": true`, written by the close
+of `actingctl install` and of the rescue module alike when the Runtime it stops says it is in its
+root's first epoch ("The post-start checks (INST-2)"); absent otherwise, so every other journal
+keeps its bytes. An older reader that refuses unknown members does not read such a journal (run
+`install` from the newest kept build, as above); `install-root` does not change, as for LAB-3's
+members.
 
 The journal is written `.part` → flushed → renamed before each step starts and after it ends.
 `current.json` is written before the first step and renamed `current.json.finished-<ms>` at the

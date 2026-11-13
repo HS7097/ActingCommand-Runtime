@@ -508,6 +508,7 @@ fn inst2_d_4_each_post_start_check_passes_and_fails() {
             {"alias": "node.b", "reason": "operator", "revision": 1}
         ]})),
         instructions: Some(json!([{"config_key": "scheduling.example_key", "value_json": "1"}])),
+        first_epoch: false,
     };
     let hold = PauseIntent {
         reason: SchedulingPauseReason::new("deploy-4").expect("a pause reason"),

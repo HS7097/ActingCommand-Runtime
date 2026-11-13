@@ -336,7 +336,8 @@ fn pause(
 }
 
 /// The instructions and the other parties' pauses as the close reads them before
-/// `request-shutdown` (review S2 L5): S0 again, without the hold's own pauses.
+/// `request-shutdown` (review S2 L5): S0 again, without the hold's own pauses. Workflow #454: and
+/// whether the Runtime about to close is in its root's first epoch.
 fn reread_s0(operation: &mut Operation<'_>, loaded: &Loaded) -> Result<(), Outcome> {
     let runtime = operation.host().runtime();
     let Ok(Some(mut seen)) = runtime.status(&loaded.state_root) else {
@@ -344,6 +345,18 @@ fn reread_s0(operation: &mut Operation<'_>, loaded: &Loaded) -> Result<(), Outco
     };
     let Ok(config) = runtime.config(&loaded.state_root) else {
         return Ok(());
+    };
+    // Workflow #454 (register §1.342): the Runtime's own start report, of the epoch S0 names. A
+    // read that fails, a build that does not know the read or the member, and a report of another
+    // epoch record no first epoch: the next start's `no_seeding` then requires `load`, as before.
+    let epoch = operation
+        .journal()
+        .s0
+        .as_ref()
+        .and_then(|s0| s0.epoch.clone());
+    let first_epoch = match runtime.start_report(&loaded.state_root) {
+        Ok(Some(report)) => postcheck::first_epoch_of(&report, epoch.as_deref()),
+        Ok(None) | Err(_) => false,
     };
     if let Some(intent) = pause_intent(operation.journal()) {
         for instance in &mut seen.instances {
@@ -360,6 +373,7 @@ fn reread_s0(operation: &mut Operation<'_>, loaded: &Loaded) -> Result<(), Outco
     operation.record_s0_reads(
         hold::pauses_value(&seen),
         hold::instructions_value(&config.instructions),
+        first_epoch,
     )
 }
 
@@ -608,11 +622,24 @@ fn post_check(
     let hold = pause_intent(&journal);
     let state = state::load_state_or_default(&paths)?;
     let config_sha256 = postcheck::config_sha256(&paths.config());
+    // Workflow #454 (review of #1679): the configuration the restarted Runtime was given, the
+    // root's file as the checks read it; `loaded` was read when the command began, before the swap
+    // of `config replace`, `config restore` and `instance add`.
+    let given_config = postcheck::given_config(&paths.config(), &loaded.config);
     let added = if rollback {
         Vec::new()
     } else {
         postcheck::added_keys(journal.plan.as_ref())
     };
+    // Workflow #454 (register §1.342): S0's first epoch speaks of the Runtime S0 closed, whose next
+    // start is the operation's own; an automatic rollback's start follows the new build's Runtime
+    // instead, so its checks judge without it.
+    let s0 = journal.s0.clone().map(|mut s0| {
+        if rollback {
+            s0.first_epoch = false;
+        }
+        s0
+    });
     operation.start(n)?;
     let rows = postcheck::evaluate(
         operation.host(),
@@ -621,9 +648,9 @@ fn post_check(
             ready,
             started_epoch,
             log: &log,
-            s0: journal.s0.as_ref(),
+            s0: s0.as_ref(),
             hold: hold.as_ref(),
-            config: &loaded.config,
+            config: &given_config,
             config_sha256: &config_sha256,
             begun_config_sha256: journal.inputs.get("config_sha256").and_then(Value::as_str),
             state: &state,

@@ -20,6 +20,11 @@
 //! Workflow #429 R-7a (register §1.233, `runtime-client` 4): `player_holds_restored`,
 //! `player_holds_dropped` and `player_hold_not_durable` follow the same rule: absent when empty
 //! (or `false`), so this build reads a report of an earlier build. R-7b fills them.
+//!
+//! Workflow #454 (register §1.342, `runtime-client` 9): `first_start`, present (`true`) only on the
+//! root's first start, the one that found no earlier start record and so writes no seeding marker
+//! (Workflow #422 LN-4); absent otherwise, so a later start's report keeps its bytes and this build
+//! reads an earlier build's report as one without it.
 
 use super::{RuntimeContractError, RuntimeContractResult};
 use crate::OwnerEpoch;
@@ -117,6 +122,12 @@ pub struct RuntimeStartReport {
     pub open: StartReportOpen,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tagged_state: Option<StartReportTaggedState>,
+    /// Workflow #454 (register §1.342): this start found no earlier start record in the ledger
+    /// (`runtime.started` or `runtime.takeover`, read before its own): the root's first start,
+    /// which has no earlier epoch to seed and writes no seeding marker, so the root's next start
+    /// seeds by design (Workflow #422 LN-4). Absent (`false`) on every other start.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub first_start: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_ms: Option<u64>,
     pub pauses_restored: u64,

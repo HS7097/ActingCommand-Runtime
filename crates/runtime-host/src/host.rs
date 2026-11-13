@@ -2278,6 +2278,10 @@ impl RuntimeHost {
             // Workflow #422 LN-4: a root's first start has no earlier epoch to seed and writes
             // no marker; read before this start's own start record.
             let earlier_start = crate::tagged_state::earlier_start(&shared.ledger)?;
+            // Workflow #454: whether this start is the root's first, for `StartReport`: the
+            // installer reads it before a stop, so that the next start's designed seeding passes
+            // its check `no_seeding`.
+            shared.note_start_first(!earlier_start)?;
             // Workflow #381 R6: each recovery step is timed, and the line is printed whether
             // the recovery succeeds or fails.
             let recovery_started = Instant::now();

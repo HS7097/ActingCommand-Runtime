@@ -746,6 +746,9 @@ pub(super) enum FakeStart {
     Hangs,
 }
 
+/// Workflow #454: what a test runs at a `StartReport` read of the fake Runtime, given its build.
+pub(super) type ReportHook = Box<dyn Fn(&str)>;
+
 /// The fake Runtime's owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FakeOwner {
@@ -800,6 +803,12 @@ pub(super) struct FakeRuntime {
     /// Workflow #421 INST-5: the aliases the next start that comes ready registers, unpaused (the
     /// instances a configuration it starts with gained); none by default.
     pub(super) registers_at_start: RefCell<Vec<String>>,
+    /// Workflow #454: the aliases the next start that comes ready no longer registers (the
+    /// instances a configuration it starts with lost), with their pauses; none by default.
+    pub(super) drops_at_start: RefCell<Vec<String>>,
+    /// Workflow #454: called with the build of the running Runtime at every `StartReport` read,
+    /// before it answers (none by default).
+    pub(super) on_report: RefCell<Option<ReportHook>>,
     /// Workflow #421 INST-5b: every status read of the running Runtime: how many calls `calls`
     /// listed then, and the reason of the global pause it showed.
     pub(super) status_reads: RefCell<Vec<(usize, Option<String>)>>,
@@ -838,6 +847,8 @@ impl FakeRuntime {
             catalog: RefCell::new(None),
             catalogs: RefCell::new(VecDeque::new()),
             registers_at_start: RefCell::new(Vec::new()),
+            drops_at_start: RefCell::new(Vec::new()),
+            on_report: RefCell::new(None),
             status_reads: RefCell::new(Vec::new()),
         }
     }
@@ -1176,6 +1187,10 @@ impl RuntimeLink for FakeRuntime {
         if !self.running.get() || self.report_fails.get() {
             return Err(refused());
         }
+        if let Some(on_report) = self.on_report.borrow().as_ref() {
+            let build = self.build.borrow().clone();
+            on_report(build.as_str());
+        }
         if self.unsupported.borrow().contains(&*self.build.borrow()) {
             return Ok(None);
         }
@@ -1216,6 +1231,10 @@ impl RuntimeLink for FakeRuntime {
             for alias in gained {
                 self.register(&alias);
             }
+            let lost = std::mem::take(&mut *self.drops_at_start.borrow_mut());
+            self.instances
+                .borrow_mut()
+                .retain(|instance| !lost.contains(&instance.alias));
         }
         if !self.running.get() {
             return None;

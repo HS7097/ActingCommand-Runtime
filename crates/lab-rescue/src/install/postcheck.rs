@@ -11,14 +11,17 @@
 //! fails `ready` (the owner the start made ready must still answer), and a `StartReport` read
 //! that fails for any other reason than an older build fails the fail-class checks it feeds;
 //! (review S2 H1) `config` is judged against the file as it was when the operation began, so an
-//! edit after the adopt is no failure.
+//! edit after the adopt is no failure. Workflow #454 (register §1.342): `no_seeding` also passes
+//! the seeding of a start whose S0 Runtime was in its root's first epoch (it wrote no seeding
+//! marker, so this start seeds by design), and `bindings` judges the configuration the restarted
+//! Runtime was given, the root's file as the checks read it.
 //!
 //! | id | judged | fail-class |
 //! |---|---|---|
 //! | `ready` | the start reached readiness, and its owner still answers | yes |
 //! | `open` | the open's phases within the deadline, no `ledger_open_slow` | no |
-//! | `no_seeding` | a root that ran before loaded its tagged state, not seeded again | yes |
-//! | `bindings` | every configured instance bound | yes |
+//! | `no_seeding` | a root that ran before loaded its tagged state, not seeded again (seeding passes after a first epoch) | yes |
+//! | `bindings` | every instance of the configuration the start was given bound | yes |
 //! | `packs` | every pack of the register registered, with its count | yes |
 //! | `pauses` | S0's pauses plus the hold on every instance it took | yes |
 //! | `instructions` | S0's run-time instructions, none dropped or superseded (one kept over a changed default passes, named) | yes |
@@ -109,7 +112,8 @@ pub(crate) struct CheckInputs<'a> {
     pub(crate) s0: Option<&'a S0>,
     /// The hold: its reason and the instances it took.
     pub(crate) hold: Option<&'a hold::PauseIntent>,
-    /// The root's configuration document and the SHA-256 of the live file (`sha256:<hex>`).
+    /// The root's configuration document (Workflow #454: the one the start was given, see
+    /// [`given_config`]) and the SHA-256 of the live file (`sha256:<hex>`).
     pub(crate) config: &'a Value,
     pub(crate) config_sha256: &'a str,
     /// The SHA-256 of the configuration file when the operation began (its journal's inputs).
@@ -289,8 +293,20 @@ pub(crate) fn evaluate(
         },
     });
 
-    // no_seeding: a root that ran before (an S0) loads the tagged state it seeded.
+    // no_seeding: a root that ran before (an S0) loads the tagged state it seeded. Workflow #454
+    // (register §1.342): unless the Runtime S0 closed was in its root's first epoch, which wrote no
+    // seeding marker: then this start seeds by design (LN-4), and `seed` passes as `load` does,
+    // the row naming `first_epoch`.
     rows.push(match (&report, inputs.s0) {
+        (Some(report), Some(s0)) if s0.first_epoch => {
+            let state = report["tagged_state"].as_str().unwrap_or("unknown");
+            check(
+                "no_seeding",
+                true,
+                verdict(state == "load" || state == "seed"),
+                json!({"tagged_state": state, "first_epoch": true}),
+            )
+        }
         (Some(report), Some(_)) => {
             let state = report["tagged_state"].as_str().unwrap_or("unknown");
             check(
@@ -605,4 +621,27 @@ pub(crate) fn config_sha256(path: &Path) -> String {
     files::read_all(path)
         .map(|bytes| format!("sha256:{}", files::sha256_bytes(&bytes)))
         .unwrap_or_default()
+}
+
+/// Workflow #454 (review of #1679): the configuration the restarted Runtime was given, the root's
+/// file at `path` as the checks read it: after the swap of `config replace`, `config restore` or
+/// `instance add` the new file, which `loaded` (read when the command began) is not. A file that
+/// cannot be read or parsed now is judged as `loaded` holds it; its SHA-256 then is not the one the
+/// operation began with, which fails `config`.
+pub(crate) fn given_config(path: &Path, loaded: &Value) -> Value {
+    files::read_all(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(files::without_bom(&bytes)).ok())
+        .unwrap_or_else(|| loaded.clone())
+}
+
+/// Workflow #454 (register §1.342): whether a running Runtime's own start report says its epoch is
+/// the root's first, the epoch `epoch` (S0's) only: the start found no earlier start
+/// (`first_start`) and seeded (`tagged_state` `seed`), so it wrote no seeding marker and the root's
+/// next start seeds by design (LN-4). A report without the member (a build before it, or any later
+/// start) or of another epoch is no first epoch.
+pub(crate) fn first_epoch_of(report: &Value, epoch: Option<&str>) -> bool {
+    epoch.is_some_and(|epoch| report["owner_epoch"].as_str() == Some(epoch))
+        && report["first_start"].as_bool() == Some(true)
+        && report["tagged_state"].as_str() == Some("seed")
 }

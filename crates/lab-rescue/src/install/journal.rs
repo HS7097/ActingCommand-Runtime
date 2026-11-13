@@ -81,6 +81,13 @@ pub(crate) struct S0 {
     pub(crate) epoch: Option<String>,
     pub(crate) pauses: Option<Value>,
     pub(crate) instructions: Option<Value>,
+    /// Workflow #454 (register §1.342): the Runtime of `epoch`, read just before
+    /// `request-shutdown`, was in its root's first epoch: its own start report said that start
+    /// found no earlier start (`first_start`) and seeded, so it wrote no seeding marker and the
+    /// next start seeds by design. Absent (`false`) otherwise, and from a Runtime that does not
+    /// report it, so every other journal keeps its bytes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) first_epoch: bool,
 }
 
 /// What an undo restores: the live build and the state before the operation.
@@ -442,6 +449,7 @@ impl<'h> Operation<'h> {
             epoch: None,
             pauses: None,
             instructions: None,
+            first_epoch: false,
         });
         s0.head = Some(head);
         self.write()
@@ -449,20 +457,24 @@ impl<'h> Operation<'h> {
 
     /// INST-2 fix round 1 (review S2 L5): records S0's pauses and run-time instructions as the
     /// close read them, just before `request-shutdown`: what another party changed during the
-    /// drains is what the start must restore.
+    /// drains is what the start must restore. Workflow #454: and whether the Runtime about to
+    /// close is in its root's first epoch ([`S0::first_epoch`]), read at the same moment.
     pub(crate) fn record_s0_reads(
         &mut self,
         pauses: Value,
         instructions: Value,
+        first_epoch: bool,
     ) -> Result<(), Outcome> {
         let s0 = self.journal.s0.get_or_insert(S0 {
             head: None,
             epoch: None,
             pauses: None,
             instructions: None,
+            first_epoch: false,
         });
         s0.pauses = Some(pauses);
         s0.instructions = Some(instructions);
+        s0.first_epoch = first_epoch;
         self.write()
     }
 

@@ -19641,6 +19641,115 @@ add`, the journal's input naming the added alias) and
 `postcheck_454_config_replace_passed_check_keeps_its_record` (checks that pass: the step `done`
 with the same three members, `failed` empty, no row failed). No existing test changes.
 
+### 1.342 Fix #454, the real cause (0.12.59): a restart of a Runtime in its root's first epoch passes `no_seeding`, and `bindings` judges the configuration the start was given (Workflow #454; a test installation driving release 0.12.58's command line, where `config replace` on a new root that had started once ended `post_check_failed` with `failed_checks` `no_seeding`, the row reading `{"tagged_state": "seed"}`; the coordinator's rulings of 11-13 on board #454, not the owner's words; coordinator work order `rd-1113/brief-454-first-epoch.md`, read on the head `5cc2be57` of #1679's branch, §1.341)
+
+1.342 is the next free number on that base, which holds #1679 (§1.341) and merges before this
+slice. [install-cli.md](install-cli.md), "The post-start checks (INST-2)" and the journal's
+`s0`, [runtime-interface.md](runtime-interface.md), the `StartReport` row, and
+[component-interfaces.md](component-interfaces.md), `runtime-client` revision 9, are the
+contract. No outcome code, value key, vocabulary word, configuration key, step kind, record or
+ledger shape is added, and no outcome code fragment changes, so the index is not regenerated.
+
+**The cause.** A start loads the tagged state when the ledger's index holds the marker
+`tagged_state_enabled`, else it seeds (`crates/runtime-host/src/tagged_state.rs`,
+`TaggedStart::read`). A root's first start finds no start record before its own
+(`earlier_start` false) and writes no marker ([ledger-observer.md](ledger-observer.md) §11.5;
+`host.rs`, `seed_tagged_state`), so by design the root's second start seeds once, by replay, and
+only it writes the marker. The installer's row `no_seeding` (`crates/lab-rescue/src/install/
+postcheck.rs`) passed only `load` whenever an S0 existed, so every operation that restarts a
+running Runtime whose epoch is its root's first (`config replace`, `config restore`, `instance
+add`, a composite update or rollback, `install stop` then `install start`) was judged failed on
+that designed seeding. Read as the coordinator read it; nothing differed.
+
+**What decides it, and from where.** The work order's first way, a fact the installer already
+holds before the stop, is not sound: S0's owner epoch is an identifier the Runtime mints from
+random bytes (`IdentifierIssuer::mint_owner_epoch`, `epoch_` and its bytes), with no order and
+nothing that says "first"; the ledger head and the pauses and instructions say nothing about
+earlier starts; the status read (`RuntimeSeen`: owner epoch, pid, start time, pauses, instances)
+neither; and the owner journal, which lists the owners, is locked while the Runtime runs (the
+status read sees only `Locked`). So the second way: the running Runtime says it. Its start
+already computes whether it found an earlier start record (`earlier_start`, read before its own
+start record); it now notes the answer beside the tagged state, and `StartReport` carries
+`first_start: true` when it found none, absent otherwise. Just before `request-shutdown`, with
+S0's second read of the pauses and instructions, the close reads that report and S0 records
+`first_epoch: true` when the report is of S0's owner epoch and says `first_start` with
+`tagged_state` `seed`.
+
+**Why it is sound.** `first_epoch` is recorded exactly when the closed Runtime's own start found
+no start record and no marker. A start that seeds writes the marker only when it found a start
+record (`seed_tagged_state`), and only a start writes it, so after that Runtime no marker exists
+and the next start seeds by design; a start that loaded (a marker it did not write) records
+nothing. A first start that crashed before it wrote its start record leaves the ledger without
+one, so the root's next start also reports `first_start` and also writes no marker: the start
+after it seeds by design, and `first_epoch` passes it rightly; a crash after the start record
+leaves the next start `first_start` false, which writes the marker, and the row requires `load`
+after it. Every other answer records nothing and the row requires `load` as before (fails closed):
+a read that fails, a build before 0.12.59 (no member) or before `StartReport`, a report of
+another epoch than S0's, a later start. The start that follows is never asked: its own report
+cannot tell a missed marker from none. An automatic rollback's checks judge without the member,
+since their start follows the new build's Runtime, not S0's.
+
+**The row.** With `first_epoch`, `no_seeding` passes `seed` as it passes `load`, with the values
+`{tagged_state, first_epoch: true}`; without it the row is as before, byte for byte (`{tagged_state}`
+with an S0, `{tagged_state, earlier_runtime: false}` without one, as `up` reads it). The name
+`earlier_runtime` there means "no S0 is judged", not "no Runtime ran before"; it is a recorded
+member and is kept.
+
+**Three smaller points (the review of #1679).**
+1. `bindings` judged the configuration the command read before the swap (`rescue::config_swap`
+   loads it, `deploy::post_check` passed `loaded.config`): a new file that removes an instance
+   failed it. It now judges the configuration the restarted Runtime was given, the root's file as
+   the checks read it (`postcheck::given_config`; a file that cannot be read or parsed then is
+   judged as before, and its hash fails `config`). A removed instance still fails `pauses` (the
+   hold's pause on it is not restored), which this slice does not change; an added instance the
+   start did not register now fails `bindings` (before, the checks passed and only its pause
+   failed).
+2. The contract says that a `post_check` step in state `done` says only that the checks ran to
+   their end; `failed` says whether they passed, also for `install start` and an automatic
+   rollback's own checks (`deploy.rs`, `post_check`: both close `done` over a failed check).
+3. The tests #1679 left out: the composite rollback through `actingctl install` that reaches
+   `close_with_end`, and a crash before the operation's end.
+
+**Interfaces.** `runtime-client` [3, 8] → [3, 9]: the start report's optional `first_start`.
+A reader whose `max` is below 9 refuses a report that carries it, that is the report of a Runtime
+in its root's first epoch (the console reads `StartReport`); every other report keeps its bytes.
+The journal's optional `s0.first_epoch` is a member of the single-location journal
+`install-operation.v1`, which `install-root` does not cover (as LAB-3's members): no raise.
+`ledger`, `actingd-config` and the rest do not move.
+
+**At deploy.** The fact comes from the Runtime that is stopped, so an operation that closes a
+Runtime of 0.12.58 or earlier judges as before, and a new root's first restart passes only once
+the Runtime that started it is 0.12.59 or later. A console whose `runtime-client` `max` is below
+9 cannot read the start report of a new root's first start.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| FE-1 | `RuntimeStartReport.first_start` (`true`, absent when `false`) | wire member, `runtime-client` 9 | #454 | `host/start_report_read.rs` | `since` 0.12.59; noted at the start from `earlier_start` |
+| FE-2 | the journal's `s0.first_epoch` (`true`, absent when `false`) | private document member (`install-operation.v1`) | #454 | `deploy::reread_s0` | `install-root` not raised |
+| FE-3 | `no_seeding` with S0's `first_epoch`: `seed` passes, `{tagged_state, first_epoch: true}` | post-start check behaviour | #454 | `postcheck::evaluate` | without it, as before |
+| FE-4 | `bindings` judges the configuration the start was given | post-start check behaviour | #454 | `deploy::post_check` | after a swap, the new file |
+| FE-5 | [install-cli.md](install-cli.md), "The post-start checks (INST-2)": what a `done` step says, S0's first epoch, the two rows; "Taking it back" and the added instance not registered; the journal's `s0` | contract text | #454 | — | |
+
+Tests (apps gate row "#454 FIRST EPOCH", `crates/lab-rescue/src/install/gate_454_postcheck.rs`,
+on the fake host): `postcheck_454_config_replace_after_a_first_epoch_passes_its_designed_seeding`
+and `postcheck_454_instance_add_after_a_first_epoch_passes_its_designed_seeding` (the closed
+Runtime reports `first_start` with `seed`, the new start `seed`: S0 `first_epoch`, the row passes
+naming it, done, the hold released); `postcheck_454_a_restart_past_the_first_epoch_fails_as_before`
+(the closed Runtime the root's second start: both commands fail exactly as #1679 pins it, S0
+without the member, the hold kept); `postcheck_454_an_older_runtime_that_does_not_report_the_fact_is_judged_as_before`
+(a report without the member, and a build without `StartReport`);
+`postcheck_454_a_deployment_past_the_first_epoch_rolls_back_as_before` (`actingctl install`'s
+composite update, `deploy_rolled_back` on `no_seeding`);
+`postcheck_454_a_composite_rollback_failed_check_closes_its_step_with_its_rows` and
+`postcheck_454_a_crash_before_the_end_leaves_the_step_started` (#1679's two);
+`postcheck_454_bindings_judges_the_new_configuration_without_a_removed_instance` and
+`postcheck_454_bindings_judges_the_new_configuration_with_an_added_instance`. Adapted:
+`gate_inst2_deploy::inst2_d_4_each_post_start_check_passes_and_fails` (its `S0` literal names the
+new field, `false`; no assertion changes), `gate_429_r0b_pairing`'s two assertions of the
+declared range and `tools/actinglab-architecture/tests/component_interfaces.rs` (`[3, 8]` →
+`[3, 9]`). The fake Runtime gains the aliases a start no longer registers and a hook at a
+`StartReport` read.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -19688,6 +19797,7 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | W21 | the player workbench's request kinds, results and members (§1.213 R0-1 to R0-4, R0-8, R0-10; §1.216 R0C-3, `PackScheduleView`), and the read `StartReport` (§1.216 R0C-4) | runtime-client 3 | #429 R-0, R-0c | declared [2, 3] in 0.12.30; each kind answers `not_implemented` until its slice; `RuntimeInstanceStatus.activity` is the status member W13 warned about: it and R0-8's answer members stay absent until a release raises `min` to 3 with the console that reads them; R-0b fills `activity` for all kinds and raises `min` to 3 in 0.12.36 (§1.238) |
 | W22 | the player hold's request kinds `AcquirePlayerHold`, `ReleasePlayerHold`, their results, the status members `player_hold`, `player_hold_operation`, `control` and the start report members `player_holds_restored`, `player_holds_dropped`, `player_hold_not_durable` (§1.233 R7A-1 to R7A-3) | runtime-client 4 | #429 R-7a | declared [2, 4] in 0.12.35; both kinds answer `not_implemented` until R-7b; every new member is absent until R-7b, which raises `min` to 4 ([player-hold.md](player-hold.md), "Interfaces and rollout") |
 | W23 | `RuntimePerformanceStatus.memory` and `.vision` (§1.280 PR-1, PR-2; `since` 0.12.41) | runtime-client 6 | #407 PERF-READ | two optional members of W15's status (`deny_unknown_fields`), read from memory: the process's counters and the parts its owners hold, and each vision model's lock waits and inference times; declared [3, 6] in 0.12.41 with `min` unchanged; a reader whose `max` is below 6 refuses an answer that carries them (`runtime_receipt_decode_failed`), and this build fills `memory` on every answer; on PerformanceStatus, not on Status, as W20 |
+| W24 | `RuntimeStartReport.first_start` (§1.342 FE-1; `since` 0.12.59) | runtime-client 9 | #454 | one optional member of the start report (`deny_unknown_fields`), present (`true`) only on a root's first start, the one that found no earlier start record and writes no seeding marker; the installer reads it just before a close (S0's `first_epoch`); a reader whose `max` is below 9 refuses a report that carries it (`runtime_receipt_decode_failed`), every other report keeps its bytes |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
 `UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).
@@ -19841,7 +19951,7 @@ K27 asserts the declaration. Every moving interface rises once for the release.
 |---|---|---|
 | `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts. Workflow #411 B15 R3 raises it to [5, 6] in v0.12.3 (§1.113 B15C-4): revision 6 adds the remedy keys, and a revision-5 file is still read. Workflow #406 T12 raises it to [5, 7] in #406's release (§1.136 T12-5): revision 7 adds the `touch` section, and revision-5 and revision-6 files are still read. #411 A38 raises it to [5, 8] (§1.148 A38-7): revision 8 adds `recovery_ladder.fence_recheck`, and revisions 5 to 7 are still read. #411 A51 adds `ledger_observer.read_budget_ms` and `close_timeout_ms` to the same revision 8 (§1.151 A51-4). #411 B37 (A35-S1) adds `recovery_ladder.busy` to the same revision 8 (§1.152 B37-5). The 0.12.x release after v0.12.9 raises it to [5, 9] (§1.168 A35-5): revision 9 adds that release's configuration keys (#411 A35: `recovery_ladder.busy.screen`), and revisions 5 to 8 are still read. P0-LO raises it to [5, 10] in v0.12.11: revision 10 adds `ledger_observer.open_timeout_ms` and `open_warn_ratio_milli`, and revisions 5 to 9 are still read. #411 A64, #411 A66, PERF-B1 and SCH-M ED-1 raise it to [5, 11] in v0.12.12: revision 11 adds `host_claims.run_end_grace_ms` (A64, ruling C-43), the `watchdog` section (`start_window_ms`, A66), the `execution` section (`capture.max_interval_ms`, `capture.backoff_enabled`, `capture.idle_ceiling_ms`; PERF-B1, §1.177 B1-2) and SCH-M ED-1's `scheduling.expected_runtime.*` (also per instance) and `scheduling.fact_refresh.expected_duration_ms` (§1.178 ED1-3), and revisions 5 to 10 are still read. IDLE-1 (Alice's ruling 41) raises it to [5, 12] in the release after v0.12.12: revision 12 adds the `idle` section (`action`, `min_gap_ms`, `close_app_wake_lead_ms`, `stop_emulator_wake_lead_ms`) and an instance entry's `idle` member; ROUT-L RL-1b (same release, §1.185 RL1B-1, RL1B-2) adds to revision 12 the `standard_packs` keys `check_interval_ms` and `cached_generations` and a `policy` section without `catalog` (composer mode), #422 LN-5 `ledger_observer.history_page_rows` and #422 LN-TUNE `ledger_observer.writer_reply_timeout_ms`; and revisions 5 to 11 are still read. #422 LN-8 raises it to [5, 13] in the release after v0.12.13: revision 13 adds `ledger_observer.open_verify_tail_records`, and revisions 5 to 12 are still read. #422 LN-WS raises it to [5, 14] in v0.12.15 (§1.194): revision 14 adds `ledger_observer.read_check_vm_steps` and `history_scan_rows`, and revisions 5 to 13 are still read Workflow #392 DA-4b-D (Alice's ruling 69) raises it to [5, 15] in v0.12.16 (§1.195 DA4bD-2): revision 15 adds the `display_safe_area` section (`directory`, `check_interval_ms`, `model`) and an instance entry's `display_safe_area` member (`model`), and revisions 5 to 14 are still read. #422 LN-7c Q raises it to [5, 16] in v0.12.17 (§1.196 LN7CQ-1 to LN7CQ-3): revision 16 adds the top-level `frame_retention_evidence_max_age_days` and `ledger_observer.frame_query_steps_per_second` and `frame_query_chunk_frames`, and revisions 5 to 15 are still read. Workflow #421 INST-1 raises it to [5, 17] in v0.12.18: revision 17 adds the `install` section (the tunables of `actingctl install`, [install-cli.md](install-cli.md)), and revisions 5 to 16 are still read |
 | `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66. Workflow #411 BT-LR raises it to [3, 4] once for the 0.12.x B train (§1.153, Alice 2026-10-20): revision 4 adds the train's shapes, and a revision-3 ledger is still read. Workflow 114-A raises it to [3, 5] in 0.12.36 (§1.236): revision 5 adds `policy.not_run_changed` with its payloads and the ledger's own copies, shapes only, and revision-3 and revision-4 ledgers are still read. #402 HS-2b raises it to [3, 6] in 0.12.39 (§1.274): revision 6 adds HS-2's closed action `device.backend_switched` with its payload and the vocabulary `nemu_app_index_source`, and revision-3 to revision-5 ledgers are still read; SS-9's own raise (§1.212) takes the next revision of a later release. Workflow #404 FS-3 raises it to [3, 7] in 0.12.43 (§1.284 FS3-4, FS3-6): revision 7 adds the select confirmations `tracked` and `track_lost`, and revision-3 to revision-6 ledgers are still read; one way, so the deploy over 0.12.42 takes `--accept-ledger-one-way` and the rollback to it is refused |
-| `runtime-client` | [2, 2] | §3 W1–W4, W8–W12, W14, W15, W17 (AO-4q, MCP-4, D1b, SH-1, A4, U-1, RD-3, MCP-2, P-m, D2-S5); A2-P's wire spellings §1.15; 九处-1's status member `emulator_state` §1.91 N1-1. `runtime-client` 3 comes with its own later release (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7, SR-6b's `not_running` in W13; re-check 10-14, §1.25). Runtime v0.12.x serves the read `ScheduleExplanation` (§3 W5) under revision 2: only actingctl and MCP of the same Runtime send it and every revision-2 shape is unchanged; revision 3 includes it. #411 A51's page limit `read_budget` (§1.151 A51-1) is folded into revision 2 as §1.91 N1-1 was. Workflow #429 R-0 raises it to [2, 3] in 0.12.30 (§1.213 R0-7, §3 W21): revision 3 is revision 2 plus the workbench's shapes (R-0c's `PackScheduleView` included, §1.216 R0C-3), W5 and `StartReport` (§1.216 R0C-4); W6, W7 and W13 are not built and take a later revision. Workflow #429 R-7a raises it to [2, 4] in 0.12.35 (§1.233, §3 W22): revision 4 is revision 3 plus the player hold's shapes; R-7b raises `min` to 4. Workflow #429 R-0b raises `min` to 3 in 0.12.36 (§1.238): it fills `RuntimeInstanceStatus.activity`, so [3, 4]. Workflow #407 PERF-READ raises `max` to 6 in 0.12.41 (§1.280, §3 W23; revision 5 is AGT-1b's, §1.246): revision 6 adds `PerformanceStatus`'s `memory` and `vision`, so [3, 6] |
+| `runtime-client` | [2, 2] | §3 W1–W4, W8–W12, W14, W15, W17 (AO-4q, MCP-4, D1b, SH-1, A4, U-1, RD-3, MCP-2, P-m, D2-S5); A2-P's wire spellings §1.15; 九处-1's status member `emulator_state` §1.91 N1-1. `runtime-client` 3 comes with its own later release (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7, SR-6b's `not_running` in W13; re-check 10-14, §1.25). Runtime v0.12.x serves the read `ScheduleExplanation` (§3 W5) under revision 2: only actingctl and MCP of the same Runtime send it and every revision-2 shape is unchanged; revision 3 includes it. #411 A51's page limit `read_budget` (§1.151 A51-1) is folded into revision 2 as §1.91 N1-1 was. Workflow #429 R-0 raises it to [2, 3] in 0.12.30 (§1.213 R0-7, §3 W21): revision 3 is revision 2 plus the workbench's shapes (R-0c's `PackScheduleView` included, §1.216 R0C-3), W5 and `StartReport` (§1.216 R0C-4); W6, W7 and W13 are not built and take a later revision. Workflow #429 R-7a raises it to [2, 4] in 0.12.35 (§1.233, §3 W22): revision 4 is revision 3 plus the player hold's shapes; R-7b raises `min` to 4. Workflow #429 R-0b raises `min` to 3 in 0.12.36 (§1.238): it fills `RuntimeInstanceStatus.activity`, so [3, 4]. Workflow #407 PERF-READ raises `max` to 6 in 0.12.41 (§1.280, §3 W23; revision 5 is AGT-1b's, §1.246): revision 6 adds `PerformanceStatus`'s `memory` and `vision`, so [3, 6]. Revisions 7 and 8 are S168-LB1a's (§1.311) and LAB-6S1a's (§1.287). Workflow #454 raises `max` to 9 in 0.12.59 (§1.342, §3 W24): the start report's `first_start`, so [3, 9] |
 | `package` | [3, 3] | PKG-S1; PKG-S5 §1.64 P5-1 with M-357a TB12 §1.65; D2-S2 §1.28 DS6; D2-S3 §1.39 D34; READ-1 §1.54 RE1; the NAV-3a follow-up §1.73 N3F-1; REC-6 §1.29 R6-2; REC-8 §1.35 R8-1; OUT-1 §1.40 O1-1; EXEC-2 §1.41 EX1; OUT-2 §1.48 O2-1; REC-5 §1.50 R5-2; EXEC-1 §1.57 EC1. M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once more in the 0.12.x release that carries them, once only when they share a release. Workflow #411 B15's `remedy` (a `task.json` mapping member) and `provides` (a `control.json` member) ride revision 4 (writer R1, §1.110 B15-10), raised once in their release by its first slice that needs it. Workflow #406 T3 raises it to [3, 5] in #406's release (§1.137 T3-7): revision 5 adds the click `single_touch_path_drag_v1`, and revision-3 and revision-4 packs are still read. Workflow #357 DB-2 raises it to [3, 6] in 0.12.37 for TB1 and TB6, DB-1 having left it as it was (§1.244); M-357b MS6–MS10 need no second raise if they share that release. Workflow #404 FS-1 and FS-2 raise it to [3, 7] once in 0.12.43 (§1.282 FS1-3, §1.283 FS2-1): revision 7 adds a `repeated_anchor` anchor's `mask` and `scales` and the feature value `anchor_milli`, and revision-3 to revision-6 packs are still read; #404 FS-3 adds a select step's `confirm: "track"` and `track_px` to revision 7 in the same release (§1.284 FS3-1), no second raise |
 | `runtime-outcomes` | [1, 1] (new) | A5 §1.16, A6a §1.37 |
 | `install-control` | [0, 1] (unchanged) | model-378 §16 A-7 dropped revision 2 (`carried`) from v0.12.0; U-4 raises it to [0, 2] in 0.12.x |

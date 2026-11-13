@@ -121,13 +121,15 @@ pub(crate) fn held_instances(seen: &RuntimeSeen, hold: &SchedulingPauseReason) -
 
 /// S0 of a hold: the owner epoch, every pause (`{global, instances: [{alias, reason,
 /// revision}]}`) and every run-time instruction (`[{config_key, value_json}]`); the ledger head is
-/// read once the Runtime stopped.
+/// read once the Runtime stopped, and (Workflow #454) whether its epoch is the root's first just
+/// before the close.
 pub(crate) fn s0_of(seen: &RuntimeSeen, config: &ConfigSeen) -> S0 {
     S0 {
         head: None,
         epoch: Some(seen.owner_epoch.clone()),
         pauses: Some(pauses_value(seen)),
         instructions: Some(instructions_value(&config.instructions)),
+        first_epoch: false,
     }
 }
 

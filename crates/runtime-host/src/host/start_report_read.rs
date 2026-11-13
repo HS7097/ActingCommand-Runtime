@@ -11,6 +11,7 @@
 //! restored, those not restored (dropped or superseded) and (#421 S2-IF) those restored over a
 //! default that changed, and its readiness. Every admitted dispatch is counted per instance. The
 //! instances bound and the standard packs registered are read when the report is answered.
+//! Workflow #454: it also notes whether it is the root's first start (no earlier start record).
 
 use super::*;
 use actingcommand_contract::{
@@ -24,6 +25,8 @@ pub(super) struct StartFacts {
     open: StartReportOpen,
     ready_at_unix_ms: Option<u64>,
     tagged_state: Option<StartReportTaggedState>,
+    /// Workflow #454: this start found no earlier start record (the root's first start).
+    first_start: bool,
     recovery_ms: Option<u64>,
     pauses_restored: u64,
     pauses_dropped: Vec<String>,
@@ -72,6 +75,7 @@ impl StartFacts {
             },
             ready_at_unix_ms: None,
             tagged_state: None,
+            first_start: false,
             recovery_ms: None,
             pauses_restored: 0,
             pauses_dropped: Vec::new(),
@@ -91,6 +95,14 @@ impl HostShared {
         } else {
             StartReportTaggedState::Load
         });
+        Ok(())
+    }
+
+    /// Workflow #454: notes whether this start is the root's first: it found no earlier start
+    /// record (`crate::tagged_state::earlier_start` false), so it writes no seeding marker and the
+    /// root's next start seeds by design (Workflow #422 LN-4).
+    pub(super) fn note_start_first(&self, first_start: bool) -> RuntimeHostResult<()> {
+        lock(&self.start_facts, HostLocation::StartRuntimeHost)?.first_start = first_start;
         Ok(())
     }
 
@@ -195,6 +207,7 @@ impl HostShared {
                 ready_at_unix_ms: facts.ready_at_unix_ms,
                 open: facts.open.clone(),
                 tagged_state: facts.tagged_state,
+                first_start: facts.first_start,
                 recovery_ms: facts.recovery_ms,
                 pauses_restored: facts.pauses_restored,
                 pauses_dropped,
