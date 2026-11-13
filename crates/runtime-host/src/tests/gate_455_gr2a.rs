@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #455 G-R2a, host half (0.12.60; register §1.353; contracts/resource-targets.md,
+// Workflow #455 G-R2a, host half (0.12.60; register §1.354; contracts/resource-targets.md,
 // "Document `actingcommand.resource-targets.v3`" and "Storage"; contracts/instance-fact-store.md,
 // "Resource target policy facts"; coordinator work order rd-1114/brief-455-gr2a-v3-store.md):
 // `ApplyResourceTargets` writes the goal document's value store through the host, on a manual

@@ -18026,6 +18026,11 @@ The coordinator cut MAPP-1 in two on 11-12. "MAPP-1" elsewhere in this section a
   (`device_group_config_invalid`, `several_members_unsupported`), and no release ships the switch
   after every task. MAPP-2's key comes with MAPP-2 and takes the next free revision of
   `actingd-config`.
+- Before the load accepts a group of several, main must also end **the member that cannot fit**
+  (added by MAPP-2b, §1.353, point 8; device-group.md, "The member that cannot fit, as built"):
+  with today's request deadlines every run of a member of a group of several is refused by this
+  bound; the lease across a switch is reworked in a later slice before any group of several is
+  accepted, and a task that cannot fit never becomes a candidate.
 - The slice "device-level actions by device" comes before the first real use of a group of
   several.
 
@@ -21296,15 +21301,196 @@ A wait clock must tell such rows from waiting contenders by the presence of `lim
 **At deploy (ORD-1b).** Nothing: no Runtime build passes the order inputs, and every group of
 several is refused at load; a device of one never reads them.
 
-### 1.353 Slice G-R2a (0.12.60): the goal document's value store, resource targets v3 (Workflow #455, step 2; the owner asked that a person in the console and an agent through the Lab set an application's goals in one document, board #455; the design `rd-1114/455-goals-design-final.md` §0, §1, §3.4, §3.12, §4 and §5 rows G-R2a, §6.1 and §6.2, read on main `fa724931`; the coordinator's rulings on board #455, not the owner's words; coordinator work order `rd-1114/brief-455-gr2a-v3-store.md`, read on main `95525c98`)
+### 1.353 Slice MAPP-2b (0.12.60): the application switch before a run, its failure and the member's cooldown (Workflow #437; the contract of §1.323 and [device-group.md](device-group.md), "The switch before a run"; the design survey `rd-1113/mapp-order-design.md`, its finding F3, its row "MAPP-2b" and its row for slice 2; the coordinator's rulings of 11-14 on board #437, not the owner's words; coordinator work orders `rd-1113/brief-437-mapp2b.md`, read on main `bd58c9a6`, main `fa724931` merged, `rd-1114/brief-1689-fix1.md`, its fix round after the independent review, with the coordinator's addition of 11-14 on the lease bound, and `rd-1114/brief-1689-fix2.md`, its fix round after the first CI run, main `803fdfa3` merged)
+
+1.353 is the next free number after §1.352: the slice took 1.348 on its first base and 1.350 on
+its second; release 0.12.59, merged before it, took §1.348 (#454) and §1.349 (DA-3b), and the first
+train of 0.12.60 took §1.350 (MAPP-1c), §1.351 (T1-R) and §1.352 (ORD-1a and ORD-1b). MAPP-2a (§1.342) built the switch's parts with no
+caller; MAPP-2b makes the run paths use them. A build still refuses every group of several at load
+(`several_members_unsupported`, unchanged), so no installation reaches this slice's code: its tests
+hand the host the member → device key map and the group's name as the assembly builds them. Every
+caller begins from `HostShared::switch_applies` (`host/switch.rs`, over `in_group_of_several`). An
+instance alone on its device keeps its path unchanged because the run path's existing gates (the
+ED-2 gate among them) pass unchanged and because the slice's only entry is that group-of-several
+check; the gate test `mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it`
+pins that the entry is never taken and that the records are equal (below, "Tests"). The slice
+ships in 0.12.60 (release 0.12.59 is cut without it).
+
+| Part | Built | Where |
+|---|---|---|
+| the switch at the start of a policy run | yes | `host/contained_task.rs`, `run_scheduled_contained_task`: after the run's own checks (the outcome declaration's check is the last) and before `append_scheduled_request_lifecycle`, `HostShared::switch_before_run` (`host/switch.rs`), the switch timed on the Runtime clock; the front read, the stops (the member in front, or every other member with the front unknown, nothing with the member's own package in front) and the startup run on the borrowed key are MAPP-2a's |
+| the switch of a direct run | yes | `run_contained_task`: on the claim's key once granted and its deadline set, before the run executes |
+| an `ApplicationLifecycle` `launch` or `restart` of a member | yes | `host/input.rs`, `application_lifecycle`: `HostShared::stop_others_before_start` (the switch's steps 1 and 2, no startup run and no time asked) on the request's key after its claim, before its own command |
+| the ladder's application restart rung | yes | `host/recovery_ladder.rs`, `recovery_application_restart`: `stop_others_before_start` on the ladder's key before the rung stops the member's own application; its failure fails the rung with the code, the ladder keeps its key |
+| a startup package after an emulator start, a player hold's release | no | nothing reaches them on a member: an operator's emulator control of a member is refused (MAPP-1b) and a member names no `start_emulator`; the player hold is Workflow #429 R-7b's |
+| the run's clock | yes | the run's deadline moved on by the switch's time (`ContainedRunControl::postpone_deadline`), within the key; a policy run's switch time kept with its dispatch clock (`PolicyDispatchClock::switch_ms`, `host.rs`; `note_policy_run_switch`, `host/policy_outcome.rs`) and subtracted at its settlement (`record_policy_dispatch_outcome_under_gate`): `runtime_ms`, so the run-duration sample, `task.<task id>.last_duration_ms` and the budget comparison, are the run's own; `observed_at_unix_ms` stays the instant the run ended |
+| the lease | yes | `HostShared::dispatch_lease_ttl` (`host/switch.rs`), at the policy admission (`host/policy_dispatch.rs`) and for a direct run's claim: `D_s + D_run + R` for a member, `D_run + R` as before for an instance alone on its device; refused before any lease and any device step, `contained_task_deadline_unavailable`, when it would exceed the scheduler's longest lease (with today's request deadlines, every run of a member: point 8) |
+| the run's need on the borrowed key | yes | `RunNeed` (`host/switch.rs`): `OwnTime { through_monotonic_ms }`, the key's expiry less what the lease holds beyond the run's response deadline (`own_time_through`), kept with a policy dispatch's clock from its admission (`PolicyDispatchClock::own_time_through_monotonic_ms`; `policy_run_need`), computed from the lease's length as the admission granted it, which the admission's action hands on with the token, never sized a second time; `For(after_ms)` keeps MAPP-2a's form for `RuntimeHost::switch_application` and the MAPP-2a gate |
+| the failure's settlement | yes | a policy run returns before its request lifecycle and is settled by `run_scheduled_policy_task` (`record_scheduled_policy_failure`, `complete_scheduled_policy_failure`), its key released with no ladder; a direct run's and an `ApplicationLifecycle` request's key released by `cleanup_composite_failure`, the receipt failed |
+| the member's switch cooldown | yes | `HostShared::switch_cooldowns` (`host.rs`, memory only), started by `switch_before_run` on `application_switch_failed`; read by every policy cycle (`policy_switch_cooldowns`, `PolicyEvaluationContext::switch_cooldowns`): the eligibility callback's position 2, after the member's own control gates and before any wait for another member (`fact_refresh::member_hold`, `switch_cooldown_hold`), the fact refresh's held instances, the not-run recorder's held set, and the evaluator's whole-instance holds (`InstanceHolds`, `policy_host.rs`) |
+| the key | yes | `scheduling.device_group.switch_failure_cooldown_ms` (`crates/runtime-config/src/scheduling.rs`, `DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS`, `DeviceGroupFile`, `SchedulingConfig::switch_failure_cooldown_ms`; `distribution/windows/actingd.defaults.json`; `host/runtime_config.rs`, `switch_failure_cooldown_ms`), `actingd-config` revision 30 |
+
+**The code.** No code is added. `dispatch_instance_cooldown` (`runtime-host`, info) takes one more
+optional value, `failure_code` (an existing key), `application_switch_failed` for a member's switch
+cooldown and absent for a takeover cooldown; its description, common causes and handling name both
+cooldowns. The refusal of a member whose startup run and run cannot both fit reuses
+`contained_task_deadline_unavailable`, the code MAPP-2a's time check already gives a key that does
+not cover both; its common causes, `TBD` until now, are written (every emission site, this refusal
+and its repetition every round included; its handling stays `TBD`). The index is regenerated
+(`ci/outcome_codes_index.py`). `runtime-outcomes` stays 1.
+
+**Where the build completes the contract.**
+
+1. *The lease bound.* The scheduler grants at most `ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS`
+   (1 800 000 ms) plus the reserve `R` (`validate_claim_ttl`, `crates/scheduler/src/lib.rs`), and a
+   member is granted `D_s + D_run + R`, so a member cannot be served when `D_s + D_run` exceeds
+   1 800 000 ms: the code refuses exactly the leases the scheduler would refuse. (The work order
+   wrote the bound as `D_s + D_run + R` not exceeding 1 800 000; against its own lease and cap that
+   is `R` stricter than the scheduler, so the code follows the scheduler's bound.)
+2. *The run's need.* MAPP-2a's check asks the key, before any stop and again before the startup run,
+   for the startup run's lease time `D_s + R` and the time the caller says it still needs. On a lease
+   of exactly `D_s + D_run + R`, a fixed need of `D_run` would fail as soon as any time had passed
+   since the grant (the run's own checks, the front read, the stops). So a run states its need as its
+   own time on the lease it was granted, counted from each check (`RunNeed::OwnTime`): on a lease sized
+   for the switch the check passes whatever time has passed, on a lease sized for the run alone it
+   fails, and the startup run's deadline is the earlier of its response deadline and the key's
+   expiry less that need, so it gets `D_s`.
+3. *The clock.* The switch's time runs from before its read to its end, the startup run included;
+   it counts in no run's own time, no sample of it is kept, no default switch time and no key for it
+   exist, and the quiet-hours horizon is not changed. A settlement after a restart (the
+   reconciliation) measures a run from its own request, after the switch, as before.
+4. *The cooldown's start.* It starts when the switch fails, on the same thread just before the
+   run's failed settlement or receipt, at the instant the key's value then in effect counts from.
+5. *Never a ladder.* A ladder takes the key only at the failed end of a run that committed a
+   `task.failed` terminal: the policy run's trigger is its control's committed failed terminal,
+   read only by `cleanup_composite_failure_with_run_links` at a run-linked lease end, and a direct
+   run's ladder is queued only by `ladder_after_direct_run` at that function's unlinked end, staged at
+   the end of the direct path. A run whose switch failed returns before both, with no `task.*`
+   record of its own, and its key is released by `ensure_scheduled_policy_lease_released` (no
+   trigger) or `cleanup_composite_failure` (no ladder).
+6. *A start outside a run* (an `ApplicationLifecycle` request, the ladder's rung) stops the member in
+   front only; its own action starts the member's application, so it runs no startup package and
+   asks no time. Its failed stop starts no cooldown.
+7. *The read and the stops* (fix round 1). Their time is not part of `D_s`: the lease is
+   `D_s + D_run + R` and the run's deadline is cut at the lease's expiry less the reserve, so in the
+   worst case the task has less than `D_run` and fails as an ordinary timeout; past `D_run` since the
+   grant, the check before the startup run refuses the key (`startup_package`,
+   `contained_task_deadline_unavailable`). Each ADB command of the read and of a stop is bounded by
+   the ADB command timeout of the registration that runs it (`command_timeout_ms`, 12 000 ms by
+   default); a switch makes one read and at most one stop per other member.
+8. *The member that cannot fit* (fix round 1, a known gap). The admission refuses it as built
+   above, but the evaluator does not know the bound: it selects the task again in every round, and
+   each round in which the task wins the device's one pick writes the dispatch's intent and an
+   error-level refusal while the device's other members wait (`device_group_waiting`). The
+   coordinator's addition of 11-14, read in the code: every startup package request
+   (`apps/actingd/src/config.rs`, `StartupPackageConfigFile::request`), every configured
+   procedure's request (the same file) and every composed pack request
+   (`host/standard_pack_schedule.rs`) carries `ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS`,
+   1 800 000 ms; every member must declare a startup package; a fact refresh's request carries
+   60 000 ms. So with today's request deadlines every run of a member of a group of several is
+   refused by this bound, the refresh included; only fixtures with shorter deadlines pass. The
+   bound and the lease logic are not changed here: the lease across a switch is reworked in a
+   later slice before any group of several is accepted, and such a task must never become a
+   candidate (it is held where tasks are composed, in the slice that orders a device or the one
+   that lets the load accept a group). The gate pins today's behaviour in
+   `mapp2b_known_gap_a_member_that_cannot_fit_is_selected_and_refused_every_round`, which that
+   slice replaces.
+9. *A stop and a shutdown in mid-switch* (fix round 1; after the other member's stop, before this
+   member's startup run ends). A `StopInstanceRun` reaches the run's control (registered from its
+   preparation or receipt) and answers at once; nothing of the switch reads it, the startup run
+   goes on to its end, and the run stops at its first check: `contained_task_cancelled`, the
+   Runtime's reset on the run's key before its release, one `stopped` execution record, no failure
+   of the pair, no cooldown, no ladder; the other member stays stopped and this member is at its
+   home. A `RequestShutdown` finds the key held and is refused `runtime_shutdown_denied`
+   (`runtime_busy`), changing nothing. The Runtime's own stop is read only by the startup run's ADB
+   readiness probe: asked before it, the switch fails at `startup_package`
+   (`startup_package_adb_not_ready`) and ends as any failed switch, its cooldown ending with the
+   process; asked after it, the startup run and the run go on. ([device-group.md](device-group.md),
+   "A stop or a shutdown in mid-switch".)
+10. *What a person sees of a failed switch on the policy path* (fix round 1; no view changes): the
+    run's failure and the pair's failed execution record in the ledger and its Errors view, the
+    member's `dispatch_instance_cooldown` with `failure_code` in the schedule explanation, and no
+    row in the run list, which is built from task records (the run fails before it writes one).
+
+**Before the load accepts a group of several** (added to §1.323's "Release" by this slice): besides
+MAPP-1b, MAPP-2a, MAPP-2b and the order within one device, main must end **the member that cannot
+fit** (point 8): with today's request deadlines every run of a member of a group of several is
+refused by this bound; the lease across a switch is reworked in a later slice before any group of
+several is accepted.
+
+**Not built.** The order within one device (ORD-1: the evaluator's choice among members is
+unchanged); the load's acceptance of a group of several; the two open session gaps (MAPP-1c); the
+switch before a startup package after an emulator start and before a player hold's release (nothing
+reaches them on a member yet); handsets; the end of the member that cannot fit (point 8).
+
+**Tests.** `crates/runtime-host/src/tests/gate_mapp2b.rs` (gate map `host.toml`, "#437 MAPP-2b"):
+`mapp2b_a_run_of_b_with_a_in_front_stops_a_starts_b_and_then_runs_b`,
+`mapp2b_the_front_unknown_stops_every_other_member_and_b_in_front_switches_nothing`,
+`mapp2b_a_switched_runs_sample_last_duration_and_budget_verdict_are_its_own_time`,
+`mapp2b_a_member_dispatch_is_granted_the_startup_and_the_run_and_one_that_cannot_fit_is_refused`,
+`mapp2b_a_failure_at_each_step_settles_the_run_failed_releases_the_key_and_starts_no_ladder`,
+`mapp2b_a_failed_switch_holds_the_member_for_the_cooldown_while_the_other_member_runs`,
+`mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it`,
+`mapp2b_no_switch_interrupts_the_run_that_holds_the_device`,
+`mapp2b_a_direct_run_and_a_launch_of_a_member_stop_the_member_in_front_first`, and from fix round 1
+`mapp2b_known_gap_a_member_that_cannot_fit_is_selected_and_refused_every_round` (point 8),
+`mapp2b_the_switch_cooldown_also_holds_the_rerun_the_member_is_owed`,
+`mapp2b_while_one_member_cools_down_the_other_members_task_runs_to_its_end_with_its_own_records`
+and `mapp2b_a_stop_request_in_mid_switch_lets_the_switch_end_and_stops_the_run_at_its_first_check`
+(point 9; the fixtures deliver the stop from the capture of the startup run, after the other
+member's stop, with the run on a thread of its own). The lone instance's test (it replaces the
+first round's `mapp2b_a_lone_instance_writes_the_same_with_and_without_the_slice_reachable`, which
+compared the same code with itself by record type and severity only, never on main) shows three
+things. B, a member with A in front, on two hosts started alike: with the test-only switch
+`RuntimeHost::switch_off_for_test` off the fake device logs no foreground read, no stop and no
+startup run and the lease is `D_run + R`; with it on, the three steps and `D_s + D_run + R`. The
+switch exists in this crate's test build only (the field `HostShared::switch_off_for_test` and its
+check in `switch_applies` are `#[cfg(test)]`); no product build has it. C, alone, with the slice
+reachable: no foreground read of C and an empty application log (no startup run, and C's task
+sends no command), nothing on the other members, the lease exactly `D_run + R`, a switch time of 0 in its dispatch clock for the settlement
+to subtract (`RuntimeHost::policy_switch_ms_for_test`), no cooldown entry afterwards
+(`switch_cooldown_entries_for_test`). And C's run on that host and on a second host started alike
+with the switch off from the start: the run's records equal record by record, type, severity and
+whole payload with ids and times normalised (every run of 32 or more hexadecimal digits in a
+string, and every member that names an instant, a measurement on the process clock or a place in
+the ledger), and the same receipt state, own time, budget verdict, sample and `last_duration_ms`.
+Two hosts, not one: a second dispatch of the same pair on one host carries the pair's history (its
+budget counts and runtime reserved, its expected duration, its ranking). Fix round 2 (the first
+CI run of these tests) corrected what the tests expected a task's own run to send: the fixture's
+package is an application entry (its first operation a `from: "any"` `restart`), and a task's run
+(a policy run, a direct run) takes its first frame first and runs that restart only when the frame
+shows no page of the package (the kernel's `ApplicationEntryRun::AfterInitialFrame`), while a run
+the host starts itself (the startup run) begins with it (`run_host_package`, R24). The fake device
+shows the package's home throughout, so every restart a device logs in these tests is a startup
+run's and a task's run sends no application command; six tests had counted one restart more, and
+the lone instance's log, said to hold its task's one restart, is empty. No product code changed.
+The register's "MAPP-2's tests" (§1.323) are covered but for the rung and a hold's release: the ladder runs on the
+device's worker and its gate fixtures wait by polling, so the rung's call of
+`stop_others_before_start` is covered through the `ApplicationLifecycle` path that shares it, and a
+player hold is not built. The MAPP-1, MAPP-2a and ED-2 gates are unchanged. One existing test is
+adapted because the requirement moves what it pins: the architecture test of the interface
+declarations (`tools/actinglab-architecture/tests/component_interfaces.rs`) now pins
+`actingd-config` [5, 30].
+
+**At deploy.** Nothing reachable until the load accepts a group of several. The configuration gains
+the key `scheduling.device_group.switch_failure_cooldown_ms` with its default `300000`: every root's
+manifest and `config.parameters.scheduling` gain its row. The Runtime declares `actingd-config`
+[5, 30] (revision 30): the console's accepted range must reach 30 before a release (the UI
+repository's work). The catalog's `dispatch_instance_cooldown` gains one optional value.
+
+**Rollback** (below 0.12.60). A file that names `scheduling.device_group` must drop it (the earlier
+section denies unknown members). Nothing is persisted by MAPP-2b: the cooldown and the switch's
+time live in memory only, and the build before it reads every record this one writes.
+
+### 1.354 Slice G-R2a (0.12.60): the goal document's value store, resource targets v3 (Workflow #455, step 2; the owner asked that a person in the console and an agent through the Lab set an application's goals in one document, board #455; the design `rd-1114/455-goals-design-final.md` §0, §1, §3.4, §3.12, §4 and §5 rows G-R2a, §6.1 and §6.2, read on main `fa724931`; the coordinator's rulings on board #455, not the owner's words; coordinator work order `rd-1114/brief-455-gr2a-v3-store.md`, read on main `95525c98`)
 
 [resource-targets.md](resource-targets.md) ("Document `actingcommand.resource-targets.v3`",
 "Storage", "Resource weights (v2)", "Read-only view") is the contract;
 [instance-fact-store.md](instance-fact-store.md) ("Resource target policy facts": the rows, the
 bounds, the replay) and [runtime-interface.md](runtime-interface.md) (the rows of
-`EditResourceTarget`, `active.rows?` and `stale_schema?`) follow it. The number 1.353 is the next
-free one on the base this slice was read on (§1.352 ORD-1a and ORD-1b); an integration train may
-renumber it.
+`EditResourceTarget`, `active.rows?` and `stale_schema?`) follow it. The number 1.354 follows
+§1.353 (MAPP-2b), which main took after the base this slice was read on (`95525c98`, whose last
+section was §1.352); an integration train may renumber it.
 
 **What.** A third document version, `actingcommand.resource-targets.v3`, holds an application's
 goals in the record that exists, the instance fact `session.resource_targets`: no new fact key,

@@ -229,6 +229,35 @@ impl Hold {
             next_wake_unix_ms: self.next_wake_unix_ms,
         }
     }
+
+    /// Workflow #437 MAPP-2b: the hold's reason and gate, as the evaluation's whole-instance
+    /// holds take them for the candidates it settles before asking the closure.
+    pub(crate) fn reason_and_gate(self) -> (DecisionReason, Code) {
+        (self.reason, self.gate)
+    }
+}
+
+/// Workflow #437 MAPP-2b (`contracts/device-group.md`, "The member's switch cooldown"): the
+/// closure's position 2 for a member of a device group of several whose switch failed: every
+/// candidate deferred with `dispatch_instance_cooldown` (`instance_id` the member,
+/// `next_eligible_unix_ms` the cooldown's end, `failure_code` `application_switch_failed`, which
+/// tells it from a takeover cooldown), a wake at its end, and, like any hold of positions 1 and 2,
+/// no fact refresh demand.
+pub(crate) fn switch_cooldown_hold(instance_id: &str, until_unix_ms: u64) -> Hold {
+    Hold {
+        gate: HostCode::DispatchInstanceCooldown.code(),
+        reason: DecisionReason {
+            outcome: Outcome::new(HostCode::DispatchInstanceCooldown)
+                .instance_id(instance_id)
+                .next_eligible_unix_ms(until_unix_ms)
+                .failure_code(HostCode::ApplicationSwitchFailed.code()),
+            detail: format!(
+                "next_eligible_unix_ms={until_unix_ms} failure_code={}",
+                HostCode::ApplicationSwitchFailed.as_str()
+            ),
+        },
+        next_wake_unix_ms: Some(until_unix_ms),
+    }
 }
 
 /// The closure's positions 1-2 for `instance_id` as the cycle starts, if they hold it: its
@@ -300,13 +329,22 @@ pub(crate) fn instance_hold(
 /// another member's gate, with `device_group_waiting` and no wake. The member's own control
 /// gates come first and keep their codes, and so does its own holder (the host names no `device`
 /// hold for a member that holds the device itself). An instance alone on its device has no
-/// `device` hold, so this is [`instance_hold`].
+/// `device` hold, so this is [`instance_hold`]. Workflow #437 MAPP-2b: after the member's own
+/// control gates, its switch cooldown (`switch_cooldown`, the Unix instant it ends) holds it
+/// before anything another member does ([`switch_cooldown_hold`]); an instance alone on its
+/// device never has one.
 pub(crate) fn member_hold(
     instance_id: &str,
     control: &ControlGates,
+    switch_cooldown: Option<u64>,
     device: Option<&DeviceGroupHold>,
     occupancy: Option<InstanceOccupancy>,
 ) -> Option<Hold> {
+    if control.code().is_none()
+        && let Some(until_unix_ms) = switch_cooldown
+    {
+        return Some(switch_cooldown_hold(instance_id, until_unix_ms));
+    }
     match device {
         Some(device) if control.code().is_none() => Some(Hold {
             gate: PolicyCode::DeviceGroupWaiting.code(),

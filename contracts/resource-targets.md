@@ -188,7 +188,7 @@ scheduling.
 
 ## Document `actingcommand.resource-targets.v3`
 
-Workflow #455 G-R2a (0.12.60; register §1.353; the design `rd-1114/455-goals-design-final.md`
+Workflow #455 G-R2a (0.12.60; register §1.354; the design `rd-1114/455-goals-design-final.md`
 §3.4): the goal document's value store. The console and the Lab will read and write an
 application's goals in one document; this version holds them in the record that already
 exists, `session.resource_targets`, with no new fact key and no new file. Nothing reads the
