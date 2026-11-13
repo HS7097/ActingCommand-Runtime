@@ -374,8 +374,9 @@ fn reread_s0(
     Ok(first_epoch)
 }
 
-/// Workflow #454: `first_epoch_unread` when no Runtime answered the close's status read.
-const NO_RUNTIME: &str = "runtime_not_running";
+/// Workflow #454: `first_epoch_unread` when no Runtime answered the close's status read, the word
+/// of the refusal this installer gives where it needs a Runtime and none answers.
+const NO_RUNTIME: &str = InstallRefusal::RuntimeNotRunning.as_str();
 /// Workflow #454: `first_epoch_unread` when the Runtime records no `config.start` (a build before
 /// 0.12.59).
 const FACT_ABSENT: &str = "fact_absent";
@@ -430,14 +431,16 @@ fn first_epoch_evidence(operation: &Operation<'_>, start: Option<&Value>) -> Map
 /// operations, other than `operation`'s, whose S0 names an owner epoch other than `epoch`
 /// (`{operation_id, owner_epoch}`): a Runtime of another epoch ran on this root and an operation
 /// stopped it, so the one about to close is not in its root's first epoch, whatever its fact says.
-/// A journal that cannot be read (`{operation_id, code}`), or journals that cannot be listed
-/// (`{code}`), count as such: the guard fails closed. A Runtime that ran and stopped with no
-/// operation of this installer around it leaves no S0, and the guard cannot see it.
+/// A journal that cannot be read (`{operation_id, journal_unread}`), or journals that cannot be
+/// listed (`{journals_unlisted}`), count as such: the guard fails closed; as in
+/// `first_epoch_unread`, the member names what could not be read and holds the failed read's code.
+/// A Runtime that ran and stopped with no operation of this installer around it leaves no S0, and
+/// the guard cannot see it.
 fn other_epoch(operation: &Operation<'_>, epoch: Option<&str>) -> Option<Value> {
     let paths = operation.paths();
     let ids = match journal::operation_ids(paths) {
         Ok(ids) => ids,
-        Err(cause) => return Some(json!({"code": cause.code().as_str()})),
+        Err(cause) => return Some(json!({"journals_unlisted": cause.code().as_str()})),
     };
     for id in ids.iter().filter(|id| id.as_str() != operation.id()) {
         let command = operation.journal().kind.location();
@@ -454,7 +457,7 @@ fn other_epoch(operation: &Operation<'_>, epoch: Option<&str>) -> Option<Value> 
                 }
             }
             Err(cause) => {
-                return Some(json!({"operation_id": id, "code": cause.code().as_str()}));
+                return Some(json!({"operation_id": id, "journal_unread": cause.code().as_str()}));
             }
         }
     }

@@ -19739,7 +19739,9 @@ the installer has its own journals (`install\operations\op-*.json`, each with it
 epoch, as `last_stop` reads them), and a journal of another operation whose S0 names another
 owner epoch than this S0's means a Runtime of another epoch ran on this root, so the fact is not
 recorded whatever it says (`{operation_id, owner_epoch}`; a journal it cannot read, `{operation_id,
-code}`, or journals it cannot list, `{code}`, refuse it too). The guard sees only the Runtimes an
+journal_unread}`, or journals it cannot list, `{journals_unlisted}`, refuse it too; as in
+`first_epoch_unread`, the member names what could not be read and holds the failed read's
+code). The guard sees only the Runtimes an
 operation of this installer stopped: a Runtime started and stopped without one leaves no S0. The
 post-start checks of the operation's own start read the newest close step before them that is not
 an automatic rollback's (`deploy::closed_first_epoch`); `install start` reads the close of the
