@@ -21296,6 +21296,95 @@ A wait clock must tell such rows from waiting contenders by the presence of `lim
 **At deploy (ORD-1b).** Nothing: no Runtime build passes the order inputs, and every group of
 several is refused at load; a device of one never reads them.
 
+### 1.353 Slice G-R2a (0.12.60): the goal document's value store, resource targets v3 (Workflow #455, step 2; the owner asked that a person in the console and an agent through the Lab set an application's goals in one document, board #455; the design `rd-1114/455-goals-design-final.md` §0, §1, §3.4, §3.12, §4 and §5 rows G-R2a, §6.1 and §6.2, read on main `fa724931`; the coordinator's rulings on board #455, not the owner's words; coordinator work order `rd-1114/brief-455-gr2a-v3-store.md`, read on main `95525c98`)
+
+[resource-targets.md](resource-targets.md) ("Document `actingcommand.resource-targets.v3`",
+"Storage", "Resource weights (v2)", "Read-only view") is the contract;
+[instance-fact-store.md](instance-fact-store.md) ("Resource target policy facts": the rows, the
+bounds, the replay) and [runtime-interface.md](runtime-interface.md) (the rows of
+`EditResourceTarget`, `active.rows?` and `stale_schema?`) follow it. The number 1.353 is the next
+free one on the base this slice was read on (§1.352 ORD-1a and ORD-1b); an integration train may
+renumber it.
+
+**What.** A third document version, `actingcommand.resource-targets.v3`, holds an application's
+goals in the record that exists, the instance fact `session.resource_targets`: no new fact key,
+no new file, no new event (the design's §3.12). Nothing reads the entries yet, and nothing writes
+one of them alone: the goal view and the edit of one entry (G-R2b), the pack's declaration
+(G-R1), deadlines (G-R4), tiers (G-R5) and the rule about irreversible packages (its own slice,
+after this one) are later.
+
+- **The document** `{schema_version, instance, targets, entries?}`: a target is a v2 target with
+  an optional `valid_until_unix_ms` of its own (the v2 bound; absent, no expiry) and a
+  `by_unix_ms` refused `deadline_unsupported` until G-R4; the document has no lifetime of its own
+  (a top-level `valid_until_unix_ms` is `unknown_field` at it); `entries` at most 96, each
+  `{name, value}`, the name `[a-z0-9][a-z0-9_]*` of 1 to 64 bytes, unique, the value any JSON value
+  whose canonical text (the policy crate's `canonical_serialized`, the writer of every policy
+  identity) is at most 1024 bytes without a control character. The reader is as strict as v2's.
+- **The rows**: `policy`; `target` (v2's members, its own `valid_until_unix_ms`, and for a target
+  that came through a v3 document `set_unix_ms`, `channel` and, for a request from the Lab,
+  `initiator`); `task`; `entry` `{name, value_json, set_unix_ms, channel [, initiator]}`. The
+  Runtime writes who set a row from the request (its clock at the request, the channel the request
+  is recorded with, the initiator its connection declared, as the receipt names them), never from
+  the document. At most 1 + 16 + 128 + 96 = 241 rows, inside the 256 of the scheduler's input. A
+  v3 record is stored without expiry.
+- **`ApplyResourceTargets`**: in the hold of the fact write gate that writes the record, the
+  active record is read and the record composed over it (`CheckedResourceTargets::compose`): a v1
+  or v2 document over a record that is not v3 exactly as before; a v1 document over a v3 record
+  refused `unsupported_schema_version` at `/schema_version`; a v2 document over a v3 record a v3
+  record of its targets, each with the document's lifetime, the stored entries kept; a v3 document
+  replaces the targets and keeps the stored entries unless it carries `entries`; with no target and
+  no entry left, the withdrawal a v2 document with `targets: []` writes, byte for byte. Replay and
+  `expected_version` as before, for every version.
+- **The evaluator** reads a v3 record into the same resolved form as a v2 record
+  (`TargetPolicyState::ActiveV2` or `ExpiredV2`; no third path): the targets whose own lifetime has
+  not passed are an active v2 policy's, whose lifetime is the earliest of theirs; a target whose
+  lifetime has passed weighs nothing and its candidates carry `resource_target_policy_expired`
+  with its lifetime; when all have passed, an expired v2 policy.
+- **The read**: `ResourceTargetView.active` for a v3 record names the version, every target in v3
+  document form with its own lifetime, no record lifetime, and `expired` exactly when every target
+  has lapsed. Entries are not shown (G-R2b).
+- **The receipt** keeps its shape and rules: for a v3 record `valid_until_unix_ms` is the latest
+  target lifetime when every target has one, with the conditions; otherwise both are absent.
+- **#429 R-13** had reserved the version name for a target table of its own (`maintain`/`gain`,
+  `paused`, `stale_schema`, a per-target edit); this design took the name, and none of that was
+  built: `EditResourceTarget` stays answered `not_implemented`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GR2A-1 | `actingcommand.resource-targets.v3`: the document and its reader | document (the `ApplyResourceTargets` text) | G-R2a | agents (a document file through `targets set`), later G-R2b | no wire shape: the request carries the document as text |
+| GR2A-2 | `session.resource_targets` record list: the v3 header, `target` rows with `valid_until_unix_ms`, `set_unix_ms`, `channel`, `initiator`, and `entry` rows | fact content (`ledger` unchanged, as v2 was) | G-R2a | the host | 241 rows at most; no event type, payload or key added |
+| GR2A-3 | `deadline_unsupported` in `ResourceTargetsRejectionReason` and in the vocabulary `resource_targets_rejection_reason` | closed reason word | G-R2a | the host | the brief's one new word; the code index regenerated |
+
+**Interface.** No revision moves in this slice: `runtime-client` stays [3, 8], `ledger`,
+`actingd-config` and `package` do not move. The record is fact content, the targets untyped values
+of the view, the document text. One word is new in a receipt's closed vocabulary
+(`deadline_unsupported`): a client built before this slice that sends a v3 document naming
+`by_unix_ms` cannot decode that one refusal; no client of an earlier build sends a v3 document.
+
+**At deploy.** Nothing changes until someone applies a v3 document: every v1 and v2 document and
+record is written, read, weighed and shown as before.
+
+**Rollback** (below 0.12.60): a build before this slice reads a v3 record as an unknown version
+(`resource_target_policy_unreadable`, `unsupported_schema_version`) and runs that application on
+base scheduling, its view answering `resource_target_view_policy_unreadable`, until a v2 document
+is applied again; nothing fails.
+
+Tests (policy gate rows and host gate rows "#455 G-R2a"): `gate_455_gr2a::gr2a_t1_a_v3_record_with_a_v2_records_targets_weighs_byte_for_byte_as_the_v2_record`,
+`gr2a_t2_a_lapsed_target_weighs_nothing_and_says_expired_while_the_other_weighs_on`,
+`gr2a_t3_the_v3_reader_refuses_each_mistake_at_its_field`,
+`gr2a_t4_a_record_of_16_targets_128_task_rows_and_96_entries_is_241_rows_and_is_evaluated`,
+`gr2a_t5_v1_and_v2_documents_write_the_bytes_they_wrote_before_and_weigh_as_before` and
+`gr2a_t6_a_record_of_a_version_the_reader_does_not_know_runs_on_base_scheduling` (the policy crate,
+gate_ss1's catalog and documents, whose fixture functions became visible to their sibling module);
+the host's `gate_455_gr2a::gr2a_h1_a_v3_record_names_who_set_its_rows_and_later_documents_keep_its_entries`,
+`gr2a_h2_entries_replaced_a_record_of_entries_alone_the_withdrawal_and_the_refusals`,
+`gr2a_h3_v1_and_v2_documents_over_v1_or_v2_records_write_the_rows_they_wrote_before` (T1-R's v2
+document) and `gr2a_h4_a_start_reloads_a_v3_record_unchanged`. One existing test pinned what this
+slice changes and changes with it, keeping its name:
+`gate_p2b::gate_p2b_g12_each_realistic_mistake_of_either_version_is_refused_with_its_reason_at_its_field`
+wrote `actingcommand.resource-targets.v3` as "a version no reader takes" and now writes `.v4`. No
+golden changes; no test leaves the gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

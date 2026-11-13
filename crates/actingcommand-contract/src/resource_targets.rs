@@ -110,6 +110,9 @@ pub enum ResourceTargetsRejectionReason {
     TaskDisabled,
     UnmappedTask,
     DuplicateTask,
+    /// Workflow #455 G-R2a: an `actingcommand.resource-targets.v3` target names `by_unix_ms`, a
+    /// deadline, which no Runtime takes before G-R4.
+    DeadlineUnsupported,
 }
 
 /// What one instance can target and the resource target policy it holds now

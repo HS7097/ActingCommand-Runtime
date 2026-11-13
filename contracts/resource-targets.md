@@ -53,7 +53,11 @@ produced resource of the instance with the pool's declared `valuation`
 (`contracts/scheduling/README.md`, "Pool Valuation") plus its target's shortfall ("Document
 `actingcommand.resource-targets.v2`" and "Resource weights (v2)" below). Agents submit v2; a v1
 document keeps its v1 meaning (its `U` aside, SS-1). Since SS-1 (0.12.30) the valuation weighs
-every instance whatever its record ("Base valuation on every instance" above).
+every instance whatever its record ("Base valuation on every instance" above). Since Workflow
+#455 G-R2a (0.12.60) a third version, `actingcommand.resource-targets.v3`, is the goal
+document's value store: v2 targets, each with a lifetime of its own, and the values of named
+entries, in the same record ("Document `actingcommand.resource-targets.v3`" below); the
+evaluator reads its targets as a v2 policy's.
 
 ## Document `actingcommand.resource-targets.v1`
 
@@ -182,6 +186,115 @@ A Runtime build before this revision refuses a v2 document at the typed parse, u
 v2 policy as unreadable (`unsupported_schema_version`), running that instance on base
 scheduling.
 
+## Document `actingcommand.resource-targets.v3`
+
+Workflow #455 G-R2a (0.12.60; register §1.353; the design `rd-1114/455-goals-design-final.md`
+§3.4): the goal document's value store. The console and the Lab will read and write an
+application's goals in one document; this version holds them in the record that already
+exists, `session.resource_targets`, with no new fact key and no new file. Nothing reads the
+entries yet, and nothing writes them one at a time yet: the goal view and the edit of one entry
+(G-R2b), the pack's declaration (G-R1), deadlines (G-R4) and tiers (G-R5) are later slices. The
+same entry, parser, 64 KiB bound and general reasons as v1 and v2.
+
+```json
+{
+  "schema_version": "actingcommand.resource-targets.v3",
+  "instance": "instance-a",
+  "targets": [
+    { "id": "credits-floor", "resource": "pool.credits",
+      "condition": { "kind": "at_least", "amount": 100000 },
+      "apply": { "mode": "adjust", "weight": "score_stage" },
+      "valid_until_unix_ms": 1791000000000 },
+    { "id": "energy-floor", "resource": "pool.energy",
+      "condition": { "kind": "at_least", "amount": 200 }, "scale": 10, "importance_milli": 500,
+      "apply": { "mode": "adjust", "weight": "score_stage" } }
+  ],
+  "entries": [ { "name": "route", "value": "a" }, { "name": "rounds", "value": 3 } ]
+}
+```
+
+| Field | v3 rule | Rejection reason @ path |
+| --- | --- | --- |
+| `instance`, `targets` (`0..=16`) | as v2 | as v2 |
+| `targets[i]` | a v2 target: every v2 rule of its members holds (`id`, `resource` and one target per resource, `condition`, `scale`, `importance_milli`, `rule`, `apply` with `manual_offset`, `tasks`) | as v2 |
+| `targets[i].valid_until_unix_ms` | optional: the target's own lifetime, `now < v <= now + 31_536_000_000`; absent, the target does not expire | `validity_out_of_range` @ `/targets/i/valid_until_unix_ms` |
+| `targets[i].by_unix_ms` | a deadline: in the shape, refused until G-R4 | `deadline_unsupported` @ `/targets/i/by_unix_ms` |
+| `valid_until_unix_ms` (top level) | not a member: a v3 document has no lifetime of its own | `unknown_field` @ `/valid_until_unix_ms` (checked right after the schema version) |
+| `entries` | optional, `0..=96` | `out_of_range` @ `/entries` |
+| `entries[i].name` | `^[a-z0-9][a-z0-9_]*$`, 1 to 64 bytes, unique in the document | `invalid_value` / `duplicate_id` @ `/entries/i/name` |
+| `entries[i].value` | any JSON value whose canonical text (below) is at most 1024 bytes and holds no control character | `invalid_type` (a fraction or an integer beyond 2^53-1, which the canonical writer refuses), `out_of_range` (over 1024 bytes), `invalid_value` (a control character) @ `/entries/i/value` |
+
+The reader is as strict as v2's: an unknown member anywhere is `unknown_field`, and every
+refusal names its field. This version adds one word to the closed reason set,
+`deadline_unsupported`. This slice checks an entry's form only: it does not know the pack's
+declaration (G-R1, G-R2b).
+
+**Version probe.** Exactly when the top-level `schema_version` is the string
+`actingcommand.resource-targets.v3` the Runtime takes the v3 checks; the v2 probe and the v1
+path are unchanged for every other document. `validate_catalog_declaration` with kind
+`resource_targets` dispatches by the same probes.
+
+The first failing check is reported, in this order: size, the declaration parse, schema
+version, bounds, forms and identifier charset (per target in document order its members, then
+`by_unix_ms`; then the entries' count, each name and each value), uniqueness (target ids, tasks,
+resources, entry names), the v2 apply rules; then the instance; then each target's own lifetime
+in document order; then per target its resource, whether `S` and `I` resolve, and its tasks, as
+v2.
+
+**Canonical text.** An entry's value is written as the policy crate's canonical JSON writer
+writes it (`canonical_serialized` in `crates/policy/src/canonical.rs`, the writer of every
+policy identity): object keys sorted by their UTF-16 code units, no whitespace, strings as
+`serde_json` escapes them, integers only, each within ±(2^53-1). The writer escapes U+0000 to
+U+001F; a value whose text would hold U+007F to U+009F is refused, as no fact string may hold one.
+
+**Applying a document.** `ApplyResourceTargets` takes v1, v2 and v3 (the Lab's `targets set`,
+which passes a document file through unchanged, the agents' tools and the console's entry with
+`expected_version`, Workflow #455 T1-R). In the hold of the fact write gate that writes the
+record, after the store is synchronized, the instance's active record is read and the record
+the document writes is composed over it:
+
+| Document | Over | Result |
+| --- | --- | --- |
+| v1 or v2 | no record, or a v1 or v2 record (or one the readers refuse) | exactly as before G-R2a: the rows, identity, lifetime, replay and receipt of a v1 or v2 policy |
+| v1 | a v3 record | refused `unsupported_schema_version` @ `/schema_version` (the v1 model is frozen and its targets are not v2 targets); nothing appended |
+| v2 | a v3 record | a v3 record: the document's targets, each with the document's `valid_until_unix_ms` as its own; the stored entries kept as they are |
+| v3 | no record, or a v1 or v2 record | a v3 record of the document's targets and entries |
+| v3 | a v3 record | the targets replaced; the stored entries kept as they are unless the document carries `entries`, which (an empty list included) replaces them all |
+
+A composition with no target and no entry left is the withdrawal a v2 document with
+`targets: []` writes, byte for byte (a v2 header alone, without expiry); with entries left it is
+a v3 record with no target. A document's checks come first: a refused document is refused for
+its own reason, and the v1 refusal above comes before the `expected_version` comparison, which is
+T1-R's for every version. A record the v3 reader refuses counts as no v3 record: every document
+applies over it as over none.
+
+**Identity and replay.** A v3 record's `policy_sha256` is `sha256:<hex>` of the canonical
+serialization of the document it holds: its targets, each with its own lifetime when it has one,
+and its entries (members left out when absent, `entries` left out when there is none), so a
+document that keeps the stored entries is the same policy as one that carries them. Replay is as
+before: an equal identity over the active record appends nothing and answers `replayed`, also
+after a restart. A v3 record has no expiry, so it is replayed until replaced; a document one of
+whose targets' lifetime has passed is refused at that lifetime.
+
+**The receipt.** `ResourceTargetsApplied` keeps its shape and its rules. For a v3 record
+`valid_until_unix_ms` is the latest of its targets' own lifetimes when every target has one, and
+`conditions` lists one condition per target, in document order; when a target has no lifetime,
+or there is no target, both are absent and empty (the receipt's rule binds the two together):
+`ResourceTargetView` shows every target with its own lifetime and its condition.
+
+**#429 R-13.** #429 R-13 had reserved the version name `actingcommand.resource-targets.v3` for a
+target table of its own (`maintain` and `gain` targets, `paused`, a `stale_schema` mark, a
+per-target edit); this design took the name instead, and none of that table was built:
+`EditResourceTarget` stays answered `not_implemented`, and `ResourceTargetView` fills neither
+`active.rows` nor `stale_schema`.
+
+**An older Runtime.** A Runtime build before G-R2a refuses a v3 document at the typed parse
+(usually `unknown_field` or `missing_field`), and reads a stored v3 record as unreadable
+(`unsupported_schema_version`: its v1 reader takes every header that is not v2), running that
+instance on base scheduling and saying so with `resource_target_policy_unreadable`; its view of
+the instance is `resource_target_view_policy_unreadable`. Nothing fails, and a v1 or v2 document
+applied again replaces the record.
+
 ## Entry and receipts
 
 `RuntimeOperation::ApplyResourceTargets { document_json }` (wire operation
@@ -232,7 +345,7 @@ holds the policy:
 | `previous_version` | the sequence of the policy active before, or `null`; equals `version` on a replay |
 | `replayed` | the equal policy was already active and unexpired; nothing was appended |
 | `checked_catalog_hash` | the active catalog the document was checked against |
-| `valid_until_unix_ms` | the policy lifetime; `null` exactly for a withdrawal |
+| `valid_until_unix_ms` | the policy lifetime; `null` exactly for a withdrawal (a v3 record: "The receipt" under the v3 document) |
 | `conditions_at_position`, `conditions` | the ledger position of the projection and, per target in document order, `{target_id, resource, fact_key, state}` |
 
 `state` separates the applied configuration from what the target can compute now:
@@ -278,7 +391,7 @@ persisted structure is added. The record:
 | `scope` / `key` | `{"kind": "instance", "instance_id": <instance>}` / `session.resource_targets` |
 | `content` | inline `record_list` (rows below) |
 | `observed_at_unix_ms` | the Runtime clock when the request was processed |
-| `expires_at_unix_ms`, `ttl_policy` | `valid_until_unix_ms` with `{1, 31_536_000_000, runtime_default}`; both absent for a withdrawal |
+| `expires_at_unix_ms`, `ttl_policy` | `valid_until_unix_ms` with `{1, 31_536_000_000, runtime_default}`; both absent for a withdrawal and for a v3 record (Workflow #455 G-R2a), whose targets carry their own lifetimes, so its entries never lapse with a target |
 | `confidence_milli` / `source_detector` | `1000` / `runtime.resource-targets` |
 | `source_snapshot_id` | `snapshot:resource-targets:<sha256 hex of JSON (scope, key, policy_sha256, observed_at)>` |
 | `schema_version` / `resource_bundle_hash` | `fact.v1` / the hex digits of `policy_sha256` |
@@ -318,6 +431,38 @@ least one. A header of the v2 version selects the v2 reader, as strict as v1's: 
 fields exactly, optional fields only from the list above, `manual_offset` only with
 `mode: override`, unique target ids and resources, and the v1 task-row rules. Every other
 record list, of any header, meets the v1 reader unchanged.
+
+A v3 record (Workflow #455 G-R2a) stores four row kinds, at most 1 + 16 + 128 + 96 = 241 rows,
+inside the 256 the scheduler's input takes (`MAX_OBSERVED_RECORD_LIST_ROWS`; a longer list would
+be left out of the evaluation), at most 14 fields a row:
+
+```text
+{row: "policy", schema_version: "actingcommand.resource-targets.v3", instance, policy_sha256}
+{row: "target", id, resource, at_least, mode, weight
+ [, scale][, importance_milli][, rule][, manual_offset][, valid_until_unix_ms]
+ [, set_unix_ms, channel][, initiator]}                                     one per target, document order
+{row: "task", target, task}                                                 one per task reference, document order
+{row: "entry", name, value_json, set_unix_ms, channel [, initiator]}        one per entry, document order
+```
+
+`valid_until_unix_ms` and `set_unix_ms` are integers. A target row carries the v2 optional
+fields exactly when the document states them and `valid_until_unix_ms` exactly when the target
+has a lifetime. `set_unix_ms`, `channel` and `initiator` say who set the row and when: the
+Runtime writes them from the request, never from the document: `set_unix_ms` the Runtime's
+clock at the request (the record's `observed_at_unix_ms`), `channel` the channel the request is
+recorded with (`cli`, `mcp`, `ui` or `lab`, as the receipt names it), and `initiator` the word the
+request's connection declared, only for a request from the Lab (as the receipt carries it,
+[lab-two-entries.md](lab-two-entries.md) §4.3). A target that came through a v3 document carries
+them; a target that came through a v2 document applied over a v3 record does not. Every entry
+row carries them; a kept entry row is stored again exactly as it was, with its own. `value_json`
+is the value's canonical text ("Canonical text" under the v3 document). A v3 header selects the
+v3 reader: the header, the target rows without their v3 fields and the task rows are read by the
+v2 reader, unchanged; a target's `valid_until_unix_ms` is a positive integer; `set_unix_ms` (at
+least 0) and `channel` (one of the four words) come together, with an optional `initiator` (one of
+the six words); an entry row has exactly its fields, a name of the entry form, unique, and a
+`value_json` that is the canonical text of a value the v3 document takes; at most 96 entries; a v3
+record has no expiry. Anything else is unreadable (`malformed_rows`, `unsupported_schema_version`
+or `instance_mismatch`).
 
 **Replay and withdrawal.** A submission whose `resource_bundle_hash` equals the active,
 unexpired policy's appends nothing and answers that policy's version with `replayed: true`,
@@ -465,6 +610,23 @@ or with a v1 policy, every candidate takes the term `R` below with no target (`�
 as "Base valuation on every instance" says; an enabled instance only adds its targets' shortfall
 `Γ`. (Until 0.12.29 no base weight counted on an instance that was not enabled.) A v1 policy
 still takes the path above for its own targets and never reads `valuation` for them.
+
+**A v3 record** (Workflow #455 G-R2a) is read into the same resolved form as a v2 record; there is
+no third evaluation path. At each evaluation the targets whose own lifetime has not passed
+(`now <= valid_until_unix_ms`, or none) are the targets of an active v2 policy, whose lifetime is
+the earliest of theirs (none when none of them has one); everything below holds for them as for a
+v2 policy's: `R`, `Γ`, the override, the reasons, freshness and the wake at that lifetime plus one,
+so the evaluation wakes at each target's expiry as at a v2 document's. A target whose own
+lifetime has passed is left out: it weighs nothing, and every candidate it covered (a task of the
+instance one run of which produces its pool, among its named tasks when it names some) carries
+`resource_target_policy_expired` (`policy=<sha> applied_at=<ms> valid_until=<its lifetime>`) as
+its policy-level reason, as under an expired v2 policy, before `resource_target_tasks_unevaluable`.
+When every target's lifetime has passed the record is an expired v2 policy whose lifetime is the
+latest of theirs. A record without targets (entries only) is no policy. The policy's version is
+the record's `policy_sha256` and `applied_at`, and the dispatch decision record names it
+`active.v2:` or `expired.v2:` as a v2 policy's, so a v3 record whose targets equal a v2 record's,
+each with the v2 document's lifetime as its own, weighs byte for byte as that v2 record, its
+identity aside. Entry rows are read by nothing yet.
 
 **Per evaluation.** Each target is resolved once for the instance against the active catalog:
 its pool (as v1), then `S = scale ?? valuation.scale` and `I = importance_milli ??
@@ -721,6 +883,14 @@ between the phases is named by `checked_catalog_hash`.
   evaluator cannot read is `resource_target_view_policy_unreadable` (`Denied`,
   `ledger_failure`, the decoder's code as detail); a store revision whose hash differs from the
   projected policy is `resource_target_view_policy_inconsistent`.
+- Workflow #455 G-R2a: for a v3 record with targets, `active` names `schema_version`
+  `actingcommand.resource-targets.v3` and the record's version and event, lists every target in
+  v3 document form with its own `valid_until_unix_ms` when it has one (lapsed targets included),
+  and one condition per target whose pool still resolves. It has no `valid_until_unix_ms` (a v3
+  record has no lifetime of its own), and `expired` is `true` exactly when every target's own
+  lifetime has passed. A v3 record without targets has no `active`. The answer's shape and every
+  answer for a v1 or v2 record are unchanged. Entries are not shown by this read: the goal view of
+  G-R2b shows them.
 
 The view takes the check phase's locks in its order (`policy_outcome_gate` → `policy` →
 `fact_write_gate`, the projection, then the fact store for the active revision) and releases

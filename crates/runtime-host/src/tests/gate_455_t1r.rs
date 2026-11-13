@@ -62,7 +62,7 @@ fn table_ui_kinds() -> Vec<(Kind, Value)> {
 /// A v2 document of the fixture instance: one target on the fixture pool, at least `amount`, with
 /// its own scale and importance (the pool declares no valuation), valid for a day from the
 /// fixture's time.
-fn document(amount: u64) -> String {
+pub(super) fn document(amount: u64) -> String {
     json!({
         "schema_version": "actingcommand.resource-targets.v2",
         "instance": ALIAS,

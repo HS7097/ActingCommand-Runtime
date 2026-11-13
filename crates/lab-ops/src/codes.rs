@@ -352,6 +352,7 @@ actingcommand_contract::outcome_vocabulary! {
         TaskDisabled => "task_disabled",
         UnmappedTask => "unmapped_task",
         DuplicateTask => "duplicate_task",
+        DeadlineUnsupported => "deadline_unsupported",
     }
 }
 
@@ -396,6 +397,7 @@ impl ResourceTargetsRejectionReason {
             Reason::TaskDisabled => Self::TaskDisabled,
             Reason::UnmappedTask => Self::UnmappedTask,
             Reason::DuplicateTask => Self::DuplicateTask,
+            Reason::DeadlineUnsupported => Self::DeadlineUnsupported,
         }
     }
 }

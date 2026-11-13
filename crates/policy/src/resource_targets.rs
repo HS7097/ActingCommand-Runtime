@@ -8,7 +8,19 @@
 //! scores its named tasks as before, a v2 policy weighs every produced resource of the instance
 //! with its declared valuation plus its target's shortfall. Since SS-1 (Alice's ruling 100) the
 //! declared valuation weighs every producing task on every instance, with or without a policy.
-//! Nothing here reads a clock, a file or the network.
+//! Workflow #455 G-R2a adds the `.v3` document, the goal document's value store (module `v3`), whose
+//! targets the evaluator reads as a v2 policy's. Nothing here reads a clock, a file or the
+//! network.
+
+mod v3;
+
+pub(crate) use v3::declares_v3;
+use v3::{CheckedDocument, LapsedTarget};
+pub use v3::{
+    ComposedResourceTargets, MAX_RESOURCE_TARGET_ENTRIES, MAX_RESOURCE_TARGET_ENTRY_VALUE_BYTES,
+    RESOURCE_TARGETS_SCHEMA_VERSION_V3, ResourceTargetEntry, ResourceTargetSpecV3,
+    ResourceTargetsDocumentV3, TargetSetter,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -219,6 +231,9 @@ pub struct ParsedResourceTargets {
     document: ResourceTargetsDocument,
     /// The v2 document; `None` for a v1 one.
     document_v2: Option<ResourceTargetsDocumentV2>,
+    /// Workflow #455 G-R2a: the v3 document; `None` for a v1 or v2 one. Its header shows in
+    /// `document` without a lifetime: a v3 document has none of its own.
+    document_v3: Option<ResourceTargetsDocumentV3>,
     source_map: SourceMap,
 }
 
@@ -250,6 +265,12 @@ pub struct CheckedResourceTargets {
     pub rows: Vec<BTreeMap<String, ContractFactScalar>>,
     /// What each target observes in the projection, in document order.
     pub conditions: Vec<ResourceTargetCondition>,
+    /// Workflow #455 G-R2a: the instance the document names, its lifetime (none for a v3
+    /// document) and the document, which [`Self::compose`] writes over the stored record. For a
+    /// v3 document `rows` is empty and `policy_sha256` names it as composed over no record.
+    instance: String,
+    valid_until_unix_ms: Option<u64>,
+    document: CheckedDocument,
 }
 
 /// Why a document cannot be applied.
@@ -275,6 +296,10 @@ pub fn parse_resource_targets(bytes: &[u8]) -> Result<ParsedResourceTargets, Res
         return Err(rejected(String::new(), 1, 1, Reason::OutOfRange));
     }
     let source = CatalogDocumentSource::new(DOCUMENT_SOURCE_URI, bytes.to_vec());
+    // Workflow #455 G-R2a: exactly the v3 string takes the v3 checks.
+    if declares_v3(bytes) {
+        return v3::parse_resource_targets_v3(&source);
+    }
     if declares_v2(bytes) {
         return parse_resource_targets_v2(&source);
     }
@@ -284,6 +309,7 @@ pub fn parse_resource_targets(bytes: &[u8]) -> Result<ParsedResourceTargets, Res
     let parsed = ParsedResourceTargets {
         document: parsed.value,
         document_v2: None,
+        document_v3: None,
         source_map: parsed.source_map,
     };
     let document = &parsed.document;
@@ -495,6 +521,7 @@ fn parse_resource_targets_v2(
             targets: Vec::new(),
         },
         document_v2: Some(document),
+        document_v3: None,
         source_map,
     })
 }
@@ -510,6 +537,9 @@ pub fn check_resource_targets(
     time: EvaluationTime,
 ) -> Result<CheckedResourceTargets, ResourceTargetsError> {
     use ResourceTargetsRejectionReason as Reason;
+    if let Some(document) = &parsed.document_v3 {
+        return v3::check_resource_targets_v3(parsed, document, catalog, facts, time);
+    }
     if let Some(document) = &parsed.document_v2 {
         return check_resource_targets_v2(parsed, document, catalog, facts, time);
     }
@@ -578,10 +608,22 @@ pub fn check_resource_targets(
             }
         })
         .collect();
+    // Workflow #455 G-R2a: over a v3 record a v1 document is refused at its version.
+    let ResourceTargetsError::Rejected(over_v3) = at(
+        "/schema_version".to_owned(),
+        Reason::UnsupportedSchemaVersion,
+    ) else {
+        return Err(ResourceTargetsError::Internal(
+            PolicyCode::ResourceTargetsParserCodeUnexpected.code(),
+        ));
+    };
     Ok(CheckedResourceTargets {
         rows: encode_rows(document, &policy_sha256),
         policy_sha256,
         conditions,
+        instance: document.instance.clone(),
+        valid_until_unix_ms: document.valid_until_unix_ms,
+        document: CheckedDocument::V1(over_v3),
     })
 }
 
@@ -657,6 +699,9 @@ fn check_resource_targets_v2(
         rows: encode_rows_v2(document, &policy_sha256),
         policy_sha256,
         conditions,
+        instance: document.instance.clone(),
+        valid_until_unix_ms: document.valid_until_unix_ms,
+        document: CheckedDocument::V2(Box::new(document.clone())),
     })
 }
 
@@ -1523,11 +1568,17 @@ pub(crate) enum TargetPolicyState {
         code: Code,
     },
     /// An active v2 policy (Workflow #335 S2b): the only state that enables resource weights.
+    /// Workflow #455 G-R2a: a v3 record reads as this state too (no third evaluation path).
     ActiveV2 {
         policy_sha256: String,
         applied_at_unix_ms: u64,
-        valid_until_unix_ms: u64,
+        /// A v2 document's lifetime; for a v3 record the earliest own lifetime of its targets
+        /// that have not lapsed, `None` when none of them has one.
+        valid_until_unix_ms: Option<u64>,
+        /// The targets that weigh: a v2 record's, or a v3 record's whose lifetime has not passed.
         targets: Vec<ResourceTargetSpecV2>,
+        /// A v3 record's targets whose own lifetime has passed; always empty for a v2 record.
+        lapsed: Vec<LapsedTarget>,
     },
     /// A v2 policy past `valid_until_unix_ms`: it weighs nothing and only names the candidates
     /// it would have weighed.
@@ -1599,6 +1650,10 @@ fn stored_policy_state(
     let FactValue::RecordList(rows) = &fact.value else {
         return unreadable(RowsDecodeError::MalformedRows.code());
     };
+    // Workflow #455 G-R2a: a v3 header selects the v3 reader, which reads the targets as v2's.
+    if v3::declares_v3_rows(rows) {
+        return v3::stored_policy_state_v3(fact, rows, instance_id, time);
+    }
     if declares_v2_rows(rows) {
         return stored_policy_state_v2(fact, rows, instance_id, time);
     }
@@ -1668,8 +1723,9 @@ fn stored_policy_state_v2(
         TargetPolicyState::ActiveV2 {
             policy_sha256,
             applied_at_unix_ms,
-            valid_until_unix_ms,
+            valid_until_unix_ms: Some(valid_until_unix_ms),
             targets,
+            lapsed: Vec::new(),
         }
     })
 }
@@ -1772,7 +1828,10 @@ pub struct StoredResourceTargetPolicy {
     pub policy_sha256: String,
     pub schema_version: &'static str,
     pub applied_at_unix_ms: u64,
-    pub valid_until_unix_ms: u64,
+    /// A v1 or v2 policy's lifetime; absent for a v3 record, whose targets carry their own
+    /// (Workflow #455 G-R2a).
+    pub valid_until_unix_ms: Option<u64>,
+    /// A v1 or v2 policy past its lifetime; a v3 record every target of which is past its own.
     pub expired: bool,
     pub targets: Vec<serde_json::Value>,
     pub conditions: Vec<ResourceTargetCondition>,
@@ -1806,58 +1865,109 @@ pub fn active_resource_targets(
         .map_err(ResourceTargetsError::Evaluation)?
         .remove(&instance.instance_id)
         .and_then(|policy| policy.state);
-    let (policy_sha256, schema_version, applied_at_unix_ms, valid_until_unix_ms, targets) =
+    let v1_targets = |targets: &[ResourceTargetSpec]| {
+        targets
+            .iter()
+            .map(|target| stored(target, &target.id, &target.resource, target.condition))
+            .collect::<Result<Vec<_>, _>>()
+    };
+    let v2_targets = |targets: &[ResourceTargetSpecV2]| {
+        targets
+            .iter()
+            .map(|target| stored(target, &target.id, &target.resource, target.condition))
+            .collect::<Result<Vec<_>, _>>()
+    };
+    // Workflow #455 G-R2a: a v3 record reads as a v2 policy; the view shows its own document,
+    // every target with its own lifetime, and no lifetime of the record.
+    let v3_targets = || {
+        v3::stored_v3_targets(facts, &instance.instance_id)
+            .map(|targets| {
+                targets
+                    .iter()
+                    .map(|target| stored(target, &target.id, &target.resource, target.condition))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+    };
+    let (policy_sha256, schema_version, applied_at_unix_ms, valid_until_unix_ms, expired, targets) =
         match state {
             None => return Ok(StoredResourceTargets::None),
             Some(TargetPolicyState::Unreadable { code }) => {
                 return Ok(StoredResourceTargets::Unreadable { code });
             }
-            Some(
-                TargetPolicyState::Active {
-                    policy_sha256,
-                    applied_at_unix_ms,
-                    valid_until_unix_ms,
-                    targets,
-                }
-                | TargetPolicyState::Expired {
-                    policy_sha256,
-                    applied_at_unix_ms,
-                    valid_until_unix_ms,
-                    targets,
-                },
-            ) => (
+            Some(TargetPolicyState::Active {
+                policy_sha256,
+                applied_at_unix_ms,
+                valid_until_unix_ms,
+                targets,
+            }) => (
                 policy_sha256,
                 RESOURCE_TARGETS_SCHEMA_VERSION,
                 applied_at_unix_ms,
-                valid_until_unix_ms,
-                targets
-                    .iter()
-                    .map(|target| stored(target, &target.id, &target.resource, target.condition))
-                    .collect::<Result<Vec<_>, _>>()?,
+                Some(valid_until_unix_ms),
+                false,
+                v1_targets(&targets)?,
             ),
-            Some(
-                TargetPolicyState::ActiveV2 {
-                    policy_sha256,
-                    applied_at_unix_ms,
-                    valid_until_unix_ms,
-                    targets,
-                }
-                | TargetPolicyState::ExpiredV2 {
-                    policy_sha256,
-                    applied_at_unix_ms,
-                    valid_until_unix_ms,
-                    targets,
-                },
-            ) => (
+            Some(TargetPolicyState::Expired {
                 policy_sha256,
-                RESOURCE_TARGETS_SCHEMA_VERSION_V2,
                 applied_at_unix_ms,
                 valid_until_unix_ms,
-                targets
-                    .iter()
-                    .map(|target| stored(target, &target.id, &target.resource, target.condition))
-                    .collect::<Result<Vec<_>, _>>()?,
+                targets,
+            }) => (
+                policy_sha256,
+                RESOURCE_TARGETS_SCHEMA_VERSION,
+                applied_at_unix_ms,
+                Some(valid_until_unix_ms),
+                true,
+                v1_targets(&targets)?,
             ),
+            Some(TargetPolicyState::ActiveV2 {
+                policy_sha256,
+                applied_at_unix_ms,
+                valid_until_unix_ms,
+                targets,
+                ..
+            }) => match v3_targets()? {
+                Some(targets) => (
+                    policy_sha256,
+                    RESOURCE_TARGETS_SCHEMA_VERSION_V3,
+                    applied_at_unix_ms,
+                    None,
+                    false,
+                    targets,
+                ),
+                None => (
+                    policy_sha256,
+                    RESOURCE_TARGETS_SCHEMA_VERSION_V2,
+                    applied_at_unix_ms,
+                    valid_until_unix_ms,
+                    false,
+                    v2_targets(&targets)?,
+                ),
+            },
+            Some(TargetPolicyState::ExpiredV2 {
+                policy_sha256,
+                applied_at_unix_ms,
+                valid_until_unix_ms,
+                targets,
+            }) => match v3_targets()? {
+                Some(targets) => (
+                    policy_sha256,
+                    RESOURCE_TARGETS_SCHEMA_VERSION_V3,
+                    applied_at_unix_ms,
+                    None,
+                    true,
+                    targets,
+                ),
+                None => (
+                    policy_sha256,
+                    RESOURCE_TARGETS_SCHEMA_VERSION_V2,
+                    applied_at_unix_ms,
+                    Some(valid_until_unix_ms),
+                    true,
+                    v2_targets(&targets)?,
+                ),
+            },
         };
     let mut conditions = Vec::new();
     if let Some(catalog) = catalog {
@@ -1895,7 +2005,7 @@ pub fn active_resource_targets(
             schema_version,
             applied_at_unix_ms,
             valid_until_unix_ms,
-            expired: time.unix_ms > valid_until_unix_ms,
+            expired,
             targets: targets.into_iter().map(|(document, ..)| document).collect(),
             conditions,
         },
@@ -1971,6 +2081,9 @@ pub(crate) struct ResourceTerm {
     unmapped: Option<(String, String, String, &'static str)>,
     /// One item per weighed resource, by term descending, then pool id.
     items: Vec<WeightItem>,
+    /// Workflow #455 G-R2a: the own lifetime of the first lapsed v3 target that covered the
+    /// candidate, which then says what an expired v2 policy says; `None` under a v2 record.
+    lapsed_until_unix_ms: Option<u64>,
 }
 
 /// One weighed resource of a candidate: `T = ⌊r · W / Q⌋` with `W = B + Γ`.
@@ -2387,7 +2500,9 @@ struct TargetContext<'a> {
     time: EvaluationTime,
     policy_sha256: &'a str,
     applied_at_unix_ms: u64,
-    valid_until_unix_ms: u64,
+    /// The policy's lifetime: always one for a v1 or v2 policy; for a v3 record the earliest own
+    /// lifetime of its targets that weigh, `None` when none of them has one (Workflow #455 G-R2a).
+    valid_until_unix_ms: Option<u64>,
 }
 
 /// Resolves `policy` for `instance`: each target's pool once, each named task once, and the
@@ -2429,7 +2544,7 @@ pub(crate) fn resolve_instance_targets(
                 time,
                 policy_sha256,
                 applied_at_unix_ms: *applied_at_unix_ms,
-                valid_until_unix_ms: *valid_until_unix_ms,
+                valid_until_unix_ms: Some(*valid_until_unix_ms),
             };
             let mut effects = BTreeMap::new();
             let mut unevaluable = Vec::new();
@@ -2457,6 +2572,7 @@ pub(crate) fn resolve_instance_targets(
             applied_at_unix_ms,
             valid_until_unix_ms,
             targets,
+            lapsed,
         }) => ResolvedPolicy::ActiveV2(Box::new(resolve_v2(
             &TargetContext {
                 catalog,
@@ -2468,6 +2584,7 @@ pub(crate) fn resolve_instance_targets(
                 valid_until_unix_ms: *valid_until_unix_ms,
             },
             targets,
+            lapsed,
         )?)),
     };
     // SS-1 (Alice's ruling 100): without an active v2 policy (none, withdrawn, expired,
@@ -2517,6 +2634,7 @@ fn base_terms(
                 targets: Vec::new(),
                 unmapped: None,
                 items: weighed.items,
+                lapsed_until_unix_ms: None,
             },
         );
     }
@@ -2660,11 +2778,14 @@ fn weighed_tasks(
 
 /// Resolves an active v2 policy for one instance (Workflow #335 S2b): each target's pool, its
 /// step and importance, its named tasks and its inventory once, then the resource term of
-/// every catalog task whose scope covers the instance. The error names a state only a bug
-/// reaches.
+/// every catalog task whose scope covers the instance. Workflow #455 G-R2a: a v3 record's
+/// `lapsed` targets weigh nothing; each task one of them covered carries its lifetime, for the
+/// reason an expired v2 policy gives (empty under a v2 record). The error names a state only a
+/// bug reaches.
 fn resolve_v2(
     context: &TargetContext<'_>,
     targets: &[ResourceTargetSpecV2],
+    lapsed: &[LapsedTarget],
 ) -> Result<ResolvedV2, &'static str> {
     use ResourceTargetsRejectionReason as Reason;
     let TargetContext {
@@ -2799,13 +2920,15 @@ fn resolve_v2(
         term_milli: 0,
         capped: false,
         override_target: None,
-        valid_until_unix_ms: Some(context.valid_until_unix_ms),
+        valid_until_unix_ms: context.valid_until_unix_ms,
         inventory_expiries: Vec::new(),
         policy: Some((context.policy_sha256.to_owned(), context.applied_at_unix_ms)),
         targets: Vec::new(),
         unmapped: None,
         items: Vec::new(),
+        lapsed_until_unix_ms: None,
     };
+    let lapsed = v3::lapsed_coverage(catalog, instance, lapsed);
     let pools = instance_pools(catalog, instance);
     let mut terms = BTreeMap::new();
     for task in catalog
@@ -2817,6 +2940,7 @@ fn resolve_v2(
     {
         let mut term = ResourceTerm {
             unmapped: unmapped.get(&task.id).cloned(),
+            lapsed_until_unix_ms: lapsed.get(&task.id).copied(),
             ..empty.clone()
         };
         for target in &resolved {
@@ -2994,6 +3118,9 @@ fn target_effects(
         .unwrap_or(0);
     let (weight_milli, _) =
         task_target_milli(gap, target.importance_milli, target.scale, 1, 1).ok_or(NO_BEST)?;
+    let valid_until_unix_ms = context
+        .valid_until_unix_ms
+        .ok_or("an active v1 resource target policy has no lifetime")?;
     for (task, per_run) in mapped {
         let useful = per_run.min(gap_milli);
         let (task_target_milli, capped) = task_target_milli(
@@ -3010,7 +3137,7 @@ fn target_effects(
                 id: target.id.clone(),
                 mode: target.apply.mode,
                 task_target_milli,
-                valid_until_unix_ms: context.valid_until_unix_ms,
+                valid_until_unix_ms,
                 inventory_expires_at_unix_ms,
                 capped,
                 policy_sha256: context.policy_sha256.to_owned(),
@@ -3113,6 +3240,18 @@ impl InstanceTargets {
                 outcome: Outcome::new(PolicyCode::ResourceTargetPolicyIgnored),
                 detail: format!(
                     "a {scope_kind} scoped {RESOURCE_TARGETS_FACT_KEY} record (observed_at={observed_at_unix_ms}) was not written by the formal entry and is ignored"
+                ),
+            })
+        } else if let TargetEffect::Resources(term) = effect
+            && let (Some(valid_until_unix_ms), Some((policy_sha256, applied_at_unix_ms))) =
+                (term.lapsed_until_unix_ms, &term.policy)
+        {
+            // Workflow #455 G-R2a: a lapsed v3 target covered the candidate; it says what an
+            // expired v2 policy says, while the record's other targets weigh on.
+            Some(DecisionReason {
+                outcome: Outcome::new(PolicyCode::ResourceTargetPolicyExpired),
+                detail: format!(
+                    "policy={policy_sha256} applied_at={applied_at_unix_ms} valid_until={valid_until_unix_ms}"
                 ),
             })
         } else {
