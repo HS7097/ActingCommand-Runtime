@@ -120,7 +120,8 @@
       "license": {
         "id": "MIT",
         "url": "https://github.com/microsoft/onnxruntime/blob/v1.24.4/LICENSE",
-        "redistribution": "task_local_cache_only"
+        "redistribution": "redistributed_in_installation_package_by_owner_decision",
+        "redistribution_note": "The owner decided to redistribute onnxruntime.dll and onnxruntime_providers_shared.dll (the pinned_files below), with the package's LICENSE and ThirdPartyNotices.txt (the pinned_license_files below), in the Windows installation package only: the complete, offline package the graphical installer installs from, assembled outside this repository and published in the umbrella repository (Workflow #441, 2026-11-13). The Runtime artifact and the Tools artifact still carry none of it. This records the owner's decision; it is not a legal opinion."
       },
       "archive": {
         "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/1.24.4/microsoft.ml.onnxruntime.directml.1.24.4.nupkg",
@@ -175,7 +176,7 @@
           "hash_provenance": "Workflow #428 CI-OCR-1: size and SHA-256 of this entry of the package pinned above (archive.sha256), read by Materialize-VisionRoot.ps1 on a GitHub-hosted Windows runner on 2026-11-11, two runs with identical values (the script's own output line)"
         }
       ],
-      "placement_note": "Workflow #407 GPU-1 (design rd-1031/perf-407/design-gpu1.md section 5): the DirectML runtime of a vision root. Neither the Runtime package, the Tools package nor the installer carries it; whoever places it copies the pinned_files to their vision_root_path and LICENSE and ThirdPartyNotices.txt to ort/licenses/onnxruntime/. crates/vision-ffi/src/runtime_pin.rs pins the same sizes and SHA-256 (a logic test holds them equal)."
+      "placement_note": "Workflow #407 GPU-1 (design rd-1031/perf-407/design-gpu1.md section 5): the DirectML runtime of a vision root. The Runtime package and the Tools package do not carry it; the Windows installation package does, by the owner's decision (Workflow #441, license.redistribution_note); whoever places it copies the pinned_files to their vision_root_path and LICENSE and ThirdPartyNotices.txt to ort/licenses/onnxruntime/. crates/vision-ffi/src/runtime_pin.rs pins the same sizes and SHA-256 (a logic test holds them equal)."
     },
     "directml-1.15.4": {
       "kind": "download_zip",
@@ -183,7 +184,8 @@
       "license": {
         "id": "Microsoft-DirectML-License-Terms",
         "url": "https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4/License",
-        "redistribution": "task_local_cache_only"
+        "redistribution": "redistributed_in_installation_package_by_owner_decision",
+        "redistribution_note": "The owner decided to redistribute DirectML.dll (the pinned_files below), with the package's license terms (LICENSE.txt), in the Windows installation package only: the complete, offline package the graphical installer installs from, assembled outside this repository and published in the umbrella repository, so that the installation can offer GPU acceleration (Workflow #441, 2026-11-13). The Runtime artifact and the Tools artifact still carry none of it. As the package's NuGet license page (the url above) summarises Microsoft's terms, this redistribution must be within the application, for use on Windows, and never stand-alone. DirectML.dll is governed by Microsoft's terms, not by the project's own licenses. This records the owner's decision; it is not a legal opinion."
       },
       "archive": {
         "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg",
@@ -216,7 +218,7 @@
           "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1"
         }
       ],
-      "placement_note": "Workflow #407 GPU-1 (design rd-1031/perf-407/design-gpu1.md section 5): DirectML 1.15.4 for a vision root's DirectML runtime, placed beside the onnxruntime-directml-1.24.4 files. Neither the Runtime package, the Tools package nor the installer carries it; whoever places it copies the pinned_files to their vision_root_path and LICENSE.txt, LICENSE-CODE.txt and ThirdPartyNotices.txt to ort/licenses/directml/, under the license terms in LICENSE.txt. crates/vision-ffi/src/runtime_pin.rs pins the same size and SHA-256 (a logic test holds them equal)."
+      "placement_note": "Workflow #407 GPU-1 (design rd-1031/perf-407/design-gpu1.md section 5): DirectML 1.15.4 for a vision root's DirectML runtime, placed beside the onnxruntime-directml-1.24.4 files. The Runtime package and the Tools package do not carry it; the Windows installation package does, by the owner's decision (Workflow #441, license.redistribution_note); whoever places it copies the pinned_files to their vision_root_path and LICENSE.txt, LICENSE-CODE.txt and ThirdPartyNotices.txt to ort/licenses/directml/, under the license terms in LICENSE.txt. crates/vision-ffi/src/runtime_pin.rs pins the same size and SHA-256 (a logic test holds them equal)."
     },
     "ppocrv6-medium-source": {
       "kind": "download_files",
@@ -253,7 +255,9 @@
       "version": "PaddleOCR-v3.7.0",
       "license": {
         "id": "Apache-2.0",
-        "url": "https://github.com/PaddlePaddle/PaddleOCR/blob/v3.7.0/LICENSE"
+        "url": "https://github.com/PaddlePaddle/PaddleOCR/blob/v3.7.0/LICENSE",
+        "redistribution": "redistributed_in_installation_package_by_owner_decision",
+        "redistribution_note": "The owner decided to redistribute the three artifacts below (the detector PP-OCRv6_medium_det_onnx, the recognizer PP-OCRv6_medium_rec_onnx and the dictionary ppocrv6_dict), with PaddleOCR's LICENSE (Apache-2.0, the url above), in the Windows installation package only: the complete, offline package the graphical installer installs from, assembled outside this repository and published in the umbrella repository (Workflow #441, 2026-11-13). The Runtime artifact and the Tools artifact still carry none of it. This records the owner's decision; it is not a legal opinion."
       },
       "compatibility": {
         "state": "Ready",

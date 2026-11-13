@@ -559,7 +559,8 @@ fn the_runtime_pin_equals_the_tool_sources_entries() {
         let component = &components[pinned.tool_source];
         assert_eq!(component["kind"], "download_zip", "{}", pinned.tool_source);
         assert_eq!(
-            component["license"]["redistribution"], "task_local_cache_only",
+            component["license"]["redistribution"],
+            "redistributed_in_installation_package_by_owner_decision",
             "{}",
             pinned.tool_source
         );
