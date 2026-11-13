@@ -22119,7 +22119,7 @@ refusals. A configuration without `policy` is refused with `config_key` `policy`
 operations are not used on it before LAB-7 (ruling 8; install-cli.md, "Journals across
 versions"), and production adds instances as before.
 
-### 1.357 Slice S11 (0.12.60): the state root remembers its installation (Workflow #453; the owner approved board #453, and the coordinator's rulings on the board replace the design survey's identity by the configuration's salt, not the owner's words; the design survey `rd-1113/fresh-root-design.md` §0 and §6, read on main `98924e28`, its line numbers found again on main `95525c98`; coordinator work order `rd-1114/brief-453-s11-state-root-record.md`, read on main `95525c98`; mains `691c20f5` and `1ffb6c7f` merged)
+### 1.358 Slice S11 (0.12.60): the state root remembers its installation (Workflow #453; the owner approved board #453, and the coordinator's rulings on the board replace the design survey's identity by the configuration's salt, not the owner's words; the design survey `rd-1113/fresh-root-design.md` §0 and §6, read on main `98924e28`, its line numbers found again on main `95525c98`; coordinator work order `rd-1114/brief-453-s11-state-root-record.md`, read on main `95525c98`; mains `691c20f5` and `1ffb6c7f` merged)
 
 [state-root-installation.md](state-root-installation.md) is the contract;
 [actingd-check-config.md](actingd-check-config.md) (the report member `state_root_installation`,
@@ -22132,10 +22132,10 @@ the stage `config_state_root`), [actingd-unlock-owner.md](actingd-unlock-owner.m
 **No interface revision moves** ([component-interfaces.md](component-interfaces.md)): the two
 files are neither configuration nor ledger shapes; the fact is a new key of `runtime.fact_recorded`;
 the codes, operations and stage are catalog additions; the tag list's default gains one entry (no
-key, no revision, as AGT1A-5 and C1D-2 added theirs). The number 1.357 is the next
-free one: main `691c20f5`, merged into this branch, took §1.353 for MAPP-2b, and main
-`1ffb6c7f` (the train 0.12.60b), merged in fix round 1, took §1.354 to §1.356 for FL-2,
-S8 and S7, and G-R1.
+key, no revision, as AGT1A-5 and C1D-2 added theirs). The integration train 0.12.60c gave it
+1.358, the number after main's §1.356 and #453 S1's §1.357 of the same train: main `691c20f5`,
+merged into this branch, took §1.353 for MAPP-2b, and main `1ffb6c7f` (the train 0.12.60b),
+merged in fix round 1, took §1.354 to §1.356 for FL-2, S8 and S7, and G-R1.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -22293,7 +22293,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.idle_state` (a record list: the instances the idle action closed or is closing, with their action and wake; since 0.12.25 its writer row names the start anchor, not the owner epoch (#405 N-2), and a woken instance stays in it, `woken`, until its startup package has run (#405 O-2); [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #405 IDLE-1P) | #405 IDLE-1P |
 | `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `host.capped_episodes` (a record list: the writer's start anchor, then per instance and pool with an open or waiting capped episode its episode row, consumer rows and member rows; [runtime-fact-store.md](runtime-fact-store.md); §1.299 SC1-11, C1D-1) | workbench | yes (added to `tag.workbench_patterns` by SCHED-C1d) | #428 SCHED-C1d |
-| `host.state_root_installation` (one row: the claim's time and who claimed, never the installation's number; [state-root-installation.md](state-root-installation.md); §1.357 S11-3) | workbench | yes (added to `tag.workbench_patterns` by S11) | #453 S11 |
+| `host.state_root_installation` (one row: the claim's time and who claimed, never the installation's number; [state-root-installation.md](state-root-installation.md); §1.358 S11-3) | workbench | yes (added to `tag.workbench_patterns` by S11) | #453 S11 |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.catalog_warnings` (count and place rows of the active composed generation's compile warnings; §1.290 CW1-2) | workbench | no (`config.` is re-observed) | #428 CW-1 |
 | `config.catalog_provenance` (count and id rows of who wrote the active composed generation's fixed values and valuations; §1.299 SC1-7, C1B-1) | workbench | no (`config.` is re-observed) | #428 SCHED-C1b |
