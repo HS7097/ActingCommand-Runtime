@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S8 (register §1.350; contracts/package-reference.md, the answer of `standard-pack
+// Workflow #453 S8 (register §1.355; contracts/package-reference.md, the answer of `standard-pack
 // check`; coordinator work order rd-1114/brief-453-s7s8-vision-manifest.md): the models a package
 // names are the `(model_ref, model_sha256)` of its recognition pack's OCR and NN targets, each
 // once, in byte order of the reference, then of the identity; `standard-pack check` reads them

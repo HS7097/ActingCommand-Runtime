@@ -1133,7 +1133,7 @@ the rescue face:
   the watchdog stands aside (`pack_place` is off row 7a″'s pass list), so no Runtime starts on a
   half-placed game root; the next start reads the placed game root.
 - **`vision manifest --provider cpu|directml` and `vision check`** (Workflow #453 S7, since
-  0.12.60; register §1.350; [vision-model-folders.md](vision-model-folders.md), "The manifest";
+  0.12.60; register §1.355; [vision-model-folders.md](vision-model-folders.md), "The manifest";
   the coordinator's rulings on board #453, not the owner's words). Two read-only rows, `runtime`
   `offline`, `writes` false; no `actingctl install` command. `vision manifest` runs the live
   build's `actingd vision manifest --provider <p>` and answers its manifest as `report`

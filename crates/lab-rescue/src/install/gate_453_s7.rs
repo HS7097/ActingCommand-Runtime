@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S7 (register §1.350; contracts/vision-model-folders.md, "The manifest"; coordinator
+// Workflow #453 S7 (register §1.355; contracts/vision-model-folders.md, "The manifest"; coordinator
 // work order rd-1114/brief-453-s7s8-vision-manifest.md): the rescue rows `vision manifest` and
 // `vision check` run the live build's `actingd vision manifest|check` (and `vision check` the
 // Tools' `standard-pack check` of each game root), each child ended at its bound, and write

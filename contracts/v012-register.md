@@ -21560,10 +21560,12 @@ A package without the member runs through the host as before: the existing list-
 **At deploy.** Nothing: no bundle declares a field list, and the resource repositories' slice FL-3
 comes after this one is on production.
 
-### 1.350 Slices #453 S8 and S7 (0.12.60): `standard-pack check` answers the models a game root's packs need; a vision root's manifest and its offline check (Workflow #453, thing 3 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0 and §3 (3(a), 3a, 3b, 3(d), 3(e)), read on main `fa724931`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-453-s7s8-vision-manifest.md`, read on main `fa724931`)
+### 1.355 Slices #453 S8 and S7 (0.12.60): `standard-pack check` answers the models a game root's packs need; a vision root's manifest and its offline check (Workflow #453, thing 3 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0 and §3 (3(a), 3a, 3b, 3(d), 3(e)), read on main `fa724931`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-453-s7s8-vision-manifest.md`, read on main `fa724931`)
 
 1.348 was the next free number on main `fa724931`; merging main `71a658f1`, which holds §1.348
-(#454, the real cause) and §1.349 (DA-3b), renumbered it 1.350. Other slices of this release add
+(#454, the real cause) and §1.349 (DA-3b), renumbered it, and the integration train 0.12.60b
+renumbered it 1.355, the number after main's §1.353 (MAPP-2b) and FL-2's §1.354 of the same
+train. Other slices of this release add
 sections at the end of section 1 too, so a train may renumber it again. One pull request, two
 commits: S8 (the survey's 3b) and S7 (its 3a). No configuration key, no interface revision, no
 record, no wire shape of the Runtime, no journal and no step kind is added or moved.
