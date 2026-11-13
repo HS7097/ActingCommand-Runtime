@@ -165,11 +165,15 @@ capture, pacing, host shutdown handling) is no request and never passes the gate
   | `Lab-CLI`, `Lab-制包`, `Lab-救急`, `Lab-看门狗` | `lab` | `cli` |
 
   Every other binding (`lab` without a word, with or without `via`, `cli`, `mcp`, `ui`, and the
-  binding an unbound connection's first request makes) is recorded as it is. M never yields `ui`,
-  so the gate's step 5 (section 2.3) judges the connections bound to `ui` and no other. The
-  connection's own binding does not change: `channel_binding_exists` names `lab`, and the answer to
-  `BindChannel` echoes the word. Its receipts follow the receipt rule R (section 4.3). LAB-6S4b,
-  which takes `via` off the wire, ends M's `via` cell; LAB-6S2-E ends M.
+  binding an unbound connection's first request makes) is recorded as it is. A request whose
+  envelope's source lies outside the client set (`Runtime`, `Scheduler`, `Device`, `System`) gets
+  from M the channel of the other non-Lab envelopes, `cli`, or `mcp` under `Lab-MCP`, so on a
+  `lab` binding with a word its refusal `invalid_client_origin` is answered with that channel and
+  without the word (section 4.3, the receipt rule R). M never yields `ui`, so the gate's step 5
+  (section 2.3) judges the connections bound to `ui` and no other. The connection's own binding
+  does not change: `channel_binding_exists` names `lab`, and the answer to `BindChannel` echoes
+  the word. Its receipts follow the receipt rule R (section 4.3). LAB-6S4b, which takes `via` off
+  the wire, ends M's `via` cell; LAB-6S2-E ends M.
 - LAB-6 deletes the origin gates of `RuntimeRequest::validate()` (emulator control, the
   self-check, the player hold, the agent wake test, the origin exceptions of fact families and the
   rest); the content and shape rules stay. Whoever sent a request is in its G14 record.
@@ -348,9 +352,14 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
     its 0.12.58 envelope (LAB-6S2-B1, LAB-6S2-B2) reads the receipt of each request it sends with
     the CLI's or an agent adapter's envelope byte for byte as on 0.12.58: acsetup decodes the
     receipts that `actingctl`'s `install-transition` and `request-shutdown` print into a receipt
-    type without `initiator` that refuses unknown members. The answer to `BindChannel` is not under
-    R: it carries the binding with its word, whose echo the client requires. Every binding without
-    a word is receipted as before. R ends with LAB-6S2-E.
+    type without `initiator` that refuses unknown members. One cell of M is not 0.12.58's: under
+    `Lab-MCP` the rescue module's requests (the rescue rows of `actinglab-mcp` and of
+    `serve --front mcp`, and the detached run) are answered with `channel` `cli` on 0.12.58 and
+    with `mcp` under M; those requests write no record that carries a channel, so only their
+    receipt's `channel` member differs, and acsetup, the released console's installer helper,
+    reads `actingctl`'s receipts, which are not of that cell. The answer to `BindChannel` is not
+    under R: it carries the binding with its word, whose echo the client requires. Every binding
+    without a word is receipted as before. R ends with LAB-6S2-E.
   - **Settings overrides.** Each `host.config_overrides` row
     ([runtime-config.md](runtime-config.md), "Facts"; register G4 and U2-5) gains `initiator`,
     written beside `channel` by every `ConfigureSettings` (LAB-6). LAB-6 writes `channel` `lab` or

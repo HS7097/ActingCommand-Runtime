@@ -114,7 +114,9 @@ Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the sa
    channel that program's binding had on 0.12.58, by the word and the envelope's source, and a
    request whose envelope's source is not `Lab` is receipted with that channel (`cli`, or `mcp`
    under `Lab-MCP`) and without `initiator` ([lab-two-entries.md](lab-two-entries.md) §2.4, the
-   map M; §4.3, the receipt rule R); the connection's binding itself is unchanged. A connection that declares no word, the
+   map M; §4.3, the receipt rule R), except the answer to `BindChannel` itself, which carries
+   `lab` and the word whatever the envelope (the first binding's and a refused second one's);
+   the connection's binding itself is unchanged. A connection that declares no word, the
    console's `ui` among them, binds, is answered and reads its receipts byte for byte as before
    (a `ui` connection's initiator `UI` is implied by its channel and never written). Nothing
    records the word, and no status read reports it.
