@@ -12,7 +12,12 @@ identity, expiry, cooldown and destructive-step checks remain effective. One
 resource-close-only lease passes the takeover cooldown, for its own close only: the
 session close ahead that closes a keyless observation's session of a member of a
 device group of several (Workflow #437 MAPP-1c, [device-group.md](device-group.md),
-"The session close of a keyless observation").
+"The session close of a keyless observation"). Workflow #437 MAPP-1d uses the same
+session close ahead for two more sessions of such a member, each under the device's
+admission guard and on a free device: the session the monitor's probe opened
+([device-group.md](device-group.md), "The monitor's probe in a device group"), and the
+session a run's lease that lapsed in its end phase left open (below, and
+[device-group.md](device-group.md), "Device-level actions", row 7).
 `begin_resource_close` admits the native close and returns its `FencedWrite`;
 ordinary input validation rejects this lease. Host invokes
 `close_instance(FencedDeviceWrite(Arc<FencedWrite>))` only after that
@@ -125,7 +130,8 @@ The primary capture failure and any actual cleanup cause retain their existing
 typed GlobalLedger representation.
 A dedicated close lease is prepared as every resource-close lease is: an entry waiting in the
 instance's queue that the routine gate lets through refuses it (`prepare_resource_close`:
-`lease_transfer_not_safe`, Workflow #369 §5.1). #411 A52: a capture failure whose dedicated close
+`lease_transfer_not_safe`, Workflow #369 §5.1); on a device of a device group of several each
+waiting entry is judged by the routine gate of the member it serves (Workflow #437 MAPP-1d). #411 A52: a capture failure whose dedicated close
 lease is refused so attempts no close and ends only its own work. The refusal is recorded once
 (`runtime.failed` with lifecycle stage `runtime_lifecycle_session_close`, the instance, under the
 failed work's links) and the capture failure is answered as every capture failure is. The host
@@ -140,7 +146,13 @@ An earlier fatal does not skip other instances' permitted cleanup. A close attem
 under an expired or otherwise invalid lease, an unresolved destructive step, or an
 unconfirmed native close retains failure and owner protection. The end of an expired
 lease attempts no close (Workflow #191 H): it keeps the session and forgets its input
-frames, as for no session, and only a session that must close fails as before. Final
+frames, as for no session, and only a session that must close fails as before. A run's
+lease that lapsed in its end phase is #411 A64's: the refused close fences the instance and
+the session is closed once the lease has ended (`close_lapsed_run_session_guarded`). For a
+member of a device group of several (Workflow #437 MAPP-1d) that end hands the key to no one,
+and the session is closed under the session close ahead, still under the device's admission
+guard, before any waiting claim is granted; an unconfirmed close there keeps its close lease,
+as every dedicated close lease is kept then. Final
 Kernel shutdown aggregates cached
 unconfirmed causes and retains any session whose close authority was not established;
 it cannot retry that session through a local-only native close. The first native

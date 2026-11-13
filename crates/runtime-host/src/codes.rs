@@ -2699,6 +2699,12 @@ pub(crate) mod test_spellings {
             InstanceClaimsForTest => "instance_claims_for_test",
             // Workflow #437 MAPP-1c: a test turns the slice's branch off.
             Mapp1cOffForTest => "mapp1c_off_for_test",
+            // Workflow #437 MAPP-1d: a test turns the slice's branches off, holds the resident
+            // monitor loop and runs a due probe itself, and lifts an instance pause.
+            Mapp1dOffForTest => "mapp1d_off_for_test",
+            HoldMonitorLoopForTest => "hold_monitor_loop_for_test",
+            RunDueMonitorProbeForTest => "run_due_monitor_probe_for_test",
+            LiftInstancePauseForTest => "lift_instance_pause_for_test",
             // #411 A51: a test latches a condition in the Runtime's fatal state.
             MarkRuntimeFatalForTest => "mark_runtime_fatal_for_test",
             ObserveShutdownSettleForTest => "observe_shutdown_settle_for_test",

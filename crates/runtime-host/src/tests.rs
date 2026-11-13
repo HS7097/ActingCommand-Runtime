@@ -233,6 +233,11 @@ mod gate_438_held;
 // another member's lease begins, whatever waits in the queue and in the takeover cooldown, and
 // the lock walk's pins.
 mod gate_mapp1c;
+// Workflow #437 MAPP-1d (0.12.60; register §1.354): a member's monitor probe made only on a free
+// device and its session closed before it lets the device go, a lapsed run lease of a member
+// handed on only after the member's session is closed, and each queued claim judged by its own
+// member's gate.
+mod gate_mapp1d;
 // Workflow #437 MAPP-1b (0.12.57; register §1.328, §1.330): the host's half of a device group:
 // one worker per device, the group's occupancy, pause, gates, session rule and refusals.
 mod gate_mapp1b;
