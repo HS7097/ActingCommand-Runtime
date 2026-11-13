@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #429 R-7a (register §1.233; contracts/player-hold.md; design R-7a §7.1 "Tests"): the
-// player hold's frozen shapes, their self-checks, the source gate, the one order of the control
-// gates, `with_derived_control` and O-7, `instance_gates`, `hold_ended_with_pause`, every row of
-// the settlement table and the two receipt waits. Pure: no clock, no I/O.
+// player hold's frozen shapes, their self-checks, the one order of the control gates,
+// `with_derived_control` and O-7, `instance_gates`, `hold_ended_with_pause`, every row of the
+// settlement table and the two receipt waits. Pure: no clock, no I/O. (The source gate's test
+// left with the gate, Workflow #434 LAB-6S1b.)
 
 use super::*;
 use crate::codes::{ReceiptCode, RuntimeContractCode};
@@ -934,38 +935,6 @@ fn r7a_a_receipt_carries_a_hold_result_only_completed() {
         .success_code(),
         Some(ReceiptCode::AcquirePlayerHoldCompleted.code())
     );
-}
-
-// ---- The source gate ----
-
-#[test]
-fn r7a_the_source_gate_takes_the_three_envelopes_for_both_requests() {
-    let ids = ids();
-    let expected = PlayerHoldExpectation {
-        owner_epoch: epoch(&ids),
-        hold_id: request_id(&ids),
-        revision: 1,
-    };
-    for operation in [acquire_operation(60_000), release_operation(expected)] {
-        for (actor, source) in [
-            (EventActor::User, EventSource::Ui),
-            (EventActor::Cli, EventSource::Cli),
-            (EventActor::Lab, EventSource::Lab),
-        ] {
-            request_as(&ids, actor, source, operation.clone()).expect("taken");
-        }
-        for (actor, source) in [
-            (EventActor::Agent, EventSource::Adapter),
-            (EventActor::User, EventSource::Cli),
-            (EventActor::Cli, EventSource::Lab),
-            (EventActor::Ui, EventSource::Ui),
-        ] {
-            refused(
-                request_as(&ids, actor, source, operation.clone()),
-                RuntimeContractCode::InvalidPlayerHoldOrigin,
-            );
-        }
-    }
 }
 
 // ---- The one order (§2.6) ----

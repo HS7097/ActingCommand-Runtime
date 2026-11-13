@@ -12,10 +12,11 @@ running instance (`ApplicationLifecycle`) is unchanged.
 - `action` is `start`, `stop` or `restart` (`EmulatorInstanceAction`, snake_case). No lease or
   holder id is part of the request: the host takes the instance's key for it (see "The
   operator's claim and the fence").
-- `RuntimeRequest::validate` admits the operation only when `(actor, source)` is
-  `(User, Ui)` or `(Cli, Cli)`; every other origin is `invalid_emulator_control_origin`.
-  `Adapter` / `Agent` are excluded on purpose: the scheduler and agents can never issue it, and
-  there is no policy that restarts the emulator by itself. The startup package (slice
+- `RuntimeRequest::validate` admits the operation from every envelope of the client set since
+  Workflow #434 LAB-6S1b (0.12.58; [lab-two-entries.md](lab-two-entries.md) §2.4), the Lab's
+  `(Lab, Lab)` included. Before it, it admitted it only when `(actor, source)` was `(User, Ui)`
+  or `(Cli, Cli)`, every other origin being `invalid_emulator_control_origin` (retired). The
+  scheduler sends no request, and there is no policy that restarts the emulator by itself. The startup package (slice
   #316-B3, "Startup package hook" below) is the one thing a successful `start` / `restart`
   sets in motion: a configuration-declared, fully ledgered contained task, not a restart.
 - The instance must be a registered physical instance (`fixture_execution_scope_forbidden`
@@ -1088,8 +1089,9 @@ Forced compromise T-08 (the recovery route could not be tried by hand) and coord
 of wave 13: a person may ask for a drill of one physical instance's ladder,
 `DrillRecoveryLadder { instance_alias, mode }`, an option-two operation (`actingctl
 ladder-drill --instance <selector> [--device]`, MCP `ac_ladder_drill` with `instance` and
-`device`; [runtime-interface.md](runtime-interface.md)). Only an explicit User+Ui or Cli+Cli
-request may issue it (the emulator control origin gate: a drill may restart the emulator), and
+`device`; [runtime-interface.md](runtime-interface.md)). Until Workflow #434 LAB-6S1b only an
+explicit User+Ui or Cli+Cli request could issue it (the emulator control origin gate: a drill may
+restart the emulator); since then every client envelope may, the Lab's `drill` included. It is
 only for a physical instance. The direct-run rule does not change: a direct task run still
 starts no ladder while `rules.direct_runs` is `exempt`.
 
@@ -1549,8 +1551,9 @@ instance's last recorded opens (#411 A7, register §1.98 A7-1).
 `RuntimeOperation::DiscoverInstances` (`{"operation": "discover_instances"}`, no fields) re-runs
 the provider's instance discovery on demand (`ExecutionBackendProvider::discover_instances`, the
 same `MuMuManager` resolution as startup, see `provider-startup.md`). It spawns the vendor tool,
-so its origin gate is the emulator control one: only `(User, Ui)` or `(Cli, Cli)`, otherwise
-`invalid_emulator_control_origin`. No lease, admission guard, fence or device session is
+so its origin gate was the emulator control one until Workflow #434 LAB-6S1b deleted it (only
+`(User, Ui)` or `(Cli, Cli)`, otherwise `invalid_emulator_control_origin`, retired); since then
+every client envelope may ask, the Lab's `discover` included. No lease, admission guard, fence or device session is
 involved, and nothing is bound, rebound or registered.
 
 `RuntimeResult::InstancesDiscovered`:

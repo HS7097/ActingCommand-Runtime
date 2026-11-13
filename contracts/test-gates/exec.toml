@@ -2914,3 +2914,17 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::package_cli::gate_448_sbud1::package_check_refuses_integer_layout_over_step_deadline",
 ]
 incident = ["#448 SBUD-1"]
+
+# Workflow #444 NOTICES-3 (0.12.58; register §1.336; brief rd-1113/brief-444-notices-3.md; contracts/package-reference.md, "Notices", and contracts/resource-verify.md, the bundle step): package bundle --notices lays every file of the directory byte for byte into <out>/notices/ (a byte-order mark and CRLF kept, a file in a subdirectory, the case of a name kept), writes the same bundle.json and no interfaces.json, and without the flag its output's root holds applications.json, bundle.json and packs only, every file the same; a refused suffix, a file one byte over 2 MiB, 65 files, 8 MiB and one byte, a control character and a pack named like the directory (at the pack's source directory with package_id) are each standard_pack_root_invalid with the rule's word, the file in the source directory or the directory for the count and the total, an empty pointer and the bound, and a path that is no directory, none at all or a directory without a file is validation_failed, each with neither --out nor its .part written; standard-pack check answers notices {files, bytes} for a game root that holds the directory and no member for one that does not, never in root_files, looks at nothing beside it (notices.old-<ms>, notices.rolledback-<ms>, a .part), refuses a control character and an empty file naming the file below the game root with the bound, and checks a root whose bundle.json lists a pack named notices in any ASCII case as before with no member; resource verify's bundle step on a repository without notices/ gives a zip of 9 entries without it, interfaces.json package [3, 3] and no member, and with notices/ committed a zip carrying its files byte for byte, interfaces.json [10, 10], package_revision 10, an installed copy holding the directory and a check counting its files and bytes, passing both times
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_444_notices3::notices3_package_bundle_lays_the_directory_byte_for_byte",
+    "actingcommand-resource-tooling::lib::gate_444_notices3::notices3_package_bundle_refuses_each_broken_rule_and_creates_nothing",
+    "actingcommand-resource-tooling::lib::gate_444_notices3::notices3_package_bundle_refuses_no_directory_and_an_empty_one",
+    "actingcommand-resource-tooling::lib::gate_444_notices3::notices3_check_counts_the_directory_and_has_no_member_without_it",
+    "actingcommand-resource-tooling::lib::gate_444_notices3::notices3_check_refuses_a_broken_rule_naming_the_file",
+    "actingcommand-resource-tooling::lib::gate_444_notices3::notices3_check_leaves_the_folder_of_a_pack_named_like_it",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::notices3_the_bundle_step_carries_a_notices_directory",
+]
+incident = ["#444 NOTICES-3"]

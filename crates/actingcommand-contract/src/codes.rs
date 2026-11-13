@@ -598,17 +598,13 @@ crate::outcome_codes! {
         UnsupportedRequestSchema => "unsupported_request_schema": error / none,
         InvalidRequestTimestamp => "invalid_request_timestamp": error / none,
         InvalidClientOrigin => "invalid_client_origin": error / none,
-        InvalidShutdownOrigin => "invalid_shutdown_origin": error / none,
-        InvalidInstallTransitionOrigin => "invalid_install_transition_origin": error / none,
-        InvalidResourceAuthoringOrigin => "invalid_resource_authoring_origin": error / none,
-        InvalidSignatureOrigin => "invalid_signature_origin": error / none,
-        InvalidRuntimeDebugOrigin => "invalid_runtime_debug_origin": error / none,
-        InvalidEmulatorControlOrigin => "invalid_emulator_control_origin": error / none,
-        InvalidSchedulingPauseOrigin => "invalid_scheduling_pause_origin": error / none,
-        // Workflow #432 AGT-1b: `AgentWakeTest` from another origin than a person's.
-        InvalidAgentWakeTestOrigin => "invalid_agent_wake_test_origin": error / none,
+        // Workflow #434 LAB-6S1b: `invalid_shutdown_origin`, `invalid_install_transition_origin`,
+        // `invalid_resource_authoring_origin`, `invalid_signature_origin`,
+        // `invalid_runtime_debug_origin`, `invalid_emulator_control_origin`,
+        // `invalid_scheduling_pause_origin`, `invalid_agent_wake_test_origin` and
+        // `invalid_agent_dispatcher_origin` are retired in 0.12.58 with the origin gates of
+        // `RuntimeRequest::validate`, which alone emitted them.
         FactOriginMixed => "fact_origin_mixed": error / none,
-        InvalidAgentDispatcherOrigin => "invalid_agent_dispatcher_origin": error / none,
         InvalidContainedTaskCancellationStatus => "invalid_contained_task_cancellation_status": error / none,
         MaterialReadResultMissing => "material_read_result_missing": error / none,
         MaterialReadFailureAlreadyRecorded => "material_read_failure_already_recorded": error / none,
@@ -784,9 +780,8 @@ crate::outcome_codes! {
         // #422 P32 B-1 (since 0.12.27): a `QueryRuns` request or answer of the wrong shape.
         InvalidQueryRuns => "invalid_query_runs": error / none,
         // Workflow #429 R-7a (register §1.233, since 0.12.35): the player hold's contract
-        // checks (contracts/player-hold.md).
-        // A player hold request from an envelope other than (User, Ui), (Cli, Cli), (Lab, Lab).
-        InvalidPlayerHoldOrigin => "invalid_player_hold_origin": error / none,
+        // checks (contracts/player-hold.md). `invalid_player_hold_origin` is retired in 0.12.58
+        // with the source gate (Workflow #434 LAB-6S1b).
         // An `AcquirePlayerHold.drain_timeout_ms` outside 1 000..=600 000.
         InvalidPlayerHoldDrainTimeout => "invalid_player_hold_drain_timeout": error / none,
         // A `ReleasePlayerHold.expected` with revision 0.

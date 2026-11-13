@@ -267,6 +267,8 @@ fn cov1_t4_a_file_without_followers_answers_as_before() {
         benefit_followers: report.benefit_followers,
         // #428 SCHED-C1f1: the answer's struct gained this member.
         consumption_facts: Some(report.consumption_facts),
+        // Workflow #444 NOTICES-3: the answer's struct gained this member.
+        notices: None,
     })
     .expect("the answer");
     assert!(answer.get("benefit_followers").is_none(), "{answer}");

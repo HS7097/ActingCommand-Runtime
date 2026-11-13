@@ -357,6 +357,10 @@ mod gate_389_u2;
 // Workflow #434 LAB-6S1a: the door also takes `lab` with an initiator; every binding without one
 // answers byte for byte as before.
 mod gate_434_lab6s1a;
+// Workflow #434 LAB-6S1b: `validate()` judges no request by its origin; a Lab connection's pause
+// and resume are a CLI connection's, and the host's own checks of the governance and install
+// kinds still refuse.
+mod gate_434_lab6s1b;
 // Workflow #434 LAB-6S3: the UI list on the `ui` channel; every other connection as before.
 mod gate_434_lab6s3;
 // Workflow #429 R-0: the workbench's kinds have their shapes and answer `not_implemented`.

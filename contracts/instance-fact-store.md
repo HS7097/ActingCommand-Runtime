@@ -406,12 +406,14 @@ an event). `FactRecord::priority_offset(scope, task_id, offset_milli,
 observed_at_unix_ms, source_detector)` builds a record without expiry whose
 snapshot id and bundle hash are the SHA-256 of that content.
 
-**Origin exception.** The request origin gate of `PublishFact` / `PublishFacts`
-accepts an observation whose every key is a priority offset key from `(agent,
-adapter)`, `(user, ui)` and `(cli, cli)`. Any other observation stays
-`(agent, adapter)` only (`invalid_agent_dispatcher_origin`), and an observation
-that mixes offset keys with other keys is refused from every origin as
-`fact_origin_mixed`.
+**Origin exception.** Until Workflow #434 LAB-6S1b (0.12.58) the request origin
+gate of `PublishFact` / `PublishFacts` accepted an observation whose every key is
+a priority offset key from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`, and
+any other observation from `(agent, adapter)` only (`invalid_agent_dispatcher_origin`,
+retired). Since then `RuntimeRequest::validate()` judges no origin
+([lab-two-entries.md](lab-two-entries.md) §2.4): every client envelope publishes
+either. An observation that mixes offset keys with other keys is still refused
+from every origin as `fact_origin_mixed`.
 
 **Ledger.** An offset-only observation published by a request keeps that
 request's source and actor on its `fact.published` event (origin module
@@ -554,10 +556,11 @@ The store accepts or refuses it like any other observation.
 - **Reserved prefix.** Only the host writes under `inventory.list.`, and only a list reading's
   `record_list`. `PublishFact` and `PublishFacts` of such a key are refused as
   `list_reading_key_reserved` (non-fatal, `fact_key`), before the fact write gate, with nothing
-  appended, from every origin that may publish facts: the agent dispatcher's (Agent, Adapter),
-  which the agent and the CLI's `facts publish` send, and the Runtime's own ordinary publication
-  path. A CLI or UI origin of its own (Cli, Cli or User, Ui) is refused earlier, when the request
-  is formed (`invalid_agent_dispatcher_origin`), as for any publication. A mark's `fact_key` or `capacity_fact_key` under the prefix is refused at the
+  appended, from every client envelope (since Workflow #434 LAB-6S1b every one may publish
+  facts: the agent dispatcher's (Agent, Adapter), the CLI's (Cli, Cli), the console's
+  (User, Ui) and the Lab's (Lab, Lab); before it only the first reached the Runtime with such a
+  key, the others being refused when the request was formed, `invalid_agent_dispatcher_origin`)
+  and on the Runtime's own ordinary publication path. A mark's `fact_key` or `capacity_fact_key` under the prefix is refused at the
   declaration gate and at admission (`resource_reading_fact_key_invalid`,
   `resource_reading_capacity_fact_key_invalid`; [resource-readings.md](resource-readings.md),
   "Capacity and reserved keys"), so no reading writes an integer there.

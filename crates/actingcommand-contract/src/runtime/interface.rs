@@ -472,7 +472,7 @@ impl RuntimeOperationKind {
             // Workflow #429 A.2 R-0: what the workbench needs without the Lab. Its new kinds act
             // only on what is bound to the instance; emulator control, the self-check and the
             // assigned application's start and stop already do (moved from option two; the
-            // origin gates of `RuntimeRequest::validate` stay until U-6).
+            // origin gates of `RuntimeRequest::validate` stayed until Workflow #434 LAB-6S1b).
             // Workflow #429 R-7a (register §1.233, R-7a §6.2): the player hold's two kinds, which
             // every counter and the Lab channel send (Alice's ruling 135; R-14 must keep the Lab
             // channel taking them from U-6).
@@ -959,8 +959,8 @@ mod tests {
             // general instructions recorded through G14.
             K::AcquirePlayerHold => (General, Some(Instruction), true),
             K::ReleasePlayerHold => (General, Some(Instruction), true),
-            // Workflow #432 AGT-1b (register §1.246): a general instruction recorded through G14,
-            // with the same origin gate as a pause.
+            // Workflow #432 AGT-1b (register §1.246): a general instruction recorded through G14
+            // (until Workflow #434 LAB-6S1b with the same origin gate as a pause).
             K::AgentWakeTest => (General, Some(Instruction), true),
         }
     }

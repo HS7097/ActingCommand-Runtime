@@ -100,6 +100,8 @@ fn answer(report: ScheduleReport) -> Value {
         benefit_provenance: Some(report.benefit_provenance),
         benefit_followers: report.benefit_followers,
         consumption_facts: Some(report.consumption_facts),
+        // Workflow #444 NOTICES-3: the answer's struct gained this member.
+        notices: None,
     })
     .expect("the answer")
 }

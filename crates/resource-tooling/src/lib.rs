@@ -100,7 +100,14 @@ mod gate_ss5;
 #[cfg(test)]
 mod gate_load1;
 
+// Workflow #444 NOTICES-3 (register §1.336): package bundle --notices and standard-pack check of a
+// game root's notices directory.
+#[cfg(test)]
+mod gate_444_notices3;
+
 mod maa_task_graph;
+// Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
+mod notices_directory;
 mod package_directory;
 // Workflow #407 LOAD-1: `package loading`, and the check `package bundle` and `standard-pack
 // check` run with it.

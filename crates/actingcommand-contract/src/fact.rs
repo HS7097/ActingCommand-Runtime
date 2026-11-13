@@ -76,9 +76,10 @@ pub enum FactKeyFamily {
 }
 
 impl FactKeyFamily {
-    /// Whether, until Workflow #389 U-6, the family takes the origin exception: besides an agent
-    /// (`(agent, adapter)`), a person (`(user, ui)`) or the operator (`(cli, cli)`) may write it,
-    /// and its `fact.published` event keeps the writer's origin.
+    /// Whether the family takes the origin exception: its `fact.published` event keeps the
+    /// writer's origin. Until Workflow #434 LAB-6S1b it also let a person (`(user, ui)`) or the
+    /// operator (`(cli, cli)`) write the family besides an agent (`(agent, adapter)`); since then
+    /// `RuntimeRequest::validate` takes every family from every client envelope.
     pub const fn takes_origin_exception(self) -> bool {
         matches!(
             self,

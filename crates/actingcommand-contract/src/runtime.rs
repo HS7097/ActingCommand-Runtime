@@ -3888,19 +3888,22 @@ pub enum RuntimeOperation {
         holder_id: HolderId,
         action: ApplicationLifecycleAction,
     },
-    /// Start, stop or restart the emulator instance through its discovered provider. Only an
-    /// explicit User+Ui or Cli+Cli request may issue it; no lease is held, the per-instance
-    /// fence is checked and the device session is closed before the provider is driven.
+    /// Start, stop or restart the emulator instance through its discovered provider. No lease
+    /// is held, the per-instance fence is checked and the device session is closed before the
+    /// provider is driven. Until Workflow #434 LAB-6S1b only a User+Ui or Cli+Cli request could
+    /// issue it (the emulator control origin gate); since then any client envelope may.
     ControlEmulatorInstance {
         instance_alias: String,
         action: EmulatorInstanceAction,
     },
     /// Re-runs the provider's instance discovery on demand and reports every instance with
-    /// its bound alias. Spawns the vendor tool, so the origin gate is the emulator control
-    /// one; binds, leases and opens nothing and records one `command.validated` observation.
+    /// its bound alias. Spawns the vendor tool (until Workflow #434 LAB-6S1b behind the emulator
+    /// control origin gate); binds, leases and opens nothing and records one `command.validated`
+    /// observation.
     DiscoverInstances,
-    /// Pauses policy dispatch (Workflow #191 ps1). Only an explicit User+Ui or Cli+Cli request
-    /// may issue it. `Global` closes the dispatch gate for every instance; `Instance` closes it
+    /// Pauses policy dispatch (Workflow #191 ps1). Until Workflow #434 LAB-6S1b only a User+Ui
+    /// or Cli+Cli request could issue it; since then any client envelope may, the Lab's
+    /// included. `Global` closes the dispatch gate for every instance; `Instance` closes it
     /// for one physical instance and then drains that instance's in-flight contained runs:
     /// they finish on their own within `drain_timeout_ms` (`1_000..=600_000`, validated for
     /// both scopes, used only by `Instance`) or are asked to stop at their next checkpoint.
@@ -3909,7 +3912,8 @@ pub enum RuntimeOperation {
         pause_reason: SchedulingPauseReason,
         drain_timeout_ms: u64,
     },
-    /// Lifts the matching scheduling pause; same origin gate as `PauseScheduling`. With
+    /// Lifts the matching scheduling pause; any client envelope may send it, as
+    /// `PauseScheduling` (Workflow #434 LAB-6S1b deleted their origin gate). With
     /// `expected` (Workflow #338 R4) only the pause of that owner epoch and scope revision is
     /// lifted; without it the resume is unconditional, as before.
     ResumeScheduling {
@@ -3922,8 +3926,9 @@ pub enum RuntimeOperation {
     /// session the instance still holds (Workflow #191 h3), opens its input and capture
     /// backends and records the opens. The new session then stays open for the instance's
     /// next leases until an external command disconnects it (Workflow #191 H); a failed open,
-    /// or an instance outside the multi-Nemu gate, closes it again. Only an explicit User+Ui or
-    /// Cli+Cli request may issue it (the emulator control origin gate).
+    /// or an instance outside the multi-Nemu gate, closes it again. Until Workflow #434
+    /// LAB-6S1b only a User+Ui or Cli+Cli request could issue it (the emulator control origin
+    /// gate); since then any client envelope may.
     SelfCheckInstance {
         instance_alias: String,
     },
@@ -3932,16 +3937,18 @@ pub enum RuntimeOperation {
     /// and is recorded like a ladder a trigger started, its own records tagged `drill`; with
     /// `mode` `plan` it never acts on the device, with `device` it climbs its rungs on the
     /// instance under the same key, admission and fences as a real ladder. A direct task run
-    /// still starts no ladder. Only an explicit User+Ui or Cli+Cli request may issue it (the
-    /// emulator control origin gate: a drill may restart the emulator).
+    /// still starts no ladder. Until Workflow #434 LAB-6S1b only a User+Ui or Cli+Cli request
+    /// could issue it (the emulator control origin gate: a drill may restart the emulator);
+    /// since then any client envelope may.
     DrillRecoveryLadder {
         instance_alias: String,
         mode: crate::RecoveryDrillMode,
     },
     /// Workflow #432 AGT-1b (`contracts/agent-wake.md`, `runtime-client` 5): a person's test of the
     /// delivery to the registered channel `to`, through the real worker, body file, row and
-    /// transport. Only an explicit User+Ui or Cli+Cli request may issue it, and no MCP tool sends
-    /// it, so an agent cannot use the Runtime to ping others. `instance_alias` only names an
+    /// transport. Until Workflow #434 LAB-6S1b only a User+Ui or Cli+Cli request could issue it;
+    /// since then any client envelope may, the Lab's `wake-test` included, and no tool of today's
+    /// MCP server sends it. `instance_alias` only names an
     /// instance in the message; a test touches no instance, so it is not an instance's request.
     AgentWakeTest {
         to: String,
@@ -4041,7 +4048,8 @@ pub enum RuntimeOperation {
     /// Applies one instance resource target policy (Workflow #308 RT-S1a): the raw
     /// `actingcommand.resource-targets.v1` document (`1..=64 KiB`), parsed, checked and
     /// stored as the instance fact `session.resource_targets` by the Runtime, the only formal
-    /// entry of that fact. Agent/Adapter only. Workflow #429 R-0 (register §1.213): with
+    /// entry of that fact. Agent/Adapter only until Workflow #434 LAB-6S1b; since then any
+    /// client envelope. Workflow #429 R-0 (register §1.213): with
     /// `expected_version` the table is replaced only while its version is that one (R-13c),
     /// `0` while the instance has no table (`ResourceTargetView` answers no `active`); the
     /// version is an opaque token compared only for equality. Until R-13c a request that
@@ -4168,14 +4176,16 @@ pub enum RuntimeOperation {
     // both `not_implemented` on every channel and records nothing.
     /// Takes the instance away from the Runtime for a person (R-7a §3.1): closes its gate, drains
     /// its in-flight runs within `drain_timeout_ms` (`1_000..=600_000`), hands the device back
-    /// and closes its session, and answers once the hold is `held`. The source gate takes
-    /// `(User, Ui)`, `(Cli, Cli)` and `(Lab, Lab)`.
+    /// and closes its session, and answers once the hold is `held`. Until Workflow #434
+    /// LAB-6S1b a source gate took `(User, Ui)`, `(Cli, Cli)` and `(Lab, Lab)` only; since then
+    /// any client envelope.
     AcquirePlayerHold {
         instance_alias: String,
         drain_timeout_ms: u64,
     },
     /// Gives the instance back to the Runtime (R-7a §3.2), only while its hold is the one
-    /// `expected` names; reconnects it when no pause holds it, else touches nothing. The source
+    /// `expected` names; reconnects it when no pause holds it, else touches nothing. Until
+    /// Workflow #434 LAB-6S1b deleted it, the source
     /// gate is the acquire's; every channel may end any hold (Alice's ruling 135). Without
     /// `startup_package` the release runs the startup package (`run`).
     ReleasePlayerHold {
@@ -4351,7 +4361,8 @@ impl RuntimeOperation {
                 crate::FactScope::Instance { instance_id } => validate_instance_alias(instance_id),
                 crate::FactScope::Server { .. } | crate::FactScope::Game { .. } => Ok(()),
             },
-            // Workflow #429 R-7a (§3.1 step 1, §3.2 step 1): the shapes, before the source gate.
+            // Workflow #429 R-7a (§3.1 step 1, §3.2 step 1): the shapes (the source gate after
+            // them went with Workflow #434 LAB-6S1b).
             Self::AcquirePlayerHold {
                 instance_alias,
                 drain_timeout_ms,
@@ -4771,141 +4782,20 @@ impl RuntimeRequest {
                 RuntimeContractCode::InvalidRequestTimestamp,
             ));
         }
+        // Workflow #434 LAB-6S1b (contracts/lab-two-entries.md §2.4): no request is judged here
+        // by its origin. The envelope is checked only against the client set, a shape rule of
+        // the envelope. The origin gates this function held before 0.12.58 (shutdown, install
+        // transition, authoring, signatures, debugging, governance, emulator control, scheduling
+        // pause, the agent wake test, fact publication by family, the agent dispatcher's kinds,
+        // the player hold) are gone; the host's own checks of the governance and installation
+        // kinds stay with those kinds.
         if !valid_client_origin(self.actor, self.source) {
             return Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidClientOrigin,
             ));
         }
-        // Shutdown is only ever requested, never forced: the person at the console (Ui) or the
-        // operator (Cli) may ask; the host still decides and stops at its own pace.
-        if matches!(self.operation, RuntimeOperation::RequestShutdown { .. })
-            && !matches!(
-                (self.actor, self.source),
-                (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
-            )
-        {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidShutdownOrigin,
-            ));
-        }
-        if matches!(self.operation, RuntimeOperation::InstallTransition { .. })
-            && !matches!(
-                (self.actor, self.source),
-                (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
-            )
-        {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidInstallTransitionOrigin,
-            ));
-        }
-        if matches!(
-            self.operation,
-            RuntimeOperation::RecordAuthoringEvent { .. }
-        ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
-        {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidResourceAuthoringOrigin,
-            ));
-        }
-        if matches!(
-            self.operation,
-            RuntimeOperation::RegisterDiagnosticSignature { .. }
-                | RuntimeOperation::MatchDiagnosticSignatures { .. }
-                | RuntimeOperation::RetireDiagnosticSignature { .. }
-        ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
-        {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidSignatureOrigin,
-            ));
-        }
-        if matches!(
-            self.operation,
-            RuntimeOperation::RecordDebugEvent { .. }
-                | RuntimeOperation::ReleaseLabPin { .. }
-                | RuntimeOperation::RunContainedLabOperation { .. }
-                | RuntimeOperation::RecognizeArtifact { .. }
-        ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
-        {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidRuntimeDebugOrigin,
-            ));
-        }
-        if matches!(
-            self.operation,
-            RuntimeOperation::DebugPackage { .. } | RuntimeOperation::ExportEvidence { .. }
-        ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
-        {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidRuntimeDebugOrigin,
-            ));
-        }
-        // A governance identity card may be declared by the person (Ui) or the operator (Cli);
-        // approval decisions stay person-only.
-        if matches!(
-            self.operation,
-            RuntimeOperation::DeclareGovernanceIdentity { .. }
-        ) && !valid_governance_declaration_origin(self.actor, self.source)
-        {
-            return Err(RuntimeContractError::new(
-                SharedCode::InvalidGovernanceOrigin,
-            ));
-        }
-        if matches!(
-            self.operation,
-            RuntimeOperation::RecordApprovalDecision { .. }
-        ) && (self.actor != EventActor::User || self.source != EventSource::Ui)
-        {
-            return Err(RuntimeContractError::new(
-                SharedCode::InvalidGovernanceOrigin,
-            ));
-        }
-        // Only an explicit person (Ui) or operator (Cli) request may drive the emulator, spawn
-        // its discovery tool or reconnect it for a self-check; Adapter/Agent origins are
-        // excluded so no scheduler or agent path can restart or reconnect it. Workflow #390
-        // DRILL-1: a ladder drill may restart the emulator, so the same gate holds it.
-        if matches!(
-            self.operation,
-            RuntimeOperation::ControlEmulatorInstance { .. }
-                | RuntimeOperation::DiscoverInstances
-                | RuntimeOperation::SelfCheckInstance { .. }
-                | RuntimeOperation::DrillRecoveryLadder { .. }
-        ) && !matches!(
-            (self.actor, self.source),
-            (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
-        ) {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidEmulatorControlOrigin,
-            ));
-        }
-        // Only the person (Ui) or the operator (Cli) may pause or resume scheduling; no
-        // scheduler, agent or Lab path can stop or restart dispatch by itself.
-        if matches!(
-            self.operation,
-            RuntimeOperation::PauseScheduling { .. } | RuntimeOperation::ResumeScheduling { .. }
-        ) && !matches!(
-            (self.actor, self.source),
-            (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
-        ) {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidSchedulingPauseOrigin,
-            ));
-        }
-        // Workflow #432 AGT-1b: only the person (Ui) or the operator (Cli) may test the delivery;
-        // no scheduler, agent or Lab path can make the Runtime message a session.
-        if matches!(self.operation, RuntimeOperation::AgentWakeTest { .. })
-            && !matches!(
-                (self.actor, self.source),
-                (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
-            )
-        {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidAgentWakeTestOrigin,
-            ));
-        }
-        // Fact publication (Workflow #308 slice 4a-2; Workflow #411 B15 R6): an observation
-        // whose every key belongs to a family with the origin exception (manual priority
-        // offsets, remedy choices) may also come from the person (Ui) or the operator (Cli);
-        // every other key stays Agent/Adapter only, and no observation mixes two families.
+        // Fact publication (Workflow #308 slice 4a-2; Workflow #411 B15 R6), a content rule: no
+        // observation mixes two key families.
         let fact_keys = match &self.operation {
             RuntimeOperation::PublishFact { record } => Some(vec![record.key.as_str()]),
             RuntimeOperation::PublishFacts { observation } => Some(
@@ -4927,57 +4817,8 @@ impl RuntimeRequest {
                     RuntimeContractCode::FactOriginMixed,
                 ));
             }
-            let agent = (self.actor, self.source) == (EventActor::Agent, EventSource::Adapter);
-            let person = matches!(
-                (self.actor, self.source),
-                (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
-            );
-            let excepted = families
-                .first()
-                .is_some_and(|family| family.takes_origin_exception());
-            if !(agent || (excepted && person)) {
-                return Err(RuntimeContractError::new(
-                    RuntimeContractCode::InvalidAgentDispatcherOrigin,
-                ));
-            }
-        }
-        if matches!(
-            self.operation,
-            RuntimeOperation::StartAgentSession { .. }
-                | RuntimeOperation::ResumeAgentSession { .. }
-                | RuntimeOperation::AgentSessionStatus { .. }
-                | RuntimeOperation::RecordAgentResponse { .. }
-                | RuntimeOperation::ProjectPolicyInputIdentity { .. }
-                | RuntimeOperation::PrepareStrategicReport { .. }
-                | RuntimeOperation::ProjectPolicyForward { .. }
-                | RuntimeOperation::AssessPredictiveMaintenance { .. }
-                | RuntimeOperation::CompileProposal { .. }
-                | RuntimeOperation::PromoteProposal { .. }
-                | RuntimeOperation::ApplyResourceTargets { .. }
-        ) && (self.actor != EventActor::Agent || self.source != EventSource::Adapter)
-        {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidAgentDispatcherOrigin,
-            ));
         }
         self.operation.validate()?;
-        // Workflow #429 R-7a (§3.1 step 2, §3.2 step 2): after the shape (step 1), the player
-        // hold's source gate takes the envelopes of the four counters: the person (Ui), the
-        // operator and MCP (Cli), and actinglab (Lab), unlike the pause's (a hold holds the
-        // device, not dispatch). Neither request is limited by channel (Alice's ruling 135).
-        if matches!(
-            self.operation,
-            RuntimeOperation::AcquirePlayerHold { .. } | RuntimeOperation::ReleasePlayerHold { .. }
-        ) && !matches!(
-            (self.actor, self.source),
-            (EventActor::User, EventSource::Ui)
-                | (EventActor::Cli, EventSource::Cli)
-                | (EventActor::Lab, EventSource::Lab)
-        ) {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidPlayerHoldOrigin,
-            ));
-        }
         Ok(ValidatedRuntimeRequest {
             request: self,
             channel: None,
@@ -6982,3 +6823,7 @@ mod tests;
 // Workflow #434 LAB-6S1a: the initiator on `BindChannel`, `ChannelBound` and the receipt.
 #[cfg(test)]
 mod gate_434_lab6s1a;
+
+// Workflow #434 LAB-6S1b: `validate()` judges no request by its origin.
+#[cfg(test)]
+mod gate_434_lab6s1b;

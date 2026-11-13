@@ -66,24 +66,12 @@ fn diagnostic_signatures_validate_typed_conditions_origins_and_prefixes() {
             EventActor::Lab,
             EventSource::Lab,
             1,
-            operation.clone(),
+            operation,
         )
         .unwrap();
         let decoded: RuntimeRequest =
             serde_json::from_value(serde_json::to_value(request).unwrap()).unwrap();
         decoded.validate().unwrap();
-        assert!(
-            RuntimeRequest::new(
-                ids.mint_request_id().unwrap(),
-                ids.mint_correlation_id().unwrap(),
-                None,
-                EventActor::Cli,
-                EventSource::Cli,
-                1,
-                operation
-            )
-            .is_err()
-        );
     }
     let record = LedgerSignatureEvent::Registered { definition };
     let draft = EventDraft::new(
@@ -922,7 +910,7 @@ fn s4_t5_a_wire_request_that_names_a_package_digest_is_refused() {
     ];
     let digest = serde_json::json!("0".repeat(64));
     for operation in operations {
-        // A Lab request: the Lab sends all three (a package debug request only from the Lab).
+        // A Lab request: the Lab sends all three.
         let lab_request = RuntimeRequest::new(
             ids.mint_request_id().expect("request id"),
             ids.mint_correlation_id().expect("correlation id"),
@@ -1004,7 +992,7 @@ fn contained_task_cancellation_status_rejects_ambiguous_terminal_identity() {
 }
 
 #[test]
-fn package_debug_contract_is_lab_only_bounded_and_redacted() {
+fn package_debug_contract_is_bounded_and_redacted() {
     let private_path = r"C:\private\resource-package.zip";
     let debug_request = PackageDebugRequest::new(private_path).expect("debug request");
     let debug = format!("{debug_request:?}");
@@ -1025,21 +1013,6 @@ fn package_debug_contract_is_lab_only_bounded_and_redacted() {
     .expect("Lab package debug request");
     assert!(request.validate().is_ok());
 
-    let ids = issuer();
-    let wrong_origin = RuntimeRequest::new(
-        ids.mint_request_id().expect("request"),
-        ids.mint_correlation_id().expect("correlation"),
-        None,
-        EventActor::Cli,
-        EventSource::Cli,
-        1,
-        RuntimeOperation::DebugPackage {
-            request: PackageDebugRequest::new(private_path).expect("debug request"),
-        },
-    )
-    .expect_err("non-Lab package debug must fail");
-    assert_eq!(wrong_origin.code().as_str(), "invalid_runtime_debug_origin");
-
     assert_eq!(
         PackageDebugRequest::new("")
             .expect_err("empty path")
@@ -1050,7 +1023,7 @@ fn package_debug_contract_is_lab_only_bounded_and_redacted() {
 }
 
 #[test]
-fn runtime_debug_events_are_strict_and_require_lab_origin() {
+fn runtime_debug_events_and_pin_releases_are_strict() {
     let mut invalid_progress =
         serde_json::to_value(RuntimeDebugEvent::progress(RuntimeDebugOperation::LabRun))
             .expect("debug event JSON");
@@ -1082,22 +1055,6 @@ fn runtime_debug_events_are_strict_and_require_lab_origin() {
     );
 
     let ids = issuer();
-    let wrong_origin = RuntimeRequest::new(
-        ids.mint_request_id().expect("request"),
-        ids.mint_correlation_id().expect("correlation"),
-        None,
-        EventActor::Cli,
-        EventSource::Cli,
-        1,
-        RuntimeOperation::RecordDebugEvent {
-            event: RuntimeDebugEvent::completed(
-                RuntimeDebugOperation::Observe,
-                EffectDisposition::NotPerformed,
-            ),
-        },
-    )
-    .expect_err("non-Lab debug event must fail");
-    assert_eq!(wrong_origin.code().as_str(), "invalid_runtime_debug_origin");
     let target = crate::LabPinReleaseTarget {
         artifact_id: *ids.mint_artifact_id().expect("artifact").transport(),
         pin: TerminalEvent {
@@ -1105,33 +1062,19 @@ fn runtime_debug_events_are_strict_and_require_lab_origin() {
             sequence: 1,
         },
     };
-    for (actor, source, allowed) in [
-        (EventActor::Lab, EventSource::Lab, true),
-        (EventActor::Cli, EventSource::Cli, false),
-        (EventActor::User, EventSource::Ui, false),
-    ] {
-        let request = RuntimeRequest::new(
-            ids.mint_request_id().expect("request"),
-            ids.mint_correlation_id().expect("correlation"),
-            None,
-            actor,
-            source,
-            1,
-            RuntimeOperation::ReleaseLabPin { target },
-        );
-        if allowed {
-            let request = request.expect("Lab unpin request");
-            let encoded = serde_json::to_value(&request).expect("typed request");
-            let decoded: RuntimeRequest =
-                serde_json::from_value(encoded).expect("request round trip");
-            decoded.validate().expect("valid typed Lab request");
-        } else {
-            assert_eq!(
-                request.expect_err("Lab-only unpin").code().as_str(),
-                "invalid_runtime_debug_origin"
-            );
-        }
-    }
+    let request = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Lab,
+        EventSource::Lab,
+        1,
+        RuntimeOperation::ReleaseLabPin { target },
+    )
+    .expect("Lab unpin request");
+    let encoded = serde_json::to_value(&request).expect("typed request");
+    let decoded: RuntimeRequest = serde_json::from_value(encoded).expect("request round trip");
+    decoded.validate().expect("valid typed Lab request");
     assert!(
         RuntimeOperation::ReleaseLabPin {
             target: crate::LabPinReleaseTarget {
@@ -1171,7 +1114,7 @@ fn package_debug_summary_round_trips_as_a_closed_result() {
 }
 
 #[test]
-fn evidence_export_request_is_lab_only_bounded_redacted_and_closed() {
+fn evidence_export_request_is_bounded_redacted_and_closed() {
     let private_path = r"C:\private\runtime-evidence.zip";
     let export = RuntimeEvidenceExportRequest::new(private_path, TaskOutcome::Success)
         .expect("evidence request");
@@ -1186,27 +1129,12 @@ fn evidence_export_request_is_lab_only_bounded_redacted_and_closed() {
         EventActor::Lab,
         EventSource::Lab,
         1,
-        RuntimeOperation::ExportEvidence {
-            request: export.clone(),
-        },
+        RuntimeOperation::ExportEvidence { request: export },
     )
     .expect("Lab evidence export request");
     let encoded = serde_json::to_string(&request).expect("serialize request");
     let decoded = serde_json::from_str::<RuntimeRequest>(&encoded).expect("deserialize request");
     assert_eq!(decoded, request);
-
-    let ids = issuer();
-    let wrong_origin = RuntimeRequest::new(
-        ids.mint_request_id().expect("request"),
-        ids.mint_correlation_id().expect("correlation"),
-        None,
-        EventActor::Cli,
-        EventSource::Cli,
-        1,
-        RuntimeOperation::ExportEvidence { request: export },
-    )
-    .expect_err("non-Lab evidence export must fail");
-    assert_eq!(wrong_origin.code().as_str(), "invalid_runtime_debug_origin");
     assert_eq!(
         RuntimeEvidenceExportRequest::new("", TaskOutcome::Success)
             .expect_err("empty path")
@@ -2003,7 +1931,7 @@ fn client_action_and_approval_operations_are_closed_typed_contracts() {
 }
 
 #[test]
-fn governance_identity_cards_require_person_or_operator_origin_and_a_valid_card() {
+fn governance_identity_cards_require_a_valid_card() {
     let card = GovernanceIdentityCard {
         client: "ui.console-1_a".to_owned(),
         client_version: Some("1.2.3".to_owned()),
@@ -2013,27 +1941,10 @@ fn governance_identity_cards_require_person_or_operator_origin_and_a_valid_card(
     governance_request(operation.clone())
         .validate()
         .expect("person governance identity");
-    request(operation.clone())
+    request(operation)
         .validate()
         .expect("operator governance identity");
 
-    let ids = issuer();
-    let rejected = RuntimeRequest::new(
-        ids.mint_request_id().expect("request"),
-        ids.mint_correlation_id().expect("correlation"),
-        None,
-        EventActor::Agent,
-        EventSource::Adapter,
-        1,
-        operation,
-    );
-    assert_eq!(
-        rejected
-            .expect_err("agent governance request")
-            .code()
-            .as_str(),
-        "invalid_governance_origin"
-    );
     for (invalid, code) in [
         (
             GovernanceIdentityCard {
@@ -2066,66 +1977,10 @@ fn governance_identity_cards_require_person_or_operator_origin_and_a_valid_card(
             code
         );
     }
-
-    let approval = ApprovalDecisionRecord::new(
-        "approval:agent-self-approval",
-        ApprovalDisposition::Approved,
-        ApprovalTarget::Catalog {
-            catalog_hash: format!("sha256:{}", "a".repeat(64)),
-            catalog_version: 1,
-        },
-        crate::ApprovalReasonCode::new("agent_claimed_approval").expect("approval reason"),
-    )
-    .expect("approval fixture");
-    let ids = issuer();
-    let rejected = RuntimeRequest::new(
-        ids.mint_request_id().expect("request"),
-        ids.mint_correlation_id().expect("correlation"),
-        None,
-        EventActor::Agent,
-        EventSource::Adapter,
-        1,
-        RuntimeOperation::RecordApprovalDecision { decision: approval },
-    );
-    assert_eq!(
-        rejected.expect_err("agent self-approval").code().as_str(),
-        "invalid_governance_origin"
-    );
 }
 
 #[test]
-fn agent_dispatcher_operations_require_agent_adapter_origin() {
-    let ids = issuer();
-    let wake_id = *ids.mint_agent_wake_id().expect("wake id").transport();
-    let operation = RuntimeOperation::StartAgentSession { wake_id };
-    let valid = RuntimeRequest::new(
-        ids.mint_request_id().expect("request"),
-        ids.mint_correlation_id().expect("correlation"),
-        None,
-        EventActor::Agent,
-        EventSource::Adapter,
-        1,
-        operation.clone(),
-    )
-    .expect("agent request");
-    valid.validate().expect("valid agent request");
-
-    let ids = issuer();
-    let error = RuntimeRequest::new(
-        ids.mint_request_id().expect("request"),
-        ids.mint_correlation_id().expect("correlation"),
-        None,
-        EventActor::Cli,
-        EventSource::Cli,
-        1,
-        operation,
-    )
-    .expect_err("CLI cannot claim an agent session");
-    assert_eq!(error.code().as_str(), "invalid_agent_dispatcher_origin");
-}
-
-#[test]
-fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
+fn publish_fact_and_policy_input_identity_requests_are_typed_and_strict() {
     let record = crate::FactRecord {
         scope: crate::FactScope::Server {
             server_id: "fixture-server-a".to_owned(),
@@ -2153,33 +2008,6 @@ fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
     );
     assert!(!format!("{operation:?}").contains(&record.source_snapshot_id));
 
-    // LIVE-FACT-POOL-v1: the bounded batch has the same v3 Agent/Adapter boundary.
-    let batch = RuntimeOperation::PublishFacts {
-        observation: crate::FactObservation {
-            records: vec![record.clone()],
-        },
-    };
-    for (actor, source, allowed) in [
-        (EventActor::Agent, EventSource::Adapter, true),
-        (EventActor::Cli, EventSource::Cli, false),
-        (EventActor::Agent, EventSource::Cli, false),
-        (EventActor::User, EventSource::Ui, false),
-    ] {
-        let ids = issuer();
-        assert_eq!(
-            RuntimeRequest::new(
-                ids.mint_request_id().unwrap(),
-                ids.mint_correlation_id().unwrap(),
-                None,
-                actor,
-                source,
-                1,
-                batch.clone()
-            )
-            .is_ok(),
-            allowed
-        );
-    }
     let mut observation = crate::FactObservation {
         records: vec![record.clone(), record.clone()],
     };
@@ -2199,7 +2027,7 @@ fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
         EventActor::Agent,
         EventSource::Adapter,
         1,
-        operation.clone(),
+        operation,
     )
     .expect("agent fact publication request");
     let encoded = serde_json::to_value(&request).expect("fact publication request JSON");
@@ -2244,7 +2072,7 @@ fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
         EventActor::Agent,
         EventSource::Adapter,
         1,
-        identity_operation.clone(),
+        identity_operation,
     )
     .expect("agent policy input identity request");
     let identity_json =
@@ -2268,45 +2096,6 @@ fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
         .as_str(),
         "invalid_policy_input_position"
     );
-
-    for (actor, source) in [
-        (EventActor::Cli, EventSource::Cli),
-        (EventActor::User, EventSource::Ui),
-        (EventActor::Lab, EventSource::Lab),
-    ] {
-        let ids = issuer();
-        assert_eq!(
-            RuntimeRequest::new(
-                ids.mint_request_id().expect("request"),
-                ids.mint_correlation_id().expect("correlation"),
-                None,
-                actor,
-                source,
-                1,
-                operation.clone(),
-            )
-            .expect_err("only Agent/Adapter may publish facts")
-            .code()
-            .as_str(),
-            "invalid_agent_dispatcher_origin"
-        );
-        let ids = issuer();
-        assert_eq!(
-            RuntimeRequest::new(
-                ids.mint_request_id().expect("identity request"),
-                ids.mint_correlation_id().expect("identity correlation"),
-                None,
-                actor,
-                source,
-                1,
-                identity_operation.clone(),
-            )
-            .expect_err("only Agent/Adapter may project policy input identity")
-            .code()
-            .as_str(),
-            "invalid_agent_dispatcher_origin"
-        );
-    }
 
     let mut invalid_record = record;
     invalid_record.key = "unsupported".to_owned();
@@ -2408,7 +2197,7 @@ fn planning_document_is_bounded_content_addressed_and_typed() {
 }
 
 #[test]
-fn planning_operations_are_strict_and_require_agent_adapter_origin() {
+fn planning_operations_are_strict() {
     let report = RuntimePlanningDocument::encode(
         RuntimePlanningDocumentKind::StrategicReport,
         &serde_json::json!({"report_id": "report:a"}),
@@ -2428,26 +2217,9 @@ fn planning_operations_are_strict_and_require_agent_adapter_origin() {
         EventActor::Agent,
         EventSource::Adapter,
         1,
-        operation.clone(),
+        operation,
     )
     .expect("agent planning request");
-
-    let ids = issuer();
-    assert_eq!(
-        RuntimeRequest::new(
-            ids.mint_request_id().expect("request"),
-            ids.mint_correlation_id().expect("correlation"),
-            None,
-            EventActor::Cli,
-            EventSource::Cli,
-            1,
-            operation,
-        )
-        .expect_err("CLI cannot invoke planning authority")
-        .code()
-        .as_str(),
-        "invalid_agent_dispatcher_origin"
-    );
 
     let trend = RuntimePlanningDocument::encode(
         RuntimePlanningDocumentKind::MaintenanceTrendPolicy,
@@ -2658,7 +2430,7 @@ fn runtime_subscription_timeout_batch_round_trips_without_fake_progress() {
 }
 
 #[test]
-fn resource_authoring_event_is_strict_and_requires_lab_origin() {
+fn resource_authoring_event_is_strict() {
     let event = ResourceAuthoringEvent::new(
         ResourceAuthoringPhase::PromoteIntent,
         "draft-a",
@@ -2688,24 +2460,6 @@ fn resource_authoring_event_is_strict_and_requires_lab_origin() {
     assert_eq!(event.phase(), ResourceAuthoringPhase::PromoteIntent);
     assert_eq!(event.changed_paths(), ["operations/task-a/task.json"]);
     assert!(!format!("{operation:?}").contains("operations/task-a"));
-
-    let ids = issuer();
-    let wrong_origin = match RuntimeRequest::new(
-        ids.mint_request_id().expect("request"),
-        ids.mint_correlation_id().expect("correlation"),
-        None,
-        EventActor::Cli,
-        EventSource::Cli,
-        1,
-        RuntimeOperation::RecordAuthoringEvent { event },
-    ) {
-        Ok(_) => panic!("CLI cannot record authoring events"),
-        Err(error) => error,
-    };
-    assert_eq!(
-        wrong_origin.code().as_str(),
-        "invalid_resource_authoring_origin"
-    );
 }
 
 #[test]

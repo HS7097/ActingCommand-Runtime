@@ -1377,7 +1377,7 @@ tests = [
 ]
 incident = ["#429 R-3"]
 
-# A person's drill of one physical instance's stuck-recovery ladder is recorded like a ladder a trigger started and tagged drill: its trigger (stage drill, no run, task, preparation, rule or match), its plan, one recovery_rung_finished per rung and its end; only a ladder's own phases carry the tag, and only a drill ends planned. A plan drill never acts on the device (each rung it would run skipped drill_plan, the climb planned at info, no Stop, Start or preparation) and opens no cool-down window; a device drill climbs its rungs on the instance under the same key as a real ladder and opens the window, after which a drill the cool-down holds is refused recovery_ladder_drill_cooling_down after its tagged suppression; a drill of an instance whose stuck recovery is off is refused recovery_ladder_drill_disabled, and no agent origin may ask for one (Workflow #390 DRILL-1, forced compromise T-08; wave 13 ruling 9); a recovery_ladder.triggers[] item that names the stage drill is refused stage_not_allowed naming recovery_ladder.triggers, at start and by instruction, and the configuration in effect stays (register DR2; TEST-FU, train 15 rulings DRILL-1 item 6)
+# A person's drill of one physical instance's stuck-recovery ladder is recorded like a ladder a trigger started and tagged drill: its trigger (stage drill, no run, task, preparation, rule or match), its plan, one recovery_rung_finished per rung and its end; only a ladder's own phases carry the tag, and only a drill ends planned. A plan drill never acts on the device (each rung it would run skipped drill_plan, the climb planned at info, no Stop, Start or preparation) and opens no cool-down window; a device drill climbs its rungs on the instance under the same key as a real ladder and opens the window, after which a drill the cool-down holds is refused recovery_ladder_drill_cooling_down after its tagged suppression; a drill of an instance whose stuck recovery is off is refused recovery_ladder_drill_disabled (no agent origin could ask for one until Workflow #434 LAB-6S1b deleted the origin gate) (Workflow #390 DRILL-1, forced compromise T-08; wave 13 ruling 9); a recovery_ladder.triggers[] item that names the stage drill is refused stage_not_allowed naming recovery_ladder.triggers, at start and by instruction, and the configuration in effect stays (register DR2; TEST-FU, train 15 rulings DRILL-1 item 6)
 [[gate]]
 key = "88"
 coverage = "Y"
@@ -1387,7 +1387,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_plan_drill_is_recorded_like_a_ladder_tagged_drill_and_never_acts_on_the_device",
     "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_device_drill_climbs_its_rungs_on_the_instance_like_a_real_ladder",
     "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_plan_drill_leaves_the_cool_down_and_a_device_drill_opens_it_as_a_real_ladder",
-    "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_drill_is_refused_when_stuck_recovery_is_off_or_it_comes_from_an_agent",
+    "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_drill_is_refused_when_stuck_recovery_is_off",
     "actingcommand-runtime-config::lib::ladder_tests::gate_drill1_a_trigger_item_naming_the_drill_stage_is_refused_at_start_and_by_an_instruction",
 ]
 incident = ["#390 DRILL-1"]
@@ -3263,7 +3263,7 @@ tests = [
 ]
 incident = ["#432 AGT-1a"]
 
-# AGT-1b (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.246; contracts/agent-wake.md; runtime-client revision 5): with no section no worker, file or row; a test wake writes its body, then its row, then sends once; the intent is durable before the write and a refused one writes nothing; after a restart sending is unknown and never resent while prepared and deferred are tried; a deferred row retries and expires loudly, a definite failure and unknown are loud and not retried, and a row takes at most four records of names, a digest and counts; failures pass the key table with the longest channel, count nothing toward direction one and never become candidates; an unreadable row shape is loud and the start goes on; a panic backs off bounded; quiet, hold and off keep their rows and give-up is read only when a send is due; one channel goes oldest first with its gap; an unknown channel fails at once and an unreadable registry never stops a start; retention keeps open rows; shutdown after the intent is unknown and before it stays; and only a person's origins may ask.
+# AGT-1b (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.246; contracts/agent-wake.md; runtime-client revision 5): with no section no worker, file or row; a test wake writes its body, then its row, then sends once; the intent is durable before the write and a refused one writes nothing; after a restart sending is unknown and never resent while prepared and deferred are tried; a deferred row retries and expires loudly, a definite failure and unknown are loud and not retried, and a row takes at most four records of names, a digest and counts; failures pass the key table with the longest channel, count nothing toward direction one and never become candidates; an unreadable row shape is loud and the start goes on; a panic backs off bounded; quiet, hold and off keep their rows and give-up is read only when a send is due; one channel goes oldest first with its gap; an unknown channel fails at once and an unreadable registry never stops a start; retention keeps open rows; shutdown after the intent is unknown and before it stays; and the test is an instruction of no instance (only a person's origins could ask until Workflow #434 LAB-6S1b deleted the origin gate).
 [[gate]]
 coverage = "Y"
 tests = [
@@ -3294,7 +3294,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_agt_1b::retention_removes_by_age_and_count_and_keeps_open_rows",
     "actingcommand-runtime-host::lib::tests::gate_agt_1b::shutdown_after_intent_is_unknown_and_before_intent_stays",
     "actingcommand-runtime-host::lib::tests::gate_agt_1b::a_rule_naming_an_unknown_alias_is_refused_while_running",
-    "actingcommand-runtime-host::lib::tests::gate_agt_1b::agent_wake_test_takes_only_person_origins",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::agent_wake_test_is_an_instruction_of_no_instance",
 ]
 incident = ["#432 AGT-1b"]
 
@@ -3623,6 +3623,15 @@ tests = [
     "actingcommand-runtime-client::lib::tests::gate_434_lab6s1a::lab6s1a_a_reconnect_and_the_temporary_client_declare_the_same_word",
 ]
 incident = ["#434 LAB-6S1a"]
+
+# Workflow #434 LAB-6S1b (0.12.58; register §1.287, "Slice LAB-6S1b"; brief rd-1113/brief-lab6s1b.md; contracts/lab-two-entries.md §2.4): RuntimeRequest::validate judges no request by its origin. A (Lab, Lab) connection's global and instance pause are taken as a (Cli, Cli) connection's (completed, revision 1, the connection's channel on the receipt: lab for the Lab), held with their reason (the instance's released), restored by a restart, and resumed from the same envelope, after which no pause is held. The host's own checks of the kinds LAB-6S4a deletes still refuse: a governance identity card from (Lab, Lab), (Agent, Adapter) or (Ui, Ui) is invalid_governance_origin; an approval decision from (Lab, Lab), (Agent, Adapter), (Cli, Cli) or (User, Ui) on a connection without an accepted card is governance_authority_required (since LAB-6S3 the cards' and the approvals' connections are bound to cli first: on ui the door refuses both kinds before the host's own check); an install transition's drain from (Lab, Lab) on such a connection is install_identity_required, and the Runtime stays healthy. The list-reading key test of S168-4 and the receipt test of #378 A4 keep their names: the first now sends the key from (Cli, Cli), (User, Ui) and (Lab, Lab) too, the second refuses an envelope outside the client set
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_434_lab6s1b::lab6s1b_a_lab_connections_pause_and_resume_are_taken_and_recorded_as_the_clis",
+    "actingcommand-runtime-host::lib::tests::gate_434_lab6s1b::lab6s1b_the_hosts_own_checks_of_the_governance_and_install_kinds_still_refuse",
+]
+incident = ["#434 LAB-6S1b"]
 
 # Workflow #434 LAB-6S3 (0.12.58; register §1.287, "Slice LAB-6S3"; brief rd-1113/brief-lab6s3.md; contracts/lab-two-entries.md §2.3 step 5, §2.6, §3): the ui part of gate_two_entries and ui_settings_within_tiers. For every kind of RuntimeOperationKind::ALL the ui channel takes it exactly when it is a handshake kind (Health, BindChannel) or on the list of §3, which ui_allows is (the identity card is refused), every kind the released console sends and the two its next release adds are taken, and every kind names a registered location as the refusal's operation. On a connection bound ui by BindChannel and on one bound by its first (User, Ui) request, Status is taken; LoadPack is Denied channel_request_refused (channel ui, operation load_pack, no config_key) with one command.rejected of channel ui whose outcome is the refusal; UpgradeStateStatus is refused with no record; DebugPackage, a read that records, is refused and recorded like a write. For every key of the key table ui may change it exactly when its tier is daily or advanced and its row settable; the console's eleven keys are among them, an instance's stuck_recovery, mumu_root, lab_module_debugging and an unknown key are not. On ui a request naming an allowed key then a refused one is refused naming the refused one (config_key, in the receipt and the record) and applies nothing (the settings' version stays, no override), a clear of the refused key and an unknown key are refused, the same request on cli completes, and a clear of an allowed key on ui completes. The eleven keys, set and cleared on ui, are not refused and are answered as on cli. On lab, cli, mcp and an unbound connection LoadPack and UpgradeStateStatus answer not_implemented with no record, the stuck_recovery change completes and an unknown key is config_key_unknown
 [[gate]]

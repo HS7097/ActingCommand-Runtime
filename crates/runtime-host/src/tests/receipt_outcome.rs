@@ -74,20 +74,18 @@ fn a4_a_request_the_contract_refuses_carries_the_refusal_code() {
     let host = host_with_state(&root, "node.a", Arc::new(FakeState::default()));
     let mut client = TestClient::connect(&host);
 
-    // Instance discovery is the person's or the operator's; an agent adapter is refused.
+    // An envelope outside the client set is refused (since Workflow #434 LAB-6S1b the one
+    // envelope rule `validate()` keeps; it refused an agent adapter's discovery before).
     let discover = client.request(RuntimeOperation::DiscoverInstances);
     let mut wire = serde_json::to_value(&discover).expect("request JSON");
-    wire["actor"] = json!("agent");
-    wire["source"] = json!("adapter");
-    let from_adapter: RuntimeRequest = serde_json::from_value(wire).expect("request v4 decodes");
-    assert!(from_adapter.validate().is_err());
+    wire["actor"] = json!("system");
+    wire["source"] = json!("system");
+    let from_system: RuntimeRequest = serde_json::from_value(wire).expect("request v4 decodes");
+    assert!(from_system.validate().is_err());
 
-    let denied = client.send(&from_adapter);
+    let denied = client.send(&from_system);
     assert_eq!(denied.state(), RuntimeReceiptState::Denied);
-    assert_eq!(
-        denied.outcome().code().as_str(),
-        "invalid_emulator_control_origin"
-    );
+    assert_eq!(denied.outcome().code().as_str(), "invalid_client_origin");
     assert_eq!(denied.outcome().category(), Category::Error);
     assert_eq!(
         serde_json::Value::Object(denied.outcome().values().clone()),

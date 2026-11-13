@@ -11621,6 +11621,151 @@ declares a word, and every binding answers as before.
 **LAB-6S1a rollback** (to the release before it). Two-way: nothing persisted; the earlier build
 declares [3, 7], which every client of this build meets, and no client sent a word.
 
+#### Slice LAB-6S1b (0.12.58): the origin gates of `RuntimeRequest::validate()` go
+
+Coordinator work order `rd-1113/brief-lab6s1b.md`, after the read-only survey
+`rd-1113/lab6-step0-survey.md` (its B.3, B.4, the row S1b of D and E's N9); the coordinator's
+rulings of 2026-11-13 on board #434, not the owner's words; built on LAB-6S1a. The contract is
+[lab-two-entries.md](lab-two-entries.md) §2.4 ("LAB-6 deletes the origin gates of
+`RuntimeRequest::validate()` ...; the content and shape rules stay"), with the slice table's row.
+
+**Each gate deleted, and what it refused** (all in `RuntimeRequest::validate`, before or after
+`self.operation.validate()`):
+
+| # | Gate | Refused | Code |
+|---|---|---|---|
+| L6S1b-1 | `RequestShutdown` | every envelope but `(User, Ui)`, `(Cli, Cli)` | `invalid_shutdown_origin` |
+| L6S1b-2 | `InstallTransition` | the same | `invalid_install_transition_origin` |
+| L6S1b-3 | `RecordAuthoringEvent` | every envelope but `(Lab, Lab)` | `invalid_resource_authoring_origin` |
+| L6S1b-4 | the signatures' register, match and retire | the same | `invalid_signature_origin` |
+| L6S1b-5 | `RecordDebugEvent`, `ReleaseLabPin`, `RunContainedLabOperation`, `RecognizeArtifact`, `DebugPackage`, `ExportEvidence` | the same | `invalid_runtime_debug_origin` |
+| L6S1b-6 | `DeclareGovernanceIdentity` | every envelope but `(User, Ui)`, `(Cli, Cli)` (`valid_governance_declaration_origin`) | `invalid_governance_origin` |
+| L6S1b-7 | `RecordApprovalDecision` | every envelope but `(User, Ui)` | `invalid_governance_origin` |
+| L6S1b-8 | `ControlEmulatorInstance`, `DiscoverInstances`, `SelfCheckInstance`, `DrillRecoveryLadder` | every envelope but `(User, Ui)`, `(Cli, Cli)` | `invalid_emulator_control_origin` |
+| L6S1b-9 | `PauseScheduling`, `ResumeScheduling` | the same | `invalid_scheduling_pause_origin` |
+| L6S1b-10 | `AgentWakeTest` | the same | `invalid_agent_wake_test_origin` |
+| L6S1b-11 | `PublishFact`, `PublishFacts` by family | every envelope but `(Agent, Adapter)`, and for a family with the origin exception (offsets, remedy choices, the pack schedule) also `(User, Ui)`, `(Cli, Cli)` | `invalid_agent_dispatcher_origin` |
+| L6S1b-12 | the agent dispatcher's kinds (the planning session's ten, `ApplyResourceTargets`) | every envelope but `(Agent, Adapter)` | `invalid_agent_dispatcher_origin` |
+| L6S1b-13 | `AcquirePlayerHold`, `ReleasePlayerHold` (after the shapes) | every envelope but `(User, Ui)`, `(Cli, Cli)`, `(Lab, Lab)` | `invalid_player_hold_origin` |
+
+**What stays, and why none of it is a gate by origin.** `valid_client_origin`: an envelope
+outside the client set (a source other than `Cli`, `Ui`, `Lab`, `Adapter`, or an actor other than
+`User`, `Cli`, `Ui`, `Lab`, `Agent`) is still `invalid_client_origin`, a shape rule of the
+envelope. Every content and shape rule, `fact_origin_mixed` among them (one request does not mix
+key families; `fact_key_family` and `FactKeyFamily::takes_origin_exception` stay, the latter for
+the host's choice of the `fact.published` origin). Judged by the envelope outside `validate()`,
+unchanged and none of it a refusal by origin of a client request: the frame pin's kind (`Lab` for
+a `(Lab, Lab)` request), the C4 intent's record type and origin module
+(`c4_client_source_unsupported`), the receipt's default detail.
+
+**The host's own re-checks of an origin stay as they are** (they belong to kinds LAB-6S4a
+deletes): `governance.rs`, `declare_governance_identity`, refuses a card from any envelope but
+`(User, Ui)`, `(Cli, Cli)` (`valid_governance_declaration_origin`, `invalid_governance_origin`,
+nothing recorded); `governance.rs`, `record_approval_decision`, refuses an approval from anything
+but `(User, Ui)` on a connection whose card was accepted (`governance_authority_required`);
+`installation.rs`, `install_transition`, refuses every action but `Query` on a connection whose
+card was not accepted (`install_identity_required`, its lifecycle failure recorded). Since no
+card can be accepted from another envelope, each refuses what it refused; only the code of an
+approval or a card from a refused envelope changes where validate's came first (an approval from
+`(Lab, Lab)` is now `governance_authority_required`; a card keeps `invalid_governance_origin`).
+Outside these kinds the host keeps one more check by envelope that `validate()` never held: an
+evidence-read confirmation (`RecordClientAction` of `evidence_read_frame` or `evidence_read_run`)
+counts only from `(Agent, Adapter)`, `(Cli, Cli)`, `(User, Ui)` (`client_action_invalid`,
+`client_events.rs`); and the runtime client still opens an authoring or debug session only on a
+Lab envelope (`runtime_authoring_origin_invalid`, `runtime_debug_origin_invalid`). This slice
+touches neither.
+
+**Codes.** Retired (`status` `retired`, `retired_in` 0.12.58, no `replaced_by`, the registry
+entries removed as G1 asks; the index regenerated): `invalid_shutdown_origin`,
+`invalid_install_transition_origin` (released settled in 0.12.0; G9 holds the signature, not the
+status), `invalid_resource_authoring_origin`, `invalid_signature_origin`,
+`invalid_runtime_debug_origin`, `invalid_emulator_control_origin`,
+`invalid_scheduling_pause_origin`, `invalid_agent_wake_test_origin`,
+`invalid_agent_dispatcher_origin`, `invalid_player_hold_origin`: no code path emits them once the
+gates are gone. No `replaced_by`: the Runtime takes the request; the `channel_request_refused`
+the U-6 text planned for some of them (runtime-interface.md, "Retired later") is LAB-6S3's refusal
+by channel on `ui`, not a replacement, and that table now says so. Kept: `invalid_governance_origin`
+(the host's card check emits it), `invalid_client_origin`, `fact_origin_mixed`. No code is added.
+**No interface revision moves**: the Runtime accepts more and no shape changes (no request,
+answer, record or document gains or loses a member; [component-interfaces.md](component-interfaces.md),
+"Bump rule").
+
+**What begins to work** (read on the code: `crates/lab-ops`' `front::Front::Actinglab` gives
+actinglab's CLI module and `serve` the envelope `(Lab, Lab)`, and `core_ops` serves these rows
+through the front's connection). Refused before and served now, from `actinglab` (CLI and
+`serve --stdio`): `pause` and `resume` (L6S1b-9), `shutdown` (1), `discover`, `emu start`,
+`emu stop`, `emu restart`, `emu selfcheck` and `drill` (8), `wake-test` (10), `facts publish`,
+`offset`, `remedy set` and `remedy lift` (11; `remedy` was not in the survey's list: its rows
+publish the remedy choices family, which the exception took from the person and the operator
+only), `targets set` (12). From `actinglab-mcp`, whose core rows connect as `Front::Mcp`, `(Cli,
+Cli)`, until LAB-6S2: `ac_targets_set` (12) and `ac_facts_publish` of a family without the origin
+exception (11); its other rows were taken before. Still refused from the Lab, and by what:
+`evidence read` (its identity card, the host's `invalid_governance_origin`; its confirmation would
+then be `client_action_invalid`); `hold` and `unhold` are reserved rows and the host answers both
+kinds `not_implemented` until R-7b. `actingctl`, the console and today's MCP server send what
+they sent and are answered as before. No program changes its binding, channel or envelope
+(LAB-6S2 does).
+
+**The operation table** (E's N9, first half): the row `evidence read` names
+`DeclareGovernanceIdentity` in its `requests` (the card `crates/lab-ops`' `evidence_read`
+declares before its confirmation), so the kind leaves `not_exposed`, which LAB-1's
+`lab_ops_table_complete` requires of a kind a row sends; the row's note says LAB-6S4a takes it off
+with the kind. The second half (`StopInstanceRun`'s `console_today`) is LAB-6S3's.
+
+**Texts corrected.** [lab-two-entries.md](lab-two-entries.md) (the slice row, §2.4, §7, §12),
+[runtime-interface.md](runtime-interface.md) (the slice table's U-6 row, "The gate", the request
+tables' gate notes, the player hold's, the key families', "Retired later" and "Kept"),
+[install-cli.md](install-cli.md) (the ways out of a kept hold and the added instance's resume:
+the Lab's own `resume` works since this slice; `next` still names actingctl's forms),
+[scheduling-pause.md](scheduling-pause.md), [emulator-control.md](emulator-control.md) (three
+places), [agent-wake.md](agent-wake.md), [player-hold.md](player-hold.md) (the acquire's step 2
+and the codes), [client-interactions.md](client-interactions.md),
+[instance-fact-store.md](instance-fact-store.md) (two places),
+[resource-targets.md](resource-targets.md), [resource-readings.md](resource-readings.md),
+[runtime-fact-store.md](runtime-fact-store.md), the catalog text of `list_reading_key_reserved`,
+`docs/architecture/emulator-control-capability-matrix.md`, the contract crate's doc comments and
+the rescue module's comments on its ways out. The player hold's recorded source
+(`player_hold_source_actor`) keeps its three words: R-7b, which builds the behaviour, settles the
+word of another envelope, or LAB-6S2 leaves only these three.
+
+**Tests.** New: contract row "#434 LAB-6S1b" (`gate_434_lab6s1b` of the contract crate: a request
+of every family of deleted gate validates from each of six client envelopes and again read back
+off the wire; five envelopes outside the client set are `invalid_client_origin` for every one of
+those kinds; a mixed fact observation is `fact_origin_mixed` from every client envelope) and host
+row "#434 LAB-6S1b" (`gate_434_lab6s1b` of the host: a `(Lab, Lab)` connection's global and
+instance pause are completed with revision 1 on the `lab` channel, held with their reason,
+restored by a restart and resumed, as a `(Cli, Cli)` connection's in the same test; the card from
+`(Lab, Lab)`, `(Agent, Adapter)`, `(Ui, Ui)` is `invalid_governance_origin`, an approval from four
+envelopes without a card is `governance_authority_required`, an install transition's drain from
+the Lab is `install_identity_required`). The architecture guard
+`b3_every_runtime_operation_has_an_explicit_origin_category` now says: the refusal branches of
+`validate()` are the schema, the timestamp, `valid_client_origin` and `fact_origin_mixed`; no
+branch names an actor or a source, and the one origin predicate is `valid_client_origin`; every
+other operation is open to every client envelope. `b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection`
+keeps the predicate's terms and the host's approval branch and checks the host's card check in
+place of validate's branch. Retired ([`ci/retired-gates.toml`](../ci/retired-gates.toml)): row K6
+whole; `agent_dispatcher_operations_require_agent_adapter_origin` and
+`r7a_the_source_gate_takes_the_three_envelopes_for_both_requests` (their whole point was a gate);
+renamed for what they keep, `runtime_debug_events_are_strict_and_require_lab_origin` (now
+`runtime_debug_events_and_pin_releases_are_strict`),
+`governance_identity_cards_require_person_or_operator_origin_and_a_valid_card` (now
+`governance_identity_cards_require_a_valid_card`), the host's
+`drill1_a_drill_is_refused_when_stuck_recovery_is_off_or_it_comes_from_an_agent` (now
+`drill1_a_drill_is_refused_when_stuck_recovery_is_off`) and `agent_wake_test_takes_only_person_origins`
+(now `agent_wake_test_is_an_instruction_of_no_instance`). Adapted, each for its origin half only:
+`list_reading_key_reserved` (the key from `(Cli, Cli)`, `(User, Ui)`, `(Lab, Lab)` now reaches the
+host and is `list_reading_key_reserved`), `a4_a_request_the_contract_refuses_carries_the_refusal_code`
+(an envelope outside the client set), and, outside the gate maps, the contract crate's tests that
+built a refused envelope beside their shape checks (signatures, package debug, evidence export,
+fact publication and the policy input identity, planning, authoring).
+
+**At deploy.** The Lab's own programs are no longer refused for their envelope (the list above).
+No program changes what it sends. A rollback to the build before this slice brings the gates
+back: the Lab's pause, resume and the rest are refused again, nothing persisted needs a way back.
+
+**LAB-6S1b rollback** (to the release before it). Two-way: nothing persisted changes shape;
+`runtime-client` stays [3, 8].
+
 #### Slice LAB-6S3 (0.12.58): the UI list on the `ui` channel
 
 Coordinator work order `rd-1113/brief-lab6s3.md`, after the read-only survey
@@ -11703,7 +11848,11 @@ actingctl's connections do, and pins what it pinned: the host tests' `TestClient
 before the card); `gate_sub_lag_1::a_lagged_subscriber_can_resume_from_its_cursor` (the served
 connection, with the console's envelope kept); the runtime client's
 `typed_client_records_client_actions_and_approval_decisions_through_runtime` (its client binds
-`cli` with the (User, Ui) envelope). No test leaves the gate map.
+`cli` with the (User, Ui) envelope); and, met when LAB-6S1b came onto this branch, its host test
+`lab6s1b_the_hosts_own_checks_of_the_governance_and_install_kinds_still_refuse` (the connections
+of its cards and its approvals bind `cli` first, for the same reason: a (Ui, Ui) or (User, Ui)
+first request bound them to `ui`, where the door now refuses both kinds before the host's own
+check). No test leaves the gate map.
 
 **Interface.** None raised: no wire shape changes (a refusal is a receipt of the existing shape),
 no record's shape, and the catalog gains an optional value of an existing code.
@@ -18605,6 +18754,215 @@ requirement changes what they pin: the contract gate row "#444 NOTICES-1"'s
 directory, refused at the later path, in either order of case; one directory twice kept; a file
 beside a directory of its name in another case still the earlier rule's), and the architecture
 pin `the_runtime_declares_each_v0120_interface_revision_once` holds `package` [3, 10].
+
+### 1.336 Slice NOTICES-3 (0.12.58): the Tools lay and check a bundle's notices directory (`package bundle --notices`, `standard-pack check`, `resource verify`) (Workflow #444; the design note `rd-1113/design-notices-in-archive.md`, read on main `29a65e2d`, design (a) with every recommended answer of its section 8 adopted by the coordinator's rulings of 11-13 on board #444, not the owner's words; coordinator work order `rd-1113/brief-444-notices-3.md`, read on the head `6df7d87d` of NOTICES-2's branch)
+
+1.336 is the coordinator's number. [package-reference.md](package-reference.md), "Notices" (the
+readers), the layout of `package bundle` and the answer of `standard-pack check`,
+[resource-verify.md](resource-verify.md) (the `bundle` step, its index checks and its counts) and
+the rows `package bundle` and `standard-pack check` of `lab-operations.json` are the contract. Added:
+one flag (`package bundle --notices <directory>`), one member of `standard-pack check`'s answer
+(`notices`), one parameter of the operation table's row `package bundle`, and one public constant of
+the contract crate. No outcome code, value key, vocabulary word, configuration key, interface
+revision, persisted shape, wire shape or record is added. After this slice nothing of the design's
+Runtime side is left: the coordinator's placement kit and the resource repositories' packer (the
+design's slices 4 and 5) are what remains.
+
+**The rules are the contract crate's** (§1.334): the Tools call `check_notice_listing`,
+`check_notice_pack_ids`, `check_notice_size` and `check_notice_text` as `place` does (§1.335) and
+state none of them. One module of the Tools crate, `crates/resource-tooling/src/notices_directory.rs`,
+reads a directory on disk for both commands: it lists every file below it with its `/`-separated
+path and its length on disk; a link below it (a symbolic link, a junction or any other reparse
+point), or an entry that is neither a file nor a directory, is refused as the pack loader refuses
+one in a pack directory (`package_invalid`, the loader's `content_directory_link_or_type`, naming
+the entry; a link at the directory itself is followed, as the loader resolves a locator). Then the
+listing goes through the set rule, the bundle's packs through the pack rule, and each file, read
+through its bound plus one byte (2,097,153), through the size and text rules. A broken rule is
+answered as a root file's problem is (`standard_pack_check::root_invalid`):
+`standard_pack_root_invalid` itself, with `game`, `standard_pack_problem` the rule's word, `path` the
+file on disk (the directory itself for the count and the total), `json_pointer` empty, and the bound
+with the value found on `limit_count` / `count` or `limit_bytes` / `actual_bytes`.
+
+**`package bundle --notices <directory>`** (`crates/resource-tooling/src/package_directory.rs`; the
+request's `StandardPackRootFiles.notices`; the CLI's read list `package_build::BUNDLE_READS`):
+
+- Before anything is created, after the root files and the loading copies are checked: a path that
+  names no directory, and a directory that holds no file, are refused as a `--loading` that names no
+  file is (`validation_failed`, naming the path); then the directory is held to the rules, its pack
+  rule over the `package_id`s the packs' `control.json` declare (`package_loading::named_packs`, the
+  reading `stale_copies` uses before anything is written). A pack named like the directory, in any
+  ASCII case, is `notice_name` with its `package_id`, `path` the pack's source directory (the
+  bundle's `bundle.json` is not written yet). A refusal leaves neither `--out` nor `<out>.part`.
+- Then, after the other root files and `loading/`, every file is laid byte for byte into
+  `<out>/notices/<path>`: no line end, byte-order mark or case of a name is changed. `bundle.json`
+  lists nothing of it and no `interfaces.json` is written.
+- Without the flag the output is byte for byte what it was: the module is not called.
+
+**`standard-pack check --root <game root>`** (`crates/resource-tooling/src/standard_pack_check.rs`):
+right after the root files and the registry are read, and before the loading copies and the
+cross-check, a directory `notices` in the game root is held to the same rules, unless the root's
+`bundle.json` lists a package named `notices` in any ASCII case (such a folder is that pack's, as
+`place` treats it, and is admitted as the pack it is). A broken rule fails the check with `path` the
+file below the game root. The answer gains `notices` `{files, bytes}` (the count of the files and
+the sum of their lengths; an empty directory counts `{0, 0}`) when it checked a directory, and has no
+such member otherwise; `notices` never joins `root_files`, and no name of a file and nothing of a text
+is echoed. A root without the directory answers byte for byte what it answered. Entries beside it
+that `place` leaves (`notices.old-<ms>`, `notices.rolledback-<ms>`, `notices.new-<ms>.part`) are not
+looked at. `place`'s `post_check` runs this check on the placed root, so from this release it checks
+a placed directory by the rules (§1.335 said the check ignored it).
+
+**`resource verify`, the `bundle` step** (`apps/actinglab/src/resource_verify/bundle.rs`): when the
+repository root holds a directory `notices` (found as the root files are, by `symlink_metadata`), the
+step passes it to `package bundle` as `--notices`, so it is laid by the code above; expects `notices`
+among the bundle root's entries (`root_file_differs` otherwise); writes `interfaces.json` declaring
+`package` [10, 10] and counts `package_revision` 10; zips the directory with the rest; lays its files
+into `installed/<game>/notices/`; and requires `standard-pack check` of that copy to answer `notices`
+with the count and the bytes of the zip's `notices/` entries (`root_files_unread` otherwise). Without
+the directory every byte it writes is what it wrote: [3, 3], `package_revision` 3, no `notices/`
+entry, and the check's member absent on both sides.
+
+**The constant.** `NOTICES_PACKAGE_REVISION` (10), which NOTICES-2 left private in
+`crates/lab-rescue/src/install/place.rs`, is now the contract crate's public constant
+(`standard_pack_notices.rs`); `place` (`notice_undeclared`) and `resource verify` (the revision it
+declares) read it from there. That is this slice's one change in `crates/lab-rescue`; no rule of the
+module changes.
+
+**Both entries** (board #434: what the Lab does is reachable through the CLI and through the MCP
+server alike). The row `package bundle` gains `{"name": "notices", "form": "option", "type": "dir",
+"required": false}`; the row `standard-pack check`'s `output` names the notices directory's count and
+bytes. The CLI reads `--notices` from its read list; the MCP server's tool is generated from the row
+(one input property per parameter) and its call goes to a `serve` child, which writes the row's
+options as flags (`engine::arguments`), so `notices` reaches `--notices` with no change to the MCP
+server. The pin `gate_434_lab5b3::lenient_rows_match_their_reads` holds the row and the read list
+equal in both directions with the new parameter.
+
+**Interfaces.** None raised. `package` stays [3, 10] (NOTICES-2): the Tools' packer mirror writes 10
+only for a bundle that carries the directory. `standard-pack check`'s answer gains an optional member
+only for a root that holds the directory (`place`'s `post_check` reads the check's exit code alone).
+
+**At deploy.** The Tools gain `package bundle --notices` and the `notices` member of `standard-pack
+check`; nothing changes for a root or a repository without the directory. No bundle that carries it
+is released before the coordinator's placement kit and the resource repositories' packer are changed
+(design §4, §5; slices 4 and 5). **Rollback** to Tools before 0.12.58: `package bundle` refuses the
+unknown flag, and `standard-pack check` ignores a placed directory again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NT3-1 | `package bundle --notices <directory>`; `StandardPackRootFiles.notices` | Tools flag, request member | NOTICES-3 | — | checked before anything is written; laid byte for byte into `notices/`; no `interfaces.json` |
+| NT3-2 | `standard-pack check`'s answer + optional `notices` `{files, bytes}` (`StandardPackNotices`) | Tools answer member | NOTICES-3 | — | absent without the directory and beside a pack named like it; never in `root_files` |
+| NT3-3 | `resource verify` `bundle` step: `--notices`, `package` [10, 10], the installed `notices/`, the check's member | Tools behaviour | NOTICES-3 | — | without the directory every byte as before |
+| NT3-4 | `NOTICES_PACKAGE_REVISION` in `actingcommand_contract` | contract constant (no shape) | NOTICES-3 | — | read by `place` and `resource verify` |
+| NT3-5 | `lab-operations.json`: `package bundle` + `notices`; `standard-pack check`'s `output` | operation table | NOTICES-3 | — | CLI and MCP serve the row as it is |
+
+Tests (exec gate row "#444 NOTICES-3", placeholder names, a notice file `NOTICE.md`):
+`crates/resource-tooling/src/gate_444_notices3.rs`:
+`notices3_package_bundle_lays_the_directory_byte_for_byte` (three files, one with a byte-order mark
+and CRLF, two in a subdirectory, one name in mixed case, laid byte for byte under their names and
+nothing else; without the flag the output's root is `applications.json`, `bundle.json` and `packs`,
+with it `notices` too and every other file and the index the same),
+`notices3_package_bundle_refuses_each_broken_rule_and_creates_nothing` (a refused suffix, a file of
+2,097,153 bytes, 65 files, 8 MiB and one byte, a control character, each with its word, file or
+directory, empty pointer and bound; a pack `Notices` at its source directory with `package_id`; no
+`--out` and no `.part`), `notices3_package_bundle_refuses_no_directory_and_an_empty_one` (a path that
+does not exist, a file, a directory holding only an empty directory: `validation_failed`, nothing
+created), `notices3_check_counts_the_directory_and_has_no_member_without_it` (no member and no key
+without it; `{files: 2, bytes}` with it, `root_files` still `bundle.json`, and three broken folders
+beside it not looked at), `notices3_check_refuses_a_broken_rule_naming_the_file` (a control character
+in `notices/texts/NOTICE.md` and an empty `notices/NOTICE.md`, at the file below the game root, the
+second with the bound 1 and 0) and `notices3_check_leaves_the_folder_of_a_pack_named_like_it` (packs
+`notices` and `NOTICES`: checked, both packs admitted, no warning, no member);
+`apps/actinglab/src/tests/gate_rv1.rs`: `notices3_the_bundle_step_carries_a_notices_directory` (a
+repository without `notices/`: 9 zip entries, none below `notices/`, [3, 3], no installed directory,
+no member; with it committed: 11 entries carrying the files byte for byte, [10, 10],
+`package_revision` 10, the installed files, the check's `{files: 2, bytes}`; the step passes both
+times). Not tested, and why: the three case-folding collisions of the set rule (two paths equal under
+ASCII case folding, a file and a directory of one name, one directory's name in two cases) cannot be
+laid on the file system the CI's Windows runners test on, which holds one entry per folded name; the
+contract gate row "#444 NOTICES-1" holds them. A link: no existing test of the pack loader's link
+refusal shows how one is made on the CI's Windows, so none is made here. Adapted, only because the
+answer's struct gained a member: `gate_cov1` and `gate_sched_c1f1` build a `StandardPackCheckResponse`
+literally and set `notices: None`; what they assert does not change.
+
+### 1.337 Slice RG-STOP (0.12.58): a planned stop is not a failure of the run-recovery grouping (Workflow #429; a real run of 11-13 stopped on request; the coordinator's ruling of 11-13 on board #429, not the owner's words; coordinator work order `rd-1113/brief-429-rg-stop.md`, read on main `ea8ef8ea`)
+
+1.337 is the coordinator's number; another slice of this release appends 1.336.
+[global-ledger-query.md](global-ledger-query.md), the paragraph on `run_recovery`, is the
+contract. No persisted shape, wire shape, page or group shape, outcome code, category, vocabulary
+word, configuration key or interface revision changes, and no outcome code fragment, so the index
+is not regenerated.
+
+**What was seen.** A scheduled run was stopped on request (`StopInstanceRun`). In the ledger view
+of that run, the run-recovery group listed the stop's own records as failures without a recovery:
+three positions, each "failed, no recovery seen", with the gap `missing_relation` and the state
+`unknown`. A stop on request is neither a success nor a failure of the run
+([policy-suspension.md](policy-suspension.md), "A stopped run"), and the routine summary counts
+such a run as an interruption, not a failure.
+
+**The cause.** `run_recovery` (`crates/ledger/src/global/projection/views.rs`) took as a failure
+every record of the run's context of severity `warning` or above, or of a failure kind
+(`failure_kind`). A stopped scheduled run writes, linked to the run: the Runtime's reset of the
+device (`input.intent` and `input.committed` of `input.reset`), its terminal `task.failed` with
+`contained_task_cancelled`, the policy driver's `runtime.failed` with the same code
+(`record_scheduled_policy_failure`) and its settlement, `policy.execution_recorded` of the kind
+`stopped`, with the same code. The code's category is `error` and a record's severity is its
+outcome's category, so the last three are errors; none of them has a recovery relation. Those are
+the three positions.
+
+**The rule.** In the grouping, a record whose outcome code is of the ladder class `planned_stop` is
+no failure unless a failure kind knows it: it is not listed and causes no gap. The class is the one
+the outcome catalog this build embeds gives the record's code (`planned_stop` and `ladder_class` in
+`views.rs`, over `outcome::catalog_json` and `parse_ladder_class`), read as the recovery ladder's
+trigger matching reads it (`ladder_class_of`); a code the catalog does not list has no class. The
+rule names no code: today the class holds `contained_task_cancelled` and `contained_task_paused`
+(a pause's drain, a player hold's drain).
+
+**What stays.** A record a failure kind knows (`input.failed`, `recognition.failed`, a failed entry
+recovery) is a failure whatever its code; any other record of severity `warning` or above stays a
+failure. A run whose context then holds no failure, read completely and within the context bound,
+has no group, as a run without failures had none; a context cut by the bound or the read's budget,
+or an incomplete source, still has its group with its gap. A stop whose reset failed keeps the
+reset's `input.failed` and the fence's records, of their own codes, in the group, and a cleanup
+refusal recorded beside a stop keeps its own code: those are failures a person must see. The
+records' severity, the codes' categories, `failure_kind`, `success_kind`, the page's rows, their
+views, the cursor, the read scope and the shapes of the page and of the group do not change.
+
+**The paths.** `run_recovery` has one caller, `project_selected`, the one projection of a view
+page, which every reader of a page goes through: the in-memory indexes
+(`EventIndexes::project_view_page`: the Segment store, and an offline snapshot without an SQLite
+root through `GlobalLedgerMetadata::project_view_page`), the SQLite store's view reader
+(`ViewReader::read_view_page`: the Runtime's writer and its reader pool) and the bounded offline
+snapshot on an SQLite root (`sqlite/offline.rs`, the same view reader). The host's `QueryEvents`
+(`read_events.rs`), `ledger-forensics`' `query_view_page` and the clients that show the groups read
+those pages. No other code derives a group or repeats the rule: `lab-ops`' diagnose groups errors by
+code, which is not this grouping, and the run listing, the run status and diagnose ask for their
+pages without run recovery (#422 QR-2, QR-2b).
+
+**At deploy.** A run that was stopped or paused no longer shows a run-recovery group for the stop's
+own records; a run with other failures shows them as before, without the stop's records. Nothing
+else of a page changes. Nothing is persisted: a rollback brings the earlier grouping back.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RGS-1 | `run_recovery`: a record whose outcome code is of the ladder class `planned_stop` is no failure of the grouping unless a failure kind knows it | read rule (no shape change) | RG-STOP | — | `since` 0.12.58; groups only; the class read from the embedded catalog |
+| RGS-2 | [global-ledger-query.md](global-ledger-query.md), the paragraph on `run_recovery` | contract text | RG-STOP | — | what a failure of the grouping is, a run without one has no group, and the rule |
+
+Tests (ledger gate row "#429 RG-STOP"), in `crates/ledger/src/global/tests/gate_429_rg_stop.rs` on
+a formal root, each page of the run checked against the in-memory indexes' page of the same records
+at the same snapshot (the same groups): `rg_stop_t1_a_run_that_was_only_stopped_has_no_group` (the
+stop's records above: no group; its three records stay errors, rows of the page in the Errors view),
+`rg_stop_t2_a_recovered_input_failure_then_a_stop_is_recovered_by_the_failure_alone` (an
+`input.failed` and the `input.completed` of the same action, then the stop: one group, `recovered`,
+its evidence the input failure alone with its success),
+`rg_stop_t3_a_warning_then_a_stop_keeps_the_warnings_group` (a `runtime.failed` of a warning code
+without a recovery relation, then the stop: the group the warning had before the stop, its evidence
+the warning alone, `missing_relation`, `unknown`),
+`rg_stop_t4_a_run_failed_with_another_class_keeps_its_group` (a terminal and a `runtime.failed` of
+`contained_task_deadline_exceeded`, class `budget_or_permission`: both listed, neither recovered,
+`missing_relation`, `unknown`, as before; no existing ledger test pinned a run ended by a failure
+code: `store_contract`'s query test pins a run's `command.rejected` error without an outcome code,
+listed and `unknown`, and `gate_pkg_s2` an entry recovery) and
+`rg_stop_t5_a_paused_runs_records_are_not_listed` (a terminal and a `runtime.failed` of
+`contained_task_paused`: errors, not listed, no group). No existing test changes.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

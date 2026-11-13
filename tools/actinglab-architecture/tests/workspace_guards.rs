@@ -2085,20 +2085,18 @@ fn b1_pure_decision_crates_ban_side_effects_in_clippy_and_name_every_escape() {
     );
 }
 
-/// Workflow #310 work package B item 3: every refusal branch of `RuntimeRequest::validate`,
-/// as (classified operations, refusal codes, origin terms). A change to any origin category is
-/// a change to this table.
+/// Workflow #310 work package B item 3, as Workflow #434 LAB-6S1b leaves it
+/// (contracts/lab-two-entries.md §2.4): every refusal branch of `RuntimeRequest::validate`, as
+/// (classified operations, refusal codes, origin terms). `validate()` judges no request by its
+/// origin: the one branch that reads the envelope is `valid_client_origin`, an envelope outside
+/// the client set; the others are the request's own shape and the content rule that no fact
+/// observation mixes two key families. The kinds of the origin gates LAB-6S1b deleted (shutdown,
+/// install transition, authoring, signatures, debugging, governance, emulator control, the
+/// scheduling pause, the agent wake test, fact publication by family, the agent dispatcher's
+/// kinds, the player hold) stand in `RUNTIME_OPEN_ORIGIN_OPERATIONS` under their own comment, but
+/// the two fact publications, which keep the content rule's branch. A change to any branch is a
+/// change to this table.
 const RUNTIME_REQUEST_ORIGIN_BRANCHES: &[(&[&str], &[&str], &[&str])] = &[
-    (
-        &["InstallTransition"],
-        &["invalid_install_transition_origin"],
-        &[
-            "EventActor::Cli",
-            "EventActor::User",
-            "EventSource::Cli",
-            "EventSource::Ui",
-        ],
-    ),
     (
         &[],
         &["unsupported_request_schema"],
@@ -2111,148 +2109,58 @@ const RUNTIME_REQUEST_ORIGIN_BRANCHES: &[(&[&str], &[&str], &[&str])] = &[
     ),
     (&[], &["invalid_client_origin"], &["valid_client_origin"]),
     (
-        &["RequestShutdown"],
-        &["invalid_shutdown_origin"],
-        &[
-            "EventActor::Cli",
-            "EventActor::User",
-            "EventSource::Cli",
-            "EventSource::Ui",
-        ],
-    ),
-    (
-        &["RecordAuthoringEvent"],
-        &["invalid_resource_authoring_origin"],
-        &["EventActor::Lab", "EventSource::Lab"],
-    ),
-    (
-        &[
-            "MatchDiagnosticSignatures",
-            "RegisterDiagnosticSignature",
-            "RetireDiagnosticSignature",
-        ],
-        &["invalid_signature_origin"],
-        &["EventActor::Lab", "EventSource::Lab"],
-    ),
-    (
-        &[
-            "RecognizeArtifact",
-            "RecordDebugEvent",
-            "ReleaseLabPin",
-            "RunContainedLabOperation",
-        ],
-        &["invalid_runtime_debug_origin"],
-        &["EventActor::Lab", "EventSource::Lab"],
-    ),
-    (
-        &["DebugPackage", "ExportEvidence"],
-        &["invalid_runtime_debug_origin"],
-        &["EventActor::Lab", "EventSource::Lab"],
-    ),
-    // Governance after slice cfg4: a card is declared by the person or the operator; an approval
-    // is the person's only. The host's accepted-connection half is checked by
-    // b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection.
-    (
-        &["DeclareGovernanceIdentity"],
-        &["invalid_governance_origin"],
-        &["valid_governance_declaration_origin"],
-    ),
-    (
-        &["RecordApprovalDecision"],
-        &["invalid_governance_origin"],
-        &["EventActor::User", "EventSource::Ui"],
-    ),
-    (
-        &[
-            "ControlEmulatorInstance",
-            "DiscoverInstances",
-            // Workflow #390 DRILL-1: a ladder drill may restart the emulator.
-            "DrillRecoveryLadder",
-            "SelfCheckInstance",
-        ],
-        &["invalid_emulator_control_origin"],
-        &[
-            "EventActor::Cli",
-            "EventActor::User",
-            "EventSource::Cli",
-            "EventSource::Ui",
-        ],
-    ),
-    (
-        &["PauseScheduling", "ResumeScheduling"],
-        &["invalid_scheduling_pause_origin"],
-        &[
-            "EventActor::Cli",
-            "EventActor::User",
-            "EventSource::Cli",
-            "EventSource::Ui",
-        ],
-    ),
-    // Workflow #432 AGT-1b (register §1.246): a person's test of the delivery, the same gate as a
-    // pause; no MCP tool sends it.
-    (
-        &["AgentWakeTest"],
-        &["invalid_agent_wake_test_origin"],
-        &[
-            "EventActor::Cli",
-            "EventActor::User",
-            "EventSource::Cli",
-            "EventSource::Ui",
-        ],
-    ),
-    (
         &["PublishFact", "PublishFacts"],
-        &["fact_origin_mixed", "invalid_agent_dispatcher_origin"],
-        &[
-            "EventActor::Agent",
-            "EventActor::Cli",
-            "EventActor::User",
-            "EventSource::Adapter",
-            "EventSource::Cli",
-            "EventSource::Ui",
-        ],
-    ),
-    (
-        &[
-            "AgentSessionStatus",
-            "ApplyResourceTargets",
-            "AssessPredictiveMaintenance",
-            "CompileProposal",
-            "PrepareStrategicReport",
-            "ProjectPolicyForward",
-            "ProjectPolicyInputIdentity",
-            "PromoteProposal",
-            "RecordAgentResponse",
-            "ResumeAgentSession",
-            "StartAgentSession",
-        ],
-        &["invalid_agent_dispatcher_origin"],
-        &["EventActor::Agent", "EventSource::Adapter"],
-    ),
-    // Workflow #429 R-7a (register §1.233, R-7a §3.1 step 2): the player hold's source gate takes
-    // the four counters' three envelopes, the Lab's included (Alice's ruling 135).
-    (
-        &["AcquirePlayerHold", "ReleasePlayerHold"],
-        &["invalid_player_hold_origin"],
-        &[
-            "EventActor::Cli",
-            "EventActor::Lab",
-            "EventActor::User",
-            "EventSource::Cli",
-            "EventSource::Lab",
-            "EventSource::Ui",
-        ],
+        &["fact_origin_mixed"],
+        &[],
     ),
 ];
 
 /// Operations `RuntimeRequest::validate` admits from every origin `valid_client_origin`
 /// accepts, with no narrower category. They are classified here explicitly, so a new operation
-/// fails the guard until it joins a refusal branch or this list.
+/// fails the guard until it joins a refusal branch or this list. Since Workflow #434 LAB-6S1b
+/// that is every operation but the two fact publications, whose content rule is a branch.
 const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
+    // Workflow #434 LAB-6S1b: the kinds of the deleted origin gates.
+    "AcquirePlayerHold",
+    "AgentSessionStatus",
+    "AgentWakeTest",
+    "ApplyResourceTargets",
+    "AssessPredictiveMaintenance",
+    "CompileProposal",
+    "ControlEmulatorInstance",
+    "DebugPackage",
+    "DeclareGovernanceIdentity",
+    "DiscoverInstances",
+    "DrillRecoveryLadder",
+    "ExportEvidence",
+    "InstallTransition",
+    "MatchDiagnosticSignatures",
+    "PauseScheduling",
+    "PrepareStrategicReport",
+    "ProjectPolicyForward",
+    "ProjectPolicyInputIdentity",
+    "PromoteProposal",
+    "RecognizeArtifact",
+    "RecordAgentResponse",
+    "RecordApprovalDecision",
+    "RecordAuthoringEvent",
+    "RecordDebugEvent",
+    "RegisterDiagnosticSignature",
+    "ReleaseLabPin",
+    "ReleasePlayerHold",
+    "RequestShutdown",
+    "ResumeAgentSession",
+    "ResumeScheduling",
+    "RetireDiagnosticSignature",
+    "RunContainedLabOperation",
+    "SelfCheckInstance",
+    "StartAgentSession",
+    // The operations that never had an origin gate.
     "AcquireLease",
     "ApplicationLifecycle",
     // Workflow #389 U-1: the new request kinds take no origin gate here; the channel decides
-    // at the door (U-6), and LoadPack and UnloadPack take the Lab-only gate with U-3.
+    // at the door (U-6). LoadPack and UnloadPack never took the Lab-only gate U-3 planned, and
+    // since Workflow #434 LAB-6S1b there is none to take.
     "BindChannel",
     "CancelContainedTask",
     "CancelQueuedLease",
@@ -2354,6 +2262,22 @@ fn b3_every_runtime_operation_has_an_explicit_origin_category() {
         "origin categories of RuntimeRequest::validate differ from RUNTIME_REQUEST_ORIGIN_BRANCHES:\n\
          branches not in the table:\n{unlisted:#?}\ntable entries without a branch:\n{vanished:#?}"
     );
+    // Workflow #434 LAB-6S1b: no branch names an actor or a source, and the one origin
+    // predicate a branch reads is `valid_client_origin`.
+    let origin_terms = branches
+        .iter()
+        .flat_map(|branch| branch.terms.iter().map(String::as_str))
+        .filter(|term| {
+            term.starts_with("EventActor::")
+                || term.starts_with("EventSource::")
+                || (term.starts_with("valid_") && term.ends_with("_origin"))
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        origin_terms,
+        BTreeSet::from(["valid_client_origin"]),
+        "RuntimeRequest::validate judges a request by its origin beyond the client set"
+    );
 
     let classified = branches
         .iter()
@@ -2414,8 +2338,11 @@ fn runtime_host_production_sources(root: &Path) -> Vec<(String, String)> {
 #[test]
 fn b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection() {
     let root = workspace_root();
-    // Slice cfg4 in the contract gate: a card is declared by User + Ui or Cli + Cli, and an
-    // approval decision is User + Ui only.
+    // Slice cfg4's predicate in the contract crate: a card is declared by User + Ui or Cli + Cli.
+    // Since Workflow #434 LAB-6S1b `RuntimeRequest::validate` no longer reads it (no branch names
+    // an actor or a source, b3_every_runtime_operation_has_an_explicit_origin_category): the
+    // host's own check below is the one gate of both governance kinds, until LAB-6S4a deletes
+    // them.
     let contract = fs::read_to_string(root.join(RUNTIME_CONTRACT_SOURCE))
         .unwrap_or_else(|error| panic!("read {RUNTIME_CONTRACT_SOURCE}: {error}"));
     assert_eq!(
@@ -2433,37 +2360,18 @@ fn b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_con
         ]),
         "a governance identity card is declared by the person or the operator only"
     );
-    let branches = runtime_request_origin_branches(&root);
-    for (operation, terms) in [
-        (
-            "DeclareGovernanceIdentity",
-            &["valid_governance_declaration_origin"][..],
-        ),
-        (
-            "RecordApprovalDecision",
-            &["EventActor::User", "EventSource::Ui"][..],
-        ),
-    ] {
-        let branch = branches
-            .iter()
-            .find(|branch| branch.variants.iter().any(|variant| variant == operation))
-            .unwrap_or_else(|| panic!("{operation} has no governance refusal branch"));
-        assert_eq!(
-            (&branch.variants, &branch.codes, &branch.terms),
-            (
-                &owned(&[operation]),
-                &owned(&["invalid_governance_origin"]),
-                &owned(terms)
-            ),
-            "{operation} left its own governance origin branch"
-        );
-    }
 
-    // The host refuses an approval first unless it comes from User + Ui on a connection whose
-    // identity card was accepted.
+    // The host refuses a card from any other origin with that predicate, and an approval first
+    // unless it comes from User + Ui on a connection whose identity card was accepted.
     let governance_path = "crates/runtime-host/src/host/governance.rs";
     let governance = fs::read_to_string(root.join(governance_path))
         .unwrap_or_else(|error| panic!("read {governance_path}: {error}"));
+    assert!(
+        governance
+            .contains("if !valid_governance_declaration_origin(request.actor(), request.source())"),
+        "HostShared::declare_governance_identity no longer refuses a card by \
+         valid_governance_declaration_origin"
+    );
     let approval = inspect_refusal_branches(
         governance_path,
         &governance,

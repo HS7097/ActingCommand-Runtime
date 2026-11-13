@@ -63,11 +63,15 @@ general instructions, copied through G14. Success codes: `request_acquire_player
 
 1. Shape (`RuntimeRequest::validate`): `drain_timeout_ms` in `1_000..=600_000`, else
    `invalid_player_hold_drain_timeout`.
-2. Source gate: only `(User, Ui)`, `(Cli, Cli)` and `(Lab, Lab)`, else
-   `invalid_player_hold_origin`. These are the envelopes of the four counters: the console is
-   `(User, Ui)`; actingctl and MCP are `(Cli, Cli)`, MCP on the channel `mcp`; actinglab is
-   `(Lab, Lab)`. Unlike the pause's gate it takes the Lab, because a hold holds the device, not
-   dispatch. Neither request is limited by channel.
+2. Source gate, until Workflow #434 LAB-6S1b (0.12.58) deleted it with every origin gate of
+   `RuntimeRequest::validate` ([lab-two-entries.md](lab-two-entries.md) §2.4): only
+   `(User, Ui)`, `(Cli, Cli)` and `(Lab, Lab)`, else `invalid_player_hold_origin` (retired).
+   These are the envelopes of the four counters: the console is `(User, Ui)`; actingctl and MCP
+   are `(Cli, Cli)`, MCP on the channel `mcp`; actinglab is `(Lab, Lab)`. Since LAB-6S1b every
+   envelope of the client set passes this step; the source the hold records
+   (`player_hold_source_actor`) still has a word for these three only, so R-7b, which builds the
+   behaviour, settles the word of any other envelope, or LAB-6S2, which fixes the envelope by the
+   channel, leaves only these. Neither request is limited by channel.
 3. Instance: a registered physical instance (`instance_unknown`,
    `fixture_execution_scope_forbidden`).
 4. Tags: `player_hold_not_durable` when the effective tag patterns do not keep the key.
@@ -591,7 +595,8 @@ From `held` until the release's claim, the device sees no adb call at all.
   `dispatch_resource_fenced` (info); `emulator_autostart_skip_reason` gains `player_held`.
 - **runtime-client:** `runtime_player_hold_settled` (warning), `runtime_player_hold_unconfirmed`
   (error, uncertain), `runtime_player_hold_prepared_client_mismatch`.
-- **contract:** `invalid_player_hold_origin`, `invalid_player_hold_drain_timeout`,
+- **contract:** `invalid_player_hold_origin` (retired in 0.12.58 with the source gate, Workflow
+  #434 LAB-6S1b), `invalid_player_hold_drain_timeout`,
   `invalid_player_hold_expectation`, `invalid_player_hold_state`, `invalid_player_hold_receipt`,
   `invalid_runtime_instance_control`; the success codes above; the locations
   `acquire_player_hold`, `release_player_hold`.

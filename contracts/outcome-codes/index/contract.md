@@ -185,7 +185,7 @@ column means. 915 codes.
 | `invalid_adb_recovery_phase` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid adb recovery phase. |
 | `invalid_adb_target_recovery` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid adb target recovery. |
 | `invalid_agent_capability_contract` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid agent capability contract. |
-| `invalid_agent_dispatcher_origin` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid agent dispatcher origin. |
+| `invalid_agent_dispatcher_origin` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. |
 | `invalid_agent_ledger_projection` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid agent ledger projection. |
 | `invalid_agent_response` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid agent response. |
 | `invalid_agent_session` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid agent session. |
@@ -195,7 +195,7 @@ column means. 915 codes.
 | `invalid_agent_session_status` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid agent session status. |
 | `invalid_agent_session_time` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid agent session time. |
 | `invalid_agent_wake` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid agent wake. |
-| `invalid_agent_wake_test_origin` | error | none | 0.12.37 | active | pending | written | Runtime contract validation refused a value: an AgentWakeTest from another origin than a person's (User+Ui or Cli+Cli), the same gate as a pause (Workflow #432… |
+| `invalid_agent_wake_test_origin` | error | none | 0.12.37 | retired | pending | written | Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. |
 | `invalid_agent_wake_trigger` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid agent wake trigger. |
 | `invalid_approval_decision` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid approval decision. |
 | `invalid_approval_id` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid approval id. |
@@ -266,7 +266,7 @@ column means. 915 codes.
 | `invalid_diagnostic_detail_stage` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid diagnostic detail stage. |
 | `invalid_diagnostic_detail_token` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid diagnostic detail token. |
 | `invalid_diagnostic_signature` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid diagnostic signature. |
-| `invalid_emulator_control_origin` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid emulator control origin. |
+| `invalid_emulator_control_origin` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. |
 | `invalid_event_query_bounds` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid event query bounds. |
 | `invalid_event_query_event_type_filter` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid event query event type filter. |
 | `invalid_event_query_fact_key_filter` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid event query fact key filter, a key that is neither an instance fact key nor a runtime fact key. |
@@ -314,7 +314,7 @@ column means. 915 codes.
 | `invalid_install_selection` | error | none | 0.12.0 | active | settled | written | The selection parses but is not one this build reads: its schema_version is not actingcommand.install-selection.v1, or its generation is 0. |
 | `invalid_install_timeout` | error | none | 0.12.0 | active | settled | written | An install transition timeout is 0 or above 600000 ms. |
 | `invalid_install_transition_id` | error | none | 0.12.0 | active | settled | written | An install transition id is empty, longer than 128 bytes, or holds a character other than ASCII letters, digits, '-' and '_'. |
-| `invalid_install_transition_origin` | error | none | 0.12.0 | active | settled | written | An InstallTransition request names an origin other than the user through the UI or the CLI; only those may drive an install transition. |
+| `invalid_install_transition_origin` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code; the host still refuses an install… |
 | `invalid_install_transition_receipt` | error | none | 0.12.0 | active | settled | written | A receipt that carries an install transition status is not in state completed, so it breaks the receipt contract. |
 | `invalid_install_transition_status` | error | none | 0.12.0 | active | settled | written | An install transition status breaks its rules: admission_closed disagrees with the phase, or the failure code is empty, longer than 128 bytes or not a code… |
 | `invalid_instance_alias` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): invalid instance alias. |
@@ -388,7 +388,7 @@ column means. 915 codes.
 | `invalid_performance_stutter` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid performance stutter. |
 | `invalid_player_hold_drain_timeout` | error | none | 0.12.35 | active | pending | written | Runtime contract validation refused a value: an AcquirePlayerHold.drain_timeout_ms outside 1000..=600000. |
 | `invalid_player_hold_expectation` | error | none | 0.12.35 | active | pending | written | Runtime contract validation refused a value: a ReleasePlayerHold.expected with revision 0 (a hold_id of the wrong form does not decode). |
-| `invalid_player_hold_origin` | error | none | 0.12.35 | active | pending | written | Runtime contract validation refused a value: a player hold request from an envelope other than (User, Ui), (Cli, Cli) or (Lab, Lab). |
+| `invalid_player_hold_origin` | error | none | 0.12.35 | retired | pending | written | Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. |
 | `invalid_player_hold_receipt` | error | none | 0.12.35 | active | pending | written | Runtime contract validation refused a value: a PlayerHoldAcquired or PlayerHoldReleased answer of the wrong shape (a hold not held; a next without the members… |
 | `invalid_player_hold_state` | error | none | 0.12.35 | active | pending | written | Runtime contract validation refused a value: a player hold or a player hold operation record of the wrong shape (the deadlines, close_started_unix_ms and… |
 | `invalid_policy_activity_sample` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid policy activity sample. |
@@ -437,7 +437,7 @@ column means. 915 codes.
 | `invalid_request_timestamp` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid request timestamp. |
 | `invalid_resource_authoring_event` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid resource authoring event. |
 | `invalid_resource_authoring_fingerprint` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid resource authoring fingerprint. |
-| `invalid_resource_authoring_origin` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid resource authoring origin. |
+| `invalid_resource_authoring_origin` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. |
 | `invalid_resource_authoring_path` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid resource authoring path. |
 | `invalid_resource_authoring_paths` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid resource authoring paths. |
 | `invalid_resource_authoring_token` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid resource authoring token. |
@@ -453,7 +453,7 @@ column means. 915 codes.
 | `invalid_resource_targets_rejection` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid resource targets rejection. |
 | `invalid_runtime_artifact_eviction_observation` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid runtime artifact eviction observation. |
 | `invalid_runtime_debug_event` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid runtime debug event. |
-| `invalid_runtime_debug_origin` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid runtime debug origin. |
+| `invalid_runtime_debug_origin` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. |
 | `invalid_runtime_event_batch` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid runtime event batch. |
 | `invalid_runtime_event_query_cursor` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid runtime event query cursor. |
 | `invalid_runtime_event_query_page` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid runtime event query page. |
@@ -493,19 +493,19 @@ column means. 915 codes.
 | `invalid_scheduling_outcome_projection` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid scheduling outcome projection. |
 | `invalid_scheduling_pause_drain_timeout` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid scheduling pause drain timeout. |
 | `invalid_scheduling_pause_expectation` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid scheduling pause expectation. |
-| `invalid_scheduling_pause_origin` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid scheduling pause origin. |
+| `invalid_scheduling_pause_origin` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. |
 | `invalid_scheduling_pause_reason` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid scheduling pause reason. |
 | `invalid_scheduling_pause_receipt` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid scheduling pause receipt. |
 | `invalid_scheduling_pause_state` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid scheduling pause state. |
 | `invalid_scheduling_resume_selfcheck` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid scheduling resume selfcheck. |
 | `invalid_segmented_swipe_contract` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid segmented swipe contract. |
 | `invalid_sha256` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid sha256. |
-| `invalid_shutdown_origin` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid shutdown origin. |
+| `invalid_shutdown_origin` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. |
 | `invalid_shutdown_receipt` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid shutdown receipt. |
 | `invalid_shutdown_target` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid shutdown target. |
 | `invalid_signature_definition` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid signature definition. |
 | `invalid_signature_match_request` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid signature match request. |
-| `invalid_signature_origin` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid signature origin. |
+| `invalid_signature_origin` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. |
 | `invalid_signature_receipt` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid signature receipt. |
 | `invalid_signature_registration` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid signature registration. |
 | `invalid_start_report` | error | none | 0.12.19 | active | pending | written | Runtime contract validation refused a value: a StartReport answer of the wrong shape (an open whose sum is not the sum of its eight phases, a start time of 0 or… |

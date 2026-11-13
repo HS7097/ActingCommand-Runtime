@@ -37,7 +37,7 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 | LAB-6 | Runtime | the door of section 2 and the UI list of section 3; the initiator in receipts, G14 and the `host.config_overrides` rows (section 4.3). Not one step: cut into the slices LAB-6S0 to LAB-6S5 below, each of which leaves main deployable (board #434, 2026-11-13) |
 | LAB-6S0 | Runtime | `deploy` and `rollback` through the Lab's MCP server. Way back: yes |
 | LAB-6S1a | Runtime | the door also takes `BindChannel{channel: lab, initiator}` (section 2.2); `runtime-client` [3, 8]. Way back: yes |
-| LAB-6S1b | Runtime | the origin gates of `RuntimeRequest::validate()` go. Way back: yes |
+| LAB-6S1b | Runtime | the origin gates of `RuntimeRequest::validate()` go (built, 0.12.58: section 2.4); their codes retire. Way back: yes |
 | LAB-6S2 | Runtime | every client of the Runtime repository binds `lab` with its word, `actingctl` included (after LAB-6S1a and LAB-6S1b have been deployed by themselves). Way back: yes |
 | LAB-6S3 | Runtime | the UI list on `ui` (section 3, `ui_allows`; section 2.3 step 5): a `ui` connection is refused, `channel_request_refused`, every kind off the list and a setting outside the console's tiers; every other connection as before. Way back: yes |
 | LAB-6S4a | Runtime | the five kinds deleted; `install-control` [0, 0]. Way back: yes |
@@ -145,6 +145,32 @@ capture, pacing, host shutdown handling) is no request and never passes the gate
 - LAB-6 deletes the origin gates of `RuntimeRequest::validate()` (emulator control, the
   self-check, the player hold, the agent wake test, the origin exceptions of fact families and the
   rest); the content and shape rules stay. Whoever sent a request is in its G14 record.
+  **Built by LAB-6S1b** (Runtime 0.12.58; register §1.287, "Slice LAB-6S1b"; the coordinator's
+  work order of 2026-11-13 on board #434, not the owner's words). The gates are gone: shutdown
+  and the install transition (person or operator only), the authoring, signature and debugging
+  kinds (Lab only), the governance card (person or operator) and the approval decision (person
+  only), emulator control, discovery, the self-check and the drill (person or operator), the
+  scheduling pause and resume (person or operator), the agent wake test (person or operator),
+  fact publication by family (the agent dispatcher, or a person or operator for the families
+  with the origin exception), the agent dispatcher's kinds, `ApplyResourceTargets` among them
+  (the agent dispatcher only), and the player hold (person, operator or Lab). Their codes retire
+  in 0.12.58 but `invalid_governance_origin`, which the host's own check of the card still emits
+  (section 12). What stays: an envelope outside the client set is `invalid_client_origin`, a
+  shape rule of the envelope; every content and shape rule, `fact_origin_mixed` among them; and
+  what is judged by the envelope outside `validate()`, none of it a gate: the frame pin's kind
+  (`Lab` for a `(Lab, Lab)` request), the C4 intent's record type and origin module
+  (`c4_client_source_unsupported`) and the receipt's default detail. The host's own checks of
+  the kinds LAB-6S4a deletes stay with them: a governance card only from `(User, Ui)` or
+  `(Cli, Cli)` (`invalid_governance_origin`), an approval decision only from `(User, Ui)` on a
+  connection whose card was accepted (`governance_authority_required`), an install transition
+  other than its Query only on such a connection (`install_identity_required`). So since
+  LAB-6S1b the Runtime takes from the Lab's `(Lab, Lab)` envelope what it refused before:
+  `actinglab`'s `pause`, `resume`, `shutdown`, `discover`, `emu start|stop|restart`,
+  `emu selfcheck`, `drill`, `wake-test`, `facts publish`, `offset`, `remedy set|lift` and
+  `targets set`; through `actinglab-mcp`, whose core rows send `(Cli, Cli)` until LAB-6S2,
+  `targets set` and `facts publish` of a family without the origin exception. No program changes
+  what it sends (LAB-6S2 does); `evidence read` from the Lab is still refused, by the host's
+  check of its identity card.
 - Frame pins follow the channel as runtime-interface.md, "Blocks", says: a frame a `lab` request
   pins is pinned `Lab`, attached to its debug run and kept in `kept\`; a `ui` request's frames are
   pinned `Explicit`. So a manual run (`run start`) keeps its frames, the direction
@@ -402,9 +428,10 @@ Alice's answer 4. From LAB-3, in the rescue module:
   `config file …`, `instance remove`, `pack remove` and `restore`) is not offered until the
   slice that builds the source (Workflow #421 INST-5 opened `instance add` with the module's own
   command first, [install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh
-  root"); until LAB-6 the module's requests to a running Runtime go on the CLI channel, as
-  `actingctl install`'s do, since the Runtime refuses a pause, a resume and a shutdown from a Lab
-  envelope until LAB-6 deletes those origin gates (§2.4).
+  root"); until LAB-6S2 the module's requests to a running Runtime go on the CLI channel, as
+  `actingctl install`'s do: the Runtime refused a pause, a resume and a shutdown from a Lab
+  envelope until LAB-6S1b deleted those origin gates (§2.4), and LAB-6S2 moves the module to the
+  Lab channel with its word.
 - **The MCP rows** (Workflow #434 LAB-5G5b, 0.12.57; register §1.287, "Slice LAB-5G5b";
   [install-cli.md](install-cli.md), "The MCP entry", "The rescue module's rows"). The module also
   serves three read-only rows of slice LAB-5, through the table as its other rows, on the CLI and
@@ -1233,6 +1260,15 @@ today's codes for the rest. The codes this contract uses:
 
 After LAB-6 the host emits neither `lab_module_not_installed` nor `lab_module_option_disabled`
 (open point 8).
+
+LAB-6S1b (0.12.58) retires the origin codes of `RuntimeRequest::validate()`, which nothing emits
+once its origin gates are gone: `invalid_shutdown_origin`, `invalid_install_transition_origin`,
+`invalid_resource_authoring_origin`, `invalid_signature_origin`, `invalid_runtime_debug_origin`,
+`invalid_emulator_control_origin`, `invalid_scheduling_pause_origin`,
+`invalid_agent_wake_test_origin`, `invalid_agent_dispatcher_origin` and
+`invalid_player_hold_origin` (each `retired_in` 0.12.58, no `replaced_by`: the Runtime takes the
+request). `invalid_governance_origin` stays active: the host's own check of the identity card
+emits it until LAB-6S4a deletes the kind. `invalid_client_origin` and `fact_origin_mixed` stay.
 
 ## 13 Open points
 

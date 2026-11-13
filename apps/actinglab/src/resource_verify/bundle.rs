@@ -5,15 +5,18 @@
 //!
 //! 1. the pack directories staged in `packs-root/`, and `package bundle` with
 //!    `applications.json`, `maintenance.json`, the source (`--source-repository` at HEAD) and the
-//!    root files the repository holds, into `bundle/`;
+//!    root files the repository holds, into `bundle/`; (Workflow #444 NOTICES-3) with the
+//!    repository root's directory `notices` as `--notices` when it holds one;
 //! 2. the index and copy checks of the written bundle;
-//! 3. `interfaces.json` (`package` [3, 3], validated with this build's head), beside
-//!    `bundle.json` in the zip only;
+//! 3. `interfaces.json` (`package` [3, 3], or [10, 10] with the notices directory, the contract
+//!    crate's `NOTICES_PACKAGE_REVISION`; validated with this build's head), beside `bundle.json`
+//!    in the zip only;
 //! 4. `out/<game>-resources-<sha7>.zip`, entries in ordinal order, and `out/SHA256SUMS`;
 //! 5. the zip read back into `read-back/<game>/`;
 //! 6. the installed root `installed/<game>/` (the root files beside `bundle.json` and, Workflow
-//!    #407 LOAD-1, the `loading/` templates beside `loading.json`, each `packs/<id>/` as
-//!    `<id>/`), checked by `standard-pack check`;
+//!    #407 LOAD-1, the `loading/` templates beside `loading.json`, Workflow #444 NOTICES-3, the
+//!    `notices/` files, each `packs/<id>/` as `<id>/`), checked by `standard-pack check`, whose
+//!    `notices` member must count the zip's `notices/` files and bytes (absent without them);
 //! 7. every read-back pack admitted again.
 //!
 //! Nothing is deleted; a failed `package bundle` leaves its `bundle.part`.
@@ -27,10 +30,13 @@ use crate::CliError;
 use crate::codes::{ActinglabCode, BundleProblem, LayoutProblem, ReadbackProblem, VerifyStep};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
-use actingcommand_contract::{BundleIndex, BundleMaintenance, BundleSource};
+use actingcommand_contract::{
+    BundleIndex, BundleMaintenance, BundleSource, NOTICES_PACKAGE_REVISION,
+    STANDARD_PACK_NOTICES_DIRECTORY, notice_relative_path,
+};
 use actingcommand_resource_tooling::{
-    PackageBundleRequest, ResourceToolingCode, StandardPackCheckRequest, StandardPackRootFiles,
-    check_standard_pack_root, package_bundle,
+    PackageBundleRequest, ResourceToolingCode, StandardPackCheckRequest, StandardPackNotices,
+    StandardPackRootFiles, check_standard_pack_root, package_bundle,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -41,8 +47,10 @@ use std::path::{Path, PathBuf};
 const RUNTIME_REPOSITORY: &str = "HS7097/ActingCommand-Runtime";
 const INTERFACES_SCHEMA: &str = "actingcommand.component-interfaces.v1";
 const INTERFACES_FILE: &str = "interfaces.json";
-/// The `package` revision the zip's `interfaces.json` declares, as `bundle.ps1` writes it.
-const PACKAGE_REVISION: u32 = 3;
+/// The `package` revision the zip's `interfaces.json` declares, as `bundle.ps1` writes it; a
+/// bundle that carries the notices directory declares the contract crate's
+/// `NOTICES_PACKAGE_REVISION` (Workflow #444 NOTICES-3).
+const PACKAGE_REVISION: u64 = 3;
 /// The standard-pack root files `package bundle` lays beside `bundle.json` (ROUT-L RL-1a:
 /// `schedule.json` too; Workflow #392 DA-4: `display-layout.json` too; Workflow #407 LOAD-1:
 /// `loading.json` too, given as `--loading`, with its templates in `loading/`).
@@ -84,7 +92,7 @@ struct Interfaces {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Speaks {
-    package: [u32; 2],
+    package: [u64; 2],
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -109,8 +117,10 @@ pub(super) fn bundle(inputs: &BundleInputs<'_>) -> StepRun {
         .into_iter()
         .filter(|name| is_file(&inputs.repo.join(name)))
         .collect::<Vec<_>>();
+    // Workflow #444 NOTICES-3: the notices directory, found as the root files are.
+    let notices = is_directory(&inputs.repo.join(STANDARD_PACK_NOTICES_DIRECTORY));
     let mut tally = BundleTally::default();
-    if let Err(outcome) = lay_out(inputs, &root_files, &mut run, &mut tally) {
+    if let Err(outcome) = lay_out(inputs, &root_files, notices, &mut run, &mut tally) {
         run.fail(outcome);
     }
     run.counts = Counts::Bundle {
@@ -119,16 +129,27 @@ pub(super) fn bundle(inputs: &BundleInputs<'_>) -> StepRun {
         bytes: tally.bytes,
         zip: tally.zip,
         root_files: root_files.iter().map(|name| (*name).to_owned()).collect(),
-        package_revision: PACKAGE_REVISION,
+        package_revision: package_revision(notices),
     };
     run.finish()
 }
 
+/// The `package` revision the zip declares: [`PACKAGE_REVISION`], or the contract crate's
+/// `NOTICES_PACKAGE_REVISION` when the bundle carries the notices directory.
+fn package_revision(notices: bool) -> u64 {
+    if notices {
+        NOTICES_PACKAGE_REVISION
+    } else {
+        PACKAGE_REVISION
+    }
+}
+
 /// The step's work. A failure it cannot go on after is the error; the others are recorded as
-/// they are found.
+/// they are found. `notices`: the repository root holds the notices directory.
 fn lay_out(
     inputs: &BundleInputs<'_>,
     root_files: &[&'static str],
+    notices: bool,
     run: &mut StepRun,
     tally: &mut BundleTally,
 ) -> Result<(), Outcome> {
@@ -158,6 +179,7 @@ fn lay_out(
             schedule: root_file("schedule.json"),
             display_layout: root_file("display-layout.json"),
             loading: root_file(LOADING_FILE),
+            notices: notices.then(|| inputs.repo.join(STANDARD_PACK_NOTICES_DIRECTORY)),
         },
     })
     .map_err(|error| lab_failure(&error))?;
@@ -167,6 +189,7 @@ fn lay_out(
     let index = check_index(
         inputs,
         root_files,
+        notices,
         &maintenance,
         &response.index,
         &bundle_dir,
@@ -197,10 +220,24 @@ fn lay_out(
         // The bundle root check named it already; the zip cannot hold a second one.
         return Ok(());
     }
+    // Workflow #444 NOTICES-3: what the check of the installed root must count of the notices
+    // directory the zip carries; nothing without it.
+    let laid_notices = notices.then(|| {
+        let files = entries
+            .iter()
+            .filter(|(name, _)| notice_relative_path(name).is_some())
+            .map(|(_, bytes)| bytes.len() as u64)
+            .collect::<Vec<_>>();
+        StandardPackNotices {
+            files: files.len(),
+            bytes: files.iter().sum(),
+        }
+    });
+    let revision = package_revision(notices);
     let interfaces = Interfaces {
         schema_version: INTERFACES_SCHEMA.to_owned(),
         speaks: Speaks {
-            package: [PACKAGE_REVISION, PACKAGE_REVISION],
+            package: [revision, revision],
         },
         validated_with: ValidatedWith {
             repository: RUNTIME_REPOSITORY.to_owned(),
@@ -278,7 +315,9 @@ fn lay_out(
         let loading_template = name
             .strip_prefix(LOADING_DIRECTORY)
             .is_some_and(|rest| rest.starts_with('/'));
-        if safe_entry(name) && (!name.contains('/') || loading_template) {
+        // Workflow #444 NOTICES-3: and the files of the notices directory, in `notices/`.
+        let notice = notice_relative_path(name).is_some();
+        if safe_entry(name) && (!name.contains('/') || loading_template || notice) {
             let target = join_relative(&installed, name);
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)
@@ -307,6 +346,7 @@ fn lay_out(
             if read_root_files != expected
                 || checked.pack_count != index.packs.len()
                 || checked.game != game
+                || checked.notices != laid_notices
             {
                 run.fail(mismatch(
                     &installed.display().to_string(),
@@ -360,10 +400,12 @@ fn read_maintenance(repo: &Path) -> Result<Vec<BundleMaintenance>, Outcome> {
         .map_err(|error| declaration_invalid("maintenance.json", foreign_json(&error.to_string())))
 }
 
-/// The index and copy checks (`bundle.ps1:316-380`); every difference is recorded.
+/// The index and copy checks (`bundle.ps1:316-380`); every difference is recorded. `notices`:
+/// the bundle root holds the notices directory too (Workflow #444 NOTICES-3).
 fn check_index(
     inputs: &BundleInputs<'_>,
     root_files: &[&'static str],
+    notices: bool,
     maintenance: &[BundleMaintenance],
     answered: &BundleIndex,
     bundle_dir: &Path,
@@ -392,6 +434,10 @@ fn check_index(
     // Workflow #407 LOAD-1: `loading.json` comes with the directory of its templates.
     if root_files.contains(&LOADING_FILE) {
         expected.insert(LOADING_DIRECTORY.to_owned());
+    }
+    // Workflow #444 NOTICES-3: and the notices directory `package bundle --notices` laid.
+    if notices {
+        expected.insert(STANDARD_PACK_NOTICES_DIRECTORY.to_owned());
     }
     let present = list_names(bundle_dir)
         .map_err(|error| read_failed(bundle_dir, &error, BundleProblem::RootFileDiffers))?;
@@ -687,6 +733,11 @@ fn join_relative(root: &Path, relative: &str) -> PathBuf {
 
 fn is_file(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file())
+}
+
+/// Workflow #444 NOTICES-3: a directory, found as [`is_file`] finds a root file.
+fn is_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
 
 fn same_bytes(left: &Path, right: &Path) -> bool {

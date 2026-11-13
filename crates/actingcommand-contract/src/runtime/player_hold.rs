@@ -223,7 +223,8 @@ crate::outcome_vocabulary! {
 
 crate::outcome_vocabulary! {
     /// Who asked for a player hold operation (vocabulary `player_hold_source_actor`): the
-    /// request's envelope, one of the source gate's three (R-7a §3.1 step 2).
+    /// request's envelope, one of the three the source gate took (R-7a §3.1 step 2) until
+    /// Workflow #434 LAB-6S1b deleted the gate; the kinds are not built yet (R-7b).
     #[derive(Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum PlayerHoldSourceActor: "player_hold_source_actor" {
